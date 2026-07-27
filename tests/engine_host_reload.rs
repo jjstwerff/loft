@@ -35,12 +35,8 @@ fn test_tmp() -> std::path::PathBuf {
 }
 
 fn vm_deadline(secs: u64) -> Instant {
-    let scale = if std::env::var_os("CI").is_some() {
-        3
-    } else {
-        1
-    };
-    Instant::now() + Duration::from_secs(secs * scale)
+    // Stretch the budget when the machine is shared — see `common::deadline_scale`.
+    Instant::now() + Duration::from_secs(secs * common::deadline_scale())
 }
 
 const PORT_BASE: u16 = 18093;

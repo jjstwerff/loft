@@ -1,0 +1,2 @@
+fn add_t(v: vector<text>, x: text) -> vector<text> { out = v; out += [x]; out }
+fn main() { a: vector<text> = []; for k in ["p","q","r"] { a = add_t(a, k); } println("{len(a)}"); }

@@ -539,6 +539,41 @@ pub fn set_file_size(self: File, size: integer) -> FileResult fs#update {
   FileResult.Other
 }
 #impure(io)
+// Moves the read/write position to `pos` bytes from the start, for random access
+// into a binary file: read an index, jump to the record it names, read that.
+//
+// Equivalent to `self#next = pos`, which is the operator form and has always
+// worked; this is the NAME the operation was already documented under, and a
+// consumer who reached for it (three call forms, all of them this one) concluded
+// random access was unsupported and restructured their file format around it.
+//
+// Returns false — a no-op — when there is nothing to seek in: a directory, an
+// absent file, a negative `pos`, or a file the process has not yet read from or
+// written to (the OS handle is opened by the first I/O, so seeking before it
+// exists has nothing to move).  Seeking PAST the end is allowed: the position is
+// remembered and a following write extends the file, which is how a free-list or
+// an update-in-place walk lands.
+pub fn seek(self: File, pos: integer) -> boolean fs#update {
+  if self.format == Format.Directory { return false }
+  if self.format == Format.NotExists { return false }
+  if pos < 0 { return false }
+  self.next = pos;
+  true
+}
+#impure(io)
+// The current read/write position in bytes, i.e. where the next read or write
+// will land.  The read side of [seek]; `self#next` is the operator form.
+//
+// Distinct from `self#index`, which is where the LAST read STARTED — after
+// `x = f#read as i32` on a fresh file, `position` is 4 and `f#index` is 0.
+//
+// A file this process has not read from or written to yet has no position, and
+// reports null rather than 0 — 0 is a legitimate position, so returning it would
+// make "not opened" indistinguishable from "at the start".  Discharge with
+// `?? 0` when the distinction does not matter.
+pub fn position(self: File) -> integer {
+  self.next
+}
 // Flushes buffered bytes for self to the underlying storage so that the
 // preceding writes are durable. Use between log records or block
 // boundaries to guarantee that earlier appends have landed on disk

@@ -242,30 +242,34 @@ fn breakpoint_captures_struct_argument() {
 /// captured with its value; one assigned *at/after* the breakpoint is not yet live
 /// and is excluded (rather than read as zero/garbage).
 #[test]
-fn breakpoint_gates_locals_by_liveness() {
+fn breakpoint_frame_shows_scope_and_marks_unset() {
     let mut p = repl();
     let hits = run_with_breakpoint(
         &mut p,
         &["fn calc(n: integer) -> integer {\n  a = n + 1;\n  b = a * 2;\n  b\n}"],
         "calc(10)",
         "calc",
-        3, // the `b = a * 2;` line — `a` is live, `b` is not yet
+        3, // the `b = a * 2;` line — `a` holds its value, `b` is not written yet
     );
     assert_eq!(hits.len(), 1, "{hits:?}");
     let frame = &hits[0].locals;
-    // `n` (arg) and `a` (assigned on line 2) are live.
+    // `n` (arg) and `a` (assigned on line 2) hold their values.
     assert!(
         frame.iter().any(|(n, _)| n == "n"),
         "arg n visible: {frame:?}"
     );
     assert!(
         frame.iter().any(|(n, v)| n == "a" && v == "11"),
-        "local a == 11 (n+1) live: {frame:?}"
+        "local a == 11 (n+1) held: {frame:?}"
     );
-    // `b` is assigned on line 3 — not yet live at the line-3 breakpoint.
+    // @PLN120 A — `b` is in lexical scope on the line that assigns it, so it is
+    // SHOWN (silence reads as a broken debugger), and shown as `<unset>` rather
+    // than as its slot's contents: the write has not run, and `reserve_frame` does
+    // not zero locals.  Both halves matter — presence alone would pass a fix that
+    // prints stack garbage, and the value check alone would pass the old omission.
     assert!(
-        !frame.iter().any(|(n, _)| n == "b"),
-        "local b not-yet-live, excluded: {frame:?}"
+        frame.iter().any(|(n, v)| n == "b" && v == "<unset>"),
+        "local b in scope but unwritten → `<unset>`: {frame:?}"
     );
 }
 

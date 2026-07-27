@@ -418,7 +418,8 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 | `big_endian(self: File)` | Switches the file to big-endian binary mode. |
 | `write_bin(self: File, v: reference)` | Writes a struct value as raw binary data. File must be in binary mode first. |
 | `read(self: File, v: reference)` | Reads binary data into a struct value. File must be in binary mode first. |
-| `seek(self: File, pos: integer)` | Moves the read/write position to `pos` bytes from the start. |
+| `seek(self: File, pos: integer) -> boolean` | Moves the read/write position to `pos` bytes from the start — random access into a binary file. `false` (a no-op) for a directory, an absent file, a negative `pos`, or a file this process has not read from or written to yet (the OS handle opens on first I/O). Seeking PAST the end is allowed: a following write extends the file. Operator form: `f#next = pos`. |
+| `position(self: File) -> integer` | The byte offset the next read or write will land at — the read side of `seek`. Operator form: `f#next`. Distinct from `f#index`, which is where the LAST read *started*: after one `f#read as i32` on a fresh file, `position` is 4 and `f#index` is 0. **Null** for a file this process has not opened yet (0 is a real position, so it is not used to mean "no position"). |
 
 **Binary attribute operators on `f: File`:**
 
@@ -440,7 +441,7 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 **Notes:**
 - `f += "text"` writes raw UTF-8 bytes; supported for TextFile, LittleEndian, and BigEndian modes.
 - For new files (format=NotExists), `f += value` defaults to TextFile mode and creates the file.
-- `f#next = pos` is a no-op if called before the first read or write (the OS file handle does not exist until first I/O). Always perform a read or write before seeking.
+- `f#next = pos` (and the `seek` method above) is a no-op if called before the first read or write — the OS file handle does not exist until first I/O. Always perform a read or write before seeking. `seek` returns `false` in that case; the operator form reports nothing, which is why the method is the better choice when the position matters.
 
 #### Struct and vector binary round-trip (@PLN47 — shipped 2026-07-09)
 

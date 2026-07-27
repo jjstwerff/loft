@@ -1,0 +1,7 @@
+fn add_a(v: vector<integer>, x: integer) -> vector<integer> { out = v; out += [x]; out }
+fn add_b(v: vector<integer>, x: integer) -> vector<integer> { out = v; out += [x]; out }
+fn main() {
+  a: vector<integer> = [];
+  for k in [10,20,30] { a = add_a(a, k); a = add_b(a, k); }
+  println("{len(a)}");
+}

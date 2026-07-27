@@ -33,8 +33,22 @@ use std::io::{BufRead, BufReader, Read};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+mod common;
+
+/// A wall-clock budget for waiting on a child process, stretched when the machine is
+/// shared (`common::deadline_scale`).
+///
+/// Every timeout in this file waits on a spawned `loft` process — server start, a
+/// client's whole game — and the variance is in process startup under contention, not
+/// in the work itself.  A fixed number is a bet against the box: measured at load
+/// average 40, a 60 s server-start budget failed four tests that need under 2 s idle.
+fn budget(secs: u64) -> Duration {
+    Duration::from_secs(secs * common::deadline_scale())
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -188,7 +202,7 @@ impl ServerGuard {
         // 30s timeout: Windows CI cold-runners can take 10+s to compile
         // / launch the loft binary on first invocation.  Local runs
         // bind in <1s, so the bump only affects flake-prone CI.
-        wait_for_port(self.port, Duration::from_secs(60), 50)
+        wait_for_port(self.port, budget(60), 50)
     }
 
     /// Diagnostic helper: when `wait_listening` fails, drain whatever
@@ -256,9 +270,15 @@ impl Drop for ServerGuard {
 enum BindOutcome {
     Bound,
     PortTaken,
-    /// The server said neither within the budget (an old build, or a genuinely stuck
-    /// child).  Treated as "carry on and let `wait_listening` judge", so this helper can
-    /// never be the reason a test fails.
+    /// The server said neither within the budget — a slow start on a loaded box, an
+    /// old build that does not print the markers, or a genuinely stuck child.
+    ///
+    /// **Not the same as `Bound`.**  Treating it as bound is how a test ends up running
+    /// against a stranger's server: the loser of the pick race still prints
+    /// "listening" (its handle is `-1`), so a connect-probe succeeds and the failure
+    /// surfaces far away as "client hung".  An unconfirmed port is therefore re-picked
+    /// like a taken one — except on the last attempt, where the caller falls back to
+    /// `wait_listening` so a build that never prints the markers is still not fatal.
     Unknown,
 }
 
@@ -298,10 +318,21 @@ fn spawn_server_on_free_port_inner(
             );
         }
         let mut s = ServerGuard::spawn(server_script, port);
-        match s.bind_outcome(Duration::from_secs(60)) {
-            BindOutcome::PortTaken => {
+        let last_attempt = attempt + 1 == ATTEMPTS;
+        match s.bind_outcome(budget(60)) {
+            // Taken, or ownership unconfirmed: re-pick rather than proceed.  A budget
+            // that expires because the box is loaded says nothing about who owns the
+            // port, and accepting it is how a test comes to run against a stranger's
+            // server — the failure this whole helper exists to prevent.  The last
+            // attempt still falls through, so a build that never prints the markers
+            // behaves as it always did.
+            BindOutcome::PortTaken | BindOutcome::Unknown if !last_attempt => {
                 last_taken = port;
                 continue; // `s` drops here, killing the zombie that never bound
+            }
+            BindOutcome::PortTaken => {
+                last_taken = port;
+                continue;
             }
             BindOutcome::Bound | BindOutcome::Unknown => {
                 if !s.wait_listening() {
@@ -359,6 +390,99 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.matches(needle).count()
 }
 
+/// A spawned child whose stdout is accumulated by a reader thread **while it runs**, so
+/// the driver can wait for a marker line and act on it.
+///
+/// [`drain_with_timeout`] cannot express that: it reads to EOF, by which time any race
+/// it might have prevented is already decided.  That is what P229a's fixed delay was
+/// standing in for — see [`spawn_client_with_go_file`].
+struct StreamingChild {
+    child: Child,
+    text: Arc<Mutex<String>>,
+    reader: Option<thread::JoinHandle<()>>,
+}
+
+fn stream_child(mut child: Child) -> StreamingChild {
+    let stdout = child.stdout.take().expect("child stdout was piped");
+    let text = Arc::new(Mutex::new(String::new()));
+    let sink = Arc::clone(&text);
+    let reader = thread::spawn(move || {
+        let mut br = BufReader::new(stdout);
+        let mut line = String::new();
+        while br.read_line(&mut line).unwrap_or(0) > 0 {
+            if let Ok(mut t) = sink.lock() {
+                t.push_str(&line);
+            }
+            line.clear();
+        }
+    });
+    StreamingChild {
+        child,
+        text,
+        reader: Some(reader),
+    }
+}
+
+impl StreamingChild {
+    /// Block until `marker` appears in the child's stdout, or `timeout` elapses.
+    /// `false` on timeout — the caller decides whether that is fatal.
+    fn wait_for(&self, marker: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.text.lock().is_ok_and(|t| t.contains(marker)) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// Wait for exit (killing on timeout), then return everything read + the status.
+    fn finish(mut self, timeout: Duration) -> (String, Option<i32>) {
+        let deadline = Instant::now() + timeout;
+        let mut status = None;
+        while Instant::now() < deadline {
+            if let Ok(Some(s)) = self.child.try_wait() {
+                status = s.code();
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        if status.is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        if let Some(h) = self.reader.take() {
+            let _ = h.join();
+        }
+        let text = self.text.lock().map(|t| t.clone()).unwrap_or_default();
+        (text, status)
+    }
+}
+
+/// Spawn a v2 client that waits on a **rendezvous file** instead of a fixed delay
+/// before placing its first X (`LOFT_TICTACTOE_GO_FILE`).
+///
+/// The driver creates the file only once EVERY client has printed "handlers learned",
+/// so the two games provably overlap.  P229a's `LOFT_TICTACTOE_CLIENT_DELAY_MS` pause
+/// was a wall-clock bet on a partner's startup being faster than the pause, and it lost
+/// under full-suite load: the failure showed A finishing its whole game before B's MAP
+/// reached the server, because the variance is in process startup (spawn + parse +
+/// connect), which no delay bounds.  The delay path stays for the scenarios that want a
+/// *lack* of overlap (late-join) or none at all (single client).
+fn spawn_client_with_go_file(label: &str, port: u16, go_file: &str) -> StreamingChild {
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg("--interpret")
+        .arg(examples_dir().join("tictactoe_client_v2.loft"))
+        .arg(label)
+        .current_dir(examples_dir())
+        .env("LOFT_TICTACTOE_PORT", port.to_string())
+        .env("LOFT_TICTACTOE_GO_FILE", go_file)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    stream_child(cmd.spawn().expect("failed to spawn loft client"))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 /// Positive control for the port-race detection, and the reason it exists.
@@ -383,7 +507,7 @@ fn server_detects_and_retries_a_stolen_port() {
 
     // The server we got back is a real one: a client can complete a game against it.
     let client = spawn_client("S", port);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(60));
+    let (out, status) = drain_with_timeout(client, budget(60));
     assert_eq!(
         status,
         Some(0),
@@ -419,7 +543,7 @@ fn v2_single_client_completes_game() {
     let (_server, port) = spawn_server_on_free_port("tictactoe_server_v2.loft");
 
     let client = spawn_client("S", port);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(60));
+    let (out, status) = drain_with_timeout(client, budget(60));
 
     assert_eq!(
         status,
@@ -454,21 +578,49 @@ fn v2_single_client_completes_game() {
 fn v2_two_clients_with_spectator_routing() {
     let (_server, port) = spawn_server_on_free_port("tictactoe_server_v2.loft");
 
-    // P229a: both clients spawn essentially simultaneously, then each
-    // pauses ~200 ms after handshake before placing its first X.  On
-    // macOS the scheduler is fast enough that without the pause the
-    // first client would complete all 3 moves before the second's
-    // handshake even reaches the server — so neither side observes
-    // the other's spectator frames.  The delay is set via the
-    // `LOFT_TICTACTOE_CLIENT_DELAY_MS` env var that the v2 client
-    // honours via `web::sleep_ms`.  Linux (already passing) tolerates
-    // the extra 200 ms with no measurable impact.
-    let a = spawn_client_with_delay("A", port, 200);
-    thread::sleep(Duration::from_millis(50));
-    let b = spawn_client_with_delay("B", port, 200);
+    // The overlap is a BARRIER, not a delay.  P229a used a fixed ~200 ms
+    // post-handshake pause in each client; that is a bet that a partner's
+    // startup beats the pause, and it lost under full-suite load on
+    // 2026-07-27 — A completed all three moves and its GameOver before B's
+    // MAP frame reached the server, so neither side saw the other and this
+    // test's own "at least one side" assertion fired.  A bigger pause would
+    // only lengthen the bet: the variance is in process startup (spawn +
+    // parse + connect), which no wall-clock number bounds.
+    //
+    // Instead: spawn both, wait until BOTH have printed "handlers learned"
+    // (so both are registered with the server), and only then create the
+    // rendezvous file both are spinning on.  Overlap becomes a fact.
+    let go_name = format!("go_{}.rendezvous", std::process::id());
+    let go_path = examples_dir().join(&go_name);
+    // A previous run killed between create and cleanup would leave the file
+    // behind and let this run's clients sail straight past the barrier —
+    // which would silently restore the old flake.
+    let _ = std::fs::remove_file(&go_path);
 
-    let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(60));
-    let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(60));
+    let a = spawn_client_with_go_file("A", port, &go_name);
+    let b = spawn_client_with_go_file("B", port, &go_name);
+
+    // Generous: this covers process spawn + parse + connect for both clients on
+    // a machine running the whole suite in parallel.  It is a failure bound, not
+    // a timing assumption — nothing races on it being tight.
+    let ready = budget(45);
+    let a_ready = a.wait_for("handlers learned", ready);
+    let b_ready = b.wait_for("handlers learned", ready);
+    // Release the barrier even if a client never reported, so neither hangs on
+    // its 30 s spin and the assertions below report real output.
+    std::fs::write(&go_path, b"go").expect("write the rendezvous file");
+
+    let (a_out, a_status) = a.finish(budget(60));
+    let (b_out, b_status) = b.finish(budget(60));
+    let _ = std::fs::remove_file(&go_path);
+    assert!(
+        a_ready,
+        "A never handshaked within {ready:?}; stdout=\n{a_out}"
+    );
+    assert!(
+        b_ready,
+        "B never handshaked within {ready:?}; stdout=\n{b_out}"
+    );
 
     assert_eq!(
         a_status,
@@ -505,22 +657,22 @@ fn v2_two_clients_with_spectator_routing() {
         );
     }
 
-    // The whole point of v2: each client should see the OTHER's
-    // frames as Spectator*.  At least one of the partner's X
-    // placements must reach each side, AND the partner's GameOver
-    // must arrive as SpectatorGameOver.
+    // The whole point of v2: each client sees the OTHER's frames as Spectator*.
     //
-    // Note: which spectator frames arrive depends on the timing —
-    // if A finishes before B connects, A sees nothing about B and
-    // vice versa.  The 50 ms stagger above makes it likely (but not
-    // guaranteed) that BOTH overlap; we require AT LEAST ONE side
-    // to have observed the other.
+    // This used to require only that AT LEAST ONE side observed the other, because
+    // with a timing-based stagger "both overlap" was likely but not guaranteed — and
+    // the weakened form is what let a half-working router pass, since one direction
+    // satisfies an OR.  With the barrier above, both clients are registered before
+    // either moves, so BOTH directions must be observed; that is the assertion the
+    // test wanted all along and could not previously afford.
+    //
+    // Measured 10/10 with 8-way CPU contention before being tightened.
     let a_saw_b_spectator = count_occurrences(&a_out, "[A] SpectatorPlacement") > 0
         || a_out.contains("[A] SpectatorGameOver");
     let b_saw_a_spectator = count_occurrences(&b_out, "[B] SpectatorPlacement") > 0
         || b_out.contains("[B] SpectatorGameOver");
     assert!(
-        a_saw_b_spectator || b_saw_a_spectator,
+        a_saw_b_spectator && b_saw_a_spectator,
         "neither client observed the other's spectator frames; \
          a_out:\n{a_out}\n\nb_out:\n{b_out}"
     );
@@ -542,7 +694,7 @@ fn v2_late_join_independent_games() {
 
     // A connects, plays, finishes.
     let a = spawn_client("A", port);
-    let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(60));
+    let (a_out, a_status) = drain_with_timeout(a, budget(60));
     assert_eq!(a_status, Some(0), "A did not exit; stdout=\n{a_out}");
     assert!(
         a_out.contains("[A] GameOver: X"),
@@ -555,7 +707,7 @@ fn v2_late_join_independent_games() {
     // B connects; should still play to completion despite A having
     // already finished.
     let b = spawn_client("B", port);
-    let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(60));
+    let (b_out, b_status) = drain_with_timeout(b, budget(60));
     assert_eq!(b_status, Some(0), "B did not exit; stdout=\n{b_out}");
     assert!(
         b_out.contains("[B] GameOver: X"),

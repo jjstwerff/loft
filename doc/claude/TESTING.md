@@ -355,6 +355,47 @@ crash on the read-only clone; scalar write → silent loss to the private stack;
 native → arm bodies don't run at all).  Run a million times, identical every time.
 Stress would have added zero; the small-scale probes were the whole answer.
 
+### A fixed delay is not synchronisation — use a barrier
+
+The corollary for **multi-process** tests, learned twice on the same test.
+`multiplayer_v2::v2_two_clients_with_spectator_routing` needs two clients
+*concurrently connected* so each observes the other's spectator frames. @P229a made
+that happen with a **fixed post-handshake pause** in each client
+(`LOFT_TICTACTOE_CLIENT_DELAY_MS=200`) plus a 50 ms spawn stagger.
+
+That is a **bet that a partner's startup is faster than the pause**, and it lost under
+full-suite load (2026-07-27): the failure log showed client A completing all three
+moves *and its GameOver* before B's MAP frame ever reached the server, so neither side
+saw the other. The decisive detail is *where* the variance lives — in each client's
+**process startup** (spawn + parse + connect), which no wall-clock number bounds. A
+bigger pause only lengthens the bet.
+
+**The fix is to make the concurrency a fact, not a probability:** the driver spawns
+both clients, waits until **both** have printed their "handlers learned" line, and only
+then creates a **rendezvous file** both are spinning on
+(`LOFT_TICTACTOE_GO_FILE`). Neither can move before both are registered.
+
+Three properties worth copying:
+
+- **The barrier releases unconditionally**, even if a client never reported, so a
+  missing participant fails on a *real* assertion instead of hanging on its spin.
+- **The waiter's spin is bounded** (30 s), so a driver that never writes the file
+  degrades to the old behaviour rather than wedging the run.
+- **Remove a stale barrier file before spawning.** A run killed between create and
+  cleanup would otherwise let the next run's clients sail straight through, silently
+  restoring the flake — the guard is one `remove_file`.
+
+The payoff is coverage, not just quietness: with overlap guaranteed the assertion
+tightened from *"at least one side observed the other"* to **both**, which the
+timing-based version could not afford. An OR over two directions is satisfied by a
+half-working router.
+
+*Reading a flake honestly:* two synthetic load models (8-way CPU spin, concurrent loft
+startups) failed to reproduce the original failure, so the fix rests on the
+**mechanism** — read off the failure log — plus the barrier making that mechanism
+impossible by construction, and on two clean full-suite runs. It is not a
+red→green reproduction, and saying so is part of the result.
+
 ### Backend divergence: the differential check is the instrument
 
 Interpret-vs-native disagreement is also an n=1, deterministic property — and the

@@ -1115,7 +1115,7 @@ fn repl_file_debugger_end_to_end() {
     // Piped session: read `n` at the frame, continue to the end, quit.
     let input = std::io::Cursor::new(b"n\n:continue\n:quit\n".to_vec());
     let mut out: Vec<u8> = Vec::new();
-    loft::repl::run_file_debug("default", file, 2, input, &mut out).expect("debug run");
+    loft::repl::run_file_debug("default", &[], file, 2, input, &mut out).expect("debug run");
     let text = String::from_utf8_lossy(&out);
     assert!(
         text.contains("break at"),
@@ -1361,5 +1361,566 @@ fn a_failed_input_does_not_warn_about_the_replayed_session() {
             Eval::Ran
         ),
         "the replayed bindings must still be live after the failed input"
+    );
+}
+
+/// @PLN120 E1 — `loft debug prog.loft:N --lib <dir>` must resolve a library the
+/// same way running the program does.
+///
+/// `run_file_debug` built its session with `ReplSession::new` (stdlib only) while
+/// the `--rpc` and `--serve` paths used `new_with_libs`, so the interactive
+/// debugger — and only it — reported `Library '<x>' not found` on a file that runs
+/// clean.  moros read that as "the debugger does not work on real programs": every
+/// project whose libraries live in a local `lib/` was undebuggable by this route.
+#[test]
+fn file_debugger_resolves_a_library_from_lib_dirs() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let lib_dirs = vec![dir.to_string_lossy().into_owned()];
+
+    let path = tmp_session("filedebug_lib").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use typeshift;\nfn main() {\n  v = ts_touch();\n  assert(v == 7, \"lib call\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    let input = std::io::Cursor::new(b":continue\n:quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &lib_dirs, file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("not found"),
+        "the library must resolve under --lib: {text}"
+    );
+    assert!(
+        text.contains("break at"),
+        "the breakpoint must be reached: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The control for the test above: with NO `lib_dirs` the same program cannot
+/// resolve its library, so the assertion there is about the wiring and not about
+/// `typeshift` happening to be findable some other way.
+#[test]
+fn file_debugger_without_lib_dirs_cannot_resolve_the_library() {
+    let path = tmp_session("filedebug_nolib").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use typeshift;\nfn main() {\n  v = ts_touch();\n  assert(v == 7, \"lib call\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    let input = std::io::Cursor::new(b":quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &[], file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        text.contains("not found"),
+        "without --lib the library must NOT resolve — else the E1 test proves nothing: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 E3b — a call crossing into NATIVE code must work under the debugger.
+///
+/// The REPL's execute path ran `compile::byte_code` (which registers native
+/// STUBS) but never loaded the packages' cdylibs, so the first `#native` call
+/// panicked with *"native function not loaded"* and the session was abandoned.
+/// The CLI run path and `loft test` both wired them; the debugger did not — which
+/// is why importing a registry package was harmless and calling the part of it
+/// that is native was fatal (moros H13: `use web; sleep_ms(5)` died while the same
+/// file ran clean under `--interpret`).
+#[test]
+fn file_debugger_can_call_into_a_native_library() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let lib_dirs = vec![dir.to_string_lossy().into_owned()];
+
+    let path = tmp_session("filedebug_native").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use native_pkg;\nfn main() {\n  v = ext_add_one(41);\n  \
+         assert(v == 42, \"native call under the debugger\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    let input = std::io::Cursor::new(b":continue\n:quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &lib_dirs, file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("native function not loaded"),
+        "the cdylib must be wired for the debug run: {text}"
+    );
+    assert!(
+        !text.contains("debug session ended"),
+        "the session must survive the native call: {text}"
+    );
+    // The program's own assert is the value check — reaching the end proves it held.
+    assert!(
+        text.contains("run finished"),
+        "the run must complete past the native call: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 B — a breakpoint condition has THREE outcomes, not two.
+///
+/// `resolve_pause` compared `debug_eval(cond) != Some("true")`, so a condition
+/// that could not be EVALUATED (a typo, or a name not in scope at that line) was
+/// indistinguishable from one that evaluated FALSE: the breakpoint reported
+/// `verified: true` and then never fired, silently. The client was promised a
+/// breakpoint that could not exist.
+///
+/// The three cells below are the whole contract. The false-but-valid row is the
+/// control — without it, a "fix" that simply always breaks would pass.
+fn cond_session(cond: &str, file: &std::path::Path) -> (bool, Vec<String>) {
+    let mut s = ReplSession::new("default").expect("stdlib");
+    let src = "fn main() {\n  total = 0;\n  for i in 0..4 {\n    \
+               step = i * 10;\n    total = total + step;\n  }\n  \
+               assert(total == 60, \"ran\")\n}\n";
+    std::fs::write(file, src).expect("write");
+    s.load_program(file.to_str().unwrap())
+        .expect("read")
+        .expect("parse");
+    s.debug_stepping(true);
+    s.add_file_breakpoint_rich(
+        file.to_str().unwrap(),
+        5,
+        Some(cond.to_string()),
+        Vec::new(),
+        true,
+    );
+    let paused = matches!(s.eval("main()"), Eval::Paused);
+    (paused, s.take_trace_output())
+}
+
+#[test]
+fn an_unevaluable_breakpoint_condition_is_reported_and_stops() {
+    let f = tmp_session("cond_bad").with_extension("loft");
+    // `i` is not in the frame at line 5, so the condition cannot be evaluated.
+    let (paused, trace) = cond_session("i == 2", &f);
+    assert!(
+        paused,
+        "an unevaluable condition must STOP — silently never firing is the bug"
+    );
+    assert!(
+        trace.iter().any(|t| t.contains("cannot be evaluated")),
+        "and must say so: {trace:?}"
+    );
+    let _ = std::fs::remove_file(&f);
+}
+
+#[test]
+fn a_false_breakpoint_condition_stays_silent_and_does_not_stop() {
+    let f = tmp_session("cond_false").with_extension("loft");
+    // `total` IS in the frame; the condition is simply never true.
+    let (paused, trace) = cond_session("total == 999", &f);
+    assert!(!paused, "a false condition must not stop: {trace:?}");
+    assert!(
+        !trace.iter().any(|t| t.contains("cannot be evaluated")),
+        "and must not be reported as unevaluable: {trace:?}"
+    );
+    let _ = std::fs::remove_file(&f);
+}
+
+#[test]
+fn a_true_breakpoint_condition_stops_without_a_diagnostic() {
+    let f = tmp_session("cond_true").with_extension("loft");
+    let (paused, trace) = cond_session("total == 10", &f);
+    assert!(paused, "a true condition must stop: {trace:?}");
+    assert!(
+        !trace.iter().any(|t| t.contains("cannot be evaluated")),
+        "a valid condition draws no complaint: {trace:?}"
+    );
+    let _ = std::fs::remove_file(&f);
+}
+
+/// @PLN120 A — the frame-liveness gate: the plan's three-row probe table, driven
+/// through the real `loft debug <file>:<line>` path.
+///
+/// `for i in 0..4 { step = i * 10; total = total + step; }` is the shape the design
+/// was built on, and it is deliberately one where `i` and `step` **share a stack
+/// slot** (`loft introspect` shows both at `var[48]`; the allocator is scope-blind,
+/// so two locals whose live ranges do not overlap coalesce even inside one scope).
+/// That is what makes the three rows below controls rather than decoration:
+///
+/// * line 4 — `step` is in scope with no completed write, so it must read `<unset>`
+///   and **not** `0`. `0` is `i`'s value in the shared slot: a scope-only fix (show
+///   every in-scope local with its slot's contents) prints exactly that, which is a
+///   silent lie of the same family arc B closed for conditions.
+/// * line 5 — `step` must read its value (the one the line consumes; it was missing
+///   entirely before A, because the reference-span filter asked whether the pc was
+///   past its first *read*), and `i` must be reported as `<reused by step>` — in
+///   scope, but its bytes are gone. Not silently dropped, not shown as `0`.
+/// * line 7 — after the loop, `i` and `step` must be **absent**. Without this row a
+///   fix that shows every local everywhere passes the other two.
+#[test]
+fn file_debugger_frame_shows_scope_with_unset_and_reused_markers() {
+    let path = std::env::temp_dir().join(format!("loft_pln120a_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..4 {\n    \
+                step = i * 10;\n    \
+                total = total + step;\n  \
+                }\n  \
+                assert(total == 60, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let at = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+
+    // Row 1 — line 4 `step = i * 10`.
+    let l4 = at(4, ":vars\n:quit\n");
+    assert!(l4.contains("i = 0"), "line 4 shows the user's `i`: {l4}");
+    assert!(
+        l4.contains("step = <unset>"),
+        "line 4 marks `step` unset — NOT `step = 0`, which is `i`'s value in the \
+         slot they share: {l4}"
+    );
+
+    // Row 2 — line 5 `total = total + step`.
+    let l5 = at(5, ":vars\n:quit\n");
+    assert!(
+        l5.contains("step = 0"),
+        "line 5 shows `step`, the value the line reads (absent before A): {l5}"
+    );
+    assert!(
+        l5.contains("i = <reused by step>"),
+        "line 5 names why `i` is unreadable rather than dropping it: {l5}"
+    );
+
+    // Row 3 (the control) — line 7, after the loop.
+    let l7 = at(7, ":vars all\n:quit\n");
+    assert!(l7.contains("total = 60"), "line 7 shows `total`: {l7}");
+    assert!(
+        !l7.contains("step ") && !l7.contains("i = "),
+        "line 7 must NOT gain `i`/`step` — they are out of scope: {l7}"
+    );
+
+    // The unreadable local names its reason on read AND refuses the edit — the edit
+    // half is the memory-safety property: writing through a name whose slot belongs
+    // to another local corrupts that local (and for `text`, `Drop`s a `String` that
+    // was never constructed).
+    let refused = at(5, "i\ni = 42\n:quit\n");
+    assert!(
+        refused.contains("slot was reused by `step`"),
+        "reading an unheld local explains itself: {refused}"
+    );
+    assert!(
+        refused.contains("can't set it:"),
+        "editing an unheld local is refused, with the reason: {refused}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 A — the `text` half of the edit gate, which is the one failure mode of
+/// this arc that corrupts memory rather than merely misinforming: overwriting a text
+/// local runs `Drop` on its old `String`, so the slot must hold a constructed one.
+/// Before A the narrow reference-span filter hid an unwritten text local, and the
+/// gate rode on that; A shows it, so the gate has to be explicit.
+#[test]
+fn file_debugger_refuses_to_edit_an_unset_text_local() {
+    let path = std::env::temp_dir().join(format!("loft_pln120a_txt_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..3 {\n    \
+                msg = \"n\";\n    \
+                total = total + i;\n  \
+                }\n  \
+                assert(total == 3, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let drive = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+    // On its own assignment line the text local is `<unset>` and the edit is refused.
+    let unset = drive(4, "msg = \"hi\"\n:quit\n");
+    assert!(
+        unset.contains("msg = <unset>"),
+        "an unwritten text local is shown as unset: {unset}"
+    );
+    assert!(
+        unset.contains("has no value yet at this line"),
+        "and the refused edit says why: {unset}"
+    );
+    // The control: one line later it IS held, so the same edit must succeed —
+    // without this, a gate that refuses every text edit would pass.
+    let held = drive(5, "msg = \"hi\"\n:quit\n");
+    assert!(
+        held.contains("msg = \"n\"") && held.contains("msg = \"hi\""),
+        "one line later the edit lands: {held}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 F — the undo/redo history survives a step exactly as far as its storage
+/// does.  Six cells; the consumer report is cell 1 and the safety property is cell 2.
+///
+/// The probe is the arc-A shape on purpose: `i` and `step` **share** slot 48 (the slot
+/// allocator is scope-blind), so an undo of `i` replayed one line later would write
+/// `step`'s value — which is exactly the hazard that made `debug_step` clear the whole
+/// history, discarding the valid entries with the stale one.
+#[test]
+fn file_debugger_undo_survives_a_step_only_while_its_storage_does() {
+    let path = std::env::temp_dir().join(format!("loft_pln120f_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..4 {\n    \
+                step = i * 10;\n    \
+                total = total + step;\n  \
+                }\n  \
+                assert(total > 0, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let drive = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+
+    // Cell 1 — THE REPORTED CASE.  `total` keeps slot 32 for the whole function, so its
+    // undo entry is still valid after a step; before F this answered "nothing to undo".
+    let c1 = drive(5, "total = 99\n:next\n:undo\n:quit\n");
+    assert!(c1.contains("total = 99"), "the edit lands: {c1}");
+    assert!(
+        c1.matches("total = 0").count() >= 2,
+        "…and `:undo` after a step restores it: {c1}"
+    );
+
+    // Cell 2 — THE SAFETY CONTROL.  Editing `i` on line 4 and stepping to line 5 hands
+    // slot 48 to `step`; the entry must be dropped WITH ITS REASON, and `step`'s value
+    // must be left alone.  Without this cell, "stop clearing the history" passes cell 1
+    // and ships the stale-slot write.
+    let c2 = drive(4, "i = 7\n:next\n:undo\n:quit\n");
+    assert!(
+        c2.contains("no longer undoable") && c2.contains("`i`'s stack slot is now `step`'s"),
+        "the drop names the local that took the slot: {c2}"
+    );
+    assert!(
+        c2.contains("step = 70"),
+        "…and `step` (7 * 10, the edit's own effect) is NOT overwritten by the undo: {c2}"
+    );
+
+    // Cell 5 — no edits at all.  Correct behaviour, previously indistinguishable from a
+    // broken feature: `:undo` is edit-scoped, and it now says so.
+    let c5 = drive(5, ":next\n:undo\n:quit\n");
+    assert!(
+        c5.contains("no edits to undo at this pause") && c5.contains("stepBack"),
+        "an empty stack names the edit/step boundary and the tool that does step back: {c5}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 F — the two classes the blanket clear discarded needlessly.
+///
+/// A **heap** edit's address survives any number of steps, so its entry must too
+/// (cell 3); an edit made in a frame that has since **returned** must be dropped, named
+/// (cell 4).  Cell 3 is what proves the frame/heap split earns its keep rather than
+/// being decoration — with one rule for everything, either heap edits stay lost or
+/// returned-frame edits get replayed into a dead frame.
+#[test]
+fn file_debugger_undo_keeps_heap_edits_and_drops_returned_frames() {
+    let path = std::env::temp_dir().join(format!("loft_pln120f_h_{}.loft", std::process::id()));
+    let prog = "struct Pt { x: integer, y: integer }\n\n\
+                fn bump(p: Pt) -> integer {\n  \
+                inner = p.x + 1;\n  \
+                return inner;\n}\n\n\
+                fn main() {\n  \
+                pt = Pt { x: 5, y: 6 };\n  \
+                a = bump(pt);\n  \
+                b = pt.x + a;\n  \
+                assert(b > 0, \"ok\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let drive = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+
+    // Cell 3 — a heap field edit, then a step, then undo: restored.  No frame binding is
+    // recorded for it, because no frame change can invalidate a heap record's address.
+    let c3 = drive(10, "pt.x = 40\n:next\n:undo\n:quit\n");
+    assert!(c3.contains("Pt{x:40,y:6}"), "the field edit lands: {c3}");
+    assert!(
+        c3.contains("a = 41"),
+        "…and takes effect in the program (5 → 40, +1): {c3}"
+    );
+    assert!(
+        c3.matches("Pt{x:5,y:6}").count() >= 2,
+        "…and `:undo` after the step restores it: {c3}"
+    );
+
+    // Cell 4 — an edit inside `bump`, then `:finish` back into `main`: the frame it was
+    // made in is gone, so the entry is dropped and says which frame.  Replaying it would
+    // write a dead frame's slot.
+    let c4 = drive(5, "inner = 99\n:finish\n:undo\n:quit\n");
+    assert!(c4.contains("inner = 99"), "the callee edit lands: {c4}");
+    assert!(
+        c4.contains("no longer undoable") && c4.contains("frame it was made in has returned"),
+        "…and returning drops it, naming the reason: {c4}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 A follow-up — a name that IS a local of this function but is not in scope on
+/// the paused line says so, instead of the generic "couldn't evaluate" a typo gets.
+/// The consumer's case verbatim: reading the loop iterator while stopped on the `for`.
+#[test]
+fn file_debugger_names_an_out_of_scope_local() {
+    let path = std::env::temp_dir().join(format!("loft_pln120a_oos_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..3 {\n    \
+                total = total + i;\n  \
+                }\n  \
+                assert(total == 3, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let input = std::io::Cursor::new(b"i\nnosuchname\n:quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &[], file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("not in scope at this line"),
+        "an out-of-scope local explains itself: {text}"
+    );
+    // The control: a name that is not a local at all must still get the generic message,
+    // or the new one would be claiming knowledge it does not have.
+    assert!(
+        text.contains("couldn't evaluate `nosuchname`"),
+        "an unknown name stays a plain failure: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// moros H13's residual — a call to a `use`d LIBRARY's function inside `eval` answered
+/// "couldn't evaluate", while a same-file call and arithmetic over locals both worked.
+///
+/// The cause was not in the debugger. An import is an ALIAS in `def_names` —
+/// `(name, importing_source) → def_nr` — which is not derivable from `definitions`,
+/// since each definition knows only its own source. `Data::rebuild_indices` rebuilt
+/// from `definitions` alone and therefore dropped every import, and the REPL rebuilds
+/// on each `savepoint`/`rewind` — so the FIRST eval probe silently un-imported every
+/// library name for the rest of the session. `Data` now retains the applied imports
+/// and replays them after a rebuild.
+///
+/// The two controls are what place the blame: a same-file call and a local expression
+/// must keep working, so a fix that broke ordinary resolution to make libraries
+/// resolve could not pass.
+#[test]
+fn debug_eval_can_call_a_library_function_at_a_frame() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let lib_dirs = vec![dir.to_string_lossy().into_owned()];
+
+    let path = tmp_session("eval_libcall").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use typeshift;\n\
+         fn local_double(n: integer) -> integer { return n * 2; }\n\
+         fn main() {\n  \
+         base = 5;\n  \
+         v = 0;\n  \
+         v = ts_touch() + base;\n  \
+         assert(v == 12, \"lib call\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    // Break on the line that uses the library call, then exercise three reads and two
+    // edits.  A bare read prints its value to stdout, which this harness does not
+    // capture — but a FAILED read prints "couldn't evaluate" to the chrome stream, and
+    // an EDIT reprints the frame there, so the edits are what pin the actual VALUES.
+    let input = std::io::Cursor::new(
+        b"base\nlocal_double(base)\nts_touch()\nv = local_double(base)\nv = ts_touch() + base\n:quit\n"
+            .to_vec(),
+    );
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &lib_dirs, file, 6, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("couldn't evaluate"),
+        "every expression must evaluate at the frame: {text}"
+    );
+    assert!(
+        !text.contains("couldn't set"),
+        "every edit must land: {text}"
+    );
+    // The same-file call is the control: `local_double(5)` is 10.
+    assert!(
+        text.contains("v = 10"),
+        "the same-file call produced its value (control): {text}"
+    );
+    // The regression: `ts_touch()` is 7, so 7 + 5 = 12.  A VALUE, not merely the
+    // absence of an error — a library call that silently yielded 0 would pass the two
+    // negative assertions above.
+    assert!(
+        text.contains("v = 12"),
+        "the LIBRARY call produced its value at the frame: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The two silent resolution sites, closed by one `ResolutionContext` value.
+///
+/// `--lib` used to be threaded into three entry points and forgotten in the fourth
+/// (@PLN120 E.1 — `loft repl --lib d` answered "Library 'x' not found"), and `:reset`
+/// rebuilt a live session from `stdlib_dir` alone, silently dropping the libraries it
+/// had. The second was LATENT BEHIND the first: with no way to get a library into a
+/// REPL session, there was no way to watch a reset lose one — which is why fixing only
+/// the flag would have left a live fault behind.
+///
+/// Both are asserted here, in order, in one session: a library call resolves, a
+/// `:reset` happens, and a library call resolves again.
+#[test]
+fn repl_keeps_its_resolution_context_across_a_reset() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let ctx = loft::repl::ResolutionContext {
+        stdlib_dir: "default".to_string(),
+        lib_dirs: vec![dir.to_string_lossy().into_owned()],
+    };
+    // The VALUE is pinned with loft's own `assert`, not by reading the printed result:
+    // an expression's value goes to stdout, which this harness does not capture, while
+    // a failed `assert` reports to the chrome stream it does.  So a wrong value fails
+    // loudly here, and a resolution failure shows as "Unknown function".
+    let input = std::io::Cursor::new(
+        b"use typeshift;\nassert(ts_touch() == 7, \"before reset\")\n:reset\n          use typeshift;\nassert(ts_touch() == 7, \"after reset\")\n:quit\n"
+            .to_vec(),
+    );
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_repl(&ctx, input, &mut out).expect("repl run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("not found") && !text.contains("Unknown function"),
+        "the library must resolve in a plain REPL session, before AND after the \
+         reset: {text}"
+    );
+    assert!(
+        text.contains("session reset."),
+        "the reset must actually have happened, or the second call proves nothing: \
+         {text}"
+    );
+    assert!(
+        !text.contains("assertion failed"),
+        "both library calls must return 7 — a resolved call with a wrong value would \
+         otherwise pass the checks above: {text}"
     );
 }

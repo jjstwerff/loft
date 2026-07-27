@@ -18,7 +18,8 @@ impl Parser {
         // the right signal — `expr_not_null` alone is false even for a non-null
         // constructed struct, which would wrongly suppress genuine warnings, e.g.
         // p285.)
-        let receiver_nullable = matches!(tp, Type::Optional(_));
+        let receiver_nullable =
+            matches!(tp, Type::Optional(_)) || self.reads_a_collection_element(code);
         if let Type::Unknown(_) | Type::Never = tp {
             // @P376 — `Type::Never` is the poison an errored struct construction
             // (`p = Plyer { … }` with an unknown `Plyer`) assigns to its
@@ -805,6 +806,49 @@ impl Parser {
     /// matrix-indexing contract). Everything else (a general var, an index touching an untrusted
     /// var) can overrun → the read types `τ?`. Mirrors the pass-2 warning walk's skip patterns 2/3;
     /// the `i < len(v)` guard (pattern 5) is added separately.
+    /// Does `code` read an ELEMENT out of a collection — `v[i]`, `m[k]` — possibly
+    /// through a chain of field reads (`v[i].pos` for `v[i].pos.x`)?
+    ///
+    /// Such a read yields null at runtime when the element is absent, whatever the
+    /// element type says: an out-of-range index and a missing key both produce the
+    /// null value (C80).  The index arms already clear `expr_not_null` for exactly
+    /// that reason — a bare `v[i]` warning about an overrun while `v[i] ?? d`
+    /// warned "redundant" left the author no clean idiom.  A following field read
+    /// re-armed the flag from the FIELD's own non-nullness and put the trap back
+    /// one level down, so `v[i].pos.x ?? 0.0` — the correct defence — was reported
+    /// as dead code.  This carries the receiver's fact through the chain, which is
+    /// the rule stated at the top of `field`: an access cannot be MORE non-null
+    /// than the thing it reads from.
+    ///
+    /// Lint signal only: the element type is unchanged, so a constant index stays
+    /// the trusted developer contract `index_provably_fit` makes it.
+    fn reads_a_collection_element(&self, code: &Value) -> bool {
+        match code.unspan() {
+            Value::Call(d, args) => {
+                let name = self.data.def(*d).name.as_str();
+                if matches!(
+                    name,
+                    "OpGetVector"
+                        | "OpGetVectorNullable"
+                        | "OpVectorRef"
+                        | "OpVectorRefNullable"
+                        | "OpGetHash"
+                        | "OpGetSorted"
+                        | "OpGetIndex"
+                        | "OpGetRadix"
+                ) {
+                    return true;
+                }
+                // Walk down a field-read chain to the value it started from.
+                name.starts_with("OpGet")
+                    && args
+                        .first()
+                        .is_some_and(|a| self.reads_a_collection_element(a))
+            }
+            _ => false,
+        }
+    }
+
     fn index_provably_fit(&self, index: &Value, vec: &Value) -> bool {
         // A compile-time-constant index — positive OR negative (`v[-1]` is the Python-style
         // last-element idiom; `-1` lowers to a negation, so use `const_int`, not a literal match)
@@ -1201,7 +1245,15 @@ impl Parser {
         // strict-index lint below can still recognise a bare loop variable.
         let raw_index = p.unspan().clone();
         if !self.convert(p, index_t, &I32) {
-            diagnostic!(self.lexer, Level::Error, "Invalid index on string");
+            // Name the offending type: the bare "invalid index" this used to
+            // print reads as "indexing text is unsupported" and sent a consumer
+            // hunting for a missing feature instead of at their index expression.
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot index text with '{}' — an index must be an integer (`s[i]`, `s[i..]`, `s[i..j]`)",
+                index_t.name(&self.data)
+            );
         }
         let mut other = Value::Null;
         if self.lexer.has_token("..") {
@@ -1214,7 +1266,12 @@ impl Parser {
             } else {
                 let ot_type = self.expression(&mut other);
                 if !self.convert(&mut other, &ot_type, &I32) {
-                    diagnostic!(self.lexer, Level::Error, "Invalid index on string",);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot end a text slice at '{}' — a range end must be an integer (`s[i..j]`)",
+                        ot_type.name(&self.data)
+                    );
                 }
                 if incl {
                     other = self.cl("OpAddInt", &[other.clone(), Value::Int(1)]);

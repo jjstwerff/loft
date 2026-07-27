@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression: defending a field read through a collection element was reported
+// as dead code (moros H4).
+//
+// `v[i]` yields null when the element is absent, whatever the element type says
+// (C80) — so the index arms clear the not-null lint signal, because a bare
+// `v[i]` warning about an overrun WHILE `v[i] ?? d` warned "redundant" left the
+// author no clean idiom.  A following field read re-armed the flag from the
+// FIELD's own non-nullness and put the trap back one level down: `verts[0].pos.x
+// ?? 0.0` — the correct defence, and demonstrably live, since the fold below
+// prints null on an empty vector — was told its default is never used.  That is
+// the diagnostic that sent a consumer looking for a runtime fault instead of at
+// their seed.
+//
+// A field access cannot be MORE non-null than the thing it reads from.  Lint
+// signal only: the element TYPE is unchanged, so a constant index stays the
+// trusted developer contract `index_provably_fit` makes it.
+//
+// @EXPECT_WARNING: Redundant null coalescing — 'x' is 'not null'
+
+struct V2 { x: float, y: float }
+struct Vertex { pos: V2 }
+
+// The defended reads: none of these may be called redundant.
+fn min_x_direct(vs: vector<V2>) -> float { vs[0].x ?? -1.0 }
+fn min_x_nested(vs: vector<Vertex>) -> float { vs[0].pos.x ?? -1.0 }
+fn min_x_varindex(vs: vector<Vertex>, i: integer) -> float { vs[i].pos.x ?? -1.0 }
+
+// The CONTROL, and the reason this is a lint change rather than a type change:
+// `v` comes from iteration, so it really cannot be null and the default really
+// is dead.  This one MUST still warn — it is the @EXPECT_WARNING above.
+fn fold_xs(vs: vector<V2>) -> float {
+  s = 0.0;
+  for v in vs { s = s + (v.x ?? -1.0); }
+  s
+}
+
+fn test_the_default_is_live_on_an_empty_vector() {
+  empty: vector<V2> = [];
+  assert(min_x_direct(empty) == -1.0,
+         "empty direct: {min_x_direct(empty)} expect -1 — the default the lint called dead");
+  none: vector<Vertex> = [];
+  assert(min_x_nested(none) == -1.0, "empty nested: {min_x_nested(none)} expect -1");
+  assert(min_x_varindex(none, 0) == -1.0, "empty var index: {min_x_varindex(none, 0)} expect -1");
+}
+
+fn test_a_present_element_still_reads_through() {
+  vs = [V2 { x: 3.0, y: 4.0 }];
+  assert(min_x_direct(vs) == 3.0, "present direct: {min_x_direct(vs)} expect 3");
+  ws = [Vertex { pos: V2 { x: 5.0, y: 6.0 } }];
+  assert(min_x_nested(ws) == 5.0, "present nested: {min_x_nested(ws)} expect 5");
+  assert(min_x_varindex(ws, 0) == 5.0, "present var index: {min_x_varindex(ws, 0)} expect 5");
+}
+
+fn test_the_control_still_reads_correctly() {
+  assert(fold_xs([V2 { x: 1.0, y: 0.0 }, V2 { x: 2.0, y: 0.0 }]) == 3.0, "control fold");
+}
+
+fn main() {
+  test_the_default_is_live_on_an_empty_vector();
+  test_a_present_element_still_reads_through();
+  test_the_control_still_reads_correctly();
+  println("h4-element-field-coalesce ok");
+}

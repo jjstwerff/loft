@@ -1603,6 +1603,25 @@ impl Parser {
     /// (`&self`). Replaces the three inline branches the Reference arm of
     /// `block_result` carried; mirrors `classify_vector_delivery`.
     fn classify_reference_delivery(&self, ls: &[u16], l: &[Value]) -> RefDelivery {
+        if l.last()
+            .is_some_and(|tail| self.return_projects_into_local(tail))
+        {
+            // The tail POINTS INTO something the callee frees, so it cannot be
+            // renamed onto the caller's buffer — copy the record in first.
+            //
+            // #425 / H9 at the implicit tail: `fn get() -> Inner { mk().inn }`
+            // projects a field of an inline-call temporary, lifted to `__lift_N`
+            // and freed at scope exit, so returning it as-is hands the caller a ref
+            // into a freed store — native discards it and returns null, the
+            // interpreter reads the stale bytes and only looks right.
+            //
+            // moros H12 is the ELEMENT twin — `{ b = make_bag(); b.b_cells[i] }`.
+            // It reached the `Rename` fallback below instead, which promoted the
+            // local `b` (a `Bag`) onto a `Cell`-typed return buffer; `ls` is `[b]`
+            // and `return_views_local` inspects each dep's own *further* deps, so
+            // it cannot see that the tail merely projects into `b`.
+            return RefDelivery::MaterializeView;
+        }
         if ls.is_empty() {
             // Issue #120: deps stripped — recover the tail's hidden work-refs so the
             // site still binds to the one buffer. No work-ref to recover → AsIs.
@@ -9347,36 +9366,13 @@ impl Parser {
         }
     }
 
-    fn return_field_base_is_call(&self, tail: &Value) -> bool {
-        match tail.unspan() {
-            Value::Return(inner) | Value::Drop(inner) => self.return_field_base_is_call(inner),
-            Value::Block(bl) => bl
-                .operators
-                .last()
-                .is_some_and(|t| self.return_field_base_is_call(t)),
-            Value::Insert(ops) => ops
-                .last()
-                .is_some_and(|t| self.return_field_base_is_call(t)),
-            Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
-                // The base is an owned temporary iff it is a plain function
-                // CALL (not an `OpGetField` chain, not a `Var`).  An inner
-                // `OpGetField` base is the chained case (E), already delivered
-                // through a materialised work-ref.
-                matches!(
-                    args.first().map(Value::unspan),
-                    Some(Value::Call(bd, _)) if *bd != self.data.def_nr("OpGetField")
-                )
-            }
-            _ => false,
-        }
-    }
-
     /// #488 — true when the returned expression is a field VIEW rooted at a
     /// non-argument LOCAL `Var` (`return r.pts`, `return r.a.b`): the local is
     /// freed at scope exit, so the view must be element-copied into the
     /// caller's return buffer.  Argument-rooted views (`return b.v`) are the
     /// dep-driven case the vector buffer gate already handles; call-rooted
-    /// views are `return_field_base_is_call`.  Pure field chains only — a
+    /// views are the call-rooted leg of `return_projects_into_local`.  Pure field
+    /// chains only — a
     /// match/if/vector construction is NOT a view and must keep its NRVO
     /// delivery (its Insert block cannot sit in OpAppendVector's argument
     /// position; the 85-store-lifetime-vector-match-return shape).
@@ -9396,6 +9392,58 @@ impl Parser {
                     Some(inner) if matches!(inner, Value::Call(bd, _) if *bd == self.data.def_nr("OpGetField")) => {
                         self.return_field_base_is_local_var(inner)
                     }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// H12 — true when the returned expression **projects into** something the
+    /// callee owns rather than *being* it: a field (`OpGetField`) or element
+    /// (`OpGetVector`) read whose base spine reaches a non-argument LOCAL, or an
+    /// inline CALL's temporary.
+    ///
+    /// That distinction is what makes a `Rename` delivery sound or not. Renaming the
+    /// tail's work-ref onto the caller's return buffer delivers the value only when
+    /// the tail IS that work-ref; when it merely points *inside* it, the record lives
+    /// in a store the callee frees at scope exit, so it must be copied into the buffer
+    /// first ([`materialize_view_return`](Self::materialize_view_return)).
+    ///
+    /// Replaces the narrower `return_field_base_is_call`, which saw only one corner of
+    /// it — the field-off-a-call case (H9).  The element case had no predicate at all —
+    /// `return b.cells[i]` and its implicit-tail twin both handed the caller a
+    /// uniformly-null record, which a consumer reads as "absent" rather than
+    /// "broken" (moros H12: an unwritten world cell and a dead one became
+    /// indistinguishable).
+    ///
+    /// An ARGUMENT-rooted projection is deliberately excluded: the caller owns that
+    /// store, so the view outlives the call and the dep-driven path already handles it.
+    fn return_projects_into_local(&self, tail: &Value) -> bool {
+        let (get_field, get_vector) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+        );
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => self.return_projects_into_local(inner),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.return_projects_into_local(t)),
+            Value::Insert(ops) => ops
+                .last()
+                .is_some_and(|t| self.return_projects_into_local(t)),
+            Value::Call(d, args) if *d == get_field || *d == get_vector => {
+                match args.first().map(Value::unspan) {
+                    // Rooted at a local: freed at scope exit, so the projection dangles.
+                    Some(Value::Var(base)) => !self.vars.is_argument(*base),
+                    // A chained projection — recurse to find the root.
+                    Some(inner @ Value::Call(bd, _)) if *bd == get_field || *bd == get_vector => {
+                        self.return_projects_into_local(inner)
+                    }
+                    // An inline call's result is an owned temporary (`__lift_N`), freed
+                    // on the way out — the H9 case.
+                    Some(Value::Call(_, _)) => true,
                     _ => false,
                 }
             }
@@ -10796,14 +10844,26 @@ impl Parser {
                 // body — `ref_return`'s one-buffer binding substitutes /
                 // copy-rewrites inside it (the reassignment guard does not
                 // apply: explicit return already copies the value).
+                // H12 — a vector-element read types as `Optional(τ)` (`v[i]` is
+                // `τ?`), and every delivery arm below matches a DENSE form.  So
+                // `return b.cells[i]` from a `-> Cell` fn matched NO arm: nothing
+                // bound the value to `__retbuf`, and the IR came out as the element
+                // read evaluated for effect followed by `return null` — uniformly
+                // null fields, which read as "absent" rather than "broken".  Peel
+                // the marker for the delivery decision; `convert` above has already
+                // discharged the nullability against the dense declared return.
+                let t = match &t {
+                    Type::Optional(inner) => (**inner).clone(),
+                    other => other.clone(),
+                };
                 if let Type::Reference(td, ls) = &t {
-                    if self.return_field_base_is_call(&v) {
-                        // #425 sibling — `return mk().field` projects a struct
-                        // field of an inline-call temporary.  The call result is
-                        // freed at scope exit (lifted to `__lift_N`), so the
-                        // sub-ref dangles; copy the field's record into an owned
-                        // buffer first (the same owned-copy `return d.field` gets
-                        // from `ref_return`'s named-local leg).
+                    if self.return_projects_into_local(&v) {
+                        // The returned expression points INTO something this
+                        // function frees — a field of an inline call's temporary
+                        // (#425 / H9), or an element of a local's vector (H12).
+                        // Copy the record into an owned buffer first (the same
+                        // owned-copy `return d.field` gets from `ref_return`'s
+                        // named-local leg).
                         let w = self.materialize_view_return(*td, &mut v);
                         self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
                     } else if ls.is_empty() {
@@ -10847,7 +10907,7 @@ impl Parser {
                     {
                         let w = self.materialize_view_return(rtd, &mut v);
                         self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
-                    } else if self.return_field_base_is_call(&v) {
+                    } else if self.return_projects_into_local(&v) {
                         // #425 sibling — `return mk().field` where `field` is a
                         // struct-enum (heap record): the inline-call base is freed
                         // at scope exit, so copy the field's record into an owned

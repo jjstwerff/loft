@@ -1,0 +1,80 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression: `File.seek` was documented and absent (moros H11).
+//
+// STDLIB.md listed `seek(self: File, pos: integer)` in the File method table.  No
+// such method existed, so every calling form failed — `f#seek(n)`, `f.seek(n)`,
+// `seek(f, n)` — and the consumer concluded that "a random-access binary format
+// cannot skip a region it does not need" and restructured their file format around
+// the limitation.
+//
+// The capability was there the whole time, 22 lines lower in the same document, as
+// the operator form `f#next = pos`, with `f#next` as the position getter the same
+// report called absent.  So the defect was one doc row pointing at a name that did
+// not exist: it stopped the reader at the method table, and a missing method reads as
+// a missing feature.
+//
+// Fixed by making the documented name real — `seek` and `position` are now methods
+// over the same `next` field the operators use — rather than by deleting the row.
+// Deleting it would have left the next consumer grepping for "seek", finding nothing,
+// and drawing the same conclusion; the operator lives under a name (`next`) that
+// nobody searching for random access would try.
+//
+// Both backends must agree on every line.
+
+fn main() {
+  p = "h11_seek_probe.bin";
+  // Delete FIRST, not only at the end: `f += …` APPENDS, so a leftover file from an
+  // earlier failed run would silently make every size/offset assertion below read a
+  // longer file.  A test that is not idempotent reports the previous run's mess.
+  delete(p);
+  f = file(p);
+  f#format = Format.LittleEndian;
+  f += 11 as i32;
+  f += 22 as i32;
+  f += 33 as i32;
+  f.sync();
+
+  g = file(p);
+  g#format = Format.LittleEndian;
+  a = g#read as i32;
+  assert(a == 11, "first record: {a}");
+  // `position` is where the NEXT read lands; `f#index` is where the LAST one began.
+  // Asserting both pins the distinction the report got wrong.
+  assert(g.position() == 4, "position after one 4-byte read: {g.position()}");
+  assert(g#index == 0, "index after one read is the read's START: {g#index}");
+  assert(g#size == 12, "size: {g#size}");
+
+  // Forward seek, then a BACKWARD one — a format that only ever moved forward could
+  // be served by sequential reads, so the backward jump is what proves random access.
+  assert(g.seek(8), "seek(8) accepted");
+  c = g#read as i32;
+  assert(c == 33, "third record after seek(8): {c}");
+  assert(g.position() == 12, "position at EOF: {g.position()}");
+
+  assert(g.seek(4), "seek(4) accepted");
+  b = g#read as i32;
+  assert(b == 22, "second record after backward seek(4): {b}");
+
+  // The method agrees with the operator form it wraps — if these ever diverge, one of
+  // the two documented spellings is lying.
+  g#next = 8;
+  assert(g.position() == 8, "operator seek is visible to position(): {g.position()}");
+  d = g#read as i32;
+  assert(d == 33, "operator-seeked read: {d}");
+
+  // Refusals, each a no-op rather than a fault: without these a `seek` that returned
+  // true unconditionally would pass every cell above.
+  assert(!g.seek(0 - 5), "a negative position is refused");
+  absent = file("h11_no_such_file.bin");
+  assert(!absent.seek(4), "seeking an absent file is refused");
+  // A file that was never opened has NO position, and loft says so with null rather
+  // than inventing a 0 — 0 is a legitimate position, so faking it would be the same
+  // "absent and broken look alike" confusion that made H12 costly.
+  np = absent.position() ?? (0 - 7);
+  assert(np == 0 - 7, "an absent file has a null position, not 0: {np}");
+
+  delete(p);
+  println("h11 ok");
+}

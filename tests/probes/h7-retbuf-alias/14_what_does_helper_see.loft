@@ -1,0 +1,10 @@
+fn add_i(v: vector<integer>, x: integer) -> vector<integer> {
+  println("  helper got len={len(v)} adding {x}");
+  out = v; out += [x]; out
+}
+fn main() {
+  a: vector<integer> = [7,8];
+  println("before loop len={len(a)}");
+  for k in [10,20,30] { a = add_i(a, k); println("  after assign len={len(a)}"); }
+  println("after loop len={len(a)}");
+}

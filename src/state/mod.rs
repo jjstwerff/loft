@@ -115,6 +115,67 @@ fn reverse_depth_from_env() -> usize {
         .unwrap_or(DEFAULT_REVERSE_DEPTH)
 }
 
+/// @PLN120 A — whether a paused frame still holds a local's own value.
+///
+/// A local can be in lexical scope and yet have nothing readable in the frame, for
+/// two different reasons — and a debugger that answers both with silence reads as
+/// broken, while one that answers with the slot's contents reads as *wrong*.  So the
+/// frame carries the reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalState {
+    /// The frame holds this local's value; reading its slot is correct.
+    Held,
+    /// In lexical scope, but no assignment to it has completed on this path yet.
+    /// `reserve_frame` does not zero locals, so its slot holds stack garbage — or,
+    /// on a slot it shares, another local's live value.  It must not be read.
+    Unset,
+    /// In lexical scope, but its slot now holds the named local's value: the slot
+    /// allocator is scope-blind, so two locals in one scope share a slot whenever
+    /// their live ranges do not overlap.  Break earlier to read this one.
+    Reused(String),
+    /// Not in lexical scope at this line, so not part of the frame a reader of the
+    /// source would expect.  [`frame_view`](State::frame_view) reports it anyway —
+    /// the slot-table dump wants every local — and the captured frame drops it.
+    OutOfScope,
+}
+
+impl LocalState {
+    /// What to show in place of a value, or `None` for [`Held`](LocalState::Held)
+    /// (whose value is read from the slot).
+    #[must_use]
+    pub fn marker(&self) -> Option<String> {
+        match self {
+            LocalState::Held => None,
+            LocalState::Unset => Some("<unset>".to_string()),
+            LocalState::Reused(by) => Some(format!("<reused by {by}>")),
+            LocalState::OutOfScope => Some("<out of scope>".to_string()),
+        }
+    }
+
+    /// Whether the frame holds this local's own value — the gate on every read or
+    /// write of its slot.
+    #[must_use]
+    pub fn is_held(&self) -> bool {
+        matches!(self, LocalState::Held)
+    }
+}
+
+/// @PLN120 A — one local of a paused frame, as [`State::frame_view`] reports it.
+pub(crate) struct FrameEntry {
+    pub var_nr: u16,
+    pub name: String,
+    /// Frame-relative slot offset (`Variables::stack`).
+    pub slot: u16,
+    pub tp: Type,
+    pub is_argument: bool,
+    pub state: LocalState,
+    /// First / last bytecode position that *references* this local, or `u32::MAX`.
+    /// The pre-@PLN120 liveness signal: still the fallback where the scope fact is
+    /// unavailable, and still reported because compiler work reads it.
+    pub bc_first: u32,
+    pub bc_last: u32,
+}
+
 /// Runtime state of a single coroutine instance (CO1.1).
 /// Holds the serialised stack and metadata needed to suspend and resume.
 #[derive(Clone, Debug)]
@@ -186,6 +247,25 @@ pub struct State {
     pub library_names: HashMap<String, u16>,
     pub(crate) text_positions: BTreeSet<u32>,
     pub(crate) line_numbers: BTreeMap<u32, u32>,
+    /// @PLN120 A — **scope spans**: `(start_pc, end_pc, scope_nr)` for every
+    /// `Block` / `Loop` codegen walks, in emission order.  A child block's code is
+    /// emitted *inside* its parent's, so **containment is the nesting relation** —
+    /// the scopes open at `pc` are every span covering it, and no scope tree is
+    /// needed.  Joined to [`Variables::scope`](crate::variables::Function::scope)
+    /// this is which locals are in lexical scope at a pause; see
+    /// [`frame_view`](State::frame_view).
+    pub(crate) scope_spans: Vec<(u32, u32, u16)>,
+    /// @PLN120 A — **store spans**: `(start_pc, end_pc, var_nr)` for every
+    /// assignment codegen emits.  `end_pc` is the pc *after* the store, so
+    /// `end_pc <= pause_pc` means the write has completed — the fact that decides
+    /// whether a local's slot may be read at all.  A local with no completed store
+    /// at the pause renders `<unset>`; `reserve_frame` does not zero locals, so
+    /// reading such a slot is a garbage-pointer hazard, not a cosmetic one.
+    ///
+    /// This cannot come from `vars` (the `code_pos → var_nr` map): that is keyed by
+    /// pc alone and a *read* at the same pc as an assignment's start overwrites the
+    /// assignment's entry, which is why it is read-dominated.
+    pub(crate) store_spans: Vec<(u32, u32, u16)>,
     /// Plan-07 phase 1 step 1.20 / phase 3 — pc → source-position table
     /// populated by codegen on every `Value::Span` it walks.  Runtime
     /// fault printers (div-by-zero, OOB, null deref, panic call) look up
@@ -451,6 +531,8 @@ impl State {
             library_names: HashMap::new(),
             text_positions: BTreeSet::new(),
             line_numbers: BTreeMap::new(),
+            scope_spans: Vec::new(),
+            store_spans: Vec::new(),
             source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
             debug: None,
@@ -2464,16 +2546,17 @@ impl State {
         ))
     }
 
-    /// Whether `name` is a local **shown** at the current suspension — i.e. it
-    /// appears in the captured paused frame.  The text edit path gates on this so a
-    /// user can only edit a text local they can see; the memory-safety of the write
-    /// itself is handled separately (by `ptr::write`, which never drops the prior
-    /// slot value).  `false` when not paused.
-    fn frame_local_is_live(&self, name: &str) -> bool {
-        self.debug
-            .as_deref()
-            .and_then(|d| d.paused.as_ref())
-            .is_some_and(|h| h.locals.iter().any(|(n, _)| n == name))
+    /// Whether the frame **holds** `name`'s own value at the current suspension —
+    /// the gate on every read or write of a frame slot by name.
+    ///
+    /// @PLN120 A: this asks [`frame_view`](Self::frame_view) rather than testing for
+    /// the name's *presence* in the captured frame, because the captured frame now
+    /// also lists locals it does not hold (`<unset>`, `<reused by …>`).  Presence
+    /// would let a heap read index a garbage `DbRef`, and would let a text edit
+    /// `Drop` a `String` that was never constructed.
+    fn frame_local_is_live(&self, name: &str, data: &crate::data::Data) -> bool {
+        self.frame_local_state(name, data)
+            .is_some_and(|st| st.is_held())
     }
 
     /// Whether a frame local's declared type is a **heap** value — a `DbRef` slot
@@ -2527,7 +2610,7 @@ impl State {
         // index a garbage store (the very OOB this read exists to avoid). The D0
         // variables panel gates the same way; an un-live name falls through to the
         // reconstruct path (which likewise lacks it → a clean `None`, never a crash).
-        if !self.frame_local_is_live(name) {
+        if !self.frame_local_is_live(name, data) {
             return None;
         }
         let (rec, at, tp, _is_arg) = self.frame_slot(name, data)?;
@@ -2560,7 +2643,7 @@ impl State {
     /// `None` for a non-keyed / unknown / un-live local.
     #[must_use]
     pub fn frame_keyed_type_source(&self, name: &str, data: &crate::data::Data) -> Option<String> {
-        if !self.frame_local_is_live(name) {
+        if !self.frame_local_is_live(name, data) {
             return None;
         }
         let (_, _, tp, _) = self.frame_slot(name, data)?;
@@ -2577,7 +2660,7 @@ impl State {
     /// fallback rather than mis-push it.
     #[must_use]
     pub fn frame_local_arg_type(&self, name: &str, data: &crate::data::Data) -> Option<String> {
-        if !self.frame_local_is_live(name) {
+        if !self.frame_local_is_live(name, data) {
             return None;
         }
         let (_, _, tp, _) = self.frame_slot(name, data)?;
@@ -2830,19 +2913,182 @@ impl State {
     /// @PLN16 M2 — finish the armed edit journal: if it recorded anything, push it onto
     /// the undo stack and clear the redo stack (a fresh edit forks the timeline);
     /// otherwise discard it.  Returns whether an undoable edit was recorded.
-    pub fn commit_edit_journal(&mut self) -> bool {
+    ///
+    /// @PLN120 F — `label` is the edit's LHS as typed, and the entry is **bound** to
+    /// what it wrote: which frame, and which locals' slots.  That binding is what lets
+    /// the entry outlive a step (see [`validate_undo_history`](Self::validate_undo_history)).
+    pub fn commit_edit_journal(&mut self, label: &str, data: &crate::data::Data) -> bool {
+        // Classify the recorded regions BEFORE moving the journal into the entry:
+        // anything in the stack store is frame storage, anything else is heap.
+        let (frame, slots) = {
+            let Some(j) = self
+                .debug
+                .as_deref()
+                .and_then(|d| d.recording_edit.as_ref())
+            else {
+                return false;
+            };
+            if j.is_empty() {
+                self.discard_edit_journal();
+                return false;
+            }
+            self.classify_edit_regions(&j.regions(), data)
+        };
         let Some(d) = self.debug.as_deref_mut() else {
             return false;
         };
-        let Some(j) = d.recording_edit.take() else {
+        let Some(journal) = d.recording_edit.take() else {
             return false;
         };
-        if j.is_empty() {
-            return false;
-        }
-        d.undo_stack.push(j);
+        d.undo_stack.push(crate::debugger::UndoEntry {
+            journal,
+            label: label.to_string(),
+            frame,
+            slots,
+        });
         d.redo_stack.clear();
         true
+    }
+
+    /// @PLN120 F — which frame (if any) and which locals' slots a set of journal
+    /// regions wrote.  Classified by **store**, not by the edit's syntax: a bare-name
+    /// edit of a heap local grafts a value into the heap *and* writes the slot's
+    /// `DbRef`, so reading the LHS shape would mis-file it.
+    fn classify_edit_regions(
+        &self,
+        regions: &[(u16, u32, u32, u32)],
+        data: &crate::data::Data,
+    ) -> (Option<crate::debugger::StackWatchFrame>, Vec<(String, u16)>) {
+        let Some(cf) = self.call_stack.last() else {
+            return (None, Vec::new());
+        };
+        let base = self.stack_cur.pos + cf.args_base;
+        let mut slots: Vec<(String, u16)> = Vec::new();
+        let mut touched_frame = false;
+        // The frame's locals at the pause, so a written offset can be attributed to the
+        // local that owns it (name included — a slot alone is ambiguous between two
+        // locals that share it at different lines).
+        let view = self.frame_view(cf.d_nr, self.code_pos, data);
+        for &(store_nr, rec, off, _len) in regions {
+            if store_nr != self.stack_cur.store_nr || rec != self.stack_cur.rec || off < base {
+                continue; // heap (or another store) — no frame binding needed
+            }
+            touched_frame = true;
+            let rel = u16::try_from(off - base).unwrap_or(u16::MAX);
+            for e in &view {
+                let size = crate::variables::size(
+                    &e.tp,
+                    if e.is_argument {
+                        &Context::Argument
+                    } else {
+                        &Context::Variable
+                    },
+                );
+                if rel >= e.slot && u32::from(rel) < u32::from(e.slot) + u32::from(size) {
+                    if !slots.iter().any(|(n, s)| n == &e.name && *s == e.slot) {
+                        slots.push((e.name.clone(), e.slot));
+                    }
+                    break;
+                }
+            }
+        }
+        let frame = touched_frame.then(|| crate::debugger::StackWatchFrame {
+            d_nr: cf.d_nr,
+            args_base: cf.args_base,
+            depth: u32::try_from(self.call_stack.len().saturating_sub(1)).unwrap_or(u32::MAX),
+        });
+        (frame, slots)
+    }
+
+    /// @PLN120 F — keep the undo/redo entries whose storage is still what they wrote,
+    /// drop the rest, and record WHY each was dropped in `dropped_undo`.
+    ///
+    /// Called at every new pause. An entry survives iff it is heap-only (no frame
+    /// binding — a heap address survives any step), or its frame is still live at the
+    /// same depth with the same `(d_nr, args_base)` **and** every local it wrote is
+    /// still `Held` at the same slot here. Anything else would write bytes that are no
+    /// longer that local's, which is the hazard the old blanket clear avoided by
+    /// throwing away the valid entries too.
+    pub fn validate_undo_history(&mut self, data: &crate::data::Data) {
+        if self
+            .debug
+            .as_deref()
+            .is_none_or(|d| d.undo_stack.is_empty() && d.redo_stack.is_empty())
+        {
+            return;
+        }
+        // The live frame's identity + view, computed once for every entry.
+        let live = self.call_stack.last().map(|cf| {
+            (
+                crate::debugger::StackWatchFrame {
+                    d_nr: cf.d_nr,
+                    args_base: cf.args_base,
+                    depth: u32::try_from(self.call_stack.len().saturating_sub(1))
+                        .unwrap_or(u32::MAX),
+                },
+                self.frame_view(cf.d_nr, self.code_pos, data),
+            )
+        });
+        let verdict = |e: &crate::debugger::UndoEntry| -> Result<(), String> {
+            let Some(bound) = e.frame.as_ref() else {
+                return Ok(()); // heap-only — no frame change can invalidate it
+            };
+            let Some((now, view)) = live.as_ref() else {
+                return Err("the frame it was made in has returned".to_string());
+            };
+            if now != bound {
+                return Err("the frame it was made in has returned".to_string());
+            }
+            for (name, slot) in &e.slots {
+                match view
+                    .iter()
+                    .find(|v| &v.name == name && v.slot == *slot)
+                    .map(|v| &v.state)
+                {
+                    Some(LocalState::Held) => {}
+                    Some(LocalState::Reused(by)) => {
+                        return Err(format!("`{name}`'s stack slot is now `{by}`'s"));
+                    }
+                    _ => {
+                        return Err(format!("`{name}` no longer holds that slot here"));
+                    }
+                }
+            }
+            Ok(())
+        };
+        let mut dropped: Vec<(String, String)> = Vec::new();
+        {
+            let Some(d) = self.debug.as_deref_mut() else {
+                return;
+            };
+            for stack in [&mut d.undo_stack, &mut d.redo_stack] {
+                stack.retain(|e| match verdict(e) {
+                    Ok(()) => true,
+                    Err(why) => {
+                        dropped.push((e.label.clone(), why));
+                        false
+                    }
+                });
+            }
+        }
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.dropped_undo = dropped;
+        }
+    }
+
+    /// @PLN120 F — the entries THIS pause dropped, as `(label, reason)`.  Empty when
+    /// nothing was dropped.
+    ///
+    /// Deliberately non-consuming: the list is cleared when the next resume starts, so
+    /// reading it is still once-per-pause, and it stays available for the whole pause —
+    /// which is what lets `:undo` explain an empty stack by naming the edit that was
+    /// dropped instead of falling back to "you made no edits".
+    #[must_use]
+    pub fn dropped_undo(&self) -> Vec<(String, String)> {
+        self.debug
+            .as_deref()
+            .map(|d| d.dropped_undo.clone())
+            .unwrap_or_default()
     }
 
     /// @PLN16 M2 — drop the armed edit journal without recording (a failed edit).
@@ -2856,12 +3102,12 @@ impl State {
     /// to the redo stack.  Returns `false` when the undo stack is empty.  Refresh the
     /// paused frame after, so `:vars` shows the restored value.
     pub fn debug_undo(&mut self) -> bool {
-        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.undo_stack.pop()) else {
+        let Some(mut e) = self.debug.as_deref_mut().and_then(|d| d.undo_stack.pop()) else {
             return false;
         };
-        let ok = j.revert(&mut self.database).is_ok();
+        let ok = e.journal.revert(&mut self.database).is_ok();
         if let Some(d) = self.debug.as_deref_mut() {
-            d.redo_stack.push(j);
+            d.redo_stack.push(e);
         }
         ok
     }
@@ -2869,12 +3115,12 @@ impl State {
     /// @PLN16 M2 — redo the last undone edit: re-apply its journal and move it back to
     /// the undo stack.  Returns `false` when the redo stack is empty.
     pub fn debug_redo(&mut self) -> bool {
-        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.redo_stack.pop()) else {
+        let Some(mut e) = self.debug.as_deref_mut().and_then(|d| d.redo_stack.pop()) else {
             return false;
         };
-        let ok = j.apply(&mut self.database).is_ok();
+        let ok = e.journal.apply(&mut self.database).is_ok();
         if let Some(d) = self.debug.as_deref_mut() {
-            d.undo_stack.push(j);
+            d.undo_stack.push(e);
         }
         ok
     }
@@ -2886,6 +3132,13 @@ impl State {
     /// edits via [`set_frame_literal`](Self::set_frame_literal), which covers every
     /// inline scalar.)
     pub fn set_frame_value(&mut self, name: &str, value: i64, data: &crate::data::Data) -> bool {
+        // @PLN120 A — a local the frame does not hold must not be written either: its
+        // slot belongs to another local (or to nothing yet), so the write would land
+        // in someone else's value.  Latent before A, because such a local was not
+        // shown and so nobody named it; A shows it, which makes the edit likely.
+        if !self.frame_local_is_live(name, data) {
+            return false;
+        }
         let Some((rec, at, tp, _is_arg)) = self.frame_slot(name, data) else {
             return false;
         };
@@ -2928,6 +3181,14 @@ impl State {
         data: &crate::data::Data,
     ) -> bool {
         use crate::data::Type;
+        // @PLN120 A — one gate for every type, replacing the `Text`-arm-only check.
+        // A local the frame does not hold shares its slot with another local (or has
+        // no completed write yet), so ANY edit through its name lands in bytes that
+        // are not its own — and for `text` it `Drop`s a `String` that was never
+        // constructed.
+        if !self.frame_local_is_live(name, data) {
+            return false;
+        }
         let Some((rec, at, tp, is_arg)) = self.frame_slot(name, data) else {
             return false;
         };
@@ -3006,11 +3267,6 @@ impl State {
                     .addr_mut::<u32>(rec, at) = c as u32;
             }
             Type::Text(_) => {
-                // Overwriting a text local drops its old `String`, so it must be a
-                // valid (initialised) one — only true once it is live.
-                if !self.frame_local_is_live(name) {
-                    return false;
-                }
                 let Some(owned) = unescape_loft_text(lit) else {
                     return false;
                 };
@@ -3611,14 +3867,23 @@ impl State {
             return false;
         }
         let hit = self.capture_break_frame(pc, data);
-        if let Some(d) = self.debug.as_mut() {
+        let suspended = if let Some(d) = self.debug.as_mut() {
             if d.stepping {
                 d.paused = Some(hit);
-                return true; // suspend the loop
+                true // suspend the loop
+            } else {
+                d.hits.push(hit);
+                false
             }
-            d.hits.push(hit);
+        } else {
+            false
+        };
+        if suspended {
+            // @PLN120 F — same decision as the step landing: a breakpoint reached
+            // mid-`:continue` is a new pause, so re-check which edits it still owns.
+            self.validate_undo_history(data);
         }
-        false
+        suspended
     }
 
     /// Read the current (topmost) frame's in-scope variables into a
@@ -3666,30 +3931,40 @@ impl State {
             .collect()
     }
 
-    /// Capture one frame — function `d_nr`, whose variable region starts at
-    /// `stack_cur.pos + frame_base` — with its variables live at `pc`.  Shared by
-    /// the top-frame breakpoint capture and the full-stack walk.
-    fn capture_frame_at(
-        &self,
-        d_nr: u32,
-        frame_base: u32,
-        pc: u32,
-        data: &crate::data::Data,
-    ) -> crate::debugger::BreakHit {
-        if d_nr == u32::MAX {
-            return crate::debugger::BreakHit {
-                function: "?".to_string(),
-                locals: Vec::new(),
-                line: self.line_at(pc),
-            };
-        }
-        let raw = data.def(d_nr).name();
-        let function = raw.strip_prefix("n_").unwrap_or(raw).to_string();
+    /// @PLN120 A — **the** frame query: every local of `d_nr` in lexical scope at
+    /// `pc`, each tagged with whether the frame still holds its value.  One source
+    /// for the captured frame, the slot dump, the `:eval` gate, the edit gate and
+    /// the store-UAF detector — the tag is part of the entry precisely so no caller
+    /// can forget to ask.
+    ///
+    /// Three facts, joined here (§ A.3 of the plan):
+    ///
+    /// * **in scope** — `pc` falls inside a [`scope_spans`](Self::scope_spans) span
+    ///   whose scope is the local's. A child block is emitted inside its parent, so
+    ///   containment is the nesting relation.
+    /// * **assigned** — a [`store_spans`](Self::store_spans) entry for it *ends* at
+    ///   or before `pc`, i.e. a write has completed. Otherwise
+    ///   [`Unset`](LocalState::Unset): `reserve_frame` does not zero locals, so the
+    ///   slot holds stack garbage or (on a shared slot) another local's value.
+    /// * **owns its slot** — no other local sharing those bytes has a *later*
+    ///   completed store. Otherwise [`Reused`](LocalState::Reused): the allocator is
+    ///   scope-blind, so two locals in the same scope share a slot whenever their
+    ///   live ranges do not overlap.
+    ///
+    /// **Fallback.** A local whose scope cannot be placed — `scope == u16::MAX` (an
+    /// uninstantiated generic template; also any future warm-loaded `Data`, whose
+    /// `VarSnapshot` does not carry `scope`) — or a `pc` no span covers at all (the
+    /// function's entry preamble) falls back to the pre-@PLN120 test: the local is
+    /// shown, as `Held`, exactly while `pc` is inside its bytecode reference range.
+    /// That degrades to the old behaviour rather than to an empty frame.
+    fn frame_view(&self, d_nr: u32, pc: u32, data: &crate::data::Data) -> Vec<FrameEntry> {
         let def = data.def(d_nr);
+        let vars = &def.variables;
         let n = def.variables.count();
-        // Per-var bytecode reference range, scanning `self.vars` within this
-        // function's bytecode span (`[code_position, +code_length)`).
         let (start, end) = (def.code_position, def.code_position + def.code_length);
+        // Per-var bytecode reference range, scanning `self.vars` within this
+        // function's bytecode span.  Still reported on every entry (compiler work
+        // reads it) and still the fallback filter above.
         let mut first = vec![u32::MAX; n as usize];
         let mut last = vec![u32::MAX; n as usize];
         for (&bc, &v) in &self.vars {
@@ -3704,40 +3979,155 @@ impl State {
                 last[i] = bc;
             }
         }
-        // Collect (name, slot, type) first so the `data` borrow ends before the
-        // value reads below.  Arguments are always live; a non-arg local is live
-        // iff its def precedes `pc` and `pc` is within its reference range.
-        let fields: Vec<(String, u16, crate::data::Type, bool)> = {
-            let vars = &def.variables;
-            (0..n)
-                .filter(|&i| {
-                    vars.is_argument(i)
-                        || (first[i as usize] != u32::MAX
-                            && first[i as usize] <= pc
-                            && pc <= last[i as usize])
-                })
-                .map(|i| {
-                    (
-                        vars.name(i).to_string(),
-                        vars.stack(i),
-                        vars.tp(i).clone(),
-                        vars.is_argument(i),
-                    )
-                })
-                .collect()
-        };
-        let locals = fields
-            .into_iter()
-            .map(|(name, off, tp, is_arg)| {
-                (
-                    name,
-                    self.render_frame_local(frame_base, off, &tp, is_arg, data),
-                )
-            })
+        // Fact 1 — the scopes open at `pc`.
+        let open: Vec<u16> = self
+            .scope_spans
+            .iter()
+            .filter(|&&(s, e, _)| s >= start && s < end && pc >= s && pc < e)
+            .map(|&(_, _, sc)| sc)
             .collect();
+        // Fact 2 — per local, the end pc of its latest COMPLETED store at or before
+        // `pc`.  `u32::MAX` = never written on this path yet.
+        let mut stored = vec![u32::MAX; n as usize];
+        for &(s, e, v) in &self.store_spans {
+            if s < start || s >= end || v as usize >= n as usize || e > pc {
+                continue;
+            }
+            let i = v as usize;
+            if stored[i] == u32::MAX || e > stored[i] {
+                stored[i] = e;
+            }
+        }
+        let byte_range = |i: u16| -> (u32, u32) {
+            let at = u32::from(vars.stack(i));
+            let ctx = if vars.is_argument(i) {
+                crate::data::Context::Argument
+            } else {
+                crate::data::Context::Variable
+            };
+            (at, at + u32::from(crate::variables::size(vars.tp(i), &ctx)))
+        };
+        let mut out = Vec::new();
+        for i in 0..n {
+            let slot = vars.stack(i);
+            let (name, tp, is_arg) = (vars.name(i), vars.tp(i), vars.is_argument(i));
+            // A local the allocator gave no slot (unused after lowering) has no
+            // bytes at all, whatever its scope says — it is not in the frame in any
+            // sense, so it is dropped rather than tagged.
+            if slot == u16::MAX {
+                continue;
+            }
+            // Arguments are written by the caller, so they are held throughout.
+            let state = if is_arg {
+                LocalState::Held
+            } else if vars.scope(i) == u16::MAX || open.is_empty() {
+                // Fallback — the pre-@PLN120 reference-range filter.
+                let (f, l) = (first[i as usize], last[i as usize]);
+                if f == u32::MAX || pc < f || pc > l {
+                    LocalState::OutOfScope
+                } else {
+                    LocalState::Held
+                }
+            } else if !open.contains(&vars.scope(i)) {
+                LocalState::OutOfScope
+            } else if stored[i as usize] == u32::MAX {
+                LocalState::Unset
+            } else {
+                // Whoever wrote these bytes most recently owns them.
+                let (lo, hi) = byte_range(i);
+                let usurper = (0..n)
+                    .filter(|&j| {
+                        j != i
+                            && !vars.is_argument(j)
+                            && vars.stack(j) != u16::MAX
+                            && stored[j as usize] != u32::MAX
+                            && stored[j as usize] > stored[i as usize]
+                    })
+                    .filter(|&j| {
+                        let (jlo, jhi) = byte_range(j);
+                        jlo < hi && lo < jhi
+                    })
+                    .max_by_key(|&j| stored[j as usize]);
+                match usurper {
+                    Some(j) => LocalState::Reused(vars.name(j).to_string()),
+                    None => LocalState::Held,
+                }
+            };
+            out.push(FrameEntry {
+                var_nr: i,
+                name: name.to_string(),
+                slot,
+                tp: tp.clone(),
+                is_argument: is_arg,
+                state,
+                bc_first: first[i as usize],
+                bc_last: last[i as usize],
+            });
+        }
+        out
+    }
+
+    /// @PLN120 A — the state of one named local in the current (topmost) frame at
+    /// the live `code_pos`, or `None` when the frame has no such local.  The gate
+    /// every read/write of a frame slot by name goes through — and what a client
+    /// asks to explain *why* a name it can see is not readable.
+    #[must_use]
+    pub fn frame_local_state(&self, name: &str, data: &crate::data::Data) -> Option<LocalState> {
+        let frame = self.call_stack.last()?;
+        if frame.d_nr == u32::MAX {
+            return None;
+        }
+        self.frame_view(frame.d_nr, self.code_pos, data)
+            .into_iter()
+            .find(|e| e.name == name)
+            .map(|e| e.state)
+        // Note `frame_view` reports OUT-OF-SCOPE locals too, so a caller can tell "not
+        // in scope here" from "no such local" — a distinction the generic
+        // "couldn't evaluate" used to collapse.
+    }
+
+    /// Capture one frame — function `d_nr`, whose variable region starts at
+    /// `stack_cur.pos + frame_base` — with its variables in lexical scope at `pc`.
+    /// Shared by the top-frame breakpoint capture and the full-stack walk.  A local
+    /// the frame no longer holds is rendered as its
+    /// [`LocalState`] marker rather than dropped (@PLN120 A) — and never as the
+    /// contents of a slot that is not its own.
+    fn capture_frame_at(
+        &self,
+        d_nr: u32,
+        frame_base: u32,
+        pc: u32,
+        data: &crate::data::Data,
+    ) -> crate::debugger::BreakHit {
+        if d_nr == u32::MAX {
+            return crate::debugger::BreakHit {
+                function: "?".to_string(),
+                locals: Vec::new(),
+                unheld: Vec::new(),
+                line: self.line_at(pc),
+            };
+        }
+        let raw = data.def(d_nr).name();
+        let function = raw.strip_prefix("n_").unwrap_or(raw).to_string();
+        let mut locals = Vec::new();
+        let mut unheld = Vec::new();
+        for e in self.frame_view(d_nr, pc, data) {
+            if e.state == LocalState::OutOfScope {
+                continue;
+            }
+            let rendered = match e.state.marker() {
+                Some(m) => {
+                    unheld.push(e.name.clone());
+                    m
+                }
+                None => self.render_frame_local(frame_base, e.slot, &e.tp, e.is_argument, data),
+            };
+            locals.push((e.name, rendered));
+        }
         crate::debugger::BreakHit {
             function,
             locals,
+            unheld,
             line: self.line_at(pc),
         }
     }
@@ -4814,14 +5204,20 @@ impl State {
         let start_depth = self.call_stack.len();
         if let Some(d) = self.debug.as_mut() {
             d.paused = None;
-            // @PLN16 M2 — resuming reuses frame stack slots, so an undo recorded at this
-            // suspension could write a stale slot.  Drop the undo/redo history; the next
-            // pause starts a fresh one.
-            d.undo_stack.clear();
-            d.redo_stack.clear();
+            // The undo/redo history survives a step; only an edit still in flight
+            // (armed, not committed) is dropped, because a half-recorded edit has no
+            // meaning at the next pause.
+            //
+            // Stepping reuses frame slots, so an entry MAY become stale — but most do
+            // not: a long-lived accumulator keeps its slot for the whole function, and
+            // a heap edit's address survives every step.  So each entry is checked at
+            // the new pause by `validate_undo_history` rather than all of them being
+            // assumed dead.
             d.recording_edit = None;
             // @PLN16 M3 — a fresh resume reports only watch hits it produces.
             d.last_watch = None;
+            // Only THIS resume's drops are worth reporting.
+            d.dropped_undo.clear();
         }
         let bytecode_len = self.bytecode.len() as u32;
         // Skip the pause-check on the very first op — it is the breakpoint/line we
@@ -4849,6 +5245,11 @@ impl State {
                     if let Some(d) = self.debug.as_mut() {
                         d.paused = Some(hit);
                     }
+                    // @PLN120 F — the step landed: decide which undo entries the new
+                    // frame still owns, rather than having dropped them all on the way
+                    // in.  Here, not at the clear above, because the verdict needs the
+                    // pc we stopped AT.
+                    self.validate_undo_history(data);
                     return true;
                 }
             }
@@ -4936,6 +5337,8 @@ impl State {
             types: HashMap::new(),
             text_positions: BTreeSet::new(),
             line_numbers: BTreeMap::new(),
+            scope_spans: Vec::new(),
+            store_spans: Vec::new(),
             source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
             debug: None,

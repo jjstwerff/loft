@@ -346,3 +346,111 @@ fn missing_file_errors() {
         .expect("invoke loft");
     assert!(!out.status.success(), "missing file should exit non-zero");
 }
+
+// ---------------------------------------------------------------------------
+// `--show-resolution` / `--why` — which names each source can SEE.
+//
+// The state these report decides whether an unqualified name resolves, and it
+// used to be inspectable only by adding an `eprintln!` to the parser.  The
+// assertions pin the three facts DEBUG.md § `--show-resolution` teaches a reader
+// to read, so the doc and the output cannot drift apart:
+//   1. the `context:` line (which stdlib and `--lib` paths this run searched),
+//   2. `defined` vs `visible` per source,
+//   3. one alias line per imported name.
+// ---------------------------------------------------------------------------
+
+/// Run `introspect --show-resolution` over a program that `use`s a library, so
+/// there is a real import alias to report.  `tests/lib/typeshift` is the same
+/// one-function fixture the session tests use.
+fn resolution(args: &[&str]) -> String {
+    let prog = std::env::temp_dir().join(format!("loft_res_{}.loft", std::process::id()));
+    std::fs::write(
+        &prog,
+        "use typeshift;\nfn main() { v = ts_touch(); assert(v == 7, \"lib\") }\n",
+    )
+    .expect("write temp program");
+    let lib = workspace_root().join("tests/lib");
+    let out = Command::new(loft_bin())
+        .arg("introspect")
+        .args(args)
+        .arg("--lib")
+        .arg(&lib)
+        .arg(&prog)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&prog);
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn resolution_section_reports_context_sources_and_aliases() {
+    let out = resolution(&["--show-resolution"]);
+    let sec = section(&out, "resolution");
+    // 1. The context this run assembled.  An empty `lib_dirs` here under a `--lib`
+    //    invocation is a whole class of bug (the flag never reached the session),
+    //    which is why the line is printed even when everything works.
+    assert!(
+        sec.contains("context:") && sec.contains("lib_dirs=["),
+        "the context line names the searched paths: {sec}"
+    );
+    assert!(
+        !sec.contains("lib_dirs=[]"),
+        "`--lib` was passed, so it must appear in the context: {sec}"
+    );
+    // 2. Per-source counts.
+    assert!(
+        sec.contains("sources:") && sec.contains("defined") && sec.contains("visible"),
+        "per-source defined/visible counts: {sec}"
+    );
+    // 3. The import alias — the fact a `use` adds, and the one a rebuild that
+    //    cannot reproduce its derived state destroys.
+    assert!(
+        sec.contains("import binding"),
+        "a program with a `use` must report at least one alias: {sec}"
+    );
+    assert!(
+        sec.contains("n_ts_touch"),
+        "the imported function is the alias reported: {sec}"
+    );
+}
+
+#[test]
+fn why_reports_where_a_name_is_defined_and_reachable_from() {
+    let out = resolution(&["--why", "ts_touch"]);
+    let sec = section(&out, "resolution");
+    assert!(
+        sec.contains("`ts_touch` is #") && sec.contains("defined in source"),
+        "`--why` names the definition: {sec}"
+    );
+    // Reachable from BOTH its own source and the importing one — the distinction
+    // the whole section exists to make.
+    assert!(
+        sec.contains("(its own)") && sec.contains("(import alias)"),
+        "`--why` separates own-source visibility from an import alias: {sec}"
+    );
+    // The control: a name nothing defines must say so rather than inventing a
+    // location, since "not defined anywhere" is itself the answer to "why can't I
+    // call this".
+    let missing = resolution(&["--why", "no_such_function_anywhere"]);
+    assert!(
+        section(&missing, "resolution").contains("is not defined in any source"),
+        "an unknown name is reported as such: {missing}"
+    );
+}
+
+#[test]
+fn resolution_section_is_available_as_json() {
+    use loft::json::Parsed;
+    let out = resolution(&["--json", "--show-resolution"]);
+    let doc = loft::json::parse(&out).expect("valid JSON");
+    let Parsed::Object(fields) = &doc else {
+        panic!("object, got {doc:?}");
+    };
+    let keys: Vec<&str> = fields.iter().map(|(k, _, _)| k.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["resolution"],
+        "only the requested section, under the documented key"
+    );
+}

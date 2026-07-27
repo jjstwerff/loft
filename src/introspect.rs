@@ -47,6 +47,11 @@ pub enum Section {
     /// as `Owned (backing=…)`.  Surfaces the borrowed-vs-owned fact behind
     /// the store-lifetime bug corpus.  Opt-in (`--show-ownership`).
     Ownership,
+    /// Per-source name VISIBILITY: which sources exist, how many names each defines
+    /// versus can reach, and every import alias.  The state that decides whether an
+    /// unqualified name resolves — previously inspectable only by adding an
+    /// `eprintln!` to the parser (@PLN120 E.4).  Opt-in (`--show-resolution`).
+    Resolution,
 }
 
 /// Options for `loft --introspect`.
@@ -71,6 +76,14 @@ pub struct Options {
     /// recorded by the parser.  Emitted after each variable table.
     /// Lines are tab-separated `<fn>\t<line>:<col>\t<type>`.
     pub trace_lines: Vec<String>,
+    /// `--show-resolution` companion: the resolution CONTEXT the invocation built
+    /// (stdlib dir + `--lib` paths), rendered by the caller, which is the only place
+    /// that knows it.  An empty `lib_dirs` under a `--lib` invocation IS the @PLN120
+    /// E.1 defect, visible without running the program.
+    pub resolution_context: Option<String>,
+    /// `--why <name>`: instead of the whole table, answer where one name is defined
+    /// and from which sources it is reachable.
+    pub why: Option<String>,
     /// Emit a single machine-readable JSON object instead of the text
     /// sections — one string field per included section (`bytecode`,
     /// `rust`, `slots`, `types`, …), so a tool / the LSP reads a section
@@ -105,6 +118,8 @@ impl Options {
             types_out: None,
             diff_against: None,
             trace_lines: Vec::new(),
+            resolution_context: None,
+            why: None,
             json: false,
             fn_filter: Vec::new(),
             all_fns: false,
@@ -280,6 +295,14 @@ pub fn emit_all(
             emit_ownership(&mut writer, data, end_def, opts)?;
         }
     }
+    // Opt-in only (`--show-resolution`) — a cross-cutting view of the whole program
+    // rather than a per-function dump, so it never joins the no-flags default.
+    if opts.sections.contains(&Section::Resolution) {
+        let mut writer = stdout.lock();
+        writeln!(writer)?;
+        writeln!(writer, "=== resolution ===")?;
+        emit_resolution(&mut writer, data, opts)?;
+    }
     // Opt-in only (a verification check, not a dump) — NOT part of the
     // no-flags "all sections" default, so it never pollutes a plain dump.
     if opts.sections.contains(&Section::Roundtrip) {
@@ -336,6 +359,11 @@ fn emit_json(
         let mut buf = Vec::new();
         emit_ownership(&mut buf, data, end_def, opts)?;
         fields.push(("ownership".to_string(), 0, as_str(buf)));
+    }
+    if opts.sections.contains(&Section::Resolution) {
+        let mut buf = Vec::new();
+        emit_resolution(&mut buf, data, opts)?;
+        fields.push(("resolution".to_string(), 0, as_str(buf)));
     }
     let mut w = std::io::stdout().lock();
     writeln!(
@@ -679,6 +707,76 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
         &mut found,
     );
     found
+}
+
+/// `--show-resolution` — the per-source name-visibility table, or `--why <name>`.
+///
+/// Answers the question that cost @PLN120 E.1 and E.4 a consumer report each: *which
+/// names can this source see, and where did they come from.*  Reading it needed a
+/// compiler edit before; it is now a flag on the shipped binary.
+fn emit_resolution<W: Write>(w: &mut W, data: &Data, opts: &Options) -> std::io::Result<()> {
+    if let Some(ctx) = opts.resolution_context.as_deref() {
+        writeln!(w, "context: {ctx}")?;
+    }
+    if let Some(name) = opts.why.as_deref() {
+        return emit_why(w, data, name);
+    }
+    let (sources, aliases) = data.resolution_view();
+    writeln!(w, "sources:")?;
+    for s in &sources {
+        // `visible` counts every reachable name, `defined` only this source's own —
+        // so the difference is precisely what its imports bought.
+        writeln!(
+            w,
+            "  {:<4} defined {:<6} visible {:<6} {}",
+            s.nr, s.defined, s.visible, s.name
+        )?;
+    }
+    if aliases.is_empty() {
+        // Not a cosmetic case: this is exactly what a rebuild that cannot reproduce
+        // its derived state looks like, so name it rather than printing nothing.
+        writeln!(
+            w,
+            "aliases: none — no name is reachable from a source other than its own              (a program with a `use` should have some; an empty list here is the              @PLN120 E.4 shape)"
+        )?;
+        return Ok(());
+    }
+    let n = aliases.len();
+    writeln!(
+        w,
+        "aliases ({n} import binding{}):",
+        if n == 1 { "" } else { "s" }
+    )?;
+    for a in &aliases {
+        writeln!(
+            w,
+            "  src {:<4} <- src {:<4} #{:<6} {}",
+            a.into_source, a.from_source, a.def_nr, a.name
+        )?;
+    }
+    Ok(())
+}
+
+/// The `--why <name>` half of [`emit_resolution`]: where one name lives and who can
+/// reach it.  A name nothing can see prints that, which is the answer to "why does
+/// this call not resolve".
+fn emit_why<W: Write>(w: &mut W, data: &Data, name: &str) -> std::io::Result<()> {
+    let Some((def_nr, own, reachable)) = data.visibility_of(name) else {
+        writeln!(
+            w,
+            "`{name}` is not defined in any source, and no source can reach it"
+        )?;
+        return Ok(());
+    };
+    writeln!(w, "`{name}` is #{def_nr}, defined in source {own}")?;
+    for (src, is_own) in reachable {
+        if is_own {
+            writeln!(w, "  visible in source {src} (its own)")?;
+        } else {
+            writeln!(w, "  visible in source {src} (import alias)")?;
+        }
+    }
+    Ok(())
 }
 
 fn emit_ownership(

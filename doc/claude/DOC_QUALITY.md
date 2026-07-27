@@ -318,6 +318,17 @@ let g = (raw ^ (raw >> 13)).wrapping_mul(0x9E37_79B1);
    [§ Inside a function](#inside-a-function-comment-what-the-non-obvious-code-does).
 7. **Write for entry-level and non-native-English readers** — see
    [§ Write for every reader](#write-for-every-reader).
+8. **A reference row that names something absent is worse than no row.** A missing
+   entry sends a reader to grep; a row promising `seek(self: File, pos: integer)` that
+   no such method answers sends them away convinced the *capability* is missing.
+   Earned (moros H11): `STDLIB.md` listed that method, the consumer tried all three
+   call forms, concluded random access into a binary file was impossible, and
+   restructured their file format around the limitation — while the operation was
+   documented 22 lines lower as `f#next = pos`, under a name nobody looking for
+   "seek" would search. So: when a reference table and the implementation disagree,
+   the fix is not only to delete the row — check whether the row is what a reader
+   would *reach for*, and if it is, make the name real. And when a capability has two
+   spellings, name the other one in both entries, so either search lands.
 
 ---
 

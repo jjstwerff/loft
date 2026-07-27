@@ -154,16 +154,35 @@ fn main() {
     "[{label}] handlers learned: Click={h_click} Placement={h_placement} GameOver={h_gameover} SpectatorPlacement={h_spec_placement} SpectatorGameOver={h_spec_gameover}"
   );
 
-  // P229a: optional post-handshake pause so a partner client can
-  // complete its own handshake and register with the server before
-  // either of us starts placing X's.  Without this, on fast schedulers
-  // (macOS in particular) the first client races through its 3 moves
-  // in under 50 ms — well before the second client's MAP frame
-  // arrives — so neither client observes the other's spectator
-  // routing.  The two-client integration test sets the env var to
-  // ~200 ms; the single-client test leaves it unset (no delay).
-  delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS");
-  if delay_raw != "" { sleep_ms(delay_raw as integer? ?? 0); }
+  // Wait until every client has handshaked, before anyone places an X.
+  //
+  // P229a first solved this with a fixed post-handshake pause, and that is a
+  // wall-clock BET: it holds only while a partner's startup is faster than the
+  // pause.  It lost under full-suite load (2026-07-27) — the failure log showed
+  // client A completing all three moves and its GameOver before B's MAP frame
+  // ever reached the server, so neither side saw the other's spectator routing.
+  // The variance is in each client's PROCESS startup (spawn + parse + connect),
+  // which no delay can bound; a bigger pause only makes the bet longer.
+  //
+  // So when the driver supplies a rendezvous file, wait for THAT: the driver
+  // creates it only after every client has printed its "handlers learned" line,
+  // which makes the overlap a fact rather than a probability.  The bounded spin
+  // keeps a driver that never writes the file from hanging the run — it degrades
+  // to "play alone", the same outcome as the old lost bet, but only after 30 s.
+  //
+  // With no rendezvous file, the P229a pause still applies, so the
+  // single-client and late-join scenarios are unaffected.
+  go_file = env_variable("LOFT_TICTACTOE_GO_FILE");
+  if go_file != "" {
+    go_waited = 0;
+    while !exists(go_file) && go_waited < 30000 {
+      sleep_ms(20);
+      go_waited = go_waited + 20;
+    }
+  } else {
+    delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS");
+    if delay_raw != "" { sleep_ms(delay_raw as integer? ?? 0); }
+  }
 
   // Phase 2 — short warmup so a second client can join (3 polls).
   poll_count = 0;

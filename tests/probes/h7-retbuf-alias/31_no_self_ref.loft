@@ -1,0 +1,7 @@
+fn mk(x: integer) -> vector<integer> { out: vector<integer> = []; out += [x]; out }
+fn main() {
+  a: vector<integer> = [];
+  n = 0;
+  for k in [10,20,30] { a = mk(k); n = n + len(a); }
+  println("{n}");
+}

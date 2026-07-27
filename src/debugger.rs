@@ -40,10 +40,51 @@ pub struct BreakHit {
     /// (`("n", "42")`).  The slice captures arguments (live at fn entry); a later
     /// slice that breaks mid-body adds the locals assigned so far.
     pub locals: Vec<(String, String)>,
+    /// @PLN120 A — the names in `locals` the frame does **not** hold: their entry
+    /// carries a reason (`<unset>`, `<reused by …>`) where a value would be.
+    ///
+    /// Carried rather than recognised from the rendering, because a rendering can
+    /// look exactly like a marker: a keyed collection renders as
+    /// `<hash<HRec,["name"]>>`.  Every path that rebuilds loft source from a captured
+    /// frame filters on this list ([`held_locals`](Self::held_locals)); a marker in
+    /// that position would poison the parse.
+    pub unheld: Vec<String>,
     /// The source line this frame is parked on — the breakpoint line for the top
     /// frame, the call-site line for a caller (the multi-frame `stackTrace`, @PLN63
     /// SF).  0 when unknown.
     pub line: u32,
+}
+
+impl BreakHit {
+    /// The locals worth SHOWING — everything except the compiler's own scratch:
+    /// `__work_N` format buffers, `__ref_N` return buffers, `___`-prefixed
+    /// internals, and the `#`-infixed loop machinery (`i#index`, `c#next`).
+    /// @PLN120 D1.
+    ///
+    /// The `#` names became filterable with @PLN120 A: the iteration variable the
+    /// user wrote (`i`) is now in the frame, so its hidden counter is no longer the
+    /// only signal about loop position.  A `#` cannot occur in a loft identifier, so
+    /// this can never hide a name the user chose.
+    ///
+    /// This is display-only: `debug_eval` still resolves any name, so a compiler
+    /// temp remains readable by typing it, and `:vars all` shows the lot.
+    #[must_use]
+    pub fn user_locals(&self) -> Vec<&(String, String)> {
+        self.locals
+            .iter()
+            .filter(|(n, _)| !n.starts_with("__") && !n.contains('#'))
+            .collect()
+    }
+
+    /// The locals the frame actually HOLDS — everything whose entry is a value.
+    /// @PLN120 A: the frame also lists locals it does not hold (`<unset>`,
+    /// `<reused by …>`), and every path that rebuilds loft source from a captured
+    /// frame must skip those, because a marker does not parse.
+    pub fn held_locals(&self) -> impl Iterator<Item = &(String, String)> {
+        self.locals
+            .iter()
+            .filter(|(n, _)| !self.unheld.iter().any(|u| u == n))
+    }
 }
 
 /// @PLN16 M3 — a **watchpoint** (data breakpoint): a fixed heap region whose bytes are
@@ -81,6 +122,34 @@ pub struct StackWatchFrame {
     pub args_base: u32,
     /// The frame's index in the `call_stack` when the watch was set.
     pub depth: u32,
+}
+
+/// @PLN120 F — one undoable edit: the journal that reverts it, plus what it edited.
+///
+/// The binding is what makes an entry survive a step. A `Journal` alone records raw
+/// store regions, so after a step nothing could tell a slot that is still the edited
+/// local's from one the allocator has re-handed to another local — which is why the
+/// history used to be dropped wholesale at every step, silently discarding edits that
+/// were perfectly valid. Carrying the frame identity and the local names lets each
+/// entry be checked instead of all of them assumed dead.
+#[derive(Debug)]
+pub struct UndoEntry {
+    /// Reverts (`revert`) / re-applies (`apply`) this one edit.
+    pub journal: crate::database::Journal,
+    /// The edit's left-hand side as the user typed it (`total`, `pt.x`, `v[1]`), for
+    /// the message when the entry can no longer be applied.
+    pub label: String,
+    /// `Some` when the journal touched FRAME storage — the frame it was recorded in,
+    /// bound exactly as a stack watchpoint binds (a recursive re-entry of the same
+    /// function is a different frame, hence `args_base` + `depth`, not just `d_nr`).
+    /// `None` for a pure-heap edit: a heap record's address survives frame exit and
+    /// every step, so no frame change can invalidate it.
+    pub frame: Option<StackWatchFrame>,
+    /// The frame slots the journal wrote, as `(local name, slot offset)`.  The NAME is
+    /// load-bearing: two locals share a slot whenever their live ranges do not overlap,
+    /// so "some local is live at this slot" would let an undo of one write the other's
+    /// value.
+    pub slots: Vec<(String, u16)>,
 }
 
 /// @PLN16 M3 — a watchpoint that just fired: the label and the rendered old → new value.
@@ -121,13 +190,22 @@ pub struct Debugger {
     pub recording_edit: Option<crate::database::Journal>,
     /// @PLN16 M2 — edits made at the current suspension, newest last.  `:undo` reverts
     /// the top entry onto `redo_stack`; a fresh edit forks the timeline (clears redo).
-    /// Per-edit `Journal`s — each a self-contained revert/apply unit — reuse the one
-    /// store change journal engine.  Cleared on resume (`debug_step`): stepping reuses
-    /// frame slots, so an old undo could write a stale slot — undo/redo therefore cover
-    /// edits at the *current* pause point only.
-    pub undo_stack: Vec<crate::database::Journal>,
+    /// Per-edit [`UndoEntry`]s — each a self-contained revert/apply unit — reuse the one
+    /// store change journal engine.
+    ///
+    /// @PLN120 F: **validated** at each new pause rather than cleared. Stepping reuses
+    /// frame slots, so an entry whose slot now belongs to another local (or whose frame
+    /// has returned) is dropped *and reported*; one whose storage is still its own
+    /// survives, which is the common case — a long-lived accumulator keeps its slot for
+    /// the whole function.
+    pub undo_stack: Vec<UndoEntry>,
     /// @PLN16 M2 — undone edits available to `:redo`, newest last (see `undo_stack`).
-    pub redo_stack: Vec<crate::database::Journal>,
+    /// Validated by the same rule: a redo replays the same regions forward.
+    pub redo_stack: Vec<UndoEntry>,
+    /// @PLN120 F — entries the last validation dropped, as `(label, reason)`, for the
+    /// driver to report once.  An edit that silently stops being undoable is the
+    /// failure this arc exists to close, so the drop is never wordless.
+    pub dropped_undo: Vec<(String, String)>,
     /// @PLN16 M3 — active watchpoints, polled after each op of a resumed run.
     pub watchpoints: Vec<Watchpoint>,
     /// @PLN16 M3 — the watchpoint that fired during the most recent resume (for the

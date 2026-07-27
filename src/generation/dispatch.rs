@@ -59,10 +59,47 @@ impl Output<'_> {
             self.output_set_inner(w, var, to)?;
             write!(
                 w,
+                // Clear the tracker only on the branch that actually freed.  A
+                // borrow reassign whose source is `r` ITSELF (`r = keep(r)`,
+                // a callee that returns its argument) leaves `r` holding the
+                // store it already owned — the free is correctly skipped, but
+                // nulling the tracker too made scope exit skip it as well and
+                // the store leaked.  Keeping it means exactly one free: the
+                // scope-exit one, of the store `r` still holds.
                 "; if _own_store_{name}.store_nr != u16::MAX \
                  && _own_store_{name}.store_nr != var_{name}.store_nr \
-                 {{ OpFreeRef(cell, _own_store_{name}, \"{name}(owned)\"); }} \
-                 _own_store_{name} = DbRef::NULL; }}"
+                 {{ OpFreeRef(cell, _own_store_{name}, \"{name}(owned)\"); \
+                 _own_store_{name} = DbRef::NULL; }} }}"
+            )?;
+            return Ok(());
+        }
+        if reassign && owned && to.reads_var(var) {
+            // `r = f(r, …)` — the new value is computed FROM the old one, so `r`
+            // must still hold its store while the value is evaluated.  The
+            // prelude below frees the tracked store and NULLs `var_r` before
+            // emitting the value, which handed the callee a null DbRef: it read
+            // through `stores[65535]` and panicked (the zero-trust `ztedit`
+            // report — `ed = ed_set_caret(ed, 3)` after an `ed = new_editor(…)`).
+            // Only a runtime-Join local took this path, which is why the same
+            // line was fine in a sibling function and the fault looked like it
+            // scaled with code volume: adding an assignment elsewhere in the body
+            // is what makes `r` a Join local in the first place.
+            //
+            // Defer instead.  Rust evaluates the RHS before the assignment, so
+            // the emitted `var_r = f(var_r, …)` already reads the OLD store;
+            // snapshot what to free, emit, then free — and skip the free when the
+            // callee ADOPTED the same store (it is now `r`'s own value, not a
+            // displaced one).  The NULL-reset the branch below needs for in-place
+            // `OpDatabase(var_r)` reuse must not happen here at all: reusing the
+            // store the value reads is the same fault one step earlier.
+            write!(w, "{{ let _disp_{name}: DbRef = _own_store_{name}; ")?;
+            self.output_set_body(w, var, to)?;
+            write!(
+                w,
+                "; if _disp_{name}.store_nr != u16::MAX \
+                 && _disp_{name}.store_nr != var_{name}.store_nr \
+                 {{ OpFreeRef(cell, _disp_{name}, \"{name}(owned)\"); }} \
+                 _own_store_{name} = var_{name}; }}"
             )?;
             return Ok(());
         }

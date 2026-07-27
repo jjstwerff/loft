@@ -144,11 +144,11 @@ pub fn session_file_path() -> Option<std::path::PathBuf> {
 /// # Errors
 /// Returns an I/O error from loading the stdlib or writing to `chrome`.
 pub fn run_repl<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new(stdlib_dir)?;
+    let mut session = ReplSession::open(ctx)?;
     // @PLN16 G1 — the REPL is the interactive debugger surface: a breakpoint hit
     // suspends into the paused sub-mode (inspect / edit / step), rather than the
     // record-and-continue mode programmatic callers use.
@@ -160,7 +160,7 @@ pub fn run_repl<R: BufRead, W: Write>(
     // before returning, even if the loop exits with an I/O error.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
-    let result = run_loop(stdlib_dir, &mut session, input, chrome);
+    let result = run_loop(ctx, &mut session, input, chrome);
     std::panic::set_hook(prev_hook);
     result
 }
@@ -176,14 +176,25 @@ pub fn run_repl<R: BufRead, W: Write>(
 ///
 /// # Errors
 /// Returns an I/O error from the input/output streams.
+/// `lib_dirs` are the `--lib` import paths, so the debugged file can `use` a library
+/// exactly as running it does.  Passing them is not optional: without them a program
+/// whose `use` resolves through `--lib` fails to load and the debugger reports
+/// `Library '<x>' not found` on a file that runs fine — @PLN120 E1, reported by moros
+/// as "the debugger does not work on real programs".  The `--rpc` and `--serve` paths
+/// always did this; this one did not, which is why the fault was interactive-only.
 pub fn run_file_debug<R: BufRead, W: Write>(
     stdlib_dir: &str,
+    lib_dirs: &[String],
     file: &str,
     line: u32,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new(stdlib_dir)?;
+    let ctx = ResolutionContext {
+        stdlib_dir: stdlib_dir.to_string(),
+        lib_dirs: lib_dirs.to_vec(),
+    };
+    let mut session = ReplSession::open(&ctx)?;
     match session.load_program(file) {
         Ok(Ok(())) => {}
         Ok(Err(diags)) => {
@@ -230,14 +241,7 @@ pub fn run_file_debug<R: BufRead, W: Write>(
     );
     // Auto-run the entry to the breakpoint, then hand off to the interactive loop.
     let mut pending = String::new();
-    let result = match process_line(
-        "main()",
-        &mut session,
-        &mut pending,
-        stdlib_dir,
-        None,
-        chrome,
-    ) {
+    let result = match process_line("main()", &mut session, &mut pending, &ctx, None, chrome) {
         Ok(_) => {
             if !session.is_debugging() {
                 let _ = writeln!(
@@ -245,7 +249,7 @@ pub fn run_file_debug<R: BufRead, W: Write>(
                     "program finished without stopping at {file}:{line} (was the line reached?)"
                 );
             }
-            run_loop(stdlib_dir, &mut session, input, chrome)
+            run_loop(&ctx, &mut session, input, chrome)
         }
         Err(e) => Err(e),
     };
@@ -258,27 +262,31 @@ pub fn run_file_debug<R: BufRead, W: Write>(
 /// plainly.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_loop<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
-        run_interactive(stdlib_dir, session, chrome)
+        run_interactive(ctx, session, chrome)
     } else {
-        run_piped(stdlib_dir, session, input, chrome)
+        run_piped(ctx, session, input, chrome)
     }
 }
 
+/// wasm32 has no terminal, so there is only the piped path.  Kept in step with the
+/// host `run_loop` above: both take the [`ResolutionContext`], and a signature change
+/// here does not surface in a host `cargo clippy` — only the wasm32 build compiles this
+/// arm, which is what `make check-wasm-threads` and the suite's wasm32 rlib step cover.
 #[cfg(target_arch = "wasm32")]
 fn run_loop<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    run_piped(stdlib_dir, session, input, chrome)
+    run_piped(ctx, session, input, chrome)
 }
 
 /// The continuation-aware prompt: the `(dbg)` prompt while suspended at a
@@ -298,7 +306,7 @@ fn prompt(pending: &str, debugging: bool) -> &'static str {
 /// test harnesses, and wasm — anywhere there is no interactive terminal — so the
 /// captured output stays stable.
 fn run_piped<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     mut input: R,
     chrome: &mut W,
@@ -313,14 +321,7 @@ fn run_piped<R: BufRead, W: Write>(
             break; // EOF
         }
         // No session path: a piped/file/test run never persists or resumes.
-        if process_line(
-            line.trim_end(),
-            session,
-            &mut pending,
-            stdlib_dir,
-            None,
-            chrome,
-        )? {
+        if process_line(line.trim_end(), session, &mut pending, ctx, None, chrome)? {
             break; // :quit
         }
     }
@@ -533,7 +534,7 @@ impl rustyline::Helper for ReplHelper {}
 /// statement in progress; Ctrl-D at an empty prompt quits.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_interactive<W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     chrome: &mut W,
 ) -> std::io::Result<()> {
@@ -546,7 +547,7 @@ fn run_interactive<W: Write>(
         match rustyline::Editor::with_config(config) {
             Ok(rl) => rl,
             // No usable terminal after all — fall back to the plain reader.
-            Err(_) => return run_piped(stdlib_dir, session, std::io::stdin().lock(), chrome),
+            Err(_) => return run_piped(ctx, session, std::io::stdin().lock(), chrome),
         };
     rl.set_helper(Some(ReplHelper {
         model: CompletionModel::default(),
@@ -588,7 +589,7 @@ fn run_interactive<W: Write>(
                     line.trim_end(),
                     session,
                     &mut pending,
-                    stdlib_dir,
+                    ctx,
                     session_path.as_deref(),
                     chrome,
                 )?;
@@ -621,7 +622,7 @@ fn process_line<W: Write>(
     trimmed: &str,
     session: &mut ReplSession,
     pending: &mut String,
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session_path: Option<&Path>,
     chrome: &mut W,
 ) -> std::io::Result<bool> {
@@ -633,14 +634,26 @@ fn process_line<W: Write>(
     if pending.is_empty() && session.is_debugging() {
         let outcome =
             std::panic::catch_unwind(AssertUnwindSafe(|| handle_paused(trimmed, session, chrome)));
-        let Ok(res) = outcome else {
-            session.abort_debug();
-            writeln!(
-                chrome,
-                "runtime error in the paused run — debug session abandoned \
-                 (session preserved)"
-            )?;
-            return Ok(false);
+        let res = match outcome {
+            Ok(res) => res,
+            Err(payload) => {
+                session.abort_debug();
+                // @PLN120 E3a — SAY WHAT HAPPENED.  This used to print a fixed
+                // string and drop the payload, so every distinct cause looked
+                // identical and the one failure the debugger exists to explain —
+                // its own — was the one it could not.  It also left the user at a
+                // `loft>` prompt where `:continue` answers "unknown command",
+                // which reads as a typo rather than as "the session is over".
+                writeln!(
+                    chrome,
+                    "runtime error in the paused run: {}\n  \
+                     the debug session ended (the REPL session is preserved) — \
+                     step/continue no longer apply; re-run `loft debug <file>:<line>` \
+                     to start a new one",
+                    panic_message(&payload)
+                )?;
+                return Ok(false);
+            }
         };
         return res;
     }
@@ -658,7 +671,11 @@ fn process_line<W: Write>(
                  :bytecode [fn]  :rust [fn]  :slots [fn]"
             )?,
             "reset" => {
-                *session = ReplSession::new(stdlib_dir)?;
+                // Re-open with the SAME resolution inputs.  Rebuilding from
+                // `stdlib_dir` alone silently un-libbed a session that was working —
+                // the @PLN120 E.1 fault turned inward, and latent because the only
+                // lib-bearing REPL route (`loft repl --lib`) was broken too.
+                *session = ReplSession::open(ctx)?;
                 // Clearing state clears the persisted session too, so the next
                 // launch starts clean; keep persisting to the now-empty file.
                 if let Some(path) = session_path {
@@ -752,15 +769,35 @@ fn process_line<W: Write>(
             }
             pending.clear();
         }
-        Err(_) => {
+        Err(payload) => {
+            // Carry the cause, do not just name the category — the same fix @PLN120
+            // E3a made for the debug-abandon path.  A fixed string here collapses
+            // every distinct fault into one line, and it hid a compiler-invariant
+            // assert (the E.4 rollback guard) whose whole purpose is to explain itself.
             writeln!(
                 chrome,
-                "runtime error (session preserved; :reset to clear state)"
+                "runtime error: {} (session preserved; :reset to clear state)",
+                panic_message(&payload)
             )?;
             pending.clear();
         }
     }
     Ok(false)
+}
+
+/// The text of a caught panic.  `catch_unwind` hands back a `Box<dyn Any>` whose
+/// payload is a `&'static str` for `panic!("literal")` and a `String` for a
+/// formatted one; anything else has no readable text.  Discarding it — which is
+/// what the debugger's abandon path used to do — collapses every distinct runtime
+/// fault into one message (@PLN120 E3a).
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "a panic with no message".to_string()
+    }
 }
 
 /// @PLN16 G1 — handle one input while **suspended** at a breakpoint.  Step verbs
@@ -779,6 +816,21 @@ fn handle_paused<W: Write>(
     use crate::debugger::StepMode;
     let t = trimmed.trim();
     let cmd = t.strip_prefix(':').unwrap_or(t);
+    // A colon-less verb is a convenience, but the verb names collide with ordinary
+    // loft locals — `s`, `n`, `c`, `r`, `o`, `u`, `q` are as common as names get,
+    // and `step` / `next` / `vars` are plausible too.  Typing `step` to see the
+    // local `step` silently STEPPED the program instead: the wrong action, and one
+    // that moves the frame you were reading.  When the paused frame actually has a
+    // local by that name, the name wins; `:step` always means the verb.
+    if !t.starts_with(':')
+        && session
+            .paused_frame()
+            .is_some_and(|f| f.locals.iter().any(|(n, _)| n == cmd))
+        && let Some(v) = session.debug_eval(cmd)
+    {
+        println!("{v}");
+        return Ok(false);
+    }
     // @PLN16 M3 — `:watch <expr>` sets a watchpoint (a scalar `pt.x` / `v[i]`); `:watch`
     // lists; `:watch clear` clears.  Handled before the match because it takes an arg.
     if cmd == "watch" || cmd.starts_with("watch ") {
@@ -816,11 +868,31 @@ fn handle_paused<W: Write>(
         "finish" | "o" => step_and_report(session, StepMode::Out, chrome)?,
         "continue" | "c" => step_and_report(session, StepMode::Continue, chrome)?,
         "vars" => print_pause(session, chrome)?,
+        "vars all" => print_pause_filtered(session, chrome, true)?,
         "undo" | "u" => {
             if session.debug_undo() {
                 print_pause(session, chrome)?;
+            } else if let Some((label, why)) = session.dropped_undo_here().first() {
+                // @PLN120 F — an empty stack because an edit was DROPPED is a different
+                // answer from "you made no edits", and saying the generic one here would
+                // re-lose the edit the drop notice just explained.
+                writeln!(
+                    chrome,
+                    "nothing to undo here — the edit to `{label}` is no longer \
+                     undoable ({why})"
+                )?;
             } else {
-                writeln!(chrome, "nothing to undo")?;
+                // @PLN120 F.4 — ":undo" reads as time-travel, so an empty stack after
+                // plain stepping looked like a broken feature (it is correct: stepping
+                // makes no edits).  Name the boundary and point at the tool that does
+                // move the program backwards.
+                writeln!(
+                    chrome,
+                    "no edits to undo at this pause — `:undo` reverts edits YOU made \
+                     (`name = <expr>`), so plain stepping leaves nothing to undo; to move \
+                     the program backwards, use reverse-stepping on the RPC surface \
+                     (`stepBack`, depth via LOFT_REVERSE_DEPTH)"
+                )?;
             }
         }
         "redo" | "r" => {
@@ -833,7 +905,7 @@ fn handle_paused<W: Write>(
         "help" | "h" => writeln!(
             chrome,
             "paused: :step(:s) into  :next(:n) over  :finish(:o) out  :continue(:c)  \
-             :vars  :undo(:u)  :redo(:r)  :watch <expr>  |  `name = <expr>` edits a local \
+             :vars  :undo(:u) an edit  :redo(:r)  :watch <expr>  |  `name = <expr>` edits a local \
              (scalar / text / enum / `pt.x` / `v[i]` / whole struct/vector)  |  any \
              expression is evaluated at the frame  |  :quit"
         )?,
@@ -843,20 +915,28 @@ fn handle_paused<W: Write>(
             Some((name, rhs)) if session.debug_set(name, rhs) => {
                 print_pause(session, chrome)?;
             }
-            Some((name, _)) => writeln!(
-                chrome,
-                "couldn't set `{name}` — unknown local, or a value whose type doesn't \
-                 match the local"
-            )?,
+            // @PLN120 A — a local the frame does not HOLD is refused, and the
+            // refusal names the reason rather than implying a typo.
+            Some((name, _)) => match session.unheld_local_reason(name) {
+                Some(why) => writeln!(chrome, "can't set it: {why}")?,
+                None => writeln!(
+                    chrome,
+                    "couldn't set `{name}` — unknown local, or a value whose type \
+                     doesn't match the local"
+                )?,
+            },
             // Anything else is an expression read against the frame's live values;
             // the value prints to stdout like a normal REPL result.
             None => match session.debug_eval(t) {
                 Some(v) => println!("{v}"),
-                None => writeln!(
-                    chrome,
-                    "couldn't evaluate `{t}` at the frame \
-                     (:step/:next/:finish/:continue, `name = <expr>` to edit, :help)"
-                )?,
+                None => match session.unheld_local_reason(t) {
+                    Some(why) => writeln!(chrome, "{why}")?,
+                    None => writeln!(
+                        chrome,
+                        "couldn't evaluate `{t}` at the frame \
+                         (:step/:next/:finish/:continue, `name = <expr>` to edit, :help)"
+                    )?,
+                },
             },
         },
     }
@@ -866,9 +946,38 @@ fn handle_paused<W: Write>(
 /// Print the current paused frame (function + its in-scope variables), or nothing
 /// when no longer paused.
 fn print_pause<W: Write>(session: &ReplSession, chrome: &mut W) -> std::io::Result<()> {
+    print_pause_filtered(session, chrome, false)
+}
+
+/// `print_pause`, with `all` to include the compiler's scratch variables
+/// (`:vars all`).  @PLN120 D1 — the default frame is the user's own locals; the
+/// temps are still there for compiler work, one word away.
+fn print_pause_filtered<W: Write>(
+    session: &ReplSession,
+    chrome: &mut W,
+    all: bool,
+) -> std::io::Result<()> {
     if let Some(f) = session.paused_frame() {
-        let vars: Vec<String> = f.locals.iter().map(|(n, v)| format!("{n} = {v}")).collect();
-        writeln!(chrome, "⏸ paused in {} | {}", f.function, vars.join(", "))?;
+        let vars: Vec<String> = if all {
+            f.locals.iter().map(|(n, v)| format!("{n} = {v}")).collect()
+        } else {
+            f.user_locals()
+                .into_iter()
+                .map(|(n, v)| format!("{n} = {v}"))
+                .collect()
+        };
+        let hidden = f.locals.len() - vars.len();
+        let note = if hidden > 0 && !all {
+            format!("   (+{hidden} compiler temp(s) — `:vars all`)")
+        } else {
+            String::new()
+        };
+        writeln!(
+            chrome,
+            "⏸ paused in {} | {}{note}",
+            f.function,
+            vars.join(", ")
+        )?;
     }
     Ok(())
 }
@@ -1346,9 +1455,46 @@ struct BpMeta {
 // replaying a saved file while stepping, with reverse armed, reading values from
 // the store.  Folding them into an enum would have to enumerate the product, so
 // the lint's suggested refactor is the worse shape here.
+/// Everything that decides which names a source can see — one value, so a session
+/// cannot be opened with a subset of it.
+///
+/// The parallel-parameter shape this replaces produced the same defect twice: a
+/// `--lib` wired into three entry points and forgotten in the fourth (@PLN120 E.1),
+/// and a `:reset` that rebuilt from `stdlib_dir` alone and dropped the libraries.
+/// Adding a field here is a compile error at every construction site, which is the
+/// property being bought.
+#[derive(Clone, Debug, Default)]
+pub struct ResolutionContext {
+    /// The `default/` standard library directory.
+    pub stdlib_dir: String,
+    /// `--lib` import paths, searched for a `use`d library.
+    pub lib_dirs: Vec<String>,
+}
+
+impl ResolutionContext {
+    /// The context for a stdlib-only session (no `--lib` paths).
+    #[must_use]
+    pub fn stdlib_only(stdlib_dir: &str) -> Self {
+        Self {
+            stdlib_dir: stdlib_dir.to_string(),
+            lib_dirs: Vec::new(),
+        }
+    }
+
+    /// Render for `--show-resolution`'s `context:` line — an empty `lib_dirs` under a
+    /// `--lib` invocation is @PLN120 E.1, visible without running the program.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!("stdlib={:?}  lib_dirs={:?}", self.stdlib_dir, self.lib_dirs)
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct ReplSession {
     pub(crate) parser: Parser,
+    /// @PLN120 follow-up — the resolution inputs this session was opened with, kept so
+    /// a re-open (`:reset`) restores them instead of silently degrading to stdlib-only.
+    context: ResolutionContext,
     /// The standard-library directory this session was built from, kept so the test runner
     /// can spin up a **fresh** parser (stdlib + the file under test) — the clean single-parse
     /// the CLI runner uses, which the persistent session's accumulated parser state can't
@@ -1376,6 +1522,10 @@ pub struct ReplSession {
     /// @PLN16 rich-bp — tracepoint emissions from the most recent resume, drained by the
     /// driver (printed at the prompt, an `output` event over the wire protocol).
     trace_output: Vec<String>,
+    /// @PLN120 B — breakpoint offsets whose condition could not be evaluated and has
+    /// already been reported.  The complaint is worth making once; on a hot line,
+    /// once per hit would bury the frame the user was sent to look at.
+    cond_unevaluable: std::collections::HashSet<u32>,
     /// Frames captured at breakpoints during the most recent observing run
     /// (record-and-continue mode — when `stepping` is off).
     last_hits: Vec<crate::debugger::BreakHit>,
@@ -1482,8 +1632,36 @@ pub struct SeedReport {
 }
 
 impl ReplSession {
+    /// Open a session from its full [`ResolutionContext`] — the constructor to use.
+    ///
+    /// Every input that decides which names a source can see travels as one value, so
+    /// a session cannot be built with a subset of them.  That shape is the fix for a
+    /// defect this repo hit twice: `--lib` was threaded into three entry points and
+    /// forgotten in the fourth (@PLN120 E.1, reported by a consumer as *"the debugger
+    /// does not work on real programs"*), and `:reset` rebuilt a live session from
+    /// `stdlib_dir` alone, silently dropping the libraries it had.  With one value a
+    /// new resolution input is a compile error at every site instead of a silent
+    /// degradation at one.
+    ///
+    /// # Errors
+    /// Returns the I/O error if the stdlib directory cannot be read.
+    pub fn open(ctx: &ResolutionContext) -> std::io::Result<Self> {
+        let mut session = Self::new(&ctx.stdlib_dir)?;
+        session.parser.lib_dirs.clone_from(&ctx.lib_dirs);
+        session.context = ctx.clone();
+        Ok(session)
+    }
+
+    /// The context this session was opened with — so a re-open (`:reset`) restores the
+    /// same resolution inputs rather than re-deriving them from whatever is in scope.
+    #[must_use]
+    pub fn context(&self) -> &ResolutionContext {
+        &self.context
+    }
+
     /// Start a session with the standard library loaded from `stdlib_dir`
     /// (e.g. `"default"`, or an absolute path to a release bundle's `default/`).
+    /// Prefer [`open`](Self::open), which carries the `--lib` paths too.
     ///
     /// # Errors
     /// Returns the I/O error if the stdlib directory cannot be read.
@@ -1493,12 +1671,17 @@ impl ReplSession {
         Ok(Self {
             parser,
             stdlib_dir: stdlib_dir.to_string(),
+            context: ResolutionContext {
+                stdlib_dir: stdlib_dir.to_string(),
+                lib_dirs: Vec::new(),
+            },
             body: String::new(),
             counter: 0,
             record: None,
             replaying: false,
             breakpoints: Vec::new(),
             bp_meta: std::collections::HashMap::new(),
+            cond_unevaluable: std::collections::HashSet::new(),
             trace_output: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
@@ -1522,9 +1705,26 @@ impl ReplSession {
     /// # Errors
     /// Returns the I/O error if the standard library cannot be read.
     pub fn new_with_libs(stdlib_dir: &str, lib_dirs: &[String]) -> std::io::Result<Self> {
-        let mut session = Self::new(stdlib_dir)?;
-        session.parser.lib_dirs = lib_dirs.to_vec();
-        Ok(session)
+        Self::open(&ResolutionContext {
+            stdlib_dir: stdlib_dir.to_string(),
+            lib_dirs: lib_dirs.to_vec(),
+        })
+    }
+
+    /// Load and wire the native cdylibs of every `#native` package the session has
+    /// parsed.  **Call this after `byte_code` on any State that will RUN user
+    /// code** — `byte_code` registers native STUBS, and a stub that is never wired
+    /// panics with *"native function not loaded"* the moment it is called.
+    ///
+    /// @PLN120 E3b: the CLI run path and `loft test` did this; the REPL's own
+    /// execute path did not, so the debugger died on the first call that crossed
+    /// into native code — `use web; sleep_ms(5)` — while the same file ran fine
+    /// under `--interpret`. Importing the package was harmless; calling the part
+    /// of it that is native was not, which is why it looked like a package problem.
+    fn wire_natives(&self, state: &mut State) {
+        let pending = self.parser.pending_native_libs.clone();
+        crate::extensions::load_all(state, pending);
+        crate::extensions::wire_native_fns(state, &self.parser.data);
     }
 
     /// Build a session over an existing `parser` already loaded with a program's
@@ -1539,12 +1739,17 @@ impl ReplSession {
             // test runner; the stdlib dir is unknown here, so the conventional `"default"`
             // is the fallback (run_file_tests is driven from `new`/`new_with_libs` sessions).
             stdlib_dir: "default".to_string(),
+            // Same fallback as `stdlib_dir` above: this session wraps an ALREADY-parsed
+            // program, so its `lib_dirs` live on the parser it was handed rather than
+            // being re-derived here.
+            context: ResolutionContext::stdlib_only("default"),
             body: String::new(),
             counter: 0,
             record: None,
             replaying: false,
             breakpoints: Vec::new(),
             bp_meta: std::collections::HashMap::new(),
+            cond_unevaluable: std::collections::HashSet::new(),
             trace_output: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
@@ -1570,7 +1775,7 @@ impl ReplSession {
     /// session) is skipped, not fatal.
     pub fn seed_frame(&mut self, hit: &crate::debugger::BreakHit) -> usize {
         let mut bound = 0;
-        for (name, literal) in &hit.locals {
+        for (name, literal) in hit.held_locals() {
             if matches!(self.eval(&format!("{name} = {literal}")), Eval::Ran) {
                 bound += 1;
             }
@@ -2334,7 +2539,9 @@ impl ReplSession {
         if let Some(state) = self.paused.as_deref_mut() {
             if ok {
                 // Push the recorded edit onto the undo stack; refresh the frame view.
-                state.commit_edit_journal();
+                // `name` labels the entry, so a drop notice at a later pause can say
+                // WHICH edit is no longer undoable.
+                state.commit_edit_journal(name, &self.parser.data);
                 state.refresh_paused_frame(&self.parser.data);
             } else {
                 state.discard_edit_journal();
@@ -2479,6 +2686,20 @@ impl ReplSession {
         }
         // @PLN16 rich-bp — honour the condition / tracepoint of whatever we stopped at.
         self.resolve_pause();
+        // @PLN120 F — an edit that stopped being undoable says so, once, on the same
+        // channel as arc B's diagnostics (so the interactive prompt prints it AND the
+        // RPC surface emits it as an `output` event, from one place).  A correct edit
+        // disappearing wordlessly is the failure this arc closes.
+        let dropped = self
+            .paused
+            .as_deref()
+            .map(State::dropped_undo)
+            .unwrap_or_default();
+        for (label, why) in dropped {
+            self.trace_output.push(format!(
+                "the edit to `{label}` is no longer undoable — {why}"
+            ));
+        }
         self.is_debugging()
     }
 
@@ -2538,14 +2759,34 @@ impl ReplSession {
             let Some(meta) = self.bp_meta.get(&off).cloned() else {
                 return; // a plain breakpoint with no metadata: stop
             };
-            // Conditional break: a false condition auto-resumes.
-            if let Some(cond) = &meta.condition
-                && self.debug_eval(cond).as_deref() != Some("true")
-            {
-                if !self.resume_continue_with(crate::debugger::StepMode::Continue) {
-                    return;
+            // Conditional break — THREE outcomes, not two (@PLN120 B).  `debug_eval`
+            // returns `None` when the condition cannot be evaluated at this frame (a
+            // typo, or a name that is not in scope here).  Treating that as "false"
+            // is what made a breakpoint report `verified: true` at setBreakpoints and
+            // then never fire, with nothing said: the client was promised a
+            // breakpoint that could not exist.  Say so — once, because a hot line
+            // would bury the frame — and STOP, so a user who typo'd a condition
+            // lands at the line instead of reading a warning they may never see.
+            if let Some(cond) = &meta.condition {
+                let cond = cond.clone();
+                match self.debug_eval(&cond).as_deref() {
+                    Some("true") => {}
+                    Some(_) => {
+                        if !self.resume_continue_with(crate::debugger::StepMode::Continue) {
+                            return;
+                        }
+                        continue;
+                    }
+                    None => {
+                        if self.cond_unevaluable.insert(off) {
+                            self.trace_output.push(format!(
+                                "breakpoint condition `{cond}` cannot be evaluated here \
+                                 — stopping anyway so it is not silently never hit; \
+                                 check the names are in scope at this line (`:vars`)"
+                            ));
+                        }
+                    }
                 }
-                continue;
             }
             // Tracepoint (stop = false): emit the actions and continue.
             if !meta.stop {
@@ -2560,6 +2801,15 @@ impl ReplSession {
             }
             return; // real stop (condition held / no condition, stop = true)
         }
+    }
+
+    /// @PLN120 F — the undo entries the current pause dropped, `(label, reason)`.
+    #[must_use]
+    pub fn dropped_undo_here(&self) -> Vec<(String, String)> {
+        self.paused
+            .as_deref()
+            .map(crate::state::State::dropped_undo)
+            .unwrap_or_default()
     }
 
     /// @PLN16 rich-bp — drain the tracepoint emissions from the most recent resume (the
@@ -2591,6 +2841,49 @@ impl ReplSession {
     /// always restored — even if the evaluation unwinds.
     pub fn debug_eval(&mut self, expr: &str) -> Option<String> {
         self.debug_eval_fmt(expr, false)
+    }
+
+    /// @PLN120 A — why a bare local name that IS in the paused frame still cannot be
+    /// read or written: the frame does not hold its value.  `None` when the name is
+    /// not a frame local, or is one the frame holds (so the failure has another
+    /// cause).  A `<reused by …>` local is readable one line earlier, and saying so
+    /// is the difference between a diagnosis and "couldn't evaluate".
+    #[must_use]
+    pub fn unheld_local_reason(&self, expr: &str) -> Option<String> {
+        let name = expr.trim();
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '#')
+        {
+            return None;
+        }
+        let state = self
+            .paused
+            .as_deref()?
+            .frame_local_state(name, &self.parser.data)?;
+        match state {
+            // Held: the failure has another cause, so the caller's generic message is
+            // the right one.
+            crate::state::LocalState::Held => None,
+            // @PLN120 A follow-up — a name that IS a local of this function but is not
+            // in scope on this line used to get the same "couldn't evaluate" as a typo,
+            // which is what made the consumer read a working debugger as broken (their
+            // case: the loop iterator, read while stopped on the `for` line).
+            crate::state::LocalState::OutOfScope => Some(format!(
+                "`{name}` is a local of this function but is not in scope at this line \
+                 — break inside the block that declares it"
+            )),
+            crate::state::LocalState::Unset => Some(format!(
+                "`{name}` is in scope but has no value yet at this line — \
+                 its first assignment has not run"
+            )),
+            crate::state::LocalState::Reused(by) => Some(format!(
+                "`{name}` is in scope but the frame no longer holds it — \
+                 its stack slot was reused by `{by}`; break earlier in the \
+                 function to read it"
+            )),
+        }
     }
 
     /// @PLN16 phase 2 — evaluate `expr` against the paused frame and render the result
@@ -2669,7 +2962,7 @@ impl ReplSession {
             let frame = state.paused_frame()?;
             let mut keyed: Vec<(String, String)> = Vec::new();
             let mut seed = String::new();
-            for (name, lit) in &frame.locals {
+            for (name, lit) in frame.held_locals() {
                 if !idents.contains(name.as_str()) {
                     continue;
                 }
@@ -2791,6 +3084,31 @@ impl ReplSession {
         state.eval_frame_reenter(&mut self.parser.data, d, arg_names, &ret_type, json)
     }
 
+    /// Run one frame-eval attempt, catching a panic so the session survives — and
+    /// **reporting** the panic's message instead of discarding it.
+    ///
+    /// The two eval attempts used to be `catch_unwind(…).unwrap_or(None)`, so a compiler
+    /// invariant tripping inside them degraded to a bare "couldn't evaluate": exactly
+    /// the swallowed-payload defect @PLN120 E.3 fixed for the abandon path, still live
+    /// here.  It hid a real one — the @PLN120 E.4 rollback guard fires inside this call,
+    /// and its message never reached the surface.  The report rides `trace_output`, so
+    /// the interactive prompt prints it and the RPC surface emits it as an `output`
+    /// event, from one place.
+    fn eval_or_report_panic<F>(&mut self, attempt: F) -> Option<String>
+    where
+        F: FnOnce(&mut Self) -> Option<String>,
+    {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| attempt(self))) {
+            Ok(v) => v,
+            Err(payload) => {
+                let why = panic_message(&payload);
+                self.trace_output
+                    .push(format!("evaluating at the frame failed: {why}"));
+                None
+            }
+        }
+    }
+
     fn debug_eval_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
         // @PLN16 D2 — a bare local that holds a heap value (struct / vector / collection)
         // is read **live, in place**: render its actual `DbRef` from the paused store
@@ -2819,8 +3137,7 @@ impl ReplSession {
         // referenced → the text-seed path below still handles everything else.
         // Guarded by the same `catch_unwind` as the reconstruct path so a codegen
         // fault in the live-frame compile can't abandon the debug session.
-        let live = std::panic::catch_unwind(AssertUnwindSafe(|| self.eval_frame_expr(expr, json)))
-            .unwrap_or(None);
+        let live = self.eval_or_report_panic(|s| s.eval_frame_expr(expr, json));
         if let Some(v) = live {
             return Some(v);
         }
@@ -2835,7 +3152,7 @@ impl ReplSession {
             // unrelated heap/keyed local can never break an expression that does not use it.
             let idents = expr_idents(expr);
             let mut p = String::new();
-            for (name, lit) in &frame.locals {
+            for (name, lit) in frame.held_locals() {
                 if !idents.contains(name.as_str()) {
                     continue;
                 }
@@ -2856,8 +3173,7 @@ impl ReplSession {
             p
         };
         let saved = std::mem::replace(&mut self.body, prefix);
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| self.value_of_fmt(expr, json)))
-            .unwrap_or(None);
+        let result = self.eval_or_report_panic(|s| s.value_of_fmt(expr, json));
         self.body = saved; // restore the real session body, panic or not
         result
     }
@@ -3176,6 +3492,7 @@ impl ReplSession {
             crate::scopes::check(&mut self.parser.data);
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
+            self.wire_natives(&mut state);
             // @PLN16 G1 — apply the session's breakpoints to this run.  In stepping
             // mode a hit *suspends* execution; otherwise it records-and-continues.
             // Only on a real observing run (`debug`), not the value-render re-runs
@@ -4606,5 +4923,116 @@ mod completion_tests {
     fn dot_non_identifier_receiver_yields_nothing() {
         let (_start, out) = complete_word(&model(), "arr[0].x", 8);
         assert!(out.is_empty());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod paused_prompt_tests {
+    use super::{Eval, ReplSession, handle_paused, panic_message};
+
+    /// @PLN120 E3a — the abandon path must SURFACE the panic payload.
+    ///
+    /// It used to print a fixed category line and drop the `Box<dyn Any>`, so every
+    /// distinct runtime fault read identically and the debugger could not explain
+    /// its own failure. Recovering the text is what named E3b's cause ("native
+    /// function not loaded: its library's native cdylib is missing or stale") on
+    /// the first run after this landed.
+    #[test]
+    fn a_caught_panic_keeps_its_message() {
+        let from_literal =
+            std::panic::catch_unwind(|| panic!("a literal cause")).expect_err("must unwind");
+        assert_eq!(panic_message(&from_literal), "a literal cause");
+
+        let n = 7;
+        let from_format =
+            std::panic::catch_unwind(|| panic!("a formatted cause: {n}")).expect_err("must unwind");
+        assert_eq!(panic_message(&from_format), "a formatted cause: 7");
+
+        // A payload with no readable text still says something, never nothing.
+        let from_value =
+            std::panic::catch_unwind(|| std::panic::panic_any(42u8)).expect_err("must unwind");
+        assert!(!panic_message(&from_value).is_empty());
+    }
+
+    /// @PLN120 E3 — a bare verb must not shadow a live local of the same name.
+    ///
+    /// The paused prompt accepts verbs with or without the leading colon, and the
+    /// verb set (`s` `n` `c` `r` `o` `u` `q`, `step`, `next`, `vars`, …) collides
+    /// with the commonest loft local names there are.  Typing `n` to read the local
+    /// `n` used to run `:next` — and typing `c` ran `:continue`, resuming the
+    /// program and ending the session instead of printing a value.  A live local
+    /// wins; the colon form is always the verb.
+    #[test]
+    fn a_bare_word_naming_a_live_local_is_read_not_run() {
+        let mut s = ReplSession::new("default").expect("stdlib");
+        assert!(matches!(
+            s.eval("fn calc(n: integer) -> integer {\n  n * 10\n}"),
+            Eval::Ran
+        ));
+        s.debug_stepping(true);
+        s.add_breakpoint("calc");
+        assert!(matches!(
+            s.eval("assert(calc(5) == 50, \"runs\")"),
+            Eval::Paused
+        ));
+        let at = s.paused_frame().expect("suspended in calc").line;
+        assert!(
+            s.paused_frame()
+                .unwrap()
+                .locals
+                .iter()
+                .any(|(n, _)| n == "n"),
+            "the local `n` must be in the frame for this test to mean anything"
+        );
+
+        let mut out = Vec::new();
+        assert!(!handle_paused("n", &mut s, &mut out).expect("io"));
+        let frame = s
+            .paused_frame()
+            .expect("still suspended — bare `n` must not have stepped");
+        assert_eq!(
+            frame.line, at,
+            "bare `n` ran the :next verb instead of reading the local"
+        );
+
+        // The colon form keeps meaning the verb even though `n` is a local.
+        assert!(!handle_paused(":next", &mut s, &mut out).expect("io"));
+        assert!(
+            s.paused_frame().is_none_or(|f| f.line != at),
+            ":next must still step"
+        );
+    }
+
+    /// The control: a bare verb with NO matching local still runs the verb — the
+    /// convenience the colon-less form exists for is preserved.
+    #[test]
+    fn a_bare_verb_with_no_such_local_still_runs() {
+        let mut s = ReplSession::new("default").expect("stdlib");
+        assert!(matches!(
+            s.eval("fn calc(v: integer) -> integer {\n  v * 10\n}"),
+            Eval::Ran
+        ));
+        s.debug_stepping(true);
+        s.add_breakpoint("calc");
+        assert!(matches!(
+            s.eval("assert(calc(5) == 50, \"runs\")"),
+            Eval::Paused
+        ));
+        let at = s.paused_frame().expect("suspended in calc").line;
+        assert!(
+            !s.paused_frame()
+                .unwrap()
+                .locals
+                .iter()
+                .any(|(n, _)| n == "n"),
+            "no local named `n` here — that is the point of the control"
+        );
+
+        let mut out = Vec::new();
+        assert!(!handle_paused("n", &mut s, &mut out).expect("io"));
+        assert!(
+            s.paused_frame().is_none_or(|f| f.line != at),
+            "bare `n` must still step when nothing shadows it"
+        );
     }
 }
