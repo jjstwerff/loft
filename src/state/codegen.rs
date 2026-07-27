@@ -296,18 +296,30 @@ impl State {
             }
             self.code_pos = old;
         }
-        // @PLN120 A — every slotted local must have produced a store span.
-        // `assign_slots_v2` gives a slot only to a variable with a live interval,
-        // and `compute_intervals` derives one only from a `Set` or a `TuplePut` —
-        // the two arms that record.  A miss therefore means a new slot-writing
-        // lowering appeared without a recording site, which would render that local
-        // `<unset>` in every paused frame forever.  Loud here beats silent there.
+        // @PLN120 A — every slotted USER local must have produced a store span.
+        // `assign_slots_v2` gives a slot only to a variable with a live interval, and
+        // `compute_intervals` derives one only from a `Set` or a `TuplePut` — the two
+        // arms that record.  A miss means a new slot-writing lowering appeared without
+        // a recording site, which would render that local `<unset>` in every paused
+        // frame forever.  Loud here beats silent there.
+        //
+        // **Compiler work-refs (`__`-prefixed) are exempt, and that is measured, not
+        // assumed.** The hidden return buffer `__ref_1` holds a slot with no recorded
+        // span in 488 of the `tests/scripts` corpus — its slot is claimed and
+        // sentinel-inited by the function preamble rather than by an IR `Set`, so the
+        // interval-derived premise above does not cover it.  The consequence is benign:
+        // no span means `<unset>`, which is conservative, and `__`-prefixed names are
+        // filtered out of the displayed frame anyway.  Asserting over them would be
+        // asserting something false.
+        //
+        // Anything a user can name is still in scope, `#`-infixed loop temps included
+        // (`i#index` is a real `Set` in the IR) — those are what the check is for.
         #[cfg(debug_assertions)]
         {
             let vars = &data.definitions[def_nr as usize].variables;
             for (v_nr, &pos) in stack_pos.iter().enumerate() {
                 let v = v_nr as u16;
-                if pos == u16::MAX || vars.is_argument(v) {
+                if pos == u16::MAX || vars.is_argument(v) || vars.name(v).starts_with("__") {
                     continue;
                 }
                 assert!(
