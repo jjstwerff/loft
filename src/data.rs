@@ -53,6 +53,16 @@ pub const STD_SOURCE: u16 = 0;
 /// See [`STD_SOURCE`] for the full source-numbering scheme.
 pub const MAIN_SOURCE: u16 = 1;
 
+/// One applied import, retained so a `def_names` rebuild can replay it.
+/// `name` is `None` for a wildcard `use lib;` / `use lib::*`, or
+/// `Some((name, bind))` for a selective `use lib::name [as bind]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedImport {
+    pub lib_source: u16,
+    pub into_source: u16,
+    pub name: Option<(String, String)>,
+}
+
 /// Specification of an `integer`-family type — bounds, nullability,
 /// and optional forced storage width.
 ///
@@ -3316,6 +3326,21 @@ pub struct Data {
     /// Index on definitions on name
     def_names: HashMap<(String, u16), u32>,
     use_names: HashMap<String, u16>,
+    /// Every import that has been applied, so [`rebuild_indices`](Self::rebuild_indices)
+    /// can replay it.
+    ///
+    /// An import is an ALIAS in `def_names` — `(name, importing_source) → def_nr` — and
+    /// therefore NOT derivable from `definitions`, each of which knows only its own
+    /// source.  A rebuild that reads `definitions` alone silently drops every one, and
+    /// the REPL rebuilds on each `savepoint`/`rewind`, so a single rolled-back probe
+    /// used to make every `use`d library name unresolvable for the rest of the session
+    /// (moros H13's residual: a library call in `eval` answered "couldn't evaluate"
+    /// while a same-file call worked).
+    ///
+    /// Deliberately NOT cleared by [`reset`](Self::reset): a REPL/debugger expression
+    /// is parsed as a fresh source that re-declares no `use`, and inheriting the
+    /// program's imports is exactly what lets it name the frame's own vocabulary.
+    applied: Vec<AppliedImport>,
     /// Current source file
     pub source: u16,
     /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
@@ -3603,6 +3628,7 @@ impl Data {
             definitions: Vec::new(),
             def_names: HashMap::new(),
             use_names: HashMap::new(),
+            applied: Vec::new(),
             source: STD_SOURCE,
             value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
@@ -3667,6 +3693,12 @@ impl Data {
     /// whole-stdlib / whole-bundle snapshot is single-pass and uniform, so
     /// the `add_def`-level inserts are sufficient.  Multi-library import
     /// reconciliation is a later extension if per-library snapshots land.
+    /// Rebuild the derived lookup indices from `definitions`.
+    ///
+    /// Ends by replaying the retained imports ([`applied`](Self::applied)): a
+    /// definition knows only its own source, so the loop below can restore
+    /// `(name, own_source)` but never the `(name, importing_source)` alias an import
+    /// creates.  Without the replay a rollback drops every `use`d name.
     pub(crate) fn rebuild_indices(&mut self) {
         self.def_names.clear();
         self.operators.clear();
@@ -3703,6 +3735,9 @@ impl Data {
         if self.use_names.is_empty() {
             self.use_names.insert("std".to_string(), STD_SOURCE);
         }
+        // The loop above restored each definition under its own source only; an
+        // import's cross-source alias has to be re-applied.
+        self.replay_imports();
     }
 
     /// Cache-verify oracle: compare the DERIVED indices (rebuilt by
@@ -5079,7 +5114,40 @@ impl Data {
 
     /// Import all names from `lib_source` into `into_source`.
     /// Names already present in `into_source` (local definitions) are kept unchanged.
+    /// Retain one applied import for [`rebuild_indices`](Self::rebuild_indices) to
+    /// replay.  Idempotent — re-applying the same `use` does not grow the list.
+    fn remember_import(
+        &mut self,
+        lib_source: u16,
+        into_source: u16,
+        name: Option<(String, String)>,
+    ) {
+        let entry = AppliedImport {
+            lib_source,
+            into_source,
+            name,
+        };
+        if !self.applied.contains(&entry) {
+            self.applied.push(entry);
+        }
+    }
+
+    /// Re-apply every retained import.  Called at the end of a `def_names` rebuild,
+    /// which can only reconstruct each definition under its OWN source and so drops
+    /// the cross-source aliases an import creates.
+    fn replay_imports(&mut self) {
+        for imp in std::mem::take(&mut self.applied) {
+            match &imp.name {
+                None => self.import_all(imp.lib_source, imp.into_source),
+                Some((name, bind)) => {
+                    self.import_name(imp.lib_source, imp.into_source, name, bind);
+                }
+            }
+        }
+    }
+
     pub fn import_all(&mut self, lib_source: u16, into_source: u16) {
+        self.remember_import(lib_source, into_source, None);
         let names: Vec<(String, u32)> = self
             .def_names
             .iter()
@@ -5106,6 +5174,11 @@ impl Data {
         name: &str,
         bind: &str,
     ) -> bool {
+        self.remember_import(
+            lib_source,
+            into_source,
+            Some((name.to_string(), bind.to_string())),
+        );
         // Functions are stored under the `n_` prefix; try both forms.
         let fn_key = format!("n_{name}");
         let bind_fn_key = format!("n_{bind}");

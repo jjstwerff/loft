@@ -132,6 +132,55 @@ fixture, a real cdylib the suite rebuilds) and the `panic_message` unit test.
 moros's five-row matrix: all four re-runnable rows green, outputs checked by value
 (`r=6`, `web ok 2`), not merely "resumed".
 
+### E.4 — a library function could not be called at a frame — **SHIPPED 2026-07-27**
+
+The residual moros left on H13 after the rest of E shipped: at a paused frame,
+`hex_distance(tq, tr, 0, 0)` answered *"couldn't evaluate"* while arithmetic over
+locals worked. Their note called it small; it is the last thing standing between the
+debugger and a real multi-package program, which is this arc's whole subject.
+
+**The discriminator narrows it to one thing (VERIFIED).** At the same frame:
+
+| expression | result |
+|---|---|
+| `tq + tr` (locals) | ✅ 9 |
+| `len("abcd")`, `max(tq, tr)` (**stdlib**) | ✅ |
+| `dist(x, y)` (**same file**) | ✅ |
+| `hex_distance(…)` (**`use`d library**) | ❌ *couldn't evaluate* |
+
+**Root cause, and it is not in the debugger.** An import is an *alias* in `def_names`
+— `(name, importing_source) → def_nr`. `Data::rebuild_indices` rebuilds that map from
+`definitions` alone, and a definition knows only its OWN source, so every import alias
+is silently dropped. `Data::def_nr` looks in the current source and `STD_SOURCE` only —
+which is exactly why stdlib and same-file names survived and library names did not.
+
+The REPL calls `rebuild_indices` through `savepoint`/`rewind` on **every** eval probe
+(`infer_type` alone parses and rolls back once per evaluation), so the FIRST probe
+un-imported every library name for the rest of the session.
+
+**Fix.** `Data` retains the applied imports (`AppliedImport { lib_source, into_source,
+name }`, recorded by `import_all` / `import_name`) and `rebuild_indices` replays them
+after rebuilding. Deliberately NOT cleared by `reset()`: a debugger expression parses as
+a fresh source that declares no `use`, and inheriting the program's imports is precisely
+what lets it name the frame's own vocabulary.
+
+**Wider than the debugger.** Any rolled-back parse dropped the imports, so the same
+hole sat under ordinary REPL use of a multi-package program — the debugger is just where
+a consumer met it.
+
+**Verified by** `tests/repl_session.rs::debug_eval_can_call_a_library_function_at_a_frame`
+— a library call, a same-file call and a local as controls, asserting VALUES (7 + 5 = 12)
+via the edit path rather than only the absence of the error, since a call silently
+yielding 0 would pass a negative-only assertion. Non-vacuity proven by disabling the
+replay: the test fails. Also confirmed on the RPC surface (`eval` → `9`, was `null`),
+which is the surface moros drives.
+
+**Not fixed here, same class:** `loft repl --lib <dir>` ignores the flag —
+*"Library 'geom' not found"* — so a library function cannot be reached from the plain
+REPL either. That is E.1's defect at a **fourth** entry point, and E.1's own follow-up
+note predicted it: the three entry points want one resolution-context value instead of
+parallel parameter lists.
+
 ---
 
 ## B — No silent lies (breakpoint conditions) — **SHIPPED 2026-07-27**

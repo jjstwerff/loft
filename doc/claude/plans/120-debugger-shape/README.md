@@ -102,6 +102,7 @@ not happen. Discoverability (**C**) only pays off once **E** is true.
 | **E1** — `--lib` ignored, so no multi-package program could be debugged | [DESIGN.md § E.1](DESIGN.md#e1----lib-ignored--shipped-2026-07-27) | **Shipped** 2026-07-27 |
 | **E2** — the target argument did not skip flags | [DESIGN.md § E.2](DESIGN.md#e2--the-target-argument-does-not-skip-flags--shipped-2026-07-27) | **Shipped** 2026-07-27 |
 | **E3** — a native call abandoned the session, unnamed | [DESIGN.md § E.3](DESIGN.md#e3--a-native-call-abandoned-the-session-unnamed--shipped-2026-07-27) | **Shipped** 2026-07-27 |
+| **E4** — a `use`d library's function could not be called in `eval` at a frame | [DESIGN.md § E.4](DESIGN.md#e4--a-library-function-could-not-be-called-at-a-frame--shipped-2026-07-27) | **Shipped** 2026-07-27 |
 | **B** — a condition that cannot be evaluated must say so, never read as `false` | [DESIGN.md § B](DESIGN.md#b--no-silent-lies-breakpoint-conditions--shipped-2026-07-27) | **Shipped** 2026-07-27 |
 | **A** — frame liveness: show lexical scope, and say why a local has no value | [DESIGN.md § A](DESIGN.md#a--frame-liveness) | **Shipped** 2026-07-27 |
 | **C1** — `DEBUG.md` gains an `## Interactive debugging` section | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |

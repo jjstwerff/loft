@@ -1809,3 +1809,71 @@ fn file_debugger_names_an_out_of_scope_local() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// moros H13's residual — a call to a `use`d LIBRARY's function inside `eval` answered
+/// "couldn't evaluate", while a same-file call and arithmetic over locals both worked.
+///
+/// The cause was not in the debugger. An import is an ALIAS in `def_names` —
+/// `(name, importing_source) → def_nr` — which is not derivable from `definitions`,
+/// since each definition knows only its own source. `Data::rebuild_indices` rebuilt
+/// from `definitions` alone and therefore dropped every import, and the REPL rebuilds
+/// on each `savepoint`/`rewind` — so the FIRST eval probe silently un-imported every
+/// library name for the rest of the session. `Data` now retains the applied imports
+/// and replays them after a rebuild.
+///
+/// The two controls are what place the blame: a same-file call and a local expression
+/// must keep working, so a fix that broke ordinary resolution to make libraries
+/// resolve could not pass.
+#[test]
+fn debug_eval_can_call_a_library_function_at_a_frame() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let lib_dirs = vec![dir.to_string_lossy().into_owned()];
+
+    let path = tmp_session("eval_libcall").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use typeshift;\n\
+         fn local_double(n: integer) -> integer { return n * 2; }\n\
+         fn main() {\n  \
+         base = 5;\n  \
+         v = 0;\n  \
+         v = ts_touch() + base;\n  \
+         assert(v == 12, \"lib call\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    // Break on the line that uses the library call, then exercise three reads and two
+    // edits.  A bare read prints its value to stdout, which this harness does not
+    // capture — but a FAILED read prints "couldn't evaluate" to the chrome stream, and
+    // an EDIT reprints the frame there, so the edits are what pin the actual VALUES.
+    let input = std::io::Cursor::new(
+        b"base\nlocal_double(base)\nts_touch()\nv = local_double(base)\nv = ts_touch() + base\n:quit\n"
+            .to_vec(),
+    );
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &lib_dirs, file, 6, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("couldn't evaluate"),
+        "every expression must evaluate at the frame: {text}"
+    );
+    assert!(
+        !text.contains("couldn't set"),
+        "every edit must land: {text}"
+    );
+    // The same-file call is the control: `local_double(5)` is 10.
+    assert!(
+        text.contains("v = 10"),
+        "the same-file call produced its value (control): {text}"
+    );
+    // The regression: `ts_touch()` is 7, so 7 + 5 = 12.  A VALUE, not merely the
+    // absence of an error — a library call that silently yielded 0 would pass the two
+    // negative assertions above.
+    assert!(
+        text.contains("v = 12"),
+        "the LIBRARY call produced its value at the frame: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
