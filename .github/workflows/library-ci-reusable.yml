@@ -109,16 +109,26 @@ jobs:
       # opt out with a `.allow_warnings` file in its dir) — distinct from the loft-side
       # revalidate-libs gate, which tolerates warnings (a new loft warning must not fail
       # an already-shipped lib).
+      #
+      # LOFT_STORE_GUARD arms loft's own store-lifetime checks on the library's code
+      # while its tests run: the Goal-E reclaim assertion (a store the model calls dead
+      # but that outlives a later allocation — a hard failure) plus the advisory
+      # confinement report on stderr.  It costs no new test and needs no consumer, so a
+      # brand-new package passes it on day one.  Verified across all 25 published
+      # packages on both backends before it was turned on: zero failures, one advisory
+      # note (`cbor`).
       - name: Interpret — ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
         env:
           LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+          LOFT_STORE_GUARD: 1
         run: loft --interpret --tests tests
 
       - name: Native — ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
         env:
           LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+          LOFT_STORE_GUARD: 1
         run: LOFT_TIMEOUT=240 loft --native --tests tests
 
       - name: Rust integration tests (if present)

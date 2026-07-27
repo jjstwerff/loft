@@ -60,6 +60,49 @@ fn sandbox_policy_for(file: &str) -> Option<loft::sandbox::SandboxConfig> {
     None
 }
 
+/// The root of the package a test file belongs to — the nearest ancestor holding a
+/// `loft.toml`.  A test lives in `tests/` while the code it drives lives in `src/`, so
+/// the walk starts beside the file and climbs.  `None` for a loose script with no
+/// package around it.
+fn package_root_for(file: &str) -> Option<std::path::PathBuf> {
+    let mut dir = std::path::Path::new(file).parent()?;
+    for _ in 0..4 {
+        if dir.join("loft.toml").is_file() {
+            return Some(dir.to_path_buf());
+        }
+        dir = dir.parent()?;
+    }
+    None
+}
+
+/// The path to report a definition under for coverage, or `None` when the package
+/// under test is not answerable for it.
+///
+/// Answerable means: inside this package's own directory.  That excludes the stdlib,
+/// dependencies (whether resolved from the registry cache, a lib dir, or a sibling
+/// directory in the same checkout), and the test file itself — its `fn test_*` are the
+/// drivers, which the runner already reports on. Charging a package for a dependency
+/// would make its number depend on how much of that dependency it happens to touch,
+/// which says nothing about the package's own tests.
+///
+/// Returns the path relative to the package root, so the report reads
+/// `src/regex.loft:30` rather than an absolute path nobody can scan.
+fn coverage_path(src: &str, test_file: &str, root: Option<&std::path::Path>) -> Option<String> {
+    if src.is_empty() || src.starts_with("default/") || src.starts_with("default\\") {
+        return None;
+    }
+    let abs = std::fs::canonicalize(src).ok()?;
+    if let Ok(t) = std::fs::canonicalize(test_file)
+        && abs == t
+    {
+        return None;
+    }
+    let root = root?;
+    let root = std::fs::canonicalize(root).ok()?;
+    let rel = abs.strip_prefix(&root).ok()?;
+    Some(rel.to_string_lossy().into_owned())
+}
+
 fn enter_source_dir(source_dir: &str, program_relative: bool) -> CwdGuard {
     if program_relative
         && !source_dir.is_empty()
@@ -451,6 +494,13 @@ pub(crate) fn run_tests(
     // that matches NOTHING reports as its own state — that is the silent case, and
     // calling it "no policy" would hide exactly what needs saying.
     let mut sandbox_policy_seen = false;
+    // Function coverage, accumulated across every test file by a STABLE identity
+    // (file, line, name) rather than by `d_nr`: each test file gets its own parser, so
+    // the same function has a different index in each one.  A function entered by ANY
+    // test in the run counts as reached.  Reported, never gated — a library is written
+    // before its consumers exist, so a coverage bar would punish exactly the case the
+    // package system is meant to support.
+    let mut coverage: BTreeMap<(String, u32, String), bool> = BTreeMap::new();
     let mut dir_summaries: Vec<(String, u32, u32)> = Vec::new(); // (dir, pass, fail)
 
     for (dir_path, files) in &dirs {
@@ -751,6 +801,10 @@ pub(crate) fn run_tests(
                 total_files += 1;
                 continue;
             }
+
+            // Coverage for THIS file's parse, indexed by `d_nr`; folded into the
+            // run-wide map under stable identities once the file's tests have run.
+            let mut file_entered: Vec<bool> = vec![false; p.data.definitions() as usize];
 
             // Find callable entry points: zero-parameter user functions, plus
             // single-vector-parameter functions when @ARGS provides argv.
@@ -1275,6 +1329,9 @@ pub(crate) fn run_tests(
                                 Some(std::sync::Arc::new(std::sync::Mutex::new(lg)));
                         }
 
+                        // Arm coverage for this run.  Sized to the definition table so
+                        // the hook is a bounds-checked index, never a resize.
+                        state.entered_fns = Some(vec![false; data_copy.definitions() as usize]);
                         if loft_log_active {
                             // When LOFT_LOG is set, emit IR+bytecode+trace to stderr
                             // (same format as cargo-test dump files, but to stderr so
@@ -1290,6 +1347,15 @@ pub(crate) fn run_tests(
                             }
                         } else {
                             state.execute_argv(&fn_name_owned, &data_copy, &user_args);
+                        }
+                        // Fold this test's entries into the file's tally.  A function
+                        // reached by any one test in the file counts as reached.
+                        if let Some(seen) = state.entered_fns.take() {
+                            for (i, hit) in seen.iter().enumerate() {
+                                if *hit && i < file_entered.len() {
+                                    file_entered[i] = true;
+                                }
+                            }
                         }
                         // @P367: assert(false) / panic / divide-by-zero / OOB /
                         // null-deref set a *typed* runtime fault and halt WITHOUT
@@ -1412,6 +1478,46 @@ pub(crate) fn run_tests(
                 }
                 println!("  FAIL  {display_name}  ({fail_count} failed, {pass_count} passed)");
             }
+
+            let pkg_root = package_root_for(&abs_file);
+            // Fold this file's tally into the run-wide map.  What counts is the code
+            // UNDER TEST: definitions from this parse (so, past the stdlib boundary at
+            // `start_def`), excluding the test file's own driver functions and anything
+            // pulled in from a dependency — a package is not answerable for its deps'
+            // coverage.
+            for d_nr in start_def..clean_data.definitions() {
+                let def = clean_data.def(d_nr);
+                if !matches!(def.def_type, DefType::Function) {
+                    continue;
+                }
+                // Decode via the canonical mapper: a library's API is mostly METHODS,
+                // stored as `t_<LEN><Type>_<method>`, so a bare `n_` prefix check would
+                // silently count only the free functions — `arguments` reported 4 of
+                // its 21 that way.  Lambdas are generated, not written, so they are not
+                // the author's to cover.
+                if def.name.starts_with("n___lambda_") {
+                    continue;
+                }
+                let Some((_kind, shown)) = loft::api_surface::classify(&clean_data, d_nr) else {
+                    continue;
+                };
+                // A `#native` declaration has no loft body to enter — it dispatches
+                // straight to Rust — so it can never be recorded and would otherwise
+                // report as permanently uncovered.  A native-backed package would then
+                // read 100% uncovered however well it is tested, which is exactly the
+                // kind of lying number that gets a coverage report ignored.
+                if !def.native.is_empty() {
+                    continue;
+                }
+                let Some(src) = coverage_path(&def.position.file, &abs_file, pkg_root.as_deref())
+                else {
+                    continue;
+                };
+                let key = (src, def.position.line, shown);
+                let hit = file_entered.get(d_nr as usize).copied().unwrap_or(false);
+                let slot = coverage.entry(key).or_insert(false);
+                *slot = *slot || hit;
+            }
         }
 
         // Per-directory summary.
@@ -1475,6 +1581,51 @@ pub(crate) fn run_tests(
     };
     let scope =
         format!("[ran on {ran} only{skipped} — {missing} not exercised: {missing_cmd}{admission}]");
+
+    // Function coverage: name the functions the suite never entered.  A LIST, not a
+    // percentage — a percentage becomes a target, and a coverage target is what makes
+    // people write tests that reach a line instead of tests that check a behaviour.
+    // Every entry here is an individual, checkable fact: this code did not run.
+    //
+    // Native mode compiles each function to Rust, so there is no `fn_call` to observe
+    // and nothing to report; the interpreter leg carries this.
+    let unreached: Vec<&(String, u32, String)> = coverage
+        .iter()
+        .filter(|(_, hit)| !**hit)
+        .map(|(k, _)| k)
+        .collect();
+    // An empty map means there was nothing to measure (a loose script, or a package
+    // whose code is all `#native`) — say nothing rather than imply a clean result.
+    // A full map with nothing unreached is a real result and gets said out loud, so
+    // "no coverage line" can never be mistaken for "everything is covered".
+    if !native_mode && !coverage.is_empty() && unreached.is_empty() {
+        println!(
+            "coverage: all {} functions were entered by these tests",
+            coverage.len()
+        );
+    }
+    if !native_mode && !coverage.is_empty() && !unreached.is_empty() {
+        println!(
+            "coverage: {} of {} functions were never entered by these tests",
+            unreached.len(),
+            coverage.len()
+        );
+        // Show enough to act on without burying the test result; the rest on request.
+        // `LOFT_COVERAGE=list` prints every entry — for piping into a worklist rather
+        // than reading at the end of a run.
+        let full = std::env::var("LOFT_COVERAGE").is_ok_and(|v| v == "list");
+        const SHOWN: usize = 10;
+        let shown = if full { unreached.len() } else { SHOWN };
+        for (file, line, name) in unreached.iter().take(shown) {
+            println!("  {file}:{line}  {name}");
+        }
+        if unreached.len() > shown {
+            println!(
+                "  … and {} more (LOFT_COVERAGE=list for the full list)",
+                unreached.len() - shown
+            );
+        }
+    }
 
     let total = total_pass + total_fail;
     if total_fail == 0 {

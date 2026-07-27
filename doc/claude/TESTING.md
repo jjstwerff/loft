@@ -112,6 +112,7 @@ below for the full rationale and when NOT to use this shape.
 - [Key Constraints](#key-constraints)
 - [`tests/scripts/` — standalone loft test suite](#testsscripts--standalone-loft-test-suite)
 - [Debugging failures in `tests/scripts/`](#debugging-failures-in-testsscripts)
+- [What a run did NOT check — scope, admission, coverage](#what-a-run-did-not-check--scope-admission-coverage)
 
 ---
 
@@ -1893,3 +1894,65 @@ stack, and the panic site appears.
 | Item | Section | Status |
 |---|---|---|
 | ~~**@P229b — Windows `pick_free_port` rebind race**~~ — **CLOSED 2026-05-29** via the v2 probe (PR #228).  Un-ignored `v2_single_client_completes_game` on `windows-latest`; CI showed it PASSING.  All 10 `multiplayer_v{2,3,5}.rs` `#[cfg_attr(target_os = "windows", ignore = "P229b…")]` ignores dropped in the follow-up.  The 2026-05-21 leading hypothesis (bind-then-drop race) was incorrect; @P229b was incidentally resolved in some recent Rust toolchain or transitive dep update.  Bug record: [PROBLEMS.md @P229](PROBLEMS.md). | — | ✅ Closed; row kept for the lesson — "don't apply unverified-from-Windows-output hypotheses blindly" stands. |
+
+---
+
+## What a run did NOT check — scope, admission, coverage
+
+`loft test` ends with a line stating what the run **left out**, not only what it did.
+The reason is one repeated defect: a bare `ok` looked identical whether the other half
+had been checked or had never run once, and people read that silence as coverage. A
+consumer found a quarter of their packages had never been native-compiled while
+`loft test` stayed green; another injected a deliberate capability violation and the
+suite passed. Three things are reported for that reason:
+
+- **Backend scope** — `[ran on the interpreter only — native not exercised: loft test
+  --native]`. Each invocation exercises exactly one backend.
+- **Admission** — whether a `[sandbox]` policy was present and how many files it
+  actually covered. A policy that designates nothing says so.
+- **Function coverage** — the functions the suite never entered.
+
+### Function coverage
+
+Every function defined in the package under test that no test entered is listed with
+its file, line, and name:
+
+```
+coverage: 4 of 8 functions were never entered by these tests
+  src/regex.loft:100  find
+  src/regex.loft:105  split
+  src/regex.loft:110  text.regex_find
+  src/regex.loft:115  text.regex_split
+```
+
+A fully-covered package says so explicitly (`coverage: all 36 functions were entered`),
+so "no coverage line" can never be misread as "everything is covered" — which would
+reproduce the very defect the report exists to remove. Ten entries print by default;
+`LOFT_COVERAGE=list` prints them all.
+
+**It is a list, never a percentage, and never a gate.** A percentage becomes a target,
+and a coverage target produces tests written to reach a line rather than tests that
+check a behaviour — the metric goes green over code nobody validated. And a gate would
+fail exactly the case the package system exists to support: a library is written
+*before* its consumers, so it legitimately starts with little coverage. Each line here
+is instead an individual, checkable fact — this code did not run — and the only way to
+remove one is to actually run the function.
+
+What is deliberately **not** counted, because counting it would make the number lie:
+
+| Excluded | Why |
+|---|---|
+| `#native` declarations | No loft body to enter — they dispatch to Rust, so a native-backed package would read 100% uncovered however well tested. |
+| Dependencies, the stdlib | A package is not answerable for code it did not write; charging it would make its number depend on how much of a dep it happens to touch. |
+| The test file's own functions | They are the drivers, and the runner already reports on them. |
+| Generated lambdas | Not written by the author. |
+
+Generators count when **iterated**, not when created: a generator's body runs on resume,
+so `it = gen();` with no loop over it has run none of it and stays on the list.
+
+Coverage is recorded on the interpreter (`State::fn_call` and the coroutine resume), so
+`loft test --native` prints no coverage line — the interpreter leg carries it. Test
+adequacy is a property of the tests, not of the backend.
+
+Guarded by `tests/function_coverage.rs`, which asserts the quiet directions as hard as
+the loud one.
