@@ -561,6 +561,27 @@ pub fn text_index_units_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_STRICT_INDEX_TEXT").is_none())
 }
 
+/// `LOFT_NO_CONST_EFFECT` — the re-evaluated-constant lint, DEFAULT ON (opt-out).
+///
+/// A file-scope `NAME = expr;` is an INLINED expression, not a once-computed value: the
+/// expression is substituted at every reference, so an initialiser that costs something
+/// pays that cost per use.  For a literal (`PI = 3.14;`) this is invisible and free;
+/// for `FNT = load_bundled();` it is not.  A consumer wrote exactly that, referenced it
+/// once per word per frame, and the browser ran out of memory — the font was re-parsed
+/// hundreds of times per reflow.  Nothing said the word "constant" did not mean
+/// "computed once".
+///
+/// Warns when such an initialiser CALLS something that can cost: a user-defined
+/// function (any source but the stdlib), or a stdlib function annotated
+/// `#impure(category)`.  A pure stdlib call or plain arithmetic stays silent, so
+/// `MAX = 10 * 3;` and `PI = 3.14;` never warn.  Advisory — the semantics are
+/// unchanged; the fix is a function plus an explicit cache.
+#[must_use]
+pub fn const_effect_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_CONST_EFFECT").is_none())
+}
+
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
 /// (`integer`, `text`, `bool`, …) is NON-NULL by default; `τ?` is the only nullable form. Turns
 /// `IntegerSpec.not_null` default `false → true` (and the analog for other scalars rides

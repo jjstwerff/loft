@@ -578,6 +578,43 @@ impl Parser {
         true
     }
 
+    /// The name of a call in a constant's initialiser that makes re-evaluation COST
+    /// something, or `None` when the initialiser is free to inline.
+    ///
+    /// Costly = a user-defined function (any source but the stdlib — its body is
+    /// arbitrary and unannotated), or a stdlib function marked `#impure(category)`.
+    /// Everything else — arithmetic, a pure stdlib call, a literal — re-evaluates for
+    /// free, which is the whole point of inlining a constant, so it stays silent.
+    fn const_initialiser_cost(&self, val: &Value) -> Option<String> {
+        match val.unspan() {
+            Value::Call(d_nr, args) => {
+                let def = self.data.def(*d_nr);
+                // Only NAMED functions (`n_`-prefixed).  The internal operator
+                // vocabulary — `OpNewRecord` for a vector literal, `OpAddInt` for
+                // arithmetic — is what a constant is MADE of; warning on it would fire
+                // on `NUMS = [1, 2, 3];`, which re-evaluates for free and is exactly
+                // the case inlining exists for.
+                let raw = def.name();
+                let named_fn = def.def_type == DefType::Function && raw.starts_with("n_");
+                let costly = def.source != crate::data::STD_SOURCE
+                    || matches!(def.purity, crate::data::Purity::Impure(_));
+                if named_fn && costly {
+                    return Some(format!("{}()", raw.trim_start_matches("n_")));
+                }
+                args.iter().find_map(|a| self.const_initialiser_cost(a))
+            }
+            Value::Block(bl) => bl
+                .operators
+                .iter()
+                .find_map(|o| self.const_initialiser_cost(o)),
+            Value::Insert(ops) => ops.iter().find_map(|o| self.const_initialiser_cost(o)),
+            Value::Set(_, inner) | Value::Return(inner) | Value::Drop(inner) => {
+                self.const_initialiser_cost(inner)
+            }
+            _ => None,
+        }
+    }
+
     // <constant>
     // Accepts either `NAME = expr;` or `NAME: type = expr;`. The optional
     // type annotation is parsed (so the parser doesn't reject the form)
@@ -633,6 +670,24 @@ impl Parser {
                      to compile on --native).  Wrap it in a zero-argument function instead: \
                      `fn {fn_name}() -> {type_name} {{ … }}`, then call `{fn_name}()`"
                 );
+            }
+            // A constant is INLINED at each reference, so an initialiser that calls
+            // something pays that cost per use.  Name it, because the word "constant"
+            // promises the opposite and the failure is invisible until the one target
+            // with bounded memory: a consumer's `FNT = load_bundled();` re-parsed a
+            // 760 KB font once per word per frame and trapped the browser wasm.
+            if !self.first_pass
+                && crate::keys::const_effect_lint_enabled()
+                && let Some(callee) = self.const_initialiser_cost(&val)
+            {
+                {
+                    let fn_name = id.to_lowercase();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "constant '{id}' is re-evaluated at EVERY reference — a file-scope constant is an inlined expression, not a once-computed value, so `{callee}` runs again for each use.  For an expensive or effectful initialiser, use a function that computes the value once and caches it: `fn {fn_name}() -> … {{ … }}`"
+                    );
+                }
             }
             if self.first_pass {
                 // detect a name collision before calling `add_def`,
