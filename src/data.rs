@@ -53,6 +53,31 @@ pub const STD_SOURCE: u16 = 0;
 /// See [`STD_SOURCE`] for the full source-numbering scheme.
 pub const MAIN_SOURCE: u16 = 1;
 
+/// One source's name-visibility summary, for `--show-resolution`.
+pub struct SourceView {
+    pub nr: u16,
+    /// Display name: the file the source's definitions came from, or the library
+    /// name a `use` bound it under.
+    pub name: String,
+    /// Definitions whose own source this is.
+    pub defined: usize,
+    /// Names REACHABLE from this source — its own plus every import alias.  The gap
+    /// between the two columns is what an import buys, and an import fault shows up
+    /// here as the gap closing.
+    pub visible: usize,
+}
+
+/// One import alias: a name reachable from `into_source` whose definition lives in
+/// `from_source`.  Derived from `def_names` rather than from the import log, so the
+/// section reports what the table ACTUALLY holds — which is the thing that went
+/// missing when a rebuild could not reproduce it.
+pub struct AliasView {
+    pub name: String,
+    pub into_source: u16,
+    pub from_source: u16,
+    pub def_nr: u32,
+}
+
 /// One applied import, retained so a `def_names` rebuild can replay it.
 /// `name` is `None` for a wildcard `use lib;` / `use lib::*`, or
 /// `Some((name, bind))` for a selective `use lib::name [as bind]`.
@@ -3663,8 +3688,48 @@ impl Data {
     /// `parse_statement` attempt ran.
     pub(crate) fn rollback_to(&mut self, keep: u32) {
         if (keep as usize) < self.definitions.len() {
+            // @PLN120 E.4 guard — the import aliases that MUST survive this rollback:
+            // a `def_names` entry whose definition lives in another source and is not
+            // itself being truncated away.  Captured before the rebuild, checked after.
+            //
+            // NOT `#[cfg(debug_assertions)]`: `[profile.dev.package.loft]` turns those
+            // off inside this library (they cost ~270x on the store hot paths), so a
+            // cfg-gated check here would be dead in `target/debug/loft` AND under
+            // `cargo test` — it would only ever run in a release-DA build.  The
+            // project's convention for a load-bearing invariant is a plain `assert!`,
+            // and this one is load-bearing: a dropped alias makes every `use`d name
+            // silently unresolvable for the rest of the session.  Cost is bounded by
+            // the `applied.is_empty()` gate — a program with no `use` pays one check.
+            //
+            // Narrower than `derived_indices_diff` (the cache round-trip oracle) on
+            // purpose: a rollback legitimately drops definitions, so a whole-`Data`
+            // comparison would report every truncated def as a divergence and drown
+            // the one thing that matters.  The property here is only "the rebuild
+            // reproduced what it could still reproduce".
+            let expected: Vec<(String, u16, u32)> = if self.applied.is_empty() {
+                Vec::new()
+            } else {
+                self.def_names
+                    .iter()
+                    .filter(|((_, src), nr)| {
+                        **nr < keep
+                            && self
+                                .definitions
+                                .get(**nr as usize)
+                                .is_some_and(|d| d.source != *src)
+                    })
+                    .map(|((n, s), &nr)| (n.clone(), *s, nr))
+                    .collect()
+            };
             self.definitions.truncate(keep as usize);
             self.rebuild_indices();
+            for (name, src, nr) in expected {
+                assert_eq!(
+                    self.def_names.get(&(name.clone(), src)).copied(),
+                    Some(nr),
+                    "a rollback dropped the import alias `{name}` visible from source                      {src} (definition #{nr}).  `rebuild_indices` reconstructs                      `def_names` from `definitions`, which know only their own source,                      so any cross-source binding has to be replayed — see                      `Data::replay_imports`.  A dropped alias makes every `use`d name                      unresolvable for the rest of the session."
+                );
+            }
         }
     }
 
@@ -5114,6 +5179,112 @@ impl Data {
 
     /// Import all names from `lib_source` into `into_source`.
     /// Names already present in `into_source` (local definitions) are kept unchanged.
+    /// The per-source name-visibility picture: one [`SourceView`] per source that has
+    /// any definition or any reachable name, plus every import [`AliasView`].
+    ///
+    /// This is the state that decides whether an unqualified name resolves, and until
+    /// now nothing could look at it: diagnosing why a `use`d library's function was
+    /// unknown at a debugger frame took an `eprintln!` in the parser printing
+    /// `source_nr(0..3, name)` and a rebuild (@PLN120 E.4).  An alias here is a
+    /// `def_names` entry whose source differs from the definition's own — read off the
+    /// table itself, so a rebuild that drops aliases shows as an empty list rather
+    /// than as a call that mysteriously fails.
+    #[must_use]
+    pub fn resolution_view(&self) -> (Vec<SourceView>, Vec<AliasView>) {
+        let mut defined: std::collections::BTreeMap<u16, usize> = std::collections::BTreeMap::new();
+        let mut visible: std::collections::BTreeMap<u16, usize> = std::collections::BTreeMap::new();
+        let mut file_of: std::collections::BTreeMap<u16, String> =
+            std::collections::BTreeMap::new();
+        for d in &self.definitions {
+            *defined.entry(d.source).or_default() += 1;
+            let f = &d.position.file;
+            if !f.is_empty() {
+                file_of.entry(d.source).or_insert_with(|| f.clone());
+            }
+        }
+        let mut aliases = Vec::new();
+        for ((name, src), &def_nr) in &self.def_names {
+            *visible.entry(*src).or_default() += 1;
+            let own = self
+                .definitions
+                .get(def_nr as usize)
+                .map_or(*src, |d| d.source);
+            if own != *src {
+                aliases.push(AliasView {
+                    name: name.clone(),
+                    into_source: *src,
+                    from_source: own,
+                    def_nr,
+                });
+            }
+        }
+        aliases.sort_by(|a, b| {
+            (a.into_source, &a.name, a.from_source).cmp(&(b.into_source, &b.name, b.from_source))
+        });
+        // Library name per source, so a `use`d source is identifiable by the name the
+        // program wrote rather than only by path.
+        let mut lib_of: std::collections::BTreeMap<u16, String> = std::collections::BTreeMap::new();
+        for (lib, src) in &self.use_names {
+            lib_of.entry(*src).or_insert_with(|| lib.clone());
+        }
+        let mut srcs: Vec<u16> = defined.keys().chain(visible.keys()).copied().collect();
+        srcs.sort_unstable();
+        srcs.dedup();
+        let views = srcs
+            .into_iter()
+            .map(|nr| {
+                let name = match (lib_of.get(&nr), file_of.get(&nr)) {
+                    (Some(lib), Some(f)) => format!("{lib} ({f})"),
+                    (Some(lib), None) => lib.clone(),
+                    (None, Some(f)) => f.clone(),
+                    (None, None) => "<unknown>".to_string(),
+                };
+                SourceView {
+                    nr,
+                    name,
+                    defined: defined.get(&nr).copied().unwrap_or(0),
+                    visible: visible.get(&nr).copied().unwrap_or(0),
+                }
+            })
+            .collect();
+        (views, aliases)
+    }
+
+    /// Where `name` is defined and from which sources it is reachable — the
+    /// `--why <name>` query.  Returns `(def_nr, own_source, reachable_from)`, with
+    /// `reachable_from` carrying `true` when the entry is the definition's own source
+    /// and `false` when it is an import alias.  `None` when no source can see it,
+    /// which is itself the answer to "why can't I call this".
+    #[must_use]
+    pub fn visibility_of(&self, name: &str) -> Option<(u32, u16, Vec<(u16, bool)>)> {
+        // Functions are stored under the `n_` prefix; accept either spelling.
+        let keys = [name.to_string(), format!("n_{name}")];
+        let mut def_nr = None;
+        let mut reachable: Vec<(u16, bool)> = Vec::new();
+        for ((n, src), &nr) in &self.def_names {
+            if !keys.iter().any(|k| k == n) {
+                continue;
+            }
+            let own = self.definitions.get(nr as usize).map_or(*src, |d| d.source);
+            if own == *src {
+                def_nr = Some((nr, own));
+            }
+            reachable.push((*src, own == *src));
+        }
+        reachable.sort_unstable();
+        let (nr, own) = def_nr.or_else(|| {
+            // Visible only as an alias (its own source is not in the table) — still
+            // report it, using the first alias's target.
+            reachable.first().map(|&(src, _)| {
+                let nr = self.def_names.iter().find_map(|((n, s), &nr)| {
+                    (keys.iter().any(|k| k == n) && *s == src).then_some(nr)
+                });
+                (nr.unwrap_or(u32::MAX), src)
+            })
+        })?;
+        Some((nr, own, reachable))
+    }
+
     /// Retain one applied import for [`rebuild_indices`](Self::rebuild_indices) to
     /// replay.  Idempotent — re-applying the same `use` does not grow the list.
     fn remember_import(
@@ -5136,6 +5307,10 @@ impl Data {
     /// which can only reconstruct each definition under its OWN source and so drops
     /// the cross-source aliases an import creates.
     fn replay_imports(&mut self) {
+        // `take` drains the list, and `import_all` / `import_name` re-`remember` each
+        // entry as they run — so the list is refilled by the replay itself and a LATER
+        // rebuild still has it.  Load-bearing: without the re-record, only the first
+        // rebuild would restore the aliases.
         for imp in std::mem::take(&mut self.applied) {
             match &imp.name {
                 None => self.import_all(imp.lib_source, imp.into_source),

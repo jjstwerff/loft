@@ -1877,3 +1877,50 @@ fn debug_eval_can_call_a_library_function_at_a_frame() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// The two silent resolution sites, closed by one `ResolutionContext` value.
+///
+/// `--lib` used to be threaded into three entry points and forgotten in the fourth
+/// (@PLN120 E.1 — `loft repl --lib d` answered "Library 'x' not found"), and `:reset`
+/// rebuilt a live session from `stdlib_dir` alone, silently dropping the libraries it
+/// had. The second was LATENT BEHIND the first: with no way to get a library into a
+/// REPL session, there was no way to watch a reset lose one — which is why fixing only
+/// the flag would have left a live fault behind.
+///
+/// Both are asserted here, in order, in one session: a library call resolves, a
+/// `:reset` happens, and a library call resolves again.
+#[test]
+fn repl_keeps_its_resolution_context_across_a_reset() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let ctx = loft::repl::ResolutionContext {
+        stdlib_dir: "default".to_string(),
+        lib_dirs: vec![dir.to_string_lossy().into_owned()],
+    };
+    // The VALUE is pinned with loft's own `assert`, not by reading the printed result:
+    // an expression's value goes to stdout, which this harness does not capture, while
+    // a failed `assert` reports to the chrome stream it does.  So a wrong value fails
+    // loudly here, and a resolution failure shows as "Unknown function".
+    let input = std::io::Cursor::new(
+        b"use typeshift;\nassert(ts_touch() == 7, \"before reset\")\n:reset\n          use typeshift;\nassert(ts_touch() == 7, \"after reset\")\n:quit\n"
+            .to_vec(),
+    );
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_repl(&ctx, input, &mut out).expect("repl run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("not found") && !text.contains("Unknown function"),
+        "the library must resolve in a plain REPL session, before AND after the \
+         reset: {text}"
+    );
+    assert!(
+        text.contains("session reset."),
+        "the reset must actually have happened, or the second call proves nothing: \
+         {text}"
+    );
+    assert!(
+        !text.contains("assertion failed"),
+        "both library calls must return 7 — a resolved call with a wrong value would \
+         otherwise pass the checks above: {text}"
+    );
+}

@@ -144,11 +144,11 @@ pub fn session_file_path() -> Option<std::path::PathBuf> {
 /// # Errors
 /// Returns an I/O error from loading the stdlib or writing to `chrome`.
 pub fn run_repl<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new(stdlib_dir)?;
+    let mut session = ReplSession::open(ctx)?;
     // @PLN16 G1 — the REPL is the interactive debugger surface: a breakpoint hit
     // suspends into the paused sub-mode (inspect / edit / step), rather than the
     // record-and-continue mode programmatic callers use.
@@ -160,7 +160,7 @@ pub fn run_repl<R: BufRead, W: Write>(
     // before returning, even if the loop exits with an I/O error.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
-    let result = run_loop(stdlib_dir, &mut session, input, chrome);
+    let result = run_loop(ctx, &mut session, input, chrome);
     std::panic::set_hook(prev_hook);
     result
 }
@@ -190,7 +190,11 @@ pub fn run_file_debug<R: BufRead, W: Write>(
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
+    let ctx = ResolutionContext {
+        stdlib_dir: stdlib_dir.to_string(),
+        lib_dirs: lib_dirs.to_vec(),
+    };
+    let mut session = ReplSession::open(&ctx)?;
     match session.load_program(file) {
         Ok(Ok(())) => {}
         Ok(Err(diags)) => {
@@ -237,14 +241,7 @@ pub fn run_file_debug<R: BufRead, W: Write>(
     );
     // Auto-run the entry to the breakpoint, then hand off to the interactive loop.
     let mut pending = String::new();
-    let result = match process_line(
-        "main()",
-        &mut session,
-        &mut pending,
-        stdlib_dir,
-        None,
-        chrome,
-    ) {
+    let result = match process_line("main()", &mut session, &mut pending, &ctx, None, chrome) {
         Ok(_) => {
             if !session.is_debugging() {
                 let _ = writeln!(
@@ -252,7 +249,7 @@ pub fn run_file_debug<R: BufRead, W: Write>(
                     "program finished without stopping at {file}:{line} (was the line reached?)"
                 );
             }
-            run_loop(stdlib_dir, &mut session, input, chrome)
+            run_loop(&ctx, &mut session, input, chrome)
         }
         Err(e) => Err(e),
     };
@@ -265,16 +262,16 @@ pub fn run_file_debug<R: BufRead, W: Write>(
 /// plainly.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_loop<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
-        run_interactive(stdlib_dir, session, chrome)
+        run_interactive(ctx, session, chrome)
     } else {
-        run_piped(stdlib_dir, session, input, chrome)
+        run_piped(ctx, session, input, chrome)
     }
 }
 
@@ -305,7 +302,7 @@ fn prompt(pending: &str, debugging: bool) -> &'static str {
 /// test harnesses, and wasm — anywhere there is no interactive terminal — so the
 /// captured output stays stable.
 fn run_piped<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     mut input: R,
     chrome: &mut W,
@@ -320,14 +317,7 @@ fn run_piped<R: BufRead, W: Write>(
             break; // EOF
         }
         // No session path: a piped/file/test run never persists or resumes.
-        if process_line(
-            line.trim_end(),
-            session,
-            &mut pending,
-            stdlib_dir,
-            None,
-            chrome,
-        )? {
+        if process_line(line.trim_end(), session, &mut pending, ctx, None, chrome)? {
             break; // :quit
         }
     }
@@ -540,7 +530,7 @@ impl rustyline::Helper for ReplHelper {}
 /// statement in progress; Ctrl-D at an empty prompt quits.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_interactive<W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     chrome: &mut W,
 ) -> std::io::Result<()> {
@@ -553,7 +543,7 @@ fn run_interactive<W: Write>(
         match rustyline::Editor::with_config(config) {
             Ok(rl) => rl,
             // No usable terminal after all — fall back to the plain reader.
-            Err(_) => return run_piped(stdlib_dir, session, std::io::stdin().lock(), chrome),
+            Err(_) => return run_piped(ctx, session, std::io::stdin().lock(), chrome),
         };
     rl.set_helper(Some(ReplHelper {
         model: CompletionModel::default(),
@@ -595,7 +585,7 @@ fn run_interactive<W: Write>(
                     line.trim_end(),
                     session,
                     &mut pending,
-                    stdlib_dir,
+                    ctx,
                     session_path.as_deref(),
                     chrome,
                 )?;
@@ -628,7 +618,7 @@ fn process_line<W: Write>(
     trimmed: &str,
     session: &mut ReplSession,
     pending: &mut String,
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session_path: Option<&Path>,
     chrome: &mut W,
 ) -> std::io::Result<bool> {
@@ -677,7 +667,11 @@ fn process_line<W: Write>(
                  :bytecode [fn]  :rust [fn]  :slots [fn]"
             )?,
             "reset" => {
-                *session = ReplSession::new(stdlib_dir)?;
+                // Re-open with the SAME resolution inputs.  Rebuilding from
+                // `stdlib_dir` alone silently un-libbed a session that was working —
+                // the @PLN120 E.1 fault turned inward, and latent because the only
+                // lib-bearing REPL route (`loft repl --lib`) was broken too.
+                *session = ReplSession::open(ctx)?;
                 // Clearing state clears the persisted session too, so the next
                 // launch starts clean; keep persisting to the now-empty file.
                 if let Some(path) = session_path {
@@ -771,10 +765,15 @@ fn process_line<W: Write>(
             }
             pending.clear();
         }
-        Err(_) => {
+        Err(payload) => {
+            // Carry the cause, do not just name the category — the same fix @PLN120
+            // E3a made for the debug-abandon path.  A fixed string here collapses
+            // every distinct fault into one line, and it hid a compiler-invariant
+            // assert (the E.4 rollback guard) whose whole purpose is to explain itself.
             writeln!(
                 chrome,
-                "runtime error (session preserved; :reset to clear state)"
+                "runtime error: {} (session preserved; :reset to clear state)",
+                panic_message(&payload)
             )?;
             pending.clear();
         }
@@ -1452,9 +1451,46 @@ struct BpMeta {
 // replaying a saved file while stepping, with reverse armed, reading values from
 // the store.  Folding them into an enum would have to enumerate the product, so
 // the lint's suggested refactor is the worse shape here.
+/// Everything that decides which names a source can see — one value, so a session
+/// cannot be opened with a subset of it.
+///
+/// The parallel-parameter shape this replaces produced the same defect twice: a
+/// `--lib` wired into three entry points and forgotten in the fourth (@PLN120 E.1),
+/// and a `:reset` that rebuilt from `stdlib_dir` alone and dropped the libraries.
+/// Adding a field here is a compile error at every construction site, which is the
+/// property being bought.
+#[derive(Clone, Debug, Default)]
+pub struct ResolutionContext {
+    /// The `default/` standard library directory.
+    pub stdlib_dir: String,
+    /// `--lib` import paths, searched for a `use`d library.
+    pub lib_dirs: Vec<String>,
+}
+
+impl ResolutionContext {
+    /// The context for a stdlib-only session (no `--lib` paths).
+    #[must_use]
+    pub fn stdlib_only(stdlib_dir: &str) -> Self {
+        Self {
+            stdlib_dir: stdlib_dir.to_string(),
+            lib_dirs: Vec::new(),
+        }
+    }
+
+    /// Render for `--show-resolution`'s `context:` line — an empty `lib_dirs` under a
+    /// `--lib` invocation is @PLN120 E.1, visible without running the program.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!("stdlib={:?}  lib_dirs={:?}", self.stdlib_dir, self.lib_dirs)
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct ReplSession {
     pub(crate) parser: Parser,
+    /// @PLN120 follow-up — the resolution inputs this session was opened with, kept so
+    /// a re-open (`:reset`) restores them instead of silently degrading to stdlib-only.
+    context: ResolutionContext,
     /// The standard-library directory this session was built from, kept so the test runner
     /// can spin up a **fresh** parser (stdlib + the file under test) — the clean single-parse
     /// the CLI runner uses, which the persistent session's accumulated parser state can't
@@ -1592,8 +1628,36 @@ pub struct SeedReport {
 }
 
 impl ReplSession {
+    /// Open a session from its full [`ResolutionContext`] — the constructor to use.
+    ///
+    /// Every input that decides which names a source can see travels as one value, so
+    /// a session cannot be built with a subset of them.  That shape is the fix for a
+    /// defect this repo hit twice: `--lib` was threaded into three entry points and
+    /// forgotten in the fourth (@PLN120 E.1, reported by a consumer as *"the debugger
+    /// does not work on real programs"*), and `:reset` rebuilt a live session from
+    /// `stdlib_dir` alone, silently dropping the libraries it had.  With one value a
+    /// new resolution input is a compile error at every site instead of a silent
+    /// degradation at one.
+    ///
+    /// # Errors
+    /// Returns the I/O error if the stdlib directory cannot be read.
+    pub fn open(ctx: &ResolutionContext) -> std::io::Result<Self> {
+        let mut session = Self::new(&ctx.stdlib_dir)?;
+        session.parser.lib_dirs.clone_from(&ctx.lib_dirs);
+        session.context = ctx.clone();
+        Ok(session)
+    }
+
+    /// The context this session was opened with — so a re-open (`:reset`) restores the
+    /// same resolution inputs rather than re-deriving them from whatever is in scope.
+    #[must_use]
+    pub fn context(&self) -> &ResolutionContext {
+        &self.context
+    }
+
     /// Start a session with the standard library loaded from `stdlib_dir`
     /// (e.g. `"default"`, or an absolute path to a release bundle's `default/`).
+    /// Prefer [`open`](Self::open), which carries the `--lib` paths too.
     ///
     /// # Errors
     /// Returns the I/O error if the stdlib directory cannot be read.
@@ -1603,6 +1667,10 @@ impl ReplSession {
         Ok(Self {
             parser,
             stdlib_dir: stdlib_dir.to_string(),
+            context: ResolutionContext {
+                stdlib_dir: stdlib_dir.to_string(),
+                lib_dirs: Vec::new(),
+            },
             body: String::new(),
             counter: 0,
             record: None,
@@ -1633,9 +1701,10 @@ impl ReplSession {
     /// # Errors
     /// Returns the I/O error if the standard library cannot be read.
     pub fn new_with_libs(stdlib_dir: &str, lib_dirs: &[String]) -> std::io::Result<Self> {
-        let mut session = Self::new(stdlib_dir)?;
-        session.parser.lib_dirs = lib_dirs.to_vec();
-        Ok(session)
+        Self::open(&ResolutionContext {
+            stdlib_dir: stdlib_dir.to_string(),
+            lib_dirs: lib_dirs.to_vec(),
+        })
     }
 
     /// Load and wire the native cdylibs of every `#native` package the session has
@@ -1666,6 +1735,10 @@ impl ReplSession {
             // test runner; the stdlib dir is unknown here, so the conventional `"default"`
             // is the fallback (run_file_tests is driven from `new`/`new_with_libs` sessions).
             stdlib_dir: "default".to_string(),
+            // Same fallback as `stdlib_dir` above: this session wraps an ALREADY-parsed
+            // program, so its `lib_dirs` live on the parser it was handed rather than
+            // being re-derived here.
+            context: ResolutionContext::stdlib_only("default"),
             body: String::new(),
             counter: 0,
             record: None,
@@ -3007,6 +3080,31 @@ impl ReplSession {
         state.eval_frame_reenter(&mut self.parser.data, d, arg_names, &ret_type, json)
     }
 
+    /// Run one frame-eval attempt, catching a panic so the session survives — and
+    /// **reporting** the panic's message instead of discarding it.
+    ///
+    /// The two eval attempts used to be `catch_unwind(…).unwrap_or(None)`, so a compiler
+    /// invariant tripping inside them degraded to a bare "couldn't evaluate": exactly
+    /// the swallowed-payload defect @PLN120 E.3 fixed for the abandon path, still live
+    /// here.  It hid a real one — the @PLN120 E.4 rollback guard fires inside this call,
+    /// and its message never reached the surface.  The report rides `trace_output`, so
+    /// the interactive prompt prints it and the RPC surface emits it as an `output`
+    /// event, from one place.
+    fn eval_or_report_panic<F>(&mut self, attempt: F) -> Option<String>
+    where
+        F: FnOnce(&mut Self) -> Option<String>,
+    {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| attempt(self))) {
+            Ok(v) => v,
+            Err(payload) => {
+                let why = panic_message(&payload);
+                self.trace_output
+                    .push(format!("evaluating at the frame failed: {why}"));
+                None
+            }
+        }
+    }
+
     fn debug_eval_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
         // @PLN16 D2 — a bare local that holds a heap value (struct / vector / collection)
         // is read **live, in place**: render its actual `DbRef` from the paused store
@@ -3035,8 +3133,7 @@ impl ReplSession {
         // referenced → the text-seed path below still handles everything else.
         // Guarded by the same `catch_unwind` as the reconstruct path so a codegen
         // fault in the live-frame compile can't abandon the debug session.
-        let live = std::panic::catch_unwind(AssertUnwindSafe(|| self.eval_frame_expr(expr, json)))
-            .unwrap_or(None);
+        let live = self.eval_or_report_panic(|s| s.eval_frame_expr(expr, json));
         if let Some(v) = live {
             return Some(v);
         }
@@ -3072,8 +3169,7 @@ impl ReplSession {
             p
         };
         let saved = std::mem::replace(&mut self.body, prefix);
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| self.value_of_fmt(expr, json)))
-            .unwrap_or(None);
+        let result = self.eval_or_report_panic(|s| s.value_of_fmt(expr, json));
         self.body = saved; // restore the real session body, panic or not
         result
     }

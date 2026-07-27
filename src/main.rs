@@ -3461,9 +3461,18 @@ fn start_repl() -> ! {
     } else {
         "default".to_string()
     };
+    // `--lib <dir>` reaches the REPL too.  It did not before: this was the FOURTH
+    // entry point of the @PLN120 E.1 defect, so `loft repl --lib d` answered
+    // "Library 'x' not found" for a library every other surface could load.  One
+    // `ResolutionContext` now carries both inputs, and `:reset` re-opens with it
+    // instead of degrading to stdlib-only.
+    let ctx = loft::repl::ResolutionContext {
+        stdlib_dir: stdlib.clone(),
+        lib_dirs: collect_lib_dirs(&std::env::args().collect::<Vec<_>>()),
+    };
     let stdin = std::io::stdin();
     let mut stderr = std::io::stderr();
-    let code = match loft::repl::run_repl(&stdlib, stdin.lock(), &mut stderr) {
+    let code = match loft::repl::run_repl(&ctx, stdin.lock(), &mut stderr) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("loft repl: {e}");
@@ -4554,6 +4563,7 @@ fn main() {
     // allowed?" loop; the policy comes from `loft.toml` like a normal run.
     let mut sandbox_check_mode = false;
     let mut introspect_sections: Vec<loft::introspect::Section> = Vec::new();
+    let mut introspect_why: Option<String> = None;
     let mut introspect_bytecode_out: Option<String> = None;
     let mut introspect_rust_out: Option<String> = None;
     let mut introspect_slots_out: Option<String> = None;
@@ -4677,6 +4687,16 @@ fn main() {
             introspect_sections.push(loft::introspect::Section::Types);
         } else if a == "--show-ownership" {
             introspect_sections.push(loft::introspect::Section::Ownership);
+        } else if a == "--show-resolution" {
+            introspect_sections.push(loft::introspect::Section::Resolution);
+        } else if a == "--why" {
+            // `--why <name>`: the resolution section, narrowed to one name.  Implies
+            // the section, since asking the question is asking for it.
+            introspect_sections.push(loft::introspect::Section::Resolution);
+            // `argv[i]` is already the flag's VALUE here — the arg loop advanced past
+            // the flag itself — so read before consuming, as `--path` does.
+            introspect_why = argv.get(i).cloned();
+            i += 1;
         } else if a == "--json" {
             // INSP.J — emit the introspection sections as one machine-readable
             // JSON object instead of the text dump (an editor / agent consumer).
@@ -5985,6 +6005,16 @@ fn main() {
         None
     };
     let program_warm = warm_user_start.is_some();
+    // A warm bundle REPLACES the parse.  When the user has armed a compiler
+    // diagnostic, that silence is indistinguishable from "the code path never ran" —
+    // it cost a full debugging session reading a stale parse while `eprintln`s in the
+    // parser produced nothing.  So say it once, and name the way out.
+    if program_warm && loft::cache::diagnostics_armed() {
+        eprintln!(
+            "loft: served a CACHED bundle for `{abs_file}` — the parser did not run, \
+             so parser diagnostics stay silent (LOFT_NO_CACHE=1 re-parses)"
+        );
+    }
     if !program_warm {
         // When building a program cache, parse `default/` fresh so every stdlib
         // file lands in the program's drift manifest; otherwise use the D2b
@@ -8076,6 +8106,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             types_out: introspect_types_out.clone(),
             diff_against: introspect_diff_against.clone(),
             trace_lines,
+            // The resolution CONTEXT this invocation assembled.  main.rs is the only
+            // place that knows it, and printing it is what makes a dropped `--lib`
+            // (@PLN120 E.1) visible without running the program.
+            resolution_context: Some(
+                loft::repl::ResolutionContext {
+                    stdlib_dir: default_str.clone(),
+                    lib_dirs: p.lib_dirs.clone(),
+                }
+                .describe(),
+            ),
+            why: introspect_why.clone(),
             json: introspect_json,
             fn_filter: introspect_fn_filter.clone(),
             all_fns: introspect_all_fns,

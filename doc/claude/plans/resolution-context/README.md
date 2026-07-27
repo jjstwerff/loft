@@ -5,7 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # One resolution context, and making name visibility observable
 
-> **Status: DESIGNED, not built (2026-07-27).** Two shipped fixes — @PLN120 **E.1**
+> **Status: BUILT (2026-07-27).** All four steps shipped; § What the build corrected
+> records the three places the design was wrong, two of them found by the probes it
+> named. Gates: `tests/repl_session.rs::repl_keeps_its_resolution_context_across_a_reset`
+> (Part A, both silent sites), `cache::tests::{cache_decision_precedence,
+> dev_build_probe_reads_the_binary_path}` (B3), and the B2 guard, whose non-vacuity was
+> proven by disabling `replay_imports` — it then fires *at the rollback* and names the
+> alias.
+>
+> ORIGINAL DESIGN BELOW. Two shipped fixes — @PLN120 **E.1**
 > and **E.4** — share a root this design names, and both were found by a *consumer*
 > rather than by us. The fix is small. The larger half is **Part B**: the tooling that
 > would have shown either one, because in both cases the state that was wrong could
@@ -234,19 +242,19 @@ is wrong about what it would have saved.
 Ordered; each is verifiable alone, and B-items land before A so the fix can be *seen*
 to work rather than only asserted.
 
-1. **B3** — widen `cache_decision`'s dev-loop signal to the binary's path; announce a
+1. `[✓]` **B3** — widen `cache_decision`'s dev-loop signal to the binary's path; announce a
    served bundle when a diagnostic is armed. *Gate:* two consecutive
    `target/debug/loft` runs on a package with a **library** both re-parse (the bundle
    is written per-library, not for a bare single file — a single-file probe would be
    vacuous here); plus a unit test on `cache_decision`'s new input, which is why the
    decision was factored into a pure function in the first place.
-2. **B1** — `Section::Resolution` + `--show-resolution` + `--why <name>`. *Gate:* on a
+2. `[✓]` **B1** — `Section::Resolution` + `--show-resolution` + `--why <name>`. *Gate:* on a
    `--lib` program it prints the alias and the context; with `--lib` omitted it prints
    `lib_dirs=[]`, i.e. E.1 visible without running.
-3. **B2** — apply `derived_indices_diff` at the rollback rebuild under
+3. `[✓]` **B2** — apply the rollback guard (see § What the build corrected — NOT `derived_indices_diff`, which is a whole-`Data` diff and would drown in a truncation's legitimate differences) at the rollback rebuild under
    `debug_assertions`. *Gate:* the E.4 non-vacuity probe (disable the replay) must now
    fail *at the rebuild*, not at a consumer-level eval.
-4. **A** — `ResolutionContext`; `ReplSession::open`; sessions keep their context;
+4. `[✓]` **A** — `ResolutionContext`; `ReplSession::open`; sessions keep their context;
    `:reset` re-opens with it. *Gate:* `loft repl --lib d` resolves a library call, and
    a `:reset` session still resolves one afterwards — the two silent sites, each as an
    assertion.
@@ -259,6 +267,53 @@ one command and B3 removes the stale-parse round entirely. E.1 was found by a co
 filing a report titled *"the debugger does not work on real programs"*; B1 prints
 `lib_dirs=[]` for it. And B2 is the cheapest of the three because it is an existing
 check applied to a second caller.
+
+## What the build corrected
+
+Three things, and the two that matter were caught by the probes this design named
+rather than by re-reading it.
+
+**1. B1 does NOT catch E.4 — the gating probe fired.** The design claimed *"a rebuild
+that drops the alias list shows as an empty section"*, and named that as the probe to
+run first. It was run first, and it falsified the claim: with `replay_imports`
+disabled, `--show-resolution` printed the alias unchanged. The reason is structural —
+`introspect` performs one fresh parse and never rolls back, and E.4 is a
+rollback-only defect, so no static dump can show it. B1's value is therefore E.1 (the
+`context:` line, verified: `lib_dirs=[]` with the flag omitted) and answering
+`--why` for a user; **E.4 is B2's alone.** Had the probe been skipped, the design
+would have shipped with a false claim about its own coverage.
+
+**2. B2's guard was dead where it was written.** `#[cfg(debug_assertions)]` is a no-op
+inside this library: `[profile.dev.package.loft]` sets `debug-assertions = false` (the
+store hot-path guards cost ~270×), and that applies under `cargo test` too — so a
+cfg-gated assert would run *only* in a release-DA build. The project's own convention,
+stated in that same Cargo.toml comment, is that load-bearing checks are plain
+`assert!`s. The guard is now unconditional, with its cost bounded by an
+`applied.is_empty()` gate so a program with no `use` pays one check.
+
+**3. The guard could not explain itself — E.3's defect at two more sites.** Once the
+assert fired, its message vanished: `debug_eval_fmt` wrapped both eval attempts in
+`catch_unwind(…).unwrap_or(None)`, and the REPL's run path printed a fixed
+*"runtime error (session preserved)"*. Both discarded the panic payload — exactly what
+@PLN120 E3a fixed for the debug-abandon path, still live in three more places. Both now
+carry the cause (`eval_or_report_panic` routes it through arc B's `trace_output`), which
+is what turned the guard from a silent abort into:
+
+```
+runtime error: assertion `left == right` failed: a rollback dropped the import alias
+`n_hex_distance` visible from source 1 (definition #650) …
+```
+
+A named assert that cannot reach the user is not a guard. Worth generalising: **every
+`catch_unwind` that discards its payload is a diagnosis destroyed**, and this repo now
+has four such sites fixed and none known remaining on the debug paths.
+
+**Also learned, and load-bearing:** `replay_imports` uses `mem::take`, which drains the
+retained list — safe only because `import_all`/`import_name` re-`remember` each entry as
+the replay runs, refilling it for the *next* rebuild. Verified with three library calls
+in one session (a single call would not have shown it). That is commented at the
+function, since a reader would otherwise "simplify" the re-record away and break every
+rebuild after the first.
 
 ## See also
 
