@@ -86,13 +86,21 @@ printf '%s\n' \
   program doesn't use); don't wait on a stop that never comes.
 - **Multi-lib programs**: append the usual lib flags —
   `loft debug src/x.loft --rpc --lib ../pkg/ …`.
-- **`stopped` carries the whole frame**: function, line, and every live local —
-  a full crawler `Sim` struct renders inline (vectors elided `…`); one event =
-  the variables panel, drill down with `eval`.
-- **`eval` runs against the paused frame** (`s.php`, `n * 100`, `len(v)`), and
-  the frame holds only the locals **live ON that line**. An out-of-scope name
-  returns `value:null`, not an error — don't misread null as "the field is
-  empty".
+- **`stopped` carries the whole frame**: function, line, and every local **in
+  lexical scope at that line** — a full crawler `Sim` struct renders inline
+  (vectors elided `…`); one event = the variables panel, drill down with `eval`.
+  A local in scope that the frame does not HOLD carries a marker instead of a
+  value (@PLN120 A): `"<unset>"` (its assignment has not run yet on this path) or
+  `"<reused by step>"` (its stack slot now belongs to `step` — the allocator is
+  scope-blind, so two locals in one scope share a slot when their live ranges do
+  not overlap; break one line earlier to read it). Never mistake a marker for a
+  value: `eval` on such a name returns `value:null`, and `setValue` refuses it.
+- **`eval` runs against the paused frame** (`s.php`, `n * 100`, `len(v)`) over
+  every local the frame **holds** — which since @PLN120 A includes one read later
+  on the same line (`step` in `total = total + step`), previously missing. A name
+  that is out of scope, `<unset>` or `<reused by …>` returns `value:null`, not an
+  error — check the `stopped` frame to tell which, and don't misread null as "the
+  field is empty".
 - **`setValue` edits the live run** (scalar / text / enum / struct field /
   nested path / vector element; a whole heap local is rejected by design) —
   execution resumes WITH the edit: probe a hypothesis by injecting the suspect
@@ -101,9 +109,13 @@ printf '%s\n' \
   tracepoint (`"log":"expr"` or `"log":["e1","e2"]`, `"stop":false`) streams
   `output{category:"trace"}` lines (`expr = value`) without pausing — structured
   trace beats sprinkled printlns. Log entries are EXPRESSIONS, not format strings.
-- **Conditions and trace exprs obey the same liveness rule** — a name not
-  read/written on that line evaluates null/`?`, so a condition on it silently
-  never matches. Anchor breakpoints on a line that uses the variables you test.
+- **Conditions and trace exprs obey the same rule as `eval`** — a name the frame
+  does not hold evaluates null/`?`. Since @PLN120 B such a condition **reports and
+  stops** instead of silently never matching, and since @PLN120 A the set of
+  usable names is lexical scope rather than "referenced on this line" — so a
+  condition on a local of the enclosing block now works. One case remains
+  genuinely unusable: a name the `stopped` frame shows as `<unset>` or
+  `<reused by …>`.
 - Program stdout arrives as `output` events on the SAME pipe, never interleaved
   with protocol — parse line-by-line as JSON, switch on `event`/`id`.
 - The interactive twin is `loft debug <file>` (the `(dbg)` prompt) — same engine,

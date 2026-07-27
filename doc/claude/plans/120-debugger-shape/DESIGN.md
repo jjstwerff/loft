@@ -452,7 +452,55 @@ gives no way to name the previous one — and a loop-**carried** local is unaffe
   shortcut, still rejected, still for its own reason: scope 3 holds only `i`, whose
   sole reference is on line 4, so the derived extent is a single point.
 
-### A.7 — Verified by
+### A.7 — What shipped (2026-07-27)
+
+Built in the order of § A.8; the two recording steps landed inert, and
+`loft introspect` on a three-shape corpus (slot-sharing loop · generic instantiation
++ `map` lambda · text local in a loop) stayed **byte-identical** through the whole
+arc — the Mode-B gate for a change that adds metadata and must emit nothing new.
+
+The A.5 table reproduced cell for cell on the first run of the wired query:
+
+```
+line 4 | total = 0, i = 0, step = <unset>
+line 5 | total = 0, i = <reused by step>, step = 0
+line 7 | total = 60
+```
+
+**The completeness claim held at scale.** The debug-build audit ("every slotted
+local produced a store span") ran over all **501 `tests/scripts/*.loft`**, each with
+the stdlib recompiled — **zero** hits. So `Set` + `TuplePut` really are the only two
+slot writers, as the interval/allocator argument predicted.
+
+**Two things the design got wrong, both caught by a gate rather than by re-reading:**
+
+1. **`iter_frame_variables` is a slot-table dump, not a frame view.** § A.4 said
+   "sites 1 and 2 become mappers over `frame_view`" — but site 2 lists *every*
+   slotted local with a `live` flag, and two `frame_vars` tests pin that. Filtering
+   broke them. Fix: `frame_view` **tags** instead of dropping — a fourth state,
+   `OutOfScope`. The captured frame filters those out; the dump keeps them. This is
+   the better shape anyway: the query answers per-local, and *what to display* is the
+   consumer's decision.
+2. **A rendered value can look exactly like a marker.** The reconstruct paths
+   (`seed_frame`, the eval seed prefix) rebuild loft source from a *captured* frame,
+   so they must skip non-values — and the first cut recognised a marker by its
+   `<…>` shape, on the argument that "no loft value begins with `<`". A keyed
+   collection renders as `` `<hash<HRec,["name"]>>` ``. The suite caught it as a real
+   regression (`rpc_eval_in_a_keyed_collection_frame`: `h["a"].v` evaluated to null
+   because `h` was dropped from the seed). Fix: `BreakHit` **carries** the unheld
+   names (`unheld: Vec<String>`) and `held_locals()` filters on that — the state
+   travels with the frame instead of being inferred from a string. The string test
+   is deleted.
+
+   Worth keeping as the arc's own anti-example: it is exactly the over-unification
+   shape § A.1 caught in the *original* design — a clean claim about a value space
+   that the domain contradicts — repeated one level down, in the fix.
+
+Also shipped, from the same fact: `set_frame_value` gained the gate it never had
+(an integer edit through an unheld name silently wrote another local's slot), and
+`set_frame_literal`'s `Text`-arm-only gate became one gate for every type.
+
+### A.8 — Verified by
 
 The A.5 table as a scripted RPC session (`loft debug --rpc`), asserting the **exact**
 local set and the **exact** rendering at each of the three lines. Three of the rows
@@ -472,7 +520,19 @@ assignment line, asserting `msg = <unset>` **and** that `msg = "hi"` is refused 
 that corrupts memory rather than merely misinforming. And the debug-build store-span
 audit from A.3, which runs over the whole suite for free.
 
-### A.8 — Steps
+**Landed as** `tests/repl_session.rs::file_debugger_frame_shows_scope_with_unset_and_reused_markers`
+(the three rows + the read/edit refusal) and `…::file_debugger_refuses_to_edit_an_unset_text_local`
+(the `text` gate, with its "one line later the edit lands" control).
+`tests/debugger.rs::breakpoint_frame_shows_scope_and_marks_unset` carries the
+contract change at the unit level — it is the old `breakpoint_gates_locals_by_liveness`,
+whose assertion (`b` excluded on the line that assigns it) is exactly what A reverses.
+
+**Non-vacuity proven, not assumed:** with the store-span check forced off, both gate
+tests fail on the assertion that matters — `step` reads `0`, which is `i`'s value in
+the slot they share — and pass again when restored. Without that check the row would
+have looked green while asserting nothing.
+
+### A.9 — Steps
 
 Each step compiles and is verifiable on its own; the frame does not change until 4.
 
@@ -485,7 +545,7 @@ Each step compiles and is verifiable on its own; the frame does not change until
    `scope(v) == u16::MAX` per-var fallback to the reference-span test. Not yet wired.
    *Gate:* a unit test over the probe reproducing the A.5 table cell for cell.
 4. **Route all five sites** through `frame_view`; render the two markers. *Gate:* the
-   A.7 RPC session including its three controls, plus the text-edit refusal.
+   A.8 RPC session including its three controls, plus the text-edit refusal.
 5. **`:eval` names the reason** for an unheld local (closes § D.3).
 6. **§ D.1** — with the frame correct, filter `i#index`/`__work_N` from `:vars` and
    keep `:vars all`. Note A.0's correction: the "loop position is only visible via
@@ -596,15 +656,12 @@ before the next begins. `[✓]` = shipped 2026-07-27.
 6. `[✓]` **A — design complete 2026-07-27.** Scope spans + store spans + `scope(v)`,
    one `frame_view` query, five consumer sites, the hand-computed expectation table
    and the gate: § A.
-7. **A — build it.** ← THE ONE ARC LEFT. Six steps, each verifiable alone and the
-   first two inert — see § A.8. *Gate:* § A.7 — the A.5 table as a scripted RPC
-   session with its three controls (line 7 must NOT gain `i`/`step`; line 4's `step`
-   must read `<unset>` and not `0`; line 5's `i` must read `<reused by step>`), plus
-   the text-edit refusal and the debug-build store-span audit.
-8. `[~]` **D1 — compiler temps.** `__`-prefixed filtered, `:vars all` shows them,
-   `i#index` still shown. Finish this step with 7 — noting that the stated reason for
-   holding it (loop position is visible only via `i#index`) is false: § A.0 measures
-   that `i#index` is absent at both loop lines too.
+7. `[✓]` **A — built 2026-07-27.** All six steps of § A.9; what it cost and the two
+   claims a gate falsified are in § A.7.
+8. `[✓]` **D1 — compiler temps.** `__`-prefixed and `#`-infixed (`i#index`, `c#next`)
+   filtered from the interactive frame, `:vars all` shows them, the RPC surface still
+   carries everything. Unblocked by A, and the stated reason for holding it (loop
+   position is visible only via `i#index`) was false anyway — § A.0.
 
 ### Any time (cheapest first, independent)
 

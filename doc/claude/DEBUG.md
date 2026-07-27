@@ -63,11 +63,25 @@ surface* is the canonical guide with a worked example; the wire contract is
 [plans/16-debugger/PROTOCOL.md](plans/16-debugger/PROTOCOL.md). Order matters
 there: `launch` loads, `run` starts, and breakpoints go between them.
 
-Known rough edges are tracked in [@PLN120](plans/120-debugger-shape/README.md) —
-the one to know is that a paused frame currently shows only variables whose
-bytecode references bracket the stopped instruction, so a local read later on the
-same line, or one whose last read has passed, is missing from `:vars` even though
-it is in scope.
+**What `:vars` shows, and the two markers.** A paused frame lists every local in
+**lexical scope** at that line. A local in scope whose value the frame does not
+hold is still listed, with the reason instead of a value:
+
+| shown | means | what to do |
+|---|---|---|
+| `step = <unset>` | in scope, but its assignment has not run yet on this path | break one line later |
+| `i = <reused by step>` | in scope, but its stack slot now belongs to `step` | break one line earlier |
+
+The second is not a bug: the slot allocator is **scope-blind**, so two locals in
+one scope share a slot whenever their live ranges do not overlap (in
+`for i in 0..4 { step = i * 10; total = total + step; }`, `i` and `step` are the
+same four bytes). Once `step` has been written, `i`'s value no longer exists
+anywhere in the frame — so the debugger names that rather than printing the slot's
+contents under `i`'s name. Reading such a local explains itself, and editing it is
+refused. Compiler temps (`__work_N`, `i#index`) are hidden; `:vars all` shows them.
+
+Remaining rough edges are tracked in
+[@PLN120](plans/120-debugger-shape/README.md).
 
 Editors get the same engine over DAP (`loft-dap`); see [@I91](../features/I91.md).
 

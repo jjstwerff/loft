@@ -688,6 +688,18 @@ impl<'a> IrBlock<'a> {
         }
     }
 
+    /// The block's scope number — the same space
+    /// [`Variables::scope`](crate::variables::Function::scope) reports per variable,
+    /// so the two join on it.  `u16::MAX` on an uninstantiated generic template,
+    /// whose blocks never received scope numbers (and which never executes).
+    #[must_use]
+    pub fn scope(&self) -> u16 {
+        match *self {
+            IrBlock::Native(b) => b.scope,
+            IrBlock::Store(s, n) => n.field_int(s, ds::NDBLOCK_BLOCK + ds::BLOCK_SCOPE) as u16,
+        }
+    }
+
     /// The block's result type (owned — clones the native `Type` / reads the
     /// stored `TypeT`).
     #[must_use]

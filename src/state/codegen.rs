@@ -296,6 +296,32 @@ impl State {
             }
             self.code_pos = old;
         }
+        // @PLN120 A — every slotted local must have produced a store span.
+        // `assign_slots_v2` gives a slot only to a variable with a live interval,
+        // and `compute_intervals` derives one only from a `Set` or a `TuplePut` —
+        // the two arms that record.  A miss therefore means a new slot-writing
+        // lowering appeared without a recording site, which would render that local
+        // `<unset>` in every paused frame forever.  Loud here beats silent there.
+        #[cfg(debug_assertions)]
+        {
+            let vars = &data.definitions[def_nr as usize].variables;
+            for (v_nr, &pos) in stack_pos.iter().enumerate() {
+                let v = v_nr as u16;
+                if pos == u16::MAX || vars.is_argument(v) {
+                    continue;
+                }
+                assert!(
+                    self.store_spans
+                        .iter()
+                        .any(|&(s, _, w)| w == v && s >= start && s < self.code_pos),
+                    "@PLN120 A: local '{}' of {} holds slot {pos} but codegen recorded \
+                     no store span for it — a slot-writing lowering is missing a \
+                     `record_store_span` call",
+                    vars.name(v),
+                    data.definitions[def_nr as usize].name,
+                );
+            }
+        }
         for (v_nr, pos) in stack_pos.into_iter().enumerate() {
             data.definitions[def_nr as usize]
                 .variables
@@ -418,7 +444,10 @@ impl State {
             // children flow through the handle to IrNode-taking helpers
             // (generate_set materialises at its boundary).
             ValueType::Set => {
-                self.generate_set(stack, node.set_var(), node.set_inner());
+                let v = node.set_var();
+                let from = self.code_pos;
+                self.generate_set(stack, v, node.set_inner());
+                self.record_store_span(from, v);
                 Type::Void
             }
             ValueType::Return => self.gen_return(node.return_inner(), stack),
@@ -557,8 +586,24 @@ impl State {
             // TuplePut read their fields via scalar/child accessors.  Every arm
             // of generate_inner now reads only through the handle — it is fully
             // store-capable (M5 just constructs IrNode::Store at the entry).
-            ValueType::Loop => self.gen_loop(node.as_block(), stack),
-            ValueType::Block => self.generate_block(stack, node.as_block(), top),
+            // @PLN120 A — a block's children are emitted sequentially, so the pc
+            // window either side of the walk IS the scope's extent, and a nested
+            // block lands inside it.  Recorded here rather than inside the two
+            // helpers so both kinds go through one shape.
+            ValueType::Loop => {
+                let b = node.as_block();
+                let (scope, from) = (b.scope(), self.code_pos);
+                let tp = self.gen_loop(b, stack);
+                self.record_scope_span(from, scope);
+                tp
+            }
+            ValueType::Block => {
+                let b = node.as_block();
+                let (scope, from) = (b.scope(), self.code_pos);
+                let tp = self.generate_block(stack, b, top);
+                self.record_scope_span(from, scope);
+                tp
+            }
             ValueType::TupleGet => {
                 let var_nr = node.tupleget_var();
                 let elem_idx = node.tupleget_idx();
@@ -669,6 +714,11 @@ impl State {
                 self.insert_types(elem_tp.clone(), code_pos, stack)
             }
             ValueType::TuplePut => {
+                // @PLN120 A — a tuple-element write is a store to `var_nr`'s slot,
+                // so it records a store span like `Set` does; the arm has three
+                // exits and each records before leaving (the debug-build audit in
+                // `def_code` is what keeps that honest).
+                let from = self.code_pos;
                 let var_nr = node.tupleput_var();
                 let elem_idx = node.tupleput_idx();
                 let value = node.tupleput_inner();
@@ -700,6 +750,7 @@ impl State {
                         _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
                     }
                     self.code_add(elem_offset);
+                    self.record_store_span(from, var_nr);
                     return Type::Void;
                 }
                 // T1.4: write to element elem_idx of tuple variable var_nr.
@@ -726,6 +777,7 @@ impl State {
                 // `emit_tuple_var_push_recursive` at line 394.
                 if let Type::Tuple(inner_elems) = &elem_tp {
                     self.emit_tuple_var_pop_put(stack, inner_elems, elem_abs_pos);
+                    self.record_store_span(from, var_nr);
                     return Type::Void;
                 }
                 match elem_tp.base() {
@@ -755,6 +807,7 @@ impl State {
                     _ => panic!("TuplePut: unsupported element type {elem_tp:?}"),
                 }
                 self.code_add(var_pos);
+                self.record_store_span(from, var_nr);
                 Type::Void
             }
             // Phase 09 phase 00 step 0.7 — RawExpr is created only by native
@@ -785,6 +838,30 @@ impl State {
             self.code_add(0i64); // pos offset within the record (length is at rec+4)
         }
         Type::Text(Deps::none())
+    }
+
+    /// @PLN120 A — record the scope span of the block that has just been emitted:
+    /// `from` (the pc before its first child) → the current pc.
+    ///
+    /// Dropped when it carries no information — a block that emitted nothing, or one
+    /// from an uninstantiated generic template, whose blocks never received scope
+    /// numbers (`u16::MAX`).  A local whose scope cannot be placed falls back to the
+    /// bytecode-reference filter in [`frame_view`](State::frame_view), so a dropped
+    /// span costs information, never correctness.
+    fn record_scope_span(&mut self, from: u32, scope: u16) {
+        if scope != u16::MAX && self.code_pos > from {
+            self.scope_spans.push((from, self.code_pos, scope));
+        }
+    }
+
+    /// @PLN120 A — record the store span of the assignment that has just been
+    /// emitted.  The recorded end is the pc *after* the write, so a pause at or past
+    /// it may read the slot and a pause before it must not: that is the difference
+    /// between showing a local's value and showing `<unset>`.
+    fn record_store_span(&mut self, from: u32, var_nr: u16) {
+        if self.code_pos > from {
+            self.store_spans.push((from, self.code_pos, var_nr));
+        }
     }
 
     pub(super) fn gen_loop(&mut self, lp: IrBlock, stack: &mut Stack) -> Type {

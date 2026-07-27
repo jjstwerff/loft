@@ -893,20 +893,28 @@ fn handle_paused<W: Write>(
             Some((name, rhs)) if session.debug_set(name, rhs) => {
                 print_pause(session, chrome)?;
             }
-            Some((name, _)) => writeln!(
-                chrome,
-                "couldn't set `{name}` — unknown local, or a value whose type doesn't \
-                 match the local"
-            )?,
+            // @PLN120 A — a local the frame does not HOLD is refused, and the
+            // refusal names the reason rather than implying a typo.
+            Some((name, _)) => match session.unheld_local_reason(name) {
+                Some(why) => writeln!(chrome, "can't set it: {why}")?,
+                None => writeln!(
+                    chrome,
+                    "couldn't set `{name}` — unknown local, or a value whose type \
+                     doesn't match the local"
+                )?,
+            },
             // Anything else is an expression read against the frame's live values;
             // the value prints to stdout like a normal REPL result.
             None => match session.debug_eval(t) {
                 Some(v) => println!("{v}"),
-                None => writeln!(
-                    chrome,
-                    "couldn't evaluate `{t}` at the frame \
-                     (:step/:next/:finish/:continue, `name = <expr>` to edit, :help)"
-                )?,
+                None => match session.unheld_local_reason(t) {
+                    Some(why) => writeln!(chrome, "{why}")?,
+                    None => writeln!(
+                        chrome,
+                        "couldn't evaluate `{t}` at the frame \
+                         (:step/:next/:finish/:continue, `name = <expr>` to edit, :help)"
+                    )?,
+                },
             },
         },
     }
@@ -1671,7 +1679,7 @@ impl ReplSession {
     /// session) is skipped, not fatal.
     pub fn seed_frame(&mut self, hit: &crate::debugger::BreakHit) -> usize {
         let mut bound = 0;
-        for (name, literal) in &hit.locals {
+        for (name, literal) in hit.held_locals() {
             if matches!(self.eval(&format!("{name} = {literal}")), Eval::Ran) {
                 bound += 1;
             }
@@ -2714,6 +2722,41 @@ impl ReplSession {
         self.debug_eval_fmt(expr, false)
     }
 
+    /// @PLN120 A — why a bare local name that IS in the paused frame still cannot be
+    /// read or written: the frame does not hold its value.  `None` when the name is
+    /// not a frame local, or is one the frame holds (so the failure has another
+    /// cause).  A `<reused by …>` local is readable one line earlier, and saying so
+    /// is the difference between a diagnosis and "couldn't evaluate".
+    #[must_use]
+    pub fn unheld_local_reason(&self, expr: &str) -> Option<String> {
+        let name = expr.trim();
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '#')
+        {
+            return None;
+        }
+        let state = self
+            .paused
+            .as_deref()?
+            .frame_local_state(name, &self.parser.data)?;
+        match state {
+            // Held, or not in scope here at all: the failure has another cause, so
+            // the caller's generic message is the right one.
+            crate::state::LocalState::Held | crate::state::LocalState::OutOfScope => None,
+            crate::state::LocalState::Unset => Some(format!(
+                "`{name}` is in scope but has no value yet at this line — \
+                 its first assignment has not run"
+            )),
+            crate::state::LocalState::Reused(by) => Some(format!(
+                "`{name}` is in scope but the frame no longer holds it — \
+                 its stack slot was reused by `{by}`; break earlier in the \
+                 function to read it"
+            )),
+        }
+    }
+
     /// @PLN16 phase 2 — evaluate `expr` against the paused frame and render the result
     /// as **JSON** — the form the wire protocol's `eval` reply carries.  A bare heap
     /// local is read live and serialised with `show_json` (**D2**); a computed
@@ -2790,7 +2833,7 @@ impl ReplSession {
             let frame = state.paused_frame()?;
             let mut keyed: Vec<(String, String)> = Vec::new();
             let mut seed = String::new();
-            for (name, lit) in &frame.locals {
+            for (name, lit) in frame.held_locals() {
                 if !idents.contains(name.as_str()) {
                     continue;
                 }
@@ -2956,7 +2999,7 @@ impl ReplSession {
             // unrelated heap/keyed local can never break an expression that does not use it.
             let idents = expr_idents(expr);
             let mut p = String::new();
-            for (name, lit) in &frame.locals {
+            for (name, lit) in frame.held_locals() {
                 if !idents.contains(name.as_str()) {
                     continue;
                 }

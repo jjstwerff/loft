@@ -40,6 +40,15 @@ pub struct BreakHit {
     /// (`("n", "42")`).  The slice captures arguments (live at fn entry); a later
     /// slice that breaks mid-body adds the locals assigned so far.
     pub locals: Vec<(String, String)>,
+    /// @PLN120 A — the names in `locals` the frame does **not** hold: their entry
+    /// carries a reason (`<unset>`, `<reused by …>`) where a value would be.
+    ///
+    /// Carried rather than recognised from the rendering, because a rendering can
+    /// look exactly like a marker: a keyed collection renders as
+    /// `<hash<HRec,["name"]>>`.  Every path that rebuilds loft source from a captured
+    /// frame filters on this list ([`held_locals`](Self::held_locals)); a marker in
+    /// that position would poison the parse.
+    pub unheld: Vec<String>,
     /// The source line this frame is parked on — the breakpoint line for the top
     /// frame, the call-site line for a caller (the multi-frame `stackTrace`, @PLN63
     /// SF).  0 when unknown.
@@ -47,15 +56,15 @@ pub struct BreakHit {
 }
 
 impl BreakHit {
-    /// The locals worth SHOWING — everything except the compiler's own scratch
-    /// (`__work_N` format buffers, `__ref_N` return buffers, `___`-prefixed
-    /// internals).  @PLN120 D1.
+    /// The locals worth SHOWING — everything except the compiler's own scratch:
+    /// `__work_N` format buffers, `__ref_N` return buffers, `___`-prefixed
+    /// internals, and the `#`-infixed loop machinery (`i#index`, `c#next`).
+    /// @PLN120 D1.
     ///
-    /// Deliberately keeps `i#index` and friends: while @PLN120 A is unbuilt the
-    /// loop iteration variable itself is missing from the frame, so the `#`-suffixed
-    /// counter is the ONLY signal about loop position — hiding it would make the
-    /// frame strictly less useful, not cleaner. Filter it together with A, not
-    /// before.
+    /// The `#` names became filterable with @PLN120 A: the iteration variable the
+    /// user wrote (`i`) is now in the frame, so its hidden counter is no longer the
+    /// only signal about loop position.  A `#` cannot occur in a loft identifier, so
+    /// this can never hide a name the user chose.
     ///
     /// This is display-only: `debug_eval` still resolves any name, so a compiler
     /// temp remains readable by typing it, and `:vars all` shows the lot.
@@ -63,8 +72,18 @@ impl BreakHit {
     pub fn user_locals(&self) -> Vec<&(String, String)> {
         self.locals
             .iter()
-            .filter(|(n, _)| !n.starts_with("__"))
+            .filter(|(n, _)| !n.starts_with("__") && !n.contains('#'))
             .collect()
+    }
+
+    /// The locals the frame actually HOLDS — everything whose entry is a value.
+    /// @PLN120 A: the frame also lists locals it does not hold (`<unset>`,
+    /// `<reused by …>`), and every path that rebuilds loft source from a captured
+    /// frame must skip those, because a marker does not parse.
+    pub fn held_locals(&self) -> impl Iterator<Item = &(String, String)> {
+        self.locals
+            .iter()
+            .filter(|(n, _)| !self.unheld.iter().any(|u| u == n))
     }
 }
 

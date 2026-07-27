@@ -1541,3 +1541,128 @@ fn a_true_breakpoint_condition_stops_without_a_diagnostic() {
     );
     let _ = std::fs::remove_file(&f);
 }
+
+/// @PLN120 A — the frame-liveness gate: the plan's three-row probe table, driven
+/// through the real `loft debug <file>:<line>` path.
+///
+/// `for i in 0..4 { step = i * 10; total = total + step; }` is the shape the design
+/// was built on, and it is deliberately one where `i` and `step` **share a stack
+/// slot** (`loft introspect` shows both at `var[48]`; the allocator is scope-blind,
+/// so two locals whose live ranges do not overlap coalesce even inside one scope).
+/// That is what makes the three rows below controls rather than decoration:
+///
+/// * line 4 — `step` is in scope with no completed write, so it must read `<unset>`
+///   and **not** `0`. `0` is `i`'s value in the shared slot: a scope-only fix (show
+///   every in-scope local with its slot's contents) prints exactly that, which is a
+///   silent lie of the same family arc B closed for conditions.
+/// * line 5 — `step` must read its value (the one the line consumes; it was missing
+///   entirely before A, because the reference-span filter asked whether the pc was
+///   past its first *read*), and `i` must be reported as `<reused by step>` — in
+///   scope, but its bytes are gone. Not silently dropped, not shown as `0`.
+/// * line 7 — after the loop, `i` and `step` must be **absent**. Without this row a
+///   fix that shows every local everywhere passes the other two.
+#[test]
+fn file_debugger_frame_shows_scope_with_unset_and_reused_markers() {
+    let path = std::env::temp_dir().join(format!("loft_pln120a_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..4 {\n    \
+                step = i * 10;\n    \
+                total = total + step;\n  \
+                }\n  \
+                assert(total == 60, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let at = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+
+    // Row 1 — line 4 `step = i * 10`.
+    let l4 = at(4, ":vars\n:quit\n");
+    assert!(l4.contains("i = 0"), "line 4 shows the user's `i`: {l4}");
+    assert!(
+        l4.contains("step = <unset>"),
+        "line 4 marks `step` unset — NOT `step = 0`, which is `i`'s value in the \
+         slot they share: {l4}"
+    );
+
+    // Row 2 — line 5 `total = total + step`.
+    let l5 = at(5, ":vars\n:quit\n");
+    assert!(
+        l5.contains("step = 0"),
+        "line 5 shows `step`, the value the line reads (absent before A): {l5}"
+    );
+    assert!(
+        l5.contains("i = <reused by step>"),
+        "line 5 names why `i` is unreadable rather than dropping it: {l5}"
+    );
+
+    // Row 3 (the control) — line 7, after the loop.
+    let l7 = at(7, ":vars all\n:quit\n");
+    assert!(l7.contains("total = 60"), "line 7 shows `total`: {l7}");
+    assert!(
+        !l7.contains("step ") && !l7.contains("i = "),
+        "line 7 must NOT gain `i`/`step` — they are out of scope: {l7}"
+    );
+
+    // The unreadable local names its reason on read AND refuses the edit — the edit
+    // half is the memory-safety property: writing through a name whose slot belongs
+    // to another local corrupts that local (and for `text`, `Drop`s a `String` that
+    // was never constructed).
+    let refused = at(5, "i\ni = 42\n:quit\n");
+    assert!(
+        refused.contains("slot was reused by `step`"),
+        "reading an unheld local explains itself: {refused}"
+    );
+    assert!(
+        refused.contains("can't set it:"),
+        "editing an unheld local is refused, with the reason: {refused}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 A — the `text` half of the edit gate, which is the one failure mode of
+/// this arc that corrupts memory rather than merely misinforming: overwriting a text
+/// local runs `Drop` on its old `String`, so the slot must hold a constructed one.
+/// Before A the narrow reference-span filter hid an unwritten text local, and the
+/// gate rode on that; A shows it, so the gate has to be explicit.
+#[test]
+fn file_debugger_refuses_to_edit_an_unset_text_local() {
+    let path = std::env::temp_dir().join(format!("loft_pln120a_txt_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..3 {\n    \
+                msg = \"n\";\n    \
+                total = total + i;\n  \
+                }\n  \
+                assert(total == 3, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let drive = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+    // On its own assignment line the text local is `<unset>` and the edit is refused.
+    let unset = drive(4, "msg = \"hi\"\n:quit\n");
+    assert!(
+        unset.contains("msg = <unset>"),
+        "an unwritten text local is shown as unset: {unset}"
+    );
+    assert!(
+        unset.contains("has no value yet at this line"),
+        "and the refused edit says why: {unset}"
+    );
+    // The control: one line later it IS held, so the same edit must succeed —
+    // without this, a gate that refuses every text edit would pass.
+    let held = drive(5, "msg = \"hi\"\n:quit\n");
+    assert!(
+        held.contains("msg = \"n\"") && held.contains("msg = \"hi\""),
+        "one line later the edit lands: {held}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

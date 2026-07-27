@@ -78,15 +78,18 @@ pub struct FrameVariable {
     pub is_argument: bool,
     pub scope: u16,
     pub value: VariableValue,
-    /// True when the variable is live at the current `code_pos` — derived from
-    /// the bytecode reference range in `State.vars`.  Stale variables (slot
-    /// coalesced with another live variable) are reported but marked.
+    /// True when the frame holds this variable's **own** value at the current
+    /// `code_pos` — i.e. [`state`](Self::state) is `Held`.  When false, `value` is
+    /// `OutOfFrame`: the slot either has not been written yet or now belongs to
+    /// another local (the allocator shares slots).
     pub live: bool,
     /// First bytecode position referencing this variable in the current
     /// function, or `u32::MAX` if never referenced.
     pub bc_first: u32,
     /// Last bytecode position referencing this variable, or `u32::MAX`.
     pub bc_last: u32,
+    /// @PLN120 A — why the frame does or does not hold this local's value.
+    pub state: crate::state::LocalState,
 }
 
 /// A safely-read snapshot of a variable's value.  Never dereferences raw
@@ -508,8 +511,12 @@ impl State {
                 if !freed.contains(&r.store_nr) {
                     continue;
                 }
-                // Not yet initialised at this position → slot bytes are garbage.
-                if fv.bc_first == u32::MAX || fv.bc_first > frame_pos {
+                // @PLN120 A — only a local the frame actually HOLDS can be the one
+                // whose store was freed.  `value` is already `OutOfFrame` otherwise
+                // (so the `DbRef` match above filtered it), but gate explicitly:
+                // attributing a freed store to a local that does not own those bytes
+                // would name the wrong variable in the report.
+                if !fv.live {
                     continue;
                 }
                 for (&bc, &v) in &self.vars {
@@ -614,33 +621,18 @@ impl State {
         }
         let def = data.def(fn_d_nr);
         let vars = &def.variables();
-        // Pre-compute bytecode reference ranges per var_nr by scanning
-        // self.vars for entries within this function's bytecode range.
-        let fn_bc_start = def.code_position;
-        let fn_bc_end = def.code_position + def.code_length;
-        let mut bc_first = vec![u32::MAX; vars.count() as usize];
-        let mut bc_last = vec![u32::MAX; vars.count() as usize];
-        for (&bc, &v) in &self.vars {
-            if bc < fn_bc_start || bc >= fn_bc_end {
-                continue;
-            }
-            let i = v as usize;
-            if i >= bc_first.len() {
-                continue;
-            }
-            if bc_first[i] == u32::MAX || bc < bc_first[i] {
-                bc_first[i] = bc;
-            }
-            if bc_last[i] == u32::MAX || bc > bc_last[i] {
-                bc_last[i] = bc;
-            }
-        }
-        for v_nr in 0..vars.count() {
-            let slot = vars.stack(v_nr);
-            if slot == u16::MAX {
-                continue;
-            }
-            let typedef = vars.tp(v_nr).clone();
+        // @PLN120 A — liveness comes from the one frame query, so this panel and the
+        // captured breakpoint frame cannot drift apart.  It returns only the locals
+        // in lexical scope at `code_pos`, each tagged with whether the frame still
+        // holds its value; a tag that is not `Held` means the slot is NOT this
+        // local's to read, so the value below reads `OutOfFrame`.
+        // Every slotted local, in scope or not — this panel is a slot-table dump, so
+        // an out-of-scope local is REPORTED (`live: false`), not omitted.  The
+        // captured breakpoint frame filters; this does not.
+        for entry in self.frame_view(fn_d_nr, code_pos, data) {
+            let v_nr = entry.var_nr;
+            let slot = entry.slot;
+            let typedef = entry.tp.clone();
             // Argument text variables are 16-byte Str on the stack; local text
             // variables are 24-byte String.  Match the runtime layout.
             let is_arg = vars.is_argument(v_nr);
@@ -651,19 +643,11 @@ impl State {
             };
             let size_bytes = size(&typedef, ctx);
             let abs_pos = frame_base + u32::from(slot);
-            // Compute liveness before reading the value — non-live slots may
-            // contain uninitialized memory whose garbage pointer fields cause
-            // SIGSEGV when dereferenced (e.g. text variables).
-            let i = v_nr as usize;
-            let first = bc_first[i];
-            let last = bc_last[i];
-            let live = if is_arg {
-                true
-            } else if first == u32::MAX {
-                false
-            } else {
-                code_pos >= first && code_pos <= last
-            };
+            // `live` = the frame holds this local's OWN value.  Reading a slot that
+            // is not the local's own is what must never happen: unwritten bytes are
+            // uninitialised memory whose garbage pointer fields SIGSEGV on deref,
+            // and a re-used slot would report another local's value under this name.
+            let live = entry.state.is_held();
             let value = if !live
                 || u64::from(abs_pos) + u64::from(size_bytes) > u64::from(self.stack_pos)
             {
@@ -673,7 +657,7 @@ impl State {
             };
             out.push(FrameVariable {
                 var_nr: v_nr,
-                name: vars.name(v_nr).to_string(),
+                name: entry.name.clone(),
                 typedef,
                 slot,
                 abs_pos,
@@ -682,8 +666,9 @@ impl State {
                 scope: vars.scope(v_nr),
                 value,
                 live,
-                bc_first: first,
-                bc_last: last,
+                bc_first: entry.bc_first,
+                bc_last: entry.bc_last,
+                state: entry.state,
             });
         }
         out

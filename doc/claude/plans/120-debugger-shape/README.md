@@ -7,12 +7,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Active — every arc shipped except A (2026-07-27).** Reach (**E**), the silent
-failures (**B**, **E3**), discoverability (**C**) and half of the cleanup (**D1**)
-are done and gated; **A** — the frame's liveness model — is the one arc left. Its
-design is now **complete and measured** ([DESIGN.md § A](DESIGN.md#a--frame-liveness)):
-three facts, one query, five consumer sites, a hand-computed expectation table, and
-its gate. Ready to build; no open question left in A.
+**Every arc shipped (2026-07-27).** Reach (**E**), the silent failures (**B**,
+**E3**), discoverability (**C**), the frame's liveness model (**A**) and the temp
+filter (**D1**) are done and gated. Only **D2/D3** (folding the consumers' write-ups
+back) is open, and D3's two reports are answered — see the table below.
+
+**A**, the arc this plan existed for: a paused frame now shows every local in
+**lexical scope** at that line, each with its own value or an explicit reason it has
+none — `<unset>` (its assignment has not run) or `<reused by step>` (its stack slot
+now belongs to `step`). Reading an unheld local explains itself and editing it is
+refused. Built from a per-definition scope-span + store-span table recorded by
+codegen, joined through one `frame_view` query that five consumer sites share
+([DESIGN.md § A](DESIGN.md#a--frame-liveness); what it cost, and the two claims a
+gate falsified, in [§ A.7](DESIGN.md#a7--what-shipped-2026-07-27)).
 
 What that changed, concretely: a multi-package program can be debugged
 (`--lib` reaches the interactive path), a call into native code no longer kills
@@ -21,18 +28,18 @@ can no longer be both `verified` and permanently inert, `DEBUG.md` and `CLAUDE.m
 finally mention the tool, and typing `c` at the prompt reads your local instead of
 resuming the program.
 
-**Still true, and the reason A matters:** a paused frame shows only variables whose
-bytecode references bracket the stopped instruction, so a local read later on the
-same line — or one whose last read has passed — is missing even though it is in
-scope. On the probe, breaking on `total = total + step` shows **nothing about the
-loop at all** — not `i`, not `step`, not even the `i#index` temp.
+**What A was before, on the same probe.** Breaking on `total = total + step` used to
+show **nothing about the loop at all** — not `i`, not `step`, not even the `i#index`
+temp — because the frame was filtered by whether the pc sat inside each local's
+bytecode *reference* range. It now reads
+`total = 0, i = <reused by step>, step = 0`.
 
-**And one thing that is no longer true.** Designing A turned up a fact that
-reshapes it: `i` and `step` **share a stack slot** (the allocator is scope-blind by
-design), so this plan's original target — show the locals in lexical scope, with
-their values — is both unachievable (`i`'s value is gone at line 5) and unsafe (it
-would print `i`'s bytes under `step`'s name at line 4). A's invariant is restated to
-carry an explicit third state per local; see [DESIGN.md § A.1](DESIGN.md#a1--the-fact-that-changes-the-arc-two-locals-share-one-slot-verified).
+**The fact that reshaped the arc.** `i` and `step` **share a stack slot** (the
+allocator is scope-blind by design), so this plan's original target — show the locals
+in lexical scope, with their values — was both unachievable (`i`'s value is gone at
+line 5) and unsafe (it would print `i`'s bytes under `step`'s name at line 4). A's
+invariant carries an explicit third state per local instead; see
+[DESIGN.md § A.1](DESIGN.md#a1--the-fact-that-changes-the-arc-two-locals-share-one-slot-verified).
 
 Every claim below was reproduced on this tree; the mechanism for each is pinned in
 [DESIGN.md](DESIGN.md), not hypothesised. Where designing A contradicted an earlier
@@ -85,12 +92,12 @@ not happen. Discoverability (**C**) only pays off once **E** is true.
 | **E2** — the target argument did not skip flags | [DESIGN.md § E.2](DESIGN.md#e2--the-target-argument-does-not-skip-flags--shipped-2026-07-27) | **Shipped** 2026-07-27 |
 | **E3** — a native call abandoned the session, unnamed | [DESIGN.md § E.3](DESIGN.md#e3--a-native-call-abandoned-the-session-unnamed--shipped-2026-07-27) | **Shipped** 2026-07-27 |
 | **B** — a condition that cannot be evaluated must say so, never read as `false` | [DESIGN.md § B](DESIGN.md#b--no-silent-lies-breakpoint-conditions--shipped-2026-07-27) | **Shipped** 2026-07-27 |
-| **A** — frame liveness: show lexical scope, and say why a local has no value | [DESIGN.md § A](DESIGN.md#a--frame-liveness) | **Open — the one arc left.** Design complete 2026-07-27 |
+| **A** — frame liveness: show lexical scope, and say why a local has no value | [DESIGN.md § A](DESIGN.md#a--frame-liveness) | **Shipped** 2026-07-27 |
 | **C1** — `DEBUG.md` gains an `## Interactive debugging` section | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
 | **C2** — `CLAUDE.md` § Key commands gains one line | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
 | **C3** — a bare verb must not shadow a live local | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
-| **D1** — `:vars` temp noise | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | **Partly shipped** — `__`-temps filtered + `:vars all`; `i#index` still shown, to be filtered with A |
-| **D2/D3** — fold the consumers' write-ups back | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | Open |
+| **D1** — `:vars` temp noise | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | **Shipped** 2026-07-27 — `__`- and `#`-names filtered, `:vars all` shows them |
+| **D2/D3** — fold the consumers' write-ups back | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | Open — but both D3 reports are answered: *"eval fails on a local not live at the exact break point"* is fixed by A, and `:undo` does not reproduce |
 
 ## Phase ordering
 
@@ -104,7 +111,7 @@ not happen. Discoverability (**C**) only pays off once **E** is true.
    because a working condition is then a usable probe for A.
 3. **A.** The design arc, and the root of the remaining complaints (D's `:vars`
    noise is only noise *because* the user's own variable is missing). Its six build
-   steps are ordered in [DESIGN.md § A.8](DESIGN.md#a8--steps): the two recording
+   steps are ordered in [DESIGN.md § A.9](DESIGN.md#a9--steps): the two recording
    steps land **inert** (nothing reads them), so the frame does not change until the
    query is wired.
 4. **D after A**, because A is what makes the frame worth filtering — not, as
