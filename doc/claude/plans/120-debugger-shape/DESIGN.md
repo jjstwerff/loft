@@ -5,14 +5,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN120 — design
 
-Five arcs. Each states the **mechanism** (verified on this tree, with the probe),
+Six arcs. Each states the **mechanism** (verified on this tree, with the probe),
 the **invariant** it violates, the **design**, what was **rejected**, and how it is
 **verified**. Every mechanism below is VERIFIED unless the row says HYPOTHESIZED.
 
 Reading order: **E** (nothing else matters if the tool cannot load your program) →
-**B** → **A** → **D** → **C**.  As of 2026-07-27 everything except **A** has
-shipped; A is the one arc left and its design is complete — including the fact
-(§ A.1) that falsified the shape A was originally given.
+**B** → **A** → **F** → **D** → **C**.  As of 2026-07-27 everything has shipped
+except **F** (designed, not built) and **D2/D3**.  Two arcs are worth reading for
+their own sake: **A**, for the fact (§ A.1) that falsified the shape A was originally
+given, and **F**, which exists because A's fact dissolved the reason for a blanket
+this plan had accepted — and because a reproduction attempt of the consumer's report
+had closed it wrongly.
 
 ---
 
@@ -553,6 +556,181 @@ Each step compiles and is verifiable on its own; the frame does not change until
 
 ---
 
+## F — An edit silently stops being undoable after one step
+
+Reported by the **zero-trust** consumer (their `LOFT_WORRIES.md` § 9, 2026-07-27):
+*"`:undo` (advertised time-travel) reported 'nothing to undo' after several `:next`
+steps — we could not tell whether it is unimplemented for `:next`, needs `:step`, or
+we drove it wrong."* § D.3 of this plan closed that as **does not reproduce**. That
+was wrong, and the way it was wrong is the interesting part.
+
+### F.0 — Mechanism (VERIFIED), and why D.3 missed it
+
+D.3 tested `total = 99` → `:undo`, which works. The report says *after several
+`:next` steps*. Put one step between the edit and the undo and it reproduces:
+
+| sequence | result |
+|---|---|
+| `total = 99` → `:undo` | ✅ restores `0` — **the only cell D.3 tried** |
+| `total = 99` → `:next` → `:undo` | ❌ **"nothing to undo"** — the edit is unrecoverable |
+| `:next` → `:next` → `:undo` | "nothing to undo" — **correct**, see F.4 |
+
+The cause is not an oversight. `debug_step` (`src/state/mod.rs`) clears the history
+unconditionally, and says why:
+
+```rust
+// @PLN16 M2 — resuming reuses frame stack slots, so an undo recorded at this
+// suspension could write a stale slot.  Drop the undo/redo history; the next
+// pause starts a fresh one.
+d.undo_stack.clear();
+d.redo_stack.clear();
+d.recording_edit = None;
+```
+
+**The hazard is real.** A `Journal` records raw store regions — `(store_nr, rec, off,
+before-bytes)` — and nothing else. It cannot know *which variable* those bytes
+belonged to, so after a step it cannot tell a slot that is still the edited local's
+from one the allocator has handed to another local. With no way to decide, the only
+safe answer available was to discard everything.
+
+**So this is a conservative blanket, not a bug — and the reason for it no longer
+holds.** Deciding "does this slot still belong to that local at this pc" is exactly
+what arc **A** built (`frame_view` → `LocalState::Held`). F is the second consumer of
+A's fact, and the first evidence that the fact was worth building for its own sake.
+
+### F.1 — What the blanket costs beyond the reported case
+
+Two classes are discarded that were never at risk:
+
+- **A heap edit.** `pt.x = 3` or `v[i] = 9` writes a heap record whose address is
+  stable across any number of steps. The watchpoint code already draws this exact
+  line — `region_of` returns a `StackWatchFrame` binding for a bare scalar local and
+  `None` for a heap region, *"unlike a heap region this isn't a stable target across
+  frame exit"*. Undo throws both away.
+- **A frame edit to a local that keeps its slot.** In the arc-A probe `total` sits at
+  slot 32 for the whole function; after a `:next` inside the loop it is still `Held`
+  at slot 32, so its undo entry was valid the entire time. That is the consumer's
+  case, and it is the common one — a long-lived accumulator is what people edit.
+
+### F.2 — Invariant
+
+> *An undo entry survives exactly as long as the storage it would write still belongs
+> to the thing that was edited.*
+
+Not "until the next step" (today: throws away valid entries) and not "forever"
+(would write another local's slot). The lifetime is a property of the storage, and
+both halves of it are now answerable.
+
+### F.3 — Design
+
+**Bind each entry to what it edited**, mirroring the watchpoint precedent rather than
+inventing a second scheme:
+
+```rust
+struct UndoEntry {
+    journal: Journal,
+    /// The edit's LHS as typed, for the messages below.
+    label: String,
+    /// `Some` when the journal touched FRAME storage — the frame it was recorded in,
+    /// exactly as a stack watchpoint binds (`d_nr` + `args_base` + `depth`; a
+    /// recursive re-entry of the same function is a different frame).  `None` for a
+    /// pure-heap edit, which no frame change can invalidate.
+    frame: Option<StackWatchFrame>,
+    /// The frame slots the journal wrote, as `(local name, slot offset)`.
+    slots: Vec<(String, u16)>,
+}
+```
+
+Classify from **what the journal actually recorded**, not from the LHS syntax: a
+region in `stack_cur.store_nr` is frame storage, anything else is heap. Syntax would
+mis-classify the bare-name heap-graft case, which writes both.
+
+**Carrying the name is load-bearing, not decoration.** "Some local is `Held` at slot
+48" is not the same question as "*this* local is": in the arc-A probe `i` is `Held` at
+slot 48 on line 4 and `step` is `Held` at slot 48 on line 5. An address-only check
+would happily apply an undo of `i` after stepping to line 5 and clobber `step` — the
+arc-A hazard reasserting itself one level down, which is precisely the shape § A.7
+records getting wrong once already.
+
+**Replace the blanket clear with validation at the next pause.** An entry survives iff
+
+- it is heap-only (`frame == None`) and its stores are still live; **or**
+- its `frame` is still at `depth` with the same `(d_nr, args_base)`, **and** every
+  `(name, slot)` it wrote is `Held` at the new pc with that same slot, per `frame_view`.
+
+Everything else is dropped — and **said**, not silently: *"1 earlier edit is no longer
+undoable — `i`'s slot is now `step`'s"*. An edit vanishing without a word is the
+failure this plan is named after; the same rule arc B applied to conditions and E.3 to
+abandoned sessions applies here. `:redo` inherits the rule unchanged (it replays the
+same journal forward, so it has the same validity question).
+
+**Plumbing is one site.** `ReplSession::debug_set` is the only caller of
+`begin_edit_journal` / `commit_edit_journal`, and it already knows the LHS and its
+shape, so the binding is built where the edit is committed. The clear in `debug_step`
+is likewise the only place the history is dropped. N = 1 on both ends.
+
+### F.4 — The other half: `:undo` is not time-travel, and says so
+
+The third row of F.0's table is **correct behaviour** — `:undo` reverts *edits*, and
+pure stepping made none. But the consumer read `:undo(:u)` in `:help` as time-travel
+and could not tell a working tool from a broken one, which is a reach failure, not a
+defect. Two strings fix it:
+
+- `:undo` with an empty stack: *"no edits to undo at this pause — `:undo` reverts
+  edits you made; to step backwards, arm reverse-stepping (`LOFT_REVERSE_DEPTH`, @PLN63
+  RX)"*.
+- `:help` scopes the verb: `:undo(:u)` → `:undo(:u) an edit`.
+
+Worth doing with F because it is the half of the report that is not a bug, and
+shipping only the fix would leave the confusion intact.
+
+### F.5 — Rejected
+
+- **Keep the blanket and document it.** That is today, and the consumer report *is*
+  the response: a correct edit disappearing with the message "nothing to undo" is
+  indistinguishable from the feature being broken.
+- **Validate by re-reading the slot and comparing it to the journal's after-image.**
+  Cheap and wrong: it tests whether the *bytes* changed, not whether the *storage* is
+  still yours. A recycled slot holding the same bit pattern passes; a local the program
+  legitimately re-assigned between the edit and the undo fails. Ownership is the
+  question.
+- **Snapshot the frame per edit instead of journaling.** @PLN63 RX already takes whole
+  checkpoints for reverse-stepping; paying one per edit duplicates it for a strictly
+  smaller need, and reverse-stepping is the right tool for "put the program back".
+- **Bind by `var_nr` alone, without the frame identity.** A recursive call re-enters the
+  same `d_nr` with the same `var_nr`s at a different `args_base`; the entry would apply
+  to the wrong invocation. This is why the watchpoint precedent carries `args_base` and
+  `depth`, and copying it is cheaper than rediscovering why.
+
+### F.6 — Verified by
+
+Six cells, driven through `loft debug <file>:<line>` on the arc-A probe (whose
+slot-sharing is what makes cells 2 and 6 possible at all):
+
+| # | sequence | must |
+|---|---|---|
+| 1 | edit `total` → `:next` (same frame, still `Held` at slot 32) → `:undo` | restore — **the consumer's case, red today** |
+| 2 | edit `i` → `:next` onto the line where `step` owns slot 48 → `:undo` | **refuse**, name `step`, and leave slot 48 unwritten — the safety control |
+| 3 | edit a struct field → `:next` → `:undo` | restore — heap addresses are stable, proving the split earns its keep |
+| 4 | edit in a callee → `:finish` → `:undo` | refuse, name the returned frame, write nothing |
+| 5 | `:next` → `:next` → `:undo` (no edits) | name the edit/step boundary and point at reverse-stepping — must NOT report a bogus success |
+| 6 | cell 2 with validation forced to "always keep" | **must corrupt `step`** — the non-vacuity proof, run before trusting cell 2 |
+
+Cell 2 is the one that matters: without it, "stop clearing the stack" passes cell 1 and
+ships the stale-slot write the blanket existed to prevent.
+
+### F.7 — Steps
+
+1. **`UndoEntry`** — wrap the journal with `label` / `frame` / `slots`; build it in
+   `commit_edit_journal`, classifying regions by store. Behaviour unchanged (the clear
+   still fires). *Gate:* a unit test on the classification — a scalar-local edit gets a
+   frame binding, a field edit does not.
+2. **Validate instead of clear** — drop the `debug_step` clear, validate at the next
+   pause, report what was dropped. *Gate:* cells 1–4 + 6.
+3. **The two messages** (F.4). *Gate:* cell 5.
+
+---
+
 ## D — Cleanup, and the consumer's write-up
 
 - **D.1** — filter compiler-generated names (`__work_N`, `i#index`, `_`-prefixed)
@@ -566,10 +744,13 @@ Each step compiles and is verifiable on its own; the frame does not change until
   actually work here* back into our docs. It is a second, independent user guide
   that should not have had to exist; the parts that are ours (driving the prompt
   non-interactively, what `:vars` shows) belong in `DEBUG.md` § C1.
-- **D.3** — re-verify their two remaining reports against arc A: *"eval fails on a
-  local not live at the exact break point"* is A by construction; *`:undo` reported
-  nothing to undo* **does not reproduce** (`total = 99` → `:undo` → `0` works), so
-  close it unless they can re-trigger it.
+- **D.3** — the consumers' two remaining reports. *"eval fails on a local not live at
+  the exact break point"* is closed by arc A (a local the frame holds now evaluates,
+  and one it does not names the reason). *`:undo` reported nothing to undo* was closed
+  here as **does not reproduce** — that was **wrong**, and it is now arc **F**: the
+  cell D.3 tried (`total = 99` → `:undo`) is the one that works, and the report says
+  *after several `:next` steps*, where it fails. The lesson is the cheap one: a
+  reproduction attempt that drops a step the report named tests a different program.
 
 ---
 
@@ -669,6 +850,10 @@ before the next begins. `[✓]` = shipped 2026-07-27.
    invocation, the piped-stdin form, pointers to the `loft-debug` skill and
    PROTOCOL.md. Biggest single gap.
 10. `[✓]` **C2** — one line in `CLAUDE.md` § Key commands.
-11. **D2/D3** — fold the consumers' write-ups back; close their `:undo` report
-    (does not reproduce) and re-check "eval fails on a local not live here" against
-    step 7.
+11. **F — undo across a step.** ← THE ARC LEFT. Three steps in § F.7; the reported
+    case is red today and an edit disappears silently. *Gate:* § F.6, six cells,
+    cell 2 (refuse a stale-slot undo) being the one that stops "just stop clearing"
+    from shipping.
+12. **D2/D3** — fold the consumers' write-ups back. Their "eval fails on a local not
+    live here" is closed by A; their `:undo` report is arc F (D.3's "does not
+    reproduce" was wrong).
