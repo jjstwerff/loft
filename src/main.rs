@@ -3599,10 +3599,28 @@ fn run_file_debugger() -> ! {
         };
         std::process::exit(code);
     }
-    let target = args
-        .iter()
-        .position(|a| a == "debug")
-        .and_then(|p| args.get(p + 1));
+    // Find the target after `debug`, skipping flags AND the value of a flag that
+    // takes one.  `loft debug --lib dir prog.loft:12` used to take `--lib` as the
+    // target and then complain that `:<line>` was missing — a message about a token
+    // the user never meant as the target (@PLN120 E2).  Skipping only `-`-prefixed
+    // tokens is not enough: it would then take `dir`, which is just as wrong.
+    let target = args.iter().position(|a| a == "debug").and_then(|p| {
+        let rest = &args[p + 1..];
+        let mut i = 0;
+        while i < rest.len() {
+            if rest[i].starts_with('-') {
+                // `--flag=value` carries its value; the spaced forms below do not.
+                i += if matches!(rest[i].as_str(), "--lib" | "--path" | "--port") {
+                    2
+                } else {
+                    1
+                };
+            } else {
+                return Some(&rest[i]);
+            }
+        }
+        None
+    });
     let Some(target) = target else {
         eprintln!("usage: loft debug <file>:<line>  (or: loft debug --rpc / --serve)");
         std::process::exit(2);
@@ -3619,13 +3637,15 @@ fn run_file_debugger() -> ! {
     };
     let stdin = std::io::stdin();
     let mut stderr = std::io::stderr();
-    let code = match loft::repl::run_file_debug(&stdlib, file, line, stdin.lock(), &mut stderr) {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("loft debug: {e}");
-            1
-        }
-    };
+    let code =
+        match loft::repl::run_file_debug(&stdlib, &lib_dirs, file, line, stdin.lock(), &mut stderr)
+        {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("loft debug: {e}");
+                1
+            }
+        };
     std::process::exit(code);
 }
 

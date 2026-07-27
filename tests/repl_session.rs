@@ -1115,7 +1115,7 @@ fn repl_file_debugger_end_to_end() {
     // Piped session: read `n` at the frame, continue to the end, quit.
     let input = std::io::Cursor::new(b"n\n:continue\n:quit\n".to_vec());
     let mut out: Vec<u8> = Vec::new();
-    loft::repl::run_file_debug("default", file, 2, input, &mut out).expect("debug run");
+    loft::repl::run_file_debug("default", &[], file, 2, input, &mut out).expect("debug run");
     let text = String::from_utf8_lossy(&out);
     assert!(
         text.contains("break at"),
@@ -1362,4 +1362,66 @@ fn a_failed_input_does_not_warn_about_the_replayed_session() {
         ),
         "the replayed bindings must still be live after the failed input"
     );
+}
+
+/// @PLN120 E1 — `loft debug prog.loft:N --lib <dir>` must resolve a library the
+/// same way running the program does.
+///
+/// `run_file_debug` built its session with `ReplSession::new` (stdlib only) while
+/// the `--rpc` and `--serve` paths used `new_with_libs`, so the interactive
+/// debugger — and only it — reported `Library '<x>' not found` on a file that runs
+/// clean.  moros read that as "the debugger does not work on real programs": every
+/// project whose libraries live in a local `lib/` was undebuggable by this route.
+#[test]
+fn file_debugger_resolves_a_library_from_lib_dirs() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let lib_dirs = vec![dir.to_string_lossy().into_owned()];
+
+    let path = tmp_session("filedebug_lib").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use typeshift;\nfn main() {\n  v = ts_touch();\n  assert(v == 7, \"lib call\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    let input = std::io::Cursor::new(b":continue\n:quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &lib_dirs, file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("not found"),
+        "the library must resolve under --lib: {text}"
+    );
+    assert!(
+        text.contains("break at"),
+        "the breakpoint must be reached: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The control for the test above: with NO `lib_dirs` the same program cannot
+/// resolve its library, so the assertion there is about the wiring and not about
+/// `typeshift` happening to be findable some other way.
+#[test]
+fn file_debugger_without_lib_dirs_cannot_resolve_the_library() {
+    let path = tmp_session("filedebug_nolib").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use typeshift;\nfn main() {\n  v = ts_touch();\n  assert(v == 7, \"lib call\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    let input = std::io::Cursor::new(b":quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &[], file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        text.contains("not found"),
+        "without --lib the library must NOT resolve — else the E1 test proves nothing: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
 }

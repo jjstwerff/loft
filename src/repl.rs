@@ -176,14 +176,21 @@ pub fn run_repl<R: BufRead, W: Write>(
 ///
 /// # Errors
 /// Returns an I/O error from the input/output streams.
+/// `lib_dirs` are the `--lib` import paths, so the debugged file can `use` a library
+/// exactly as running it does.  Passing them is not optional: without them a program
+/// whose `use` resolves through `--lib` fails to load and the debugger reports
+/// `Library '<x>' not found` on a file that runs fine — @PLN120 E1, reported by moros
+/// as "the debugger does not work on real programs".  The `--rpc` and `--serve` paths
+/// always did this; this one did not, which is why the fault was interactive-only.
 pub fn run_file_debug<R: BufRead, W: Write>(
     stdlib_dir: &str,
+    lib_dirs: &[String],
     file: &str,
     line: u32,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new(stdlib_dir)?;
+    let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
     match session.load_program(file) {
         Ok(Ok(())) => {}
         Ok(Err(diags)) => {
@@ -779,6 +786,21 @@ fn handle_paused<W: Write>(
     use crate::debugger::StepMode;
     let t = trimmed.trim();
     let cmd = t.strip_prefix(':').unwrap_or(t);
+    // A colon-less verb is a convenience, but the verb names collide with ordinary
+    // loft locals — `s`, `n`, `c`, `r`, `o`, `u`, `q` are as common as names get,
+    // and `step` / `next` / `vars` are plausible too.  Typing `step` to see the
+    // local `step` silently STEPPED the program instead: the wrong action, and one
+    // that moves the frame you were reading.  When the paused frame actually has a
+    // local by that name, the name wins; `:step` always means the verb.
+    if !t.starts_with(':')
+        && session
+            .paused_frame()
+            .is_some_and(|f| f.locals.iter().any(|(n, _)| n == cmd))
+        && let Some(v) = session.debug_eval(cmd)
+    {
+        println!("{v}");
+        return Ok(false);
+    }
     // @PLN16 M3 — `:watch <expr>` sets a watchpoint (a scalar `pt.x` / `v[i]`); `:watch`
     // lists; `:watch clear` clears.  Handled before the match because it takes an arg.
     if cmd == "watch" || cmd.starts_with("watch ") {
@@ -4606,5 +4628,92 @@ mod completion_tests {
     fn dot_non_identifier_receiver_yields_nothing() {
         let (_start, out) = complete_word(&model(), "arr[0].x", 8);
         assert!(out.is_empty());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod paused_prompt_tests {
+    use super::{Eval, ReplSession, handle_paused};
+
+    /// @PLN120 E3 — a bare verb must not shadow a live local of the same name.
+    ///
+    /// The paused prompt accepts verbs with or without the leading colon, and the
+    /// verb set (`s` `n` `c` `r` `o` `u` `q`, `step`, `next`, `vars`, …) collides
+    /// with the commonest loft local names there are.  Typing `n` to read the local
+    /// `n` used to run `:next` — and typing `c` ran `:continue`, resuming the
+    /// program and ending the session instead of printing a value.  A live local
+    /// wins; the colon form is always the verb.
+    #[test]
+    fn a_bare_word_naming_a_live_local_is_read_not_run() {
+        let mut s = ReplSession::new("default").expect("stdlib");
+        assert!(matches!(
+            s.eval("fn calc(n: integer) -> integer {\n  n * 10\n}"),
+            Eval::Ran
+        ));
+        s.debug_stepping(true);
+        s.add_breakpoint("calc");
+        assert!(matches!(
+            s.eval("assert(calc(5) == 50, \"runs\")"),
+            Eval::Paused
+        ));
+        let at = s.paused_frame().expect("suspended in calc").line;
+        assert!(
+            s.paused_frame()
+                .unwrap()
+                .locals
+                .iter()
+                .any(|(n, _)| n == "n"),
+            "the local `n` must be in the frame for this test to mean anything"
+        );
+
+        let mut out = Vec::new();
+        assert!(!handle_paused("n", &mut s, &mut out).expect("io"));
+        let frame = s
+            .paused_frame()
+            .expect("still suspended — bare `n` must not have stepped");
+        assert_eq!(
+            frame.line, at,
+            "bare `n` ran the :next verb instead of reading the local"
+        );
+
+        // The colon form keeps meaning the verb even though `n` is a local.
+        assert!(!handle_paused(":next", &mut s, &mut out).expect("io"));
+        assert!(
+            s.paused_frame().is_none_or(|f| f.line != at),
+            ":next must still step"
+        );
+    }
+
+    /// The control: a bare verb with NO matching local still runs the verb — the
+    /// convenience the colon-less form exists for is preserved.
+    #[test]
+    fn a_bare_verb_with_no_such_local_still_runs() {
+        let mut s = ReplSession::new("default").expect("stdlib");
+        assert!(matches!(
+            s.eval("fn calc(v: integer) -> integer {\n  v * 10\n}"),
+            Eval::Ran
+        ));
+        s.debug_stepping(true);
+        s.add_breakpoint("calc");
+        assert!(matches!(
+            s.eval("assert(calc(5) == 50, \"runs\")"),
+            Eval::Paused
+        ));
+        let at = s.paused_frame().expect("suspended in calc").line;
+        assert!(
+            !s.paused_frame()
+                .unwrap()
+                .locals
+                .iter()
+                .any(|(n, _)| n == "n"),
+            "no local named `n` here — that is the point of the control"
+        );
+
+        let mut out = Vec::new();
+        assert!(!handle_paused("n", &mut s, &mut out).expect("io"));
+        assert!(
+            s.paused_frame().is_none_or(|f| f.line != at),
+            "bare `n` must still step when nothing shadows it"
+        );
     }
 }
