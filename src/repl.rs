@@ -275,14 +275,18 @@ fn run_loop<R: BufRead, W: Write>(
     }
 }
 
+/// wasm32 has no terminal, so there is only the piped path.  Kept in step with the
+/// host `run_loop` above: both take the [`ResolutionContext`], and a signature change
+/// here does not surface in a host `cargo clippy` — only the wasm32 build compiles this
+/// arm, which is what `make check-wasm-threads` and the suite's wasm32 rlib step cover.
 #[cfg(target_arch = "wasm32")]
 fn run_loop<R: BufRead, W: Write>(
-    stdlib_dir: &str,
+    ctx: &ResolutionContext,
     session: &mut ReplSession,
     input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    run_piped(stdlib_dir, session, input, chrome)
+    run_piped(ctx, session, input, chrome)
 }
 
 /// The continuation-aware prompt: the `(dbg)` prompt while suspended at a

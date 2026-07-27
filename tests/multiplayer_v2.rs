@@ -37,6 +37,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod common;
+
+/// A wall-clock budget for waiting on a child process, stretched when the machine is
+/// shared (`common::deadline_scale`).
+///
+/// Every timeout in this file waits on a spawned `loft` process — server start, a
+/// client's whole game — and the variance is in process startup under contention, not
+/// in the work itself.  A fixed number is a bet against the box: measured at load
+/// average 40, a 60 s server-start budget failed four tests that need under 2 s idle.
+fn budget(secs: u64) -> Duration {
+    Duration::from_secs(secs * common::deadline_scale())
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 fn loft_bin() -> PathBuf {
@@ -189,7 +202,7 @@ impl ServerGuard {
         // 30s timeout: Windows CI cold-runners can take 10+s to compile
         // / launch the loft binary on first invocation.  Local runs
         // bind in <1s, so the bump only affects flake-prone CI.
-        wait_for_port(self.port, Duration::from_secs(60), 50)
+        wait_for_port(self.port, budget(60), 50)
     }
 
     /// Diagnostic helper: when `wait_listening` fails, drain whatever
@@ -257,9 +270,15 @@ impl Drop for ServerGuard {
 enum BindOutcome {
     Bound,
     PortTaken,
-    /// The server said neither within the budget (an old build, or a genuinely stuck
-    /// child).  Treated as "carry on and let `wait_listening` judge", so this helper can
-    /// never be the reason a test fails.
+    /// The server said neither within the budget — a slow start on a loaded box, an
+    /// old build that does not print the markers, or a genuinely stuck child.
+    ///
+    /// **Not the same as `Bound`.**  Treating it as bound is how a test ends up running
+    /// against a stranger's server: the loser of the pick race still prints
+    /// "listening" (its handle is `-1`), so a connect-probe succeeds and the failure
+    /// surfaces far away as "client hung".  An unconfirmed port is therefore re-picked
+    /// like a taken one — except on the last attempt, where the caller falls back to
+    /// `wait_listening` so a build that never prints the markers is still not fatal.
     Unknown,
 }
 
@@ -299,10 +318,21 @@ fn spawn_server_on_free_port_inner(
             );
         }
         let mut s = ServerGuard::spawn(server_script, port);
-        match s.bind_outcome(Duration::from_secs(60)) {
-            BindOutcome::PortTaken => {
+        let last_attempt = attempt + 1 == ATTEMPTS;
+        match s.bind_outcome(budget(60)) {
+            // Taken, or ownership unconfirmed: re-pick rather than proceed.  A budget
+            // that expires because the box is loaded says nothing about who owns the
+            // port, and accepting it is how a test comes to run against a stranger's
+            // server — the failure this whole helper exists to prevent.  The last
+            // attempt still falls through, so a build that never prints the markers
+            // behaves as it always did.
+            BindOutcome::PortTaken | BindOutcome::Unknown if !last_attempt => {
                 last_taken = port;
                 continue; // `s` drops here, killing the zombie that never bound
+            }
+            BindOutcome::PortTaken => {
+                last_taken = port;
+                continue;
             }
             BindOutcome::Bound | BindOutcome::Unknown => {
                 if !s.wait_listening() {
@@ -477,7 +507,7 @@ fn server_detects_and_retries_a_stolen_port() {
 
     // The server we got back is a real one: a client can complete a game against it.
     let client = spawn_client("S", port);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(60));
+    let (out, status) = drain_with_timeout(client, budget(60));
     assert_eq!(
         status,
         Some(0),
@@ -513,7 +543,7 @@ fn v2_single_client_completes_game() {
     let (_server, port) = spawn_server_on_free_port("tictactoe_server_v2.loft");
 
     let client = spawn_client("S", port);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(60));
+    let (out, status) = drain_with_timeout(client, budget(60));
 
     assert_eq!(
         status,
@@ -573,15 +603,15 @@ fn v2_two_clients_with_spectator_routing() {
     // Generous: this covers process spawn + parse + connect for both clients on
     // a machine running the whole suite in parallel.  It is a failure bound, not
     // a timing assumption — nothing races on it being tight.
-    let ready = Duration::from_secs(45);
+    let ready = budget(45);
     let a_ready = a.wait_for("handlers learned", ready);
     let b_ready = b.wait_for("handlers learned", ready);
     // Release the barrier even if a client never reported, so neither hangs on
     // its 30 s spin and the assertions below report real output.
     std::fs::write(&go_path, b"go").expect("write the rendezvous file");
 
-    let (a_out, a_status) = a.finish(Duration::from_secs(60));
-    let (b_out, b_status) = b.finish(Duration::from_secs(60));
+    let (a_out, a_status) = a.finish(budget(60));
+    let (b_out, b_status) = b.finish(budget(60));
     let _ = std::fs::remove_file(&go_path);
     assert!(
         a_ready,
@@ -664,7 +694,7 @@ fn v2_late_join_independent_games() {
 
     // A connects, plays, finishes.
     let a = spawn_client("A", port);
-    let (a_out, a_status) = drain_with_timeout(a, Duration::from_secs(60));
+    let (a_out, a_status) = drain_with_timeout(a, budget(60));
     assert_eq!(a_status, Some(0), "A did not exit; stdout=\n{a_out}");
     assert!(
         a_out.contains("[A] GameOver: X"),
@@ -677,7 +707,7 @@ fn v2_late_join_independent_games() {
     // B connects; should still play to completion despite A having
     // already finished.
     let b = spawn_client("B", port);
-    let (b_out, b_status) = drain_with_timeout(b, Duration::from_secs(60));
+    let (b_out, b_status) = drain_with_timeout(b, budget(60));
     assert_eq!(b_status, Some(0), "B did not exit; stdout=\n{b_out}");
     assert!(
         b_out.contains("[B] GameOver: X"),

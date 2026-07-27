@@ -12,6 +12,24 @@
 #[allow(dead_code)]
 pub mod cross_mode;
 
+/// How much to stretch a test's wall-clock deadline, because the machine is shared.
+///
+/// A deadline is an UPPER bound: a fast run returns early and pays nothing for a
+/// generous budget, while a tight one turns ordinary contention into a failure.  So the
+/// question is not "how long should this take" but "am I sharing the box".
+///
+/// `CI` alone misses the case that actually bites: a LOCAL full-suite run, where dozens
+/// of tests share the CPU — measured at 61.6 s against a 60 s budget for a browser test
+/// that takes 25 s alone.  `NEXTEST` covers it, since the harness is exactly what runs
+/// tests in parallel.  A hand-run test binary keeps the tight budget, so iterating on one
+/// test still fails fast.
+#[allow(dead_code)]
+#[must_use]
+pub fn deadline_scale() -> u64 {
+    let shared = std::env::var_os("CI").is_some() || std::env::var_os("NEXTEST").is_some();
+    if shared { 3 } else { 1 }
+}
+
 /// A server-test port, offset by `LOFT_TEST_PORT_OFFSET` (default 0).  The engine-host /
 /// wasm-relay tests bind FIXED ports; two suites run at once — e.g. two agents in sibling
 /// checkouts (`loft` and `loft2`) — collide on them and flake.  `find_problems.sh` exports a

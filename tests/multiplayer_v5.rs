@@ -33,6 +33,19 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod common;
+
+/// A wall-clock budget for waiting on a child process, stretched when the machine is
+/// shared (`common::deadline_scale`).
+///
+/// Every timeout in this file waits on a spawned `loft` process — server start, a
+/// client's whole game — and the variance is in process startup under contention, not
+/// in the work itself.  A fixed number is a bet against the box: measured at load
+/// average 40, a 60 s server-start budget failed four tests that need under 2 s idle.
+fn budget(secs: u64) -> Duration {
+    Duration::from_secs(secs * common::deadline_scale())
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 fn loft_bin() -> PathBuf {
@@ -183,6 +196,11 @@ struct ServerGuard {
     /// Receiver for the rest of the server's stdout.  Drained at the
     /// end of the test by `drain_remaining_stdout`.
     stdout_rx: Option<mpsc::Receiver<String>>,
+    /// The server's stderr, read on a thread.  Carries the native listener's
+    /// bind verdict, which stdout does NOT: a server that lost the port race still
+    /// prints its own "listening port=" line (its handle is `-1`), so the stdout
+    /// marker cannot tell "I own this port" from "someone else does".
+    stderr_rx: Option<mpsc::Receiver<String>>,
 }
 
 impl ServerGuard {
@@ -194,13 +212,62 @@ impl ServerGuard {
             .current_dir(examples_dir())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = cmd.spawn().expect("failed to spawn loft v5 server");
+        let mut child = cmd.spawn().expect("failed to spawn loft v5 server");
+        let stderr_rx = child.stderr.take().map(|s| {
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                for line in BufReader::new(s).lines().map_while(Result::ok) {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            rx
+        });
         ServerGuard {
             child: Some(child),
             port,
             early_stdout: String::new(),
             stdout_rx: None,
+            stderr_rx,
         }
+    }
+
+    /// Whether this server LOST the port it was told to use.
+    ///
+    /// `pick_free_port` binds `:0`, reads the port and closes it, so another test can
+    /// take that port before this server binds it.  The loser is invisible on stdout —
+    /// it prints "listening port=" regardless — so its client connects to whoever won,
+    /// receives nothing it expects, and the test hangs until the harness watchdog fires
+    /// (measured: four v5 tests killed at 300 s each).  The native listener does say so
+    /// on stderr, which is the only place the truth appears.
+    ///
+    /// `grace` bounds the wait because stdout and stderr are separate pipes: the
+    /// "cannot bind" line is WRITTEN before "listening port=", but the two can be READ
+    /// out of order.  Missing it degrades to the previous behaviour rather than to
+    /// something worse, so a short grace is the right trade.
+    fn bind_lost(&mut self, grace: Duration) -> bool {
+        let Some(rx) = self.stderr_rx.as_ref() else {
+            return false;
+        };
+        let deadline = Instant::now() + grace;
+        let mut lost = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(line) => {
+                    let is_loss = line.contains("cannot bind");
+                    self.early_stdout.push_str(&line);
+                    self.early_stdout.push('\n');
+                    if is_loss {
+                        lost = true;
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        lost
     }
 
     /// Wait until the server prints its "listening port=" marker.
@@ -213,7 +280,7 @@ impl ServerGuard {
             None => return false,
         };
         let marker = format!("listening port={}", self.port);
-        let (early, rx, ok) = await_stdout_marker(stdout, &marker, Duration::from_secs(60));
+        let (early, rx, ok) = await_stdout_marker(stdout, &marker, budget(60));
         self.early_stdout = early;
         self.stdout_rx = Some(rx);
         ok
@@ -254,9 +321,14 @@ impl ServerGuard {
                     out.push_str(&format!("\n  failed to query child status: {e}"));
                 }
             }
+            // Drain the reader thread's channel — `spawn` took `child.stderr`, so the
+            // handle is no longer here to read directly.
             let mut stderr_buf = String::new();
-            if let Some(mut s) = child.stderr.take() {
-                let _ = s.read_to_string(&mut stderr_buf);
+            if let Some(rx) = self.stderr_rx.as_ref() {
+                while let Ok(line) = rx.try_recv() {
+                    stderr_buf.push_str(&line);
+                    stderr_buf.push('\n');
+                }
             }
             if !stderr_buf.is_empty() {
                 out.push_str("\n  --- server stderr ---\n");
@@ -319,6 +391,32 @@ fn spawn_client_with_args(
 
 /// Convenience: spawn server + wait for its "listening port=N"
 /// marker, panic with a useful diagnostic if it doesn't appear.
+/// Start `script` on a port it actually OWNS, re-picking when it loses the race.
+///
+/// Prefer this over picking a port yourself: `pick_free_port` cannot reserve the port
+/// it reports, and a server that loses it still says "listening", so the test proceeds
+/// against a stranger's server and hangs.  Re-picking costs milliseconds; the hang
+/// costs the harness watchdog (300 s per test).  Same idiom as
+/// `multiplayer_v2::spawn_server_on_free_port`, for the same reason.
+fn spawn_listening_server_on_free_port(script: &str, label: &str) -> (ServerGuard, u16) {
+    const ATTEMPTS: usize = 5;
+    let mut last_lost = 0;
+    for _ in 0..ATTEMPTS {
+        let port = pick_free_port();
+        let mut s = spawn_listening_server(script, port, label);
+        // 250 ms: the verdict is already written by the time the stdout marker
+        // arrives; this only covers cross-pipe read ordering.
+        if s.bind_lost(Duration::from_millis(250)) {
+            last_lost = port;
+            continue; // `s` drops here, killing the server that never owned the port
+        }
+        return (s, port);
+    }
+    panic!(
+        "{label}: could not obtain a port {script} owns in {ATTEMPTS} attempts          (last contended port {last_lost})"
+    );
+}
+
 fn spawn_listening_server(script: &str, port: u16, label: &str) -> ServerGuard {
     let t = Instant::now();
     let mut s = ServerGuard::spawn(script, port);
@@ -343,11 +441,11 @@ fn spawn_listening_server(script: &str, port: u16, label: &str) -> ServerGuard {
 /// height + u16 age) is exactly 4 bytes.
 #[test]
 fn v5_t1_binary_round_trip() {
-    let port = pick_free_port();
-    let mut server = spawn_listening_server("v5_t1_binary_server.loft", port, "v5-t1");
+    let (mut server, port) =
+        spawn_listening_server_on_free_port("v5_t1_binary_server.loft", "v5-t1");
 
     let client = spawn_client("v5_t1_binary_client.loft", port);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
+    let (out, status) = drain_with_timeout(client, budget(30));
 
     let server_out = server.snapshot_stdout();
     assert_eq!(
@@ -382,11 +480,11 @@ fn v5_t1_binary_round_trip() {
 ///   - no blobs are coalesced or dropped (5 + 1, not 4 + 1 or 5 + 0)
 #[test]
 fn v5_t2_session_blob_grouping() {
-    let port = pick_free_port();
-    let mut server = spawn_listening_server("v5_t2_session_blobs_server.loft", port, "v5-t2");
+    let (mut server, port) =
+        spawn_listening_server_on_free_port("v5_t2_session_blobs_server.loft", "v5-t2");
 
     let client = spawn_client("v5_t2_session_blobs_client.loft", port);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
+    let (out, status) = drain_with_timeout(client, budget(30));
 
     let server_out = server.snapshot_stdout();
     assert_eq!(
@@ -425,20 +523,33 @@ fn v5_t2_session_blob_grouping() {
 #[test]
 fn v5_t3_n_client_broadcast() {
     const N: usize = 5;
-    let port = pick_free_port();
     let n_str = N.to_string();
     let env = [("LOFT_T3_CLIENTS", n_str.as_str())];
 
-    let mut server = ServerGuard::spawn("v5_t3_n_clients_server.loft", port);
+    // Same port-ownership retry as the other tests, spelled out here because this one
+    // does not use `spawn_listening_server`: its readiness check is N connects, not the
+    // plain marker.
+    let (mut server, port) = {
+        let mut got = None;
+        for _ in 0..5 {
+            let port = pick_free_port();
+            let mut s = ServerGuard::spawn("v5_t3_n_clients_server.loft", port);
+            if !s.wait_listening() {
+                let diag = s.diagnose_listen_failure();
+                panic!("v5-t3 server failed to start within 60s{diag}");
+            }
+            if s.bind_lost(Duration::from_millis(250)) {
+                continue;
+            }
+            got = Some((s, port));
+            break;
+        }
+        got.expect("v5-t3: could not obtain a port the server owns in 5 attempts")
+    };
     // The server reads LOFT_T3_CLIENTS from env, but it doesn't need
     // it for this assertion shape — we just need the server to log
     // "connected seat=" once per client and "broadcast hello from"
     // once per inbound Hello.
-    if !server.wait_listening() {
-        let diag = server.diagnose_listen_failure();
-        panic!("v5-t3 server failed to start within 60s{diag}");
-    }
-
     let labels = ["A", "B", "C", "D", "E"];
     let mut children = Vec::with_capacity(N);
     for label in &labels[..N] {
@@ -455,7 +566,7 @@ fn v5_t3_n_client_broadcast() {
     // a slow CI runner finish without flake.
     let mut handles = Vec::with_capacity(N);
     for child in children {
-        let h = thread::spawn(move || drain_with_timeout(child, Duration::from_secs(30)));
+        let h = thread::spawn(move || drain_with_timeout(child, budget(30)));
         handles.push(h);
     }
     let outs: Vec<(String, Option<i32>)> = handles
@@ -508,14 +619,14 @@ fn v5_t3_n_client_broadcast() {
 #[test]
 fn v5_t4_catch_up_after_reconnect() {
     const TOTAL: usize = 5;
-    let port = pick_free_port();
     let total_str = TOTAL.to_string();
     let env = [("LOFT_T4_SESSIONS", total_str.as_str())];
 
-    let mut server = spawn_listening_server("v5_t4_catch_up_server.loft", port, "v5-t4");
+    let (mut server, port) =
+        spawn_listening_server_on_free_port("v5_t4_catch_up_server.loft", "v5-t4");
 
     let client = spawn_client_with_args("v5_t4_catch_up_client.loft", port, "", &env);
-    let (out, status) = drain_with_timeout(client, Duration::from_secs(30));
+    let (out, status) = drain_with_timeout(client, budget(30));
 
     let server_out = server.snapshot_stdout();
     assert_eq!(
@@ -570,7 +681,7 @@ fn v5_t5_world_tick_and_decay() {
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let child = cmd.spawn().expect("failed to spawn loft v5-t5");
-    let (out, status) = drain_with_timeout(child, Duration::from_secs(30));
+    let (out, status) = drain_with_timeout(child, budget(30));
 
     assert_eq!(
         status,
