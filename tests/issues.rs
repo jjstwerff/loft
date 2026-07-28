@@ -16653,3 +16653,95 @@ fn issue618_entry_fn_returning_struct_still_works() {
         "entry returning a struct must keep working"
     );
 }
+
+// #654 — past ~32 KB of function body the interpreter's jump displacement was
+// truncated to 16 bits, so a `while true` took its backward jump to an arbitrary
+// address: the body ran ONCE, execution fell out of the loop, and main returned
+// status 0 with no diagnostic.  A log ended mid-story with nothing wrong in it.
+//
+// The filed scope was the backward `while` jump, but a boundary matrix showed
+// every jump class truncating — `while`, `for`, `break`, and the forward skips of
+// `if` and `else` — because all of them encode a displacement the same way.  So
+// the fix is at the encoding, not at any one construct: `OpGotoWord` /
+// `OpGotoFalseWord` now carry a 32-bit displacement, which covers the whole
+// `code_pos` space and so cannot move the threshold somewhere further out.
+//
+// `--native` was always correct here (it emits real Rust control flow and never
+// reads these operands), which is why this guards the interpreter specifically.
+#[test]
+fn issue_654_jumps_survive_a_body_past_the_16_bit_displacement() {
+    // ~2400 filler statements puts the body comfortably past 32 KB of emitted
+    // bytecode; at 1484 the old encoder was still correct and at 1485 it was not,
+    // so a guard at the boundary itself would be one statement from vacuous.
+    //
+    // The filler ACCUMULATES rather than assigning throwaway locals: it has to be
+    // warning-free to compile here, and a running total lets each case assert how
+    // many times the body actually ran.
+    const N: i64 = 2400;
+    let filler: String = (0..N).map(|i| format!("acc = acc + {i}; ")).collect();
+    let once = N * (N - 1) / 2; // the filler's contribution per execution
+
+    // One case per jump class.  Each asserts a VALUE, not merely that it ran:
+    // the failure mode was silent fall-through, which a run-to-completion check
+    // would have called a pass.
+    let cases: [(&str, String); 5] = [
+        // backward jump — `while`
+        (
+            "while",
+            format!(
+                "fn test() {{ acc = 0; i = 0; while true {{ i = i + 1; if i > 3 {{ break; }} {filler} }} \
+             assert(i == 4, \"while ran {{i}} times, expected 4\"); \
+             assert(acc == {}, \"while body ran the wrong number of times\"); }}",
+                once * 3
+            ),
+        ),
+        // backward jump — counted `for`
+        (
+            "for",
+            format!(
+                "fn test() {{ acc = 0; n = 0; for _ in 0..4 {{ n = n + 1; {filler} }} \
+             assert(n == 4, \"for ran {{n}} times, expected 4\"); \
+             assert(acc == {}, \"for body ran the wrong number of times\"); }}",
+                once * 4
+            ),
+        ),
+        // forward jump — `break` out of a huge body
+        (
+            "break",
+            format!(
+                "fn test() {{ acc = 0; i = 0; while true {{ i = i + 1; if i > 2 {{ break; }} {filler} }} \
+             assert(i == 3, \"break left the loop at {{i}}, expected 3\"); \
+             assert(acc == {}, \"break body ran the wrong number of times\"); }}",
+                once * 2
+            ),
+        ),
+        // forward jump — skipping a huge `if` body that must NOT run
+        (
+            "if",
+            format!(
+                "fn test() {{ acc = 0; x = 0; if x > 100 {{ {filler} }} \
+             assert(acc == 0, \"the untaken if body ran\"); \
+             assert(x == 0, \"execution did not reach the join\"); }}"
+            ),
+        ),
+        // forward jump — skipping a huge `else` arm
+        (
+            "else",
+            format!(
+                "fn test() {{ acc = 0; taken = 0; if acc < 100 {{ taken = 1; }} else {{ {filler} taken = 2; }} \
+             assert(taken == 1, \"took the wrong arm: {{taken}}\"); \
+             assert(acc == 0, \"the untaken else arm ran\"); }}"
+            ),
+        ),
+    ];
+
+    for (label, src) in &cases {
+        let (mut state, data) = compile_for_production(src);
+        attach_production_logger(&mut state);
+        state.execute("test", &data);
+        assert!(
+            !state.database.had_fatal,
+            "#654: the `{label}` jump misbehaved past a 32 KB body"
+        );
+    }
+}

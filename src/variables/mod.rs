@@ -2128,6 +2128,17 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
     match tp {
         // @PLN25 slice (b): `Optional(τ)` shares its base's sentinel storage — same size.
         Type::Optional(inner) => size(inner, context),
+        // A declared `size(N)` on an integer alias wins over the range heuristic
+        // below, which only knows a 1 / 2 / 8 ladder and so has no way to express
+        // 4.  For every alias that existed before this arm the two agree (`u8` /
+        // `i8` force 1 and range to 1; `u16` / `i16` force 2 and range to 2; plain
+        // `integer` forces nothing), so reading the declaration changes no
+        // constant that was already being emitted — verified by a byte-identical
+        // `loft introspect` over a corpus of all of them.  It is what makes a
+        // 4-byte constant expressible at all, which the jump displacement needs.
+        Type::Integer(s) if context == &Context::Constant && s.forced_size.is_some() => {
+            u16::from(s.forced_size.expect("checked by the guard").get())
+        }
         Type::Integer(s) if context == &Context::Constant && s.range() - 1 <= 256 => 1,
         Type::Integer(s) if context == &Context::Constant && s.range() - 1 <= 65536 => 2,
         Type::Boolean | Type::Enum(_, false, _) => 1,

@@ -884,7 +884,7 @@ impl State {
         }
         self.clear_stack(stack, 0);
         stack.add_op("OpGotoWord", self);
-        self.code_add((i64::from(pos) - i64::from(self.code_pos) - 2) as i16);
+        self.code_add((i64::from(pos) - i64::from(self.code_pos) - 4) as i32);
         stack.end_loop(self);
         Type::Void
     }
@@ -894,7 +894,7 @@ impl State {
         self.clear_stack(stack, loop_nr);
         stack.add_op("OpGotoWord", self);
         stack.add_break(self.code_pos, loop_nr);
-        self.code_add(0i16); // temporary value to the end of the loop
+        self.code_add(0i32); // temporary value to the end of the loop
         stack.position = old_pos;
         Type::Void
     }
@@ -903,7 +903,7 @@ impl State {
         let old_pos = stack.position;
         self.clear_stack(stack, loop_nr);
         stack.add_op("OpGotoWord", self);
-        self.code_add((i64::from(stack.get_loop(loop_nr)) - i64::from(self.code_pos) - 2) as i16);
+        self.code_add((i64::from(stack.get_loop(loop_nr)) - i64::from(self.code_pos) - 4) as i32);
         stack.position = old_pos;
         Type::Void
     }
@@ -918,7 +918,7 @@ impl State {
         self.generate_node(test, stack, false);
         stack.add_op("OpGotoFalseWord", self);
         let code_step = self.code_pos;
-        self.code_add(0i16); // temp step
+        self.code_add(0i32); // temp step
         let true_pos = self.code_pos;
         let stack_pos = stack.position;
         let tp = self.generate_node(t_val, stack, false);
@@ -947,7 +947,7 @@ impl State {
             && !matches!(tp, Type::Void | Type::Never)
             && true_stack != stack_pos;
         if matches!(f_val.kind(), ValueType::Null) && !null_else_value {
-            self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
+            self.code_put(code_step, (self.code_pos - true_pos) as i32); // actual step
             // when the true branch diverges (return/break/continue, possibly
             // wrapped by scopes.rs in Insert/Block), execution only reaches the
             // join point via the goto-false path — where runtime stack_pos equals
@@ -962,20 +962,20 @@ impl State {
             // both arms reach the join with the same stack delta (= true_stack).
             stack.add_op("OpGotoWord", self);
             let end = self.code_pos;
-            self.code_add(0i16); // temp end
+            self.code_add(0i32); // temp end
             let false_pos = self.code_pos;
-            self.code_put(code_step, (self.code_pos - true_pos) as i16); // goto-false → false arm
+            self.code_put(code_step, (self.code_pos - true_pos) as i32); // goto-false → false arm
             stack.position = stack_pos;
             self.emit_typed_null(stack, &tp);
-            self.code_put(end, (self.code_pos - false_pos) as i16);
+            self.code_put(end, (self.code_pos - false_pos) as i32);
             // emit_typed_null pushes exactly size(tp); both arms now balanced.
             stack.position = true_stack;
         } else {
             stack.add_op("OpGotoWord", self);
             let end = self.code_pos;
-            self.code_add(0i16); // temp end
+            self.code_add(0i32); // temp end
             let false_pos = self.code_pos;
-            self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
+            self.code_put(code_step, (self.code_pos - true_pos) as i32); // actual step
             stack.position = stack_pos;
             let fp = self.generate_node(f_val, stack, false);
             // @PLN90 P4 — a value-producing `if` whose FALSE arm pushes no result (an empty
@@ -1024,7 +1024,7 @@ impl State {
                     self.code_add(ret_size as u8);
                     self.code_add((false_stack - target) + keep);
                     stack.position = target;
-                    self.code_put(end, (self.code_pos - false_pos) as i16);
+                    self.code_put(end, (self.code_pos - false_pos) as i32);
                 } else {
                     // The true arm is taller, but its code and join-goto were
                     // already emitted, so it cannot be shrunk in place.  Route it
@@ -1033,17 +1033,17 @@ impl State {
                     // the true path lands in it, frees its excess, falls through.
                     stack.add_op("OpGotoWord", self);
                     let skip = self.code_pos;
-                    self.code_add(0i16);
+                    self.code_add(0i32);
                     let skip_base = self.code_pos;
-                    self.code_put(end, (skip_base - false_pos) as i16); // true arm → trampoline
+                    self.code_put(end, (skip_base - false_pos) as i32); // true arm → trampoline
                     stack.add_op("OpFreeStack", self);
                     self.code_add(ret_size as u8);
                     self.code_add((true_stack - target) + keep);
-                    self.code_put(skip, (self.code_pos - skip_base) as i16); // false arm → join
+                    self.code_put(skip, (self.code_pos - skip_base) as i32); // false arm → join
                 }
                 stack.position = target;
             } else {
-                self.code_put(end, (self.code_pos - false_pos) as i16);
+                self.code_put(end, (self.code_pos - false_pos) as i32);
                 // when one branch diverges (return/break/continue), use the
                 // other branch's stack position. The divergent branch exits the
                 // scope so its stack delta is irrelevant at the join point.
@@ -1070,18 +1070,18 @@ impl State {
             self.generate(test, stack, false);
             stack.add_op("OpGotoFalseWord", self);
             let code_step = self.code_pos;
-            self.code_add(0i16);
+            self.code_add(0i32);
             let true_pos = self.code_pos;
             let stack_pos = stack.position;
             self.gen_fn_ref_value(t_val, stack);
             stack.add_op("OpGotoWord", self);
             let end = self.code_pos;
-            self.code_add(0i16);
+            self.code_add(0i32);
             let false_pos = self.code_pos;
-            self.code_put(code_step, (self.code_pos - true_pos) as i16);
+            self.code_put(code_step, (self.code_pos - true_pos) as i32);
             stack.position = stack_pos;
             self.gen_fn_ref_value(f_val, stack);
-            self.code_put(end, (self.code_pos - false_pos) as i16);
+            self.code_put(end, (self.code_pos - false_pos) as i32);
         } else {
             let before = stack.position;
             self.generate(value, stack, false);
@@ -1190,7 +1190,7 @@ impl State {
         // OpGotoWord past all arm code — main thread skips
         stack.add_op("OpGotoWord", self);
         let goto_skip_pos = self.code_pos;
-        self.code_add(0i16);
+        self.code_add(0i32);
         let goto_skip_base = self.code_pos;
         // Emit each arm as a separate region ending with OpReturn
         for (i, arm) in arms.iter().enumerate() {
@@ -1206,7 +1206,7 @@ impl State {
         }
         // Patch skip goto
         let end_pos = self.code_pos;
-        self.code_put(goto_skip_pos, (end_pos - goto_skip_base) as i16);
+        self.code_put(goto_skip_pos, (end_pos - goto_skip_base) as i32);
     }
 
     /// Plan-04 Phase B.2: push a `DbRef{store_nr: u16::MAX, …}` sentinel

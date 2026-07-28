@@ -318,8 +318,8 @@ fn goto(s: &mut State) {
 }
 
 fn goto_word(s: &mut State) {
-    let v_step = s.code::<i16>();
-    s.code_pos = (s.code_pos as i32 + i32::from(v_step)) as u32;
+    let v_step = s.code::<i32>();
+    s.code_pos = (i64::from(s.code_pos) + i64::from(v_step)) as u32;
 }
 
 fn goto_false(s: &mut State) {
@@ -331,10 +331,10 @@ fn goto_false(s: &mut State) {
 }
 
 fn goto_false_word(s: &mut State) {
-    let v_step = s.code::<i16>();
+    let v_step = s.code::<i32>();
     let v_if_false = *s.get_stack::<u8>();
     if v_if_false != 1 {
-        s.code_pos = (s.code_pos as i32 + i32::from(v_step)) as u32;
+        s.code_pos = (i64::from(s.code_pos) + i64::from(v_step)) as u32;
     }
 }
 
@@ -1252,7 +1252,7 @@ fn text_compare(s: &mut State) {
 }
 
 fn cast_character_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i32>();
     let new_value = if let Some(c) = char::from_u32(v_v1 as u32) {
         c
     } else {

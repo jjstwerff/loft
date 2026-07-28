@@ -9,6 +9,49 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### #654: jump displacements were 16-bit — a body past 32 KB jumped somewhere arbitrary (2026-07-28)
+
+`OpGotoWord` / `OpGotoFalseWord` carried a `const i16` displacement, computed with an
+unchecked `as i16` at every emission site. Past ~32 KB of emitted body the value wrapped
+and the jump landed at an arbitrary address; for a `while true` that meant the body ran
+ONCE and control fell out of the loop, with `main` returning 0 and no diagnostic.
+
+**The filed scope was the backward `while` jump; a boundary matrix showed the real one.**
+All five jump classes truncate, because they share the encoding: `while` and `for`
+(backward, `gen_loop` / `gen_continue`), `break` (forward, patched in `Stack::end_loop`),
+and the forward skips of `if` and `else` (`gen_if`). `--native` was correct in every cell
+— it emits real Rust control flow and never reads these operands — which made it the
+positive control the matrix was read against.
+
+Both ops now carry `const i32`, which covers the whole `code_pos` (`u32`) space, so the
+threshold is removed rather than moved. A fixed-width slot also means the forward-jump
+patch sites need no branch relaxation: `code_put` writes an `i32` into a slot whose size
+was already reserved.
+
+Getting a 4-byte constant emitted required two places to stop deriving an integer's width
+from its RANGE and start reading its declared `size(N)`:
+
+- `variables::size(_, Context::Constant)` — a 1 / 2 / 8 ladder with no rung for 4.
+- `Data::rust_type` — the same ladder, deciding what the generated reader in `fill.rs`
+  reads. Left alone it would have READ an `i64` while codegen WROTE 4 bytes.
+
+Both are inert for every integer alias that predates the change (`u8` / `i8` force 1 and
+range to 1; `u16` / `i16` force 2 and range to 2; plain `integer` forces nothing), proven
+by a byte-identical `loft introspect` over a corpus exercising all of them before and
+after the `variables::size` change alone.
+
+Displacement arithmetic that measured from after-the-operand moved from `- 2` to `- 4`
+(`gen_loop`, `gen_continue`, `Stack::end_loop`); the disassembler's jump-target scan
+(`compile.rs`) and both renderers in `state/debug.rs` follow the same width. `tests/dumps`
+is gitignored, so no golden output churned.
+
+Guard: `tests/issues.rs::issue_654_jumps_survive_a_body_past_the_16_bit_displacement`, one
+case per jump class, each asserting an accumulated VALUE rather than mere completion —
+the failure mode was silent fall-through, which a runs-to-completion check would have
+called a pass. Verified non-vacuous against the installed pre-change 2026.7.2 binary: all
+five cases produce NO output there (execution falls past the asserts) and pass here.
+
+
 ### @PLN108 "Share read-only parent stores across par workers" — interpreter core (2026-07-17)
 
 - A par worker whose captured parent state is read-only (@PLN102 C93) now **BORROWS** the parent

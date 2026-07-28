@@ -937,7 +937,8 @@ impl State {
         a: &Attribute,
     ) -> Result<(), Error> {
         if (def.name() == "OpGotoFalseWord" || def.name() == "OpGotoWord") && a_nr == 0 {
-            let to = i64::from(p) + 3 + i64::from(self.code::<i16>()) - i64::from(start_pos);
+            // 1 opcode byte + a 32-bit displacement (loft#654).
+            let to = i64::from(p) + 5 + i64::from(self.code::<i32>()) - i64::from(start_pos);
             write!(f, "jump=:POS{to}")?;
         } else if (def.name() == "OpGoto" || def.name() == "OpGotoFalse") && a_nr == 0 {
             let to = i64::from(p) + 2 + i64::from(self.code::<i8>()) - i64::from(start_pos);
@@ -1432,7 +1433,15 @@ impl State {
                 } else if def.name() == "OpCall" && a_nr == 2 {
                     self.call_name(&mut attr, a_nr, data);
                 } else if def.name().starts_with("OpGoto") && a_nr == 0 {
-                    let to = i64::from(cur) + 2 + i64::from(self.code::<i16>()) - i64::from(minus);
+                    // The narrow (`OpGoto` / `OpGotoFalse`) forms carry an i8
+                    // displacement, the wide ones an i32 (loft#654); the operand
+                    // width sets both the read and the past-the-operand base.
+                    let (disp, width) = if def.name().ends_with("Word") {
+                        (i64::from(self.code::<i32>()), 5)
+                    } else {
+                        (i64::from(self.code::<i8>()), 2)
+                    };
+                    let to = i64::from(cur) + width + disp - i64::from(minus);
                     attr.insert(a_nr, format!("jump={to}"));
                 } else if def.name() == "OpIterate" {
                     self.iterate_args(log)?;

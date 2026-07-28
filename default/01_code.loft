@@ -82,12 +82,19 @@ pub interface Printable {
 // General operations
 fn OpGoto(step: const i8);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
-fn OpGotoWord(step: const i16);
-#rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
+// The wide jump forms carry a 32-bit displacement.  A 16-bit one silently
+// truncated past ~32 KB of function body: the loop's backward jump landed
+// somewhere arbitrary, so the body ran once and fell through with status 0 and
+// no diagnostic (loft#654).  Every jump class was affected — `while`, `for`,
+// `break`, and the forward skips of `if` / `else` — because they all encode a
+// displacement the same way.  32 bits covers the whole `code_pos` space, so the
+// truncation cannot recur rather than moving to a larger threshold.
+fn OpGotoWord(step: const i32);
+#rust"s.code_pos = (i64::from(s.code_pos) + i64::from(@step)) as u32;"
 fn OpGotoFalse(step: const i8, if_false: boolean);
 #rust"if @if_false != 1 {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
-fn OpGotoFalseWord(step: const i16, if_false: boolean);
-#rust"if @if_false != 1 {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
+fn OpGotoFalseWord(step: const i32, if_false: boolean);
+#rust"if @if_false != 1 {{s.code_pos = (i64::from(s.code_pos) + i64::from(@step)) as u32;}}"
 fn OpCall(d_nr: const integer, args_size: const u16, to: const integer);
 #rust"s.fn_call(@d_nr as u32, @args_size, @to);"
 fn OpReturn(ret: const u16, value: const u8, discard: const u16);
