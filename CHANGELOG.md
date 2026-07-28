@@ -21,6 +21,26 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — a big function no longer breaks its own loops
+
+A function whose body grew past about 32 KB started behaving impossibly: a
+`while true` would run its body **once** and then simply carry on past the loop,
+and the program would exit reporting success. No error, no warning, no hang. Every
+`println` inside the body still ran exactly once, so a log ended mid-story with
+nothing wrong in it — there was nothing to follow.
+
+The cause was that the interpreter recorded "how far to jump" in a 16-bit number.
+Past 32 KB that number no longer reached, and the jump landed somewhere arbitrary.
+It affected **every** kind of jump — `while`, `for`, `break`, and skipping over an
+`if` or `else` body — because they all recorded the distance the same way. The
+compiled backend (`--native`) was never affected.
+
+Jump distances are now 32-bit, which covers any program loft can hold, so this
+cannot come back at a larger size. Nothing to change in your code: functions that
+were too big simply work now. (Reported from moros, whose editor server sat right
+on the edge — adding two `println` lines made it exit before any client could
+connect.)
+
 ### Unreleased — a `vector<vector<u8>>` finally reads back what you put in
 
 Nesting a **narrow** number inside a vector — `vector<vector<u8>>`, `<u16>`, `<i16>`,

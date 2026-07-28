@@ -40,6 +40,29 @@ jobs:
           # LIB_COVERAGE_IGNORE: "name1 name2"   # intentionally-unpublished packages
         run: scripts/lib_coverage_check.sh
 
+  # Retention guard: the matrix below only ever tests versions that are STILL
+  # listed, so a version deleted from the index becomes invisible to it — the
+  # failure is the disappearance itself.  `web 0.2.2` was lost that way and could
+  # not be restored once its release asset went with it.  Checks both directions a
+  # version can stop resolving: dropped from index.json (walks its history), or
+  # listed but no longer downloadable.
+  retention:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every published version is still listed and still resolves
+        run: scripts/registry_retention_check.py --json retention.json
+      - name: Report
+        if: always()
+        run: |
+          [ -f retention.json ] || exit 0
+          {
+            echo "### Registry retention"
+            echo '```json'
+            cat retention.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   discover:
     runs-on: ubuntu-latest
     outputs:

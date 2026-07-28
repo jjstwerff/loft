@@ -265,6 +265,10 @@ fn print_help() {
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
+    println!(
+        "    --tarball-only              build the tarball only — no registry entry, and none"
+    );
+    println!("                                of the checks that registering requires");
     println!("                                prints sha256 + size + the registry index entry");
     println!("                                (PKG.REG R1 — see doc/claude/PKG_REGISTRY.md)");
     println!("  build-native [pkg-dir]        build the package's native cdylib for this host");
@@ -1230,16 +1234,40 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
             .get(&entry.name)
             .cloned()
             .unwrap_or_else(|| "*".to_string());
-        let Some(best) = registry_index::find_best_version(pkg, &constraint, false) else {
+        // Step 6: an upgrade must not hand the consumer a release that has
+        // DECLARED it breaks them.  `entry.version` is what they hold, so a
+        // candidate whose `api_compatible_with` is above it is passed over —
+        // and named, because a resolver that silently stops at an older release
+        // teaches its consumer that no upgrade exists.
+        let resolved =
+            registry_index::find_compatible_version(pkg, &constraint, false, Some(&entry.version));
+        for held_back in &resolved.withheld {
+            let floor = held_back.api_compatible_with.as_deref().unwrap_or("?");
             diff.push(format!(
-                "  {pkg} {ver} — no version satisfies range `{constraint}` (skipped)",
+                "  {pkg} {ver} — {new} held back: declares a break past {ver} \
+                 (api_compatible_with = {floor}). Upgrade deliberately, or stay.",
+                pkg = entry.name,
+                ver = entry.version,
+                new = held_back.semver
+            ));
+        }
+        let Some(best) = resolved.best else {
+            // Distinguish "nothing satisfies the range" from "everything that
+            // does declares a break" — the fixes are different.
+            let why = if resolved.withheld.is_empty() {
+                format!("no version satisfies range `{constraint}` (skipped)")
+            } else {
+                format!("every version satisfying `{constraint}` declares a break past it")
+            };
+            diff.push(format!(
+                "  {pkg} {ver} — {why}",
                 pkg = entry.name,
                 ver = entry.version
             ));
             continue;
         };
         if best.semver == entry.version {
-            // Already on the highest satisfying version.
+            // Already on the highest satisfying version this consumer can take.
             continue;
         }
         // Higher OR lower (e.g. rollback after yank) — both are
@@ -1275,11 +1303,18 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
     }
 
     if opts.check_only {
-        println!("loft update --check: updates available:");
+        if updates_available {
+            println!("loft update --check: updates available:");
+        } else {
+            // Reachable when the only lines are held-back or skipped notes.  A
+            // consumer correctly staying put must not turn a CI check red —
+            // that is the pressure that gets a floor ignored or a gate removed.
+            println!("loft update --check: no updates available, but note:");
+        }
         for line in &diff {
             println!("{line}");
         }
-        return 1;
+        return i32::from(updates_available);
     }
     if opts.dry_run {
         println!("loft update --dry-run: would update:");
@@ -2159,6 +2194,24 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
             return 1;
         }
     };
+    // Step 5a: refuse to emit a registry entry for a package that has not
+    // declared its three compatibility levels.  Checked BEFORE the GitHub
+    // release lookup, so the author learns it needs two more lines while the
+    // fix is still a commit — not after they have tagged and released.
+    let levels_manifest =
+        loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy())
+            .unwrap_or_default();
+    let levels = match package::declared_levels(&levels_manifest, &pkg.version) {
+        Ok(l) => l,
+        Err(problems) => {
+            eprintln!(
+                "loft publish: {}",
+                package::declared_levels_error(&pkg.name, &pkg.version, &problems)
+            );
+            return 1;
+        }
+    };
+
     let tag = format!("{}-v{}", pkg.name, pkg.version);
     let tarball_filename = format!("{}-{}.tar.gz", pkg.name, pkg.version);
 
@@ -2217,10 +2270,12 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     println!("  \"url\": \"{release_url}\",");
     println!("  \"sha256\": \"{}\",", pkg.sha256);
     println!("  \"size\": {},", pkg.size);
-    println!(
-        "  \"loft\": \"{}\",",
-        manifest.loft_version.unwrap_or_else(|| ">=0.8".to_string())
-    );
+    println!("  \"loft\": \"{}\",", levels.loft);
+    // The two floors travel WITH the version they describe, so a resolver can
+    // read a release's promises straight from the index instead of downloading
+    // and unpacking the tarball to find its loft.toml (step 6).
+    println!("  \"api_compatible_with\": \"{}\",", levels.api);
+    println!("  \"data_compatible_with\": \"{}\",", levels.data);
     println!("  \"subpath\": \"{}\",", pkg.name);
     if registry_deps.is_empty() {
         println!("  \"deps\": {{}},");
@@ -3807,8 +3862,11 @@ fn run_compat_command(args: &[String]) -> i32 {
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     // The dispatcher strips `compat`, so positional[0] is the sub-verb.
     let sub = positional.first().map(|s| s.as_str()).unwrap_or("");
-    if !matches!(sub, "api" | "test" | "check") {
-        eprintln!("loft compat: usage: loft compat <api|test|check> [<version>] [--json]");
+    if !matches!(sub, "api" | "test" | "check" | "levels" | "floor") {
+        eprintln!(
+            "loft compat: usage: loft compat <api|test|check|levels|floor> [<version>] \
+             [--json] [--with-tests]"
+        );
         return 2;
     }
 
@@ -3823,6 +3881,42 @@ fn run_compat_command(args: &[String]) -> i32 {
         eprintln!("loft compat: `loft.toml` has no [package] name");
         return 2;
     };
+
+    // `levels` — the REGISTRY-ADMISSION gate, and the only place the three-level
+    // requirement is fatal.  It is deliberately its own verb rather than a side effect of
+    // packaging: a library in its current form must keep building, testing and packaging
+    // exactly as before, and only asking to enter the registry requires the declaration.
+    if sub == "levels" {
+        let Some(version) = manifest.version.clone() else {
+            eprintln!("loft compat levels: `loft.toml` has no [package] version");
+            return 2;
+        };
+        return match loft::package::declared_levels(&manifest, &version) {
+            Ok(l) => {
+                println!(
+                    "compat levels `{name}` {version}: loft = {}, api_compatible_with = {}, \
+                     data_compatible_with = {}",
+                    l.loft, l.api, l.data
+                );
+                0
+            }
+            Err(problems) => {
+                eprintln!(
+                    "loft compat levels: {}",
+                    loft::package::declared_levels_error(&name, &version, &problems)
+                );
+                1
+            }
+        };
+    }
+
+    if sub == "floor" {
+        return compat_floor(
+            &name,
+            manifest.version.as_deref(),
+            args.iter().any(|a| a == "--with-tests"),
+        );
+    }
 
     if sub == "check" {
         return compat_check(
@@ -3915,8 +4009,182 @@ fn run_compat_command(args: &[String]) -> i32 {
 /// different release is drawn, it goes green, and a genuine contract break is dismissed as CI
 /// noise — strictly worse than having no check.
 ///
-/// Advisory: always exits 0. Blocking is a later step, once this has been quiet across every
-/// published package.
+/// **Blocking only when a floor is declared.** Declaring `api_compatible_with` IS the act of
+/// entering the contract: a library that declares nothing has made no promise, so there is
+/// nothing to enforce and this stays advisory for it. That is not timidity — it is the model,
+/// where a library may break its consumers as long as the break is an explicit choice. It also
+/// makes the flip safe by construction: no published package declares a floor today, so
+/// turning this into a gate cannot fail anyone's CI until they opt in.
+///
+/// Exit: 1 when a DECLARED floor is violated · 0 otherwise.
+/// `loft compat floor` — MEASURE how far back this package's current API still reaches, and
+/// print the declaration to paste.
+///
+/// The migration tool. Every library starts the contract with the same problem: it has to name
+/// a floor, and the honest answer is a fact about its own history that nobody remembers. Left
+/// to guess, an author writes the version they are cutting — true, but claiming nothing, and a
+/// registry full of self-referential floors carries no information at all.
+///
+/// So this derives it. Scanning from the NEWEST installed release downward and stopping at the
+/// first incompatible one is the only correct direction: a floor `F` claims drop-in for
+/// *everything* at or above `F`, so a single failure above a candidate disqualifies it — even
+/// if older releases happen to pass. That is why this is not a bisect; compatibility is not
+/// guaranteed monotone, and a bisect would happily return a floor with a break sitting above it.
+///
+/// `--with-tests` adds the behaviour axis (each candidate's own published suite, run against
+/// the working tree). Worth the time for the migration itself: an API diff proves the SHAPE of
+/// a surface, and the `arguments::parse` cell in step 3 is a release that kept its signature
+/// and inverted its result — `API: drop-in` on this axis, a break on that one.
+#[cfg(feature = "registry")]
+fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 {
+    let mut versions: Vec<String> = loft::registry_index::installed_packages()
+        .into_iter()
+        .filter(|(n, v, _)| n == name && Some(v.as_str()) != own_version)
+        .map(|(_, v, _)| v)
+        .collect();
+    versions.sort_by(|a, b| loft::registry_index::compare_semver(a, b));
+
+    let own = own_version.unwrap_or("0.0.0");
+    if versions.is_empty() {
+        println!(
+            "compat floor `{name}`: no earlier release installed, so this release is the only \
+             thing it can claim to be a drop-in for.\n\n  api_compatible_with  = \"{own}\"\n  \
+             data_compatible_with = \"{own}\"\n\n  That is the correct FIRST declaration, not a \
+             placeholder: it is true, and it becomes meaningful the moment a later release \
+             keeps it."
+        );
+        return 0;
+    }
+
+    // Read the WORKING TREE's surface once, before the walk.  Inside the loop a failure here
+    // is indistinguishable from the old release being unreadable, and the loop would blame
+    // the release — reporting a fact about someone else's published version when the problem
+    // is the source in front of you.  It also fails identically at every step, so the floor
+    // would read as "reaches back to nothing" for a package that was never compared at all.
+    let new_entry = entry_file_of(std::path::Path::new("."), name);
+    let new_surface = match api_surface_of(&new_entry) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "loft compat floor: cannot read THIS package's own surface ({}): {e}\n  \
+                 Nothing was measured — fix the working tree first.  No floor is being \
+                 claimed, and none should be until this parses.",
+                new_entry
+            );
+            return 2;
+        }
+    };
+    let (new_s, new_id) = new_surface;
+
+    println!(
+        "compat floor `{name}` {own}: walking {} installed release(s), newest first",
+        versions.len()
+    );
+    let mut floor: Option<String> = None;
+    let mut stopped_at: Option<(String, String)> = None;
+    // Versions the behaviour axis could not judge (stale corpus / suite would not run).
+    let mut no_behaviour: Vec<String> = Vec::new();
+
+    for v in versions.iter().rev() {
+        let dir = loft::registry_index::extract_dir(name, v);
+        if !dir.join("loft.toml").exists() {
+            // A gap is not a pass.  Treat it as the end of the reachable window rather than
+            // stepping over it, or the floor would claim a version nobody looked at.
+            stopped_at = Some((v.clone(), "not installed — cannot be verified".to_string()));
+            break;
+        }
+        let old_entry = entry_file_of(&dir, name);
+        let Ok((old_s, old_id)) = api_surface_of(&old_entry) else {
+            // Only the PUBLISHED side can fail here — the working tree was read once above.
+            stopped_at = Some((
+                v.clone(),
+                "its published source no longer parses — cannot be verified".to_string(),
+            ));
+            break;
+        };
+        let api = loft::api_diff::diff(&old_s, &new_s);
+        let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+        if let loft::api_diff::Verdict::Break(why) = &api {
+            // Every reason, not the first: the point of the migration run is to show the
+            // author exactly what stops the claim from reaching further back.
+            stopped_at = Some((v.clone(), format!("API break — {}", why.join("; "))));
+            break;
+        }
+        if layout_reshaped(&layout) {
+            stopped_at = Some((v.clone(), "DATA break — stored layout reshaped".to_string()));
+            break;
+        }
+        if with_tests && dir.join("tests").is_dir() {
+            // ONLY a Break lowers the floor.  A Break is evidence about the LIBRARY: the
+            // release's tests pass against its own source and fail against this tree, so
+            // released behaviour changed.  Unverifiable and CouldNotRun are evidence about
+            // the ENVIRONMENT — a corpus written against an older loft, a suite that would
+            // not start — and say nothing about compatibility.
+            //
+            // Letting those lower the floor is failure path F4, and it is not hypothetical:
+            // the first full sweep produced 0 Breaks, 17 drop-ins and 5 Unverifiables, and
+            // every floor the axis moved was moved by a stale corpus.  Treating them as
+            // failures makes each loft language change quietly shorten every library's
+            // history, which is precisely how a check earns its way into being switched off.
+            // The API and layout axes verified these versions; the behaviour axis merely has
+            // nothing to add, and that is recorded rather than punished.
+            match compat_test_verdict(name, v, &dir) {
+                TestVerdict::Break => {
+                    stopped_at = Some((
+                        v.clone(),
+                        "its published tests FAIL against this tree — released behaviour changed"
+                            .to_string(),
+                    ));
+                    break;
+                }
+                // Recorded, not punished: the report must say which versions the behaviour
+                // axis could not speak for, so nobody reads the floor as fully verified.
+                TestVerdict::Unverifiable | TestVerdict::CouldNotRun => {
+                    no_behaviour.push(v.clone())
+                }
+                TestVerdict::DropIn => {}
+            }
+        }
+        println!("  {v}: drop-in");
+        floor = Some(v.clone());
+    }
+
+    if let Some((v, why)) = &stopped_at {
+        println!("  {v}: STOP — {why}");
+    }
+    if !no_behaviour.is_empty() {
+        println!(
+            "  note: the behaviour axis could not judge {} — their suites no longer pass \
+             against their OWN source on this loft, which is a fact about the corpus, not \
+             about compatibility. The API and layout axes still verified them.",
+            no_behaviour.join(", ")
+        );
+    }
+    let axes = if with_tests {
+        "API surface, stored layout, and each release's own tests"
+    } else {
+        "API surface and stored layout (pass --with-tests to add the behaviour axis)"
+    };
+    match floor {
+        Some(f) => println!(
+            "\ncompat floor `{name}`: reaches back to {f}, verified on {axes}.\n\n  \
+             api_compatible_with  = \"{f}\"\n  data_compatible_with = \"{f}\"\n\n  \
+             Check `data_compatible_with` by hand before pasting: it is about STORED data, and \
+             a release can keep every signature while changing what it computes over a file \
+             somebody already has."
+        ),
+        None => println!(
+            "\ncompat floor `{name}`: reaches back to nothing — the newest earlier release \
+             already differs, so this release can only claim itself.\n\n  \
+             api_compatible_with  = \"{own}\"\n  data_compatible_with = \"{own}\"\n\n  \
+             That is a DECLARED break, which is allowed: the registry keeps the older releases \
+             installable, so a consumer that cannot follow stays where it is."
+        ),
+    }
+    0
+}
+
+#[cfg(feature = "registry")]
 fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i32 {
     // Candidates come from the install cache, because that is what `compat api` / `compat
     // test` can actually read. Anything not installed is REPORTED as skipped, never silently
@@ -3928,14 +4196,24 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
         .map(|(_, v, _)| v)
         .collect();
     versions.sort_by(|a, b| loft::registry_index::compare_semver(a, b));
-    if let Some(f) = floor {
-        versions.retain(|v| {
-            !matches!(
-                loft::registry_index::compare_semver(v, f),
-                std::cmp::Ordering::Less
-            )
-        });
-    }
+    // Releases BELOW the declared floor stay in the comparison, reported but never gating.
+    // Dropping them would make raising the floor buy SILENCE, which is the wrong gradient
+    // entirely: the reflex to bump the number until the check shuts up is what turns floors
+    // into decoration. Keeping the promise must be the quiet path and declaring a break the
+    // loud one, so a raise converts a failure into an announcement rather than into nothing.
+    let below_floor: Vec<String> = match floor {
+        Some(f) => versions
+            .iter()
+            .filter(|v| {
+                matches!(
+                    loft::registry_index::compare_semver(v, f),
+                    std::cmp::Ordering::Less
+                )
+            })
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
     if versions.is_empty() {
         println!("compat check `{name}`: no other release installed — nothing to compare against");
         return 0;
@@ -3984,6 +4262,7 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
             String::new()
         }
     );
+    let mut violated: Vec<String> = Vec::new();
     for v in &sample {
         let dir = loft::registry_index::extract_dir(name, v);
         if !dir.join("loft.toml").exists() {
@@ -4006,11 +4285,62 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
                     "data ok"
                 };
                 println!("  {v}: {api_word}, {layout_word}");
+                if matches!(api, loft::api_diff::Verdict::Break(_)) || layout_reshaped(&layout) {
+                    violated.push(v.clone());
+                }
             }
             (Err(e), _) | (_, Err(e)) => println!("  {v}: could not read ({e})"),
         }
     }
-    0
+
+    let Some(f) = floor else {
+        if violated.is_empty() {
+            println!(
+                "  `{name}` declares no `api_compatible_with`. Nothing is enforced: add one \
+                 naming the oldest release this is still a drop-in for, and this becomes a \
+                 promise consumers can rely on."
+            );
+        } else {
+            println!(
+                "  advisory only: `{name}` declares no `api_compatible_with`, so no promise \
+                 was made to break. Declare one to have this enforced."
+            );
+        }
+        return 0;
+    };
+    // A break against a release the floor already excludes is the DECLARED one. Say so out
+    // loud — it is the thing a reviewer most needs to see, and saying it is what keeps the
+    // raise honest rather than a way to go quiet.
+    let declared: Vec<&String> = violated
+        .iter()
+        .filter(|v| below_floor.contains(v))
+        .collect();
+    if !declared.is_empty() {
+        println!(
+            "  DECLARED BREAK — `{name}` no longer works with {} (floor raised to {f}). \
+             Consumers on those releases keep resolving to the last version that suits them; \
+             this is the supported move, but it is a promise withdrawn, not a free one.",
+            declared
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let violated: Vec<String> = violated
+        .into_iter()
+        .filter(|v| !below_floor.contains(v))
+        .collect();
+    if violated.is_empty() {
+        return 0;
+    }
+    println!(
+        "  FAIL — `{name}` claims to be a drop-in for >= {f}, but breaks against {}. \
+         Either restore compatibility, or raise `api_compatible_with` past the release you \
+         broke — declaring the break is the supported move, hiding it is not.",
+        violated.join(", ")
+    );
+    1
 }
 
 #[cfg(feature = "registry")]
@@ -4030,10 +4360,40 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
 /// everyone learns the check lies, and it gets switched off — failure path F4 in the design.
 ///
 /// Advisory in this step: reports, exits 0 unless it could not run.
+/// What a published release's own test suite says about the working tree.
+///
+/// Separate from the CLI's exit code because the two answer different questions. `loft compat
+/// test` is advisory and exits 0 whatever it finds; a CALLER deciding a compatibility floor has
+/// to tell the three verdicts apart, and collapsing them into one exit code is how the
+/// `--with-tests` axis silently checked nothing.
+#[cfg(feature = "registry")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestVerdict {
+    /// The release's tests still pass against the working tree.
+    DropIn,
+    /// They pass against their own source and FAIL here — released behaviour changed.
+    Break,
+    /// They no longer pass against their OWN source on this loft, so they judge nothing.
+    /// A floor must treat this as unverified, never as a pass.
+    Unverifiable,
+    /// The comparison could not be set up (no `tests/`, staging failed).
+    CouldNotRun,
+}
+
+#[cfg(feature = "registry")]
 fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
+    // Advisory by contract: report the verdict, always exit 0 unless it could not run.
+    match compat_test_verdict(name, version, published) {
+        TestVerdict::CouldNotRun => 2,
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "registry")]
+fn compat_test_verdict(name: &str, version: &str, published: &std::path::Path) -> TestVerdict {
     if !published.join("tests").is_dir() {
         eprintln!("loft compat: `{name}` {version} ships no tests/ — nothing to check against");
-        return 2;
+        return TestVerdict::CouldNotRun;
     }
     let base = std::env::temp_dir().join(format!("loft_compat_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
@@ -4048,7 +4408,7 @@ fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
     let ctl = base.join("control").join(name);
     if let Err(e) = stage_package(published, published, &ctl) {
         eprintln!("loft compat: {e}");
-        return 2;
+        return TestVerdict::CouldNotRun;
     }
     let control_ok = run_package_tests(&ctl);
 
@@ -4056,28 +4416,34 @@ fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
     let subj = base.join("subject").join(name);
     if let Err(e) = stage_package(std::path::Path::new("."), published, &subj) {
         eprintln!("loft compat: {e}");
-        return 2;
+        return TestVerdict::CouldNotRun;
     }
     let subject_ok = run_package_tests(&subj);
     let _ = std::fs::remove_dir_all(&base);
 
     println!("compat: `{name}` — {version} tests against the working tree");
     match (control_ok, subject_ok) {
-        (false, _) => println!(
-            "  UNVERIFIABLE — the {version} tests do not pass against {version} own source on \
+        (false, _) => {
+            println!(
+                "  UNVERIFIABLE — the {version} tests do not pass against {version} own source on \
              this loft, so they cannot judge anything. The corpus is stale (a language change \
              since it was written), not the working tree broken."
-        ),
-        (true, false) => println!(
-            "  BREAK — the {version} tests pass against {version} but FAIL against the working \
+            );
+            TestVerdict::Unverifiable
+        }
+        (true, false) => {
+            println!(
+                "  BREAK — the {version} tests pass against {version} but FAIL against the working \
              tree. Behaviour a released version promised has changed. Either fix it, or raise \
              `api_compatible_with` past {version} to declare the break."
-        ),
+            );
+            TestVerdict::Break
+        }
         (true, true) => {
             println!("  drop-in — the {version} tests still pass against the working tree.");
+            TestVerdict::DropIn
         }
     }
-    0
 }
 
 /// Assemble a runnable package in `dst`: sources from `src_from`, tests from `tests_from`.
@@ -5923,8 +6289,18 @@ fn main() {
             // entry the publisher pastes into loft-lang/registry.
             // Feature-gated on `registry` because tar / flate2 / sha2
             // aren't worth carrying in a no-default-features build.
+            //
+            // `--tarball-only` builds the tarball and stops.  It exists because
+            // packaging has a second, purely mechanical use: the
+            // reproducible-build check re-packages every published library just
+            // to compare bytes against its release, and must not care what any
+            // of them declares.  Registering is the act that needs the
+            // compatibility levels, so that is what the flag opts out of —
+            // and it opts out of the index entry too, since the entry IS the
+            // registration.
             #[cfg(feature = "registry")]
             {
+                let tarball_only = argv[i..].iter().any(|s| s == "--tarball-only");
                 let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
                     // `i += 1` would be dead since we `return` below, but
                     // the arg is consumed for clarity.
@@ -5936,6 +6312,28 @@ fn main() {
                     Ok(out) => {
                         let stdout = std::io::stdout();
                         let mut lock = stdout.lock();
+                        if tarball_only {
+                            drop(lock);
+                            println!("{}", out.tarball.display());
+                            return;
+                        }
+                        if out.levels.is_none() {
+                            // ADVISORY here, fatal at the registry PR (`loft compat
+                            // levels`).  Packaging is something a library does to itself —
+                            // a local check, a byte comparison, an artifact for a release
+                            // — and a library in its current form has to keep doing all of
+                            // that unchanged.  Asking to enter the REGISTRY is the act that
+                            // needs the declaration, because that is the point where other
+                            // people start depending on the answer.
+                            eprintln!(
+                                "warning: `{}` declares no compatibility floor, so a registry \
+                                 PR for it will be REJECTED.\n  Run `loft compat levels` for \
+                                 the exact fields, or `loft compat floor` to measure what \
+                                 they should say.\n  The tarball and the entry below are \
+                                 still correct for every other use.",
+                                out.name
+                            );
+                        }
                         if let Err(e) = loft::package::print_summary(&out, &mut lock) {
                             eprintln!("loft package: print summary failed: {e}");
                             std::process::exit(1);

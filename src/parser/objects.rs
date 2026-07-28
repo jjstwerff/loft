@@ -94,6 +94,14 @@ impl Parser {
         let qualified = self.lexer.has_token("::");
         let nm = if qualified {
             source = self.data.get_source(name);
+            // A package qualifying a call with its OWN name means "in this file".
+            // `use_names` never holds the main file, so the lookup above misses and
+            // the code below would report "Unknown library" for the library being
+            // read right now (loft#656).  Resolving to the current source is what
+            // the author wrote: those definitions are already parsed.
+            if source == u16::MAX && self.own_lib.as_deref() == Some(name) {
+                source = self.data.source;
+            }
             if let Some(id) = self.lexer.has_identifier() {
                 id
             } else {

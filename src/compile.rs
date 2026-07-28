@@ -653,11 +653,17 @@ pub(crate) fn collect_jump_targets(
                 let target = (pc as i32 + 2 + i32::from(off)) as usize;
                 targets.insert(target);
             } else if (name == "OpGotoWord" || name == "OpGotoFalseWord")
-                && ilen == 3
-                && pc + 2 < end
+                && ilen == 5
+                && pc + 4 < end
             {
-                let off = i16::from_le_bytes([bytecode[pc + 1], bytecode[pc + 2]]);
-                let target = (pc as i32 + 3 + i32::from(off)) as usize;
+                // 32-bit displacement (loft#654) — 1 opcode byte + 4 operand.
+                let off = i32::from_le_bytes([
+                    bytecode[pc + 1],
+                    bytecode[pc + 2],
+                    bytecode[pc + 3],
+                    bytecode[pc + 4],
+                ]);
+                let target = (pc as i64 + 5 + i64::from(off)) as usize;
                 targets.insert(target);
             }
         }

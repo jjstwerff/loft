@@ -5936,6 +5936,18 @@ impl Data {
             return result;
         }
         match tp {
+            // A declared `size(N)` picks the Rust type, the same way it picks the
+            // storage width in `variables::size`.  The range ladder below has no
+            // 4-byte rung, so without this a `size(4)` alias would be READ as an
+            // `i64` while being WRITTEN as 4 bytes — the reader and the writer
+            // disagreeing about one operand, which is how loft#654's jump
+            // displacement silently landed in the wrong place.  Inert for every
+            // alias that predates it: `u8` / `i8` / `u16` / `i16` force exactly
+            // what the ladder already gives them, and plain `integer` forces
+            // nothing.
+            Type::Integer(s) if s.forced_size.map(NonZeroU8::get) == Some(4) => {
+                if i64::from(s.min) >= 0 { "u32" } else { "i32" }
+            }
             Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => "u8",
             Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => "u16",
             Type::Integer(s) if s.range() - 1 <= 255 => "i8",

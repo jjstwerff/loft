@@ -199,7 +199,10 @@ impl<'a> Stack<'a> {
     pub fn end_loop(&mut self, state: &mut State) {
         let breaks = &self.loops.pop().unwrap().breaks;
         for b in breaks {
-            state.code_put(*b, (i64::from(state.code_pos) - i64::from(*b) - 2) as i16);
+            // 4, not 2: the displacement is measured from AFTER the operand, and
+            // the operand is a 32-bit word (loft#654 — a 16-bit one truncated
+            // past ~32 KB of body and jumped somewhere arbitrary).
+            state.code_put(*b, (i64::from(state.code_pos) - i64::from(*b) - 4) as i32);
         }
     }
 

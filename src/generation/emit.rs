@@ -232,6 +232,15 @@ impl Output<'_> {
                         if matches!(**inner, Type::Text(_)) {
                             return write!(w, "&*var_{var_name}");
                         }
+                        // A `&boolean` slot is the tri-state STORAGE byte (0/1/255),
+                        // because locals are `u8`; every loft-level USE of it is a
+                        // two-state `bool`, exactly as a plain `boolean` parameter
+                        // already is.  Convert on read so consumers see the type they
+                        // expect (`if b`, `b && …`) rather than a `u8` (loft#655).
+                        // `== 1` deliberately: a null (255) reads as false.
+                        if matches!(**inner, Type::Boolean) {
+                            return write!(w, "(*var_{var_name} == 1)");
+                        }
                         return write!(w, "*var_{var_name}");
                     }
                     return write!(w, "var_{var_name}");
@@ -247,6 +256,9 @@ impl Output<'_> {
                 {
                     // @PLN87 L1 — a local scalar `&`-link holds `*mut T` (raw); deref
                     // to read the linked source's current value.
+                    if matches!(**inner, Type::Boolean) {
+                        return write!(w, "unsafe {{ *var_{var_name} == 1 }}");
+                    }
                     return write!(w, "unsafe {{ *var_{var_name} }}");
                 } else if matches!(variables.tp(var).base(), Type::Text(_))
                     && !self.tuple_text_to_string

@@ -76,6 +76,146 @@ fn has_suffix_ci(s: &str, suffix: &str) -> bool {
     sb.len() >= tb.len() && sb[sb.len() - tb.len()..].eq_ignore_ascii_case(tb)
 }
 
+/// The three compatibility levels a package declares, each a promise on a
+/// different axis a consumer can be hurt on.
+///
+/// Produced by [`declared_levels`], which is the ONE place the rule lives —
+/// `loft package` and `loft publish` both call it rather than re-deriving it.
+/// Design: `doc/claude/plans/library-compat-contract/README.md` step 5a.
+#[derive(Debug, Clone)]
+pub struct DeclaredLevels {
+    /// `[package] loft` — which loft this needs.  A range (`">=0.8"`), because
+    /// the platform is the one axis a library does not choose a single point on.
+    pub loft: String,
+    /// `[package] api_compatible_with` — the oldest own release this is still a
+    /// drop-in for.  A bare version: it names an artifact that exists.
+    pub api: String,
+    /// `[package] data_compatible_with` — the oldest own release whose stored
+    /// data this still reads.
+    pub data: String,
+}
+
+/// A floor names ONE release, so it must be a bare `major.minor.patch` (an
+/// optional `-prerelease` suffix is allowed).  A range would name a set, and a
+/// set cannot be fetched and run — which is the entire reason these are real
+/// versions rather than abstract epochs.
+fn is_bare_version(v: &str) -> bool {
+    let core = v.split('-').next().unwrap_or(v);
+    let mut parts = core.split('.');
+    let ok =
+        |p: Option<&str>| p.is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
+    ok(parts.next()) && ok(parts.next()) && ok(parts.next()) && parts.next().is_none()
+}
+
+/// Check `[package]` declares all three compatibility levels, each naming a real
+/// version at or below `version`.
+///
+/// Required before a package may be **registered** — these three are what a
+/// consumer needs to decide whether an upgrade is safe on each axis it can be
+/// hurt on: the platform, its call sites, its stored data.  A library that
+/// declares nothing has promised nothing, which is fine right up until it asks
+/// the registry to distribute it to people who cannot ask it questions.
+///
+/// # Errors
+///
+/// Returns **every** problem found rather than the first.  An author fixing one
+/// line at a time pays a full tag-and-release cycle per round trip, so a
+/// one-at-a-time gate would be several cycles of the same two-line edit.
+pub fn declared_levels(
+    manifest: &crate::manifest::Manifest,
+    version: &str,
+) -> Result<DeclaredLevels, Vec<String>> {
+    let mut problems = Vec::new();
+
+    // A floor at or above the release being cut would claim compatibility with
+    // something that does not exist yet.  For a FIRST release the only honest
+    // value is the version itself — trivially true, and the natural bootstrap.
+    let mut floor = |field: &str, value: Option<&String>, means: &str| -> Option<String> {
+        match value {
+            None => {
+                problems.push(format!(
+                    "`{field}` is not declared.  It is {means}.\n    \
+                     For a first release the value is this release itself:\n      \
+                     {field} = \"{version}\"\n    \
+                     Otherwise name the oldest own release the claim still holds for."
+                ));
+                None
+            }
+            Some(v) if !is_bare_version(v) => {
+                problems.push(format!(
+                    "`{field} = \"{v}\"` is not a bare version.  A floor names ONE release \
+                     (`\"0.3.0\"`), never a range — the claim is verified by fetching that \
+                     release and running its own tests, and a range names nothing to fetch."
+                ));
+                None
+            }
+            Some(v)
+                if crate::registry_index::compare_semver(v, version)
+                    == std::cmp::Ordering::Greater =>
+            {
+                problems.push(format!(
+                    "`{field} = \"{v}\"` is newer than this release ({version}), so it claims \
+                     compatibility with a version that does not exist yet."
+                ));
+                None
+            }
+            Some(v) => Some(v.clone()),
+        }
+    };
+
+    let api = floor(
+        "api_compatible_with",
+        manifest.api_compatible_with.as_ref(),
+        "the oldest release of this package whose public API this one is still a drop-in for",
+    );
+    let data = floor(
+        "data_compatible_with",
+        manifest.data_compatible_with.as_ref(),
+        "the oldest release of this package whose stored or wire data this one still reads",
+    );
+    let loft = manifest.loft_version.clone();
+    if loft.is_none() {
+        problems.push(
+            "`loft` is not declared.  It is which loft this package needs, and unlike the \
+             other two it is a RANGE:\n      loft = \">=0.8\""
+                .to_string(),
+        );
+    }
+
+    match (loft, api, data) {
+        (Some(loft), Some(api), Some(data)) if problems.is_empty() => {
+            Ok(DeclaredLevels { loft, api, data })
+        }
+        _ => Err(problems),
+    }
+}
+
+/// Render a [`declared_levels`] failure as the message a publisher acts on.
+///
+/// Shared so `loft package` and `loft publish` refuse in the same words — a gate
+/// that reads differently depending on which command hit it teaches that it is
+/// two rules rather than one.
+#[must_use]
+pub fn declared_levels_error(name: &str, version: &str, problems: &[String]) -> String {
+    let mut out = format!(
+        "`{name}` {version} cannot be registered: a package must declare all three \
+         compatibility levels first.\n\n"
+    );
+    for p in problems {
+        out.push_str("  • ");
+        out.push_str(p);
+        out.push_str("\n\n");
+    }
+    out.push_str(
+        "  These are the three axes an upgrade can hurt a consumer on — the platform, its\n  \
+         call sites, its stored data — and a consumer cannot ask your package a question.\n  \
+         Declaring a floor is what enters the contract; raising one later is how you\n  \
+         declare a break, and it should read like the promise withdrawal it is.\n  \
+         See doc/claude/COMPATIBILITY.md and `loft compat --help`.",
+    );
+    out
+}
+
 /// Result of a successful `package_create`.
 #[derive(Debug)]
 pub struct PackageOutput {
@@ -93,6 +233,10 @@ pub struct PackageOutput {
     /// monorepo (`<name>-v<version>` release tags); absent → legacy
     /// one-repo-per-package fallback.  See `print_summary`.
     pub repository: Option<String>,
+    /// The three declared compatibility levels, when the manifest declares all
+    /// of them (see [`declared_levels`]).  `None` → the package has not entered
+    /// the contract, and `print_summary` refuses to emit a registry entry for it.
+    pub levels: Option<DeclaredLevels>,
 }
 
 /// Walk `pkg_dir`, build a gzipped tarball, write it to disk, and
@@ -117,13 +261,15 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
                 format!("loft.toml not found at {}", manifest_path.display()),
             )
         })?;
-    let name = manifest.name.ok_or_else(|| {
+    // Cloned rather than moved out: `declared_levels` below needs the whole
+    // manifest, and a partial move would make it unborrowable.
+    let name = manifest.name.clone().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "loft.toml is missing [package] name",
         )
     })?;
-    let version = manifest.version.ok_or_else(|| {
+    let version = manifest.version.clone().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "loft.toml is missing [package] version",
@@ -169,6 +315,12 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
     // Hash + size.
     let (size, sha256) = hash_file(&out_path)?;
 
+    // Carried, not enforced: building a tarball is mechanical (the
+    // reproducible-build check re-packages every library just to compare bytes,
+    // and must not care what any of them declares).  The gate is at the two
+    // commands that produce a REGISTRY ENTRY — `loft package` and `loft publish`.
+    let levels = declared_levels(&manifest, &version).ok();
+
     Ok(PackageOutput {
         tarball: out_path,
         size,
@@ -176,6 +328,7 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
         name,
         version,
         repository: manifest.repository,
+        levels,
     })
 }
 
@@ -410,7 +563,21 @@ pub fn print_summary(out: &PackageOutput, w: &mut dyn Write) -> io::Result<()> {
     writeln!(w, "    \"url\": \"{url}\",")?;
     writeln!(w, "    \"sha256\": \"{}\",", out.sha256)?;
     writeln!(w, "    \"size\": {},", out.size)?;
-    writeln!(w, "    \"loft\": \">=0.8\",")?;
+    // The manifest's own value, not a constant.  This line read a hardcoded
+    // `">=0.8"` for every package regardless of what it declared, so a library
+    // needing a newer loft published an entry saying it did not.
+    let levels = out.levels.as_ref();
+    writeln!(
+        w,
+        "    \"loft\": \"{}\",",
+        levels.map_or(">=0.8", |l| l.loft.as_str())
+    )?;
+    if let Some(l) = levels {
+        // Carried into the index so a resolver can read a version's promises
+        // without fetching and unpacking its tarball first.
+        writeln!(w, "    \"api_compatible_with\": \"{}\",", l.api)?;
+        writeln!(w, "    \"data_compatible_with\": \"{}\",", l.data)?;
+    }
     writeln!(w, "    \"published\": \"<ISO-8601 UTC timestamp>\"")?;
     writeln!(w, "  }}")?;
     Ok(())
@@ -438,6 +605,124 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, content).unwrap();
+    }
+
+    /// Build a manifest from `[package]` body lines, so each level case differs
+    /// in exactly the line under test.
+    fn manifest_with(package_lines: &str) -> crate::manifest::Manifest {
+        let dir = tmpdir(&format!(
+            "levels_{:x}",
+            package_lines.len() * 31
+                + usize::from(package_lines.as_bytes().first().copied().unwrap_or(0))
+        ));
+        let path = dir.join("loft.toml");
+        write(
+            &path,
+            &format!(
+                "[package]\nname = \"probe\"\nversion = \"0.4.0\"\n{package_lines}\n\
+                 [library]\nentry = \"src/probe.loft\"\n"
+            ),
+        );
+        let m = crate::manifest::read_manifest(path.to_str().unwrap()).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        m
+    }
+
+    /// Step 5a: all three levels are required before a package may be
+    /// registered, and each floor must name a version that could exist.
+    ///
+    /// The `all` / `first_release` cells are the ones that must PASS — without
+    /// them a gate that rejected everything would look identical to a correct
+    /// one, which is how the first hand-run of this matrix read.
+    #[test]
+    fn declared_levels_matrix() {
+        let ok = |lines: &str| declared_levels(&manifest_with(lines), "0.4.0");
+        let err = |lines: &str| ok(lines).expect_err("should be rejected").join(" | ");
+
+        // All three declared, floors below the release being cut.
+        let levels = ok(
+            "loft = \">=0.8\"\napi_compatible_with = \"0.2.0\"\ndata_compatible_with = \"0.1.0\"",
+        )
+        .expect("all three declared");
+        assert_eq!(levels.loft, ">=0.8");
+        assert_eq!(levels.api, "0.2.0");
+        assert_eq!(levels.data, "0.1.0");
+
+        // A FIRST release: the floors are the release itself.  This is the
+        // bootstrap the error message tells authors to write, so it has to pass.
+        assert!(
+            ok("loft = \">=0.8\"\napi_compatible_with = \"0.4.0\"\ndata_compatible_with = \"0.4.0\"")
+                .is_ok()
+        );
+
+        // Each one missing is named, and its own name appears in the message —
+        // an author must not have to guess which of the three is absent.
+        assert!(
+            err("loft = \">=0.8\"\ndata_compatible_with = \"0.1.0\"")
+                .contains("`api_compatible_with` is not declared")
+        );
+        assert!(
+            err("loft = \">=0.8\"\napi_compatible_with = \"0.2.0\"")
+                .contains("`data_compatible_with` is not declared")
+        );
+        assert!(
+            err("api_compatible_with = \"0.2.0\"\ndata_compatible_with = \"0.1.0\"")
+                .contains("`loft` is not declared")
+        );
+
+        // ALL problems at once, not the first: each round trip costs a publish
+        // cycle, so a one-at-a-time gate is several cycles of the same edit.
+        let none = ok("").expect_err("nothing declared");
+        assert_eq!(none.len(), 3, "expected all three reported, got: {none:?}");
+
+        // A floor names ONE release, so a range is rejected — a set names
+        // nothing that can be fetched and run.
+        assert!(
+            err("loft = \">=0.8\"\napi_compatible_with = \">=0.2\"\ndata_compatible_with = \"0.1.0\"")
+                .contains("not a bare version")
+        );
+        // `loft` is the exception: it IS a range, and must stay accepted as one.
+        assert!(ok("loft = \">=0.8\"\napi_compatible_with = \"0.2.0\"\ndata_compatible_with = \"0.1.0\"").is_ok());
+
+        // A floor above the release claims compatibility with a version that
+        // does not exist yet.
+        assert!(
+            err("loft = \">=0.8\"\napi_compatible_with = \"0.9.0\"\ndata_compatible_with = \"0.1.0\"")
+                .contains("does not exist yet")
+        );
+    }
+
+    /// The index entry carries the manifest's OWN `loft` range and both floors.
+    /// This line was a hardcoded `">=0.8"` for every package regardless of what
+    /// it declared, so a library needing a newer loft published an entry saying
+    /// it did not.
+    #[test]
+    fn index_entry_carries_declared_levels() {
+        let out = PackageOutput {
+            tarball: PathBuf::from("crypto-0.2.1.tar.gz"),
+            size: 1,
+            sha256: "00".to_string(),
+            name: "crypto".to_string(),
+            version: "0.2.1".to_string(),
+            repository: Some("loft-libs-core".to_string()),
+            levels: Some(DeclaredLevels {
+                loft: ">=2026.7".to_string(),
+                api: "0.2.0".to_string(),
+                data: "0.1.0".to_string(),
+            }),
+        };
+        let mut buf = Vec::new();
+        print_summary(&out, &mut buf).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        assert!(text.contains("\"loft\": \">=2026.7\""), "{text}");
+        assert!(
+            text.contains("\"api_compatible_with\": \"0.2.0\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"data_compatible_with\": \"0.1.0\""),
+            "{text}"
+        );
     }
 
     #[test]
@@ -476,6 +761,7 @@ mod tests {
             name: "crypto".to_string(),
             version: "0.2.1".to_string(),
             repository: repo.map(str::to_string),
+            levels: None,
         };
         let url_of = |o: &PackageOutput| {
             let mut buf = Vec::new();

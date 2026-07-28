@@ -1,0 +1,184 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# lib-main-health — every library repo's MAIN, against today's loft, on a schedule.
+#
+# The gap, found 2026-07-28 while measuring library compatibility floors: a library's
+# main is verified against today's loft ONLY when someone pushes to that library.
+# `library-ci` runs the full gate — interpret, native, `loft compat check` — but it
+# triggers on `push` and `pull_request` TO THE LIBRARY.  A loft change that breaks a
+# library's main produces no event there, so the gate never fires.  loft-libs-core's
+# last run was 2026-07-26 and green; nothing would have re-run it for weeks.
+#
+# So the window between "loft breaks a library" and "anyone finds out" is unbounded,
+# and it closes only by coincidence — the next time that library happens to change.
+#
+# The other two nightlies watch the axis this one does not:
+#
+#   revalidate-libs       PUBLISHED tarballs × today's loft   (a shipped artifact rots)
+#   registry-validation   PUBLISHED tarballs, installed as a user gets them
+#   lib-main-health       library MAIN × today's loft         ← this one
+#
+# Published-vs-main matters because they diverge: a main can carry months of
+# unreleased work, and that is exactly the code the next release ships.  Catching
+# the break when loft causes it — rather than when someone next touches the library
+# — is the difference between a one-line fix and an archaeology session.
+#
+# Ownership note: this deliberately lives in loft rather than as a `schedule:` added
+# to each library's `library-ci.yml`.  The failure being watched for is loft
+# retro-breaking a library, which is loft's regression to notice and fix; putting the
+# alarm in eight other repos spreads one team's problem across eight backlogs.
+name: lib-main-health
+
+on:
+  schedule:
+    - cron: '45 5 * * *'   # after miri (04:00) and registry-validation (04:30)
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 'Space-separated repo names to check (default: every loft-libs-*)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.list.outputs.repos }}
+    steps:
+      - name: List library repos
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERRIDE: ${{ inputs.repos }}
+        run: |
+          set -uo pipefail
+          if [ -n "${OVERRIDE:-}" ]; then
+            repos=$(printf '%s\n' $OVERRIDE)
+          else
+            # Discovered, never hard-coded: a new loft-libs-* repo must be covered the
+            # day it appears, not the day somebody remembers to edit this list.
+            repos=$(gh repo list loft-lang --limit 100 --json name --jq '.[].name' \
+                    | grep -E '^loft-libs-' | sort)
+          fi
+          [ -n "$repos" ] || { echo "::error::no library repos discovered"; exit 1; }
+          echo "$repos"
+          echo "repos=$(printf '%s\n' $repos | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # one rotten library must not hide the state of the others
+      matrix:
+        repo: ${{ fromJson(needs.discover.outputs.repos) }}
+    steps:
+      - name: Checkout loft
+        uses: actions/checkout@v4
+        with:
+          path: loft-src
+
+      - name: Install mold
+        run: sudo apt-get update -y && sudo apt-get install -y mold
+
+      - name: Cache cargo + loft build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            loft-src/target
+          key: lib-main-health-${{ hashFiles('loft-src/Cargo.lock') }}
+          restore-keys: lib-main-health-
+
+      - name: Build loft
+        working-directory: loft-src
+        run: |
+          cargo build --release --lib --bin loft
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+
+      - name: Clone ${{ matrix.repo }} main
+        run: git clone --quiet --depth 1 "https://github.com/loft-lang/${{ matrix.repo }}.git" lib
+
+      # Every package in the repo, each reported separately.
+      #
+      #   tests    the library's own suite on the interpreter        — GATES
+      #   parse    `loft api-surface` on the entry                   — advisory
+      #   compat   `loft compat check` vs its own published releases — advisory
+      #
+      # ONLY the tests gate, and that split is deliberate.  `loft api-surface` is
+      # currently unreliable: it fails on `regex` and `graphics` while both libraries
+      # build and pass their suites, so gating on it would produce a nightly red that
+      # says nothing about either library (loft#656).  Tests are what `library-ci`
+      # gates on and what actually proves the library still works.
+      #
+      # Warnings are NOT denied here.  This gate answers "did loft break this library",
+      # and a new loft warning must never be reported as the library breaking — that is
+      # the revalidate-libs discipline, and mixing the two is how a gate gets ignored.
+      - name: Check every package
+        id: check
+        run: |
+          set -u
+          fail=0
+          summary=""
+          for toml in lib/*/loft.toml lib/loft.toml; do
+            [ -f "$toml" ] || continue
+            dir=$(dirname "$toml")
+            name=$(sed -n 's/^ *name *= *"\(.*\)".*/\1/p' "$toml" | head -1)
+            [ -n "$name" ] || continue
+            echo "::group::$name"
+            ( cd "$dir" && loft install >/dev/null 2>&1 ) || true
+            # System libraries the native crate links against — same discovery the
+            # library-ci reusable does, and best-effort for the same reason.
+            deps=$( { sed -n 's/^ *build-deps *= *"\(.*\)"/\1/p' "$toml" 2>/dev/null
+                      cat ~/.loft/registry/*/loft.toml 2>/dev/null \
+                        | sed -n 's/^ *build-deps *= *"\(.*\)"/\1/p'
+                    } | tr ',' '\n' | tr -d ' ' | sed '/^$/d' | sort -u | tr '\n' ' ') || true
+            [ -n "$deps" ] && sudo apt-get install -y $deps >/dev/null 2>&1
+            entry=$(sed -n 's/^ *entry *= *"\(.*\)".*/\1/p' "$toml" | head -1)
+            entry=${entry:-src/$name.loft}
+
+            if ( cd "$dir" && LOFT_TIMEOUT=300 loft api-surface "$entry" >/dev/null 2>&1 ); then
+              parse=ok
+            else
+              # Advisory only — see loft#656.  Reported so the surface stays visible,
+              # never failing, because the tool and not the library may be at fault.
+              parse=advisory-fail
+              echo "::warning title=$name: api-surface could not read the entry::advisory (loft#656); the tests below are the real signal"
+            fi
+
+            if [ -d "$dir/tests" ]; then
+              if ( cd "$dir" && LOFT_TIMEOUT=300 loft --interpret --tests tests >/dev/null 2>&1 ); then
+                tests=ok
+              else
+                tests=FAIL; fail=1
+                echo "::error title=$name: tests fail on main::"
+                ( cd "$dir" && LOFT_TIMEOUT=300 loft --interpret --tests tests 2>&1 | tail -15 )
+              fi
+            else
+              tests="(none)"
+            fi
+
+            # Advisory: reports an unclaimed API break against this package's own
+            # published releases.  Never fails the job — `loft compat check` gates only
+            # for a package that declares a floor, and that gating belongs in the
+            # library's own CI where its author sees it.
+            ( cd "$dir" && LOFT_TIMEOUT=600 loft compat check 2>&1 | sed 's/^/    /' ) || true
+
+            summary="$summary| \`$name\` | $parse | $tests |\n"
+            echo "::endgroup::"
+          done
+          {
+            echo "### ${{ matrix.repo }} — main vs loft@${{ github.sha }}"
+            echo
+            echo "| package | parse | tests |"
+            echo "|---|---|---|"
+            printf "$summary"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $fail

@@ -64,6 +64,20 @@ pub struct Version {
     pub sha256: String,
     pub size: u64,
     pub loft: String,
+    /// The oldest release of this package that THIS version is still a drop-in
+    /// for — mirrored from its `loft.toml` at publish time so a resolver can
+    /// read a release's promise without downloading and unpacking its tarball.
+    ///
+    /// `None` for versions published before the compatibility contract existed,
+    /// and that absence is load-bearing: a version that declares nothing has
+    /// promised nothing, so resolution must treat it exactly as it did before.
+    /// Design: `doc/claude/plans/library-compat-contract/README.md`.
+    pub api_compatible_with: Option<String>,
+    /// The oldest release whose stored / wire data this version still reads.
+    /// Recorded for a consumer to read; resolution does not act on it, because
+    /// a data break is not fixed by choosing a different version — the old data
+    /// still needs migrating either way.
+    pub data_compatible_with: Option<String>,
     pub deps: BTreeMap<String, String>,
     /// Schema slot — resolver-side support deferred.
     pub conflicts: Vec<String>,
@@ -244,6 +258,8 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
     let mut sha256: Option<String> = None;
     let mut size: Option<u64> = None;
     let mut loft: Option<String> = None;
+    let mut api_compatible_with: Option<String> = None;
+    let mut data_compatible_with: Option<String> = None;
     let mut deps: BTreeMap<String, String> = BTreeMap::new();
     let mut conflicts: Vec<String> = Vec::new();
     let mut replaces: Vec<String> = Vec::new();
@@ -268,6 +284,8 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                 }
             }
             ("loft", Parsed::Str(s)) => loft = Some(s.clone()),
+            ("api_compatible_with", Parsed::Str(s)) => api_compatible_with = Some(s.clone()),
+            ("data_compatible_with", Parsed::Str(s)) => data_compatible_with = Some(s.clone()),
             ("deps", Parsed::Object(dmap)) => {
                 for (dname, _, dval) in dmap {
                     if let Parsed::Str(s) = dval {
@@ -378,6 +396,8 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
         sha256,
         size,
         loft,
+        api_compatible_with,
+        data_compatible_with,
         deps,
         conflicts,
         replaces,
@@ -396,7 +416,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
 /// yanked versions and (unless `allow_prerelease`) prereleases.
 ///
 /// Constraint shorthand:
-/// - exact:  `"0.1.0"`        — only `0.1.0`.
+/// - exact:  `"0.1.0"`        — only `0.1.0`, **and a yanked version still resolves**.
 /// - caret:  `"^0.1.0"`       — `>=0.1.0, <0.2.0` (cargo / npm shape).
 /// - tilde:  `"~0.1.0"`       — `>=0.1.0, <0.2.0` (loosened to match
 ///   cargo's tilde for 0.x).
@@ -404,6 +424,12 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
 /// - any:    `"*"` or empty   — any non-yanked, non-prerelease.
 ///
 /// Picks the **highest** satisfying version.
+///
+/// **Yanking discourages a version; it does not withdraw one.** `PKG_REGISTRY.md` keeps a
+/// yanked version listed precisely so a `loft.lock` pinned to it still resolves, and skipping
+/// it on an EXACT pin broke that promise — `loft install glb@0.1.1` refused a version the
+/// index plainly carries, which is the same retention failure `web 0.2.2` suffered one layer
+/// down. A range or `*` still skips yanked, so nothing new ever picks one up by accident.
 #[must_use]
 pub fn find_best_version<'a>(
     pkg: &'a Package,
@@ -411,9 +437,12 @@ pub fn find_best_version<'a>(
     allow_prerelease: bool,
 ) -> Option<&'a Version> {
     let yanked: std::collections::HashSet<&str> = pkg.yanked.iter().map(String::as_str).collect();
+    // An exact pin names one release and is what a lockfile records; anything else is the
+    // resolver choosing on the consumer's behalf, where a yanked version must stay excluded.
+    let exact_pin = constraint.trim().starts_with(|c: char| c.is_ascii_digit());
     let mut best: Option<&Version> = None;
     for ver in pkg.versions.values() {
-        if yanked.contains(ver.semver.as_str()) {
+        if yanked.contains(ver.semver.as_str()) && !exact_pin {
             continue;
         }
         if ver.prerelease && !allow_prerelease {
@@ -429,6 +458,93 @@ pub fn find_best_version<'a>(
         }
     }
     best
+}
+
+/// What resolution chose for a consumer that already holds a version, and what
+/// it deliberately did not choose.
+///
+/// `withheld` is the reason this is a struct rather than an `Option<&Version>`:
+/// a resolver that silently stops at an older release teaches the consumer that
+/// no upgrade exists. The whole point of a DECLARED break is that someone gets
+/// told about it.
+#[derive(Debug)]
+pub struct Resolution<'a> {
+    /// Highest satisfying version that is safe for what the consumer holds.
+    pub best: Option<&'a Version>,
+    /// Higher satisfying versions passed over because they declare a break past
+    /// the held version, newest first.
+    pub withheld: Vec<&'a Version>,
+}
+
+/// Resolve for a consumer that already holds `held`: the highest satisfying
+/// version that still declares itself a drop-in for what they have.
+///
+/// A candidate `R` saying `api_compatible_with = F` promises it replaces
+/// anything from `F` onward, so it is safe for a consumer on `held` exactly
+/// when `F <= held`. Above that, `R` has declared it will break them, and the
+/// registry keeps `held`'s neighbours installable precisely so they can stay.
+///
+/// Three cases mean "unconstrained", and all three are deliberate:
+///
+/// - **`held` is `None`** (a fresh install) — there is nothing to be a drop-in
+///   *for*. Constraining here would resolve a first-time user to an ancient
+///   release because the library broke compatibility three versions ago, which
+///   is backwards: they have no old call sites to protect.
+/// - **the candidate declares no floor** — it has promised nothing, so nothing
+///   is enforced. This is what keeps the change inert for every version
+///   published before the contract existed.
+/// - **`constraint` is an exact pin** — it names ONE release, so the caller has
+///   already chosen. Filtering it would report "no version satisfies the
+///   constraint" for a version that plainly exists, which reads as a broken
+///   registry rather than the deliberate step across a break that it is.
+#[must_use]
+pub fn find_compatible_version<'a>(
+    pkg: &'a Package,
+    constraint: &str,
+    allow_prerelease: bool,
+    held: Option<&str>,
+) -> Resolution<'a> {
+    let exact_pin = constraint.trim().starts_with(|c: char| c.is_ascii_digit());
+    let Some(held) = held.filter(|_| !exact_pin) else {
+        return Resolution {
+            best: find_best_version(pkg, constraint, allow_prerelease),
+            withheld: Vec::new(),
+        };
+    };
+    let yanked: std::collections::HashSet<&str> = pkg.yanked.iter().map(String::as_str).collect();
+    let mut safe: Option<&Version> = None;
+    let mut withheld: Vec<&Version> = Vec::new();
+    for ver in pkg.versions.values() {
+        if yanked.contains(ver.semver.as_str())
+            || (ver.prerelease && !allow_prerelease)
+            || !satisfies(&ver.semver, constraint)
+        {
+            continue;
+        }
+        // A floor above what the consumer holds is a declared break.  Only
+        // count it as withheld when it is a version they would otherwise move
+        // UP to — a lower release they were never going to take is not news.
+        let breaks = ver
+            .api_compatible_with
+            .as_deref()
+            .is_some_and(|floor| compare_semver(floor, held) == std::cmp::Ordering::Greater);
+        if breaks {
+            if compare_semver(&ver.semver, held) == std::cmp::Ordering::Greater {
+                withheld.push(ver);
+            }
+            continue;
+        }
+        if safe
+            .is_none_or(|b| compare_semver(&ver.semver, &b.semver) == std::cmp::Ordering::Greater)
+        {
+            safe = Some(ver);
+        }
+    }
+    withheld.sort_by(|a, b| compare_semver(&b.semver, &a.semver));
+    Resolution {
+        best: safe,
+        withheld,
+    }
 }
 
 /// Check whether `version` satisfies `constraint`.
@@ -1262,6 +1378,124 @@ mod tests {
         assert!(parse_index(bad).is_err());
     }
 
+    /// Four releases across one declared break, plus a package that declares
+    /// nothing — the two halves step 6 has to get right at once.
+    ///
+    /// `lib` 0.3.0 raises `api_compatible_with` to itself, so 0.3.0 and 0.4.0
+    /// are drop-ins only for consumers already on 0.3.0 or later.  `legacy`
+    /// mirrors every version published before the contract existed.
+    const FLOORS: &str = r#"{
+        "schema_version": 1,
+        "updated": "2026-07-28T08:00:00Z",
+        "packages": {
+            "lib": {
+                "categories": [], "yanked": [],
+                "versions": {
+                    "0.1.0": {"url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p"},
+                    "0.2.0": {"url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p",
+                              "api_compatible_with":"0.1.0"},
+                    "0.3.0": {"url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p",
+                              "api_compatible_with":"0.3.0"},
+                    "0.4.0": {"url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p",
+                              "api_compatible_with":"0.3.0"}
+                }
+            },
+            "legacy": {
+                "categories": [], "yanked": [],
+                "versions": {
+                    "0.1.0": {"url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p"},
+                    "0.4.0": {"url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p"}
+                }
+            }
+        }
+    }"#;
+
+    /// Step 6: an upgrade stops below a declared break, and says which releases
+    /// it stopped below.
+    #[test]
+    fn resolution_honours_declared_floors() {
+        let idx = parse_index(FLOORS).expect("parse");
+        let lib = idx.packages.get("lib").expect("lib");
+        let resolve = |held: Option<&str>| {
+            let r = find_compatible_version(lib, "*", false, held);
+            (
+                r.best.map(|v| v.semver.clone()).unwrap_or_default(),
+                r.withheld
+                    .iter()
+                    .map(|v| v.semver.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        // A FRESH install has no old call sites to protect, so it takes the
+        // newest.  Constraining here would hand a first-time user an ancient
+        // release because the library broke compatibility three versions ago.
+        assert_eq!(resolve(None), ("0.4.0".to_string(), vec![]));
+
+        // Held below the break: stop at the last drop-in, and name BOTH
+        // releases that were passed over, newest first.
+        assert_eq!(
+            resolve(Some("0.1.0")),
+            (
+                "0.2.0".to_string(),
+                vec!["0.4.0".to_string(), "0.3.0".to_string()]
+            )
+        );
+        assert_eq!(
+            resolve(Some("0.2.0")),
+            (
+                "0.2.0".to_string(),
+                vec!["0.4.0".to_string(), "0.3.0".to_string()]
+            )
+        );
+
+        // Held AT or past the break: the newest is a declared drop-in again,
+        // and nothing is withheld.
+        assert_eq!(resolve(Some("0.3.0")), ("0.4.0".to_string(), vec![]));
+        assert_eq!(resolve(Some("0.4.0")), ("0.4.0".to_string(), vec![]));
+    }
+
+    /// A version that declares no floor has promised nothing, so nothing is
+    /// enforced.  This is what keeps step 6 inert for every version published
+    /// before the contract existed — without it, landing the resolver change
+    /// would silently alter what every consumer in the registry resolves to.
+    #[test]
+    fn resolution_is_inert_without_declared_floors() {
+        let idx = parse_index(FLOORS).expect("parse");
+        let legacy = idx.packages.get("legacy").expect("legacy");
+        let r = find_compatible_version(legacy, "*", false, Some("0.1.0"));
+        assert_eq!(r.best.map(|v| v.semver.as_str()), Some("0.4.0"));
+        assert!(r.withheld.is_empty());
+        // Identical to the pre-step-6 answer, which is the actual claim.
+        assert_eq!(
+            r.best.map(|v| &v.semver),
+            find_best_version(legacy, "*", false).map(|v| &v.semver)
+        );
+    }
+
+    /// An exact pin names ONE release, so the caller has already chosen.
+    #[test]
+    fn an_exact_pin_crosses_a_declared_break() {
+        let idx = parse_index(FLOORS).expect("parse");
+        let lib = idx.packages.get("lib").expect("lib");
+        let r = find_compatible_version(lib, "0.4.0", false, Some("0.1.0"));
+        assert_eq!(r.best.map(|v| v.semver.as_str()), Some("0.4.0"));
+        assert!(r.withheld.is_empty());
+    }
+
+    /// The floors travel in the index, so a resolver reads a release's promise
+    /// without downloading and unpacking its tarball.
+    #[test]
+    fn index_parses_both_compatibility_floors() {
+        let idx = parse_index(FLOORS).expect("parse");
+        let v = &idx.packages["lib"].versions["0.3.0"];
+        assert_eq!(v.api_compatible_with.as_deref(), Some("0.3.0"));
+        assert_eq!(
+            idx.packages["lib"].versions["0.1.0"].api_compatible_with,
+            None
+        );
+    }
+
     #[test]
     fn find_best_version_skips_yanked() {
         let idx = parse_index(SAMPLE).expect("parse");
@@ -1269,6 +1503,29 @@ mod tests {
         // 0.1.0 is yanked; 0.1.1 is non-prerelease; 0.2.0-beta is prerelease.
         let best = find_best_version(crypto, "^0.1", false).expect("Some");
         assert_eq!(best.semver, "0.1.1");
+    }
+
+    /// A yanked version stays INSTALLABLE by exact pin — that is the whole reason
+    /// `PKG_REGISTRY.md` keeps it listed. Skipping it here refused a version the index
+    /// plainly carries (`loft install glb@0.1.1`), breaking every `loft.lock` pinned across a
+    /// yank: the same retention promise `web 0.2.2` broke one layer down.
+    #[test]
+    fn an_exact_pin_still_resolves_a_yanked_version() {
+        let idx = parse_index(SAMPLE).expect("parse");
+        let crypto = idx.packages.get("crypto").expect("crypto");
+        assert_eq!(
+            find_best_version(crypto, "0.1.0", false).map(|v| v.semver.as_str()),
+            Some("0.1.0"),
+            "a lockfile pin to a yanked version must still resolve"
+        );
+        // ...while nothing that lets the RESOLVER choose ever picks one up.
+        for c in ["*", "^0.1", ">=0.1"] {
+            assert_ne!(
+                find_best_version(crypto, c, false).map(|v| v.semver.as_str()),
+                Some("0.1.0"),
+                "constraint `{c}` must not select a yanked version"
+            );
+        }
     }
 
     #[test]
@@ -1387,6 +1644,8 @@ mod tests {
             sha256: "s".to_string(),
             size: 1,
             loft: ">=0.8".to_string(),
+            api_compatible_with: None,
+            data_compatible_with: None,
             deps: BTreeMap::new(),
             conflicts: vec![],
             replaces: vec![],

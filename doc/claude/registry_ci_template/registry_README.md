@@ -125,10 +125,20 @@ adding your key to the loft binary's trust root list.
 
 ## Yanking
 
-Open a PR that removes the version from `versions` and adds it
-to the package's `yanked` array.  Yanked versions stay listed
-(so existing `loft.lock` pins still resolve) but new installs
-skip them.  Use the PR description to record the reason.
+Open a PR that adds the version to the package's `yanked` array
+and **leaves its `versions` entry untouched**.  Yanking discourages
+a version; it never withdraws one.  The entry stays listed and stays
+downloadable, so an existing `loft.lock` pinned to it still resolves,
+while new installs skip it.  Use the PR description to record the
+reason.
+
+**Never delete a `versions` entry**, in a yank or in any other PR.
+Deleting is not a stronger yank, it is an unrecoverable one — a
+consumer pinned to that version can no longer resolve at all, and if
+the release asset is later cleaned up there is nothing left to restore
+from.  That has happened once (`web 0.2.2`) and cost a downstream
+library a vendored copy of the source.  The nightly retention check
+fails on any version that leaves the index or stops downloading.
 
 ---
 

@@ -233,7 +233,9 @@ only sets one explicitly once the corresponding feature ships.
 | `packages.<name>.versions.<semver>.url` | yes | Direct download URL for the tarball.  Convention: GitHub release asset. |
 | `…sha256` | yes | Lowercase hex of the SHA-256 hash of the tarball bytes.  Verified post-download. |
 | `…size` | yes | Byte length.  Bandwidth sanity check + early-abort on giant downloads. |
-| `…loft` | yes | Required loft interpreter version.  `>=0.8` syntax mirrors `loft.toml::[package] loft`. |
+| `…loft` | yes | Required loft interpreter version.  `>=0.8` syntax mirrors `loft.toml::[package] loft`.  A **range**, because the platform is the one axis a library does not pick a single point on. |
+| `…api_compatible_with` | new entries | Bare version.  The oldest release of THIS package whose public API this version is still a drop-in for.  Mirrors `loft.toml::[package] api_compatible_with`; emitted by `loft publish` / `loft package`, which refuse to produce an entry without it.  A real version, not an epoch — the claim is verified by fetching that release and running its own tests against this source, and a range would name nothing to fetch.  Absent on versions published before the contract existed. |
+| `…data_compatible_with` | new entries | Bare version.  The oldest release whose stored / wire data this version still reads.  Separate from `api_compatible_with` because the failures differ in kind: an API break costs a recompile, a data break costs someone's stored file.  `hex_terrain` is the worked example — it kept its API and changed what it computed over stored heights, which one number cannot express. |
 | `…subpath` | for monorepos | Package directory within the release repo (e.g. `crypto` inside `loft-libs-core`).  The loft-lang libraries are **domain monorepos** (`loft-libs-core`/`-net`/`-graphics`/`-game`/`-world`/`-assets`/`-docs`) tagged `<pkg>-v<version>`, so `subpath` tells the installer where the package lives in the unpacked tarball.  Omit for a one-repo-per-package layout. |
 | `…deps` | no | Inter-package dependencies.  Resolved during install; failures abort before any download. |
 | `…triggers` | no | Array of `"name:receiver"` strings (e.g. `"matches:text"`) — Tier-1 lazy-load triggers derived from this version's `pub fn` method surface at publish time, so a consumer's resolver can map `obj.method()` to the owning package without having the source.  Populated when the package opts into `[triggers]`; globally unique across the registry (enforced at PR gate 4, see REGISTRY_SUBMIT.md § Trigger uniqueness). |
@@ -585,9 +587,21 @@ The maintainer pipeline is just GitHub Actions + branch protection
 
 ### Yanking
 
-PR removes the version from `versions` and adds it to the package's
-`yanked` array.  Yanked versions stay listed (so `loft.lock` pins
-don't break) but new installs / version resolution skip them.
+PR adds the version to the package's `yanked` array and **leaves its
+`versions` entry exactly where it is**.  Yanking discourages a version;
+it never withdraws one.  A yanked version stays listed and stays
+downloadable, so a `loft.lock` pinned to it still resolves, while new
+installs and version resolution skip it.
+
+**Never delete a `versions` entry.**  Deleting is not a stronger yank,
+it is an unrecoverable one: `web 0.2.2` was yanked correctly and then
+had its entry removed a commit later, and by the time anyone noticed,
+its release asset and tag were gone too — leaving a `yanked` marker
+that implies a version which no longer exists anywhere.  An earlier
+revision of this section said to remove the entry, contradicting the
+promise in the sentence right after it; that wording is how the loss
+happened.  `scripts/registry_retention_check.py` now fails the nightly
+if any version leaves the index or stops downloading.
 
 ---
 

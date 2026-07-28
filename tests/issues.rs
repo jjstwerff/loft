@@ -16653,3 +16653,279 @@ fn issue618_entry_fn_returning_struct_still_works() {
         "entry returning a struct must keep working"
     );
 }
+
+// #654 — past ~32 KB of function body the interpreter's jump displacement was
+// truncated to 16 bits, so a `while true` took its backward jump to an arbitrary
+// address: the body ran ONCE, execution fell out of the loop, and main returned
+// status 0 with no diagnostic.  A log ended mid-story with nothing wrong in it.
+//
+// The filed scope was the backward `while` jump, but a boundary matrix showed
+// every jump class truncating — `while`, `for`, `break`, and the forward skips of
+// `if` and `else` — because all of them encode a displacement the same way.  So
+// the fix is at the encoding, not at any one construct: `OpGotoWord` /
+// `OpGotoFalseWord` now carry a 32-bit displacement, which covers the whole
+// `code_pos` space and so cannot move the threshold somewhere further out.
+//
+// `--native` was always correct here (it emits real Rust control flow and never
+// reads these operands), which is why this guards the interpreter specifically.
+#[test]
+fn issue_654_jumps_survive_a_body_past_the_16_bit_displacement() {
+    // ~2400 filler statements puts the body comfortably past 32 KB of emitted
+    // bytecode; at 1484 the old encoder was still correct and at 1485 it was not,
+    // so a guard at the boundary itself would be one statement from vacuous.
+    //
+    // The filler ACCUMULATES rather than assigning throwaway locals: it has to be
+    // warning-free to compile here, and a running total lets each case assert how
+    // many times the body actually ran.
+    const N: i64 = 2400;
+    let filler: String = (0..N).map(|i| format!("acc = acc + {i}; ")).collect();
+    let once = N * (N - 1) / 2; // the filler's contribution per execution
+
+    // One case per jump class.  Each asserts a VALUE, not merely that it ran:
+    // the failure mode was silent fall-through, which a run-to-completion check
+    // would have called a pass.
+    let cases: [(&str, String); 5] = [
+        // backward jump — `while`
+        (
+            "while",
+            format!(
+                "fn test() {{ acc = 0; i = 0; while true {{ i = i + 1; if i > 3 {{ break; }} {filler} }} \
+             assert(i == 4, \"while ran {{i}} times, expected 4\"); \
+             assert(acc == {}, \"while body ran the wrong number of times\"); }}",
+                once * 3
+            ),
+        ),
+        // backward jump — counted `for`
+        (
+            "for",
+            format!(
+                "fn test() {{ acc = 0; n = 0; for _ in 0..4 {{ n = n + 1; {filler} }} \
+             assert(n == 4, \"for ran {{n}} times, expected 4\"); \
+             assert(acc == {}, \"for body ran the wrong number of times\"); }}",
+                once * 4
+            ),
+        ),
+        // forward jump — `break` out of a huge body
+        (
+            "break",
+            format!(
+                "fn test() {{ acc = 0; i = 0; while true {{ i = i + 1; if i > 2 {{ break; }} {filler} }} \
+             assert(i == 3, \"break left the loop at {{i}}, expected 3\"); \
+             assert(acc == {}, \"break body ran the wrong number of times\"); }}",
+                once * 2
+            ),
+        ),
+        // forward jump — skipping a huge `if` body that must NOT run
+        (
+            "if",
+            format!(
+                "fn test() {{ acc = 0; x = 0; if x > 100 {{ {filler} }} \
+             assert(acc == 0, \"the untaken if body ran\"); \
+             assert(x == 0, \"execution did not reach the join\"); }}"
+            ),
+        ),
+        // forward jump — skipping a huge `else` arm
+        (
+            "else",
+            format!(
+                "fn test() {{ acc = 0; taken = 0; if acc < 100 {{ taken = 1; }} else {{ {filler} taken = 2; }} \
+             assert(taken == 1, \"took the wrong arm: {{taken}}\"); \
+             assert(acc == 0, \"the untaken else arm ran\"); }}"
+            ),
+        ),
+    ];
+
+    for (label, src) in &cases {
+        let (mut state, data) = compile_for_production(src);
+        attach_production_logger(&mut state);
+        state.execute("test", &data);
+        assert!(
+            !state.database.had_fatal,
+            "#654: the `{label}` jump misbehaved past a 32 KB body"
+        );
+    }
+}
+
+// #655 — a `&boolean` parameter that is actually assigned panicked codegen with
+// "Unknown referenced variable type: boolean".  Every other scalar reference type
+// worked, which is what made it sting: `&boolean` is the natural shape for a
+// two-state out-parameter, reached for right after `&integer` has just worked for
+// the count beside it (moros hit it on `fn do_wall(open: &boolean, ax: &float, …)`).
+//
+// FOUR sites, not one.  The filed panic was the interpreter's READ path; fixing it
+// exposed the interpreter WRITE path, and getting that far exposed two native ones.
+// The root asymmetry is that a plain `boolean` parameter renders as Rust `bool`
+// while a `&boolean` renders as `&mut u8`, because a boolean LOCAL is the tri-state
+// storage byte (0/1/255, null-capable).  So the deref sites convert, symmetrically:
+// read `*p == 1` (a null reads as false), write `u8::from(..)`.
+//
+// The matrix below is the reason all four were found — the filed scope was the
+// parameter alone, and probes for a local `&`-link and for READING the flag in a
+// condition each failed on native after the parameter case was green.
+#[test]
+fn issue_655_ampersand_boolean_reads_and_writes() {
+    let cases: [(&str, &str); 7] = [
+        // the filed reproducer
+        (
+            "negate",
+            "fn flip(b: &boolean) { b = !b; } \
+                    fn test() { x = false; flip(x); assert(x == true, \"negate\"); }",
+        ),
+        // a constant, not a negation — the write path without a read
+        (
+            "const",
+            "fn setit(b: &boolean) { b = true; } \
+                   fn test() { x = false; setit(x); assert(x == true, \"const\"); }",
+        ),
+        // the other direction, so a test that only ever produced `true` cannot pass
+        (
+            "from_true",
+            "fn flip(b: &boolean) { b = !b; } \
+                       fn test() { x = true; flip(x); assert(x == false, \"from true\"); }",
+        ),
+        // two flags at once — each must write its own slot
+        (
+            "two",
+            "fn both(a: &boolean, b: &boolean) { a = true; b = false; } \
+                 fn test() { p = false; q = true; both(p, q); \
+                 assert(p == true, \"first\"); assert(q == false, \"second\"); }",
+        ),
+        // the shape moros actually wrote: a flag beside the scalars that worked
+        (
+            "mixed",
+            "fn do_wall(open: &boolean, ax: &float, n: &integer) \
+                   { open = true; ax = ax + 1.5; n = n + 1; } \
+                   fn test() { o = false; x = 1.0; c = 0; do_wall(o, x, c); \
+                   assert(o == true, \"flag\"); assert(x == 2.5, \"float\"); \
+                   assert(c == 1, \"int\"); }",
+        ),
+        // a local `&`-link rather than a parameter — a separate native path
+        (
+            "local_link",
+            "fn test() { a = false; b = &a; b = true; \
+                        assert(a == true, \"local link\"); }",
+        ),
+        // READING the flag through the reference, which native compiled as `u8`
+        // where a `bool` was required
+        (
+            "read",
+            "fn setpair(b: &boolean, out: &integer) \
+                  { if b { out = 1; } else { out = 2; } b = !b; } \
+                  fn test() { x = true; n = 0; setpair(x, n); \
+                  assert(x == false, \"flipped\"); assert(n == 1, \"read as true\"); }",
+        ),
+    ];
+    for (label, src) in &cases {
+        let (mut state, data) = compile_for_production(src);
+        attach_production_logger(&mut state);
+        state.execute("test", &data);
+        assert!(
+            !state.database.had_fatal,
+            "#655: `&boolean` case `{label}` misbehaved"
+        );
+    }
+}
+
+// #656 — a library that qualifies a call with its OWN name (`dlib::shout(x)` inside
+// `src/dlib.loft`) made the parser resolve that name back to the file it was already
+// parsing and load it a second time.  Every definition re-registered, which surfaced
+// as "cannot redefine method `shout` on `text`" pointing at the file's own line — an
+// error about the source disagreeing with itself.
+//
+// A free function only duplicated silently (it showed up twice in `loft api-surface`
+// output, the tell that went unread); a METHOD made it fatal.  Published `regex`
+// carries exactly that shape, so `loft api-surface` — and with it `loft compat api` /
+// `compat floor` / `compat check`, which all route through it — reported the library
+// as unreadable while its own test suite passed.
+#[test]
+fn issue_656_self_qualified_reference_does_not_reparse_the_file() {
+    let dir = std::env::temp_dir().join(format!("loft_656_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A METHOD plus a self-qualified call — both halves are needed: the method is
+    // what makes the re-registration fatal rather than merely duplicated.
+    let file = dir.join("dlib.loft");
+    std::fs::write(
+        &file,
+        "pub fn shout(self: text) -> text { return self; }\n\
+         pub fn go(x: text) -> text { return dlib::shout(x); }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.lib_dirs.push(dir.to_string_lossy().to_string());
+    let _ = p.parse_dir(
+        &format!("{}/default", env!("CARGO_MANIFEST_DIR")),
+        true,
+        false,
+    );
+    p.parse(&file.to_string_lossy(), false);
+    let level = p.diagnostics.level();
+    let report = format!("{}", p.diagnostics);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        level < loft::diagnostics::Level::Error,
+        "#656: a self-qualified reference must not re-parse its own file:\n{report}"
+    );
+}
+
+// #656, second shape — a package that names itself while ANOTHER library is loaded.
+//
+// The two halves failed differently for the same reason.  With no other library in
+// play the self-qualified name got loaded (and the file re-parsed) — the first case
+// above.  Once a `use <dep>` has loaded something else, the main file's own name no
+// longer resolves at all and the parser reported "Unknown library 'glib'" — naming
+// the library it was reading at that moment.  `use_names` deliberately never holds
+// the main file (source 1 is reserved so a user def can shadow a prelude name), so a
+// package simply could not name itself.
+//
+// Published `graphics` is the real case: `graphics::color_r(..)` in a package that
+// also does `use mesh3d; use glb;`.  It reproduced on 0.5.0, not just on main, and
+// was the last package `loft compat floor` could not measure.  The dependency here
+// is a local file rather than a registry package, so the test needs no network and
+// no install.
+#[test]
+fn issue_656_package_can_name_itself_while_another_library_is_loaded() {
+    let dir = std::env::temp_dir().join(format!("loft_656b_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    // The other library — its presence is the whole point, so `use` must resolve.
+    std::fs::write(
+        dir.join("src").join("gdep.loft"),
+        "pub fn helper(x: integer) -> integer { return x * 2; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("loft.toml"),
+        "[package]\nname = \"glib\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+         [library]\nentry = \"src/glib.loft\"\n",
+    )
+    .unwrap();
+    let file = dir.join("src").join("glib.loft");
+    std::fs::write(
+        &file,
+        "use gdep;\n\
+         pub fn base(x: integer) -> integer { return x + 1; }\n\
+         pub fn far(x: integer) -> integer { return glib::base(x) + gdep::helper(x); }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.lib_dirs
+        .push(dir.join("src").to_string_lossy().to_string());
+    let _ = p.parse_dir(
+        &format!("{}/default", env!("CARGO_MANIFEST_DIR")),
+        true,
+        false,
+    );
+    p.parse(&file.to_string_lossy(), false);
+    let level = p.diagnostics.level();
+    let report = format!("{}", p.diagnostics);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        level < loft::diagnostics::Level::Error,
+        "#656: a package must be able to name itself with another library loaded:\n{report}"
+    );
+}
