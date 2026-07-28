@@ -140,6 +140,9 @@ pub struct Parser {
     /// already cost 6; a flat `match` costs 1 however many arms it has. That ordering is the
     /// point — "many branches" and "hard to follow" are different properties.
     pub complexity: HashMap<u32, u32>,
+    /// Deepest control-flow nesting reached per definition, with the source line where it
+    /// was reached — so the advice can say WHERE to cut instead of only how bad it is.
+    pub(crate) cc_deepest: HashMap<u32, (u32, u32)>,
     /// Control-flow nesting depth while parsing, for [`Parser::complexity`]. Bumped only
     /// around a construct's BODY, so an `else if` chain — which re-enters `parse_if` after
     /// the `then` body has closed — charges once per link at the chain's own depth rather
@@ -731,6 +734,7 @@ impl Parser {
             lexer: Lexer::default(),
             in_loop: false,
             complexity: HashMap::new(),
+            cc_deepest: HashMap::new(),
             cc_nest: 0,
             in_format_expr: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
@@ -1195,6 +1199,47 @@ impl Parser {
              reads bytes — this truncates by one byte per multi-byte character and is silent \
              on ASCII; use `0..size(text)` for a byte walk, or iterate with `for c in text` \
              (@PLN110 strict-index)"
+        );
+    }
+
+    /// Advice: this function's cognitive complexity has passed [`crate::keys::COMPLEXITY_ADVICE_AT`]
+    /// — a whole algorithm in one body.
+    ///
+    /// Cognitive, so DEPTH is what costs: a construct is charged `1 + nesting`, an `else if`
+    /// chain once per link at its own depth, and a flat `match` once however many arms it
+    /// has. Eight sequential `if`s score 8 while three nested ones score 6, which is the
+    /// ordering that matters — "many branches" is not "hard to follow", and only the second
+    /// is worth interrupting anyone about.
+    ///
+    /// Counted at parse time because that is the only place the author's structure still
+    /// exists: loft has no AST between the parser and the Value IR, and on the IR five `??`
+    /// discharges with no author-written branch score 10 while one `for x in v` scores 5 — a
+    /// reading that charges people for writing idiomatic loft.
+    ///
+    /// Names the deepest nesting line, because "score 93" is not actionable and "your
+    /// deepest nesting is 7 levels at line 412" is.
+    fn warn_function_complexity(&mut self) {
+        if self.first_pass || self.default || !crate::keys::complexity_lint_enabled() {
+            return;
+        }
+        let score = self.complexity.get(&self.context).copied().unwrap_or(0);
+        if score < crate::keys::COMPLEXITY_ADVICE_AT {
+            return;
+        }
+        let (depth, line) = self
+            .cc_deepest
+            .get(&self.context)
+            .copied()
+            .unwrap_or((0, 0));
+        let name = self.data.def(self.context).original_name().clone();
+        let at = crate::keys::COMPLEXITY_ADVICE_AT;
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            "`{name}` scores {score} for control-flow complexity (nudge at {at}) — its \
+             deepest nesting is {depth} levels, at line {line}. Nesting is what the score \
+             charges, so lifting the innermost part into its own function buys the most; a \
+             long flat sequence of branches costs almost nothing"
         );
     }
 

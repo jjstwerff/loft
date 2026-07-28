@@ -1990,3 +1990,33 @@ Writing tests against a tier:
 - `@EXPECT_WARNING` in a `.loft` script matches **either** tier: it asks whether a
   diagnostic fired, not which tier it landed in.
 - `loft test` prints both; only the Warning bucket reaches the deny gate.
+
+### The complexity advice, and why it is counted at parse time
+
+`LOFT_NO_COMPLEXITY` opts out of a nudge when a function's **cognitive** complexity
+reaches `keys::COMPLEXITY_ADVICE_AT` (40).
+
+Cognitive, not cyclomatic: a construct costs `1 + nesting`, so depth is what is expensive.
+Eight sequential `if`s cost 8; three nested cost 6; a flat `match` costs 1 however many arms
+it has. "Many branches" and "hard to follow" are different properties, and a lint that
+confuses them fires on every wide dispatch and gets switched off.
+
+**It is counted as the source is parsed, and that is not an implementation detail.** loft has
+no AST between the parser and the Value IR, so any whole-program pass sees post-desugar code.
+Measured on the IR: five `??` discharges with no author-written branch score 10, and one plain
+`for x in v` scores 5 — a reading that charges people for using the null model and the loop
+forms idiomatically. An IR version was built and measured before being discarded; the numbers
+are in the commit that added `Parser::complexity`.
+
+Two calibration facts worth keeping:
+
+- The boundary is set from the corpus, not chosen: over 5,972 functions of real loft the
+  distribution runs p50 1, p90 15, p95 27, p98 47. 40 speaks for ~3%.
+- The score is charged on **pass 2 only** — the parser runs twice, and charging both doubles
+  every score (eight flat `if`s read 16). The nesting counter still tracks on both passes, or
+  pass-1 bodies are charged at a stale depth.
+
+Also discarded on evidence, so it is not re-derived: a live-interval "cut point" signal (no
+variable crosses a boundary ⇒ two independent halves). It fires on 45% of long functions and
+flags a one-line vector add, because the absence of a spanning variable is a property of
+sequential evaluation, not of separable logic.

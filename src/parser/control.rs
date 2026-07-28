@@ -484,6 +484,13 @@ impl Parser {
                 *self.complexity.entry(self.context).or_insert(0) += add;
             }
             self.cc_nest += 1;
+            if !self.first_pass {
+                let line = self.lexer.pos().line;
+                let deepest = self.cc_deepest.entry(self.context).or_insert((0, 0));
+                if self.cc_nest > deepest.0 {
+                    *deepest = (self.cc_nest, line);
+                }
+            }
         }
         let cc_ret = self.parse_block_inner(context, val, result);
         if cc.is_some() {

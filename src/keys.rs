@@ -536,6 +536,33 @@ pub fn math_domain_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_MATH_DOMAIN").is_none())
 }
 
+/// The cognitive-complexity score at which a function earns a split nudge.
+///
+/// Just under p98 of real loft (47), so it speaks for roughly the top 3%. Deliberately a
+/// round number rather than a fitted one: the exact cut is a judgement, and a suspiciously
+/// precise threshold invites tuning it until the corpus goes quiet, which is how a lint stops
+/// meaning anything.
+pub const COMPLEXITY_ADVICE_AT: u32 = 40;
+
+/// `LOFT_NO_COMPLEXITY=1` opts OUT of the function-complexity ADVICE — default ON.
+///
+/// Advice, never a warning: a complex function is correct, so ignoring this cannot produce a
+/// wrong result.  It exists because a whole algorithm wired into one function is the thing
+/// nobody chooses and everybody inherits.
+///
+/// Cognitive, not cyclomatic — a construct costs `1 + nesting`, so DEPTH is what is
+/// expensive.  Eight sequential `if`s cost 8; three nested cost 6; a flat `match` costs 1
+/// however many arms it has.  "Many branches" and "hard to follow" are different properties,
+/// and only the second is worth a nudge.
+///
+/// The boundary is calibrated, not picked: over 5,972 functions of real loft the distribution
+/// runs p50 1, p90 15, p95 27, p98 47.  [`COMPLEXITY_ADVICE_AT`] sits just under p98 so it
+/// speaks for ~3% — few enough that each one is worth reading.
+pub fn complexity_lint_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_COMPLEXITY").is_none())
+}
+
 /// `LOFT_LINT_STRICT_INDEX=1` (@PLN102 case D audit) — opt-in, DEFAULT OFF. The index-trust
 /// model types `v[i]` non-null for a for-loop iter var (like a constant index), trusting the
 /// loop bounds the vector. That trust is unchecked, so `for i in 0..len(v) { w[i] }` (or a

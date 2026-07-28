@@ -1542,6 +1542,7 @@ impl Parser {
             // @PLN46 W3 — auto-infer `#null_safe` from entry guards (after the warn
             // pass, so this fn's flag is set for LATER callers' walks).
             self.infer_function_null_safe(&body);
+            self.warn_function_complexity();
             self.lexer.to(warn_pos);
         }
         self.lexer.has_token(";");

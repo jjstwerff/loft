@@ -270,6 +270,11 @@ read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost) �
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·
+`LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
+construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
+`match` costs 1 whatever its arm count; counted at PARSE time because the IR is
+post-desugar and would charge `??` and `for` as branches the author never wrote;
+names the deepest-nesting line, since that is where a split pays) ·
 `LOFT_NO_STRICT_INDEX_TEXT` (@PLN110 3a text strict-index units lint: warns on
 `for i in 0..len(s) { s[i] }` AND `{ s.byte_at(i) }`, incl. via a local (`n = len(s); 0..n`) —
 `len(text)` is a CHARACTER count but both reads are byte-indexed, so the loop truncates
