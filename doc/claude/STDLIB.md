@@ -672,11 +672,20 @@ Off when the `mmap` Cargo feature is disabled at build time:
 returns `false` so consumers branch into a JSON fallback (or
 rebuild-from-source).
 
-### Images
+### Images — `use imaging;`
+
+These live in the **`imaging` package**, not the always-loaded stdlib: `Image` and
+`Pixel` were drained out of `default/` because image types are not language
+primitives. Add `use imaging;` (or call them qualified, `imaging::…`) or the names
+do not resolve at all.
+
+`png` is a METHOD, so a missing import reads as `Unknown field File.png` with no
+package named — the did-you-mean hint that redirects a free function to its package
+does not cover methods yet.
 
 | Function | Description |
 |----------|-------------|
-| `png(self: File) -> Image` | Decodes a PNG file and returns an `Image`. Returns null if the file is not in text format. |
+| `png(self: File) -> Image` | Decodes a PNG file and returns an `Image`. Returns null unless the file exists and is readable (`Format.TextFile`, which is loft's classification for any ordinary file — a PNG included). |
 
 **`Image`** struct fields: `name: text`, `width: integer`, `height: integer`, `data: vector<Pixel>`.
 
@@ -685,6 +694,15 @@ rebuild-from-source).
 | Function | Description |
 |----------|-------------|
 | `value(self: Pixel) -> integer` | Returns the pixel colour as a packed 24-bit integer (`0xRRGGBB`). Use for fast colour comparison or storage. |
+
+**Example — read a PNG's dimensions:**
+```loft
+use imaging;
+fn main() {
+  img = file("assets/map.png").png();
+  println("{img.width}x{img.height}");
+}
+```
 
 ---
 
@@ -927,7 +945,11 @@ Functions for interacting with the host operating system.
 
 ---
 
-## Random
+## Random — `use random;`
+
+These live in the **`random` package**, not the always-loaded stdlib. Add
+`use random;` (or call them qualified, `random::…`) or the names do not resolve;
+loft names the package for you when they are missing.
 
 A fast PCG64 generator, seeded with a fixed default at startup. Call `rand_seed` before use
 when reproducibility matters.
@@ -940,10 +962,13 @@ when reproducibility matters.
 
 **Example — pick 3 distinct items at random:**
 ```loft
-rand_seed(42);
-items = ["a", "b", "c", "d", "e"];
-order = rand_indices(len(items));
-for i in 0..3 { println(items[order[i]]) }
+use random;
+fn main() {
+  rand_seed(42);
+  items = ["a", "b", "c", "d", "e"];
+  order = rand_indices(len(items));
+  for i in 0..3 { println(items[order[i]]) }
+}
 ```
 
 ---
