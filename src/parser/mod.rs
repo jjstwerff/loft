@@ -7535,6 +7535,20 @@ impl Parser {
                     continue;
                 }
                 let f = self.lib_path(&n);
+                // A library must never be loaded from the file being parsed RIGHT
+                // NOW.  A package that qualifies a call with its own name
+                // (`graphics::color_r(..)` inside `src/graphics.loft`) resolves the
+                // library to that same file, and parsing it a second time into one
+                // parser re-registers every definition — which surfaces as
+                // "cannot redefine method `x` on `text`" naming the file's own line,
+                // an error about the source disagreeing with itself (loft#656).
+                // Free functions merely duplicated silently; a METHOD made it fatal.
+                // The definitions are already present, so skipping is not a
+                // work-around: the load has nothing left to do.
+                if self.is_current_source(&f) {
+                    self.data.use_add(&n);
+                    continue;
+                }
                 if std::path::Path::new(&f).exists() {
                     resolved.push((n, f));
                 }
@@ -7781,6 +7795,18 @@ impl Parser {
     #[allow(clippy::unused_self)]
     fn catalog_trigger_map(&mut self) -> std::collections::HashMap<String, String> {
         std::collections::HashMap::new()
+    }
+
+    /// Is `f` the source file this parser is currently parsing?
+    ///
+    /// Compared canonically, because the two paths reach here by different routes —
+    /// the lexer's is whatever the caller passed, the candidate's is built from a
+    /// probe directory — so `src/x.loft` and an absolute form must compare equal.
+    fn is_current_source(&self, f: &str) -> bool {
+        let canon =
+            |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+        let cur = self.lexer.pos().file.clone();
+        !cur.is_empty() && canon(&cur) == canon(f)
     }
 
     fn lib_path(&mut self, id: &str) -> String {

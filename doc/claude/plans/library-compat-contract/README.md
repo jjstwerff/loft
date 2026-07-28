@@ -422,25 +422,44 @@ Every published version installed (99), every package measured against its `orig
 |---|---|---|
 | reaches back ≥1 release | **14** | crypto **4**; game_protocol, glb, imaging, pluginabi, server, web **2**; cbor, hex_terrain, hex_world, input, markdown, mesh3d, shapes **1** |
 | only one release ever published | 15 | the `hex_*` family, `html`, `ssh`, `hexbody` |
-| reaches back to nothing | 4 | `arguments`, `gridmesh`, `random`, `time` |
-| unmeasurable — `api-surface` cannot read them (**loft#656**) | 2 | `graphics`, `regex` |
+| reaches back to nothing — a declared break is owed | 5 | `arguments`, `gridmesh`, `random`, `regex`, `time` |
+| unmeasurable — `api-surface` cannot read it (**loft#656**, `regex`'s half fixed) | 1 | `graphics` |
 
 **The falsifier did not fire.** The plan said the migration fails if most packages measure back
 only to their own latest release. Of the **20** packages with more than one release, **14 reach
-back at least one** and only 4 reach nothing (2 could not be measured). Depth histogram over
-those 20: `0`×4, `1`×7, `2`×6, `4`×1. The floors carry information, so the migration is worth
+back at least one** and 5 reach nothing (1 could not be measured). Depth histogram over
+those 20: `0`×5, `1`×7, `2`×6, `4`×1, unmeasurable×1. The floors carry information, so the migration is worth
 doing.
 
-**The 4 zero-depth packages are unclaimed API breaks — the thing this contract exists to catch,
-now with names:** `arguments` changed `Args.error_msg`, `gridmesh` changed `clear_dirty`,
-`random` changed `rand`, `time` changed `Duration.to_text`. Each shipped a break with nothing
-saying so. They are not defects to fix — a library may break — but each must now declare it.
+**The zero-depth packages have changed their API, which is allowed.** `arguments` changed
+`Args.error_msg`, `gridmesh` changed `clear_dirty`, `random` changed `rand`, `time` changed
+`Duration.to_text`, and `regex`'s main renamed its verbs and dropped `match_groups` / `replace`
+/ `replace_all` — deliberately, to dodge the stdlib collisions C95 made fatal.
 
-**A correction to what those 2 unmeasurable packages mean.** They were first recorded as
-"their own main does not parse". That is wrong: `regex`'s main **passes its own test suite**
-(7 tests) on the same loft that `api-surface` refuses to read, and `graphics` fails identically
-on its *published* 0.5.0. The libraries are fine; `loft api-surface` disagrees with every other
-way of reading them — filed as **loft#656**. It matters beyond the tool, because `compat api` /
+**None of that is a defect, and none of it is something to fix.** This design never tried to
+prevent library breaks; it exists so a break cannot happen *silently* or without leaving a
+working version behind, and the registry keeps every earlier release installable so a consumer
+that cannot follow simply stays where it is. What these five are missing is not a repair, it is
+a **sentence**: `api_compatible_with = "<this release>"`, which says "a drop-in for myself and
+nothing older". That is the supported way to break, and writing it costs one line.
+
+Read the depth number the same way: a shallow floor is a library that moved recently, not a
+badly-behaved one. The only failure the contract recognises here is a break that nobody wrote
+down.
+
+**A correction to what the unmeasurable packages meant — and one of them is now fixed.** They
+were first recorded as "their own main does not parse". That was wrong: `regex`'s main **passes
+its own test suite** (7 tests) on the same loft that `api-surface` refused to read, and
+`graphics` failed identically on its *published* 0.5.0. The libraries were fine; `loft
+api-surface` disagreed with every other way of reading them — **loft#656**.
+
+`regex`'s half is **fixed**: a library that qualified a call with its own name made the parser
+re-parse the file it was already parsing, re-registering every definition. It now measures, and
+what it shows is the API change described above. `graphics` still fails, from a *different*
+cause on the same issue — its own package name does not resolve at all while its entry is being
+read — so it remains the one unmeasurable package.
+
+It mattered beyond the tool, because `compat api` /
 `compat floor` / `compat check` all route through the same `api_surface_of`, so the contract
 reports `UNMEASURABLE` for these packages for a reason that has nothing to do with them.
 

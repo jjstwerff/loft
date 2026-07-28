@@ -16825,3 +16825,47 @@ fn issue_655_ampersand_boolean_reads_and_writes() {
         );
     }
 }
+
+// #656 — a library that qualifies a call with its OWN name (`dlib::shout(x)` inside
+// `src/dlib.loft`) made the parser resolve that name back to the file it was already
+// parsing and load it a second time.  Every definition re-registered, which surfaced
+// as "cannot redefine method `shout` on `text`" pointing at the file's own line — an
+// error about the source disagreeing with itself.
+//
+// A free function only duplicated silently (it showed up twice in `loft api-surface`
+// output, the tell that went unread); a METHOD made it fatal.  Published `regex`
+// carries exactly that shape, so `loft api-surface` — and with it `loft compat api` /
+// `compat floor` / `compat check`, which all route through it — reported the library
+// as unreadable while its own test suite passed.
+#[test]
+fn issue_656_self_qualified_reference_does_not_reparse_the_file() {
+    let dir = std::env::temp_dir().join(format!("loft_656_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A METHOD plus a self-qualified call — both halves are needed: the method is
+    // what makes the re-registration fatal rather than merely duplicated.
+    let file = dir.join("dlib.loft");
+    std::fs::write(
+        &file,
+        "pub fn shout(self: text) -> text { return self; }\n\
+         pub fn go(x: text) -> text { return dlib::shout(x); }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.lib_dirs.push(dir.to_string_lossy().to_string());
+    let _ = p.parse_dir(
+        &format!("{}/default", env!("CARGO_MANIFEST_DIR")),
+        true,
+        false,
+    );
+    p.parse(&file.to_string_lossy(), false);
+    let level = p.diagnostics.level();
+    let report = format!("{}", p.diagnostics);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        level < loft::diagnostics::Level::Error,
+        "#656: a self-qualified reference must not re-parse its own file:\n{report}"
+    );
+}
