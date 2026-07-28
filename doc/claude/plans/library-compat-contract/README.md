@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Library compatibility contract — declared floors, verified by the versions they name
 
-> **Status: steps 1-2 BUILT (2026-07-28), advisory only — nothing gates.** Steps are ordered
+> **Status: steps 1-3 BUILT (2026-07-28), advisory only — nothing gates.** Steps are ordered
 > so each one lands on its own, is useful on its own, and cannot break anything before it.
 >
 > **Step 0 is BLOCKED and cannot be completed as written** — see its section.
@@ -160,11 +160,37 @@ Fetch that version's source, diff its API surface against the working tree, repo
 additive-or-not. Reuses `loft api-surface --check`. A standalone command, no CI. **Verify:**
 run it across all 25 published packages and read the output; a known break must be reported.
 
-### Step 3 — `loft compat test <published-version>`, advisory
+### Step 3 — `loft compat test <published-version>`, advisory — **BUILT**
 
-Fetch that version, run **its** tests against the current source. Reuses `loft test` and
-`LOFT_TIMEOUT`. Carries F4's re-classification from the start. **Verify:** a deliberate break
-is caught; a loft-caused failure is re-classified, not blamed on the library.
+Runs a published release's tests against the working tree's source, staged together in a temp
+directory. Those tests are the only description of the behaviour written *before* this change
+existed — and unlike the working tree's tests they cannot have been edited to match the new
+behaviour in the same commit, which is why library CI running the CURRENT tests can never
+catch a self-inflicted break.
+
+**The control runs first** (F4): the published tests against their own source, establishing the
+corpus can pass at all on today's loft. Three outcomes, all reachable —
+
+| control | subject | verdict |
+|---|---|---|
+| fail | — | `UNVERIFIABLE` — stale corpus, the working tree is not blamed |
+| pass | fail | `BREAK` — released behaviour changed |
+| pass | pass | `drop-in` |
+
+**Measured, and it decides the design:** of 55 published versions with a test suite, **51 (92%)
+still pass their own tests on today's loft**; 4 are stale (`cbor 0.1.1`, `graphics 0.3.0`,
+`hex_terrain 0.1.0`, `markdown 0.1.0`). So F4 — "old failures are mostly loft's fault" — is
+NOT the common case, which was the condition that would have sunk this whole design.
+
+**The cell that justifies the step:** inverting the result of `arguments::parse` while keeping
+its signature reads `API: drop-in` on the api axis and `BREAK` here. An API diff proves the
+SHAPE of a surface; only the old tests prove it still does the same thing.
+
+**One bug the matrix caught.** The staged directory must be named after the package: a test
+does `use <name>;`, which resolves by DIRECTORY NAME, so `control/` and `subject/` silently
+fell back to the installed copy in `~/.loft/registry` — comparing a release against itself and
+reporting drop-in whatever the working tree said. It read green on a deliberate break until
+the directories were renamed.
 
 ### Step 4 — wire both into library CI as **advice**
 

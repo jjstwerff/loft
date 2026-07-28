@@ -3804,12 +3804,10 @@ fn run_ship_command(args: &[String]) -> i32 {
 fn run_compat_command(args: &[String]) -> i32 {
     let json = args.iter().any(|a| a == "--json");
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    // `compat api [<version>]` — the sub-verb is positional[0] ("compat" is stripped by the
-    // caller only for the outer arg, so positional[0] is the subcommand itself).
     // The dispatcher strips `compat`, so positional[0] is the sub-verb.
     let sub = positional.first().map(|s| s.as_str()).unwrap_or("");
-    if sub != "api" {
-        eprintln!("loft compat: usage: loft compat api [<version>] [--json]");
+    if !matches!(sub, "api" | "test") {
+        eprintln!("loft compat: usage: loft compat <api|test> [<version>] [--json]");
         return 2;
     }
 
@@ -3856,6 +3854,10 @@ fn run_compat_command(args: &[String]) -> i32 {
         return 2;
     }
 
+    if sub == "test" {
+        return compat_test(&name, &target, &dir);
+    }
+
     let old_entry = entry_file_of(&dir, &name);
     let new_entry = entry_file_of(std::path::Path::new("."), &name);
     let ((old_s, old_id), (new_s, new_id)) =
@@ -3888,6 +3890,133 @@ fn run_compat_command(args: &[String]) -> i32 {
         );
     }
     0
+}
+
+/// `loft compat test <version>` — run a PUBLISHED release's tests against the working tree.
+///
+/// This is the half `loft compat api` cannot see. An API diff proves the SHAPE of the surface
+/// is unchanged; it says nothing about whether the functions still DO the same thing. The
+/// published version's own tests are the only description of that behaviour written before
+/// this change existed — and unlike the working tree's tests they cannot have been edited to
+/// match the new behaviour in the same commit, which is exactly why library CI running the
+/// CURRENT tests can never catch a self-inflicted break.
+///
+/// **The control comes first, and it is not optional.** Those tests were written against the
+/// loft of their day, so a failure has two possible causes: this change broke them, or they no
+/// longer run against today's loft at all. Running them first against their OWN source
+/// separates the two. Without it the first language change turns every library's history red,
+/// everyone learns the check lies, and it gets switched off — failure path F4 in the design.
+///
+/// Advisory in this step: reports, exits 0 unless it could not run.
+fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
+    if !published.join("tests").is_dir() {
+        eprintln!("loft compat: `{name}` {version} ships no tests/ — nothing to check against");
+        return 2;
+    }
+    let base = std::env::temp_dir().join(format!("loft_compat_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+
+    // CONTROL: the published tests against the published source. Establishes that this corpus
+    // can pass at all on today's loft, so a subject failure means something.
+    // The staged directory MUST be named after the package: a test does `use <name>;`, which
+    // resolves by DIRECTORY NAME, so a differently-named dir silently falls back to the
+    // installed copy in ~/.loft/registry — and the check then compares that release against
+    // itself and reports drop-in no matter what the working tree says. Caught by the matrix:
+    // a deliberate behaviour break read as drop-in until the directories were renamed.
+    let ctl = base.join("control").join(name);
+    if let Err(e) = stage_package(published, published, &ctl) {
+        eprintln!("loft compat: {e}");
+        return 2;
+    }
+    let control_ok = run_package_tests(&ctl);
+
+    // SUBJECT: the same tests against the working tree's source.
+    let subj = base.join("subject").join(name);
+    if let Err(e) = stage_package(std::path::Path::new("."), published, &subj) {
+        eprintln!("loft compat: {e}");
+        return 2;
+    }
+    let subject_ok = run_package_tests(&subj);
+    let _ = std::fs::remove_dir_all(&base);
+
+    println!("compat: `{name}` — {version} tests against the working tree");
+    match (control_ok, subject_ok) {
+        (false, _) => println!(
+            "  UNVERIFIABLE — the {version} tests do not pass against {version} own source on \
+             this loft, so they cannot judge anything. The corpus is stale (a language change \
+             since it was written), not the working tree broken."
+        ),
+        (true, false) => println!(
+            "  BREAK — the {version} tests pass against {version} but FAIL against the working \
+             tree. Behaviour a released version promised has changed. Either fix it, or raise \
+             `api_compatible_with` past {version} to declare the break."
+        ),
+        (true, true) => {
+            println!("  drop-in — the {version} tests still pass against the working tree.");
+        }
+    }
+    0
+}
+
+/// Assemble a runnable package in `dst`: sources from `src_from`, tests from `tests_from`.
+///
+/// The mix is the point — the published tests have to run against the working tree's source,
+/// and a test does `use <name>;`, so the two must sit in one package for the name to resolve.
+/// Staged in a temp directory because neither input may be written to: the install cache is
+/// shared, and the working tree is the user's.
+fn stage_package(
+    src_from: &std::path::Path,
+    tests_from: &std::path::Path,
+    dst: &std::path::Path,
+) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("cannot create {}: {e}", dst.display()))?;
+    for item in ["loft.toml", "src", "native"] {
+        let from = src_from.join(item);
+        if from.exists() {
+            copy_tree(&from, &dst.join(item))?;
+        }
+    }
+    copy_tree(&tests_from.join("tests"), &dst.join("tests"))
+}
+
+/// Recursive copy. Skips per-checkout build state, which would otherwise carry a stale build
+/// into the staged package and have it test something other than the source beside it.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+    let meta = std::fs::metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    if meta.is_file() {
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::copy(from, to).map_err(|e| format!("{}: {e}", from.display()))?;
+        return Ok(());
+    }
+    std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
+        let entry = entry.map_err(|e| format!("read_dir: {e}"))?;
+        let nm = entry.file_name();
+        if matches!(nm.to_str(), Some(".loft" | "native-auto" | "target")) {
+            continue;
+        }
+        copy_tree(&entry.path(), &to.join(&nm))?;
+    }
+    Ok(())
+}
+
+/// Run a staged package's suite, returning whether it passed. Bounded by `LOFT_TIMEOUT` (the
+/// same bound library CI uses) so one hung old test cannot stall the check.
+fn run_package_tests(dir: &std::path::Path) -> bool {
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("loft"));
+    std::process::Command::new(exe)
+        .arg("--interpret")
+        .arg("--tests")
+        .arg("tests")
+        .current_dir(dir)
+        .env(
+            "LOFT_TIMEOUT",
+            std::env::var("LOFT_TIMEOUT").unwrap_or_else(|_| "120".into()),
+        )
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 /// A package's entry `.loft` file: `[library] entry` when declared, else the
