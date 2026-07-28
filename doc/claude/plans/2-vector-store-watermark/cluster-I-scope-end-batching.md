@@ -80,6 +80,33 @@ Investigation under `LOFT_STORES=log` (the monotonic `database.peak` watermark, 
    interacts with dep-tracking/aliasing (cannot free a local whose store is aliased by a
    still-live binding — exactly the PLAN51/52 hazard). Needs the full aliasing analysis.
 
+## The `LOFT_STORE_GUARD` confinement detector does NOT measure this (2026-07-28)
+
+`store_lifetime_guard` / `store_confinement` in `src/scopes.rs` reads as the detector
+for this cluster — "a vector local's references are confined to one non-loop nested
+block, yet its backing `__vdb_N` store is scoped to the function and so frees late".
+It is not usable as evidence, in either direction:
+
+- **It misses the case it was written for.** `probes/15-if-block-locals.loft` is ten
+  vectors each declared inside a separate `if`-block — the exact shape, and the probe
+  records the result as "if-block locals PIN to function exit". The detector reports
+  **nothing** on it. Zero of the 19 probes in `probes/` fire it.
+- **The only thing it did report was a false positive**, now removed: it never asked
+  whether the `__vdb` store itself is a PARAMETER. `return <vector local>` lowers to
+  the incoming caller buffer plus a field-view local (`buf = OpGetField(__vdb_1, …);
+  return __vdb_1`), so every function returning a vector was reported — and acting on
+  the advice would have freed the *caller's* buffer at an inner block's exit.
+  `cbor`'s `head` is where it surfaced.
+
+So **its silence is not evidence that late frees are absent** — this cluster remains
+open and unmeasured, exactly as the Status section above says. Anyone reaching for
+this detector to decide whether cluster I still bites needs to give it a positive
+control first (a shape it demonstrably fires on); until then it reports on nothing.
+
+The hard half of `LOFT_STORE_GUARD` — the Goal-E reclaim assertion — is unaffected
+and does carry evidence; it is a separate check in the same env gate, and it is what
+the library CI arming relies on.
+
 ## Probes
 
 `02`, `07`, `09` (+ contrast `08`); field repro `tests/scripts/11-vectors.loft`.

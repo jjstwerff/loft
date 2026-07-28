@@ -7016,6 +7016,20 @@ fn store_confinement(
         if !vars.name(vdb).starts_with("__vdb") {
             continue;
         }
+        // A caller-provided return buffer arrives as a PARAMETER, so it is not this
+        // function's store to confine — and "free it at the inner block's exit" would
+        // have the callee free the CALLER's buffer.  The backer check below rejects an
+        // argument BACKER but never asked whether the store itself is one.
+        //
+        // `return <vector local>` lowers to exactly that shape: the incoming `__vdb`
+        // becomes the buffer and the named local a field-view of it
+        // (`buf = OpGetField(__vdb_1, …); return __vdb_1`), so the local is a non-arg
+        // backer of an arg store and every such function was reported.  That is the
+        // most ordinary vector idiom in the language — `cbor`'s `head` is the shape
+        // that surfaced it — so the report was noise wherever anyone looked.
+        if vars.is_argument(vdb) {
+            continue;
+        }
         // The single local that holds `vdb` (vdb in its dep), non-arg,
         // non-captured.  A *single-store* local (dep == [vdb]) shares its store's
         // span; a *multi-store* local (dep ⊇ vdb, reassigned a fresh store per
