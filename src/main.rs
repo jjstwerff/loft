@@ -6141,7 +6141,8 @@ fn main() {
                         if entry.level == Level::Debug {
                             continue;
                         }
-                        if !print_warnings && entry.level == Level::Warning {
+                        if !print_warnings && matches!(entry.level, Level::Warning | Level::Advice)
+                        {
                             continue;
                         }
                         eprintln!("{}", entry.to_string_compact());

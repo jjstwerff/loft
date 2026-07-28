@@ -105,8 +105,11 @@ fn superseded_steer_carries_a_structured_suggestion_on_the_call_name() {
         .entries()
         .iter()
         .find(|e| e.message.contains("is superseded"))
-        .expect("the steer warning fires from owned source");
-    assert_eq!(e.level, Level::Warning, "the steer is a Warning");
+        .expect("the steer fires from owned source");
+    // Advice, so an editor renders it as a Hint (severity 4) rather than a problem:
+    // the old form keeps working, and gating on it would fail a shipped library's own
+    // CI the moment loft supersedes a symbol it uses.
+    assert_eq!(e.level, Level::Advice, "the steer is Advice, not a Warning");
     assert_eq!(
         e.suggestion.as_deref(),
         Some("new_add"),

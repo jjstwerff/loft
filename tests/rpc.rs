@@ -568,9 +568,12 @@ fn rpc_compile_emits_structured_diagnostics() {
         out.contains("\"event\":\"diagnostics\""),
         "a diagnostics event: {out}"
     );
+    // `level` is part of the RPC contract, so the tier is asserted, not just the
+    // presence: UPPER_CASE is ADVICE (correct code, a naming preference), and a client
+    // that gates on `"level":"warning"` must not see it.
     assert!(
-        out.contains("\"line\":2,\"col\":6,\"level\":\"warning\""),
-        "structured warning at line 2:6: {out}"
+        out.contains("\"line\":2,\"col\":6,\"level\":\"advice\""),
+        "structured advice at line 2:6: {out}"
     );
     let _ = std::fs::remove_file(&path);
 }

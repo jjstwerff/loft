@@ -874,7 +874,11 @@ fn check_diagnostics(
     for diag in diagnostics {
         if diag.starts_with("Debug: ") {
             continue;
-        } else if diag.starts_with("Warning: ") {
+        } else if diag.starts_with("Warning: ") || diag.starts_with("Advice: ") {
+            // Advice counts for `// #warn` / `@EXPECT_WARNING` the same as a warning:
+            // the declaration asserts a diagnostic FIRED, not which tier it landed in.
+            // Without this an `Advice:` line falls to the error branch below and a
+            // script that deliberately triggers a deprecation fails as "unexpected".
             // Try #warn patterns first (strict — must all match)
             if let Some(pos) = unmatched_warns.iter().position(|pat| diag.contains(*pat)) {
                 println!("expected warning matched: {diag}");
@@ -1081,10 +1085,9 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     let path = entry.to_string_lossy().to_string();
     p.parse(&path, false);
     let had_errors = !p.diagnostics.is_empty()
-        && p.diagnostics
-            .lines()
-            .iter()
-            .any(|l| !l.starts_with("Warning:") && !l.starts_with("Debug:"));
+        && p.diagnostics.lines().iter().any(|l| {
+            !l.starts_with("Warning:") && !l.starts_with("Debug:") && !l.starts_with("Advice:")
+        });
     if !p.diagnostics.is_empty() {
         check_diagnostics(
             &p.diagnostics.lines(),

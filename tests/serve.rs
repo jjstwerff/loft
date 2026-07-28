@@ -254,9 +254,11 @@ fn serve_ws_compile_streams_diagnostics() {
     );
     let msgs = recv_until(&mut ws, 4, |m| m.contains("\"event\":\"diagnostics\""));
     let all = msgs.join("\n");
+    // The tier is asserted, not just the presence: UPPER_CASE is advice (correct code,
+    // a naming preference), so a client gating on `"level":"warning"` must not see it.
     assert!(
-        all.contains("\"event\":\"diagnostics\"") && all.contains("\"level\":\"warning\""),
-        "a warning diagnostic streamed over the websocket: {all}"
+        all.contains("\"event\":\"diagnostics\"") && all.contains("\"level\":\"advice\""),
+        "an advice diagnostic streamed over the websocket: {all}"
     );
     let _ = std::fs::remove_file(&path);
 }

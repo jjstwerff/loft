@@ -1956,3 +1956,37 @@ adequacy is a property of the tests, not of the backend.
 
 Guarded by `tests/function_coverage.rs`, which asserts the quiet directions as hard as
 the loud one.
+
+---
+
+## Diagnostic tiers — what `--deny-warnings` may fail on
+
+Two tiers, and the difference is contractual rather than cosmetic:
+
+| tier | renders | gates `--deny-warnings` | LSP severity |
+|---|---|---|---|
+| `Level::Warning` | `warning:` | **yes** | Warning (2) |
+| `Level::Advice` | `advice:` | **never** | Hint (4) |
+
+**The rule for choosing: a diagnostic gates if and only if ignoring it can produce a
+wrong result.** A lost write, `len(text)` indexed as bytes, a nullable reaching a
+non-null slot — those gate. A deprecation, a perf note, a preferred spelling — those
+advise.
+
+The split is not a convenience. With one tier the compatibility doctrine contradicted
+itself: `revalidate-libs.yml` states that a new deprecation must not fail an
+already-shipped library, while that library's own CI runs `LOFT_DENY_WARNINGS=1` and
+fails on any warning. `not null` — a deliberate no-op kept parseable so unrepublished
+libraries keep loading — therefore made those libraries unable to pass their own CI
+without editing code they never touched.
+
+**There is deliberately no `LOFT_DENY_ADVICE`.** The moment advice can gate, cosmetics
+block a release and the split has bought nothing.
+
+Writing tests against a tier:
+
+- `Test::warning("…")` / `Test::advice("…")` in `tests/testing.rs` assert the tier, not
+  just the text — that is what keeps the split from silently eroding.
+- `@EXPECT_WARNING` in a `.loft` script matches **either** tier: it asks whether a
+  diagnostic fired, not which tier it landed in.
+- `loft test` prints both; only the Warning bucket reaches the deny gate.

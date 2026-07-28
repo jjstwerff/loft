@@ -24,7 +24,7 @@ impl Parser {
             if !self.first_pass {
                 diagnostic!(
                     self.lexer,
-                    Level::Warning,
+                    Level::Advice,
                     "`not null` is deprecated and has no effect — a type is non-null by \
                      default now; delete `not null` (write `T?` if the type should allow null)"
                 );
@@ -768,7 +768,7 @@ impl Parser {
                     let fn_name = id.to_lowercase();
                     diagnostic!(
                         self.lexer,
-                        Level::Warning,
+                        Level::Advice,
                         "constant '{id}' is re-evaluated at EVERY reference — a file-scope constant is an inlined expression, not a once-computed value, so `{callee}` runs again for each use.  For an expensive or effectful initialiser, use a function that computes the value once and caches it: `fn {fn_name}() -> … {{ … }}`"
                     );
                 }

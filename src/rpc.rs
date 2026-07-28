@@ -649,6 +649,7 @@ fn level_str(level: crate::diagnostics::Level) -> &'static str {
     use crate::diagnostics::Level;
     match level {
         Level::Debug => "debug",
+        Level::Advice => "advice",
         Level::Warning => "warning",
         Level::Error => "error",
         Level::Fatal => "fatal",

@@ -6557,7 +6557,7 @@ impl Parser {
                     diagnostic_at!(
                         self.lexer,
                         pos,
-                        Level::Warning,
+                        Level::Advice,
                         "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
                     );
                     self.lexer.suggest_last(&succ);

@@ -134,6 +134,12 @@ pub(crate) fn run_tests(
     struct FileResult {
         tests: Vec<(String, bool, Option<String>)>, // (fn_name, passed, fail_msg)
         warnings: Vec<String>,
+        /// `Level::Advice` lines, kept SEPARATE from `warnings` so `--deny-warnings`
+        /// cannot fail on them: advice reports correct code, and a library must not be
+        /// unable to pass its own CI because loft gained a deprecation.  They still
+        /// satisfy `@EXPECT_WARNING`, because a test asserting a diagnostic fires is
+        /// asking whether it FIRED, not which tier it landed in.
+        advice: Vec<String>,
         errors: Vec<String>,
     }
 
@@ -591,11 +597,14 @@ pub(crate) fn run_tests(
             let mut file_result = FileResult {
                 tests: Vec::new(),
                 warnings: Vec::new(),
+                advice: Vec::new(),
                 errors: Vec::new(),
             };
             for line in p.diagnostics.lines() {
                 if line.starts_with("Warning:") {
                     file_result.warnings.push(line.clone());
+                } else if line.starts_with("Advice:") {
+                    file_result.advice.push(line.clone());
                 } else {
                     file_result.errors.push(line.clone());
                 }
@@ -613,7 +622,13 @@ pub(crate) fn run_tests(
 
             let has_fn_errors = !ann.expect_errors_fn.is_empty();
             let has_fn_warnings = !ann.expect_warnings_fn.is_empty();
-            let all_warnings = file_result.warnings.join("\n");
+            let all_warnings = file_result
+                .warnings
+                .iter()
+                .chain(file_result.advice.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
 
             // Per-function @EXPECT_ERROR: consume errors matching each function's
             // expected substrings.  Track which functions had their errors satisfied.
@@ -737,7 +752,8 @@ pub(crate) fn run_tests(
                 continue;
             }
             if !no_warnings && !has_expect_warning && !has_fn_warnings {
-                for w in &file_result.warnings {
+                // Advice prints alongside warnings — it is reported, just never gated.
+                for w in file_result.warnings.iter().chain(file_result.advice.iter()) {
                     println!("  {w}");
                 }
             }

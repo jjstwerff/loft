@@ -252,6 +252,14 @@ Set before `cargo test` (controls `tests/dumps/*.txt`; also works with `cargo ru
 `bridging` · `all_fns`. DbRef dumps tune via `LOFT_DUMP_DEPTH` (2), `LOFT_DUMP_ELEMENTS` (8).
 Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
 
+**Two diagnostic tiers.** `warning` GATES a library's CI (`LOFT_DENY_WARNINGS=1`);
+`advice` never does and has no deny switch. The rule: **a diagnostic gates if and only if
+ignoring it can produce a wrong result** — lost writes, char/byte index confusion,
+null-into-non-null gate; deprecations, perf notes and spellings advise. The split exists
+because one tier made the compat doctrine self-contradictory: `not null` is a deliberate
+no-op kept parseable so unrepublished libs load, yet it hard-failed those libs' own CI.
+Renders as `advice:`, LSP severity Hint; `@EXPECT_WARNING` and `Test::advice()` match it.
+
 **Error rendering (@PLN28):** `LOFT_ERRORS=pretty|compact` (or `--errors=…`) picks the
 user renderer — `pretty` (default: `file:line:col` + source line + caret) vs `compact`
 (single line; the test harness pins this). Diagnostic toggles (default-on opt-outs, except

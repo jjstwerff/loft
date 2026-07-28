@@ -1845,7 +1845,7 @@ impl Function {
             lexer.to(var.source);
             diagnostic!(
                 lexer,
-                Level::Warning,
+                Level::Advice,
                 "Variable '{}' is UPPER_CASE — that style is reserved for constants.  \
                  Declare with `const {} = …` to make it immutable, or rename to lower_case.",
                 var.name,

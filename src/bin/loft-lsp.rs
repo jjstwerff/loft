@@ -405,7 +405,11 @@ fn diagnose_text(text: &str, uri: &str, stdlib_dir: &str) -> Vec<Parsed> {
     diags
         .entries()
         .iter()
-        .filter(|e| e.level >= Level::Warning)
+        // `>= Advice`, not `>= Warning`: an editor is exactly where advice belongs — a
+        // faint Hint the author can act on or ignore.  Filtering it out would make the
+        // tier invisible in the one place it is most useful, and the deprecation steer
+        // (its main occupant) would silently stop being offered.  Debug stays excluded.
+        .filter(|e| e.level >= Level::Advice)
         .map(|e| lsp_diagnostic(e, text))
         .collect()
 }
@@ -447,6 +451,9 @@ fn lsp_severity(level: Level) -> i64 {
         Level::Fatal | Level::Error => 1,
         Level::Warning => 2,
         Level::Debug => 3,
+        // Hint, not Information: advice reports correct code, so an editor should
+        // render it as a suggestion (a faint underline) rather than a problem.
+        Level::Advice => 4,
     }
 }
 

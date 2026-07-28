@@ -105,6 +105,7 @@ pub struct Test {
     expr: String,
     code: String,
     warnings: Vec<String>,
+    advice: Vec<String>,
     errors: Vec<String>,
     fatal: Vec<String>,
     sizes: HashMap<String, u32>,
@@ -139,6 +140,15 @@ impl Test {
     /// This will not change if it results in an error or a normal result.
     pub fn warning(&mut self, text: &str) -> &mut Test {
         self.warnings.push(text.to_string());
+        self
+    }
+
+    /// Expect this ADVICE during parsing — a diagnostic on code that is correct as
+    /// written (a deprecation, a cost, a preferred spelling).  Distinct from
+    /// [`Test::warning`] because only the Warning tier gates a library's CI under
+    /// `--deny-warnings`; asserting the tier here is what keeps that split honest.
+    pub fn advice(&mut self, text: &str) -> &mut Test {
+        self.advice.push(text.to_string());
         self
     }
 
@@ -514,6 +524,9 @@ impl Test {
         for w in &self.warnings {
             expected.insert(normalize_loft_loc(&format!("Warning: {w}")));
         }
+        for w in &self.advice {
+            expected.insert(normalize_loft_loc(&format!("Advice: {w}")));
+        }
         for w in &self.errors {
             expected.insert(normalize_loft_loc(&format!("Error: {w}")));
         }
@@ -612,6 +625,7 @@ pub fn testing_code(code: &str, test: &str) -> Test {
         expr: "".to_string(),
         code: code.to_string(),
         warnings: vec![],
+        advice: vec![],
         errors: vec![],
         fatal: vec![],
         result: Value::Null,
@@ -628,6 +642,7 @@ pub fn testing_expr(expr: &str, test: &str) -> Test {
         expr: expr.to_string(),
         code: "".to_string(),
         warnings: vec![],
+        advice: vec![],
         errors: vec![],
         fatal: vec![],
         result: Value::Null,
