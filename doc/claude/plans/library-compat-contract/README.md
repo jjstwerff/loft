@@ -459,8 +459,48 @@ loft, so their real reach may be further back. That is failure path F6 on the AP
 tool reports it rather than stepping over it — a floor must never claim a version nobody could
 look at.
 
-Not yet done: seeding the two lines into 8 `loft-libs-*` repos (steps 3–5 above), and a
-`--with-tests` pass to add the behaviour axis.
+#### The `--with-tests` pass — run 2026-07-28
+
+Same 34 packages, now with each candidate release's own published suite run against the working
+tree. **Result: every floor is unchanged**, and the axis is worth having anyway — 17 of the
+version comparisons now rest on behaviour evidence rather than shape alone.
+
+| verdict | n | meaning |
+|---|---|---|
+| `drop-in` | 17 | the release's tests ran and still pass — real evidence |
+| `UNVERIFIABLE` | 5 | its suite no longer passes against its OWN source, so it judges nothing |
+| **`BREAK`** | **0** | tests pass on their own source and fail here |
+
+**F4 turned out to be live, not hypothetical, and it caught a defect in this tool.** The first
+implementation stopped the walk on *any* non-pass, including `UNVERIFIABLE`. That moved five
+floors — `cbor`, `game_protocol`, `hex_terrain` and `markdown` collapsed to *nothing*, `imaging`
+went shallower — and **not one of those was a behaviour break**. Every one was a stale corpus:
+`game_protocol 0.1.1`'s test file uses `use game_protocol::(a, b, …)`, a multi-name import loft
+no longer accepts. Left alone, each loft language change would quietly shorten every library's
+history, which is exactly how a check earns its way into being switched off.
+
+Corrected to the rule F4 implies: **only a `BREAK` lowers a floor.** A `BREAK` is evidence about
+the *library*; `UNVERIFIABLE` and "could not run" are evidence about the *environment* and say
+nothing about compatibility. The API and layout axes still verified those releases, so the claim
+stands — and the versions the behaviour axis could not speak for are **named in the report**, so
+nobody reads the floor as more thoroughly verified than it is:
+
+| package | behaviour axis silent on |
+|---|---|
+| `cbor` | 0.1.1 |
+| `game_protocol` | 0.1.1, 0.1.0 |
+| `hex_terrain` | 0.1.0 |
+| `imaging` | 0.1.0 |
+| `markdown` | 0.1.0 |
+
+Those five are a finding in their own right, on the other axis this plan does not own: published
+artifacts whose tests no longer run on today's loft. Pre-contract-1 that is permitted, but it is
+the population contract 1 has to stop growing.
+
+**The floors are ready to seed.** Both passes agree, and the numbers now carry behaviour evidence
+wherever a corpus could still run.
+
+Not yet done: seeding the two lines into 8 `loft-libs-*` repos (steps 3–5 above).
 
 ### Step 6 — resolution honours the floors — **BUILT**
 

@@ -4082,6 +4082,8 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
     );
     let mut floor: Option<String> = None;
     let mut stopped_at: Option<(String, String)> = None;
+    // Versions the behaviour axis could not judge (stale corpus / suite would not run).
+    let mut no_behaviour: Vec<String> = Vec::new();
 
     for v in versions.iter().rev() {
         let dir = loft::registry_index::extract_dir(name, v);
@@ -4112,12 +4114,34 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
             stopped_at = Some((v.clone(), "DATA break — stored layout reshaped".to_string()));
             break;
         }
-        if with_tests && dir.join("tests").is_dir() && compat_test(name, v, &dir) != 0 {
-            stopped_at = Some((
-                v.clone(),
-                "its published tests fail against this tree".to_string(),
-            ));
-            break;
+        if with_tests && dir.join("tests").is_dir() {
+            // ONLY a Break lowers the floor.  A Break is evidence about the LIBRARY: the
+            // release's tests pass against its own source and fail against this tree, so
+            // released behaviour changed.  Unverifiable and CouldNotRun are evidence about
+            // the ENVIRONMENT — a corpus written against an older loft, a suite that would
+            // not start — and say nothing about compatibility.
+            //
+            // Letting those lower the floor is failure path F4, and it is not hypothetical:
+            // the first full sweep produced 0 Breaks, 17 drop-ins and 5 Unverifiables, and
+            // every floor the axis moved was moved by a stale corpus.  Treating them as
+            // failures makes each loft language change quietly shorten every library's
+            // history, which is precisely how a check earns its way into being switched off.
+            // The API and layout axes verified these versions; the behaviour axis merely has
+            // nothing to add, and that is recorded rather than punished.
+            match compat_test_verdict(name, v, &dir) {
+                TestVerdict::Break => {
+                    stopped_at = Some((
+                        v.clone(),
+                        "its published tests FAIL against this tree — released behaviour changed"
+                            .to_string(),
+                    ));
+                    break;
+                }
+                // Recorded, not punished: the report must say which versions the behaviour
+                // axis could not speak for, so nobody reads the floor as fully verified.
+                TestVerdict::Unverifiable | TestVerdict::CouldNotRun => no_behaviour.push(v.clone()),
+                TestVerdict::DropIn => {}
+            }
         }
         println!("  {v}: drop-in");
         floor = Some(v.clone());
@@ -4125,6 +4149,14 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
 
     if let Some((v, why)) = &stopped_at {
         println!("  {v}: STOP — {why}");
+    }
+    if !no_behaviour.is_empty() {
+        println!(
+            "  note: the behaviour axis could not judge {} — their suites no longer pass \
+             against their OWN source on this loft, which is a fact about the corpus, not \
+             about compatibility. The API and layout axes still verified them.",
+            no_behaviour.join(", ")
+        );
     }
     let axes = if with_tests {
         "API surface, stored layout, and each release's own tests"
@@ -4326,10 +4358,40 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
 /// everyone learns the check lies, and it gets switched off — failure path F4 in the design.
 ///
 /// Advisory in this step: reports, exits 0 unless it could not run.
+/// What a published release's own test suite says about the working tree.
+///
+/// Separate from the CLI's exit code because the two answer different questions. `loft compat
+/// test` is advisory and exits 0 whatever it finds; a CALLER deciding a compatibility floor has
+/// to tell the three verdicts apart, and collapsing them into one exit code is how the
+/// `--with-tests` axis silently checked nothing.
+#[cfg(feature = "registry")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestVerdict {
+    /// The release's tests still pass against the working tree.
+    DropIn,
+    /// They pass against their own source and FAIL here — released behaviour changed.
+    Break,
+    /// They no longer pass against their OWN source on this loft, so they judge nothing.
+    /// A floor must treat this as unverified, never as a pass.
+    Unverifiable,
+    /// The comparison could not be set up (no `tests/`, staging failed).
+    CouldNotRun,
+}
+
+#[cfg(feature = "registry")]
 fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
+    // Advisory by contract: report the verdict, always exit 0 unless it could not run.
+    match compat_test_verdict(name, version, published) {
+        TestVerdict::CouldNotRun => 2,
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "registry")]
+fn compat_test_verdict(name: &str, version: &str, published: &std::path::Path) -> TestVerdict {
     if !published.join("tests").is_dir() {
         eprintln!("loft compat: `{name}` {version} ships no tests/ — nothing to check against");
-        return 2;
+        return TestVerdict::CouldNotRun;
     }
     let base = std::env::temp_dir().join(format!("loft_compat_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
@@ -4344,7 +4406,7 @@ fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
     let ctl = base.join("control").join(name);
     if let Err(e) = stage_package(published, published, &ctl) {
         eprintln!("loft compat: {e}");
-        return 2;
+        return TestVerdict::CouldNotRun;
     }
     let control_ok = run_package_tests(&ctl);
 
@@ -4352,28 +4414,34 @@ fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
     let subj = base.join("subject").join(name);
     if let Err(e) = stage_package(std::path::Path::new("."), published, &subj) {
         eprintln!("loft compat: {e}");
-        return 2;
+        return TestVerdict::CouldNotRun;
     }
     let subject_ok = run_package_tests(&subj);
     let _ = std::fs::remove_dir_all(&base);
 
     println!("compat: `{name}` — {version} tests against the working tree");
     match (control_ok, subject_ok) {
-        (false, _) => println!(
+        (false, _) => {
+            println!(
             "  UNVERIFIABLE — the {version} tests do not pass against {version} own source on \
              this loft, so they cannot judge anything. The corpus is stale (a language change \
              since it was written), not the working tree broken."
-        ),
-        (true, false) => println!(
+            );
+            TestVerdict::Unverifiable
+        }
+        (true, false) => {
+            println!(
             "  BREAK — the {version} tests pass against {version} but FAIL against the working \
              tree. Behaviour a released version promised has changed. Either fix it, or raise \
              `api_compatible_with` past {version} to declare the break."
-        ),
+            );
+            TestVerdict::Break
+        }
         (true, true) => {
             println!("  drop-in — the {version} tests still pass against the working tree.");
+            TestVerdict::DropIn
         }
     }
-    0
 }
 
 /// Assemble a runnable package in `dst`: sources from `src_from`, tests from `tests_from`.
