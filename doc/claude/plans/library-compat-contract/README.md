@@ -9,7 +9,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > declares a floor — see below. Steps 6-7 remain.** Steps are ordered
 > so each one lands on its own, is useful on its own, and cannot break anything before it.
 >
-> **Step 0 is BLOCKED and cannot be completed as written** — see its section.
+> **Step 0 is BLOCKED and cannot be completed as written** — but its *generalisable* half,
+> the retention guard, is BUILT and nightly. See its section.
 
 ## The problem, measured
 
@@ -28,6 +29,7 @@ A library can silently break its consumers today. Verified on the current tree:
 - **One retention hole.** `PKG_REGISTRY.md` promises yanked versions stay listed so
   `loft.lock`-pinned consumers don't break. `shapes 0.1.0` and `glb 0.1.1` honour it;
   **`web 0.2.2` is absent from its `versions` map**, so a lock pinned there cannot resolve.
+  *(Now guarded — step 0. The loss itself is permanent.)*
 
 ## The invariant
 
@@ -121,15 +123,18 @@ author rather than merely accusing them.
 Each step is independently landable and verifiable. Nothing gates until its noise has been
 measured — the lesson of every check in this repo that had to be walked back.
 
-### Step 0 — restore `web 0.2.2` — **BLOCKED: unrecoverable**
+### Step 0 — restore `web 0.2.2` — **BLOCKED: unrecoverable. Replaced by a guard — BUILT**
 
 Investigated 2026-07-28. It cannot be restored, and attempting to would be worse than the
 gap.
 
-The history is exact. `c8893db5` (06-24) added it; `e471bd26` (07-03) yanked it **correctly**,
-leaving it listed as the rule requires; `738984bc` (07-07), an unrelated `web 0.3.0` publish,
-silently dropped the entry. So the retention rule was honoured and then lost as collateral of
-a later publish — nobody decided to remove it.
+The history is exact — and reading it with the guard below **corrected** the attribution
+recorded on the first pass. `c8893db5` (06-24) added it; `e471bd26` (07-03) yanked it
+**correctly**, leaving it listed as the rule requires; the very next index.json commit,
+`d8ff94c` (07-03) — *"sign: commit index.json + regenerate index.json.sig"* — dropped the
+entry, and that deletion was its **only** index change. Not a later publish, as first written.
+So the retention rule was honoured and then lost as collateral of a **signing** commit that
+committed a working-tree deletion nobody decided to make.
 
 But the artifact is gone too: the release asset 404s, and **no `web-v0.2.2` tag exists** on
 `loft-libs-net`. Source, tag, release and index entry are all erased; only the `yanked` marker
@@ -143,9 +148,36 @@ absence. The one consumer that needed it, `routing`, already survived by **vendo
 source into `routing/lib/web/` — which is what people do when distribution cannot be relied on,
 and is the clearest evidence available that this gap has a cost.
 
-**What replaces this step:** a retention guard, so it cannot recur — a check that no version
-ever leaves `index.json`, and that every listed version's artifact actually resolves. That is
-the generalisable fix; restoring one lost tarball was never the point.
+**What replaces this step — BUILT.** `scripts/registry_retention_check.py`, a nightly job in
+`registry-validation.yml`. Restoring one lost tarball was never the point; making the loss
+impossible to repeat is.
+
+Two halves, because a version stops resolving in two independent ways and neither check sees
+the other's failure:
+
+| half | what it reads | the loss it catches |
+|---|---|---|
+| history | every revision of `index.json`, oldest-first | a version **leaves** the index |
+| artifact | a ranged GET per listed URL | a version is listed but no longer **downloads** |
+
+The nightly matrix could never have caught either: it is built *from* the index, so a deleted
+version is simply absent from the work list and no red night appears.
+
+**Measured, and both halves proven able to fail:**
+
+| cell | result |
+|---|---|
+| real registry, 57 revisions | OK — one drop in the entire history, the known one |
+| real registry, 99 listed versions | OK — all 99 resolve |
+| a constructed drop in a later commit | **FAIL**, naming the revision it was last listed at and the one that dropped it |
+| a listed version pointed at a dead asset | **FAIL**, naming the URL and `HTTP 404` |
+| unreadable repo | **exit 2**, distinct from a pass — "the guard is broken" must never read as "the registry is fine" |
+
+`web 0.2.2` is the one recorded exemption, printed on **every** run including green ones: an
+accepted loss that stops being mentioned is one nobody remembers is still owed. The comment on
+`EXEMPT` states the rule that keeps the list from growing — a dropped version is normally
+*repairable*, because the tarball URL and its sha256 are still in the history the check just
+read, so exemption is only for a loss repair cannot reach.
 
 ### Step 1 — parse the two fields, inert
 

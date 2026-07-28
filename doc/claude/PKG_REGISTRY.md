@@ -585,9 +585,21 @@ The maintainer pipeline is just GitHub Actions + branch protection
 
 ### Yanking
 
-PR removes the version from `versions` and adds it to the package's
-`yanked` array.  Yanked versions stay listed (so `loft.lock` pins
-don't break) but new installs / version resolution skip them.
+PR adds the version to the package's `yanked` array and **leaves its
+`versions` entry exactly where it is**.  Yanking discourages a version;
+it never withdraws one.  A yanked version stays listed and stays
+downloadable, so a `loft.lock` pinned to it still resolves, while new
+installs and version resolution skip it.
+
+**Never delete a `versions` entry.**  Deleting is not a stronger yank,
+it is an unrecoverable one: `web 0.2.2` was yanked correctly and then
+had its entry removed a commit later, and by the time anyone noticed,
+its release asset and tag were gone too — leaving a `yanked` marker
+that implies a version which no longer exists anywhere.  An earlier
+revision of this section said to remove the entry, contradicting the
+promise in the sentence right after it; that wording is how the loss
+happened.  `scripts/registry_retention_check.py` now fails the nightly
+if any version leaves the index or stops downloading.
 
 ---
 
