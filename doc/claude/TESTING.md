@@ -2020,3 +2020,31 @@ Also discarded on evidence, so it is not re-derived: a live-interval "cut point"
 variable crosses a boundary ⇒ two independent halves). It fires on 45% of long functions and
 flags a one-line vector add, because the absence of a spanning variable is a property of
 sequential evaluation, not of separable logic.
+
+### The interface nudges — parameters and default values
+
+Two more advices sit beside the complexity one, deliberately SEPARATE from it and from each
+other, because they measure different burdens with different fixes.
+
+**`LOFT_NO_PARAM_COUNT`** — 8 or more REQUIRED parameters (`keys::PARAM_ADVICE_AT`).
+Parameters with a default do not count (they cost a caller nothing) and neither do
+compiler-injected hidden ones (`__retbuf`, work buffers). Folding this into the complexity
+score was measured and rejected: `th_subdiv` takes 12 required parameters with a complexity
+of **2** — trivial to read, hard to call — so at +1 per parameter it scores 14 and stays
+silent, missing the very case that motivates the check. It would also make the complexity
+message untrue, since most of such a score would not be control flow. 86% of real loft takes
+4 or fewer; `>=8` is 2.1%.
+
+**`LOFT_NO_DEFAULT_HINT`** — 2 or more TRAILING booleans, none defaulted
+(`keys::BOOL_FLAG_ADVICE_AT`). This one advertises a feature rather than reporting a fault,
+and the trigger is deliberately conservative: one trailing flag is idiomatic (1.0% of real
+loft), 96.9% of functions have none at all, and `>=2` covers 2.1%. A nudge that fired on the
+common shape would be suppressed, taking the feature it was advertising with it.
+
+It goes quiet the moment it is taken — a function whose trailing booleans already have
+defaults does not fire. That property is what separates a nudge from nagging, and it is
+asserted rather than assumed.
+
+The message states that adoption is free under the compatibility promise, because that is the
+part people do not know: giving an existing parameter a default is **additive**, so every call
+that passes it today keeps working unchanged and new calls may omit it.

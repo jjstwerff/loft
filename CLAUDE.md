@@ -270,6 +270,11 @@ read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost) �
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·
+`LOFT_NO_PARAM_COUNT` (≥8 REQUIRED parameters — defaulted and compiler-hidden ones
+excluded; separate from complexity because a caller's burden and a reader's burden have
+different fixes: a struct vs an extracted function) · `LOFT_NO_DEFAULT_HINT` (≥2 trailing
+booleans with no default — advertises default parameters, which are under-used and free to
+adopt: adding a default is additive, so existing callers keep working) ·
 `LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
 construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
 `match` costs 1 whatever its arm count; counted at PARSE time because the IR is

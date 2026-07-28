@@ -544,6 +544,61 @@ pub fn math_domain_enabled() -> bool {
 /// meaning anything.
 pub const COMPLEXITY_ADVICE_AT: u32 = 40;
 
+/// Trailing boolean parameters with no default, at which a function earns a
+/// use-defaults nudge.
+///
+/// Two, not one: a single trailing flag is idiomatic and common (1.0% of real loft), while
+/// two or more is a steering CLUSTER — the shape defaults exist for.  The pattern is
+/// naturally rare, which is what keeps this quiet: 96.9% of functions have none at all, and
+/// `>=2` covers 2.1%.  A nudge that fires on a common shape gets suppressed, and then the
+/// thing it was advertising never gets adopted.
+pub const BOOL_FLAG_ADVICE_AT: u32 = 2;
+
+/// `LOFT_NO_DEFAULT_HINT=1` opts OUT of the default-parameter ADVICE — default ON.
+///
+/// Advertises a genuinely under-used feature rather than reporting a fault: `fn f(a: T, loud:
+/// boolean = false)` lets callers say what they mean and omit the rest.  Trailing booleans
+/// are where it pays most, because a call site reading `f(x, true, false, true)` carries no
+/// information at the point a reader needs it.
+///
+/// Worth advertising because adopting it is FREE under the compatibility promise: giving an
+/// existing parameter a default is purely additive — every existing call passes it explicitly
+/// and keeps working, while new calls may leave it out.  Nothing to migrate, so the only
+/// thing standing between the feature and its users is knowing it is there.
+pub fn default_params_lint_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEFAULT_HINT").is_none())
+}
+
+/// The count of REQUIRED parameters at which a function earns a bundle-them nudge.
+///
+/// Separate from [`COMPLEXITY_ADVICE_AT`] on purpose, because the two measure different
+/// burdens with different fixes: parameters are what a CALLER carries and the fix is a
+/// struct; nesting is what a READER carries and the fix is an extracted function.
+///
+/// Folding parameters into the complexity score was measured and rejected — it misses the
+/// case that motivates the check.  `th_subdiv` takes 12 required parameters with a
+/// complexity of 2: trivial to read, hard to call.  At +1 per parameter it scores 14 and
+/// stays silent, so the one function most needing the nudge would never get it.  It would
+/// also make the complexity message untrue, since most of such a score would not be control
+/// flow.
+///
+/// 8 is read off real loft: 86% of functions take 4 or fewer, `>=6` is 8.5%, `>=8` is 2.1%
+/// — about the share the complexity nudge speaks for.
+pub const PARAM_ADVICE_AT: u32 = 8;
+
+/// `LOFT_NO_PARAM_COUNT=1` opts OUT of the required-parameter ADVICE — default ON.
+///
+/// Counts only what a caller must supply: parameters with a DEFAULT are excluded (they cost
+/// the caller nothing), as are compiler-injected hidden ones (`__retbuf`, work buffers) which
+/// no author wrote.  The default exemption currently exempts nothing — no function in 5,915
+/// of real loft uses a default value — but it is the rule that makes the count mean "what a
+/// caller must know", so it is applied rather than assumed away.
+pub fn param_count_lint_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_PARAM_COUNT").is_none())
+}
+
 /// `LOFT_NO_COMPLEXITY=1` opts OUT of the function-complexity ADVICE — default ON.
 ///
 /// Advice, never a warning: a complex function is correct, so ignoring this cannot produce a

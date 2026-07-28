@@ -1243,6 +1243,84 @@ impl Parser {
         );
     }
 
+    /// Advice: this function asks its callers for too many separate things.
+    ///
+    /// Counts only REQUIRED parameters — a defaulted one costs the caller nothing, and
+    /// hidden ones (`__retbuf`, work buffers) were injected by the compiler, not written.
+    /// Kept separate from the complexity nudge because the burdens differ: parameters are
+    /// what a caller carries and the fix is a struct; nesting is what a reader carries and
+    /// the fix is an extracted function. A function can be trivial to read and still hard to
+    /// call — `th_subdiv` takes 12 with a complexity of 2 — which is exactly the case a
+    /// combined score misses.
+    fn warn_parameter_count(&mut self) {
+        if self.first_pass || self.default || !crate::keys::param_count_lint_enabled() {
+            return;
+        }
+        let def = self.data.def(self.context);
+        let required = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && matches!(a.value, Value::Null))
+            .count() as u32;
+        if required < crate::keys::PARAM_ADVICE_AT {
+            return;
+        }
+        let name = def.original_name().clone();
+        let at = crate::keys::PARAM_ADVICE_AT;
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            "`{name}` takes {required} required parameters (nudge at {at}) — every caller \
+             has to get all {required} right, in order. Parameters that travel together are \
+             usually one thing: group them into a struct, or give the optional ones defaults \
+             so callers can leave them out"
+        );
+    }
+
+    /// Advice: these trailing boolean parameters want defaults.
+    ///
+    /// Fires only on a CLUSTER — two or more trailing booleans, none defaulted. One trailing
+    /// flag is ordinary; two is where a call site turns into `f(x, true, false)` and stops
+    /// saying anything at the point a reader meets it.
+    ///
+    /// This advertises a feature rather than reporting a fault, which is why it must stay
+    /// quiet: the shape is rare (96.9% of real loft has none), and a nudge that fired on the
+    /// common case would be suppressed — taking the thing it was advertising with it.
+    ///
+    /// Adopting it costs nothing under the compatibility promise, and the message says so,
+    /// because that is the part people do not know: giving an existing parameter a default is
+    /// additive, so every call that passes it today keeps working unchanged.
+    fn warn_boolean_flag_cluster(&mut self) {
+        if self.first_pass || self.default || !crate::keys::default_params_lint_enabled() {
+            return;
+        }
+        let def = self.data.def(self.context);
+        let mut trailing = 0u32;
+        for a in def.attributes().iter().rev() {
+            if a.hidden {
+                continue;
+            }
+            if matches!(a.typedef.base(), Type::Boolean) && matches!(a.value, Value::Null) {
+                trailing += 1;
+            } else {
+                break;
+            }
+        }
+        if trailing < crate::keys::BOOL_FLAG_ADVICE_AT {
+            return;
+        }
+        let name = def.original_name().clone();
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            "`{name}` ends with {trailing} boolean parameters — a call reading \
+             `{name}(…, true, false)` says nothing about which flag is which. Give them \
+             defaults (`loud: boolean = false`) so callers pass only what they are changing. \
+             Adding a default never breaks a caller: existing calls pass the value and keep \
+             working, new ones may leave it out"
+        );
+    }
+
     /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
     /// VALUE (a function name used as a value).  No-op outside sandboxed code.
     /// Called at the fn-ref creation site so every flow is caught.

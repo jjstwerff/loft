@@ -1543,6 +1543,8 @@ impl Parser {
             // pass, so this fn's flag is set for LATER callers' walks).
             self.infer_function_null_safe(&body);
             self.warn_function_complexity();
+            self.warn_parameter_count();
+            self.warn_boolean_flag_cluster();
             self.lexer.to(warn_pos);
         }
         self.lexer.has_token(";");
