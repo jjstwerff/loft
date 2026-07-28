@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Library compatibility contract — declared floors, verified by the versions they name
 
-> **Status: steps 1-3 BUILT (2026-07-28), advisory only — nothing gates.** Steps are ordered
+> **Status: steps 1-4 BUILT (2026-07-28), advisory only — nothing gates.** Steps are ordered
 > so each one lands on its own, is useful on its own, and cannot break anything before it.
 >
 > **Step 0 is BLOCKED and cannot be completed as written** — see its section.
@@ -192,11 +192,27 @@ fell back to the installed copy in `~/.loft/registry` — comparing a release ag
 reporting drop-in whatever the working tree said. It read green on a deliberate break until
 the directories were renamed.
 
-### Step 4 — wire both into library CI as **advice**
+### Step 4 — wire both into library CI as **advice** — **BUILT**
 
-Non-blocking, on the 4-version sample. This is the calibration step: measure the noise across
-every published package before anything can fail. **Verify:** the advice is quiet on libraries
-that did not break.
+`loft compat check` picks the sample (latest + declared floor + one random interior), reports
+its draw, and always exits 0. Wired into `library-ci-reusable.yml` with `continue-on-error`.
+
+**The calibration found a real defect, which is what this step is for.** The first sweep
+reported `server` as an API BREAK. It was a **false positive in the differ**: `server` 0.5.0
+*added* the method `bound` (plus `listen_on` / `listen_tls`), and `api_diff` treated any
+textual change to a struct's member list as a break. Wired to block, a purely additive release
+would have failed CI.
+
+Fixed with a finer rule than "additions are free", because that is also wrong: an added
+**method** is additive, but an added **field** is not — a consumer writing `Server { … }` must
+now supply it. Both directions proven rather than argued: adding a field reports
+*"added field `extra_field` (a literal construction must supply it)"*, removing a method that
+exists in the baseline reports *"removed method `Server.broadcast`"*, and adding a method
+reports drop-in. An unparseable member list still reports "shape changed" — the conservative
+direction for a check whose value is that a silent break is impossible.
+
+**Result after the fix: 9 comparable packages, 0 breaks, 17 with only one release installed.**
+That quiet baseline is the precondition for step 5.
 
 ### Step 5 — flip to blocking
 

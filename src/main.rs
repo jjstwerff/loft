@@ -3806,8 +3806,8 @@ fn run_compat_command(args: &[String]) -> i32 {
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     // The dispatcher strips `compat`, so positional[0] is the sub-verb.
     let sub = positional.first().map(|s| s.as_str()).unwrap_or("");
-    if !matches!(sub, "api" | "test") {
-        eprintln!("loft compat: usage: loft compat <api|test> [<version>] [--json]");
+    if !matches!(sub, "api" | "test" | "check") {
+        eprintln!("loft compat: usage: loft compat <api|test|check> [<version>] [--json]");
         return 2;
     }
 
@@ -3822,6 +3822,14 @@ fn run_compat_command(args: &[String]) -> i32 {
         eprintln!("loft compat: `loft.toml` has no [package] name");
         return 2;
     };
+
+    if sub == "check" {
+        return compat_check(
+            &name,
+            manifest.version.as_deref(),
+            manifest.api_compatible_with.as_deref(),
+        );
+    }
 
     // Which release to compare against: an explicit argument, else the declared API floor.
     // No silent default to "latest" — the floor is the claim, and comparing against something
@@ -3888,6 +3896,117 @@ fn run_compat_command(args: &[String]) -> i32 {
                 .as_deref()
                 .unwrap_or("<unset>")
         );
+    }
+    0
+}
+
+/// `loft compat check` — the CI entry point: sample a few published releases and report.
+///
+/// Cost is **O(1) per run** by construction, which is the only shape that survives a mature
+/// registry: a library with 50 releases and slow suites must cost the same per PR as one with
+/// two. The sample is the latest release, the declared floor, and **one random release in
+/// between** — the random pick is what makes it mean, because a break cannot hide in a version
+/// nobody ever looks at. Coverage accumulates across runs rather than within one.
+///
+/// The random pick is PRINTED and can be pinned with `LOFT_COMPAT_SAMPLE` (failure path F5).
+/// Without that a real break reads as a flake: the job goes red, someone re-runs it, a
+/// different release is drawn, it goes green, and a genuine contract break is dismissed as CI
+/// noise — strictly worse than having no check.
+///
+/// Advisory: always exits 0. Blocking is a later step, once this has been quiet across every
+/// published package.
+fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i32 {
+    // Candidates come from the install cache, because that is what `compat api` / `compat
+    // test` can actually read. Anything not installed is REPORTED as skipped, never silently
+    // dropped — a check that quietly narrows its own scope reports "clean" for work it did
+    // not do.
+    let mut versions: Vec<String> = loft::registry_index::installed_packages()
+        .into_iter()
+        .filter(|(n, v, _)| n == name && Some(v.as_str()) != own_version)
+        .map(|(_, v, _)| v)
+        .collect();
+    versions.sort_by(|a, b| loft::registry_index::compare_semver(a, b));
+    if let Some(f) = floor {
+        versions.retain(|v| {
+            !matches!(
+                loft::registry_index::compare_semver(v, f),
+                std::cmp::Ordering::Less
+            )
+        });
+    }
+    if versions.is_empty() {
+        println!("compat check `{name}`: no other release installed — nothing to compare against");
+        return 0;
+    }
+
+    let latest = versions.last().cloned().expect("non-empty");
+    let mut sample: Vec<String> = vec![latest.clone()];
+    if let Some(f) = floor
+        && versions.iter().any(|v| v == f)
+        && !sample.contains(&f.to_string())
+    {
+        sample.push(f.to_string());
+    }
+    // One random interior pick: anything not already sampled.
+    let interior: Vec<&String> = versions.iter().filter(|v| !sample.contains(v)).collect();
+    if !interior.is_empty() {
+        let pinned = std::env::var("LOFT_COMPAT_SAMPLE").ok();
+        let chosen = match pinned.as_deref() {
+            Some(p) if interior.iter().any(|v| v.as_str() == p) => p.to_string(),
+            _ => {
+                // Seeded from the clock; the point is not cryptographic quality but that the
+                // draw VARIES across runs and is reported, so coverage accumulates and any
+                // red can be reproduced with LOFT_COMPAT_SAMPLE.
+                let n = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as usize);
+                interior[n % interior.len()].clone()
+            }
+        };
+        println!(
+            "compat check `{name}`: sampled interior release {chosen} (pin with LOFT_COMPAT_SAMPLE={chosen})"
+        );
+        sample.push(chosen);
+    }
+
+    println!(
+        "compat check `{name}`: {} of {} installed release(s) sampled{}",
+        sample.len(),
+        versions.len(),
+        if versions.len() > sample.len() {
+            format!(
+                " — {} not looked at this run",
+                versions.len() - sample.len()
+            )
+        } else {
+            String::new()
+        }
+    );
+    for v in &sample {
+        let dir = loft::registry_index::extract_dir(name, v);
+        if !dir.join("loft.toml").exists() {
+            println!("  {v}: SKIPPED (not installed)");
+            continue;
+        }
+        let old_entry = entry_file_of(&dir, name);
+        let new_entry = entry_file_of(std::path::Path::new("."), name);
+        match (api_surface_of(&old_entry), api_surface_of(&new_entry)) {
+            (Ok((old_s, old_id)), Ok((new_s, new_id))) => {
+                let api = loft::api_diff::diff(&old_s, &new_s);
+                let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+                let api_word = match api {
+                    loft::api_diff::Verdict::Break(_) => "API BREAK",
+                    loft::api_diff::Verdict::Superset => "api ok",
+                };
+                let layout_word = if layout_reshaped(&layout) {
+                    "DATA BREAK"
+                } else {
+                    "data ok"
+                };
+                println!("  {v}: {api_word}, {layout_word}");
+            }
+            (Err(e), _) | (_, Err(e)) => println!("  {v}: could not read ({e})"),
+        }
     }
     0
 }

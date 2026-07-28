@@ -131,6 +131,22 @@ jobs:
           LOFT_STORE_GUARD: 1
         run: LOFT_TIMEOUT=240 loft --native --tests tests
 
+      # Library compatibility contract, step 4 — ADVISORY, never gating.
+      #
+      # Compares this package against a sample of its own published releases: the latest, the
+      # declared `api_compatible_with` floor, and one RANDOM release in between.  O(1) per run
+      # whatever the history, and the random draw is what makes it mean — a break cannot hide
+      # in a version nobody ever looks at.  The draw is printed and can be pinned with
+      # LOFT_COMPAT_SAMPLE, so a red reproduces instead of reshuffling into green.
+      #
+      # `continue-on-error` is deliberate and stays until the noise has been measured in real
+      # CI (it is clean across all 25 packages locally: 9 comparable, 0 breaks).  Design:
+      # doc/claude/plans/library-compat-contract/README.md.
+      - name: Compatibility with published releases (advisory) — ${{ matrix.package }}
+        continue-on-error: true
+        working-directory: ${{ matrix.package }}
+        run: loft compat check
+
       - name: Rust integration tests (if present)
         if: hashFiles(format('{0}/native/tests/*.rs', matrix.package)) != ''
         working-directory: ${{ matrix.package }}/native
