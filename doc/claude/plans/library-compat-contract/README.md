@@ -5,7 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Library compatibility contract — declared floors, verified by the versions they name
 
-> **Status: steps 1-4 BUILT (2026-07-28), advisory only — nothing gates.** Steps are ordered
+> **Status: steps 1-5 BUILT (2026-07-28). Step 5 GATES, but only for a package that
+> declares a floor — see below. Steps 6-7 remain.** Steps are ordered
 > so each one lands on its own, is useful on its own, and cannot break anything before it.
 >
 > **Step 0 is BLOCKED and cannot be completed as written** — see its section.
@@ -214,11 +215,52 @@ direction for a check whose value is that a silent break is impossible.
 **Result after the fix: 9 comparable packages, 0 breaks, 17 with only one release installed.**
 That quiet baseline is the precondition for step 5.
 
-### Step 5 — flip to blocking
+### Step 5 — flip to blocking — **BUILT**
 
-Only once step 4 reads clean. This is the `warning` tier by the established rule — ignoring it
-produces a wrong result for someone downstream. **Verify:** an undeclared break fails; raising
-the floor makes the same commit pass.
+`loft compat check` exits 1 on a violated floor, and `library-ci-reusable.yml` no longer
+carries `continue-on-error`.
+
+**It gates only for a package that DECLARES a floor.** Declaring `api_compatible_with` is the
+act of entering the contract: a package that declares nothing has promised nothing, so there
+is nothing to enforce. That is the model — a library may break its consumers as long as the
+break is an explicit choice — and it is also what makes the flip safe, since no published
+package declares a floor today, so gating cannot fail anyone's build until they opt in.
+
+**Raising the floor must not buy silence.** The first implementation dropped sub-floor releases
+from the comparison, so bumping the number made every check go quiet — the reflex that turns
+floors into decoration. Sub-floor releases are now still compared and reported as a
+`DECLARED BREAK`. Keeping the promise is the quiet path; withdrawing one is the loud path.
+
+Four cells, all verified:
+
+| source | floor | result |
+|---|---|---|
+| break | none | advisory, exit 0, nudged to declare one |
+| break | below the break | **FAIL**, exit 1 |
+| same break | raised past it | exit 0, prints `DECLARED BREAK` |
+| unmodified | declared | exit 0 |
+
+### Step 5a — the three levels, required before a register/PR — **DESIGN**
+
+A library declares **three** compatibility levels, all real versions:
+
+| field | means | status |
+|---|---|---|
+| `loft` | which loft this needs | exists; all 25 packages declare it |
+| `api_compatible_with` | oldest own release this is a drop-in for | built (step 1) |
+| `data_compatible_with` | oldest own release whose data this still reads | built (step 1) |
+
+**All three must be present before a package may be registered or open a registry PR.** They
+are what a consumer needs to decide whether an upgrade is safe on each of the three axes it
+can be hurt on: the platform, the call sites, the stored data.
+
+Not yet enforced. The gate belongs where the registry entry is produced (`loft package`) and at
+the registry PR (`registry_validate.sh` / `SUBMITTING.md`), not in the library's own CI —
+that CI must keep passing for a package that has not opted in, which is step 5's whole shape.
+
+**The incentive to protect, in both this and step 5:** raising a floor is a promise withdrawn,
+and should read like one. The constant updating is the chore, not the default — a library that
+raises its floor most releases has taught its consumers that its numbers mean nothing.
 
 ### Step 6 — resolution honours the floors
 

@@ -56,6 +56,15 @@ holding a bug fix (same rule as `lint_comments.sh` — advisory, never fails CI)
 
 ### Structure & packaging — `[auto]`
 - [ ] `loft.toml` valid: `[package]` name/version/`loft` range; `[library] entry`; deps declared (path or registry).
+- [ ] **Declares its compatibility scope** — `api_compatible_with` (and `data_compatible_with`
+      where it stores or transmits data): the oldest release of THIS package the current one is
+      still a drop-in for. Real versions, so the claim is checkable by fetching that release and
+      running its own tests (`loft compat check`).
+      *Declaring is what enters the contract*: a package with no floor is enforced by nothing.
+      **Raising it should be rare.** The number is a promise to consumers, not a per-release
+      chore — a library raising it most releases has taught its consumers that its version
+      numbers mean nothing. Keeping it still is the default; moving it is the exception you
+      write a CHANGELOG line for.
 - [ ] Repo is `loft-lang/loft-libs-<chunk>` (canonical naming; not `loft-<pkg>`, not a loft-monorepo dir).
 - [ ] Carries the org lifecycle stubs (`fpm-apply` / `fpm-strip` → `loft-lang/.github` reusables).
 - [ ] Deterministic package: two `loft package` runs produce an identical sha256.

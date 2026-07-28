@@ -158,6 +158,29 @@ $ LOFT=target/release/loft \
 
 ## 3. Pre-release checklist
 
+**Declare your three compatibility levels first.** They are required before a package may be
+registered or open a registry PR, because they are what a consumer needs to decide whether an
+upgrade is safe on each axis it can be hurt on:
+
+```toml
+[package]
+version              = "0.7.0"
+loft                 = ">=0.8"    # which loft this needs
+api_compatible_with  = "0.3.0"    # oldest release of THIS package it is a drop-in for
+data_compatible_with = "0.1.0"    # oldest release whose stored data it still reads
+```
+
+All three are real versions, so each claim is checkable: `loft compat check` fetches the
+release a floor names and runs that release's own tests against your working tree.
+
+**Raising a floor is how you declare a break** — it is the only way, and the release version is
+deliberately not an indicator. It is also meant to be rare. The number is a promise to your
+consumers, not a per-release chore: a library that raises it most releases has taught its
+consumers that its numbers mean nothing. Keeping it still is the default; moving it is the
+exception you write a CHANGELOG line for. Breaking is allowed — the registry keeps your older
+releases installable, so a consumer that cannot follow you keeps resolving to the last version
+that suits them — but it must be a choice you made, not one you shipped by accident.
+
 The mechanical `[auto]` core of the full correctness bar — see
 [LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) for the Goal-by-Goal + doc-quality
 `[review]` items and the registry `verified` administration.

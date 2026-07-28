@@ -139,11 +139,17 @@ jobs:
       # in a version nobody ever looks at.  The draw is printed and can be pinned with
       # LOFT_COMPAT_SAMPLE, so a red reproduces instead of reshuffling into green.
       #
-      # `continue-on-error` is deliberate and stays until the noise has been measured in real
-      # CI (it is clean across all 25 packages locally: 9 comparable, 0 breaks).  Design:
+      # GATING, but only for a package that DECLARES `api_compatible_with`.  Declaring a floor
+      # is the act of entering the contract: a package that declares nothing has promised
+      # nothing, so this stays advisory for it and cannot fail its build.  No published package
+      # declares one today, which is what makes turning this into a gate safe — it can only
+      # start failing a build after its author opts in.
+      #
+      # Raising the floor is the supported way to break, and it does NOT buy silence: the
+      # sub-floor releases are still compared and reported as a DECLARED BREAK.  Keeping the
+      # promise is the quiet path; withdrawing one is the loud path.  Design:
       # doc/claude/plans/library-compat-contract/README.md.
-      - name: Compatibility with published releases (advisory) — ${{ matrix.package }}
-        continue-on-error: true
+      - name: Compatibility with published releases — ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
         run: loft compat check
 

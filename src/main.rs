@@ -3915,8 +3915,14 @@ fn run_compat_command(args: &[String]) -> i32 {
 /// different release is drawn, it goes green, and a genuine contract break is dismissed as CI
 /// noise — strictly worse than having no check.
 ///
-/// Advisory: always exits 0. Blocking is a later step, once this has been quiet across every
-/// published package.
+/// **Blocking only when a floor is declared.** Declaring `api_compatible_with` IS the act of
+/// entering the contract: a library that declares nothing has made no promise, so there is
+/// nothing to enforce and this stays advisory for it. That is not timidity — it is the model,
+/// where a library may break its consumers as long as the break is an explicit choice. It also
+/// makes the flip safe by construction: no published package declares a floor today, so
+/// turning this into a gate cannot fail anyone's CI until they opt in.
+///
+/// Exit: 1 when a DECLARED floor is violated · 0 otherwise.
 fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i32 {
     // Candidates come from the install cache, because that is what `compat api` / `compat
     // test` can actually read. Anything not installed is REPORTED as skipped, never silently
@@ -3928,14 +3934,24 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
         .map(|(_, v, _)| v)
         .collect();
     versions.sort_by(|a, b| loft::registry_index::compare_semver(a, b));
-    if let Some(f) = floor {
-        versions.retain(|v| {
-            !matches!(
-                loft::registry_index::compare_semver(v, f),
-                std::cmp::Ordering::Less
-            )
-        });
-    }
+    // Releases BELOW the declared floor stay in the comparison, reported but never gating.
+    // Dropping them would make raising the floor buy SILENCE, which is the wrong gradient
+    // entirely: the reflex to bump the number until the check shuts up is what turns floors
+    // into decoration. Keeping the promise must be the quiet path and declaring a break the
+    // loud one, so a raise converts a failure into an announcement rather than into nothing.
+    let below_floor: Vec<String> = match floor {
+        Some(f) => versions
+            .iter()
+            .filter(|v| {
+                matches!(
+                    loft::registry_index::compare_semver(v, f),
+                    std::cmp::Ordering::Less
+                )
+            })
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
     if versions.is_empty() {
         println!("compat check `{name}`: no other release installed — nothing to compare against");
         return 0;
@@ -3984,6 +4000,7 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
             String::new()
         }
     );
+    let mut violated: Vec<String> = Vec::new();
     for v in &sample {
         let dir = loft::registry_index::extract_dir(name, v);
         if !dir.join("loft.toml").exists() {
@@ -4006,11 +4023,62 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
                     "data ok"
                 };
                 println!("  {v}: {api_word}, {layout_word}");
+                if matches!(api, loft::api_diff::Verdict::Break(_)) || layout_reshaped(&layout) {
+                    violated.push(v.clone());
+                }
             }
             (Err(e), _) | (_, Err(e)) => println!("  {v}: could not read ({e})"),
         }
     }
-    0
+
+    let Some(f) = floor else {
+        if violated.is_empty() {
+            println!(
+                "  `{name}` declares no `api_compatible_with`. Nothing is enforced: add one \
+                 naming the oldest release this is still a drop-in for, and this becomes a \
+                 promise consumers can rely on."
+            );
+        } else {
+            println!(
+                "  advisory only: `{name}` declares no `api_compatible_with`, so no promise \
+                 was made to break. Declare one to have this enforced."
+            );
+        }
+        return 0;
+    };
+    // A break against a release the floor already excludes is the DECLARED one. Say so out
+    // loud — it is the thing a reviewer most needs to see, and saying it is what keeps the
+    // raise honest rather than a way to go quiet.
+    let declared: Vec<&String> = violated
+        .iter()
+        .filter(|v| below_floor.contains(v))
+        .collect();
+    if !declared.is_empty() {
+        println!(
+            "  DECLARED BREAK — `{name}` no longer works with {} (floor raised to {f}). \
+             Consumers on those releases keep resolving to the last version that suits them; \
+             this is the supported move, but it is a promise withdrawn, not a free one.",
+            declared
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let violated: Vec<String> = violated
+        .into_iter()
+        .filter(|v| !below_floor.contains(v))
+        .collect();
+    if violated.is_empty() {
+        return 0;
+    }
+    println!(
+        "  FAIL — `{name}` claims to be a drop-in for >= {f}, but breaks against {}. \
+         Either restore compatibility, or raise `api_compatible_with` past the release you \
+         broke — declaring the break is the supported move, hiding it is not.",
+        violated.join(", ")
+    );
+    1
 }
 
 #[cfg(feature = "registry")]
