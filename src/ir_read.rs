@@ -1713,8 +1713,13 @@ mod tests {
                 names.0, names.1, names.2
             )
         };
+        // ADVICE, not Warning: the steer's own prose says "the old form keeps working",
+        // so ignoring it cannot produce a wrong result — and gating on it would make a
+        // shipped library fail its own CI the moment loft supersedes a symbol it uses.
+        // Its sibling below (a `#superseded` body that never calls its successor) stays
+        // a Warning: there, two implementations can silently diverge.
         let is_steer = |e: &crate::diagnostics::DiagEntry| {
-            e.level == Level::Warning && e.message.contains("is superseded")
+            e.level == Level::Advice && e.message.contains("is superseded")
         };
 
         let mut p = crate::parser::Parser::new();

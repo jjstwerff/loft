@@ -24,6 +24,7 @@
 
 use server;
 use markdown;
+use html;
 
 const PORT: integer = 8765;
 
@@ -95,26 +96,6 @@ fn route(req: server::Request) {
     }
 }
 
-// ── HTML escape ──────────────────────────────────────────────
-
-fn escape(s: text) -> text {
-    out = "";
-    for c in s {
-        if c == '&' {
-            out += "&amp;";
-        } else if c == '<' {
-            out += "&lt;";
-        } else if c == '>' {
-            out += "&gt;";
-        } else if c == '"' {
-            out += "&quot;";
-        } else {
-            out += "{c}";
-        }
-    }
-    out
-}
-
 // ── Page templates ───────────────────────────────────────────
 
 fn page_landing() -> text {
@@ -131,9 +112,9 @@ fn page_landing() -> text {
         head_msg = b.field("head_msg").as_text();
         ahead = b.field("ahead").as_long();
         behind = b.field("behind").as_long();
-        esc_branch = escape(branch);
-        esc_sha = escape(head_sha);
-        esc_msg = escape(head_msg);
+        esc_branch = branch.escape_html();
+        esc_sha = head_sha.escape_html();
+        esc_msg = head_msg.escape_html();
         body += "<header class=\"dash\">";
         body += "<h1>loft-view — branch <code>{esc_branch}</code></h1>";
         body += "<p class=\"ahead-behind\">{ahead} ahead, {behind} behind <code>main</code></p>";
@@ -167,9 +148,9 @@ fn page_landing() -> text {
             dt = "";
             if dt_v.kind() == "JString" { dt = dt_v.as_text(); }
             ms = e.field("msg").as_text();
-            esc_sh = escape(sh);
-            esc_dt = escape(dt);
-            esc_ms = escape(ms);
+            esc_sh = sh.escape_html();
+            esc_dt = dt.escape_html();
+            esc_ms = ms.escape_html();
             body += render_activity_card(sh, esc_sh, esc_dt, esc_ms);
             i = i + 1;
         }
@@ -223,7 +204,7 @@ fn page_landing() -> text {
                 st = e.field("status").as_text();
                 pa = e.field("path").as_text();
                 chip = status_chip(st);
-                esc_pa = escape(pa);
+                esc_pa = pa.escape_html();
                 body += "<li>{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
                 i = i + 1;
             }
@@ -269,7 +250,7 @@ fn page_landing() -> text {
                     if top_level_dir(pa) == g { gcount = gcount + 1; }
                     j = j + 1;
                 }
-                esc_g = escape(g);
+                esc_g = g.escape_html();
                 body += "<details class=\"group\" open><summary><span class=\"group-name\">{esc_g}</span><span class=\"group-count\">{gcount}</span></summary>";
                 body += "<ul class=\"changed\">";
                 k = 0;
@@ -280,7 +261,7 @@ fn page_landing() -> text {
                     if top_level_dir(pa) == g {
                         st = e.field("status").as_text();
                         chip = status_chip(st);
-                        esc_pa = escape(pa);
+                        esc_pa = pa.escape_html();
                         body += "<li style=\"--i:{idx}\">{chip} <a href=\"/file/{esc_pa}\">{esc_pa}</a></li>";
                         idx = idx + 1;
                     }
@@ -440,10 +421,10 @@ fn render_recent_fix(e: JsonValue) -> text {
     if bare.starts_with("@") { bare = bare[1..bare.len()]; }
     closed = e.field("closed").as_text();
     sum = e.field("summary").as_text();
-    esc_tag = escape(tag);
-    esc_bare = escape(bare);
-    esc_closed = escape(closed);
-    esc_sum = escape(sum);
+    esc_tag = tag.escape_html();
+    esc_bare = bare.escape_html();
+    esc_closed = closed.escape_html();
+    esc_sum = sum.escape_html();
     "<li><span class=\"recent-date\">{esc_closed}</span> <a class=\"recent-tag\" href=\"/tag/{esc_bare}\">{esc_tag}</a> <span class=\"recent-sum\">{esc_sum}</span></li>"
 }
 
@@ -459,7 +440,7 @@ fn render_plan_bucket(title: text, sub: text, arr: JsonValue, fold: text) -> tex
         out += "<section class=\"welcome-sec\"><h2>{title} <span class=\"ct\">{n}</span></h2>";
     }
     if sub != "" {
-        esc_sub = escape(sub);
+        esc_sub = sub.escape_html();
         out += "<p class=\"sec-sub\">{esc_sub}</p>";
     }
     out += "<ul class=\"plan-list\">";
@@ -469,9 +450,9 @@ fn render_plan_bucket(title: text, sub: text, arr: JsonValue, fold: text) -> tex
         slug = e.field("slug").as_text();
         path = e.field("path").as_text();
         ttl = e.field("title").as_text();
-        esc_slug = escape(slug);
-        esc_path = escape(path);
-        esc_ttl = escape(ttl);
+        esc_slug = slug.escape_html();
+        esc_path = path.escape_html();
+        esc_ttl = ttl.escape_html();
         out += "<li><a class=\"plan-link\" href=\"/file/{esc_path}/README.md\"><span class=\"plan-slug\">{esc_slug}</span> <span class=\"plan-title\">{esc_ttl}</span></a></li>";
         i = i + 1;
     }
@@ -499,7 +480,7 @@ fn page_tree(rel: text) -> text {
     }
     if f.format != Format.Directory {
         // Not a dir — redirect-style: link to /raw/<path>.
-        esc_rel = escape(rel);
+        esc_rel = rel.escape_html();
         body = "<h1>{esc_rel}</h1>";
         body += "<p>Not a directory.";
         body += " <a href=\"/raw/{esc_rel}\">View raw</a>.</p>";
@@ -510,12 +491,12 @@ fn page_tree(rel: text) -> text {
     // codegen quirk: text-returning calls passed inline get an extra
     // `&` wrap in the generated Rust, fail to compile).
     body = breadcrumbs(rel, "tree");
-    esc_rel = escape(rel);
+    esc_rel = rel.escape_html();
     body += "<h1>{esc_rel}/</h1>";
     body += "<ul class=\"dir\">";
     if rel != "" {
         parent = parent_of(rel);
-        esc_parent = escape(parent);
+        esc_parent = parent.escape_html();
         body += "<li><a href=\"/tree/{esc_parent}\">..</a></li>";
     }
 
@@ -525,8 +506,8 @@ fn page_tree(rel: text) -> text {
         if e.format == Format.Directory && !skip(e.path) {
             name = basename(e.path);
             joined = rel_join(rel, name);
-            esc_joined = escape(joined);
-            esc_name = escape(name);
+            esc_joined = joined.escape_html();
+            esc_name = name.escape_html();
             body += "<li><a class=\"d\" href=\"/tree/{esc_joined}\">{esc_name}/</a></li>";
         }
     }
@@ -534,8 +515,8 @@ fn page_tree(rel: text) -> text {
         if e.format != Format.Directory && !skip(e.path) {
             name = basename(e.path);
             joined = rel_join(rel, name);
-            esc_joined = escape(joined);
-            esc_name = escape(name);
+            esc_joined = joined.escape_html();
+            esc_name = name.escape_html();
             sz = e.size;
             // Link to /file/ for rendered view; /raw/ available from
             // the file page itself for "give me the bytes."
@@ -604,7 +585,7 @@ fn is_binary_ext(rel: text) -> boolean {
 }
 
 fn page_file(rel: text, f: File) -> text {
-    esc_rel = escape(rel);
+    esc_rel = rel.escape_html();
     sz = f.size;
 
     // The article holds breadcrumbs + heading + view-toggle +
@@ -687,26 +668,11 @@ fn render_code(src: text) -> text {
     out
 }
 
-// Like escape() but expands tabs to 4 spaces so indentation
-// renders consistently regardless of browser default tab width.
+// HTML escaping plus tab expansion, for source listings: a browser collapses a
+// raw tab to one space, so indentation has to be widened to a fixed 4 columns to
+// render the same everywhere.  Escaping first is safe — no entity contains a tab.
 fn escape_with_tabs(s: text) -> text {
-    out = "";
-    for c in s {
-        if c == '&' {
-            out += "&amp;";
-        } else if c == '<' {
-            out += "&lt;";
-        } else if c == '>' {
-            out += "&gt;";
-        } else if c == '"' {
-            out += "&quot;";
-        } else if c == '\t' {
-            out += "    ";
-        } else {
-            out += "{c}";
-        }
-    }
-    out
+    s.escape_html().replace("\t", "    ")
 }
 
 // ── /tag/<bare_name> — phase 04a: tracker-tag references ──
@@ -720,7 +686,7 @@ fn escape_with_tabs(s: text) -> text {
 fn page_tag(tag: text) -> text {
     f = file("index/tags.json");
     if f.format == Format.NotExists {
-        body = "<h1>Tracker tag <code>{escape(tag)}</code></h1>";
+        body = "<h1>Tracker tag <code>{tag.escape_html()}</code></h1>";
         body += "<p class=\"warn\">No index found at <code>index/tags.json</code>.";
         body += " Run <code>make index</code> from the repo root to build it.</p>";
         body += "<p><a href=\"/\">back to landing</a></p>";
@@ -745,7 +711,7 @@ fn page_tag(tag: text) -> text {
     if legacy_arr.kind() == "JArray" { legacy_count = legacy_arr.len(); }
     total = at_count + legacy_count;
 
-    body = "<h1>Tracker tag <code>{escape(tag)}</code> <small>{total} references</small></h1>";
+    body = "<h1>Tracker tag <code>{tag.escape_html()}</code> <small>{total} references</small></h1>";
 
     if total == 0 {
         body += "<p>No references found.</p>";
@@ -765,11 +731,11 @@ fn page_tag(tag: text) -> text {
     body += render_definition(tag, at_arr);
 
     if at_count > 0 {
-        body += "<h2><code>@{escape(tag)}</code> (canonical) — {at_count}</h2>";
+        body += "<h2><code>@{tag.escape_html()}</code> (canonical) — {at_count}</h2>";
         body += render_refs(at_arr);
     }
     if legacy_count > 0 {
-        body += "<h2><code>{escape(tag)}</code> (legacy bare-name) — {legacy_count}</h2>";
+        body += "<h2><code>{tag.escape_html()}</code> (legacy bare-name) — {legacy_count}</h2>";
         body += render_refs(legacy_arr);
     }
 
@@ -867,8 +833,8 @@ fn render_md_table_row(file_path: text, line_n: integer) -> text {
         if clen > 360 {
             cell = cell[0..357] + "...";
         }
-        esc_label = escape(label);
-        esc_cell = escape(cell);
+        esc_label = label.escape_html();
+        esc_cell = cell.escape_html();
         out += "<p class=\"row-line\"><span class=\"row-label\">{esc_label}</span> {esc_cell}</p>";
         i = i + 1;
     }
@@ -978,10 +944,10 @@ fn render_problems_row(line_n: integer) -> text {
     // crashing, just structurally needed to dodge @P278.
     summary = problem_row_summary(rb, id);
 
-    esc_id = escape(id);
-    esc_body = escape(summary);
-    esc_sev = escape(sev);
-    esc_fx = escape(fx);
+    esc_id = id.escape_html();
+    esc_body = summary.escape_html();
+    esc_sev = sev.escape_html();
+    esc_fx = fx.escape_html();
     out = "<article class=\"prob-card\">";
     out += "<p class=\"prob-line\"><span class=\"prob-label\">Tag</span> <a href=\"/tag/P{esc_id}\"><code>@P{esc_id}</code></a> <a class=\"prob-row-link\" href=\"/file/doc/claude/PROBLEMS.md#L{line_n}\">PROBLEMS.md:{line_n}</a></p>";
     out += "<p class=\"prob-line\"><span class=\"prob-label\">Severity</span> {esc_sev}</p>";
@@ -1113,13 +1079,13 @@ fn render_definition(tag: text, arr: JsonValue) -> text {
     // path-link + blockquote form for non-table sources (plan
     // README headings, source-code lines, etc.).
     out = "<section class=\"definition\"><h2>Definition</h2>";
-    esc_file = escape(file_path);
+    esc_file = file_path.escape_html();
     out += "<p><a class=\"def-link\" href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a></p>";
     table_card = render_md_table_row(file_path, line_n);
     if table_card != "" {
         out += table_card;
     } else {
-        esc_ctx = escape(ctx);
+        esc_ctx = ctx.escape_html();
         out += "<blockquote><code>{esc_ctx}</code></blockquote>";
     }
     out += "</section>";
@@ -1161,8 +1127,8 @@ fn sidebar_referenced_by(rel: text) -> text {
         file_path = ref_v.field("file").as_text();
         line_n = ref_v.field("line").as_long();
         ctx = ref_v.field("context").as_text();
-        esc_file = escape(file_path);
-        esc_ctx = escape(ctx);
+        esc_file = file_path.escape_html();
+        esc_ctx = ctx.escape_html();
         out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a><br><code>{esc_ctx}</code></li>";
         i = i + 1;
     }
@@ -1203,8 +1169,8 @@ fn sidebar_tags_on_page(rel: text) -> text {
             // Strip leading `@` for the /tag/<bare> route.
             bare = key;
             if bare.starts_with("@") { bare = bare[1..len(bare)]; }
-            esc_key = escape(key);
-            esc_bare = escape(bare);
+            esc_key = key.escape_html();
+            esc_bare = bare.escape_html();
             if count == 0 {
                 out += "<section class=\"sidebar\"><h2>Tags on this page</h2><ul class=\"tag-list\">";
             }
@@ -1228,7 +1194,7 @@ fn render_refs(arr: JsonValue) -> text {
         file_path = ref_v.field("file").as_text();
         line_n = ref_v.field("line").as_long();
         ctx = ref_v.field("context").as_text();
-        esc_file = escape(file_path);
+        esc_file = file_path.escape_html();
         out += "<li><a href=\"/file/{esc_file}#L{line_n}\">{esc_file}:{line_n}</a>";
         // If the context line is a markdown table row, render
         // it as a labeled-paragraph card (one paragraph per
@@ -1241,11 +1207,11 @@ fn render_refs(arr: JsonValue) -> text {
             if table_card != "" {
                 out += table_card;
             } else {
-                esc_ctx = escape(ctx);
+                esc_ctx = ctx.escape_html();
                 out += "<br><code>{esc_ctx}</code>";
             }
         } else {
-            esc_ctx = escape(ctx);
+            esc_ctx = ctx.escape_html();
             out += "<br><code>{esc_ctx}</code>";
         }
         out += "</li>";
@@ -1264,7 +1230,7 @@ fn render_refs(arr: JsonValue) -> text {
 // message) shows up as the leading non-diff lines in the
 // `git show` output and renders inline with the rest.
 fn page_commit(sha: text) -> text {
-    esc_sha = escape(sha);
+    esc_sha = sha.escape_html();
     body = "<h1>commit <code>{esc_sha}</code></h1>";
     f = file("tools/viewer/state/commits/{sha}.diff");
     if f.format == Format.NotExists {
@@ -1301,7 +1267,7 @@ fn diff_exists_for(rel: text) -> boolean {
 // /diff/<path> — render the per-file unified diff.
 fn page_diff(rel: text) -> text {
     safe = diff_safe_name(rel);
-    esc_rel = escape(rel);
+    esc_rel = rel.escape_html();
     body = breadcrumbs(rel, "diff");
     body += "<h1>{esc_rel} <small>diff vs main</small></h1>";
     body += view_toggle(rel, "diff");
@@ -1325,7 +1291,7 @@ fn page_diff(rel: text) -> text {
 // be highlighted.  When no diff exists, only the Rendered link
 // is shown (no broken-link Diff button).
 fn view_toggle(rel: text, current_view: text) -> text {
-    esc_rel = escape(rel);
+    esc_rel = rel.escape_html();
     has_diff = diff_exists_for(rel);
     out = "<nav class=\"view-toggle\">";
     if current_view == "file" {
@@ -1390,7 +1356,7 @@ fn serve_404_page(req: server::Request, p: text) {
 }
 
 fn page_404(p: text) -> text {
-    esc_p = escape(p);
+    esc_p = p.escape_html();
     body = "<h1>404 — not found</h1>";
     body += "<p>No route matches <code>{esc_p}</code>.</p>";
     body += "<p><a href=\"/\">back to landing</a></p>";
@@ -1400,7 +1366,7 @@ fn page_404(p: text) -> text {
 // ── Layout shell ─────────────────────────────────────────────
 
 fn page(title: text, body: text) -> text {
-    esc_title = escape(title);
+    esc_title = title.escape_html();
     out = "<!doctype html>";
     out += "<html lang=\"en\"><head>";
     out += "<meta charset=\"utf-8\">";
@@ -1472,8 +1438,8 @@ fn breadcrumbs(rel: text, kind: text) -> text {
     for p in parts {
         if p == "" { continue; }
         if acc == "" { acc = p; } else { acc = "{acc}/{p}"; }
-        esc_acc = escape(acc);
-        esc_p = escape(p);
+        esc_acc = acc.escape_html();
+        esc_p = p.escape_html();
         is_leaf = idx + 1 == total;
         seg_kind = "tree";
         if is_leaf { seg_kind = kind; }
@@ -1584,9 +1550,9 @@ fn render_file_row(f: JsonValue) -> text {
     if dels_v.kind() == "JString" { dels = dels_v.as_text(); }
     pa = "";
     if path_v.kind() == "JString" { pa = path_v.as_text(); }
-    esc_pa = escape(pa);
-    esc_a = escape(adds);
-    esc_d = escape(dels);
+    esc_pa = pa.escape_html();
+    esc_a = adds.escape_html();
+    esc_d = dels.escape_html();
     "<li><a href=\"/file/{esc_pa}\">{esc_pa}</a><span class=\"act-stats\"><span class=\"act-add\">+{esc_a}</span><span class=\"act-del\">−{esc_d}</span></span></li>"
 }
 
@@ -1596,10 +1562,10 @@ fn n_min(a: integer, b: integer) -> integer {
 }
 
 fn tile(initial: text, name: text, desc: text, href: text) -> text {
-    esc_init = escape(initial);
-    esc_name = escape(name);
-    esc_desc = escape(desc);
-    esc_href = escape(href);
+    esc_init = initial.escape_html();
+    esc_name = name.escape_html();
+    esc_desc = desc.escape_html();
+    esc_href = href.escape_html();
     out = "<a class=\"tile\" href=\"{esc_href}\">";
     out += "<span class=\"tile-init\">{esc_init}</span>";
     out += "<span class=\"tile-body\">";
@@ -1620,8 +1586,8 @@ fn tile(initial: text, name: text, desc: text, href: text) -> text {
 fn status_chip(st: text) -> text {
     if len(st) == 0 { return ""; }
     letter = st[0..1];
-    esc_letter = escape(letter);
-    esc_full = escape(st);
+    esc_letter = letter.escape_html();
+    esc_full = st.escape_html();
     "<span class=\"st st-{esc_letter}\" title=\"{esc_full}\">{esc_letter}</span>"
 }
 

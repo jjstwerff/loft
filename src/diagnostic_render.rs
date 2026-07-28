@@ -165,6 +165,7 @@ const ANSI_RESET: &str = "\x1b[0m";
 fn level_label(level: Level) -> &'static str {
     match level {
         Level::Debug => "note",
+        Level::Advice => "advice",
         Level::Warning => "warning",
         Level::Error => "error",
         Level::Fatal => "fatal",
@@ -173,7 +174,7 @@ fn level_label(level: Level) -> &'static str {
 
 fn level_color(level: Level) -> &'static str {
     match level {
-        Level::Debug => ANSI_BLUE,
+        Level::Debug | Level::Advice => ANSI_BLUE,
         Level::Warning => ANSI_YELLOW,
         Level::Error | Level::Fatal => ANSI_RED,
     }
@@ -305,7 +306,7 @@ pub fn render_pretty_all(
     // Cascade dedup pass: collect indices to render.
     let mut keep: Vec<bool> = vec![true; entries.len()];
     for i in 0..entries.len() {
-        if entries[i].level != Level::Warning {
+        if !matches!(entries[i].level, Level::Warning | Level::Advice) {
             continue;
         }
         for j in 0..i {

@@ -465,6 +465,41 @@ impl Parser {
     // <block> ::= '}' | <expression> {';' <expression} '}'
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_block(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
+        // Cognitive complexity, charged here because `parse_block`'s `context` already names
+        // the construct — one hook instead of one per parser entry point.  `match_arm` is
+        // deliberately free: `parse_match` charges once for the whole construct, so a wide
+        // flat dispatch stays cheap while nesting does not.
+        let cc = match context {
+            "if" | "for" | "while" => Some(1 + self.cc_nest),
+            "else" => Some(1), // a plain `else` costs 1, with no nesting bonus
+            "match_arm" => Some(0),
+            _ => None,
+        };
+        if let Some(add) = cc {
+            // Pass 2 only: the parser runs twice over every definition, so charging on both
+            // doubles every score (`seq_ifs` read 16 for eight flat `if`s).  The nesting
+            // depth still has to track on BOTH passes, or pass-1 bodies would be charged at
+            // the wrong depth by a stale counter.
+            if add > 0 && !self.first_pass {
+                *self.complexity.entry(self.context).or_insert(0) += add;
+            }
+            self.cc_nest += 1;
+            if !self.first_pass {
+                let line = self.lexer.pos().line;
+                let deepest = self.cc_deepest.entry(self.context).or_insert((0, 0));
+                if self.cc_nest > deepest.0 {
+                    *deepest = (self.cc_nest, line);
+                }
+            }
+        }
+        let cc_ret = self.parse_block_inner(context, val, result);
+        if cc.is_some() {
+            self.cc_nest -= 1;
+        }
+        cc_ret
+    }
+
+    fn parse_block_inner(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
         if let Value::Var(v) = val
             && let Type::Reference(r, _) = self.vars.tp(*v).clone()
             && context == "block"
@@ -2780,6 +2815,11 @@ impl Parser {
     #[allow(clippy::too_many_lines)]
     // @F29 — pattern matching (enum/scalar/tuple, guards, or-patterns, exhaustiveness)
     pub(crate) fn parse_match(&mut self, code: &mut Value) -> Type {
+        // One charge for the whole construct — arm count is not complexity (a 12-arm flat
+        // dispatch reads straight down); its arms deepen via `parse_block("match_arm")`.
+        if !self.first_pass {
+            *self.complexity.entry(self.context).or_insert(0) += 1 + self.cc_nest;
+        }
         // Save position of the match keyword for exhaustiveness diagnostics.
         let match_pos = self.lexer.pos().clone();
         // 1. Parse the subject expression.
@@ -9366,39 +9406,6 @@ impl Parser {
         }
     }
 
-    /// #488 — true when the returned expression is a field VIEW rooted at a
-    /// non-argument LOCAL `Var` (`return r.pts`, `return r.a.b`): the local is
-    /// freed at scope exit, so the view must be element-copied into the
-    /// caller's return buffer.  Argument-rooted views (`return b.v`) are the
-    /// dep-driven case the vector buffer gate already handles; call-rooted
-    /// views are the call-rooted leg of `return_projects_into_local`.  Pure field
-    /// chains only — a
-    /// match/if/vector construction is NOT a view and must keep its NRVO
-    /// delivery (its Insert block cannot sit in OpAppendVector's argument
-    /// position; the 85-store-lifetime-vector-match-return shape).
-    fn return_field_base_is_local_var(&self, tail: &Value) -> bool {
-        match tail.unspan() {
-            Value::Return(inner) | Value::Drop(inner) => self.return_field_base_is_local_var(inner),
-            Value::Block(bl) => bl
-                .operators
-                .last()
-                .is_some_and(|t| self.return_field_base_is_local_var(t)),
-            Value::Insert(ops) => ops
-                .last()
-                .is_some_and(|t| self.return_field_base_is_local_var(t)),
-            Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
-                match args.first().map(Value::unspan) {
-                    Some(Value::Var(base)) => !self.vars.is_argument(*base),
-                    Some(inner) if matches!(inner, Value::Call(bd, _) if *bd == self.data.def_nr("OpGetField")) => {
-                        self.return_field_base_is_local_var(inner)
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
     /// H12 — true when the returned expression **projects into** something the
     /// callee owns rather than *being* it: a field (`OpGetField`) or element
     /// (`OpGetVector`) read whose base spine reaches a non-argument LOCAL, or an
@@ -10916,6 +10923,19 @@ impl Parser {
                         let ed = *e_d;
                         let w = self.materialize_view_return(ed, &mut v);
                         self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    } else if self.return_views_local(ls) {
+                        // #306's payload-enum twin.  The predicate above reads the
+                        // returned EXPRESSION, so it sees `return e.value` but not
+                        // `r = e.value; return r` — there the tail is a bare `Var`,
+                        // and the fact that `r` points into the local `e` lives in
+                        // its deps, which is what `return_views_local` reads.  The
+                        // Reference arm has carried this leg since #306; without it
+                        // here the payload-enum twin renamed `r` onto `__retbuf`,
+                        // so the caller got a pointer into a store this function
+                        // frees on the way out and read a corrupt record.
+                        let ed = *e_d;
+                        let w = self.materialize_view_return(ed, &mut v);
+                        self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
                     } else {
                         let ls_own: Vec<u16> = ls.to_vec();
                         self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
@@ -10997,7 +11017,18 @@ impl Parser {
                                 // fresh-local return also carries local deps but must keep
                                 // its NRVO delivery (its construction block cannot sit in
                                 // OpAppendVector's argument position).
-                                || self.return_field_base_is_local_var(&v))
+                                //
+                                // The predicate covers a projection rooted at an inline
+                                // CALL's temporary too (`return mk().lines`), which #488's
+                                // Var-only version missed — the third sibling of the same
+                                // defect, after the struct (#425) and element (H12) forms.
+                                // The lift temp is freed at scope exit, so the returned
+                                // vector aliased a freed store: empty on native, and on the
+                                // interpreter a live value that a LATER allocating call in
+                                // the caller transiently clobbered to length 0.  Reported
+                                // by the zero-trust consumer as a one-line accessor that
+                                // silently corrupted its result.
+                                || self.return_projects_into_local(&v))
                         {
                             (a, bv)
                         } else {

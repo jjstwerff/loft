@@ -252,6 +252,14 @@ Set before `cargo test` (controls `tests/dumps/*.txt`; also works with `cargo ru
 `bridging` · `all_fns`. DbRef dumps tune via `LOFT_DUMP_DEPTH` (2), `LOFT_DUMP_ELEMENTS` (8).
 Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
 
+**Two diagnostic tiers.** `warning` GATES a library's CI (`LOFT_DENY_WARNINGS=1`);
+`advice` never does and has no deny switch. The rule: **a diagnostic gates if and only if
+ignoring it can produce a wrong result** — lost writes, char/byte index confusion,
+null-into-non-null gate; deprecations, perf notes and spellings advise. The split exists
+because one tier made the compat doctrine self-contradictory: `not null` is a deliberate
+no-op kept parseable so unrepublished libs load, yet it hard-failed those libs' own CI.
+Renders as `advice:`, LSP severity Hint; `@EXPECT_WARNING` and `Test::advice()` match it.
+
 **Error rendering (@PLN28):** `LOFT_ERRORS=pretty|compact` (or `--errors=…`) picks the
 user renderer — `pretty` (default: `file:line:col` + source line + caret) vs `compact`
 (single line; the test harness pins this). Diagnostic toggles (default-on opt-outs, except
@@ -262,6 +270,16 @@ read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost) �
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·
+`LOFT_NO_PARAM_COUNT` (≥8 REQUIRED parameters — defaulted and compiler-hidden ones
+excluded; separate from complexity because a caller's burden and a reader's burden have
+different fixes: a struct vs an extracted function) · `LOFT_NO_DEFAULT_HINT` (≥2 trailing
+booleans with no default — advertises default parameters, which are under-used and free to
+adopt: adding a default is additive, so existing callers keep working) ·
+`LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
+construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
+`match` costs 1 whatever its arm count; counted at PARSE time because the IR is
+post-desugar and would charge `??` and `for` as branches the author never wrote;
+names the deepest-nesting line, since that is where a split pays) ·
 `LOFT_NO_STRICT_INDEX_TEXT` (@PLN110 3a text strict-index units lint: warns on
 `for i in 0..len(s) { s[i] }` AND `{ s.byte_at(i) }`, incl. via a local (`n = len(s); 0..n`) —
 `len(text)` is a CHARACTER count but both reads are byte-indexed, so the loop truncates

@@ -3783,6 +3783,374 @@ fn run_ship_command(args: &[String]) -> i32 {
 
 /// @PLN102 C1 — `loft api-surface <file>` prints the surface descriptor; `loft api-surface
 /// --diff <base> <new> [--json]` prints the compatibility verdict (human text, or machine JSON
+#[cfg(feature = "registry")]
+/// `loft compat api [<version>]` — is this working tree still a drop-in for a PUBLISHED
+/// release of itself?
+///
+/// The claim being checked is the package's own `api_compatible_with` / `data_compatible_with`
+/// floor: a real version of this package, which is what makes the claim verifiable — the
+/// release it names can be fetched and diffed. An abstract epoch could not be.
+///
+/// Reuses `api-surface --diff` wholesale, which already reports BOTH axes the two floors
+/// need: `api_diff::diff` (public surface) and `schema_sidecar::classify` (value-type layout
+/// — a silent DATA break the API axis alone green-lights).
+///
+/// **Advisory in this step**: it reports and always exits 0 unless it could not run. Turning a
+/// break into a failure is a later step, after the noise has been measured across every
+/// published package — the discipline every check in this repo that had to be walked back did
+/// not follow. Design: `doc/claude/plans/library-compat-contract/README.md`.
+///
+/// Exit: 0 = ran (verdict on stdout) · 2 = could not run (no manifest, no such release,
+/// unreadable source).
+fn run_compat_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    // The dispatcher strips `compat`, so positional[0] is the sub-verb.
+    let sub = positional.first().map(|s| s.as_str()).unwrap_or("");
+    if !matches!(sub, "api" | "test" | "check") {
+        eprintln!("loft compat: usage: loft compat <api|test|check> [<version>] [--json]");
+        return 2;
+    }
+
+    let Some(manifest) = loft::manifest::read_manifest("loft.toml") else {
+        eprintln!(
+            "loft compat: no `loft.toml` here — run this from a package root, since the \
+             comparison is against a published release of THIS package"
+        );
+        return 2;
+    };
+    let Some(name) = manifest.name.clone() else {
+        eprintln!("loft compat: `loft.toml` has no [package] name");
+        return 2;
+    };
+
+    if sub == "check" {
+        return compat_check(
+            &name,
+            manifest.version.as_deref(),
+            manifest.api_compatible_with.as_deref(),
+        );
+    }
+
+    // Which release to compare against: an explicit argument, else the declared API floor.
+    // No silent default to "latest" — the floor is the claim, and comparing against something
+    // the author did not declare would report a verdict about a promise nobody made.
+    let target = match positional.get(1) {
+        Some(v) => (*v).clone(),
+        None => match manifest.api_compatible_with.clone() {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "loft compat: `{name}` declares no `api_compatible_with`, so there is no \
+                     claim to check. Add one naming the oldest release this is still a \
+                     drop-in for, or pass a version explicitly."
+                );
+                return 2;
+            }
+        },
+    };
+
+    // The published source must be on disk to diff against. Reuse the install cache rather
+    // than fetching a second way, so this sees exactly what a consumer would get.
+    let dir = loft::registry_index::extract_dir(&name, &target);
+    if !dir.join("loft.toml").exists() {
+        eprintln!(
+            "loft compat: `{name}` {target} is not available locally — install it first \
+             (`loft install {name}@{target}`).\n\
+             If it cannot be installed at all, the claim naming it is unverifiable, which is \
+             itself the finding: a floor must name a release that still exists."
+        );
+        return 2;
+    }
+
+    if sub == "test" {
+        return compat_test(&name, &target, &dir);
+    }
+
+    let old_entry = entry_file_of(&dir, &name);
+    let new_entry = entry_file_of(std::path::Path::new("."), &name);
+    let ((old_s, old_id), (new_s, new_id)) =
+        match (api_surface_of(&old_entry), api_surface_of(&new_entry)) {
+            (Ok(o), Ok(n)) => (o, n),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!("loft compat: {e}");
+                return 2;
+            }
+        };
+    let api = loft::api_diff::diff(&old_s, &new_s);
+    let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+    if !json {
+        println!("compat: `{name}` working tree vs published {target}");
+    }
+    print_verdict(&api, &layout, json);
+    // Advisory: report the two floors beside the two verdicts, so the author sees which claim
+    // each axis is measured against rather than having to remember.
+    if !json {
+        println!(
+            "  api_compatible_with  = {}",
+            manifest.api_compatible_with.as_deref().unwrap_or("<unset>")
+        );
+        println!(
+            "  data_compatible_with = {}",
+            manifest
+                .data_compatible_with
+                .as_deref()
+                .unwrap_or("<unset>")
+        );
+    }
+    0
+}
+
+#[cfg(feature = "registry")]
+/// `loft compat check` — the CI entry point: sample a few published releases and report.
+///
+/// Cost is **O(1) per run** by construction, which is the only shape that survives a mature
+/// registry: a library with 50 releases and slow suites must cost the same per PR as one with
+/// two. The sample is the latest release, the declared floor, and **one random release in
+/// between** — the random pick is what makes it mean, because a break cannot hide in a version
+/// nobody ever looks at. Coverage accumulates across runs rather than within one.
+///
+/// The random pick is PRINTED and can be pinned with `LOFT_COMPAT_SAMPLE` (failure path F5).
+/// Without that a real break reads as a flake: the job goes red, someone re-runs it, a
+/// different release is drawn, it goes green, and a genuine contract break is dismissed as CI
+/// noise — strictly worse than having no check.
+///
+/// Advisory: always exits 0. Blocking is a later step, once this has been quiet across every
+/// published package.
+fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i32 {
+    // Candidates come from the install cache, because that is what `compat api` / `compat
+    // test` can actually read. Anything not installed is REPORTED as skipped, never silently
+    // dropped — a check that quietly narrows its own scope reports "clean" for work it did
+    // not do.
+    let mut versions: Vec<String> = loft::registry_index::installed_packages()
+        .into_iter()
+        .filter(|(n, v, _)| n == name && Some(v.as_str()) != own_version)
+        .map(|(_, v, _)| v)
+        .collect();
+    versions.sort_by(|a, b| loft::registry_index::compare_semver(a, b));
+    if let Some(f) = floor {
+        versions.retain(|v| {
+            !matches!(
+                loft::registry_index::compare_semver(v, f),
+                std::cmp::Ordering::Less
+            )
+        });
+    }
+    if versions.is_empty() {
+        println!("compat check `{name}`: no other release installed — nothing to compare against");
+        return 0;
+    }
+
+    let latest = versions.last().cloned().expect("non-empty");
+    let mut sample: Vec<String> = vec![latest.clone()];
+    if let Some(f) = floor
+        && versions.iter().any(|v| v == f)
+        && !sample.contains(&f.to_string())
+    {
+        sample.push(f.to_string());
+    }
+    // One random interior pick: anything not already sampled.
+    let interior: Vec<&String> = versions.iter().filter(|v| !sample.contains(v)).collect();
+    if !interior.is_empty() {
+        let pinned = std::env::var("LOFT_COMPAT_SAMPLE").ok();
+        let chosen = match pinned.as_deref() {
+            Some(p) if interior.iter().any(|v| v.as_str() == p) => p.to_string(),
+            _ => {
+                // Seeded from the clock; the point is not cryptographic quality but that the
+                // draw VARIES across runs and is reported, so coverage accumulates and any
+                // red can be reproduced with LOFT_COMPAT_SAMPLE.
+                let n = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as usize);
+                interior[n % interior.len()].clone()
+            }
+        };
+        println!(
+            "compat check `{name}`: sampled interior release {chosen} (pin with LOFT_COMPAT_SAMPLE={chosen})"
+        );
+        sample.push(chosen);
+    }
+
+    println!(
+        "compat check `{name}`: {} of {} installed release(s) sampled{}",
+        sample.len(),
+        versions.len(),
+        if versions.len() > sample.len() {
+            format!(
+                " — {} not looked at this run",
+                versions.len() - sample.len()
+            )
+        } else {
+            String::new()
+        }
+    );
+    for v in &sample {
+        let dir = loft::registry_index::extract_dir(name, v);
+        if !dir.join("loft.toml").exists() {
+            println!("  {v}: SKIPPED (not installed)");
+            continue;
+        }
+        let old_entry = entry_file_of(&dir, name);
+        let new_entry = entry_file_of(std::path::Path::new("."), name);
+        match (api_surface_of(&old_entry), api_surface_of(&new_entry)) {
+            (Ok((old_s, old_id)), Ok((new_s, new_id))) => {
+                let api = loft::api_diff::diff(&old_s, &new_s);
+                let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+                let api_word = match api {
+                    loft::api_diff::Verdict::Break(_) => "API BREAK",
+                    loft::api_diff::Verdict::Superset => "api ok",
+                };
+                let layout_word = if layout_reshaped(&layout) {
+                    "DATA BREAK"
+                } else {
+                    "data ok"
+                };
+                println!("  {v}: {api_word}, {layout_word}");
+            }
+            (Err(e), _) | (_, Err(e)) => println!("  {v}: could not read ({e})"),
+        }
+    }
+    0
+}
+
+#[cfg(feature = "registry")]
+/// `loft compat test <version>` — run a PUBLISHED release's tests against the working tree.
+///
+/// This is the half `loft compat api` cannot see. An API diff proves the SHAPE of the surface
+/// is unchanged; it says nothing about whether the functions still DO the same thing. The
+/// published version's own tests are the only description of that behaviour written before
+/// this change existed — and unlike the working tree's tests they cannot have been edited to
+/// match the new behaviour in the same commit, which is exactly why library CI running the
+/// CURRENT tests can never catch a self-inflicted break.
+///
+/// **The control comes first, and it is not optional.** Those tests were written against the
+/// loft of their day, so a failure has two possible causes: this change broke them, or they no
+/// longer run against today's loft at all. Running them first against their OWN source
+/// separates the two. Without it the first language change turns every library's history red,
+/// everyone learns the check lies, and it gets switched off — failure path F4 in the design.
+///
+/// Advisory in this step: reports, exits 0 unless it could not run.
+fn compat_test(name: &str, version: &str, published: &std::path::Path) -> i32 {
+    if !published.join("tests").is_dir() {
+        eprintln!("loft compat: `{name}` {version} ships no tests/ — nothing to check against");
+        return 2;
+    }
+    let base = std::env::temp_dir().join(format!("loft_compat_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+
+    // CONTROL: the published tests against the published source. Establishes that this corpus
+    // can pass at all on today's loft, so a subject failure means something.
+    // The staged directory MUST be named after the package: a test does `use <name>;`, which
+    // resolves by DIRECTORY NAME, so a differently-named dir silently falls back to the
+    // installed copy in ~/.loft/registry — and the check then compares that release against
+    // itself and reports drop-in no matter what the working tree says. Caught by the matrix:
+    // a deliberate behaviour break read as drop-in until the directories were renamed.
+    let ctl = base.join("control").join(name);
+    if let Err(e) = stage_package(published, published, &ctl) {
+        eprintln!("loft compat: {e}");
+        return 2;
+    }
+    let control_ok = run_package_tests(&ctl);
+
+    // SUBJECT: the same tests against the working tree's source.
+    let subj = base.join("subject").join(name);
+    if let Err(e) = stage_package(std::path::Path::new("."), published, &subj) {
+        eprintln!("loft compat: {e}");
+        return 2;
+    }
+    let subject_ok = run_package_tests(&subj);
+    let _ = std::fs::remove_dir_all(&base);
+
+    println!("compat: `{name}` — {version} tests against the working tree");
+    match (control_ok, subject_ok) {
+        (false, _) => println!(
+            "  UNVERIFIABLE — the {version} tests do not pass against {version} own source on \
+             this loft, so they cannot judge anything. The corpus is stale (a language change \
+             since it was written), not the working tree broken."
+        ),
+        (true, false) => println!(
+            "  BREAK — the {version} tests pass against {version} but FAIL against the working \
+             tree. Behaviour a released version promised has changed. Either fix it, or raise \
+             `api_compatible_with` past {version} to declare the break."
+        ),
+        (true, true) => {
+            println!("  drop-in — the {version} tests still pass against the working tree.");
+        }
+    }
+    0
+}
+
+/// Assemble a runnable package in `dst`: sources from `src_from`, tests from `tests_from`.
+///
+/// The mix is the point — the published tests have to run against the working tree's source,
+/// and a test does `use <name>;`, so the two must sit in one package for the name to resolve.
+/// Staged in a temp directory because neither input may be written to: the install cache is
+/// shared, and the working tree is the user's.
+fn stage_package(
+    src_from: &std::path::Path,
+    tests_from: &std::path::Path,
+    dst: &std::path::Path,
+) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("cannot create {}: {e}", dst.display()))?;
+    for item in ["loft.toml", "src", "native"] {
+        let from = src_from.join(item);
+        if from.exists() {
+            copy_tree(&from, &dst.join(item))?;
+        }
+    }
+    copy_tree(&tests_from.join("tests"), &dst.join("tests"))
+}
+
+/// Recursive copy. Skips per-checkout build state, which would otherwise carry a stale build
+/// into the staged package and have it test something other than the source beside it.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+    let meta = std::fs::metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    if meta.is_file() {
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::copy(from, to).map_err(|e| format!("{}: {e}", from.display()))?;
+        return Ok(());
+    }
+    std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
+        let entry = entry.map_err(|e| format!("read_dir: {e}"))?;
+        let nm = entry.file_name();
+        if matches!(nm.to_str(), Some(".loft" | "native-auto" | "target")) {
+            continue;
+        }
+        copy_tree(&entry.path(), &to.join(&nm))?;
+    }
+    Ok(())
+}
+
+/// Run a staged package's suite, returning whether it passed. Bounded by `LOFT_TIMEOUT` (the
+/// same bound library CI uses) so one hung old test cannot stall the check.
+fn run_package_tests(dir: &std::path::Path) -> bool {
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("loft"));
+    std::process::Command::new(exe)
+        .arg("--interpret")
+        .arg("--tests")
+        .arg("tests")
+        .current_dir(dir)
+        .env(
+            "LOFT_TIMEOUT",
+            std::env::var("LOFT_TIMEOUT").unwrap_or_else(|_| "120".into()),
+        )
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// A package's entry `.loft` file: `[library] entry` when declared, else the
+/// `src/<name>.loft` default that `loft.toml`'s documentation specifies.
+fn entry_file_of(root: &std::path::Path, name: &str) -> String {
+    let entry =
+        loft::manifest::read_manifest(root.join("loft.toml").to_str().unwrap_or("loft.toml"))
+            .and_then(|m| m.entry)
+            .unwrap_or_else(|| format!("src/{name}.loft"));
+    root.join(entry).to_string_lossy().into_owned()
+}
+
 /// for a CI check). Exit: 0 = drop-in / printed · 1 = a BREAK (so a non-required CI check goes
 /// red) · 2 = a usage / load error.
 fn run_api_surface_command(args: &[String]) -> i32 {
@@ -5403,6 +5771,24 @@ fn main() {
             };
             let code = scaffold_library(&name, native, chunk);
             std::process::exit(code);
+        } else if a == "compat" {
+            // Library compatibility contract — `loft compat <api|test|check>`.
+            // Self-contained + early-exit, like its api-surface sibling.  Registry-gated:
+            // every sub-verb compares against a PUBLISHED release, which a build without the
+            // registry feature cannot locate at all.
+            #[cfg(feature = "registry")]
+            {
+                let rest: Vec<String> = argv[i..].to_vec();
+                std::process::exit(run_compat_command(&rest));
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft compat: this build has no registry support, so a published release \
+                     cannot be fetched to compare against"
+                );
+                std::process::exit(2);
+            }
         } else if a == "api-surface" {
             // @PLN102 C1 — `loft api-surface <file>` | `--diff <base> <new> [--json]`.
             // Self-contained + early-exit.
@@ -6141,7 +6527,8 @@ fn main() {
                         if entry.level == Level::Debug {
                             continue;
                         }
-                        if !print_warnings && entry.level == Level::Warning {
+                        if !print_warnings && matches!(entry.level, Level::Warning | Level::Advice)
+                        {
                             continue;
                         }
                         eprintln!("{}", entry.to_string_compact());

@@ -155,20 +155,19 @@ pub fn program_cache_enabled() -> bool {
 #[must_use]
 pub fn running_a_dev_build() -> bool {
     std::env::current_exe().is_ok_and(|p| {
-        // A `debug`/`release` component somewhere BELOW a `target` one.  Not the
-        // immediate parent: a test binary is `target/debug/deps/loft-<hash>`, and a
-        // custom target-dir build is `target/loft/html-mt/release/loft` — both are
-        // development builds, and pinning the parent name would miss both.
-        let mut seen_target = false;
-        for c in p.components() {
-            let name = c.as_os_str();
-            if name == "target" {
-                seen_target = true;
-            } else if seen_target && (name == "debug" || name == "release") {
-                return true;
-            }
-        }
-        false
+        // Any `debug` / `release` path component.  Cargo always puts a build under one
+        // — `target/debug/loft`, `target/debug/deps/loft-<hash>` for a test binary,
+        // `target/loft/html-mt/release/loft` for a custom target-dir build, and
+        // `target-da/release/loft` for the debug-assertions calibration build the
+        // project's own guidance uses.  An installed binary
+        // (`/usr/local/bin/loft`) has none.
+        //
+        // Deliberately NOT "a `target` component followed by debug/release": that is
+        // the obvious reading and it misses `CARGO_TARGET_DIR=target-da`, which is
+        // precisely the configuration this exemption exists to protect.  A false
+        // positive would only disable a cache, which is the safe direction.
+        p.components()
+            .any(|c| c.as_os_str() == "debug" || c.as_os_str() == "release")
     })
 }
 
@@ -1157,18 +1156,27 @@ mod tests {
         assert!(cache_decision(false, false, false, false));
     }
 
-    /// The dev-build probe must recognise a `target/{debug,release}/` binary and NOT an
-    /// installed one — the whole point is to tell a development build from a shipped
-    /// one, so a false positive would disable the cache for every real user.
+    /// The dev-build probe must recognise a cargo build and NOT an installed one — the
+    /// point is to tell a development build from a shipped one, and a false negative
+    /// re-enables the cache for the compiler-debug loop it exists to protect.
     #[test]
     fn dev_build_probe_reads_the_binary_path() {
-        // This test binary itself lives under `target/…/deps/`, so the running
-        // executable is by construction a dev build — a self-check that needs no
-        // fixture and cannot drift from how the real binary is laid out.
+        // This test binary is itself a cargo build, so the running executable is by
+        // construction a dev build — a self-check that needs no fixture and cannot
+        // drift from how the real binary is laid out.  It holds under a custom
+        // `CARGO_TARGET_DIR` too (e.g. `target-da/`, the debug-assertions
+        // calibration build), which the first version of this predicate got wrong.
         assert!(
             running_a_dev_build(),
-            "the test binary lives in a target/ tree, so this must hold: {:?}",
+            "a cargo-built test binary must read as a dev build: {:?}",
             std::env::current_exe()
+        );
+        // The shipped shape must NOT: no `debug`/`release` component.
+        assert!(
+            !std::path::Path::new("/usr/local/bin/loft")
+                .components()
+                .any(|c| c.as_os_str() == "debug" || c.as_os_str() == "release"),
+            "an installed path must not look like a dev build"
         );
     }
 

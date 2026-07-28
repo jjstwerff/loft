@@ -126,6 +126,28 @@ pub struct Parser {
     pub lexer: Lexer,
     /// Are we currently allowing break/continue statements?
     in_loop: bool,
+    /// Cognitive complexity per definition — `context` → score, accumulated AS THE SOURCE IS
+    /// PARSED.
+    ///
+    /// Parse time is the only level at which this is meaningful. loft has no AST between the
+    /// parser and the Value IR, so a whole-program pass sees post-desugar code: measured on
+    /// the IR, five `??` discharges with no author-written branch score 10 and one plain
+    /// `for x in v` scores 5, which would charge people for using the null model and the
+    /// loop forms idiomatically. Here the parser is looking at exactly what was written.
+    ///
+    /// Cognitive, not cyclomatic: a construct costs `1 + nesting`, so DEPTH is what is
+    /// expensive rather than branch count. Eight sequential `if`s cost 8; three nested ones
+    /// already cost 6; a flat `match` costs 1 however many arms it has. That ordering is the
+    /// point — "many branches" and "hard to follow" are different properties.
+    pub complexity: HashMap<u32, u32>,
+    /// Deepest control-flow nesting reached per definition, with the source line where it
+    /// was reached — so the advice can say WHERE to cut instead of only how bad it is.
+    pub(crate) cc_deepest: HashMap<u32, (u32, u32)>,
+    /// Control-flow nesting depth while parsing, for [`Parser::complexity`]. Bumped only
+    /// around a construct's BODY, so an `else if` chain — which re-enters `parse_if` after
+    /// the `then` body has closed — charges once per link at the chain's own depth rather
+    /// than deepening with each link.
+    cc_nest: u32,
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
@@ -711,6 +733,9 @@ impl Parser {
             database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,
+            complexity: HashMap::new(),
+            cc_deepest: HashMap::new(),
+            cc_nest: 0,
             in_format_expr: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
@@ -1174,6 +1199,125 @@ impl Parser {
              reads bytes — this truncates by one byte per multi-byte character and is silent \
              on ASCII; use `0..size(text)` for a byte walk, or iterate with `for c in text` \
              (@PLN110 strict-index)"
+        );
+    }
+
+    /// Advice: this function's cognitive complexity has passed [`crate::keys::COMPLEXITY_ADVICE_AT`]
+    /// — a whole algorithm in one body.
+    ///
+    /// Cognitive, so DEPTH is what costs: a construct is charged `1 + nesting`, an `else if`
+    /// chain once per link at its own depth, and a flat `match` once however many arms it
+    /// has. Eight sequential `if`s score 8 while three nested ones score 6, which is the
+    /// ordering that matters — "many branches" is not "hard to follow", and only the second
+    /// is worth interrupting anyone about.
+    ///
+    /// Counted at parse time because that is the only place the author's structure still
+    /// exists: loft has no AST between the parser and the Value IR, and on the IR five `??`
+    /// discharges with no author-written branch score 10 while one `for x in v` scores 5 — a
+    /// reading that charges people for writing idiomatic loft.
+    ///
+    /// Names the deepest nesting line, because "score 93" is not actionable and "your
+    /// deepest nesting is 7 levels at line 412" is.
+    fn warn_function_complexity(&mut self) {
+        if self.first_pass || self.default || !crate::keys::complexity_lint_enabled() {
+            return;
+        }
+        let score = self.complexity.get(&self.context).copied().unwrap_or(0);
+        if score < crate::keys::COMPLEXITY_ADVICE_AT {
+            return;
+        }
+        let (depth, line) = self
+            .cc_deepest
+            .get(&self.context)
+            .copied()
+            .unwrap_or((0, 0));
+        let name = self.data.def(self.context).original_name().clone();
+        let at = crate::keys::COMPLEXITY_ADVICE_AT;
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            "`{name}` scores {score} for control-flow complexity (nudge at {at}) — its \
+             deepest nesting is {depth} levels, at line {line}. Nesting is what the score \
+             charges, so lifting the innermost part into its own function buys the most; a \
+             long flat sequence of branches costs almost nothing"
+        );
+    }
+
+    /// Advice: this function asks its callers for too many separate things.
+    ///
+    /// Counts only REQUIRED parameters — a defaulted one costs the caller nothing, and
+    /// hidden ones (`__retbuf`, work buffers) were injected by the compiler, not written.
+    /// Kept separate from the complexity nudge because the burdens differ: parameters are
+    /// what a caller carries and the fix is a struct; nesting is what a reader carries and
+    /// the fix is an extracted function. A function can be trivial to read and still hard to
+    /// call — `th_subdiv` takes 12 with a complexity of 2 — which is exactly the case a
+    /// combined score misses.
+    fn warn_parameter_count(&mut self) {
+        if self.first_pass || self.default || !crate::keys::param_count_lint_enabled() {
+            return;
+        }
+        let def = self.data.def(self.context);
+        let required = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && matches!(a.value, Value::Null))
+            .count() as u32;
+        if required < crate::keys::PARAM_ADVICE_AT {
+            return;
+        }
+        let name = def.original_name().clone();
+        let at = crate::keys::PARAM_ADVICE_AT;
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            "`{name}` takes {required} required parameters (nudge at {at}) — every caller \
+             has to get all {required} right, in order. Parameters that travel together are \
+             usually one thing: group them into a struct, or give the optional ones defaults \
+             so callers can leave them out"
+        );
+    }
+
+    /// Advice: these trailing boolean parameters want defaults.
+    ///
+    /// Fires only on a CLUSTER — two or more trailing booleans, none defaulted. One trailing
+    /// flag is ordinary; two is where a call site turns into `f(x, true, false)` and stops
+    /// saying anything at the point a reader meets it.
+    ///
+    /// This advertises a feature rather than reporting a fault, which is why it must stay
+    /// quiet: the shape is rare (96.9% of real loft has none), and a nudge that fired on the
+    /// common case would be suppressed — taking the thing it was advertising with it.
+    ///
+    /// Adopting it costs nothing under the compatibility promise, and the message says so,
+    /// because that is the part people do not know: giving an existing parameter a default is
+    /// additive, so every call that passes it today keeps working unchanged.
+    fn warn_boolean_flag_cluster(&mut self) {
+        if self.first_pass || self.default || !crate::keys::default_params_lint_enabled() {
+            return;
+        }
+        let def = self.data.def(self.context);
+        let mut trailing = 0u32;
+        for a in def.attributes().iter().rev() {
+            if a.hidden {
+                continue;
+            }
+            if matches!(a.typedef.base(), Type::Boolean) && matches!(a.value, Value::Null) {
+                trailing += 1;
+            } else {
+                break;
+            }
+        }
+        if trailing < crate::keys::BOOL_FLAG_ADVICE_AT {
+            return;
+        }
+        let name = def.original_name().clone();
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            "`{name}` ends with {trailing} boolean parameters — a call reading \
+             `{name}(…, true, false)` says nothing about which flag is which. Give them \
+             defaults (`loud: boolean = false`) so callers pass only what they are changing. \
+             Adding a default never breaks a caller: existing calls pass the value and keep \
+             working, new ones may leave it out"
         );
     }
 
@@ -6557,7 +6701,7 @@ impl Parser {
                     diagnostic_at!(
                         self.lexer,
                         pos,
-                        Level::Warning,
+                        Level::Advice,
                         "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
                     );
                     self.lexer.suggest_last(&succ);

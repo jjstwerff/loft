@@ -475,7 +475,7 @@ fn undefined_enum() {
     // synthesised a placeholder local for it during recovery.
     code!("enum E1 { V1 }\nfn test(v: E1) -> boolean { v > V2 }")
         .error("Unknown variable 'V2' — did you mean 'v'? at undefined_enum:2:33")
-        .warning(
+        .advice(
             "Variable 'V2' is UPPER_CASE — that style is reserved for constants.  \
              Declare with `const V2 = …` to make it immutable, or rename to lower_case. \
              at undefined_enum:2:37",
@@ -490,7 +490,7 @@ fn unknown_sizeof() {
     code!("fn test() { sizeof(C); }")
         .error("Expect a variable or type after sizeof at unknown_sizeof:1:22")
         .error("Unknown variable 'C' at unknown_sizeof:1:20")
-        .warning(
+        .advice(
             "Variable 'C' is UPPER_CASE — that style is reserved for constants.  \
              Declare with `const C = …` to make it immutable, or rename to lower_case. \
              at unknown_sizeof:1:22",
@@ -850,7 +850,7 @@ fn missing_return_not_null() {
 }
 fn test() { classify(1); }"
     )
-    .warning(
+    .advice(
         "`not null` is deprecated and has no effect — a type is non-null by default now; delete `not null` (write `T?` if the type should allow null) at missing_return_not_null:1:43",
     )
     .warning(
@@ -1660,7 +1660,7 @@ fn gh253_bang_on_not_null_warns() {
     // Genuinely exercises `not null` (the `!x`-is-always-false diagnostic depends on the
     // value being non-null), so it KEEPS `not null` and asserts the deprecation too.
     code!("fn test() { h: integer not null = 3; if !h { h = 4; } }")
-        .warning(
+        .advice(
             "`not null` is deprecated and has no effect — a type is non-null by default now; delete `not null` (write `T?` if the type should allow null) at gh253_bang_on_not_null_warns:1:34",
         )
         .warning(
@@ -2094,4 +2094,20 @@ fn struct_valued_constant_rejected() {
              `fn point_none() -> Point { … }`, then call `point_none()` at \
              struct_valued_constant_rejected:1:57",
         );
+}
+
+// A text constant builds its value in ONE work buffer, and a constant is pasted at every
+// reference — so the paste re-points that buffer onto one the using function owns
+// (`rebind_constant_buffer`).  An initialiser that needs more than one buffer, such as a
+// constant referenced twice, has no single buffer to re-point; before this it panicked the
+// parser inside a formatted string and returned a doubled value (`q2qq2q`) through a local.
+// Refuse it at the declaration and name the idiom that does work.
+#[test]
+fn multi_buffer_text_constant_rejected() {
+    code!("B = \"q\"; A = B + \"{1 + 1}\" + B; fn test() { a = A; }").error(
+        "text constant 'A' is assembled in a way that cannot be pasted at a use site — a \
+         constant is inlined at every reference, and this initialiser builds its value \
+         across more than one buffer.  Use a zero-argument function instead: \
+         `fn a() -> text { … }`, then call `a()` at multi_buffer_text_constant_rejected:1:32",
+    );
 }

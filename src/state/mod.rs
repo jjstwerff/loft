@@ -276,6 +276,13 @@ pub struct State {
     /// unwrapped pc inherits the nearest preceding span (mirrors the
     /// `line_numbers` map's behaviour).
     pub(crate) source_spans: BTreeMap<u32, Position>,
+    /// Function coverage — `Some(bitmap)` records which definitions this run actually
+    /// entered, indexed by `d_nr`.  `None` on a normal run, so the hook in
+    /// [`State::fn_call`] costs one branch and nothing else.  The test runner turns it
+    /// on to report the functions a suite never reached: a test suite that never enters
+    /// a function has not checked it, and until this existed that silence was
+    /// indistinguishable from coverage — the same shape as the backend-scope note.
+    pub entered_fns: Option<Vec<bool>>,
     pub(crate) fn_positions: Vec<u32>,
     /// @PLN16 debugger — present only while debugging; the execute loop pauses at
     /// a registered breakpoint offset and captures the frame.  `None` on normal
@@ -534,6 +541,7 @@ impl State {
             scope_spans: Vec::new(),
             store_spans: Vec::new(),
             source_spans: BTreeMap::new(),
+            entered_fns: None,
             fn_positions: Vec::new(),
             debug: None,
             call_stack: Vec::new(),
@@ -624,6 +632,13 @@ impl State {
             self.call_depth -= 1;
             self.raise(crate::runtime_error::RuntimeErrorKind::StackOverflow);
             return;
+        }
+        // Coverage: record the entry AFTER the depth check, so a call that overflows
+        // the stack — and therefore never runs the body — is not counted as reached.
+        if let Some(seen) = &mut self.entered_fns
+            && let Some(slot) = seen.get_mut(d_nr as usize)
+        {
+            *slot = true;
         }
         self.call_stack.push(CallFrame {
             d_nr,
@@ -1301,6 +1316,17 @@ impl State {
                 }
 
                 let d_nr = self.coroutine_frame_mut(idx).d_nr;
+                // Coverage: a generator's body does not enter through `fn_call` — it
+                // resumes here — so without this every `iterator<T>` function reported as
+                // never entered however thoroughly it was iterated.  Recorded on RESUME,
+                // not on `coroutine_create`: creating a generator that is never iterated
+                // runs none of its body, and a report that claims otherwise is worse than
+                // one that misses it.
+                if let Some(seen) = &mut self.entered_fns
+                    && let Some(slot) = seen.get_mut(d_nr as usize)
+                {
+                    *slot = true;
+                }
                 let mut bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
                 let code_pos = self.coroutine_frame_mut(idx).code_pos;
                 let saved_frames: Vec<_> = self
@@ -5340,6 +5366,7 @@ impl State {
             scope_spans: Vec::new(),
             store_spans: Vec::new(),
             source_spans: BTreeMap::new(),
+            entered_fns: None,
             fn_positions: Vec::new(),
             debug: None,
             call_stack: Vec::new(),

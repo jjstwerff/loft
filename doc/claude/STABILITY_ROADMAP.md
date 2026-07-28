@@ -133,10 +133,11 @@ breadth stays clean through the soak, the door opens. Consumer coverage is track
    element of a match-captured repetition group** (`(x)*`/`(x)+`) frees the group's backing store
    before the arm body dereferences it (the group is a `frame1(__vdb)` view whose dep-liveness
    scopes.rs doesn't extend past the collection). Benign on release, caught only under
-   debug-assertions/POISON — so the nightly miri gate stays red until it lands. Root cause PINNED,
-   fix decided, not yet implemented → [plans/captured-group-elem-uaf.md](plans/captured-group-elem-uaf.md)
-   (repro + exact chokepoint + verification matrix). So gate 1's "every *tracked* store-lifetime bug
-   is closed" now carries this one open item.
+   debug-assertions/POISON. **CLOSED 2026-07-19 — both scripts, both backends** (35m was
+   `vector_match`'s `__acc` materialisation, 35c the skip-trailing-frees in
+   `collect_return_sources`), plus a static overlay gate so the pair cannot regress silently →
+   [plans/captured-group-elem-uaf.md](plans/captured-group-elem-uaf.md). Gate 1's "every *tracked*
+   store-lifetime bug is closed" holds again.
 
 2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02 (#480);
    the gate is NOT yet cleared.** @PLN25 (nullable sequences / dense-default) is closed as a *plan*:
@@ -202,28 +203,30 @@ is the live one.** Gate 2 (@PLN25) settled the value model and the `deps` owners
 invariant is defined against, exactly as the build order required — so gate 1 is **unblocked** even
 though gate 2 still carries verified-open soundness edges of its own (see gate 2 above; they do not
 block gate 1, because the *model* is what gate 1 reads). Gate 3 (@PLN28 + @PLN36) is closed. So the
-order now reads: **finish gate 1** (the Cluster C fold — the fuzz/sanitizer corpora it must run under
-are now standing, @PLN53/@PLN54 closed) and **drain gate 2's edge cases** in parallel, **then open
-gate 5** (opened, @PLN102), with gate 4 (@PLN43, parked) after. Performance (the copy-vs-borrow
+order it ran in was: finish gate 1, drain gate 2's edge cases, then gate 5 — all now done or at
+close-out (see § Readiness today). Gate 4 (@PLN43) is still parked. Performance (the copy-vs-borrow
 elision, an @PLN25 sub-thread) is "good enough for prototyping" — fold in opportunistically, not a
 blocker.
 
-**Readiness today (2026-07-10).** The 2026-07 stability + type-safety release SHIPPED as
-`2026.7.1`. Gate 3 is CLOSED; gate 2's *model* is landed but the gate is **open** on verified soundness
-edges (a `?? null` unsoundness, the call-arg N-Store hole — see gate 2 above). **Gate 1 is sealed
-pending merge**: its tracked store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via
-@PLN90 #516), its fuzz-proof stands (@PLN53/@PLN54 closed, #547), the Cluster C fold landed, and the
-nightly DA + `stack_align_guard` gates were widened to the whole in-process interpreter corpus — all on
-`tuxedo-cluster-c`, **merged to `main` 2026-07-10 (#551, squash `58a3f08e`)** — gate 1 sealed. **Gate 5
-(@PLN102) is now the active gate**, and well underway: **arc B is COMPLETE** (mechanical — a real
-version-constraint parser, `check_version` → `VersionCheck`; and semantic — the `contract` axis,
-`check_contract` → `ContractCheck`, `CONTRACT_VERSION = 0` inert pending the 1.0 freeze); the **pivot is
-DECIDED** (a monotone integer `contract` version, `1.0` == contract 1 — [versioning-decision.md](plans/102-stability-contract/versioning-decision.md));
-and **arc A is DRAFTED** ([COMPATIBILITY.md](COMPATIBILITY.md) — the silent/loud/additive breaking-change
-policy per surface, the per-tier maker obligations, and the misclassification detectors). Remaining: the
-`CONTRACT_VERSION` 0→1 flip at the freeze, and policy arcs **C** (deprecation channel), **D** (public
-bug-intake), **E** (the 1.0 line) + the omitted-bump CI gates + the registry range check. `hex_terrain`
-remains registry-validation's sole red — a library republish, not a loft fix.
+**Readiness today (2026-07-28) — the gate list is nearly exhausted; the soak is what is left.**
+Every numbered gate below is now closed or down to close-out, so the binding constraint has moved to
+the overriding gate above: breadth of real use, not a green board.
+
+| gate | state |
+|---|---|
+| 1 — memory model | **sealed.** Tracked store-lifetime bugs closed; the 2026-07-19 re-opened captured-group UAF is fixed both backends; the fuzz/sanitizer corpora (@PLN53/@PLN54) stand and the DA + `stack_align_guard` gates span the in-process corpus. |
+| 2 — null model | **close-out only.** @PLN25 CLOSED; all three soundness edges closed 2026-07-16. What remains is not a soundness hole: the `not null` hard-reject is still a deprecation warning, blocked on the library republish, plus F6 bookkeeping. |
+| 3 — first contact | **cleared** (@PLN28 + @PLN36 closed). |
+| 4 — durability | **parked** (@PLN43, `status:parked`). Needs an explicit in-or-out-of-contract-1 decision rather than continued drift. |
+| 5 — stability contract | **CLOSED.** @PLN102 is `status:finished`. The `CONTRACT_VERSION` 0→1 flip remains, but that is the freeze act itself, not plan work. |
+
+`registry-validation` is **green** again (since 2026-07-26, after four red days) — `hex_terrain` was
+its last red and is no longer failing.
+
+With the language surface effectively frozen in practice (no breaking changes planned), "time since
+the last defect" stops being evidence: a static surface produces no new reports whether it is sound or
+merely unchanging. Only a composition nobody has tried can still surface a contract-level defect,
+which is why the diverse-consumer soak — not this list — is the remaining gate.
 
 **Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
 this file is *fix, don't file*, and the cycle runs under a warm feature freeze

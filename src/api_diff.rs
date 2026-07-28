@@ -48,7 +48,14 @@ pub fn diff(old: &[Member], new: &[Member]) -> Verdict {
         match new_map.get(&(name.as_str(), *kind)) {
             None => breaks.push(format!("removed {kind} `{name}`")),
             Some(new_sig) if *new_sig != sig.as_str() => {
-                breaks.push(format!("changed {kind} `{name}`"));
+                // A textual difference is not automatically a break for an aggregate. A
+                // struct's signature is its member list, so GAINING a method rewrites the
+                // string while leaving every existing use valid. Measured on real libraries:
+                // `server` 0.3.1 -> 0.5.0 added the method `bound` and read as a break, which
+                // would have failed a purely additive release had this been a gate.
+                if let Some(reason) = aggregate_break(sig, new_sig) {
+                    breaks.push(format!("changed {kind} `{name}` — {reason}"));
+                }
             }
             Some(_) => {}
         }
@@ -58,6 +65,62 @@ pub fn diff(old: &[Member], new: &[Member]) -> Verdict {
     } else {
         Verdict::Break(breaks)
     }
+}
+
+/// Why an aggregate's member list changed in a way a consumer can observe, or `None` when the
+/// change is purely additive.
+///
+/// The distinction that matters is what a consumer may do with the type:
+/// * a **removed** member, or one whose type changed, breaks every existing use;
+/// * an added **method** (`name: fn`) is additive — nothing that compiled stops compiling;
+/// * an added **field** is NOT, because a consumer constructing the aggregate literally
+///   (`Server { … }`) must now supply it.
+///
+/// Anything whose shape this cannot parse falls back to "changed", so an unrecognised
+/// rendering is reported rather than waved through — the conservative direction for a check
+/// whose whole value is that a silent break is impossible.
+fn aggregate_break(old_sig: &str, new_sig: &str) -> Option<String> {
+    let (Some(old_m), Some(new_m)) = (members_of(old_sig), members_of(new_sig)) else {
+        return Some("shape changed".to_string());
+    };
+    let mut reasons = Vec::new();
+    for (name, ty) in &old_m {
+        match new_m.iter().find(|(n, _)| n == name) {
+            None => reasons.push(format!("removed `{name}`")),
+            Some((_, new_ty)) if new_ty != ty => {
+                reasons.push(format!("`{name}` changed type"));
+            }
+            Some(_) => {}
+        }
+    }
+    for (name, ty) in &new_m {
+        if ty != "fn" && !old_m.iter().any(|(n, _)| n == name) {
+            reasons.push(format!(
+                "added field `{name}` (a literal construction must supply it)"
+            ));
+        }
+    }
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join(", "))
+    }
+}
+
+/// Parse `{ a: fn, b: integer }` into `[(a, fn), (b, integer)]`. `None` when the signature is
+/// not a brace-delimited member list (a plain function signature, say).
+fn members_of(sig: &str) -> Option<Vec<(String, String)>> {
+    let inner = sig.trim().strip_prefix('{')?.strip_suffix('}')?;
+    if inner.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    inner
+        .split(',')
+        .map(|part| {
+            let (n, t) = part.split_once(':')?;
+            Some((n.trim().to_string(), t.trim().to_string()))
+        })
+        .collect()
 }
 
 /// The PUBLIC members of a surface, each with sealed types inlined into its signature (so a

@@ -7,6 +7,23 @@ use std::fmt::{Arguments, Debug, Display, Formatter};
 #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Level {
     Debug,
+    /// Advice — the code is CORRECT as written; this reports a deprecation, a cost,
+    /// or a preferred spelling.  Deliberately below `Warning` in the ordering, and
+    /// deliberately WITHOUT a deny switch.
+    ///
+    /// The split exists because one tier made the compatibility doctrine
+    /// self-contradictory.  `revalidate-libs.yml` states that a new deprecation must
+    /// not fail an already-shipped library, yet a library's own CI runs
+    /// `LOFT_DENY_WARNINGS=1`, which fails on any warning — so `not null`, a
+    /// deliberate no-op kept parseable so unrepublished libraries keep loading, made
+    /// those libraries unable to pass their own CI without editing untouched code.
+    ///
+    /// The rule for choosing: **a diagnostic gates CI if and only if ignoring it can
+    /// produce a wrong result.** Lost writes, byte/char index confusion and
+    /// null-into-non-null gate; deprecations and perf notes advise.  Never add a
+    /// `LOFT_DENY_ADVICE` — the moment advice can gate, cosmetics block a release and
+    /// the split has bought nothing.
+    Advice,
     Warning,
     Error,
     Fatal,

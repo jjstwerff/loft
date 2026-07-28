@@ -3135,7 +3135,7 @@ impl Parser {
             self.lexer.to(self.vars.var_source(var));
             diagnostic!(
                 self.lexer,
-                Level::Warning,
+                Level::Advice,
                 "`&` on parameter `{}` only slows it down here — a `&`-reference is \
                  double-indirect (slower on every access), and field mutation already \
                  propagates to the caller without it. Drop the `&` unless you REASSIGN \

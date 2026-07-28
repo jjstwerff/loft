@@ -105,6 +105,45 @@ reproduces in a single file.
 - **`return_field_base_is_call` is gone**, subsumed by the general predicate. The H9
   and H7 regression scripts were green on both backends before it was deleted.
 
+## The third sibling: a returned vector field of a call (zero-trust § 12)
+
+> **Reported and fixed 2026-07-27**, after the struct and element forms above.  Guard:
+> `tests/scripts/zt12-return-vector-field-of-call.loft`.
+
+`return f().field` where the field is a heap **vector** returned a view into the freed
+lift temp — empty from the start on `--native`; on the interpreter a live value that a
+later store-allocating call in the caller transiently clobbered to length 0.  It cost the
+consumer a one-line accessor that silently corrupted its result.
+
+**Why the H12 fix did not cover it.** The explicit-return **vector** arm selects its
+return buffer with its own condition, and #488 had given it a **Var-only** predicate: a
+field view rooted at a local `Var` copied into the buffer, but one rooted at a *call
+temporary* fell through — so the field read was emitted as a discarded statement and the
+function returned an empty buffer.  Exactly the signature of the struct case, one arm
+over.  Swapping that predicate for `return_projects_into_local` unified all three
+siblings on one question, and retired `return_field_base_is_local_var` the way the
+struct fix retired `return_field_base_is_call`.
+
+**The emitted shape needed no invention** — the working `l = f(); return l.lines` form
+already produces it: clear the caller's buffer, append the elements into it, return the
+buffer.  Its IR *was* the spec.
+
+**The boundary is narrower than the report suggests**, and the controls are what pin it:
+
+| shape | before | note |
+|---|---|---|
+| `return mk().lines` (struct elements) | `len 0` | reported |
+| `return mk().nums` (`integer`) | `len 0` | element width is NOT an axis |
+| `return mk().bytes` (`u8`) | `len 0` | — |
+| implicit tail `mk().lines` | ✅ 2 | already handled by `block_result`'s #437 intercept |
+| `return mk().inner.lines` (chained) | ✅ 2 | a chain is delivered via a materialised work-ref |
+| `return f.lines` (argument-rooted) | ✅ 2 | the caller owns that store |
+| `Holder { copy: mk().lines }` | ✅ 2 | why the consumer's render path never tripped |
+| `return o` (fresh local, #437) | ✅ 2 | must keep NRVO — its block cannot sit in `OpAppendVector`'s arg |
+
+The last two controls are load-bearing: a change that copied *every* vector return into
+the buffer passes the failing cells and breaks the fresh-local return.
+
 ## See also
 
 - `tests/scripts/h12-return-vector-element.loft` — the eight cells, three of them

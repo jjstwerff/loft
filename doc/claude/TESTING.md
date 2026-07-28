@@ -112,6 +112,7 @@ below for the full rationale and when NOT to use this shape.
 - [Key Constraints](#key-constraints)
 - [`tests/scripts/` — standalone loft test suite](#testsscripts--standalone-loft-test-suite)
 - [Debugging failures in `tests/scripts/`](#debugging-failures-in-testsscripts)
+- [What a run did NOT check — scope, admission, coverage](#what-a-run-did-not-check--scope-admission-coverage)
 
 ---
 
@@ -1893,3 +1894,157 @@ stack, and the panic site appears.
 | Item | Section | Status |
 |---|---|---|
 | ~~**@P229b — Windows `pick_free_port` rebind race**~~ — **CLOSED 2026-05-29** via the v2 probe (PR #228).  Un-ignored `v2_single_client_completes_game` on `windows-latest`; CI showed it PASSING.  All 10 `multiplayer_v{2,3,5}.rs` `#[cfg_attr(target_os = "windows", ignore = "P229b…")]` ignores dropped in the follow-up.  The 2026-05-21 leading hypothesis (bind-then-drop race) was incorrect; @P229b was incidentally resolved in some recent Rust toolchain or transitive dep update.  Bug record: [PROBLEMS.md @P229](PROBLEMS.md). | — | ✅ Closed; row kept for the lesson — "don't apply unverified-from-Windows-output hypotheses blindly" stands. |
+
+---
+
+## What a run did NOT check — scope, admission, coverage
+
+`loft test` ends with a line stating what the run **left out**, not only what it did.
+The reason is one repeated defect: a bare `ok` looked identical whether the other half
+had been checked or had never run once, and people read that silence as coverage. A
+consumer found a quarter of their packages had never been native-compiled while
+`loft test` stayed green; another injected a deliberate capability violation and the
+suite passed. Three things are reported for that reason:
+
+- **Backend scope** — `[ran on the interpreter only — native not exercised: loft test
+  --native]`. Each invocation exercises exactly one backend.
+- **Admission** — whether a `[sandbox]` policy was present and how many files it
+  actually covered. A policy that designates nothing says so.
+- **Function coverage** — the functions the suite never entered.
+
+### Function coverage
+
+Every function defined in the package under test that no test entered is listed with
+its file, line, and name:
+
+```
+coverage: 4 of 8 functions were never entered by these tests
+  src/regex.loft:100  find
+  src/regex.loft:105  split
+  src/regex.loft:110  text.regex_find
+  src/regex.loft:115  text.regex_split
+```
+
+A fully-covered package says so explicitly (`coverage: all 36 functions were entered`),
+so "no coverage line" can never be misread as "everything is covered" — which would
+reproduce the very defect the report exists to remove. Ten entries print by default;
+`LOFT_COVERAGE=list` prints them all.
+
+**It is a list, never a percentage, and never a gate.** A percentage becomes a target,
+and a coverage target produces tests written to reach a line rather than tests that
+check a behaviour — the metric goes green over code nobody validated. And a gate would
+fail exactly the case the package system exists to support: a library is written
+*before* its consumers, so it legitimately starts with little coverage. Each line here
+is instead an individual, checkable fact — this code did not run — and the only way to
+remove one is to actually run the function.
+
+What is deliberately **not** counted, because counting it would make the number lie:
+
+| Excluded | Why |
+|---|---|
+| `#native` declarations | No loft body to enter — they dispatch to Rust, so a native-backed package would read 100% uncovered however well tested. |
+| Dependencies, the stdlib | A package is not answerable for code it did not write; charging it would make its number depend on how much of a dep it happens to touch. |
+| The test file's own functions | They are the drivers, and the runner already reports on them. |
+| Generated lambdas | Not written by the author. |
+
+Generators count when **iterated**, not when created: a generator's body runs on resume,
+so `it = gen();` with no loop over it has run none of it and stays on the list.
+
+Coverage is recorded on the interpreter (`State::fn_call` and the coroutine resume), so
+`loft test --native` prints no coverage line — the interpreter leg carries it. Test
+adequacy is a property of the tests, not of the backend.
+
+Guarded by `tests/function_coverage.rs`, which asserts the quiet directions as hard as
+the loud one.
+
+---
+
+## Diagnostic tiers — what `--deny-warnings` may fail on
+
+Two tiers, and the difference is contractual rather than cosmetic:
+
+| tier | renders | gates `--deny-warnings` | LSP severity |
+|---|---|---|---|
+| `Level::Warning` | `warning:` | **yes** | Warning (2) |
+| `Level::Advice` | `advice:` | **never** | Hint (4) |
+
+**The rule for choosing: a diagnostic gates if and only if ignoring it can produce a
+wrong result.** A lost write, `len(text)` indexed as bytes, a nullable reaching a
+non-null slot — those gate. A deprecation, a perf note, a preferred spelling — those
+advise.
+
+The split is not a convenience. With one tier the compatibility doctrine contradicted
+itself: `revalidate-libs.yml` states that a new deprecation must not fail an
+already-shipped library, while that library's own CI runs `LOFT_DENY_WARNINGS=1` and
+fails on any warning. `not null` — a deliberate no-op kept parseable so unrepublished
+libraries keep loading — therefore made those libraries unable to pass their own CI
+without editing code they never touched.
+
+**There is deliberately no `LOFT_DENY_ADVICE`.** The moment advice can gate, cosmetics
+block a release and the split has bought nothing.
+
+Writing tests against a tier:
+
+- `Test::warning("…")` / `Test::advice("…")` in `tests/testing.rs` assert the tier, not
+  just the text — that is what keeps the split from silently eroding.
+- `@EXPECT_WARNING` in a `.loft` script matches **either** tier: it asks whether a
+  diagnostic fired, not which tier it landed in.
+- `loft test` prints both; only the Warning bucket reaches the deny gate.
+
+### The complexity advice, and why it is counted at parse time
+
+`LOFT_NO_COMPLEXITY` opts out of a nudge when a function's **cognitive** complexity
+reaches `keys::COMPLEXITY_ADVICE_AT` (40).
+
+Cognitive, not cyclomatic: a construct costs `1 + nesting`, so depth is what is expensive.
+Eight sequential `if`s cost 8; three nested cost 6; a flat `match` costs 1 however many arms
+it has. "Many branches" and "hard to follow" are different properties, and a lint that
+confuses them fires on every wide dispatch and gets switched off.
+
+**It is counted as the source is parsed, and that is not an implementation detail.** loft has
+no AST between the parser and the Value IR, so any whole-program pass sees post-desugar code.
+Measured on the IR: five `??` discharges with no author-written branch score 10, and one plain
+`for x in v` scores 5 — a reading that charges people for using the null model and the loop
+forms idiomatically. An IR version was built and measured before being discarded; the numbers
+are in the commit that added `Parser::complexity`.
+
+Two calibration facts worth keeping:
+
+- The boundary is set from the corpus, not chosen: over 5,972 functions of real loft the
+  distribution runs p50 1, p90 15, p95 27, p98 47. 40 speaks for ~3%.
+- The score is charged on **pass 2 only** — the parser runs twice, and charging both doubles
+  every score (eight flat `if`s read 16). The nesting counter still tracks on both passes, or
+  pass-1 bodies are charged at a stale depth.
+
+Also discarded on evidence, so it is not re-derived: a live-interval "cut point" signal (no
+variable crosses a boundary ⇒ two independent halves). It fires on 45% of long functions and
+flags a one-line vector add, because the absence of a spanning variable is a property of
+sequential evaluation, not of separable logic.
+
+### The interface nudges — parameters and default values
+
+Two more advices sit beside the complexity one, deliberately SEPARATE from it and from each
+other, because they measure different burdens with different fixes.
+
+**`LOFT_NO_PARAM_COUNT`** — 8 or more REQUIRED parameters (`keys::PARAM_ADVICE_AT`).
+Parameters with a default do not count (they cost a caller nothing) and neither do
+compiler-injected hidden ones (`__retbuf`, work buffers). Folding this into the complexity
+score was measured and rejected: `th_subdiv` takes 12 required parameters with a complexity
+of **2** — trivial to read, hard to call — so at +1 per parameter it scores 14 and stays
+silent, missing the very case that motivates the check. It would also make the complexity
+message untrue, since most of such a score would not be control flow. 86% of real loft takes
+4 or fewer; `>=8` is 2.1%.
+
+**`LOFT_NO_DEFAULT_HINT`** — 2 or more TRAILING booleans, none defaulted
+(`keys::BOOL_FLAG_ADVICE_AT`). This one advertises a feature rather than reporting a fault,
+and the trigger is deliberately conservative: one trailing flag is idiomatic (1.0% of real
+loft), 96.9% of functions have none at all, and `>=2` covers 2.1%. A nudge that fired on the
+common shape would be suppressed, taking the feature it was advertising with it.
+
+It goes quiet the moment it is taken — a function whose trailing booleans already have
+defaults does not fire. That property is what separates a nudge from nagging, and it is
+asserted rather than assumed.
+
+The message states that adoption is free under the compatibility promise, because that is the
+part people do not know: giving an existing parameter a default is **additive**, so every call
+that passes it today keeps working unchanged and new calls may omit it.

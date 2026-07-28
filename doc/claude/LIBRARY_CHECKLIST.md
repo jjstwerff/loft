@@ -64,6 +64,9 @@ holding a bug fix (same rule as `lint_comments.sh` — advisory, never fails CI)
 - [ ] Tests pass on **interpret** and **`--native`** (`loft test` / `loft --native test`).
 - [ ] `LOFT_DENY_WARNINGS=1 loft test` is green (or a justified `.allow_warnings` opt-out while not ready).
 - [ ] If it manages stores: clean under `LOFT_STORE_GUARD` and the sanitizer surfaces it touches (N/A for pure-data libs).
+      *(`LOFT_STORE_GUARD=1` now rides the unified library CI's own test run on both
+      backends, so this is checked for every package on every push — no extra test to
+      write, and a brand-new package passes it on day one.)*
 
 ### Goal D — Cross-backend / cross-platform parity — `[auto]`
 - [ ] Interpret and native produce **identical** results (the both-backend test run covers it).
@@ -76,6 +79,11 @@ holding a bug fix (same rule as `lint_comments.sh` — advisory, never fails CI)
 ### Goal C — Capability via dogfood — `[review]`
 - [ ] At least one **real consumer or example** exercises the public API (a genuine use, not a toy).
 - [ ] Tests cover the public surface — each `pub fn` / `pub struct` has a test or example path.
+      *(`loft test` lists the functions a suite never entered — see
+      [TESTING.md § What a run did NOT check](TESTING.md#what-a-run-did-not-check--scope-admission-coverage).
+      It is a report for this review to read, never a gate: a library is written before
+      its consumers exist, so a coverage bar would fail exactly the case the package
+      system is meant to support.)*
 
 ### Goal F — Friction-free surface — `[review]`
 - [ ] The public API expresses **intent**, with no compiler-serving ceremony — it passes the fun-on-pickup bar.

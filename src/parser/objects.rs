@@ -1127,6 +1127,36 @@ impl Parser {
         ret
     }
 
+    /// Re-point a pasted text constant's build buffer at a fresh buffer owned by the
+    /// function doing the pasting.
+    ///
+    /// A file-scope constant is stored as IR and PASTED at every reference.  A text
+    /// initialiser builds its value in place in ONE buffer, held as a variable number
+    /// that only means what it says in the file-scope table where the constant was
+    /// parsed.  Pasted into a function that number names something else: inside a
+    /// formatted string it lands on the format's own `__work_N`, so the block cleared
+    /// the text being built — `"[{B}]"` for `B = "x" + "y"` printed `xyxy]`, the `[`
+    /// gone and the value appended to itself — and past the end of the table it
+    /// panicked the parser instead.
+    ///
+    /// The declaration already refused any block this cannot re-point
+    /// (`constant_block_is_rebindable`), so the rewrite is total.  The buffer is minted
+    /// on BOTH passes: the work-buffer counter has to advance identically, or pass 2
+    /// numbers every later buffer differently from pass 1.
+    fn rebind_constant_buffer(&mut self, mut code: Value, mut tp: Type) -> (Value, Type) {
+        let fresh = self.vars.work_text(&mut self.lexer);
+        crate::parser::definitions::visit_constant_vars(&mut code, &mut |v| *v = fresh);
+        // The type names the same buffer (`text["b"]`), so it has to move with it: a dep
+        // still pointing at the declaration's numbering makes the text-return path
+        // promote a variable this function does not have.
+        if let Type::Text(deps) = &mut tp
+            && !deps.is_empty()
+        {
+            *deps = crate::data::Deps::frame1(fresh);
+        }
+        (code, tp)
+    }
+
     pub(crate) fn parse_constant_value(
         &mut self,
         code: &mut Value,
@@ -1265,6 +1295,16 @@ impl Parser {
                     // gen_set_first_ref_call_copy handles the CopyRecord.
                     *code = self.cl("OpConstRef", &[Value::Int(d_nr as i32)]);
                     return const_tp;
+                }
+                // A text constant builds its value in a buffer whose NUMBER is only
+                // valid where the constant was parsed — re-point it at one this
+                // function owns before pasting.
+                if matches!(const_tp.base(), Type::Text(_))
+                    && matches!(const_code.unspan(), Value::Block(_))
+                {
+                    let (rebound, tp) = self.rebind_constant_buffer(const_code, const_tp);
+                    *code = rebound;
+                    return tp;
                 }
                 *code = const_code;
                 return const_tp;

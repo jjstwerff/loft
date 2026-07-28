@@ -24,7 +24,7 @@ impl Parser {
             if !self.first_pass {
                 diagnostic!(
                     self.lexer,
-                    Level::Warning,
+                    Level::Advice,
                     "`not null` is deprecated and has no effect — a type is non-null by \
                      default now; delete `not null` (write `T?` if the type should allow null)"
                 );
@@ -578,6 +578,102 @@ impl Parser {
         true
     }
 
+    /// Fold a TEXT constant's initialiser to a single literal, or `None` when it is not
+    /// all-literal.
+    ///
+    /// A `"x" + "y"` initialiser parses to `{ OpClearText(w); OpAppendText(w, "x");
+    /// OpAppendText(w, "y"); w }` — a block that builds its value in a WORK BUFFER.  A
+    /// constant is pasted verbatim at each use, work-var numbers included, so inside a
+    /// formatted string the pasted block clears and appends the very buffer the format
+    /// is being built into: `"[{B}]"` printed `xyxy]`, having wiped the `[` and then
+    /// appended the buffer to itself.  Folding removes the buffer, so there is nothing
+    /// left to alias.
+    ///
+    /// Vector constants avoid the same trap by living in the const store and being
+    /// referenced (`OpConstRef`) rather than pasted; text has no such store, and a
+    /// literal fold makes one unnecessary.
+    fn fold_text_constant(&self, val: &Value) -> Option<String> {
+        let Value::Block(bl) = val.unspan() else {
+            return None;
+        };
+        let clear = self.data.def_nr("OpClearText");
+        let append = self.data.def_nr("OpAppendText");
+        let mut out = String::new();
+        for op in &bl.operators {
+            match op.unspan() {
+                // The buffer reset and the trailing read of it carry no text.
+                Value::Call(d, args) if *d == clear && args.len() == 1 => {}
+                Value::Var(_) => {}
+                Value::Call(d, args) if *d == append && args.len() == 2 => match args[1].unspan() {
+                    Value::Text(t) => out.push_str(t),
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    /// Whether a text constant's block can be re-pointed at a buffer owned by the
+    /// function that pastes it (see [`crate::parser::Parser::rebind_constant_buffer`]).
+    ///
+    /// True when the block builds in exactly ONE variable and hands that variable back
+    /// as its result — the shape every text initialiser has.  Checked here, at the
+    /// declaration, so a constant that can never be pasted safely is reported where the
+    /// reader can act on it rather than at each use.
+    fn constant_block_is_rebindable(val: &Value) -> bool {
+        let Value::Block(bl) = val.unspan() else {
+            return false;
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        let mut probe = val.clone();
+        if !visit_constant_vars(&mut probe, &mut |v| {
+            seen.insert(*v);
+        }) {
+            return false;
+        }
+        seen.len() == 1
+            && matches!(bl.operators.last().map(Value::unspan),
+                Some(Value::Var(v)) if seen.contains(v))
+    }
+
+    /// The name of a call in a constant's initialiser that makes re-evaluation COST
+    /// something, or `None` when the initialiser is free to inline.
+    ///
+    /// Costly = a user-defined function (any source but the stdlib — its body is
+    /// arbitrary and unannotated), or a stdlib function marked `#impure(category)`.
+    /// Everything else — arithmetic, a pure stdlib call, a literal — re-evaluates for
+    /// free, which is the whole point of inlining a constant, so it stays silent.
+    fn const_initialiser_cost(&self, val: &Value) -> Option<String> {
+        match val.unspan() {
+            Value::Call(d_nr, args) => {
+                let def = self.data.def(*d_nr);
+                // Only NAMED functions (`n_`-prefixed).  The internal operator
+                // vocabulary — `OpNewRecord` for a vector literal, `OpAddInt` for
+                // arithmetic — is what a constant is MADE of; warning on it would fire
+                // on `NUMS = [1, 2, 3];`, which re-evaluates for free and is exactly
+                // the case inlining exists for.
+                let raw = def.name();
+                let named_fn = def.def_type == DefType::Function && raw.starts_with("n_");
+                let costly = def.source != crate::data::STD_SOURCE
+                    || matches!(def.purity, crate::data::Purity::Impure(_));
+                if named_fn && costly {
+                    return Some(format!("{}()", raw.trim_start_matches("n_")));
+                }
+                args.iter().find_map(|a| self.const_initialiser_cost(a))
+            }
+            Value::Block(bl) => bl
+                .operators
+                .iter()
+                .find_map(|o| self.const_initialiser_cost(o)),
+            Value::Insert(ops) => ops.iter().find_map(|o| self.const_initialiser_cost(o)),
+            Value::Set(_, inner) | Value::Return(inner) | Value::Drop(inner) => {
+                self.const_initialiser_cost(inner)
+            }
+            _ => None,
+        }
+    }
+
     // <constant>
     // Accepts either `NAME = expr;` or `NAME: type = expr;`. The optional
     // type annotation is parsed (so the parser doesn't reject the form)
@@ -611,7 +707,7 @@ impl Parser {
                 );
             }
             let mut val = Value::Null;
-            let tp = self.expression(&mut val);
+            let mut tp = self.expression(&mut val);
             // A struct-valued file-scope constant (`P = Point { … }`) is NOT supported: its
             // value is the constructor's field-writes with no allocated record, so every use
             // inlines writes into a null record — silently reading `null` on `--interpret`,
@@ -633,6 +729,49 @@ impl Parser {
                      to compile on --native).  Wrap it in a zero-argument function instead: \
                      `fn {fn_name}() -> {type_name} {{ … }}`, then call `{fn_name}()`"
                 );
+            }
+            // A constant is INLINED at each reference, so an initialiser that calls
+            // something pays that cost per use.  Name it, because the word "constant"
+            // promises the opposite and the failure is invisible until the one target
+            // with bounded memory: a consumer's `FNT = load_bundled();` re-parsed a
+            // 760 KB font once per word per frame and trapped the browser wasm.
+            // A text initialiser builds its value in a work buffer, and a constant is
+            // PASTED at each use — buffer number included.  Two ways to make that safe,
+            // in order of preference: fold an all-literal initialiser to a single
+            // literal (no buffer survives, and the value stops being rebuilt per use),
+            // or leave the block for `rebind_constant_buffer` to re-point onto a buffer
+            // the pasting function owns.  Anything neither can handle is refused here,
+            // at the declaration, rather than pasted as numbering that means something
+            // else wherever it lands.
+            if matches!(tp.base(), Type::Text(_)) && matches!(val.unspan(), Value::Block(_)) {
+                if let Some(folded) = self.fold_text_constant(&val) {
+                    val = Value::Text(folded);
+                    // The block's TYPE named that buffer too (`text["b"]`).  A literal
+                    // depends on nothing, and a dep left pointing at the declaration's
+                    // numbering makes the text-return path promote a variable the using
+                    // function does not have.
+                    tp = Type::Text(crate::data::Deps::none());
+                } else if !Self::constant_block_is_rebindable(&val) && !self.first_pass {
+                    let fn_name = id.to_lowercase();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "text constant '{id}' is assembled in a way that cannot be pasted at a use site — a constant is inlined at every reference, and this initialiser builds its value across more than one buffer.  Use a zero-argument function instead: `fn {fn_name}() -> text {{ … }}`, then call `{fn_name}()`"
+                    );
+                }
+            }
+            if !self.first_pass
+                && crate::keys::const_effect_lint_enabled()
+                && let Some(callee) = self.const_initialiser_cost(&val)
+            {
+                {
+                    let fn_name = id.to_lowercase();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Advice,
+                        "constant '{id}' is re-evaluated at EVERY reference — a file-scope constant is an inlined expression, not a once-computed value, so `{callee}` runs again for each use.  For an expensive or effectful initialiser, use a function that computes the value once and caches it: `fn {fn_name}() -> … {{ … }}`"
+                    );
+                }
             }
             if self.first_pass {
                 // detect a name collision before calling `add_def`,
@@ -1403,6 +1542,9 @@ impl Parser {
             // @PLN46 W3 — auto-infer `#null_safe` from entry guards (after the warn
             // pass, so this fn's flag is set for LATER callers' walks).
             self.infer_function_null_safe(&body);
+            self.warn_function_complexity();
+            self.warn_parameter_count();
+            self.warn_boolean_flag_cluster();
             self.lexer.to(warn_pos);
         }
         self.lexer.has_token(";");
@@ -3096,5 +3238,66 @@ impl Parser {
             self.lexer.token(")");
         }
         (is_computed, is_init)
+    }
+}
+
+/// Visit every variable index a constant's initialiser carries, in place.
+///
+/// Returns `false` on the first node whose variable numbering this walker cannot
+/// account for.  A caller re-pointing a pasted constant onto a fresh buffer has to
+/// rewrite ALL of the numbering or none of it — a half-rewritten block would read one
+/// buffer and write another.  The `match` is exhaustive on purpose: a new IR variant
+/// that carries a variable makes this fail to compile rather than silently paste
+/// numbering that is only valid where it was parsed.
+pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) -> bool {
+    match val {
+        // The two forms that name a variable a constant's initialiser owns.
+        Value::Var(v) => {
+            f(v);
+            true
+        }
+        Value::Set(v, inner) => {
+            f(v);
+            visit_constant_vars(inner, f)
+        }
+
+        // No variable of their own — recurse.  The `u16` on `Break`/`Continue`/
+        // `BreakWith` is a loop level, not a variable, so it is left alone.
+        Value::Span(b) => visit_constant_vars(&mut b.1, f),
+        Value::Call(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
+            args.iter_mut().all(|a| visit_constant_vars(a, f))
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter_mut().all(|o| visit_constant_vars(o, f))
+        }
+        Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
+            visit_constant_vars(b, f)
+        }
+        Value::If(c, t, e) => {
+            visit_constant_vars(c, f) && visit_constant_vars(t, f) && visit_constant_vars(e, f)
+        }
+        Value::Null
+        | Value::Line(_)
+        | Value::Int(_)
+        | Value::Enum(..)
+        | Value::Boolean(_)
+        | Value::Float(_)
+        | Value::Long(_)
+        | Value::Single(_)
+        | Value::Text(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::RawExpr(_) => true,
+
+        // These carry a variable too, in a form no constant initialiser takes.  Refuse
+        // rather than guess at the rewrite.
+        Value::CallRef(..)
+        | Value::Iter(..)
+        | Value::Keys(_)
+        | Value::TupleGet(..)
+        | Value::TuplePut(..)
+        | Value::FnRef(..)
+        | Value::FnRefDnr(_)
+        | Value::ParFor(_) => false,
     }
 }

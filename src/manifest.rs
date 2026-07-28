@@ -111,6 +111,31 @@ pub struct Manifest {
     /// assert forward-coverage.  `None` means the library declares no contract
     /// (grandfathered — no gate).  See `check_contract` / `CONTRACT_VERSION`.
     pub contract: Option<String>,
+    /// The oldest release of THIS package whose public API this one is still a drop-in
+    /// for, from `[package] api_compatible_with = "0.3.0"`.
+    ///
+    /// A real version, not an abstract epoch: it means something on sight, it can be
+    /// recorded in `loft.lock`, and — the load-bearing part — it NAMES AN ARTIFACT THAT
+    /// EXISTS, so the claim is verifiable by fetching that release and running its own
+    /// tests against this source. An opaque counter would be none of those things.
+    ///
+    /// Raising it is the ONLY way to declare an API break, and it is a deliberate edit in
+    /// the same commit as the break. The release `version` is deliberately NOT an
+    /// indicator — releases mean "newer" and nothing else.
+    ///
+    /// `None` means the package declares no floor (grandfathered — no gate).
+    /// Design: `doc/claude/plans/library-compat-contract/README.md`.
+    pub api_compatible_with: Option<String>,
+    /// The oldest release of THIS package whose stored/wire data this one still reads,
+    /// from `[package] data_compatible_with = "0.1.0"`.
+    ///
+    /// Separate from [`Manifest::api_compatible_with`] because the two failures differ in
+    /// kind: an API break costs a recompile, a data break costs someone's stored file.
+    /// `hex_terrain` is the worked example — it kept its API and changed what it computed
+    /// over stored heights, which one number cannot express.
+    ///
+    /// `None` means the package declares no floor (grandfathered — no gate).
+    pub data_compatible_with: Option<String>,
     /// GitHub repository that publishes this package's releases, from
     /// `[package] repository = "..."`.  Either a bare repo name under the
     /// `loft-lang` org (`"loft-libs-core"`) or a full `"owner/repo"`.  When
@@ -483,6 +508,8 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
         ("package", "version") => m.version = Some(value.scalar()),
         ("package", "loft") => m.loft_version = Some(value.scalar()),
         ("package", "contract") => m.contract = Some(value.scalar()),
+        ("package", "api_compatible_with") => m.api_compatible_with = Some(value.scalar()),
+        ("package", "data_compatible_with") => m.data_compatible_with = Some(value.scalar()),
         ("package", "repository") => m.repository = Some(value.scalar()),
         ("package", "description") => m.description = Some(value.scalar()),
         ("library", "entry") => m.entry = Some(value.scalar()),
@@ -626,6 +653,55 @@ fn parse_predicate(s: &str) -> Result<Predicate, String> {
     let ver = parse_version(rest)
         .ok_or_else(|| format!("'{rest}' is not a valid version in constraint predicate '{s}'"))?;
     Ok(Predicate { op, ver })
+}
+
+/// Outcome of validating a declared compatibility floor
+/// (`api_compatible_with` / `data_compatible_with`).
+#[derive(Debug, PartialEq, Eq)]
+pub enum FloorCheck {
+    /// Absent — the package declares no floor (grandfathered).
+    Undeclared,
+    /// A well-formed floor at or below the package's own version.
+    Ok((u32, u32, u32)),
+    /// Not a version. Rejected loudly rather than treated as "no floor": a claim
+    /// nobody can parse must never read as a claim nobody needs to check — the
+    /// mistake `check_version` made when it accepted `"garbage"` as "any version".
+    Malformed(String),
+    /// A floor NEWER than the package's own version — a package cannot be a drop-in
+    /// for a release that does not exist yet, and the artifact the claim names could
+    /// never be fetched to verify it.
+    AboveSelf { floor: String, own: String },
+}
+
+/// Validate a declared compatibility floor against the package's own `version`.
+///
+/// Both floors use this: they differ in what they promise (API surface vs stored data),
+/// not in how they are written. See
+/// `doc/claude/plans/library-compat-contract/README.md`.
+#[must_use]
+pub fn check_floor(declared: Option<&str>, own_version: Option<&str>) -> FloorCheck {
+    let Some(raw) = declared else {
+        return FloorCheck::Undeclared;
+    };
+    let Some(floor) = parse_version(raw) else {
+        return FloorCheck::Malformed(format!(
+            "`{raw}` is not a version — a compatibility floor names a RELEASE of this \
+             package (e.g. \"0.3.0\"), because the claim is checked by fetching that \
+             release and running its own tests"
+        ));
+    };
+    // An unparseable OWN version is not this check's business to report — `check_version`
+    // owns that — so treat it as "cannot compare" rather than inventing a second error.
+    if let Some(own_raw) = own_version
+        && let Some(own) = parse_version(own_raw)
+        && floor > own
+    {
+        return FloorCheck::AboveSelf {
+            floor: raw.to_string(),
+            own: own_raw.to_string(),
+        };
+    }
+    FloorCheck::Ok(floor)
 }
 
 /// Parse `X` / `X.Y` / `X.Y.Z` into a numeric triple (missing parts default to

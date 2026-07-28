@@ -536,6 +536,88 @@ pub fn math_domain_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_MATH_DOMAIN").is_none())
 }
 
+/// The cognitive-complexity score at which a function earns a split nudge.
+///
+/// Just under p98 of real loft (47), so it speaks for roughly the top 3%. Deliberately a
+/// round number rather than a fitted one: the exact cut is a judgement, and a suspiciously
+/// precise threshold invites tuning it until the corpus goes quiet, which is how a lint stops
+/// meaning anything.
+pub const COMPLEXITY_ADVICE_AT: u32 = 40;
+
+/// Trailing boolean parameters with no default, at which a function earns a
+/// use-defaults nudge.
+///
+/// Two, not one: a single trailing flag is idiomatic and common (1.0% of real loft), while
+/// two or more is a steering CLUSTER — the shape defaults exist for.  The pattern is
+/// naturally rare, which is what keeps this quiet: 96.9% of functions have none at all, and
+/// `>=2` covers 2.1%.  A nudge that fires on a common shape gets suppressed, and then the
+/// thing it was advertising never gets adopted.
+pub const BOOL_FLAG_ADVICE_AT: u32 = 2;
+
+/// `LOFT_NO_DEFAULT_HINT=1` opts OUT of the default-parameter ADVICE — default ON.
+///
+/// Advertises a genuinely under-used feature rather than reporting a fault: `fn f(a: T, loud:
+/// boolean = false)` lets callers say what they mean and omit the rest.  Trailing booleans
+/// are where it pays most, because a call site reading `f(x, true, false, true)` carries no
+/// information at the point a reader needs it.
+///
+/// Worth advertising because adopting it is FREE under the compatibility promise: giving an
+/// existing parameter a default is purely additive — every existing call passes it explicitly
+/// and keeps working, while new calls may leave it out.  Nothing to migrate, so the only
+/// thing standing between the feature and its users is knowing it is there.
+pub fn default_params_lint_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEFAULT_HINT").is_none())
+}
+
+/// The count of REQUIRED parameters at which a function earns a bundle-them nudge.
+///
+/// Separate from [`COMPLEXITY_ADVICE_AT`] on purpose, because the two measure different
+/// burdens with different fixes: parameters are what a CALLER carries and the fix is a
+/// struct; nesting is what a READER carries and the fix is an extracted function.
+///
+/// Folding parameters into the complexity score was measured and rejected — it misses the
+/// case that motivates the check.  `th_subdiv` takes 12 required parameters with a
+/// complexity of 2: trivial to read, hard to call.  At +1 per parameter it scores 14 and
+/// stays silent, so the one function most needing the nudge would never get it.  It would
+/// also make the complexity message untrue, since most of such a score would not be control
+/// flow.
+///
+/// 8 is read off real loft: 86% of functions take 4 or fewer, `>=6` is 8.5%, `>=8` is 2.1%
+/// — about the share the complexity nudge speaks for.
+pub const PARAM_ADVICE_AT: u32 = 8;
+
+/// `LOFT_NO_PARAM_COUNT=1` opts OUT of the required-parameter ADVICE — default ON.
+///
+/// Counts only what a caller must supply: parameters with a DEFAULT are excluded (they cost
+/// the caller nothing), as are compiler-injected hidden ones (`__retbuf`, work buffers) which
+/// no author wrote.  The default exemption currently exempts nothing — no function in 5,915
+/// of real loft uses a default value — but it is the rule that makes the count mean "what a
+/// caller must know", so it is applied rather than assumed away.
+pub fn param_count_lint_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_PARAM_COUNT").is_none())
+}
+
+/// `LOFT_NO_COMPLEXITY=1` opts OUT of the function-complexity ADVICE — default ON.
+///
+/// Advice, never a warning: a complex function is correct, so ignoring this cannot produce a
+/// wrong result.  It exists because a whole algorithm wired into one function is the thing
+/// nobody chooses and everybody inherits.
+///
+/// Cognitive, not cyclomatic — a construct costs `1 + nesting`, so DEPTH is what is
+/// expensive.  Eight sequential `if`s cost 8; three nested cost 6; a flat `match` costs 1
+/// however many arms it has.  "Many branches" and "hard to follow" are different properties,
+/// and only the second is worth a nudge.
+///
+/// The boundary is calibrated, not picked: over 5,972 functions of real loft the distribution
+/// runs p50 1, p90 15, p95 27, p98 47.  [`COMPLEXITY_ADVICE_AT`] sits just under p98 so it
+/// speaks for ~3% — few enough that each one is worth reading.
+pub fn complexity_lint_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_COMPLEXITY").is_none())
+}
+
 /// `LOFT_LINT_STRICT_INDEX=1` (@PLN102 case D audit) — opt-in, DEFAULT OFF. The index-trust
 /// model types `v[i]` non-null for a for-loop iter var (like a constant index), trusting the
 /// loop bounds the vector. That trust is unchecked, so `for i in 0..len(v) { w[i] }` (or a
@@ -559,6 +641,27 @@ pub fn strict_index_lint_enabled() -> bool {
 pub fn text_index_units_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_STRICT_INDEX_TEXT").is_none())
+}
+
+/// `LOFT_NO_CONST_EFFECT` — the re-evaluated-constant lint, DEFAULT ON (opt-out).
+///
+/// A file-scope `NAME = expr;` is an INLINED expression, not a once-computed value: the
+/// expression is substituted at every reference, so an initialiser that costs something
+/// pays that cost per use.  For a literal (`PI = 3.14;`) this is invisible and free;
+/// for `FNT = load_bundled();` it is not.  A consumer wrote exactly that, referenced it
+/// once per word per frame, and the browser ran out of memory — the font was re-parsed
+/// hundreds of times per reflow.  Nothing said the word "constant" did not mean
+/// "computed once".
+///
+/// Warns when such an initialiser CALLS something that can cost: a user-defined
+/// function (any source but the stdlib), or a stdlib function annotated
+/// `#impure(category)`.  A pure stdlib call or plain arithmetic stays silent, so
+/// `MAX = 10 * 3;` and `PI = 3.14;` never warn.  Advisory — the semantics are
+/// unchanged; the fix is a function plus an explicit cache.
+#[must_use]
+pub fn const_effect_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_CONST_EFFECT").is_none())
 }
 
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
