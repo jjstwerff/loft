@@ -130,6 +130,23 @@ jobs:
       - name: Install C toolchain (linker)
         run: sudo apt-get update && sudo apt-get install -y build-essential
 
+      # ...and gcc then has to FIND the linker the project asks for.
+      # `.cargo/config.toml` pins `-fuse-ld=mold` for x86_64-unknown-linux-gnu,
+      # which this job builds — the `build` job targets musl, so it is unaffected
+      # and stayed green while this one failed.
+      #
+      # The link line carries BOTH rustc's `-fuse-ld=lld` (with
+      # `-B<sysroot>/lib/rustlib/.../bin/gcc-ld`) and our `-fuse-ld=mold`; the last
+      # wins, so gcc looks for mold, finds only `ld.lld` in that `-B` directory,
+      # and reports `collect2: fatal error: cannot find 'ld'`.  That message names
+      # `ld`, not mold, which is why it reads as a missing toolchain — the
+      # build-essential step above was added for it and did not help.  gcc falls
+      # back to PATH when the `-B` directory lacks the linker, so installing mold
+      # is what actually resolves it.  Every other workflow building this target
+      # already does; this job was the only one that did not.
+      - name: Install mold
+        run: sudo apt-get install -y mold
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -187,6 +204,13 @@ jobs:
       # the release: a missing CARGO_REGISTRY_TOKEN should not turn the whole
       # tag run red.  cargo reads the token from CARGO_REGISTRY_TOKEN, so no
       # `--token ''` (which errors with "a value is required").
+      # `cargo publish` VERIFIES by building for the host target (gnu), so it needs
+      # mold for the same reason the docs job does.  This job has stayed green only
+      # because the step below skips when the token is unset — it would fail on the
+      # first real publish, which is the worst moment to discover it.
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
