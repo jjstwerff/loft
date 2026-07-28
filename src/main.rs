@@ -265,6 +265,10 @@ fn print_help() {
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
+    println!(
+        "    --tarball-only              build the tarball only — no registry entry, and none"
+    );
+    println!("                                of the checks that registering requires");
     println!("                                prints sha256 + size + the registry index entry");
     println!("                                (PKG.REG R1 — see doc/claude/PKG_REGISTRY.md)");
     println!("  build-native [pkg-dir]        build the package's native cdylib for this host");
@@ -2159,6 +2163,24 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
             return 1;
         }
     };
+    // Step 5a: refuse to emit a registry entry for a package that has not
+    // declared its three compatibility levels.  Checked BEFORE the GitHub
+    // release lookup, so the author learns it needs two more lines while the
+    // fix is still a commit — not after they have tagged and released.
+    let levels_manifest =
+        loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy())
+            .unwrap_or_default();
+    let levels = match package::declared_levels(&levels_manifest, &pkg.version) {
+        Ok(l) => l,
+        Err(problems) => {
+            eprintln!(
+                "loft publish: {}",
+                package::declared_levels_error(&pkg.name, &pkg.version, &problems)
+            );
+            return 1;
+        }
+    };
+
     let tag = format!("{}-v{}", pkg.name, pkg.version);
     let tarball_filename = format!("{}-{}.tar.gz", pkg.name, pkg.version);
 
@@ -2217,10 +2239,12 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     println!("  \"url\": \"{release_url}\",");
     println!("  \"sha256\": \"{}\",", pkg.sha256);
     println!("  \"size\": {},", pkg.size);
-    println!(
-        "  \"loft\": \"{}\",",
-        manifest.loft_version.unwrap_or_else(|| ">=0.8".to_string())
-    );
+    println!("  \"loft\": \"{}\",", levels.loft);
+    // The two floors travel WITH the version they describe, so a resolver can
+    // read a release's promises straight from the index instead of downloading
+    // and unpacking the tarball to find its loft.toml (step 6).
+    println!("  \"api_compatible_with\": \"{}\",", levels.api);
+    println!("  \"data_compatible_with\": \"{}\",", levels.data);
     println!("  \"subpath\": \"{}\",", pkg.name);
     if registry_deps.is_empty() {
         println!("  \"deps\": {{}},");
@@ -5991,8 +6015,18 @@ fn main() {
             // entry the publisher pastes into loft-lang/registry.
             // Feature-gated on `registry` because tar / flate2 / sha2
             // aren't worth carrying in a no-default-features build.
+            //
+            // `--tarball-only` builds the tarball and stops.  It exists because
+            // packaging has a second, purely mechanical use: the
+            // reproducible-build check re-packages every published library just
+            // to compare bytes against its release, and must not care what any
+            // of them declares.  Registering is the act that needs the
+            // compatibility levels, so that is what the flag opts out of —
+            // and it opts out of the index entry too, since the entry IS the
+            // registration.
             #[cfg(feature = "registry")]
             {
+                let tarball_only = argv[i..].iter().any(|s| s == "--tarball-only");
                 let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
                     // `i += 1` would be dead since we `return` below, but
                     // the arg is consumed for clarity.
@@ -6004,6 +6038,34 @@ fn main() {
                     Ok(out) => {
                         let stdout = std::io::stdout();
                         let mut lock = stdout.lock();
+                        if tarball_only {
+                            drop(lock);
+                            println!("{}", out.tarball.display());
+                            return;
+                        }
+                        if out.levels.is_none() {
+                            // Re-run the check for its reasons: `package_create`
+                            // keeps only the success, since it has no opinion.
+                            let problems = loft::manifest::read_manifest(
+                                &pkg_path.join("loft.toml").to_string_lossy(),
+                            )
+                            .and_then(|m| loft::package::declared_levels(&m, &out.version).err())
+                            .unwrap_or_default();
+                            eprintln!(
+                                "loft package: {}",
+                                loft::package::declared_levels_error(
+                                    &out.name,
+                                    &out.version,
+                                    &problems
+                                )
+                            );
+                            eprintln!(
+                                "\n  The tarball was still written to {} — pass --tarball-only \
+                                 to build one without asking for a registry entry.",
+                                out.tarball.display()
+                            );
+                            std::process::exit(1);
+                        }
                         if let Err(e) = loft::package::print_summary(&out, &mut lock) {
                             eprintln!("loft package: print summary failed: {e}");
                             std::process::exit(1);

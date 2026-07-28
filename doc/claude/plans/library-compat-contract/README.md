@@ -272,23 +272,57 @@ Four cells, all verified:
 | same break | raised past it | exit 0, prints `DECLARED BREAK` |
 | unmodified | declared | exit 0 |
 
-### Step 5a — the three levels, required before a register/PR — **DESIGN**
+### Step 5a — the three levels, required before a register/PR — **BUILT**
 
 A library declares **three** compatibility levels, all real versions:
 
-| field | means | status |
+| field | means | shape |
 |---|---|---|
-| `loft` | which loft this needs | exists; all 25 packages declare it |
-| `api_compatible_with` | oldest own release this is a drop-in for | built (step 1) |
-| `data_compatible_with` | oldest own release whose data this still reads | built (step 1) |
+| `loft` | which loft this needs | a **range** (`">=0.8"`) — the platform is the one axis a library does not pick a point on |
+| `api_compatible_with` | oldest own release this is a drop-in for | a **bare version** |
+| `data_compatible_with` | oldest own release whose data this still reads | a **bare version** |
 
-**All three must be present before a package may be registered or open a registry PR.** They
-are what a consumer needs to decide whether an upgrade is safe on each of the three axes it
-can be hurt on: the platform, the call sites, the stored data.
+**All three must be present before a package may be registered.** They are what a consumer
+needs to decide whether an upgrade is safe on each of the three axes it can be hurt on: the
+platform, the call sites, the stored data — and a consumer cannot ask the package a question.
 
-Not yet enforced. The gate belongs where the registry entry is produced (`loft package`) and at
-the registry PR (`registry_validate.sh` / `SUBMITTING.md`), not in the library's own CI —
-that CI must keep passing for a package that has not opted in, which is step 5's whole shape.
+**The gate is on producing a REGISTRY ENTRY, not on building a tarball.** That distinction is
+load-bearing: packaging has a second, purely mechanical use — the reproducible-build check
+re-packages every published library just to compare bytes against its release — and it must
+not care what any of them declares. So `loft package --tarball-only` builds and stops, and it
+opts out of the index entry too, because the entry *is* the registration. Verified: the two
+paths produce byte-identical tarballs, so the reproducibility check is untouched.
+
+Enforced in `loft package` and `loft publish`, both calling **one** `package::declared_levels`
+— the N=4 rule below. `loft publish` checks *before* the GitHub-release lookup, so an author
+learns it while the fix is still a commit rather than after tagging and releasing.
+`scripts/vet-lib.sh` (pre-admission) inherits the gate and now prints the reason rather than
+`✗ loft package failed`.
+
+Rejections are hand-verified, each cell differing in one line:
+
+| manifest | result |
+|---|---|
+| all three, floors below the release | entry printed, carrying all three |
+| floors == own version (a **first** release) | accepted — the bootstrap the error message tells authors to write |
+| any one missing | rejected, **naming that field** |
+| nothing declared | rejected with **all three** reported at once |
+| `api_compatible_with = ">=0.2"` | rejected — a floor names ONE release; a set names nothing to fetch |
+| `api_compatible_with` newer than the release | rejected — claims compatibility with a version that does not exist yet |
+
+All problems are reported together rather than one at a time: each round trip costs a publish
+cycle, so a first-failure gate is several cycles of the same two-line edit.
+
+**One defect found while wiring it.** The index entry hardcoded `"loft": ">=0.8"` for every
+package regardless of what its manifest declared — so a library needing a newer loft published
+an entry saying it did not. Now emitted from the manifest, with the two floors beside it, so a
+resolver can read a release's promises straight from the index instead of downloading and
+unpacking its tarball (which is what step 6 needs).
+
+**Not covered here — F3, "the named floor version is not in the registry."** That check needs
+the index, so it belongs at the registry PR rather than in an offline `loft package`. The
+shape-and-bound half above (bare version, at or below the release) is what can be decided
+without a network, and it is what rules out the floors that could never name anything.
 
 **The incentive to protect, in both this and step 5:** raising a floor is a promise withdrawn,
 and should read like one. The constant updating is the chore, not the default — a library that

@@ -56,10 +56,13 @@ holding a bug fix (same rule as `lint_comments.sh` — advisory, never fails CI)
 
 ### Structure & packaging — `[auto]`
 - [ ] `loft.toml` valid: `[package]` name/version/`loft` range; `[library] entry`; deps declared (path or registry).
-- [ ] **Declares its compatibility scope** — `api_compatible_with` (and `data_compatible_with`
-      where it stores or transmits data): the oldest release of THIS package the current one is
-      still a drop-in for. Real versions, so the claim is checkable by fetching that release and
-      running its own tests (`loft compat check`).
+- [ ] **Declares all three compatibility levels** — `loft` (a range), `api_compatible_with` and
+      `data_compatible_with` (bare versions): the oldest release of THIS package the current one
+      is still a drop-in for, and whose stored data it still reads. Real versions, so the claim
+      is checkable by fetching that release and running its own tests (`loft compat check`).
+      **Required to register** — `loft package` / `loft publish` refuse to emit a registry entry
+      without them. For a first release all three floors are that release itself. (Building a
+      tarball without registering is `loft package --tarball-only`.)
       *Declaring is what enters the contract*: a package with no floor is enforced by nothing.
       **Raising it should be rare.** The number is a promise to consumers, not a per-release
       chore — a library raising it most releases has taught its consumers that its version

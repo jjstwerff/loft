@@ -197,7 +197,13 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
     fi
     # Build main's tarball + fetch the published one; compare.  On any error
     # (can't package / can't download) keep the lib — the publish loop reports it.
-    if "$LOFT" package "$libdir" > /dev/null 2>&1 && [ -f "$libdir/$name-$ver.tar.gz" ] \
+    #
+    # `--tarball-only`: this comparison is mechanical — it asks whether main's
+    # bytes match the release, which is true or false regardless of what the
+    # package declares.  Without it a library that has not yet entered the
+    # compatibility contract would report as a STALE RELEASE, which is a
+    # different and untrue thing.
+    if "$LOFT" package --tarball-only "$libdir" > /dev/null 2>&1 && [ -f "$libdir/$name-$ver.tar.gz" ] \
        && gh release download "$tag" -R "$ORG/$repo" --pattern "$name-$ver.tar.gz" \
               --dir "$tmp/dl_$name" --clobber 2>/dev/null \
        && [ -f "$tmp/dl_$name/$name-$ver.tar.gz" ] \
@@ -346,8 +352,14 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
     echo "publishing $name $ver from $repo ..."
     tag="$name-v$ver"
     tarball="$libdir/$name-$ver.tar.gz"
-    if ! "$LOFT" package "$libdir" > /dev/null 2>&1 || [ ! -f "$tarball" ]; then
-        echo "  ⚠ package/tarball failed — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
+    # Full `loft package` (no --tarball-only): this IS the publish path, so the
+    # compatibility-level gate belongs here — before the tag and GitHub release
+    # exist.  A refusal after those are cut leaves an artifact nobody can
+    # register, and deleting a release is exactly the move that lost web 0.2.2.
+    if ! "$LOFT" package "$libdir" > "$tmp/pkg_$name.log" 2>&1 || [ ! -f "$tarball" ]; then
+        echo "  ⚠ package/tarball failed — skipping $name $ver"
+        sed -n '1,12p' "$tmp/pkg_$name.log" | sed 's/^/      /'
+        SKIPPED_LIBS+=("$name-$ver"); continue
     fi
     if ! gh release view "$tag" -R "$ORG/$repo" > /dev/null 2>&1; then
         if ! gh release create "$tag" "$tarball" -R "$ORG/$repo" \

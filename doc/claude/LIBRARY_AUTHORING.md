@@ -173,6 +173,12 @@ data_compatible_with = "0.1.0"    # oldest release whose stored data it still re
 All three are real versions, so each claim is checkable: `loft compat check` fetches the
 release a floor names and runs that release's own tests against your working tree.
 
+`loft package` and `loft publish` **refuse to emit a registry entry** without all three, and
+report every missing or malformed one at once rather than one per attempt. For a **first
+release** the two floors are that release itself (`api_compatible_with = "0.1.0"` on 0.1.0) —
+trivially true, and the natural starting point. If you only want the tarball and are not
+registering anything, `loft package --tarball-only` skips both the entry and the check.
+
 **Raising a floor is how you declare a break** — it is the only way, and the release version is
 deliberately not an indicator. It is also meant to be rare. The number is a promise to your
 consumers, not a per-release chore: a library that raises it most releases has taught its
