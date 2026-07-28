@@ -423,7 +423,7 @@ Every published version installed (99), every package measured against its `orig
 | reaches back ≥1 release | **14** | crypto **4**; game_protocol, glb, imaging, pluginabi, server, web **2**; cbor, hex_terrain, hex_world, input, markdown, mesh3d, shapes **1** |
 | only one release ever published | 15 | the `hex_*` family, `html`, `ssh`, `hexbody` |
 | reaches back to nothing | 4 | `arguments`, `gridmesh`, `random`, `time` |
-| unmeasurable — own `main` does not parse | 2 | `graphics`, `regex` |
+| unmeasurable — `api-surface` cannot read them (**loft#656**) | 2 | `graphics`, `regex` |
 
 **The falsifier did not fire.** The plan said the migration fails if most packages measure back
 only to their own latest release. Of the **20** packages with more than one release, **14 reach
@@ -435,6 +435,14 @@ doing.
 now with names:** `arguments` changed `Args.error_msg`, `gridmesh` changed `clear_dirty`,
 `random` changed `rand`, `time` changed `Duration.to_text`. Each shipped a break with nothing
 saying so. They are not defects to fix — a library may break — but each must now declare it.
+
+**A correction to what those 2 unmeasurable packages mean.** They were first recorded as
+"their own main does not parse". That is wrong: `regex`'s main **passes its own test suite**
+(7 tests) on the same loft that `api-surface` refuses to read, and `graphics` fails identically
+on its *published* 0.5.0. The libraries are fine; `loft api-surface` disagrees with every other
+way of reading them — filed as **loft#656**. It matters beyond the tool, because `compat api` /
+`compat floor` / `compat check` all route through the same `api_surface_of`, so the contract
+reports `UNMEASURABLE` for these packages for a reason that has nothing to do with them.
 
 **Two findings the sweep produced, both fixed in the same commit:**
 
