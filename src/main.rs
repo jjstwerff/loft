@@ -4185,7 +4185,6 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
     0
 }
 
-#[cfg(feature = "registry")]
 /// Step 7 — verify a package's ENTIRE claim: every installed release, under a wall-clock
 /// budget, with overrun reported as failure rather than smuggled in as success.
 ///
@@ -4315,8 +4314,10 @@ fn compat_check_full(name: &str, versions: &[String], floor: Option<&str>) -> i3
 /// everything". Overrun is a FAILURE, never a truncation: a release that ran out of time has
 /// proved less than it claims, and reporting that as proven is the exact dishonesty the floors
 /// exist to prevent.
+#[cfg(feature = "registry")]
 const RELEASE_WINDOW_BUDGET_SECS: u64 = 600;
 
+#[cfg(feature = "registry")]
 fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>, full: bool) -> i32 {
     // Candidates come from the install cache, because that is what `compat api` / `compat
     // test` can actually read. Anything not installed is REPORTED as skipped, never silently
