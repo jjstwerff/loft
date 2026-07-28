@@ -5,9 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Library compatibility contract — declared floors, verified by the versions they name
 
-> **Status: steps 1-5 BUILT (2026-07-28). Step 5 GATES, but only for a package that
-> declares a floor — see below. Steps 6-7 remain.** Steps are ordered
-> so each one lands on its own, is useful on its own, and cannot break anything before it.
+> **Status: steps 1-6 BUILT (2026-07-28). Only step 7 remains.** Step 5 GATES, but only for
+> a package that declares a floor; step 5a gates registration; step 6 makes the floors change
+> what a consumer actually resolves to. Steps are ordered so each one lands on its own, is
+> useful on its own, and cannot break anything before it.
+>
+> **Nothing is enforced against a package that declares no floor**, which is why steps 5, 5a
+> and 6 could all land at once without breaking a single published package. Declaring is what
+> enters the contract.
 >
 > **Step 0 is BLOCKED and cannot be completed as written** — but its *generalisable* half,
 > the retention guard, is BUILT and nightly. See its section.
@@ -328,11 +333,51 @@ without a network, and it is what rules out the floors that could never name any
 and should read like one. The constant updating is the chore, not the default — a library that
 raises its floor most releases has taught its consumers that its numbers mean nothing.
 
-### Step 6 — resolution honours the floors
+### Step 6 — resolution honours the floors — **BUILT**
 
-`loft install` / the resolver pick the newest version whose `api_compatible_with` is at or
-below what the consumer holds, instead of simply the highest. **Verify:** a consumer pinned
-across a declared break resolves to the last compatible release rather than the newest.
+This is where the contract stops being paperwork: the floors now change what a consumer
+actually gets. `registry_index::find_compatible_version` picks the newest satisfying release
+that still declares itself a drop-in for what the consumer holds, rather than simply the
+highest — the one computation, called by both `loft update` and `loft install` (the N=4 rule).
+
+The two floors travel **in the index** (step 5a emits them), so resolution reads a release's
+promise without downloading and unpacking its tarball.
+
+A candidate `R` declaring `api_compatible_with = F` promises it replaces anything from `F`
+onward, so it is safe for a consumer on `held` exactly when `F <= held`.
+
+**It never silently stops.** Withheld releases are returned alongside the choice and named —
+`loft update` prints *"0.5.0 held back: declares a break past 0.2.0"*, `loft install` a
+`note:`. A resolver that quietly settles on an older release teaches its consumer that no
+upgrade exists, which is the opposite of what a DECLARED break is for.
+
+Three cases mean unconstrained, and all three are deliberate:
+
+| case | why |
+|---|---|
+| no held version (a **fresh install**) | nothing to be a drop-in *for*. Constraining would hand a first-time user an ancient release because the library broke compatibility three versions ago — they have no old call sites to protect |
+| the candidate **declares no floor** | it has promised nothing, so nothing is enforced. This is what keeps the change **inert for every version published today** |
+| the constraint is an **exact pin** | it names one release, so the caller already chose. Filtering it would report "no version satisfies the constraint" for a version that plainly exists |
+
+Verified on a constructed index (`lib` raises its floor at 0.3.0, `legacy` declares nothing):
+
+| held | resolves to | withheld |
+|---|---|---|
+| — (fresh) | 0.4.0 | — |
+| 0.1.0 | **0.2.0** | 0.4.0, 0.3.0 |
+| 0.2.0 | **0.2.0** | 0.4.0, 0.3.0 |
+| 0.3.0 | 0.4.0 | — |
+| 0.4.0 | 0.4.0 | — |
+| 0.1.0 of `legacy` | 0.4.0 — *identical to the pre-step-6 answer, which is the actual claim* | — |
+| 0.1.0, pinned `"0.4.0"` | 0.4.0 | — |
+
+Proven non-vacuous by forcing the break test to `false`: `resolution_honours_declared_floors`
+fails, `resolution_is_inert_without_declared_floors` still passes — which is the right split,
+since only the first is claiming the floors do anything.
+
+One consequence worth stating: `loft update --check` exits 0 when the ONLY lines are
+held-back notes. A consumer correctly staying put must not turn a CI check red — that is the
+pressure that gets a floor ignored, or the gate removed.
 
 ### Step 7 — the release gate runs the full window
 
