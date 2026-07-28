@@ -352,10 +352,15 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
     echo "publishing $name $ver from $repo ..."
     tag="$name-v$ver"
     tarball="$libdir/$name-$ver.tar.gz"
-    # Full `loft package` (no --tarball-only): this IS the publish path, so the
-    # compatibility-level gate belongs here — before the tag and GitHub release
+    # The registry-admission gate, checked BEFORE the tag and GitHub release
     # exist.  A refusal after those are cut leaves an artifact nobody can
     # register, and deleting a release is exactly the move that lost web 0.2.2.
+    if ! ( cd "$libdir" && "$LOFT" compat levels ) > "$tmp/levels_$name.log" 2>&1; then
+        echo "  ⚠ $name $ver — no compatibility floor declared; cannot enter the registry."
+        sed -n '1,10p' "$tmp/levels_$name.log" | sed 's/^/      /'
+        echo "      Measure what it should say:  (cd $libdir && $LOFT compat floor --with-tests)"
+        SKIPPED_LIBS+=("$name-$ver"); continue
+    fi
     if ! "$LOFT" package "$libdir" > "$tmp/pkg_$name.log" 2>&1 || [ ! -f "$tarball" ]; then
         echo "  ⚠ package/tarball failed — skipping $name $ver"
         sed -n '1,12p' "$tmp/pkg_$name.log" | sed 's/^/      /'

@@ -5,10 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Library compatibility contract — declared floors, verified by the versions they name
 
-> **Status: steps 1-6 BUILT (2026-07-28). Only step 7 remains.** Step 5 GATES, but only for
-> a package that declares a floor; step 5a gates registration; step 6 makes the floors change
-> what a consumer actually resolves to. Steps are ordered so each one lands on its own, is
-> useful on its own, and cannot break anything before it.
+> **Status: the machinery is BUILT (steps 1-6); adoption is ZERO.** Step 5 gates only for a
+> package that declares a floor; step 5a gates ADMISSION TO THE REGISTRY (not packaging); step 6
+> makes the floors change what a consumer resolves to. Steps are ordered so each one lands on
+> its own, is useful on its own, and cannot break anything before it.
+>
+> **The live gap is step 5b: 0 of 99 published versions declare a floor**, so every gate is
+> currently inert. The migration measures each package's real floor rather than asking its
+> author to guess — `loft compat floor`, built. That is what turns the contract on.
 >
 > **Nothing is enforced against a package that declares no floor**, which is why steps 5, 5a
 > and 6 could all land at once without breaking a single published package. Declaring is what
@@ -119,9 +123,16 @@ Cost is proportional to the *claim*: a library declaring a floor 20 releases bac
 something large and pays to verify it; one that raised its floor last release pays nothing.
 That is the correct incentive, and narrowing the claim is always available.
 
-**On failure, bisect** (O(log k), only on the failing path) and report the oldest version that
-still passes — that is what the floor should have said. The check then sets the number for the
-author rather than merely accusing them.
+**On failure, report the floor the author should have written** rather than merely accusing
+them — `loft compat floor` (step 5b). It walks the window from the newest release **downward**
+and stops at the first break.
+
+An earlier draft said "bisect" here. That is wrong, and the reason matters: a floor `F` claims
+drop-in for *everything* at or above `F`, so a single failure above a candidate disqualifies it.
+Compatibility is not guaranteed monotone across a release history — a package can break against
+0.2.0 and pass against 0.1.0 — and a bisect would return a floor with a break sitting above it,
+which is precisely the unverified claim this design exists to prevent. The downward walk is
+O(k) on the failing path instead of O(log k), and that is the correct trade.
 
 ## Steps
 
@@ -291,18 +302,25 @@ A library declares **three** compatibility levels, all real versions:
 needs to decide whether an upgrade is safe on each of the three axes it can be hurt on: the
 platform, the call sites, the stored data — and a consumer cannot ask the package a question.
 
-**The gate is on producing a REGISTRY ENTRY, not on building a tarball.** That distinction is
-load-bearing: packaging has a second, purely mechanical use — the reproducible-build check
-re-packages every published library just to compare bytes against its release — and it must
-not care what any of them declares. So `loft package --tarball-only` builds and stops, and it
-opts out of the index entry too, because the entry *is* the registration. Verified: the two
-paths produce byte-identical tarballs, so the reproducibility check is untouched.
+**The gate is on ADMISSION TO THE REGISTRY, not on packaging.** A library in its current form
+must keep building, testing and packaging exactly as it does today — none of that involves
+anyone else. Asking to enter the registry is the act that requires the declaration, because
+that is the point where other people start depending on the answer.
 
-Enforced in `loft package` and `loft publish`, both calling **one** `package::declared_levels`
-— the N=4 rule below. `loft publish` checks *before* the GitHub-release lookup, so an author
-learns it while the fix is still a commit rather than after tagging and releasing.
-`scripts/vet-lib.sh` (pre-admission) inherits the gate and now prints the reason rather than
-`✗ loft package failed`.
+| surface | behaviour | why |
+|---|---|---|
+| `loft compat levels` | **fatal** — the gate | asks precisely "may this be registered?" |
+| `loft publish` | **fatal** | it emits the registry-PR entry; checked *before* the GitHub-release lookup, so an author learns it while the fix is still a commit rather than after tagging |
+| `scripts/registry_maintain.sh` | **skips the package**, before any tag or release is cut | a refusal after the artifact exists leaves something nobody can register, and deleting a release is the move that lost `web 0.2.2` |
+| `scripts/vet-lib.sh` | **fails** (gate V5, separate from V1 packaging) | pre-admission vetting is exactly this question |
+| `loft package` | **warns, exits 0** | packaging is a library talking to itself |
+| library CI | **untouched** | a library that has not opted in must keep passing |
+
+An earlier revision put the fatal check in `loft package`. That was wrong: it would have broken
+every existing library's republish before any of them had a chance to declare anything, which
+inverts the rule that nothing may break a library in its current form.
+
+All of them call **one** `package::declared_levels` — the N=4 rule below.
 
 Rejections are hand-verified, each cell differing in one line:
 
@@ -332,6 +350,68 @@ without a network, and it is what rules out the floors that could never name any
 **The incentive to protect, in both this and step 5:** raising a floor is a promise withdrawn,
 and should read like one. The constant updating is the chore, not the default — a library that
 raises its floor most releases has taught its consumers that its numbers mean nothing.
+
+### Step 5b — migrate the 34 published packages onto MEASURED floors — **TOOL BUILT, MIGRATION PENDING**
+
+Every gate above is inert at zero adoption: **0 of 99 published versions declare a floor.** The
+contract binds nobody until the libraries carry numbers, so this is what turns it on.
+
+**The failure to avoid is a registry full of self-referential floors.** Asked to name a number,
+an author writes the version being cut. That is true and claims nothing, and if every package
+does it the floors carry no information — the contract would be adopted and worthless in the
+same move. So the migration does not ask; it **measures**.
+
+#### `loft compat floor [--with-tests]`
+
+Walks the package's published releases from the **newest downward**, stopping at the first that
+is not a drop-in, and prints the two lines to paste.
+
+Newest-downward, not a bisect, and the reason is the invariant: a floor `F` claims drop-in for
+*everything* at or above `F`, so one failure above a candidate disqualifies it — even if older
+releases happen to pass. Compatibility is not guaranteed monotone across a release history, and
+a bisect would cheerfully return a floor with a break sitting above it.
+
+Axes, in increasing cost:
+
+| axis | what it proves | always on |
+|---|---|---|
+| API surface (`api_diff`) | the shape of the callable surface | yes |
+| stored layout (`schema_sidecar`) | a value type's byte layout — a silent DATA break the API axis green-lights | yes |
+| the release's own tests | what it *did*, not just what it exposed | `--with-tests` |
+
+The third axis is why the migration should run **with** tests: step 3's justifying cell is a
+release that kept `arguments::parse`'s signature and inverted its result — `API: drop-in` on the
+first axis, a break on the third. Cost is small (a pure-loft suite runs in 0.06–0.12 s; median 2
+published versions per package), and this runs once per package, ever.
+
+A gap in the installed window **stops the walk** rather than being stepped over — a floor must
+not claim a version nobody looked at.
+
+Worked example: `crypto 0.3.6` measures back to **0.3.4** (both earlier releases drop-in), so it
+declares `api_compatible_with = "0.3.4"` — a real claim, where a self-declaration would have
+said `0.3.6` and meant nothing.
+
+#### The migration, in order
+
+1. **Install every published version** of each package so the walk has a window to read (the
+   tool reports what it could not see rather than skipping silently).
+2. **Run `loft compat floor --with-tests`** per package against its `origin/main`. Record the
+   measured floor, the stopping version, and the reason it stopped.
+3. **Review `data_compatible_with` by hand.** The tool seeds it from the same measurement, but
+   the data axis is about somebody's stored file and only the author knows whether a computed
+   value changed under a format that stayed put. `hex_terrain` is the known case.
+4. **One PR per lib repo** adding the two lines. Additive manifest fields, so the change is
+   inert until the package is next published.
+5. **Re-run the sweep** and record the distribution of floor *depth* (how many releases back
+   each package reaches). That number is the migration's actual result: a registry where most
+   packages reach back several releases means the contract carries information.
+
+**What would say the migration failed:** most packages measuring back only to their own latest
+release. That would mean either the libraries genuinely break compatibility every release — worth
+knowing on its own — or the measurement is too strict to be useful, and the axes need revisiting
+before anyone is asked to declare anything.
+
+Not yet done: steps 1–5 above, across 8 `loft-libs-*` repos.
 
 ### Step 6 — resolution honours the floors — **BUILT**
 

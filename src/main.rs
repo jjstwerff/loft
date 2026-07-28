@@ -3862,8 +3862,11 @@ fn run_compat_command(args: &[String]) -> i32 {
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     // The dispatcher strips `compat`, so positional[0] is the sub-verb.
     let sub = positional.first().map(|s| s.as_str()).unwrap_or("");
-    if !matches!(sub, "api" | "test" | "check") {
-        eprintln!("loft compat: usage: loft compat <api|test|check> [<version>] [--json]");
+    if !matches!(sub, "api" | "test" | "check" | "levels" | "floor") {
+        eprintln!(
+            "loft compat: usage: loft compat <api|test|check|levels|floor> [<version>] \
+             [--json] [--with-tests]"
+        );
         return 2;
     }
 
@@ -3878,6 +3881,42 @@ fn run_compat_command(args: &[String]) -> i32 {
         eprintln!("loft compat: `loft.toml` has no [package] name");
         return 2;
     };
+
+    // `levels` — the REGISTRY-ADMISSION gate, and the only place the three-level
+    // requirement is fatal.  It is deliberately its own verb rather than a side effect of
+    // packaging: a library in its current form must keep building, testing and packaging
+    // exactly as before, and only asking to enter the registry requires the declaration.
+    if sub == "levels" {
+        let Some(version) = manifest.version.clone() else {
+            eprintln!("loft compat levels: `loft.toml` has no [package] version");
+            return 2;
+        };
+        return match loft::package::declared_levels(&manifest, &version) {
+            Ok(l) => {
+                println!(
+                    "compat levels `{name}` {version}: loft = {}, api_compatible_with = {}, \
+                     data_compatible_with = {}",
+                    l.loft, l.api, l.data
+                );
+                0
+            }
+            Err(problems) => {
+                eprintln!(
+                    "loft compat levels: {}",
+                    loft::package::declared_levels_error(&name, &version, &problems)
+                );
+                1
+            }
+        };
+    }
+
+    if sub == "floor" {
+        return compat_floor(
+            &name,
+            manifest.version.as_deref(),
+            args.iter().any(|a| a == "--with-tests"),
+        );
+    }
 
     if sub == "check" {
         return compat_check(
@@ -3978,6 +4017,119 @@ fn run_compat_command(args: &[String]) -> i32 {
 /// turning this into a gate cannot fail anyone's CI until they opt in.
 ///
 /// Exit: 1 when a DECLARED floor is violated · 0 otherwise.
+/// `loft compat floor` — MEASURE how far back this package's current API still reaches, and
+/// print the declaration to paste.
+///
+/// The migration tool. Every library starts the contract with the same problem: it has to name
+/// a floor, and the honest answer is a fact about its own history that nobody remembers. Left
+/// to guess, an author writes the version they are cutting — true, but claiming nothing, and a
+/// registry full of self-referential floors carries no information at all.
+///
+/// So this derives it. Scanning from the NEWEST installed release downward and stopping at the
+/// first incompatible one is the only correct direction: a floor `F` claims drop-in for
+/// *everything* at or above `F`, so a single failure above a candidate disqualifies it — even
+/// if older releases happen to pass. That is why this is not a bisect; compatibility is not
+/// guaranteed monotone, and a bisect would happily return a floor with a break sitting above it.
+///
+/// `--with-tests` adds the behaviour axis (each candidate's own published suite, run against
+/// the working tree). Worth the time for the migration itself: an API diff proves the SHAPE of
+/// a surface, and the `arguments::parse` cell in step 3 is a release that kept its signature
+/// and inverted its result — `API: drop-in` on this axis, a break on that one.
+#[cfg(feature = "registry")]
+fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 {
+    let mut versions: Vec<String> = loft::registry_index::installed_packages()
+        .into_iter()
+        .filter(|(n, v, _)| n == name && Some(v.as_str()) != own_version)
+        .map(|(_, v, _)| v)
+        .collect();
+    versions.sort_by(|a, b| loft::registry_index::compare_semver(a, b));
+
+    let own = own_version.unwrap_or("0.0.0");
+    if versions.is_empty() {
+        println!(
+            "compat floor `{name}`: no earlier release installed, so this release is the only \
+             thing it can claim to be a drop-in for.\n\n  api_compatible_with  = \"{own}\"\n  \
+             data_compatible_with = \"{own}\"\n\n  That is the correct FIRST declaration, not a \
+             placeholder: it is true, and it becomes meaningful the moment a later release \
+             keeps it."
+        );
+        return 0;
+    }
+
+    println!(
+        "compat floor `{name}` {own}: walking {} installed release(s), newest first",
+        versions.len()
+    );
+    let new_entry = entry_file_of(std::path::Path::new("."), name);
+    let mut floor: Option<String> = None;
+    let mut stopped_at: Option<(String, String)> = None;
+
+    for v in versions.iter().rev() {
+        let dir = loft::registry_index::extract_dir(name, v);
+        if !dir.join("loft.toml").exists() {
+            // A gap is not a pass.  Treat it as the end of the reachable window rather than
+            // stepping over it, or the floor would claim a version nobody looked at.
+            stopped_at = Some((v.clone(), "not installed — cannot be verified".to_string()));
+            break;
+        }
+        let old_entry = entry_file_of(&dir, name);
+        let (Ok((old_s, old_id)), Ok((new_s, new_id))) =
+            (api_surface_of(&old_entry), api_surface_of(&new_entry))
+        else {
+            stopped_at = Some((v.clone(), "could not read its surface".to_string()));
+            break;
+        };
+        let api = loft::api_diff::diff(&old_s, &new_s);
+        let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+        if let loft::api_diff::Verdict::Break(why) = &api {
+            // Every reason, not the first: the point of the migration run is to show the
+            // author exactly what stops the claim from reaching further back.
+            stopped_at = Some((v.clone(), format!("API break — {}", why.join("; "))));
+            break;
+        }
+        if layout_reshaped(&layout) {
+            stopped_at = Some((v.clone(), "DATA break — stored layout reshaped".to_string()));
+            break;
+        }
+        if with_tests && dir.join("tests").is_dir() && compat_test(name, v, &dir) != 0 {
+            stopped_at = Some((
+                v.clone(),
+                "its published tests fail against this tree".to_string(),
+            ));
+            break;
+        }
+        println!("  {v}: drop-in");
+        floor = Some(v.clone());
+    }
+
+    if let Some((v, why)) = &stopped_at {
+        println!("  {v}: STOP — {why}");
+    }
+    let axes = if with_tests {
+        "API surface, stored layout, and each release's own tests"
+    } else {
+        "API surface and stored layout (pass --with-tests to add the behaviour axis)"
+    };
+    match floor {
+        Some(f) => println!(
+            "\ncompat floor `{name}`: reaches back to {f}, verified on {axes}.\n\n  \
+             api_compatible_with  = \"{f}\"\n  data_compatible_with = \"{f}\"\n\n  \
+             Check `data_compatible_with` by hand before pasting: it is about STORED data, and \
+             a release can keep every signature while changing what it computes over a file \
+             somebody already has."
+        ),
+        None => println!(
+            "\ncompat floor `{name}`: reaches back to nothing — the newest earlier release \
+             already differs, so this release can only claim itself.\n\n  \
+             api_compatible_with  = \"{own}\"\n  data_compatible_with = \"{own}\"\n\n  \
+             That is a DECLARED break, which is allowed: the registry keeps the older releases \
+             installable, so a consumer that cannot follow stays where it is."
+        ),
+    }
+    0
+}
+
+#[cfg(feature = "registry")]
 fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i32 {
     // Candidates come from the install cache, because that is what `compat api` / `compat
     // test` can actually read. Anything not installed is REPORTED as skipped, never silently
@@ -6075,27 +6227,21 @@ fn main() {
                             return;
                         }
                         if out.levels.is_none() {
-                            // Re-run the check for its reasons: `package_create`
-                            // keeps only the success, since it has no opinion.
-                            let problems = loft::manifest::read_manifest(
-                                &pkg_path.join("loft.toml").to_string_lossy(),
-                            )
-                            .and_then(|m| loft::package::declared_levels(&m, &out.version).err())
-                            .unwrap_or_default();
+                            // ADVISORY here, fatal at the registry PR (`loft compat
+                            // levels`).  Packaging is something a library does to itself —
+                            // a local check, a byte comparison, an artifact for a release
+                            // — and a library in its current form has to keep doing all of
+                            // that unchanged.  Asking to enter the REGISTRY is the act that
+                            // needs the declaration, because that is the point where other
+                            // people start depending on the answer.
                             eprintln!(
-                                "loft package: {}",
-                                loft::package::declared_levels_error(
-                                    &out.name,
-                                    &out.version,
-                                    &problems
-                                )
+                                "warning: `{}` declares no compatibility floor, so a registry \
+                                 PR for it will be REJECTED.\n  Run `loft compat levels` for \
+                                 the exact fields, or `loft compat floor` to measure what \
+                                 they should say.\n  The tarball and the entry below are \
+                                 still correct for every other use.",
+                                out.name
                             );
-                            eprintln!(
-                                "\n  The tarball was still written to {} — pass --tarball-only \
-                                 to build one without asking for a registry entry.",
-                                out.tarball.display()
-                            );
-                            std::process::exit(1);
                         }
                         if let Err(e) = loft::package::print_summary(&out, &mut lock) {
                             eprintln!("loft package: print summary failed: {e}");

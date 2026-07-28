@@ -102,21 +102,30 @@ else
 fi
 
 # V1 — package integrity (the entry a maintainer will sign)
-#
-# Deliberately the FULL `loft package`, not `--tarball-only`: this gate asks
-# whether the package is admissible to the registry, and declaring the three
-# compatibility levels is part of that.  A refusal here is the cheapest place to
-# learn it — before a tag, a release, or a registry PR exists.
 echo "V1 package       :"
-if ( cd "$DIR" && loft package ) >/dev/null 2>"$tmp/package.err"; then
+if ( cd "$DIR" && loft package --tarball-only ) >/dev/null 2>"$tmp/package.err"; then
   for t in "$DIR"/*.tar.gz; do
     [ -f "$t" ] && echo "     sha256 $(sha256sum "$t" | cut -d' ' -f1)  size $(stat -c%s "$t")  $(basename "$t")"
   done
 else
   echo "     ✗ loft package failed"
-  # The reason, not just the verdict — the common one is a missing
-  # `api_compatible_with` / `data_compatible_with`, a two-line fix.
   sed -n '1,14p' "$tmp/package.err" | sed 's/^/       /'
+  fail=1
+fi
+
+# V5 — the three compatibility levels (registry-ADMISSION gate)
+#
+# Separate from V1 on purpose.  Packaging is something a library does to itself
+# and must keep working exactly as before; declaring the levels is what admission
+# to the registry requires, because that is where other people start depending on
+# the answer.  This is the cheapest place to learn it — before a tag, a release,
+# or a registry PR exists.
+echo "V5 compat levels :"
+if ( cd "$DIR" && loft compat levels ) >"$tmp/levels.out" 2>&1; then
+  sed -n '1,2p' "$tmp/levels.out" | sed 's/^/     /'
+else
+  sed -n '1,16p' "$tmp/levels.out" | sed 's/^/     /'
+  echo "     → measure what they should say:  (cd $DIR && loft compat floor --with-tests)"
   fail=1
 fi
 
