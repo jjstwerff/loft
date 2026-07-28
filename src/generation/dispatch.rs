@@ -251,10 +251,21 @@ impl Output<'_> {
                     crate::use_analysis::Own::Owned
                 );
                 let needs_text_coerce = matches!(**inner, Type::Text(_));
+                // A `&boolean` slot holds the tri-state STORAGE byte (`u8`: 0/1/255,
+                // null-capable) while an expression like `!b` produces a two-state
+                // `bool`, so the write needs the same conversion `OpSetBoolean` carries
+                // on the interpreter side.  Without it native emitted
+                // `*var_b = (…) != 1;` into a `&mut u8` and rustc rejected it — the
+                // second half of loft#655, invisible until the interpreter half was
+                // fixed and compilation got far enough to reach it.
+                let needs_bool_coerce = matches!(**inner, Type::Boolean);
                 if amp_owned_writeback {
                     write!(w, "{{ let _old_disp = *var_{name}; *var_{name} = ")?;
                 } else {
                     write!(w, "*var_{name} = ")?;
+                    if needs_bool_coerce {
+                        write!(w, "u8::from(")?;
+                    }
                     if needs_text_coerce {
                         // P223: wrap the RHS in `(...)` so that `.to_string()`
                         // attaches to the whole expression — without parens
@@ -275,6 +286,8 @@ impl Output<'_> {
                     )?;
                 } else if needs_text_coerce {
                     write!(w, ").to_string()")?;
+                } else if needs_bool_coerce {
+                    write!(w, ")")?;
                 }
             }
             return Ok(());
@@ -360,8 +373,17 @@ impl Output<'_> {
                 }
             } else {
                 // write-THROUGH to the linked source
+                // Write half of the same conversion the read does (loft#655): the
+                // slot is the `u8` storage byte, the RHS is a `bool`.
+                let bool_link = matches!(**inner, Type::Boolean);
                 write!(w, "unsafe {{ *var_{name} = ")?;
+                if bool_link {
+                    write!(w, "u8::from(")?;
+                }
                 self.output_code_inner(w, to)?;
+                if bool_link {
+                    write!(w, ")")?;
+                }
                 write!(w, " }}")?;
             }
             return Ok(());

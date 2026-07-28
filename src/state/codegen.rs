@@ -3631,6 +3631,13 @@ impl State {
                 Type::Character => stack.add_op("OpGetCharacter", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
                 Type::Float => stack.add_op("OpGetFloat", self),
+                // `&boolean` reads through the ref as a BOOLEAN, not as the raw
+                // byte an enum uses: storage is tri-state (0/1/255, null-capable)
+                // while the expression form is two-state, and `OpGetBoolean` is
+                // the op that already makes that conversion.  Its absence panicked
+                // codegen — the natural shape for a two-state out-parameter, next
+                // to an `&integer` that worked (loft#655).
+                Type::Boolean => stack.add_op("OpGetBoolean", self),
                 Type::Enum(_, false, _) => stack.add_op("OpGetByte", self),
                 Type::Text(_) => stack.add_op("OpGetStackText", self),
                 Type::Vector(_, _)
@@ -3981,6 +3988,11 @@ impl State {
                 Type::Character => stack.add_op("OpSetCharacter", self),
                 Type::Single => stack.add_op("OpSetSingle", self),
                 Type::Float => stack.add_op("OpSetFloat", self),
+                // The write half of `&boolean` (loft#655).  Paired with
+                // `OpGetBoolean` on the read path: both carry the tri-state
+                // storage ↔ two-state expression conversion, which `OpSetByte`
+                // would skip.
+                Type::Boolean => stack.add_op("OpSetBoolean", self),
                 Type::Enum(_, false, _) => stack.add_op("OpSetByte", self),
                 Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _) => {
                     stack.add_op("OpSetStackRef", self);

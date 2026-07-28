@@ -4139,7 +4139,9 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
                 }
                 // Recorded, not punished: the report must say which versions the behaviour
                 // axis could not speak for, so nobody reads the floor as fully verified.
-                TestVerdict::Unverifiable | TestVerdict::CouldNotRun => no_behaviour.push(v.clone()),
+                TestVerdict::Unverifiable | TestVerdict::CouldNotRun => {
+                    no_behaviour.push(v.clone())
+                }
                 TestVerdict::DropIn => {}
             }
         }
@@ -4423,7 +4425,7 @@ fn compat_test_verdict(name: &str, version: &str, published: &std::path::Path) -
     match (control_ok, subject_ok) {
         (false, _) => {
             println!(
-            "  UNVERIFIABLE — the {version} tests do not pass against {version} own source on \
+                "  UNVERIFIABLE — the {version} tests do not pass against {version} own source on \
              this loft, so they cannot judge anything. The corpus is stale (a language change \
              since it was written), not the working tree broken."
             );
@@ -4431,7 +4433,7 @@ fn compat_test_verdict(name: &str, version: &str, published: &std::path::Path) -
         }
         (true, false) => {
             println!(
-            "  BREAK — the {version} tests pass against {version} but FAIL against the working \
+                "  BREAK — the {version} tests pass against {version} but FAIL against the working \
              tree. Behaviour a released version promised has changed. Either fix it, or raise \
              `api_compatible_with` past {version} to declare the break."
             );

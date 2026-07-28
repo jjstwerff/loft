@@ -16745,3 +16745,83 @@ fn issue_654_jumps_survive_a_body_past_the_16_bit_displacement() {
         );
     }
 }
+
+// #655 — a `&boolean` parameter that is actually assigned panicked codegen with
+// "Unknown referenced variable type: boolean".  Every other scalar reference type
+// worked, which is what made it sting: `&boolean` is the natural shape for a
+// two-state out-parameter, reached for right after `&integer` has just worked for
+// the count beside it (moros hit it on `fn do_wall(open: &boolean, ax: &float, …)`).
+//
+// FOUR sites, not one.  The filed panic was the interpreter's READ path; fixing it
+// exposed the interpreter WRITE path, and getting that far exposed two native ones.
+// The root asymmetry is that a plain `boolean` parameter renders as Rust `bool`
+// while a `&boolean` renders as `&mut u8`, because a boolean LOCAL is the tri-state
+// storage byte (0/1/255, null-capable).  So the deref sites convert, symmetrically:
+// read `*p == 1` (a null reads as false), write `u8::from(..)`.
+//
+// The matrix below is the reason all four were found — the filed scope was the
+// parameter alone, and probes for a local `&`-link and for READING the flag in a
+// condition each failed on native after the parameter case was green.
+#[test]
+fn issue_655_ampersand_boolean_reads_and_writes() {
+    let cases: [(&str, &str); 7] = [
+        // the filed reproducer
+        (
+            "negate",
+            "fn flip(b: &boolean) { b = !b; } \
+                    fn test() { x = false; flip(x); assert(x == true, \"negate\"); }",
+        ),
+        // a constant, not a negation — the write path without a read
+        (
+            "const",
+            "fn setit(b: &boolean) { b = true; } \
+                   fn test() { x = false; setit(x); assert(x == true, \"const\"); }",
+        ),
+        // the other direction, so a test that only ever produced `true` cannot pass
+        (
+            "from_true",
+            "fn flip(b: &boolean) { b = !b; } \
+                       fn test() { x = true; flip(x); assert(x == false, \"from true\"); }",
+        ),
+        // two flags at once — each must write its own slot
+        (
+            "two",
+            "fn both(a: &boolean, b: &boolean) { a = true; b = false; } \
+                 fn test() { p = false; q = true; both(p, q); \
+                 assert(p == true, \"first\"); assert(q == false, \"second\"); }",
+        ),
+        // the shape moros actually wrote: a flag beside the scalars that worked
+        (
+            "mixed",
+            "fn do_wall(open: &boolean, ax: &float, n: &integer) \
+                   { open = true; ax = ax + 1.5; n = n + 1; } \
+                   fn test() { o = false; x = 1.0; c = 0; do_wall(o, x, c); \
+                   assert(o == true, \"flag\"); assert(x == 2.5, \"float\"); \
+                   assert(c == 1, \"int\"); }",
+        ),
+        // a local `&`-link rather than a parameter — a separate native path
+        (
+            "local_link",
+            "fn test() { a = false; b = &a; b = true; \
+                        assert(a == true, \"local link\"); }",
+        ),
+        // READING the flag through the reference, which native compiled as `u8`
+        // where a `bool` was required
+        (
+            "read",
+            "fn setpair(b: &boolean, out: &integer) \
+                  { if b { out = 1; } else { out = 2; } b = !b; } \
+                  fn test() { x = true; n = 0; setpair(x, n); \
+                  assert(x == false, \"flipped\"); assert(n == 1, \"read as true\"); }",
+        ),
+    ];
+    for (label, src) in &cases {
+        let (mut state, data) = compile_for_production(src);
+        attach_production_logger(&mut state);
+        state.execute("test", &data);
+        assert!(
+            !state.database.had_fatal,
+            "#655: `&boolean` case `{label}` misbehaved"
+        );
+    }
+}
