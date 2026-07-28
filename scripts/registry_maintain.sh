@@ -361,6 +361,17 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
         echo "      Measure what it should say:  (cd $libdir && $LOFT compat floor --with-tests)"
         SKIPPED_LIBS+=("$name-$ver"); continue
     fi
+    # Step 7 — the RELEASE gate proves the WHOLE claim, not the O(1) sample a PR pays
+    # for.  A PR asks "did this change break something"; publishing asks "is everything
+    # this package promises actually true", and only the second is a promise to people
+    # who cannot ask the package a question.  Overrunning the budget FAILS here rather
+    # than publishing a floor that was never checked past its first few releases.
+    # Before the tag, for the same reason the admission gate is.
+    if ! ( cd "$libdir" && "$LOFT" compat check --full ) > "$tmp/full_$name.log" 2>&1; then
+        echo "  ⚠ $name $ver — its declared compatibility claim does not hold."
+        sed -n '1,20p' "$tmp/full_$name.log" | sed 's/^/      /'
+        SKIPPED_LIBS+=("$name-$ver"); continue
+    fi
     if ! "$LOFT" package "$libdir" > "$tmp/pkg_$name.log" 2>&1 || [ ! -f "$tarball" ]; then
         echo "  ⚠ package/tarball failed — skipping $name $ver"
         sed -n '1,12p' "$tmp/pkg_$name.log" | sed 's/^/      /'

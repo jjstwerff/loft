@@ -173,6 +173,13 @@ data_compatible_with = "0.1.0"    # oldest release whose stored data it still re
 All three are real versions, so each claim is checkable: `loft compat check` fetches the
 release a floor names and runs that release's own tests against your working tree.
 
+Two checks, asking different questions. `loft compat check` runs on every PR and pays O(1) —
+the latest release, your declared floor, and one random release in between. `loft compat
+check --full` runs at PUBLISH time and verifies the whole claim: every release, under a time
+budget. If the budget runs out the release FAILS rather than reporting a partial pass, because
+a release that claims a floor it did not check is worse than one that claims nothing. The cost
+is proportional to your claim, so narrowing the floor is always the available remedy.
+
 `loft package` and `loft publish` **refuse to emit a registry entry** without all three, and
 report every missing or malformed one at once rather than one per attempt. For a **first
 release** the two floors are that release itself (`api_compatible_with = "0.1.0"` on 0.1.0) —
