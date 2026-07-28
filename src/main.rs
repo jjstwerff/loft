@@ -3865,7 +3865,7 @@ fn run_compat_command(args: &[String]) -> i32 {
     if !matches!(sub, "api" | "test" | "check" | "levels" | "floor") {
         eprintln!(
             "loft compat: usage: loft compat <api|test|check|levels|floor> [<version>] \
-             [--json] [--with-tests]"
+             [--json] [--with-tests] [--full]"
         );
         return 2;
     }
@@ -3923,6 +3923,7 @@ fn run_compat_command(args: &[String]) -> i32 {
             &name,
             manifest.version.as_deref(),
             manifest.api_compatible_with.as_deref(),
+            args.iter().any(|a| a == "--full"),
         );
     }
 
@@ -4184,8 +4185,140 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
     0
 }
 
+/// Step 7 — verify a package's ENTIRE claim: every installed release, under a wall-clock
+/// budget, with overrun reported as failure rather than smuggled in as success.
+///
+/// The gate a release passes through, where the O(1) per-PR sample is not enough. A sampled
+/// check answers "did this change break something"; a release has to answer "is everything
+/// this package promises actually true", and those are different questions.
+///
+/// **Overrun fails.** The tempting alternative — verify what fits, report green — produces a
+/// release that claims a floor it did not check, which is worse than no check at all because
+/// it carries the authority of one. Cost is proportional to the CLAIM, so the remedy is in the
+/// author's hands and is named in the message: narrow the floor, or make the suite faster.
 #[cfg(feature = "registry")]
-fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i32 {
+fn compat_check_full(name: &str, versions: &[String], floor: Option<&str>) -> i32 {
+    let budget = std::env::var("LOFT_COMPAT_BUDGET")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(RELEASE_WINDOW_BUDGET_SECS);
+    let started = std::time::Instant::now();
+    println!(
+        "compat check `{name}` --full: verifying all {} installed release(s), budget {budget}s",
+        versions.len()
+    );
+
+    let new_entry = entry_file_of(std::path::Path::new("."), name);
+    let Ok((new_s, new_id)) = api_surface_of(&new_entry) else {
+        eprintln!(
+            "compat check `{name}` --full: cannot read this package's own surface ({}) — \
+             nothing was verified",
+            new_entry
+        );
+        return 2;
+    };
+
+    let mut violated: Vec<String> = Vec::new();
+    let mut declared: Vec<String> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    // Oldest first, so a timeout leaves the DEEPEST part of the claim — the part a floor is
+    // actually asserting, and the part nobody else looks at — already proven.
+    for v in versions {
+        if started.elapsed().as_secs() >= budget {
+            let remaining = versions.len() - checked;
+            eprintln!(
+                "\ncompat check `{name}` --full: BUDGET EXCEEDED after {checked} of {} \
+                 release(s) — {remaining} never checked.\n  \
+                 This release claims more than it proved, so the claim is NOT verified and this \
+                 is a failure rather than a partial pass.\n  \
+                 Narrow the claim (raise `api_compatible_with`, which shrinks the window) or \
+                 split the suite. Raise the ceiling with LOFT_COMPAT_BUDGET=<seconds> only when \
+                 the window is genuinely that large.",
+                versions.len()
+            );
+            return 1;
+        }
+        let dir = loft::registry_index::extract_dir(name, v);
+        if !dir.join("loft.toml").exists() {
+            unreadable.push(v.clone());
+            continue;
+        }
+        let old_entry = entry_file_of(&dir, name);
+        let Ok((old_s, old_id)) = api_surface_of(&old_entry) else {
+            unreadable.push(v.clone());
+            continue;
+        };
+        checked += 1;
+        let api = loft::api_diff::diff(&old_s, &new_s);
+        let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+        let broke = matches!(api, loft::api_diff::Verdict::Break(_)) || layout_reshaped(&layout);
+        // Below the declared floor a break is ANNOUNCED, not failed — the promise never
+        // covered it.  Above the floor it is the unclaimed break F1 exists for.
+        let below = floor.is_some_and(|f| {
+            matches!(
+                loft::registry_index::compare_semver(v, f),
+                std::cmp::Ordering::Less
+            )
+        });
+        let verdict = match (broke, below) {
+            (false, _) => "drop-in",
+            (true, true) => {
+                declared.push(v.clone());
+                "DECLARED BREAK (below the floor)"
+            }
+            (true, false) => {
+                violated.push(v.clone());
+                "BREAK"
+            }
+        };
+        println!("  {v}: {verdict}");
+    }
+
+    let elapsed = started.elapsed().as_secs();
+    // Named, never silently dropped: a release that could not read part of its own history has
+    // not verified that part, and the report has to say so even when nothing failed.
+    if !unreadable.is_empty() {
+        println!(
+            "  note: {} release(s) could not be read and were NOT verified: {}",
+            unreadable.len(),
+            unreadable.join(", ")
+        );
+    }
+    if !declared.is_empty() {
+        println!(
+            "  {} release(s) below the declared floor differ, as declared: {}",
+            declared.len(),
+            declared.join(", ")
+        );
+    }
+    if violated.is_empty() {
+        println!(
+            "compat check `{name}` --full: whole claim verified in {elapsed}s ({checked} release(s))"
+        );
+        return 0;
+    }
+    eprintln!(
+        "\ncompat check `{name}` --full: {} release(s) at or above the declared floor are NOT \
+         drop-in: {}\n  Either restore compatibility, or raise `api_compatible_with` past them \
+         to declare the break.",
+        violated.len(),
+        violated.join(", ")
+    );
+    1
+}
+
+/// Step 7 — how long the RELEASE gate may spend proving a package's whole claim.
+///
+/// A budget is what keeps "verify everything" from decaying into "verify a prefix and call it
+/// everything". Overrun is a FAILURE, never a truncation: a release that ran out of time has
+/// proved less than it claims, and reporting that as proven is the exact dishonesty the floors
+/// exist to prevent.
+#[cfg(feature = "registry")]
+const RELEASE_WINDOW_BUDGET_SECS: u64 = 600;
+
+#[cfg(feature = "registry")]
+fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>, full: bool) -> i32 {
     // Candidates come from the install cache, because that is what `compat api` / `compat
     // test` can actually read. Anything not installed is REPORTED as skipped, never silently
     // dropped — a check that quietly narrows its own scope reports "clean" for work it did
@@ -4217,6 +4350,14 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
     if versions.is_empty() {
         println!("compat check `{name}`: no other release installed — nothing to compare against");
         return 0;
+    }
+
+    // The RELEASE gate proves the whole claim; every other caller pays O(1).  Two different
+    // questions: a PR asks "did this change break something", a release asks "is everything
+    // this package promises actually true".  Sampling answers the first honestly and the
+    // second not at all.
+    if full {
+        return compat_check_full(name, &versions, floor);
     }
 
     let latest = versions.last().cloned().expect("non-empty");

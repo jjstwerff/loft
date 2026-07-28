@@ -5,14 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Library compatibility contract — declared floors, verified by the versions they name
 
-> **Status: the machinery is BUILT (steps 1-6); adoption is ZERO.** Step 5 gates only for a
+> **Status: COMPLETE — steps 0-7 built, and every published package has adopted them.** Step 5 gates only for a
 > package that declares a floor; step 5a gates ADMISSION TO THE REGISTRY (not packaging); step 6
 > makes the floors change what a consumer resolves to. Steps are ordered so each one lands on
 > its own, is useful on its own, and cannot break anything before it.
 >
-> **The live gap is step 5b: 0 of 99 published versions declare a floor**, so every gate is
-> currently inert. The migration measures each package's real floor rather than asking its
-> author to guess — `loft compat floor`, built. That is what turns the contract on.
+> **All 35 packages across 9 repos now declare measured floors** (step 5b, seeded 2026-07-28),
+> so the gates have something to act on. The floors were MEASURED by `loft compat floor`, not
+> guessed — a registry of self-referential floors would have been adoption without information.
 >
 > **Nothing is enforced against a package that declares no floor**, which is why steps 5, 5a
 > and 6 could all land at once without breaking a single published package. Declaring is what
@@ -603,10 +603,40 @@ One consequence worth stating: `loft update --check` exits 0 when the ONLY lines
 held-back notes. A consumer correctly staying put must not turn a CI check red — that is the
 pressure that gets a floor ignored, or the gate removed.
 
-### Step 7 — the release gate runs the full window
+### Step 7 — the release gate runs the full window — **BUILT**
 
-Under a total budget; exceeding it fails the release with "narrow the claim or split the
-suite", never a silently-truncated prefix reported as proven.
+`loft compat check --full` verifies a package's **entire** claim — every installed release,
+oldest first — under a wall-clock budget (`LOFT_COMPAT_BUDGET`, default 600s). Wired into
+`registry_maintain.sh`'s publish path, before the tag and GitHub release are cut, for the same
+reason the admission gate is: a refusal after the artifact exists leaves something nobody can
+register.
+
+**Two different questions.** A PR asks *"did this change break something"* and pays O(1) for the
+answer — latest + floor + one random interior release. Publishing asks *"is everything this
+package promises actually true"*, and that is the only one of the two that is a promise to
+people who cannot ask the package a question. Sampling answers the first honestly and the
+second not at all.
+
+**Overrun is a FAILURE, never a truncation.** The tempting alternative — verify what fits,
+report green — produces a release claiming a floor it never checked, which is worse than no
+check at all because it carries the authority of one. Cost is proportional to the *claim*, so
+the remedy is in the author's hands and the message names it: narrow the floor, or split the
+suite. Releases are walked **oldest first**, so a timeout leaves the deepest part of the claim
+— the part the floor is actually asserting, and the part nobody else looks at — already proven.
+
+| cell | exit |
+|---|---|
+| full window, claim holds | 0, *"whole claim verified"* |
+| budget exhausted | **1**, naming how many went unchecked and what to do |
+| break at or above the declared floor | **1** |
+| break BELOW the floor | 0, reported as `DECLARED BREAK` — the promise never covered it |
+| a release that cannot be read | named as NOT verified, never silently dropped |
+| sampled (per-PR) mode | unchanged |
+
+Verified against all 34 published packages: every one passes the full window, so publishing
+stays unblocked. The regression test drives the real binary — the property is an **exit code**,
+and a test of the message would have passed while the gate returned 0 — and is proven
+non-vacuous by making the gate truncate-and-pass, which fails it.
 
 ## Re-assertion sites — the brittleness count
 

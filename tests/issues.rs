@@ -16929,3 +16929,100 @@ fn issue_656_package_can_name_itself_while_another_library_is_loaded() {
         "#656: a package must be able to name itself with another library loaded:\n{report}"
     );
 }
+
+// Library compatibility contract, step 7 — the RELEASE gate proves the WHOLE claim.
+//
+// A PR pays O(1): latest + declared floor + one random interior release. That answers
+// "did this change break something". Publishing asks a different question — "is
+// everything this package promises actually true" — and it is the only one of the two
+// that is a promise to people who cannot ask the package a question.
+//
+// The pressure this must resist is truncation. Verifying what fits in the time available
+// and reporting green produces a release claiming a floor it never checked, which is
+// worse than no check at all because it carries the authority of one. So an overrun is a
+// FAILURE, and the remedy is named rather than implied: cost is proportional to the
+// CLAIM, so narrowing the floor shrinks it.
+//
+// Driven through the real binary, because the property under test is an EXIT CODE — the
+// thing the release script branches on. A unit test of the message would have passed
+// while the gate returned 0. `LOFT_HOME` isolates the install cache so the window is
+// built here rather than depending on whatever this machine happens to have installed.
+#[test]
+fn compat_full_window_budget_overrun_fails_the_release() {
+    let loft = env!("CARGO_BIN_EXE_loft");
+    let root = std::env::temp_dir().join(format!("loft_s7_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("pkg");
+    std::fs::create_dir_all(pkg.join("src")).unwrap();
+
+    let manifest = |v: &str| {
+        format!(
+            "[package]\nname = \"s7pkg\"\nversion = \"{v}\"\nloft = \">=0.8\"\n\
+             api_compatible_with  = \"0.1.0\"\ndata_compatible_with = \"0.1.0\"\n\
+             [library]\nentry = \"src/s7pkg.loft\"\n"
+        )
+    };
+    let source = "pub fn one(x: integer) -> integer { return x + 1; }\n";
+    std::fs::write(pkg.join("loft.toml"), manifest("0.4.0")).unwrap();
+    std::fs::write(pkg.join("src").join("s7pkg.loft"), source).unwrap();
+
+    // Three earlier releases in an isolated install cache — a real window to walk, so
+    // "budget exhausted" is reachable and "verified everything" means something.
+    for v in ["0.1.0", "0.2.0", "0.3.0"] {
+        let d = root.join(".loft/registry").join(format!("s7pkg-{v}"));
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        std::fs::write(d.join("loft.toml"), manifest(v)).unwrap();
+        std::fs::write(d.join("src").join("s7pkg.loft"), source).unwrap();
+    }
+
+    let run = |budget: &str| {
+        std::process::Command::new(loft)
+            .args(["compat", "check", "--full"])
+            .current_dir(&pkg)
+            .env("LOFT_HOME", &root)
+            .env("LOFT_COMPAT_BUDGET", budget)
+            .output()
+            .expect("run loft compat check --full")
+    };
+    let text = |o: &std::process::Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        )
+    };
+
+    // Generous budget: the whole window is walked and the claim holds.
+    let ok = run("600");
+    let ok_txt = text(&ok);
+    // Zero budget: nothing can be proved, so it must not report success.
+    let over = run("0");
+    let over_txt = text(&over);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        ok.status.success(),
+        "#step7: an unbroken window must pass:\n{ok_txt}"
+    );
+    assert!(
+        ok_txt.contains("whole claim verified"),
+        "#step7: a pass must say the WHOLE claim was proved:\n{ok_txt}"
+    );
+    assert!(
+        ok_txt.contains("0.1.0") && ok_txt.contains("0.2.0") && ok_txt.contains("0.3.0"),
+        "#step7: --full must report every release, not a sample:\n{ok_txt}"
+    );
+
+    assert!(
+        !over.status.success(),
+        "#step7: a budget overrun must FAIL the release, not pass:\n{over_txt}"
+    );
+    assert!(
+        over_txt.contains("BUDGET EXCEEDED") && over_txt.contains("never checked"),
+        "#step7: an overrun must quantify what went unverified:\n{over_txt}"
+    );
+    assert!(
+        over_txt.contains("Narrow the claim"),
+        "#step7: an overrun must name the remedy:\n{over_txt}"
+    );
+}
