@@ -3783,6 +3783,123 @@ fn run_ship_command(args: &[String]) -> i32 {
 
 /// @PLN102 C1 — `loft api-surface <file>` prints the surface descriptor; `loft api-surface
 /// --diff <base> <new> [--json]` prints the compatibility verdict (human text, or machine JSON
+/// `loft compat api [<version>]` — is this working tree still a drop-in for a PUBLISHED
+/// release of itself?
+///
+/// The claim being checked is the package's own `api_compatible_with` / `data_compatible_with`
+/// floor: a real version of this package, which is what makes the claim verifiable — the
+/// release it names can be fetched and diffed. An abstract epoch could not be.
+///
+/// Reuses `api-surface --diff` wholesale, which already reports BOTH axes the two floors
+/// need: `api_diff::diff` (public surface) and `schema_sidecar::classify` (value-type layout
+/// — a silent DATA break the API axis alone green-lights).
+///
+/// **Advisory in this step**: it reports and always exits 0 unless it could not run. Turning a
+/// break into a failure is a later step, after the noise has been measured across every
+/// published package — the discipline every check in this repo that had to be walked back did
+/// not follow. Design: `doc/claude/plans/library-compat-contract/README.md`.
+///
+/// Exit: 0 = ran (verdict on stdout) · 2 = could not run (no manifest, no such release,
+/// unreadable source).
+fn run_compat_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    // `compat api [<version>]` — the sub-verb is positional[0] ("compat" is stripped by the
+    // caller only for the outer arg, so positional[0] is the subcommand itself).
+    // The dispatcher strips `compat`, so positional[0] is the sub-verb.
+    let sub = positional.first().map(|s| s.as_str()).unwrap_or("");
+    if sub != "api" {
+        eprintln!("loft compat: usage: loft compat api [<version>] [--json]");
+        return 2;
+    }
+
+    let Some(manifest) = loft::manifest::read_manifest("loft.toml") else {
+        eprintln!(
+            "loft compat: no `loft.toml` here — run this from a package root, since the \
+             comparison is against a published release of THIS package"
+        );
+        return 2;
+    };
+    let Some(name) = manifest.name.clone() else {
+        eprintln!("loft compat: `loft.toml` has no [package] name");
+        return 2;
+    };
+
+    // Which release to compare against: an explicit argument, else the declared API floor.
+    // No silent default to "latest" — the floor is the claim, and comparing against something
+    // the author did not declare would report a verdict about a promise nobody made.
+    let target = match positional.get(1) {
+        Some(v) => (*v).clone(),
+        None => match manifest.api_compatible_with.clone() {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "loft compat: `{name}` declares no `api_compatible_with`, so there is no \
+                     claim to check. Add one naming the oldest release this is still a \
+                     drop-in for, or pass a version explicitly."
+                );
+                return 2;
+            }
+        },
+    };
+
+    // The published source must be on disk to diff against. Reuse the install cache rather
+    // than fetching a second way, so this sees exactly what a consumer would get.
+    let dir = loft::registry_index::extract_dir(&name, &target);
+    if !dir.join("loft.toml").exists() {
+        eprintln!(
+            "loft compat: `{name}` {target} is not available locally — install it first \
+             (`loft install {name}@{target}`).\n\
+             If it cannot be installed at all, the claim naming it is unverifiable, which is \
+             itself the finding: a floor must name a release that still exists."
+        );
+        return 2;
+    }
+
+    let old_entry = entry_file_of(&dir, &name);
+    let new_entry = entry_file_of(std::path::Path::new("."), &name);
+    let ((old_s, old_id), (new_s, new_id)) =
+        match (api_surface_of(&old_entry), api_surface_of(&new_entry)) {
+            (Ok(o), Ok(n)) => (o, n),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!("loft compat: {e}");
+                return 2;
+            }
+        };
+    let api = loft::api_diff::diff(&old_s, &new_s);
+    let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+    if !json {
+        println!("compat: `{name}` working tree vs published {target}");
+    }
+    print_verdict(&api, &layout, json);
+    // Advisory: report the two floors beside the two verdicts, so the author sees which claim
+    // each axis is measured against rather than having to remember.
+    if !json {
+        println!(
+            "  api_compatible_with  = {}",
+            manifest.api_compatible_with.as_deref().unwrap_or("<unset>")
+        );
+        println!(
+            "  data_compatible_with = {}",
+            manifest
+                .data_compatible_with
+                .as_deref()
+                .unwrap_or("<unset>")
+        );
+    }
+    0
+}
+
+/// A package's entry `.loft` file: `[library] entry` when declared, else the
+/// `src/<name>.loft` default that `loft.toml`'s documentation specifies.
+fn entry_file_of(root: &std::path::Path, name: &str) -> String {
+    let entry =
+        loft::manifest::read_manifest(root.join("loft.toml").to_str().unwrap_or("loft.toml"))
+            .and_then(|m| m.entry)
+            .unwrap_or_else(|| format!("src/{name}.loft"));
+    root.join(entry).to_string_lossy().into_owned()
+}
+
 /// for a CI check). Exit: 0 = drop-in / printed · 1 = a BREAK (so a non-required CI check goes
 /// red) · 2 = a usage / load error.
 fn run_api_surface_command(args: &[String]) -> i32 {
@@ -5403,6 +5520,11 @@ fn main() {
             };
             let code = scaffold_library(&name, native, chunk);
             std::process::exit(code);
+        } else if a == "compat" {
+            // Library compatibility contract, step 2 — `loft compat api [<version>]`.
+            // Self-contained + early-exit, like its api-surface sibling.
+            let rest: Vec<String> = argv[i..].to_vec();
+            std::process::exit(run_compat_command(&rest));
         } else if a == "api-surface" {
             // @PLN102 C1 — `loft api-surface <file>` | `--diff <base> <new> [--json]`.
             // Self-contained + early-exit.

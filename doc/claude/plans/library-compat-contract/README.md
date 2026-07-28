@@ -5,8 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Library compatibility contract — declared floors, verified by the versions they name
 
-> **Status: DESIGN (2026-07-28).** Nothing below is built. Steps are ordered so each one
-> lands on its own, is useful on its own, and cannot break anything that came before.
+> **Status: steps 1-2 BUILT (2026-07-28), advisory only — nothing gates.** Steps are ordered
+> so each one lands on its own, is useful on its own, and cannot break anything before it.
+>
+> **Step 0 is BLOCKED and cannot be completed as written** — see its section.
 
 ## The problem, measured
 
@@ -118,10 +120,31 @@ author rather than merely accusing them.
 Each step is independently landable and verifiable. Nothing gates until its noise has been
 measured — the lesson of every check in this repo that had to be walked back.
 
-### Step 0 — restore `web 0.2.2` to the registry index
+### Step 0 — restore `web 0.2.2` — **BLOCKED: unrecoverable**
 
-The foundation: every later step assumes an old version stays fetchable. Fixes a promise
-already broken. Registry repo, no loft change. **Verify:** `loft install web@0.2.2` resolves.
+Investigated 2026-07-28. It cannot be restored, and attempting to would be worse than the
+gap.
+
+The history is exact. `c8893db5` (06-24) added it; `e471bd26` (07-03) yanked it **correctly**,
+leaving it listed as the rule requires; `738984bc` (07-07), an unrelated `web 0.3.0` publish,
+silently dropped the entry. So the retention rule was honoured and then lost as collateral of
+a later publish — nobody decided to remove it.
+
+But the artifact is gone too: the release asset 404s, and **no `web-v0.2.2` tag exists** on
+`loft-libs-net`. Source, tag, release and index entry are all erased; only the `yanked` marker
+survives, which now *implies* a version that exists and is discouraged when in fact there is
+nothing to install.
+
+Recreating it is not an option worth taking: without the tag there is no source to package,
+and republishing a rebuild that did not reproduce sha256 `59518a5…` would substitute different
+code under a version consumers may trust — a silent substitution is worse than an honest
+absence. The one consumer that needed it, `routing`, already survived by **vendoring** the
+source into `routing/lib/web/` — which is what people do when distribution cannot be relied on,
+and is the clearest evidence available that this gap has a cost.
+
+**What replaces this step:** a retention guard, so it cannot recur — a check that no version
+ever leaves `index.json`, and that every listed version's artifact actually resolves. That is
+the generalisable fix; restoring one lost tarball was never the point.
 
 ### Step 1 — parse the two fields, inert
 
@@ -131,7 +154,7 @@ exactly as today. **Verify:** both forms parse; a malformed value is rejected lo
 silently ignored — the `check_version` lesson, where an unparseable bound was accepted as
 "any").
 
-### Step 2 — `loft compat api <published-version>`, advisory
+### Step 2 — `loft compat api <published-version>`, advisory — **BUILT**
 
 Fetch that version's source, diff its API surface against the working tree, report
 additive-or-not. Reuses `loft api-surface --check`. A standalone command, no CI. **Verify:**
