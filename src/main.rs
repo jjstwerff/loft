@@ -3783,6 +3783,7 @@ fn run_ship_command(args: &[String]) -> i32 {
 
 /// @PLN102 C1 — `loft api-surface <file>` prints the surface descriptor; `loft api-surface
 /// --diff <base> <new> [--json]` prints the compatibility verdict (human text, or machine JSON
+#[cfg(feature = "registry")]
 /// `loft compat api [<version>]` — is this working tree still a drop-in for a PUBLISHED
 /// release of itself?
 ///
@@ -3900,6 +3901,7 @@ fn run_compat_command(args: &[String]) -> i32 {
     0
 }
 
+#[cfg(feature = "registry")]
 /// `loft compat check` — the CI entry point: sample a few published releases and report.
 ///
 /// Cost is **O(1) per run** by construction, which is the only shape that survives a mature
@@ -4011,6 +4013,7 @@ fn compat_check(name: &str, own_version: Option<&str>, floor: Option<&str>) -> i
     0
 }
 
+#[cfg(feature = "registry")]
 /// `loft compat test <version>` — run a PUBLISHED release's tests against the working tree.
 ///
 /// This is the half `loft compat api` cannot see. An API diff proves the SHAPE of the surface
@@ -5769,10 +5772,23 @@ fn main() {
             let code = scaffold_library(&name, native, chunk);
             std::process::exit(code);
         } else if a == "compat" {
-            // Library compatibility contract, step 2 — `loft compat api [<version>]`.
-            // Self-contained + early-exit, like its api-surface sibling.
-            let rest: Vec<String> = argv[i..].to_vec();
-            std::process::exit(run_compat_command(&rest));
+            // Library compatibility contract — `loft compat <api|test|check>`.
+            // Self-contained + early-exit, like its api-surface sibling.  Registry-gated:
+            // every sub-verb compares against a PUBLISHED release, which a build without the
+            // registry feature cannot locate at all.
+            #[cfg(feature = "registry")]
+            {
+                let rest: Vec<String> = argv[i..].to_vec();
+                std::process::exit(run_compat_command(&rest));
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft compat: this build has no registry support, so a published release \
+                     cannot be fetched to compare against"
+                );
+                std::process::exit(2);
+            }
         } else if a == "api-surface" {
             // @PLN102 C1 — `loft api-surface <file>` | `--diff <base> <new> [--json]`.
             // Self-contained + early-exit.
