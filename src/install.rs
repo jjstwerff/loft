@@ -167,7 +167,14 @@ pub fn install_one(
 ) -> Result<InstallReport, String> {
     let index = load_index(opts)?;
     let mut graph: Vec<ResolvedPackage> = Vec::new();
-    resolve_recursive(&index, package_name, constraint, opts, &mut graph)?;
+    resolve_recursive(
+        &index,
+        package_name,
+        constraint,
+        opts,
+        &held_versions(opts),
+        &mut graph,
+    )?;
 
     let mut report = InstallReport {
         installed: Vec::new(),
@@ -423,6 +430,34 @@ fn index_stale(idx_path: &Path) -> bool {
     age.as_secs() > 60 * 60 // 1-hour TTL per PKG_REGISTRY.md
 }
 
+/// What this project already holds, read from its `loft.lock` — the input step 6
+/// needs to tell a first install from an upgrade.
+///
+/// Empty on every path that has no consumer project to speak of: a
+/// cache-internal resolution (`skip_lockfile`), a missing or unreadable
+/// lockfile.  Empty means unconstrained, so those paths resolve exactly as they
+/// did before.
+fn held_versions(opts: &InstallOptions) -> std::collections::BTreeMap<String, String> {
+    use std::collections::BTreeMap;
+    if opts.skip_lockfile {
+        return BTreeMap::new();
+    }
+    let lock_path = match &opts.lock_path {
+        Some(p) => p.clone(),
+        None => std::env::current_dir()
+            .unwrap_or_default()
+            .join("loft.lock"),
+    };
+    match lockfile::read_lockfile(&lock_path) {
+        Ok(Some(l)) => l
+            .packages
+            .into_iter()
+            .map(|p| (p.name, p.version))
+            .collect(),
+        _ => BTreeMap::new(),
+    }
+}
+
 /// Recursive resolver: pull `name` (and its transitive deps) into
 /// `graph`.  Diamond resolution: when a package appears twice via
 /// different dep paths, pick the **highest** version satisfying both
@@ -432,6 +467,7 @@ fn resolve_recursive(
     name: &str,
     constraint: Option<&str>,
     opts: &InstallOptions,
+    held: &std::collections::BTreeMap<String, String>,
     graph: &mut Vec<ResolvedPackage>,
 ) -> Result<(), String> {
     if graph.iter().any(|r| r.name == name) {
@@ -444,7 +480,27 @@ fn resolve_recursive(
         .get(name)
         .ok_or_else(|| format!("package `{name}` not found in registry"))?;
     let constraint_str = constraint.unwrap_or("*");
-    let version = registry_index::find_best_version(pkg, constraint_str, opts.allow_prerelease)
+    // Step 6: if this project already holds a version, re-resolving is an
+    // UPGRADE, and an upgrade must not hand it a release that declared it
+    // breaks them.  Nothing held → nothing to be a drop-in for, so the fresh
+    // install resolves exactly as before.
+    let resolved = registry_index::find_compatible_version(
+        pkg,
+        constraint_str,
+        opts.allow_prerelease,
+        held.get(name).map(String::as_str),
+    );
+    for held_back in &resolved.withheld {
+        eprintln!(
+            "note: `{name}` {} is available but declares a break past the {} you hold \
+             (api_compatible_with = {}); staying compatible.  Ask for it by version to take it.",
+            held_back.semver,
+            held.get(name).map_or("?", String::as_str),
+            held_back.api_compatible_with.as_deref().unwrap_or("?"),
+        );
+    }
+    let version = resolved
+        .best
         .ok_or_else(|| {
             format!(
                 "no version of `{name}` satisfies constraint `{constraint_str}` \
@@ -464,7 +520,7 @@ fn resolve_recursive(
         version,
     });
     for (dep_name, dep_constraint) in dep_pairs {
-        resolve_recursive(index, &dep_name, Some(&dep_constraint), opts, graph)?;
+        resolve_recursive(index, &dep_name, Some(&dep_constraint), opts, held, graph)?;
     }
     Ok(())
 }
@@ -583,6 +639,8 @@ mod tests {
             sha256: "0".repeat(64),
             size: 1,
             loft: ">=0.8".to_string(),
+            api_compatible_with: None,
+            data_compatible_with: None,
             deps: d,
             conflicts: vec![],
             replaces: vec![],
@@ -643,7 +701,7 @@ mod tests {
             pkg("c", vec![ver("0.1.0", &[])]),
         ]);
         let mut graph = Vec::new();
-        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        resolve_recursive(&idx, "a", None, &opts(), &BTreeMap::default(), &mut graph).unwrap();
         let names: Vec<&str> = graph.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
     }
@@ -657,7 +715,7 @@ mod tests {
             pkg("d", vec![ver("0.1.0", &[])]),
         ]);
         let mut graph = Vec::new();
-        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        resolve_recursive(&idx, "a", None, &opts(), &BTreeMap::default(), &mut graph).unwrap();
         let names: Vec<&str> = graph.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "d", "c"]);
         // Each package appears exactly once.
@@ -673,7 +731,7 @@ mod tests {
             pkg("b", vec![ver("0.1.0", &[("a", "^0.1")])]),
         ]);
         let mut graph = Vec::new();
-        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        resolve_recursive(&idx, "a", None, &opts(), &BTreeMap::default(), &mut graph).unwrap();
         let names: Vec<&str> = graph.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b"]);
     }
@@ -682,7 +740,7 @@ mod tests {
     fn rejects_missing_transitive_dep() {
         let idx = index(vec![pkg("a", vec![ver("0.1.0", &[("b", "^0.1")])])]);
         let mut graph = Vec::new();
-        let err = resolve_recursive(&idx, "a", None, &opts(), &mut graph)
+        let err = resolve_recursive(&idx, "a", None, &opts(), &BTreeMap::default(), &mut graph)
             .expect_err("should fail on missing transitive");
         assert!(err.contains("`b` not found"), "msg: {err}");
     }
@@ -691,8 +749,15 @@ mod tests {
     fn rejects_unsatisfiable_constraint() {
         let idx = index(vec![pkg("a", vec![ver("0.1.0", &[])])]);
         let mut graph = Vec::new();
-        let err = resolve_recursive(&idx, "a", Some("^0.2"), &opts(), &mut graph)
-            .expect_err("should fail on unsatisfiable constraint");
+        let err = resolve_recursive(
+            &idx,
+            "a",
+            Some("^0.2"),
+            &opts(),
+            &BTreeMap::default(),
+            &mut graph,
+        )
+        .expect_err("should fail on unsatisfiable constraint");
         assert!(
             err.contains("satisfies constraint") && err.contains("^0.2"),
             "msg: {err}"
@@ -704,8 +769,15 @@ mod tests {
     fn rejects_missing_root_package() {
         let idx = index(vec![]);
         let mut graph = Vec::new();
-        let err = resolve_recursive(&idx, "nope", None, &opts(), &mut graph)
-            .expect_err("should fail on unknown package");
+        let err = resolve_recursive(
+            &idx,
+            "nope",
+            None,
+            &opts(),
+            &BTreeMap::default(),
+            &mut graph,
+        )
+        .expect_err("should fail on unknown package");
         assert!(err.contains("`nope` not found"), "msg: {err}");
     }
 
@@ -716,7 +788,7 @@ mod tests {
             vec![ver("0.1.0", &[]), ver("0.1.5", &[]), ver("0.1.2", &[])],
         )]);
         let mut graph = Vec::new();
-        resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
+        resolve_recursive(&idx, "a", None, &opts(), &BTreeMap::default(), &mut graph).unwrap();
         assert_eq!(graph[0].version.semver, "0.1.5");
     }
 
@@ -731,11 +803,19 @@ mod tests {
             vec![ver("0.1.0", &[]), ver("0.1.1", &[]), ver("0.2.0", &[])],
         )]);
         let mut graph = Vec::new();
-        resolve_recursive(&idx, "a", Some("=0.1.0"), &opts(), &mut graph).unwrap();
+        resolve_recursive(
+            &idx,
+            "a",
+            Some("=0.1.0"),
+            &opts(),
+            &BTreeMap::default(),
+            &mut graph,
+        )
+        .unwrap();
         assert_eq!(graph[0].version.semver, "0.1.0");
         // Sanity: without the pin the newest wins.
         let mut g2 = Vec::new();
-        resolve_recursive(&idx, "a", None, &opts(), &mut g2).unwrap();
+        resolve_recursive(&idx, "a", None, &opts(), &BTreeMap::default(), &mut g2).unwrap();
         assert_eq!(g2[0].version.semver, "0.2.0");
     }
 
@@ -743,7 +823,15 @@ mod tests {
     fn resolves_specific_pinned_version() {
         let idx = index(vec![pkg("a", vec![ver("0.1.0", &[]), ver("0.1.5", &[])])]);
         let mut graph = Vec::new();
-        resolve_recursive(&idx, "a", Some("0.1.0"), &opts(), &mut graph).unwrap();
+        resolve_recursive(
+            &idx,
+            "a",
+            Some("0.1.0"),
+            &opts(),
+            &BTreeMap::default(),
+            &mut graph,
+        )
+        .unwrap();
         assert_eq!(graph[0].version.semver, "0.1.0");
     }
 
@@ -755,6 +843,8 @@ mod tests {
             sha256: "s".to_string(),
             size: 1,
             loft: ">=0.8".to_string(),
+            api_compatible_with: None,
+            data_compatible_with: None,
             deps: BTreeMap::new(),
             conflicts: vec![],
             replaces: vec![],

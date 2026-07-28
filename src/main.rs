@@ -1234,16 +1234,40 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
             .get(&entry.name)
             .cloned()
             .unwrap_or_else(|| "*".to_string());
-        let Some(best) = registry_index::find_best_version(pkg, &constraint, false) else {
+        // Step 6: an upgrade must not hand the consumer a release that has
+        // DECLARED it breaks them.  `entry.version` is what they hold, so a
+        // candidate whose `api_compatible_with` is above it is passed over —
+        // and named, because a resolver that silently stops at an older release
+        // teaches its consumer that no upgrade exists.
+        let resolved =
+            registry_index::find_compatible_version(pkg, &constraint, false, Some(&entry.version));
+        for held_back in &resolved.withheld {
+            let floor = held_back.api_compatible_with.as_deref().unwrap_or("?");
             diff.push(format!(
-                "  {pkg} {ver} — no version satisfies range `{constraint}` (skipped)",
+                "  {pkg} {ver} — {new} held back: declares a break past {ver} \
+                 (api_compatible_with = {floor}). Upgrade deliberately, or stay.",
+                pkg = entry.name,
+                ver = entry.version,
+                new = held_back.semver
+            ));
+        }
+        let Some(best) = resolved.best else {
+            // Distinguish "nothing satisfies the range" from "everything that
+            // does declares a break" — the fixes are different.
+            let why = if resolved.withheld.is_empty() {
+                format!("no version satisfies range `{constraint}` (skipped)")
+            } else {
+                format!("every version satisfying `{constraint}` declares a break past it")
+            };
+            diff.push(format!(
+                "  {pkg} {ver} — {why}",
                 pkg = entry.name,
                 ver = entry.version
             ));
             continue;
         };
         if best.semver == entry.version {
-            // Already on the highest satisfying version.
+            // Already on the highest satisfying version this consumer can take.
             continue;
         }
         // Higher OR lower (e.g. rollback after yank) — both are
@@ -1279,11 +1303,18 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
     }
 
     if opts.check_only {
-        println!("loft update --check: updates available:");
+        if updates_available {
+            println!("loft update --check: updates available:");
+        } else {
+            // Reachable when the only lines are held-back or skipped notes.  A
+            // consumer correctly staying put must not turn a CI check red —
+            // that is the pressure that gets a floor ignored or a gate removed.
+            println!("loft update --check: no updates available, but note:");
+        }
         for line in &diff {
             println!("{line}");
         }
-        return 1;
+        return i32::from(updates_available);
     }
     if opts.dry_run {
         println!("loft update --dry-run: would update:");
