@@ -416,7 +416,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
 /// yanked versions and (unless `allow_prerelease`) prereleases.
 ///
 /// Constraint shorthand:
-/// - exact:  `"0.1.0"`        — only `0.1.0`.
+/// - exact:  `"0.1.0"`        — only `0.1.0`, **and a yanked version still resolves**.
 /// - caret:  `"^0.1.0"`       — `>=0.1.0, <0.2.0` (cargo / npm shape).
 /// - tilde:  `"~0.1.0"`       — `>=0.1.0, <0.2.0` (loosened to match
 ///   cargo's tilde for 0.x).
@@ -424,6 +424,12 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
 /// - any:    `"*"` or empty   — any non-yanked, non-prerelease.
 ///
 /// Picks the **highest** satisfying version.
+///
+/// **Yanking discourages a version; it does not withdraw one.** `PKG_REGISTRY.md` keeps a
+/// yanked version listed precisely so a `loft.lock` pinned to it still resolves, and skipping
+/// it on an EXACT pin broke that promise — `loft install glb@0.1.1` refused a version the
+/// index plainly carries, which is the same retention failure `web 0.2.2` suffered one layer
+/// down. A range or `*` still skips yanked, so nothing new ever picks one up by accident.
 #[must_use]
 pub fn find_best_version<'a>(
     pkg: &'a Package,
@@ -431,9 +437,12 @@ pub fn find_best_version<'a>(
     allow_prerelease: bool,
 ) -> Option<&'a Version> {
     let yanked: std::collections::HashSet<&str> = pkg.yanked.iter().map(String::as_str).collect();
+    // An exact pin names one release and is what a lockfile records; anything else is the
+    // resolver choosing on the consumer's behalf, where a yanked version must stay excluded.
+    let exact_pin = constraint.trim().starts_with(|c: char| c.is_ascii_digit());
     let mut best: Option<&Version> = None;
     for ver in pkg.versions.values() {
-        if yanked.contains(ver.semver.as_str()) {
+        if yanked.contains(ver.semver.as_str()) && !exact_pin {
             continue;
         }
         if ver.prerelease && !allow_prerelease {
@@ -1494,6 +1503,29 @@ mod tests {
         // 0.1.0 is yanked; 0.1.1 is non-prerelease; 0.2.0-beta is prerelease.
         let best = find_best_version(crypto, "^0.1", false).expect("Some");
         assert_eq!(best.semver, "0.1.1");
+    }
+
+    /// A yanked version stays INSTALLABLE by exact pin — that is the whole reason
+    /// `PKG_REGISTRY.md` keeps it listed. Skipping it here refused a version the index
+    /// plainly carries (`loft install glb@0.1.1`), breaking every `loft.lock` pinned across a
+    /// yank: the same retention promise `web 0.2.2` broke one layer down.
+    #[test]
+    fn an_exact_pin_still_resolves_a_yanked_version() {
+        let idx = parse_index(SAMPLE).expect("parse");
+        let crypto = idx.packages.get("crypto").expect("crypto");
+        assert_eq!(
+            find_best_version(crypto, "0.1.0", false).map(|v| v.semver.as_str()),
+            Some("0.1.0"),
+            "a lockfile pin to a yanked version must still resolve"
+        );
+        // ...while nothing that lets the RESOLVER choose ever picks one up.
+        for c in ["*", "^0.1", ">=0.1"] {
+            assert_ne!(
+                find_best_version(crypto, c, false).map(|v| v.semver.as_str()),
+                Some("0.1.0"),
+                "constraint `{c}` must not select a yanked version"
+            );
+        }
     }
 
     #[test]

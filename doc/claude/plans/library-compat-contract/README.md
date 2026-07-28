@@ -35,10 +35,13 @@ A library can silently break its consumers today. Verified on the current tree:
 - **Resolution is version-only.** `registry_index.rs` picks the highest satisfying version
   with no compatibility input, so a consumer asking `foo = ">=0.1"` silently receives a
   release that broke its contract.
-- **One retention hole.** `PKG_REGISTRY.md` promises yanked versions stay listed so
-  `loft.lock`-pinned consumers don't break. `shapes 0.1.0` and `glb 0.1.1` honour it;
-  **`web 0.2.2` is absent from its `versions` map**, so a lock pinned there cannot resolve.
-  *(Now guarded — step 0. The loss itself is permanent.)*
+- **Two retention holes, at different layers.** `PKG_REGISTRY.md` promises yanked versions stay
+  listed so `loft.lock`-pinned consumers don't break. **`web 0.2.2` is absent from its
+  `versions` map** entirely, so a lock pinned there cannot resolve *(now guarded — step 0; the
+  loss itself is permanent)*. And `shapes 0.1.0` / `glb 0.1.1` are listed correctly yet the
+  RESOLVER refused them on an exact pin, so the promise failed anyway *(fixed — step 5b)*.
+  Keeping the entry and honouring it are two separate obligations; only the first was written
+  down, so only the first was met.
 
 ## The invariant
 
@@ -411,7 +414,53 @@ release. That would mean either the libraries genuinely break compatibility ever
 knowing on its own — or the measurement is too strict to be useful, and the axes need revisiting
 before anyone is asked to declare anything.
 
-Not yet done: steps 1–5 above, across 8 `loft-libs-*` repos.
+#### The measurement — run 2026-07-28, all 34 published packages
+
+Every published version installed (99), every package measured against its `origin/main`.
+
+| outcome | n | packages |
+|---|---|---|
+| reaches back ≥1 release | **14** | crypto **4**; game_protocol, glb, imaging, pluginabi, server, web **2**; cbor, hex_terrain, hex_world, input, markdown, mesh3d, shapes **1** |
+| only one release ever published | 15 | the `hex_*` family, `html`, `ssh`, `hexbody` |
+| reaches back to nothing | 4 | `arguments`, `gridmesh`, `random`, `time` |
+| unmeasurable — own `main` does not parse | 2 | `graphics`, `regex` |
+
+**The falsifier did not fire.** The plan said the migration fails if most packages measure back
+only to their own latest release. Of the **20** packages with more than one release, **14 reach
+back at least one** and only 4 reach nothing (2 could not be measured). Depth histogram over
+those 20: `0`×4, `1`×7, `2`×6, `4`×1. The floors carry information, so the migration is worth
+doing.
+
+**The 4 zero-depth packages are unclaimed API breaks — the thing this contract exists to catch,
+now with names:** `arguments` changed `Args.error_msg`, `gridmesh` changed `clear_dirty`,
+`random` changed `rand`, `time` changed `Duration.to_text`. Each shipped a break with nothing
+saying so. They are not defects to fix — a library may break — but each must now declare it.
+
+**Two findings the sweep produced, both fixed in the same commit:**
+
+- *`compat floor` blamed the wrong side.* A failure to read the WORKING TREE's surface was
+  reported as "could not read its surface" against the published release being compared, which
+  is a claim about somebody else's shipped version. It also failed identically at every step, so
+  a package that was never compared at all read as "reaches back to nothing". The working tree
+  is now read ONCE before the walk; failing there is `UNMEASURABLE` and measures nothing. That
+  reclassification is exactly what moved `graphics` and `regex` out of the zero-depth row.
+- *A yanked version could not be installed by exact pin.* `PKG_REGISTRY.md` keeps yanked
+  versions listed so a `loft.lock` pinned to one still resolves — but `find_best_version` skipped
+  yanked unconditionally, so `loft install glb@0.1.1` refused a version the index plainly
+  carries. **The same retention promise `web 0.2.2` broke, one layer down**: there the entry was
+  deleted, here the entry survives and the resolver refuses it anyway. An exact pin now resolves
+  a yanked version; a range or `*` still skips it, so nothing new picks one up by accident.
+  Restoring those two windows deepened `glb` from 1 to **2** (it can now see `0.1.1`); `shapes`
+  was unchanged, since its window still stops at an unparseable `0.2.0`.
+
+**A floor stopped by "its published source no longer parses" is a LOWER BOUND**, not the answer:
+`server`, `cbor`, `hex_world` and `shapes` each hit a release that no longer parses on today's
+loft, so their real reach may be further back. That is failure path F6 on the API axis, and the
+tool reports it rather than stepping over it — a floor must never claim a version nobody could
+look at.
+
+Not yet done: seeding the two lines into 8 `loft-libs-*` repos (steps 3–5 above), and a
+`--with-tests` pass to add the behaviour axis.
 
 ### Step 6 — resolution honours the floors — **BUILT**
 

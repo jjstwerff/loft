@@ -4056,11 +4056,30 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
         return 0;
     }
 
+    // Read the WORKING TREE's surface once, before the walk.  Inside the loop a failure here
+    // is indistinguishable from the old release being unreadable, and the loop would blame
+    // the release — reporting a fact about someone else's published version when the problem
+    // is the source in front of you.  It also fails identically at every step, so the floor
+    // would read as "reaches back to nothing" for a package that was never compared at all.
+    let new_entry = entry_file_of(std::path::Path::new("."), name);
+    let new_surface = match api_surface_of(&new_entry) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "loft compat floor: cannot read THIS package's own surface ({}): {e}\n  \
+                 Nothing was measured — fix the working tree first.  No floor is being \
+                 claimed, and none should be until this parses.",
+                new_entry
+            );
+            return 2;
+        }
+    };
+    let (new_s, new_id) = new_surface;
+
     println!(
         "compat floor `{name}` {own}: walking {} installed release(s), newest first",
         versions.len()
     );
-    let new_entry = entry_file_of(std::path::Path::new("."), name);
     let mut floor: Option<String> = None;
     let mut stopped_at: Option<(String, String)> = None;
 
@@ -4073,10 +4092,12 @@ fn compat_floor(name: &str, own_version: Option<&str>, with_tests: bool) -> i32 
             break;
         }
         let old_entry = entry_file_of(&dir, name);
-        let (Ok((old_s, old_id)), Ok((new_s, new_id))) =
-            (api_surface_of(&old_entry), api_surface_of(&new_entry))
-        else {
-            stopped_at = Some((v.clone(), "could not read its surface".to_string()));
+        let Ok((old_s, old_id)) = api_surface_of(&old_entry) else {
+            // Only the PUBLISHED side can fail here — the working tree was read once above.
+            stopped_at = Some((
+                v.clone(),
+                "its published source no longer parses — cannot be verified".to_string(),
+            ));
             break;
         };
         let api = loft::api_diff::diff(&old_s, &new_s);
