@@ -126,6 +126,25 @@ pub struct Parser {
     pub lexer: Lexer,
     /// Are we currently allowing break/continue statements?
     in_loop: bool,
+    /// Cognitive complexity per definition — `context` → score, accumulated AS THE SOURCE IS
+    /// PARSED.
+    ///
+    /// Parse time is the only level at which this is meaningful. loft has no AST between the
+    /// parser and the Value IR, so a whole-program pass sees post-desugar code: measured on
+    /// the IR, five `??` discharges with no author-written branch score 10 and one plain
+    /// `for x in v` scores 5, which would charge people for using the null model and the
+    /// loop forms idiomatically. Here the parser is looking at exactly what was written.
+    ///
+    /// Cognitive, not cyclomatic: a construct costs `1 + nesting`, so DEPTH is what is
+    /// expensive rather than branch count. Eight sequential `if`s cost 8; three nested ones
+    /// already cost 6; a flat `match` costs 1 however many arms it has. That ordering is the
+    /// point — "many branches" and "hard to follow" are different properties.
+    pub complexity: HashMap<u32, u32>,
+    /// Control-flow nesting depth while parsing, for [`Parser::complexity`]. Bumped only
+    /// around a construct's BODY, so an `else if` chain — which re-enters `parse_if` after
+    /// the `then` body has closed — charges once per link at the chain's own depth rather
+    /// than deepening with each link.
+    cc_nest: u32,
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
@@ -711,6 +730,8 @@ impl Parser {
             database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,
+            complexity: HashMap::new(),
+            cc_nest: 0,
             in_format_expr: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),

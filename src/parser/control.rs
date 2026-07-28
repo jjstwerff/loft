@@ -465,6 +465,34 @@ impl Parser {
     // <block> ::= '}' | <expression> {';' <expression} '}'
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_block(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
+        // Cognitive complexity, charged here because `parse_block`'s `context` already names
+        // the construct — one hook instead of one per parser entry point.  `match_arm` is
+        // deliberately free: `parse_match` charges once for the whole construct, so a wide
+        // flat dispatch stays cheap while nesting does not.
+        let cc = match context {
+            "if" | "for" | "while" => Some(1 + self.cc_nest),
+            "else" => Some(1), // a plain `else` costs 1, with no nesting bonus
+            "match_arm" => Some(0),
+            _ => None,
+        };
+        if let Some(add) = cc {
+            // Pass 2 only: the parser runs twice over every definition, so charging on both
+            // doubles every score (`seq_ifs` read 16 for eight flat `if`s).  The nesting
+            // depth still has to track on BOTH passes, or pass-1 bodies would be charged at
+            // the wrong depth by a stale counter.
+            if add > 0 && !self.first_pass {
+                *self.complexity.entry(self.context).or_insert(0) += add;
+            }
+            self.cc_nest += 1;
+        }
+        let cc_ret = self.parse_block_inner(context, val, result);
+        if cc.is_some() {
+            self.cc_nest -= 1;
+        }
+        cc_ret
+    }
+
+    fn parse_block_inner(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
         if let Value::Var(v) = val
             && let Type::Reference(r, _) = self.vars.tp(*v).clone()
             && context == "block"
@@ -2780,6 +2808,11 @@ impl Parser {
     #[allow(clippy::too_many_lines)]
     // @F29 — pattern matching (enum/scalar/tuple, guards, or-patterns, exhaustiveness)
     pub(crate) fn parse_match(&mut self, code: &mut Value) -> Type {
+        // One charge for the whole construct — arm count is not complexity (a 12-arm flat
+        // dispatch reads straight down); its arms deepen via `parse_block("match_arm")`.
+        if !self.first_pass {
+            *self.complexity.entry(self.context).or_insert(0) += 1 + self.cc_nest;
+        }
         // Save position of the match keyword for exhaustiveness diagnostics.
         let match_pos = self.lexer.pos().clone();
         // 1. Parse the subject expression.
