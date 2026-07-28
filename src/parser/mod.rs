@@ -278,6 +278,15 @@ pub struct Parser {
     context: u32,
     /// Extra library directories for 'use' resolution (from --lib / --project flags)
     pub lib_dirs: Vec<String>,
+    /// The library short-name of the file being parsed, when that file is a
+    /// package entry — so a self-qualified call (`graphics::color_r(..)` inside
+    /// `src/graphics.loft`) resolves to the definitions already in hand.
+    ///
+    /// `use_names` deliberately never holds the main file (source 1 is reserved so
+    /// a user def can shadow a prelude name), so without this a package that
+    /// qualifies with its OWN name reported "Unknown library" — for a library that
+    /// was not merely present but currently being read (loft#656).
+    own_lib: Option<String>,
     /// Resolved paths of native shared libraries to load after `byte_code()`.
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
@@ -773,6 +782,7 @@ impl Parser {
             vars: Function::new("", "none"),
             line: 0,
             lib_dirs: Vec::new(),
+            own_lib: None,
             pending_native_libs: Vec::new(),
             native_lib_regs: Vec::new(),
             pending_native_compile: Vec::new(),
@@ -1364,6 +1374,21 @@ impl Parser {
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
         }
+        if !default && self.own_lib.is_none() {
+            // The manifest's `[package] name` when there is one, else the file
+            // stem — the same answer for a conventional package, whose entry
+            // defaults to `src/<name>.loft`.
+            let path = std::path::Path::new(filename);
+            let from_manifest = path
+                .parent()
+                .and_then(std::path::Path::parent)
+                .map(|root| root.join("loft.toml"))
+                .filter(|m| m.exists())
+                .and_then(|m| crate::manifest::read_manifest(&m.to_string_lossy()))
+                .and_then(|m| m.name);
+            self.own_lib = from_manifest
+                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()));
+        }
         self.vars.logging = false;
         self.lexer.switch(filename);
         self.first_pass = true;
@@ -1792,6 +1817,21 @@ impl Parser {
                 .parent()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
+        }
+        if !default && self.own_lib.is_none() {
+            // The manifest's `[package] name` when there is one, else the file
+            // stem — the same answer for a conventional package, whose entry
+            // defaults to `src/<name>.loft`.
+            let path = std::path::Path::new(filename);
+            let from_manifest = path
+                .parent()
+                .and_then(std::path::Path::parent)
+                .map(|root| root.join("loft.toml"))
+                .filter(|m| m.exists())
+                .and_then(|m| crate::manifest::read_manifest(&m.to_string_lossy()))
+                .and_then(|m| m.name);
+            self.own_lib = from_manifest
+                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()));
         }
         self.default = default;
         self.vars.logging = false;

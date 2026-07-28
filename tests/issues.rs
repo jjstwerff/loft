@@ -16869,3 +16869,63 @@ fn issue_656_self_qualified_reference_does_not_reparse_the_file() {
         "#656: a self-qualified reference must not re-parse its own file:\n{report}"
     );
 }
+
+// #656, second shape — a package that names itself while ANOTHER library is loaded.
+//
+// The two halves failed differently for the same reason.  With no other library in
+// play the self-qualified name got loaded (and the file re-parsed) — the first case
+// above.  Once a `use <dep>` has loaded something else, the main file's own name no
+// longer resolves at all and the parser reported "Unknown library 'glib'" — naming
+// the library it was reading at that moment.  `use_names` deliberately never holds
+// the main file (source 1 is reserved so a user def can shadow a prelude name), so a
+// package simply could not name itself.
+//
+// Published `graphics` is the real case: `graphics::color_r(..)` in a package that
+// also does `use mesh3d; use glb;`.  It reproduced on 0.5.0, not just on main, and
+// was the last package `loft compat floor` could not measure.  The dependency here
+// is a local file rather than a registry package, so the test needs no network and
+// no install.
+#[test]
+fn issue_656_package_can_name_itself_while_another_library_is_loaded() {
+    let dir = std::env::temp_dir().join(format!("loft_656b_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    // The other library — its presence is the whole point, so `use` must resolve.
+    std::fs::write(
+        dir.join("src").join("gdep.loft"),
+        "pub fn helper(x: integer) -> integer { return x * 2; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("loft.toml"),
+        "[package]\nname = \"glib\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+         [library]\nentry = \"src/glib.loft\"\n",
+    )
+    .unwrap();
+    let file = dir.join("src").join("glib.loft");
+    std::fs::write(
+        &file,
+        "use gdep;\n\
+         pub fn base(x: integer) -> integer { return x + 1; }\n\
+         pub fn far(x: integer) -> integer { return glib::base(x) + gdep::helper(x); }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.lib_dirs
+        .push(dir.join("src").to_string_lossy().to_string());
+    let _ = p.parse_dir(
+        &format!("{}/default", env!("CARGO_MANIFEST_DIR")),
+        true,
+        false,
+    );
+    p.parse(&file.to_string_lossy(), false);
+    let level = p.diagnostics.level();
+    let report = format!("{}", p.diagnostics);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        level < loft::diagnostics::Level::Error,
+        "#656: a package must be able to name itself with another library loaded:\n{report}"
+    );
+}

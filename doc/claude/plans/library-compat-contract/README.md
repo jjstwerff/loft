@@ -423,12 +423,12 @@ Every published version installed (99), every package measured against its `orig
 | reaches back ≥1 release | **14** | crypto **4**; game_protocol, glb, imaging, pluginabi, server, web **2**; cbor, hex_terrain, hex_world, input, markdown, mesh3d, shapes **1** |
 | only one release ever published | 15 | the `hex_*` family, `html`, `ssh`, `hexbody` |
 | reaches back to nothing — a declared break is owed | 5 | `arguments`, `gridmesh`, `random`, `regex`, `time` |
-| unmeasurable — `api-surface` cannot read it (**loft#656**, `regex`'s half fixed) | 1 | `graphics` |
+| unmeasurable | **0** | — (**loft#656** fixed; `graphics` measures at depth 2) |
 
 **The falsifier did not fire.** The plan said the migration fails if most packages measure back
 only to their own latest release. Of the **20** packages with more than one release, **14 reach
-back at least one** and 5 reach nothing (1 could not be measured). Depth histogram over
-those 20: `0`×5, `1`×7, `2`×6, `4`×1, unmeasurable×1. The floors carry information, so the migration is worth
+back at least one** and 5 reach nothing. **Every package is measurable** — the two that were
+not are fixed (loft#656). Depth histogram over those 20: `0`×5, `1`×7, `2`×7, `4`×1. The floors carry information, so the migration is worth
 doing.
 
 **The zero-depth packages have changed their API, which is allowed.** `arguments` changed
@@ -453,11 +453,16 @@ its own test suite** (7 tests) on the same loft that `api-surface` refused to re
 `graphics` failed identically on its *published* 0.5.0. The libraries were fine; `loft
 api-surface` disagreed with every other way of reading them — **loft#656**.
 
-`regex`'s half is **fixed**: a library that qualified a call with its own name made the parser
-re-parse the file it was already parsing, re-registering every definition. It now measures, and
-what it shows is the API change described above. `graphics` still fails, from a *different*
-cause on the same issue — its own package name does not resolve at all while its entry is being
-read — so it remains the one unmeasurable package.
+**Both are fixed** (loft#656), and they were two faults wearing one symptom:
+
+| | what happened | fix |
+|---|---|---|
+| `regex` | qualifying a call with its own name made the parser re-parse the file it was already parsing, re-registering every definition | a library load must not re-enter the current source |
+| `graphics` | with another library loaded (`use mesh3d; use glb;`), the main file's own name resolved to nothing at all — `use_names` never holds the main file | a package's own name resolves to its own source |
+
+The second only shows up once *another* library is in play, which is why the first fix did not
+cover it and why a probe without a dependency could not reproduce it. Both now measure:
+`graphics` at depth 2 (back to 0.4.2), `regex` at depth 0.
 
 It mattered beyond the tool, because `compat api` /
 `compat floor` / `compat check` all route through the same `api_surface_of`, so the contract
