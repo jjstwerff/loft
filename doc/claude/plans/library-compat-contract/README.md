@@ -532,7 +532,30 @@ the population contract 1 has to stop growing.
 **The floors are ready to seed.** Both passes agree, and the numbers now carry behaviour evidence
 wherever a corpus could still run.
 
-Not yet done: seeding the two lines into 8 `loft-libs-*` repos (steps 3–5 above).
+#### Seeded — 2026-07-28
+
+**Done.** All 35 packages across 9 repos now declare both floors, pushed to each repo's `main`
+(one commit per repo, `loft.toml` only, additive).
+
+Validated before pushing: every one of the 34 published packages passes **both**
+`loft compat levels` and `loft compat check` with its floor applied, so the seed reddens no
+library's CI. It could not have anyway — `origin/main`'s reusable still carries
+`continue-on-error: true` on the compat step and main's `compat_check` always returns 0, since
+the gating half (step 5) is not merged yet. That ordering is deliberate: the numbers land
+first, the gate follows.
+
+Two things the push surfaced:
+
+- **`web` had already declared its own floor** (`loft-libs-net@3876149`), at `0.3.0` — the same
+  number the measurement independently arrived at. Left untouched. An author and the tool
+  agreeing on a floor with no coordination is the best evidence so far that the measurement
+  says something real.
+- **`hexbody` declares no `loft` field at all.** Pre-existing, and it is the one unpublished
+  package. Its two floors are correct but it still cannot be registered until someone chooses
+  its `loft` range — an owner's call, not a measurement.
+
+Remaining for the contract: step 7, and merging the gating half so the floors start being
+enforced.
 
 ### Step 6 — resolution honours the floors — **BUILT**
 
