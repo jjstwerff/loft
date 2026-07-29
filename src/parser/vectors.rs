@@ -2197,6 +2197,18 @@ impl Parser {
             was
         };
         let elm = self.create_unique("elm", &elm_tp);
+        // loft#664 — an element NEVER owns a store: its record is the slot the
+        // enclosing `OpNewRecord` carved out of the container, and `OpFinishRecord`
+        // commits it there.  That was encoded only as a DEPENDENCY on the container
+        // VARIABLE, so a container with no variable — a vector inside an enum payload
+        // is addressed by a field DbRef — left the dep list empty, and empty reads as
+        // "owns its store": the answer came back WRONG rather than unknown.  State the
+        // fact at the mint site instead, through the marker that already means
+        // "borrow, don't allocate", so every consumer reads it rather than inferring
+        // it from deps (or, as #660 had to, from the `_elm` name).  The dep below is
+        // still recorded where a container variable exists — it names the borrow
+        // SOURCE, which the marker does not.
+        self.vars.mark_inline_ref(elm);
         if vec != u16::MAX {
             self.vars.depend(elm, vec);
         }

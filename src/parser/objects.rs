@@ -2433,7 +2433,21 @@ impl Parser {
             let var_tp = self.vars.tp(*v_nr).clone();
             let type_matches =
                 var_tp.is_unknown() || matches!(&var_tp, Type::Reference(d, _) if *d == td_nr);
-            if self.vars.is_independent(*v_nr) && type_matches {
+            // loft#660 — a vector-literal ELEMENT alias is never an in-place
+            // allocation target.  Its storage is the slot `OpNewRecord` already
+            // carved out of the container, so re-allocating it here (`OpDatabase`)
+            // hands the field initialisers a DIFFERENT record and leaves the slot
+            // holding whatever the surrounding writes put there: `OpFinishRecord`
+            // then commits the wrong record — the element vanishes (length 0), or
+            // its payload lands on an outer struct's field, or the read walks a
+            // bogus rec-id and SIGSEGVs.
+            //
+            // Ownership is the invariant, not the presence of a dep: an element
+            // whose container is a field DbRef (a vector inside an enum payload) has
+            // no container VARIABLE to depend on, so a dep-only test read it as
+            // owning.  `owns_store` is the one predicate that answers it, shared with
+            // `generation::dispatch` so parser and codegen cannot drift (loft#664).
+            if self.vars.owns_store(*v_nr) && type_matches {
                 // #330: remember the in-place target — a field initialiser
                 // that READS it must be hoisted ABOVE the OpDatabase re-init
                 // (see the hoist in parse_object_field and the splice after
@@ -2995,7 +3009,18 @@ impl Parser {
             // pass-1 mustn't emit errors pass-2 will naturally
             // resolve).  `set_field_no_check` still runs so codegen
             // stays consistent with pass-2.
-            if !self.first_pass || !exp_tp.is_unknown() {
+            //
+            // loft#661 — the same tolerance is owed to the FIELD side.  A field
+            // declared with a type defined LATER in the file holds a
+            // `Type::Unknown(stub)` for all of pass 1: `parse_field` stores the
+            // type on pass 1 only, and stubs are not bound to their real defs
+            // until `actual_types_deferred` runs at the END of that pass.  So a
+            // correct `S { f: t }` compared `ref(T)` against `unknown(N)` here,
+            // errored, and that pass-1 error ABORTED the run before pass 2 —
+            // which re-checks against the resolved type and passes.  Two
+            // mutually-referential types cannot dodge this by reordering:
+            // whichever is declared first names the other before it exists.
+            if !self.first_pass || !(exp_tp.is_unknown() || td.is_unknown()) {
                 // A FIELD STORE: a literal that fits the type but lands on the
                 // reserved null sentinel of a nullable narrow field is rejected
                 // here too (not just on `obj.f = …`), so `U8N { x: 255 }` doesn't

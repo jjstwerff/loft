@@ -739,6 +739,63 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32, scope_blind
 ///
 /// # Errors
 /// Propagates any I/O error from the writer.
+/// `LOFT_VAR_TABLE=<substring>` — print each matching function's variable table
+/// after `scopes::check`, with every type dep rendered as `name(index)`.
+///
+/// The IR dump names variables but never numbers them, so a body and a variable
+/// table that disagree read as one consistent story. loft#666 is that story: the
+/// operation read `e` while the binding's type dep printed `__retbuf`, and only the
+/// index says whether those are one variable or two. Printing the index beside the
+/// name — and resolving each dep to `name(index)` — makes a code/table desync
+/// visible instead of inferred, for this bug and the next one in its family.
+pub fn dump_var_tables(data: &Data, from: u32) {
+    let Some(want) = std::env::var_os("LOFT_VAR_TABLE") else {
+        return;
+    };
+    let want = want.to_string_lossy().to_string();
+    for d_nr in from..data.definitions() {
+        let def = data.def(d_nr);
+        if !def.name().contains(&want) || *def.code() == Value::Null {
+            continue;
+        }
+        let vars = def.variables();
+        eprintln!("[vartable] {} — returned {:?}", def.name(), def.returned());
+        for (idx, var) in vars.variables.iter().enumerate() {
+            let deps: Vec<String> = var
+                .type_def
+                .depend()
+                .iter()
+                .map(|d| format!("{}({d})", vars.name(*d)))
+                .collect();
+            let scope = if var.scope == u16::MAX {
+                "-".to_string()
+            } else {
+                var.scope.to_string()
+            };
+            let idx16 = u16::try_from(idx).unwrap_or(u16::MAX);
+            eprintln!(
+                "[vartable]   {idx:<3} {:<18} {:<14} scope={scope:<4} {}{}{}{}{}{}",
+                var.name,
+                short_type(&var.type_def),
+                if var.argument { "arg " } else { "" },
+                if var.defined { "def " } else { "" },
+                if var.skip_free { "skipfree " } else { "" },
+                if vars.is_inline_ref(idx16) {
+                    "inlineref "
+                } else {
+                    ""
+                },
+                if vars.owns_store(idx16) { "OWNS " } else { "" },
+                if deps.is_empty() {
+                    String::new()
+                } else {
+                    format!("deps=[{}]", deps.join(", "))
+                },
+            );
+        }
+    }
+}
+
 pub fn dump_variables(f: &mut dyn Write, function: &Function, data: &Data) -> Result<(), Error> {
     writeln!(
         f,

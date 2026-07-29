@@ -105,6 +105,24 @@ share-marker is deliberately NOT writable through this path.  ✅ uniform.
 4. **`parser/expressions.rs:1590`** — "Strip ALL deps" before a
    `stores.allocations[u16::MAX]` lookup can fire: a reader defending
    against the share-marker reaching an allocation path.
+5. **The TYPE HINT channel (`Parser::expected`)** — CLOSED 2026-07-29
+   (loft#666).  `parse_block_inner` installs the block's expected result
+   type as the enum-resolution context, and inside a function body that
+   is `Definition.returned` — DEF space.  `parse_vector` then rebuilt its
+   destination's type with `Deps::frame(parent_tp.depend())`, so an
+   attribute index became a caller frame var: in a recursive `-> E`
+   function attr 1 became var 1, the retired `__retbuf` placeholder, and
+   `scopes::check` null-inited and freed a slot nothing had written
+   (`#306` ×2, `#405`, then SIGSEGV).  Only recursion tripped it — a
+   non-recursive callee's return carries no attr dep.  A hint answers
+   "what SHAPE is expected here", never "what does this borrow", so the
+   three hint accessors (`enum_hint` / `vector_hint` / `read_target_type`)
+   now return `Type::without_deps()`.  This was NOT a space bridge anyone
+   had written on purpose, which is why it was missing from this list:
+   the deps rode along on a type copied for an unrelated reason.  Worth
+   re-reading the writer catalog with that shape in mind — a `Type` moved
+   between spaces for its SHAPE is a crossing site even when no dep code
+   is involved.
 
 ### Corpus probe (2026-06-11)
 

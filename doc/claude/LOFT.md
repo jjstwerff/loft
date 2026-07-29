@@ -1242,6 +1242,23 @@ match shape {
 }
 ```
 
+A destructured field is a **view of the subject**, not a copy: writing through it
+updates the value being matched, whatever the field's type.
+
+```
+match e {
+    Holder { items } => { items += "y"; }      // `e`'s payload is now "…y"
+    _ => { }
+}
+```
+
+This holds for a `text` payload as well as a heap one (loft#673) and through nested
+patterns (`Wrap { inner: Holder { items } }`).  A whole-value BIND is the other rule and
+still copies — `b = e.items; b += "y"` leaves `e` alone (C86); the difference is that a
+pattern binding is not a bind, and you never wrote the copy.  A subject that is a
+temporary (`match make_e() { … }`) has nothing to write back to, so a write there
+updates only the arm's own view.
+
 **Scalar match:** the subject is an integer, text, float, boolean, or character. Arms
 are literal values, ranges, `null`, or `_`:
 

@@ -1683,6 +1683,34 @@ impl Type {
         matches!(self, Type::Unknown(_)) || matches!(self, Type::Reference(0, _))
     }
 
+    /// The same type with every dep list emptied — an OWNED reading of the shape.
+    ///
+    /// For a type used as a HINT (what shape is expected here?) rather than as a
+    /// place. A hint is copied out of `Definition.returned` or an attribute typedef,
+    /// so its deps are ATTRIBUTE indices; any caller that reads them as caller frame
+    /// variables silently borrows from an unrelated local (loft#666). The shape is
+    /// the only part of a hint that means anything, so this keeps exactly that.
+    #[must_use]
+    pub fn without_deps(&self) -> Type {
+        match self {
+            Type::Text(_) => Type::Text(Deps::none()),
+            Type::Reference(t, _) => Type::Reference(*t, Deps::none()),
+            Type::Enum(t, is_ref, _) => Type::Enum(*t, *is_ref, Deps::none()),
+            Type::Index(t, keys, _) => Type::Index(*t, keys.clone(), Deps::none()),
+            Type::Radix(t, keys, _) => Type::Radix(*t, keys.clone(), Deps::none()),
+            Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), Deps::none()),
+            Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), Deps::none()),
+            Type::Vector(t, _) => Type::Vector(Box::new(t.without_deps()), Deps::none()),
+            Type::Function(params, ret, _) => {
+                Type::Function(params.clone(), ret.clone(), Deps::none())
+            }
+            Type::RefVar(tp) => Type::RefVar(Box::new(tp.without_deps())),
+            Type::Optional(tp) => Type::optional(tp.without_deps()),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(Type::without_deps).collect()),
+            _ => self.clone(),
+        }
+    }
+
     /**
     Return the same type but with an additional variable in the dependency list.
     # Panics

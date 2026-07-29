@@ -2211,6 +2211,9 @@ pub fn check(data: &mut Data) {
     // `get_free_vars` has inserted the frees into `def.code` above. Self-gates on
     // `LOFT_OWN_ORACLE=check-dev`; observer only (SI-1), a no-op on the default `check` path.
     crate::ownership_cfg::oracle_free_checks(data);
+    // `LOFT_VAR_TABLE=<fn substring>` — the variable table beside the IR dump, with
+    // each type dep resolved to `name(index)`.  Observer only; a no-op when unset.
+    crate::variables::dump_var_tables(data, 0);
 }
 
 /// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a

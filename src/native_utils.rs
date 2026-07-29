@@ -821,6 +821,42 @@ pub(crate) fn default_artifact_path(script_path: &str, ext: &str) -> std::path::
 /// only path that errors is one where it successfully read import module
 /// names and found one that is not `loft_gl`/`loft_io`.
 pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>> {
+    let Some(imports) = html_wasm_imports(wasm) else {
+        return Ok(());
+    };
+    // loft's own host imports (`loft_io` / `loft_gl` / @PLN117's `loft_thread`) AND
+    // library-bridge host imports (e.g. the crypto bridge's `loft_crypto.random_fill`)
+    // all use a `loft_` prefix.  A wasm-bindgen stomp instead imports `__wbindgen_*`,
+    // so a non-`loft_` module is the red flag this guards.  The one exception is the
+    // shared MEMORY a threaded build imports as `env.memory` (kind 2) — still no
+    // function may come from `env`.
+    let bad: std::collections::BTreeSet<String> = imports
+        .iter()
+        .filter(|(m, _, kind)| !(m.starts_with("loft_") || (m == "env" && *kind == 2)))
+        .map(|(m, _, _)| m.clone())
+        .collect();
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        Err(bad.into_iter().collect())
+    }
+}
+
+/// Every `(module, field, descriptor-kind)` a wasm imports, or `None` if it cannot be
+/// walked (bad magic, truncated section, unknown descriptor kind).
+///
+/// The ONE import-section walk.  Three callers read it — the `--html` bundle guard
+/// ([`html_wasm_import_modules_ok`]), the page-shell chooser
+/// ([`html_wasm_import_modules`]), and the host-surface check
+/// ([`missing_host_imports`]) — and they used to carry a copy each of the LEB/name/
+/// limits decoding.
+///
+/// Deliberately conservative: on any shape it does not understand it returns `None`
+/// rather than risk a false verdict on a valid bundle.  Callers treat `None` as "no
+/// opinion", never as "nothing imported".
+pub(crate) fn html_wasm_imports(
+    wasm: &[u8],
+) -> Option<std::collections::BTreeSet<(String, String, u8)>> {
     fn read_uleb(b: &[u8], p: &mut usize) -> Option<u64> {
         let mut result: u64 = 0;
         let mut shift = 0u32;
@@ -852,85 +888,95 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
         }
         Some(())
     }
-    // Header: magic "\0asm" + version.  Malformed → don't block (the browser
-    // would surface a genuinely corrupt module); this parser only judges the
-    // import modules of a wasm it can walk.
+    // Header: magic "\0asm" + version.
     if wasm.len() < 8 || &wasm[0..4] != b"\0asm" {
-        return Ok(());
+        return None;
     }
     let mut p = 8;
-    let mut bad: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut out = std::collections::BTreeSet::new();
     while p < wasm.len() {
-        let Some(id) = wasm.get(p).copied() else {
-            break;
-        };
+        let id = *wasm.get(p)?;
         p += 1;
-        let Some(size) = read_uleb(wasm, &mut p) else {
-            return Ok(());
-        };
-        let Ok(size) = usize::try_from(size) else {
-            return Ok(());
-        };
+        let size = usize::try_from(read_uleb(wasm, &mut p)?).ok()?;
         let section_start = p;
-        let section_end = match section_start.checked_add(size) {
-            Some(e) if e <= wasm.len() => e,
-            _ => return Ok(()),
-        };
+        let section_end = section_start
+            .checked_add(size)
+            .filter(|e| *e <= wasm.len())?;
         if id == 2 {
             // Import section: u32 count, then `count` (module, field, desc).
             let mut ip = section_start;
-            let Some(count) = read_uleb(wasm, &mut ip) else {
-                return Ok(());
-            };
+            let count = read_uleb(wasm, &mut ip)?;
             for _ in 0..count {
-                let Some(module) = read_name(wasm, &mut ip) else {
-                    return Ok(());
-                };
-                let Some(_field) = read_name(wasm, &mut ip) else {
-                    return Ok(());
-                };
-                let Some(kind) = wasm.get(ip).copied() else {
-                    return Ok(());
-                };
+                let module = read_name(wasm, &mut ip)?;
+                let field = read_name(wasm, &mut ip)?;
+                let kind = *wasm.get(ip)?;
                 ip += 1;
-                let ok = match kind {
-                    0 => read_uleb(wasm, &mut ip).map(|_| ()), // func: typeidx
+                match kind {
+                    0 => {
+                        read_uleb(wasm, &mut ip)?; // func: typeidx
+                    }
                     1 => {
-                        // table: reftype byte + limits
-                        ip += 1;
-                        skip_limits(wasm, &mut ip)
+                        ip += 1; // table: reftype byte, then limits
+                        skip_limits(wasm, &mut ip)?;
                     }
-                    2 => skip_limits(wasm, &mut ip), // mem: limits
-                    3 => {
-                        // global: valtype byte + mut byte
-                        ip += 2;
-                        Some(())
-                    }
-                    _ => None, // unknown kind — bail safe
-                };
-                if ok.is_none() {
-                    return Ok(());
+                    2 => skip_limits(wasm, &mut ip)?, // mem: limits
+                    3 => ip += 2,                     // global: valtype + mut byte
+                    _ => return None,                 // unknown kind — no opinion
                 }
-                let m = String::from_utf8_lossy(module).into_owned();
-                // loft's own host imports (`loft_io` / `loft_gl` / @PLN117's
-                // `loft_thread`) AND library-bridge host imports (e.g. the crypto
-                // bridge's `loft_crypto.random_fill`) all use a `loft_` prefix.  A
-                // wasm-bindgen stomp instead imports `__wbindgen_*`, so a non-`loft_`
-                // module is the red flag this guards.  The one exception is the
-                // shared MEMORY a threaded build imports as `env.memory` (kind 2) —
-                // still no function may come from `env`.
-                if !(m.starts_with("loft_") || (m == "env" && kind == 2)) {
-                    bad.insert(m);
-                }
+                out.insert((
+                    String::from_utf8_lossy(module).into_owned(),
+                    String::from_utf8_lossy(field).into_owned(),
+                    kind,
+                ));
             }
         }
         p = section_end;
     }
-    if bad.is_empty() {
-        Ok(())
-    } else {
-        Err(bad.into_iter().collect())
-    }
+    Some(out)
+}
+
+/// Host-import names the `--html` page will NOT provide, as `module.field` strings.
+///
+/// The browser shim implements a SUBSET of `lib/graphics`' native surface — reasonably,
+/// since a canvas cannot do everything a desktop window can.  The defect was that the
+/// boundary was invisible until the page loaded, and crossing it killed the WHOLE page:
+/// `WebAssembly.instantiate` fails with `LinkError: Import #7 "loft_gl"
+/// "loft_gl_window_width": function import requires a callable`, so there is no canvas,
+/// no output, not even a `println` — and nothing names the loft call responsible
+/// (loft#668).
+///
+/// Both sides are known at build time — the program's imports are in the wasm, and the
+/// shim is a fixed file compiled into this binary — so the answer is decidable before the
+/// page is ever written.
+///
+/// `provided_js` is the shim source; a host function is provided iff it appears as an
+/// object METHOD (`name(` at the start of a line's content) or a property (`name:`).
+/// Reading the shim rather than a hand-kept list is deliberate: a second list would drift
+/// from the shim exactly the way `loft install`'s whitelist drifted from `loft package`.
+/// Only FUNCTION imports (kind 0) are judged — a threaded build's `env.memory` is
+/// supplied by the loader, not the shim.
+pub(crate) fn missing_host_imports(wasm: &[u8], provided_js: &str) -> Vec<String> {
+    let Some(imports) = html_wasm_imports(wasm) else {
+        return Vec::new();
+    };
+    let defined = |name: &str| {
+        provided_js.match_indices(name).any(|(i, _)| {
+            match provided_js[i + name.len()..].chars().next() {
+                // `name(...) {` — a method shorthand; `name:` — a property.
+                Some('(' | ':') => !provided_js[..i]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_'),
+                _ => false,
+            }
+        })
+    };
+    imports
+        .iter()
+        .filter(|(m, _, kind)| *kind == 0 && m.starts_with("loft_"))
+        .filter(|(_, field, _)| !defined(field))
+        .map(|(m, field, _)| format!("{m}.{field}"))
+        .collect()
 }
 
 /// Return the distinct import-module names of a `loft --html` wasm, or `None`
@@ -942,79 +988,14 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
 /// module means the program opted into something bigger — `loft_gl` for
 /// graphics/audio, or a `loft_<lib>` library bridge — which needs the full
 /// engine page. On `None` the caller falls back to the full page, the shell
-/// that satisfies every import. Same import-section walk as
-/// [`html_wasm_import_modules_ok`], collecting names instead of judging them.
+/// that satisfies every import.
 pub(crate) fn html_wasm_import_modules(wasm: &[u8]) -> Option<std::collections::BTreeSet<String>> {
-    fn read_uleb(b: &[u8], p: &mut usize) -> Option<u64> {
-        let mut result: u64 = 0;
-        let mut shift = 0u32;
-        loop {
-            let byte = *b.get(*p)?;
-            *p += 1;
-            result |= u64::from(byte & 0x7f) << shift;
-            if byte & 0x80 == 0 {
-                return Some(result);
-            }
-            shift += 7;
-            if shift >= 64 {
-                return None;
-            }
-        }
-    }
-    fn read_name<'a>(b: &'a [u8], p: &mut usize) -> Option<&'a [u8]> {
-        let len = usize::try_from(read_uleb(b, p)?).ok()?;
-        let s = b.get(*p..p.checked_add(len)?)?;
-        *p += len;
-        Some(s)
-    }
-    fn skip_limits(b: &[u8], p: &mut usize) -> Option<()> {
-        let flag = *b.get(*p)?;
-        *p += 1;
-        read_uleb(b, p)?; // min
-        if flag & 1 == 1 {
-            read_uleb(b, p)?; // max
-        }
-        Some(())
-    }
-    if wasm.len() < 8 || &wasm[0..4] != b"\0asm" {
-        return None;
-    }
-    let mut p = 8;
-    let mut modules = std::collections::BTreeSet::new();
-    while p < wasm.len() {
-        let id = *wasm.get(p)?;
-        p += 1;
-        let size = usize::try_from(read_uleb(wasm, &mut p)?).ok()?;
-        let section_start = p;
-        let section_end = section_start
-            .checked_add(size)
-            .filter(|e| *e <= wasm.len())?;
-        if id == 2 {
-            let mut ip = section_start;
-            let count = read_uleb(wasm, &mut ip)?;
-            for _ in 0..count {
-                let module = read_name(wasm, &mut ip)?;
-                let _field = read_name(wasm, &mut ip)?;
-                let kind = *wasm.get(ip)?;
-                ip += 1;
-                match kind {
-                    0 => {
-                        read_uleb(wasm, &mut ip)?; // func: typeidx
-                    }
-                    1 => {
-                        ip += 1; // table: reftype byte
-                        skip_limits(wasm, &mut ip)?;
-                    }
-                    2 => skip_limits(wasm, &mut ip)?, // mem: limits
-                    3 => ip += 2,                     // global: valtype + mut bytes
-                    _ => return None,                 // unknown kind — bail safe
-                }
-                modules.insert(String::from_utf8_lossy(module).into_owned());
-            }
-        }
-        p = section_end;
-    }
-    Some(modules)
+    Some(
+        html_wasm_imports(wasm)?
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect(),
+    )
 }
 
 pub(crate) fn project_dir() -> String {
@@ -1720,6 +1701,24 @@ mod p350_html_wasm_import_check {
 
     /// Build a minimal valid wasm (header + one import section) whose single
     /// import has the given module name and is a function import (kind 0).
+    /// A minimal wasm importing exactly `module.field` as a function (kind 0).
+    fn wasm_with_import(module: &str, field: &str) -> Vec<u8> {
+        let mut entry = Vec::new();
+        entry.push(u8::try_from(module.len()).expect("short module"));
+        entry.extend_from_slice(module.as_bytes());
+        entry.push(u8::try_from(field.len()).expect("short field"));
+        entry.extend_from_slice(field.as_bytes());
+        entry.push(0); // kind: func
+        entry.push(0); // typeidx
+        let mut body = vec![1u8]; // one import
+        body.extend_from_slice(&entry);
+        let mut wasm = b"\0asm\x01\x00\x00\x00".to_vec();
+        wasm.push(2); // import section
+        wasm.push(u8::try_from(body.len()).expect("small section"));
+        wasm.extend_from_slice(&body);
+        wasm
+    }
+
     fn wasm_with_import_module(module: &str) -> Vec<u8> {
         // import entry: <ulen module><module><ulen field><field><kind=0><typeidx=0>
         let field = "f";
@@ -1770,6 +1769,61 @@ mod p350_html_wasm_import_check {
         assert!(html_wasm_import_modules_ok(b"not a wasm").is_ok());
         assert!(html_wasm_import_modules_ok(&[]).is_ok());
         assert!(html_wasm_import_modules_ok(b"\0asm\x01\x00\x00\x00\x02\xff").is_ok());
+    }
+
+    /// loft#668 — a host function the page will not provide is decidable at BUILD time,
+    /// so it must be reported by name instead of becoming a `LinkError` at instantiate
+    /// that names an import index and kills the whole page.
+    #[test]
+    fn missing_host_import_is_named() {
+        let wasm = wasm_with_import("loft_gl", "loft_gl_window_width");
+        // Absent from the shim → reported, module-qualified.
+        assert_eq!(
+            missing_host_imports(&wasm, "loft_gl_use_shader(p) {}"),
+            vec!["loft_gl.loft_gl_window_width".to_string()],
+        );
+        // Present as a method, and as a property — both are definitions.
+        assert!(missing_host_imports(&wasm, "loft_gl_window_width() { return 1; }").is_empty());
+        assert!(missing_host_imports(&wasm, "loft_gl_window_width: () => 1,").is_empty());
+        // A LONGER name that merely CONTAINS the import must not count as providing it —
+        // otherwise `loft_gl_window_width_ex` would mask the real gap.
+        assert_eq!(
+            missing_host_imports(&wasm, "x_loft_gl_window_width() {}").len(),
+            1,
+            "a longer identifier ending in the name does not define it"
+        );
+        // The shipped shim really does provide it (this is what the fix added).
+        assert!(
+            missing_host_imports(&wasm, include_str!("../doc/loft-gl-wasm.js")).is_empty(),
+            "doc/loft-gl-wasm.js must define loft_gl_window_width"
+        );
+        // Unwalkable input yields no opinion, never a false build failure.
+        assert!(missing_host_imports(b"not a wasm", "").is_empty());
+    }
+
+    /// loft#669 — every handle table in the browser shim hands out 1-BASED handles, so
+    /// `0` means failure and nothing else, as `lib/graphics` documents and as the native
+    /// backend behaves.  Pinned by reading the shim: a table that goes back to returning
+    /// its array index would make the FIRST shader/VAO/texture on a page indistinguishable
+    /// from a failure.
+    #[test]
+    fn browser_gl_handles_are_one_based() {
+        let js = include_str!("../doc/loft-gl-wasm.js");
+        assert!(
+            !js.contains("programs.length; programs.push")
+                && !js.contains("vaos.length; vaos.push")
+                && !js.contains("textures.length; textures.push"),
+            "a handle table returned its 0-based array index"
+        );
+        // `hold` returns Array.prototype.push's value — the new LENGTH, i.e. index + 1.
+        assert!(
+            js.contains("const hold = (arr, obj) => arr.push(obj)"),
+            "handles must be minted through `hold` (1-based)"
+        );
+        assert!(
+            js.contains("const slot = (arr, h) => (h > 0 && h <= arr.length ? arr[h - 1] : null)"),
+            "handles must be resolved through `slot` (rejects 0)"
+        );
     }
 }
 

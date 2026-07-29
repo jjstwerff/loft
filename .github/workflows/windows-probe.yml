@@ -44,6 +44,15 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: URI/path abstraction unit tests (Windows cfg)
         run: cargo test --release --lib uri_path_tests -- --nocapture
+
+      # Path SEPARATORS in user-facing output, the same class as the URI work above
+      # and unverifiable anywhere else: on Linux a native-separator bug and a correct
+      # `/` are indistinguishable, so only this leg can tell them apart.  Added after
+      # the coverage report printed `src\pos.loft` on Windows against a contract that
+      # says `src/pos.loft`, reddening main's Windows leg for a day with no PR able to
+      # catch it (the real Windows leg runs on push-to-main and nightly only).
+      - name: Report paths read the same on every platform
+        run: cargo test --release --test function_coverage -- --nocapture
       - name: LSP transport (was hanging on Windows) — must reply, not time out
         shell: bash
         run: |

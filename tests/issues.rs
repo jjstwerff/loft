@@ -17026,3 +17026,88 @@ fn compat_full_window_budget_overrun_fails_the_release() {
         "#step7: an overrun must name the remedy:\n{over_txt}"
     );
 }
+
+// loft#664 — element-slot ownership must be REPRESENTABLE when the container is a
+// field DbRef.
+//
+// A vector-literal element never owns a store: its record is the slot the enclosing
+// `OpNewRecord` carved out of the container.  That fact was encoded only as a
+// DEPENDENCY on the container VARIABLE, so a vector living inside an enum payload —
+// addressed by a field DbRef, with no variable to depend on — produced an EMPTY dep
+// list, and empty reads as "owns its store".  The answer came back wrong rather than
+// unknown, and every consumer of the predicate inherited it (loft#660 surfaced through
+// `parse_object`, which allocated a fresh record over the slot: a silent corruption
+// and a SIGSEGV at depth 2, patched there by matching the `_elm` NAME prefix).
+//
+// This asserts the FACT, not a value, because the value is already right — #660's name
+// proxy covered the one consumer that acted on it, so a behaviour test would pass with
+// or without the fix and prove nothing.  What must hold is that the element reports
+// "does not own a store" WHILE its dep list is empty: that combination is exactly what
+// only a marker at the mint site can express, and it is what retires the name proxy.
+#[test]
+fn issue_664_element_in_enum_payload_is_not_owning() {
+    const SRC: &str = r#"
+struct L664 { n: integer }
+enum B664 { NilB, Items { items: vector<L664> } }
+enum E664 { NilE, Val { v: B664 } }
+
+fn build664() -> E664 {
+  return Val { v: Items { items: [ L664 { n: 7 }, L664 { n: 9 } ] } };
+}
+"#;
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).expect("stdlib");
+    p.parse_str(SRC, "<issue-664>", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#664 source must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+
+    let d_nr = p.data.def_nr("n_build664");
+    assert_ne!(d_nr, u32::MAX, "#664: build664 must be defined");
+    let vars = p.data.def(d_nr).variables();
+
+    let mut checked = 0;
+    for v in 0..vars.var_count() {
+        let v = v as u16;
+        if !vars.name(v).starts_with("_elm") {
+            continue;
+        }
+        checked += 1;
+        // The dep list is the part that CANNOT carry the fact here: the container is a
+        // field DbRef, so there is no variable to name.  Left as the only encoding, an
+        // empty list is read as ownership.
+        assert!(
+            vars.tp(v).depend().is_empty(),
+            "#664: this element's container is a field DbRef, so it has no container \
+             variable to depend on — the probe is aimed at the wrong construction if \
+             '{}' has deps {:?}",
+            vars.name(v),
+            vars.tp(v).depend()
+        );
+        // The fact is now STATED at the mint site rather than inferred, so it holds
+        // whatever the container turns out to be.  Without the marker this element
+        // reports non-owning only because the field-initialiser path happens to also
+        // set `skip_free` — a coincidence of two conditions, not one fact, and the
+        // reason #660 had to fall back on the `_elm` name.
+        assert!(
+            vars.is_inline_ref(v),
+            "#664: element '{}' must be marked non-owning where it is MINTED, not \
+             wherever a consumer can infer it",
+            vars.name(v)
+        );
+        assert!(
+            !vars.owns_store(v),
+            "#664: element '{}' has an empty dep list AND must still report that it \
+             does not own a store — that is the whole gap, and inferring ownership \
+             from deps alone gets it wrong",
+            vars.name(v)
+        );
+    }
+    assert!(
+        checked > 0,
+        "#664: the probe found no element variable — it proves nothing"
+    );
+}

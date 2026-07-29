@@ -185,6 +185,10 @@ they merge-conflict across files and have destroyed sessions. **Always commit be
 that changes the working tree.** Compare without switching: `git diff main -- <file>`,
 `git show origin/main:<file>`.
 
+Run **`make hooks`** once per clone: the `commit-msg` hook reports an issue mentioned without a
+`Fixes #N` trailer (that trailer is what the push workflow labels `fixed-pending-merge` off — see
+the bug-filing policy above). It never blocks.
+
 ---
 
 ## Documentation index
@@ -249,7 +253,12 @@ publishing is the **loft-ship skill** (touch-gated signing). REPL: [REPL.md](doc
 Set before `cargo test` (controls `tests/dumps/*.txt`; also works with `cargo run` → stderr):
 `full` (default: IR+bytecode+exec+slots) · `static` (IR+bytecode only) · `minimal` (exec trace) ·
 `crash_tail:N` (last N lines, flushed on panic) · `fn:<name>` · `variables` · `ref_debug` ·
-`bridging` · `all_fns`. DbRef dumps tune via `LOFT_DUMP_DEPTH` (2), `LOFT_DUMP_ELEMENTS` (8).
+`bridging` · `all_fns` · `type_timeline:<var>` (every write to a variable's type, naming the
+SOURCE LINE; `LOFT_TIMELINE_BT=1` adds the stack). DbRef dumps tune via `LOFT_DUMP_DEPTH` (2),
+`LOFT_DUMP_ELEMENTS` (8). Separately, **`LOFT_VAR_TABLE=<fn>`** prints that function's
+variable table with every type dep resolved to `name(index)` plus its ownership flags —
+reach for it when a borrow points somewhere impossible, because the IR dump names variables
+without numbering them and a code/table desync then reads as one consistent story (loft#666).
 Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
 
 **Two diagnostic tiers.** `warning` GATES a library's CI (`LOFT_DENY_WARNINGS=1`);

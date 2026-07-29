@@ -38,7 +38,7 @@ pub use intervals::compute_intervals;
 // it directly via `assign_slots_v2` + `apply_v2_result`.
 #[allow(unused_imports)]
 pub use slots_v2::{AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2};
-pub use validate::dump_variables;
+pub use validate::{dump_var_tables, dump_variables};
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
 // shadow mode can invoke it from any build profile (integration
 // tests compile against loft without debug_assertions).  The
@@ -225,6 +225,22 @@ pub struct Function {
     /// that closes the #433-residual (see `parse_assign_op`).
     annotated: HashSet<u16>,
     work_text: u16,
+    /// Separate counter for the caller-allocated `&text` out-param buffers
+    /// `caller_text_buf()` mints — the text twin of `work_vdb` below, and for
+    /// the same reason (loft#662).  A call only needs one once the callee's
+    /// `&text` ABI exists, which for a self-/forward-recursive callee is not
+    /// until pass 1 has promoted it; sharing `work_text` would shift the
+    /// `__work_N` names relative to pass 1 and break `text_return`'s name-based
+    /// attr matching.
+    work_ctext: u16,
+    /// loft#665 piece 2 — the PASS-2-ONLY `__work` sequence.  A mint site that can
+    /// only fire on pass 2 must not draw from `work_text`: doing so shifts every
+    /// later `__work_N` relative to pass 1, and because the variable tables persist
+    /// BY NAME, pass 2's buffers then re-find pass 1's variables under the wrong
+    /// roles (loft#662).  Pass-availability is a STATIC property of each mint site
+    /// (measured: 19 both-pass sites, 15 pass-2-only, none mixed), so the split is
+    /// decidable at the call site.
+    work_text_p2: u16,
     work_ref: u16,
     // Separate counter for vector-db work-refs created by `vector_db()`.
     // `vector_db` only runs on the second pass (first_pass guard), so it cannot
@@ -341,6 +357,8 @@ impl Function {
             current_loop: u16::MAX,
             loops: Vec::new(),
             work_text: 0,
+            work_ctext: 0,
+            work_text_p2: 0,
             work_ref: 0,
             work_vdb: 0,
             variables: Vec::new(),
@@ -484,6 +502,8 @@ impl Function {
             v.uses = 0;
         }
         self.work_text = 0;
+        self.work_ctext = 0;
+        self.work_text_p2 = 0;
         self.work_ref = 0;
         self.work_vdb = 0;
         self.work_texts.clear();
@@ -523,6 +543,8 @@ impl Function {
             annotated: other.annotated.clone(),
             arm_consumed: other.arm_consumed.clone(),
             work_text: 0,
+            work_ctext: 0,
+            work_text_p2: 0,
             work_ref: 0,
             work_vdb: 0,
             work_texts: BTreeSet::new(),
@@ -987,6 +1009,7 @@ impl Function {
         }
     }
 
+    #[track_caller]
     pub fn depend(&mut self, var_nr: u16, on: u16) {
         if on != u16::MAX {
             let new_tp = self.variables[var_nr as usize].type_def.depending(on);
@@ -1366,6 +1389,33 @@ impl Function {
             self.variables[var_nr as usize].type_def = type_def.clone();
             return self.is_new(var_nr);
         }
+        // loft#663 — an integer-element vector's element WIDTH is layout-bearing: it
+        // IS the store's stride.  `is_equal` deliberately collapses every integer
+        // width to one type, so the equality early-return below keeps whichever
+        // element type the variable was given FIRST.  When pass 1 could not resolve
+        // the callee — a FORWARD-declared or recursive function — that first type
+        // carries no declared width; pass 2 resolves the real one, and the collapse
+        // then discards it.  The append writes 8-byte elements into a 1-byte-strided
+        // store and they read back as 0.  Adopt a declared width over none; the
+        // reverse (declared → undeclared) is left to the collapse, so an annotated
+        // variable is never widened out from under its declaration.
+        let adopt_elem_width = matches!(
+            (var_tp, type_def),
+            (Type::Vector(cur, _), Type::Vector(new, _))
+                if matches!(
+                    (&**cur, &**new),
+                    (Type::Integer(c), Type::Integer(n))
+                        if c.forced_size.is_none() && n.forced_size.is_some()
+                )
+        );
+        if adopt_elem_width {
+            self.trace_type_change(var_nr, type_def, "change_var_type(#663 element width)");
+            self.variables[var_nr as usize].type_def = type_def.clone();
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
         // @P376 — assigning the `Never` poison (an errored struct construction,
         // pass 2) to an as-yet-`Unknown` variable must OVERWRITE it to `Never`,
         // NOT take the early-return below.  `is_equal(Unknown, Never)` is true,
@@ -1374,6 +1424,7 @@ impl Function {
         // variable" → format-string fatal).  Falling through re-types it to
         // `Never`, which field access / format interpolation / the unknown-type
         // sweep all skip — leaving the single `unknown type '…'` diagnostic.
+        let var_tp = &self.variables[var_nr as usize].type_def;
         let never_into_unknown = matches!(type_def, Type::Never) && var_tp.is_unknown();
         if !never_into_unknown && (type_def.is_unknown() || var_tp.is_equal(type_def)) {
             for on in type_def.depend() {
@@ -1777,6 +1828,18 @@ impl Function {
             if var.name.starts_with('_') || var.name.contains('#') {
                 continue;
             }
+            // A variable still typed `Unknown` after pass 2 is a pass-1 LEFTOVER, not
+            // something the user wrote and failed to read (loft#661).  Pass 1 parses a
+            // `match` whose subject type is not resolvable yet — e.g. a field whose type
+            // is declared later in the file — and binds each arm pattern to a plain
+            // variable; pass 2, with the enum resolved, binds the arm to its `_mv_<field>`
+            // variable instead and reads THAT.  Variables persist across passes, so the
+            // abandoned pass-1 binding survives with `uses == 0` and warned about a name
+            // the program does read.  Every variable pass 2 actually lowered has a
+            // resolved type, so this cannot silence a genuine unused local.
+            if matches!(var.type_def, Type::Unknown(_)) {
+                continue;
+            }
             if var.uses == 0 && !var.captured && data.def_nr(&var.name) == u32::MAX {
                 lexer.to(var.source);
                 diagnostic!(
@@ -1854,23 +1917,122 @@ impl Function {
         }
     }
 
-    /// Advance the pooling counter past every `__work_N` already in `names`, so the next
-    /// `work_text()` mints a genuinely-fresh buffer instead of aliasing a live one.  Needed
-    /// when a def's work-texts live in `names` but the counter is out of sync — e.g. a
-    /// post-parse retbuf injection into an already-parsed caller (loft#568 @PLN104 Phase B),
-    /// where re-using `__work_1` would collide with a live format-arg buffer in the SAME call.
-    pub fn sync_work_text_counter(&mut self) {
+    /// Advance EVERY pooled work-name counter past the names already in `names`, so the
+    /// next mint yields a genuinely-fresh variable instead of aliasing a live one.
+    ///
+    /// A mint helper reuses the name it finds in `names`.  That pooling is deliberate
+    /// during a parse — it is what lets pass 2 re-find pass 1's buffer in the same role.
+    /// Re-entering an ALREADY-PARSED function is where the reuse turns into aliasing: the
+    /// counters were reset to 0 when the function was stored (`append`), so the first mint
+    /// hands back the buffer the parse already gave to something still live.
+    ///
+    /// Call this at every such re-entry.  @PLN104 Phase B (`patch_tret_callers`) is the
+    /// one today, and the buffer it aliased went to a callee AS ITS OWN ARGUMENT:
+    /// `wrap(s())` gave `s`'s result buffer to `wrap` to build its return in, so `wrap`
+    /// overwrote the bytes it was reading — `[hi]` came out `[[i]`, and `--native` dropped
+    /// the backing `String` while a `&str` still pointed into it, a null-pointer copy
+    /// (loft#671).
+    ///
+    /// **Every sequence belongs in this list.**  Syncing only `__work_N` is what left that
+    /// hole: the caller retbuf moved to its own `__work_cN` counter (loft#662) and silently
+    /// stopped being covered.  The shared `__work` stem self-disambiguates — `strip_prefix`
+    /// leaves `c1` / `p2_1`, which do not parse as a number.
+    pub fn sync_work_counters(&mut self) {
+        fn index(name: &str, prefix: &str) -> Option<u16> {
+            name.strip_prefix(prefix)?.parse::<u16>().ok()
+        }
+        let (mut text, mut ctext, mut p2, mut refs, mut vdb) = (
+            self.work_text,
+            self.work_ctext,
+            self.work_text_p2,
+            self.work_ref,
+            self.work_vdb,
+        );
         for name in self.names.keys() {
-            if let Some(rest) = name.strip_prefix("__work_")
-                && let Ok(k) = rest.parse::<u16>()
-            {
-                self.work_text = self.work_text.max(k);
+            if let Some(k) = index(name, "__work_") {
+                text = text.max(k);
+            }
+            if let Some(k) = index(name, "__work_c") {
+                ctext = ctext.max(k);
+            }
+            if let Some(k) = index(name, "__work_p2_") {
+                p2 = p2.max(k);
+            }
+            if let Some(k) = index(name, "__ref_") {
+                refs = refs.max(k);
+            }
+            if let Some(k) = index(name, "__vdb_") {
+                vdb = vdb.max(k);
             }
         }
+        self.work_text = text;
+        self.work_ctext = ctext;
+        self.work_text_p2 = p2;
+        self.work_ref = refs;
+        self.work_vdb = vdb;
     }
+    #[track_caller]
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
         let n = format!("__work_{}", self.work_text + 1);
         self.work_text += 1;
+        let v = if let Some(nr) = self.names.get(&n) {
+            *nr
+        } else {
+            self.add_variable(&n, &Type::Text(Deps::none()), lexer)
+        };
+        self.work_texts.insert(v);
+        v
+    }
+
+    /// The pass-2-only twin of [`Function::work_text`] — same buffer, own sequence.
+    ///
+    /// Use it at any mint site that cannot fire on pass 1 (typically one gated
+    /// `!first_pass`, or one that needs a callee signature pass 1 has not promoted
+    /// yet).  Such a site drawing from `work_text` shifts every later `__work_N`
+    /// relative to pass 1; since the variable tables persist BY NAME, pass 2 then
+    /// re-finds pass 1's variables under the wrong roles — loft#662.  Drawing from
+    /// its own sequence, a pass-2-only mint cannot perturb anyone else's numbering,
+    /// and its own names simply have no pass-1 counterpart to collide with.
+    ///
+    /// The name keeps the `__work` prefix so the free/scope/coroutine/introspect
+    /// passes that key on it are unaffected; only `sync_work_text_counter`'s
+    /// `__work_<N>` parse skips it, as it does for `__work_c<N>`.
+    #[track_caller]
+    pub fn work_text_p2(&mut self, lexer: &mut Lexer) -> u16 {
+        let n = format!("__work_p2_{}", self.work_text_p2 + 1);
+        self.work_text_p2 += 1;
+        let v = if let Some(nr) = self.names.get(&n) {
+            *nr
+        } else {
+            self.add_variable(&n, &Type::Text(Deps::none()), lexer)
+        };
+        self.work_texts.insert(v);
+        v
+    }
+
+    /// A buffer the CALLER allocates for a callee's hidden `&text` out-param —
+    /// the text twin of `work_refs`' `__ref_N` retbuf for a vector/enum callee.
+    ///
+    /// It gets its own `__work_c<N>` counter rather than sharing `work_text`'s
+    /// `__work_<N>` because the two are minted on different schedules, and the
+    /// variable tables persist across passes BY NAME (loft#662).  A call to a
+    /// text-returning function only needs this buffer once the callee's `&text`
+    /// ABI exists — which for a SELF- or forward-recursive callee is not until
+    /// pass 1 has promoted it.  Sharing one counter therefore let a pass-2-only
+    /// mint shift every later `__work_N` by one, so pass 2's format buffers
+    /// re-found pass 1's variables under the wrong roles: the return buffer
+    /// landed on a fresh name (growing the signature — "Too few parameters") and
+    /// a plain local landed on the variable pass 1 had promoted to a `&text`
+    /// parameter.  Separate counters keep `__work_N` driven only by the body's
+    /// format sites, which ARE pass-stable.
+    ///
+    /// The name keeps the `__work` prefix: the free/scope/coroutine/introspect
+    /// passes that key on it treat this buffer identically, and only
+    /// `sync_work_text_counter`'s `__work_<N>` parse is deliberately skipped.
+    #[track_caller]
+    pub fn caller_text_buf(&mut self, lexer: &mut Lexer) -> u16 {
+        let n = format!("__work_c{}", self.work_ctext + 1);
+        self.work_ctext += 1;
         let v = if let Some(nr) = self.names.get(&n) {
             *nr
         } else {
@@ -1894,6 +2056,7 @@ impl Function {
         }
     }
 
+    #[track_caller]
     pub fn work_refs(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
         let n = format!("__ref_{}", self.work_ref + 1);
         self.work_ref += 1;
@@ -1912,19 +2075,13 @@ impl Function {
         v
     }
 
-    /// Like `work_refs` but uses a separate `__rref_N` counter/namespace.
-    /// Used by `add_defaults` for work-refs allocated for recursive self-calls
-    /// on the second pass.  This prevents the `__ref_N` counter from being
-    /// consumed by those recursive-call temporaries, so the outer function's
-    /// return-value work-ref continues to receive the same `__ref_N` name it
-    /// got on the first pass — allowing `ref_return` to find the name match
-    /// and reuse the existing attribute instead of adding a new one.
     /// Work-ref for `vector_db()` — uses a separate `__vdb_N` counter/namespace.
     /// `vector_db` only runs on the second pass (it is guarded by `!first_pass`),
     /// so it must NOT share the `work_ref` / `__ref_N` counter with `add_defaults`.
     /// Using a distinct counter prevents the name-shift that would cause
     /// `ref_return` to fail its name-based attr match and add a spurious attr.
     /// These variables are inserted into `work_refs` so they receive null-inits.
+    #[track_caller]
     pub fn work_vec_db(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
         let n = format!("__vdb_{}", self.work_vdb + 1);
         self.work_vdb += 1;
@@ -2005,6 +2162,34 @@ impl Function {
         self.variables[v as usize].name.starts_with('_')
     }
 
+    /// Does `v` own the store it points at — i.e. may a site allocate into its
+    /// slot and free it independently?
+    ///
+    /// ONE home for a fact three different derivations used to answer separately
+    /// (loft#664): an empty dep list, the `_elm` NAME prefix loft#660 had to match
+    /// on, and the structural "defined by `OpNewRecord`" scan.  Deps alone cannot
+    /// carry it — a dep names the borrow SOURCE, so a borrow with no source
+    /// VARIABLE (a vector inside an enum payload is addressed by a field DbRef)
+    /// came back with an empty list and read as OWNING, which is a wrong answer
+    /// rather than an unknown one.  So the two markers are read first and the deps
+    /// only decide what they do not cover:
+    ///
+    /// - `inline_ref` — "borrow, don't allocate", set at every producer of a
+    ///   non-owning slot (a vector-literal element, a lift temp, a rebind backing);
+    /// - `skip_free` — the free-time half of the same fact;
+    /// - otherwise a non-empty dep list means the value is a view of something
+    ///   else, and a lone SELF dep is the @P302 owned-keyed-local marker.
+    #[must_use]
+    pub fn owns_store(&self, v: u16) -> bool {
+        // `u16::MAX` reaches here from a file-scope construction with no destination
+        // slot; report "does not own" so the caller allocates fresh, as `is_independent`
+        // does for the same sentinel.
+        if v as usize >= self.variables.len() {
+            return false;
+        }
+        !self.is_inline_ref(v) && !self.is_skip_free(v) && self.is_independent(v)
+    }
+
     /// Record that fn_ref variable `fn_ref` has its closure stored in `clos`.
     pub fn set_closure_var_of(&mut self, fn_ref: u16, clos: u16) {
         self.closure_var_map.insert(fn_ref, clos);
@@ -2066,6 +2251,11 @@ impl Function {
     /// variable's name.  No-op fast path when the env var is unset
     /// or has a different value (one `env::var` read per call;
     /// type-mutations are rare).
+    /// `#[track_caller]` so the timeline names the SOURCE LINE that rewrote the type.
+    /// A dep list is overwritten, not merged (`Type::depending`), so "who wrote this
+    /// dep last" is the whole question when a borrow points at the wrong variable
+    /// (loft#666) — and the origin word alone ("depend") cannot answer it.
+    #[track_caller]
     fn trace_type_change(&self, var_nr: u16, new_tp: &Type, origin: &str) {
         let Some(target) = crate::log_config::type_timeline_target() else {
             return;
@@ -2078,14 +2268,23 @@ impl Function {
             return;
         }
         eprintln!(
-            "[type_timeline] {name} (v_nr={v_nr}) {old:?} -> {new:?}  origin={origin}",
+            "[type_timeline] {name} (v_nr={v_nr}) {old:?} -> {new:?}  origin={origin} at {site}",
             name = v.name,
             v_nr = var_nr,
             old = v.type_def,
             new = new_tp,
+            site = std::panic::Location::caller(),
         );
+        // `LOFT_TIMELINE_BT=1` adds the stack behind that line.  The immediate caller is
+        // often a shared helper (`change_var_type`'s adopt-deps branch rewrites a dep list
+        // on behalf of whoever assigned), and the question is always which PARSE site is
+        // behind it.
+        if std::env::var_os("LOFT_TIMELINE_BT").is_some() {
+            eprintln!("{}", std::backtrace::Backtrace::force_capture());
+        }
     }
 
+    #[track_caller]
     pub fn set_type(&mut self, var_nr: u16, tp: Type) {
         self.trace_type_change(var_nr, &tp, "set_type");
         self.variables[var_nr as usize].type_def = tp;

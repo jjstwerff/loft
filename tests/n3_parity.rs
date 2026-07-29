@@ -603,3 +603,83 @@ fn shared_bridge_nested_return_no_orphan_leak() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// loft#672 — a `boolean` library function whose body compares a field of a
+/// RECORD-RETURNING CALL must compile in the auto-cdylib.
+///
+/// `return node_at().kind == 0` lifts the call into a `__lift_N` temp, which makes the
+/// assignment's RHS an `Insert` (preamble + value).  That arm emitted the value raw and
+/// returned early, skipping the storage-form coercion every other RHS gets — so a
+/// `boolean` (stored as `u8`) was assigned a Rust `bool`: `error[E0308]: expected u8,
+/// found bool`, and the library became unconsumable from every `--native` binary.
+///
+/// Only the cdylib path shows it: a library's own `loft test --native` compiles the
+/// function INLINE and passes, so a green library suite never exercised this.  The test
+/// therefore runs all three modes — and asserts VALUES, since a cast bug that compiles
+/// could still invert a comparison.
+///
+/// `narrow_widen` covers the other half of the same coercion (a narrow int widening to
+/// the `integer` slot), which the early return dropped identically.
+#[test]
+fn boolean_compare_of_lifted_ref_field_builds_in_cdylib_672() {
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_672_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let libdir = root.join("lib");
+    write_lib(
+        &libdir,
+        "liftlib",
+        None,
+        "pub struct Node { kind: integer, flag: boolean, small: u8 }\n\
+         fn node_at() -> Node { return Node { kind: 7, flag: true, small: 200 }; }\n\
+         pub fn cmp_false() -> boolean { return node_at().kind == 0; }\n\
+         pub fn cmp_true() -> boolean { return node_at().kind == 7; }\n\
+         pub fn cmp_ne() -> boolean { return node_at().kind != 0; }\n\
+         pub fn cmp_lt() -> boolean { return node_at().kind < 10; }\n\
+         pub fn bool_field() -> boolean { return node_at().flag; }\n\
+         pub fn negated() -> boolean { return !(node_at().kind == 0); }\n\
+         pub fn narrow_widen() -> integer { return node_at().small; }\n\
+         pub fn via_local() -> boolean { n = node_at(); return n.kind == 0; }\n",
+    );
+    let prog = root.join("main.loft");
+    std::fs::write(
+        &prog,
+        "use liftlib;\n\
+         fn main() {\n\
+         \x20   println(\"{cmp_false()} {cmp_true()} {cmp_ne()} {cmp_lt()}\");\n\
+         \x20   println(\"{bool_field()} {negated()} {narrow_widen()} {via_local()}\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    // Hand-computed: kind=7, flag=true, small=200.
+    let want = "false true true true\ntrue true 200 false\n";
+    for (mode, args) in [
+        ("interp", vec!["--interpret"]),
+        ("mixed", vec![]),
+        ("native", vec!["--native"]),
+    ] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+        cmd.arg("--lib").arg(&libdir).arg(&prog);
+        for a in &args {
+            cmd.arg(a);
+        }
+        let out = cmd
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("spawn loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "[{mode}] the library must build — E0308 here is the #672 dropped cast.\
+             \nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.contains(want),
+            "[{mode}] wrong values\n  want: {want:?}\n  got:  {stdout:?}\n{stderr}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}

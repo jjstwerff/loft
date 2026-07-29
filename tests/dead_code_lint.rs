@@ -325,3 +325,73 @@ fn s1_classifier_isolates_w_copy_dead_store() {
         "N-ref-alias al: same (0,1) signal as a value-struct copy, filtered by ownership"
     );
 }
+
+// ── loft#670: the alias false POSITIVE and the element-assign false NEGATIVE ─────────────────
+
+/// Both edges a consumer walked into, on both backends (`tests/data/dead_store_670.loft`).
+///
+/// **False negative** — `w[i] = Row{…}` lowers to `OpCopyRecord(obj, OpGetVector(w,…))`, whose
+/// destination is arg **1**, so the first-arg write rule never saw it and the lost write was
+/// silent.  A BARE-var destination stays uncounted: that is the definitional value-struct fill,
+/// not a mutation.
+///
+/// **False positive** — `w = &v` on a local vector mints no buffer, so `w` takes `v`'s own
+/// backing and resolves to a synth base like a private copy does.  The lint warned on it,
+/// recommending the `&` the author had already written; warnings gate a library's CI.  Sharing
+/// that backing with a live sibling is what separates the two.
+///
+/// The values are asserted alongside the diagnostics: a lint that warns for the wrong reason
+/// passes a warning-only check.
+fn assert_670(backend: &str) {
+    let (stdout, diag, code) = run_env(backend, &workspace("tests/data/dead_store_670.loft"), &[]);
+    assert_eq!(
+        code,
+        Some(0),
+        "[{backend}] fixture did not exit 0\n{stdout}\n---\n{diag}"
+    );
+
+    // Exactly the two private copies warn.
+    let ds = dead_stores(&diag);
+    assert_eq!(
+        ds, 2,
+        "[{backend}] want 2 dead stores (copy_elem_assign, copy_field_write), got {ds}\n{diag}"
+    );
+    for v in ["copy_elem_assign", "copy_field_write"] {
+        assert!(
+            diag.contains(&format!("'{v}' {DEAD_STORE_MSG}")),
+            "[{backend}] the dead store on `{v}` must fire\n{diag}"
+        );
+    }
+    // Every alias form stays silent — these are the write-through cures the message names.
+    for v in ["ref_local", "ref_field", "elem"] {
+        assert!(
+            !diag.contains(&format!("'{v}' {DEAD_STORE_MSG}")),
+            "[{backend}] `{v}` aliases its source — the write propagates, so it must NOT warn\n{diag}"
+        );
+    }
+
+    // The values behind the verdicts: the warned copies really do lose the write, and the
+    // silent aliases really do propagate it.
+    for want in [
+        "elem_assign=0",     // whole-element assign into a copy — discarded
+        "field_write=0",     // field write into a copy — discarded
+        "ref_local=7.25",    // `&` on a local vector — propagates
+        "ref_field=9.25",    // `&` on a field: 7.25 written back + 2 elements after the append
+        "element_view=7.25", // an element view writes into the vector it views
+    ] {
+        assert!(
+            stdout.contains(want),
+            "[{backend}] expected `{want}`\n{stdout}\n---\n{diag}"
+        );
+    }
+}
+
+#[test]
+fn alias_and_element_assign_670_interpret() {
+    assert_670("--interpret");
+}
+
+#[test]
+fn alias_and_element_assign_670_native() {
+    assert_670("--native");
+}

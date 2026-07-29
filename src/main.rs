@@ -41,6 +41,7 @@ mod android;
 mod native_utils;
 use loft::parser;
 use loft::platform;
+use loft::portable_path;
 use loft::scopes;
 use loft::state;
 mod test_runner;
@@ -430,9 +431,7 @@ fn install_package(pkg_path: &std::path::Path) {
         println!("loft install: no loft.toml found in {}", pkg_path.display());
         std::process::exit(1);
     }
-    let manifest =
-        manifest::read_manifest(manifest_file.to_str().unwrap_or("loft.toml")).unwrap_or_default();
-    // Derive package name from directory name or manifest entry.
+    // Derive package name from the directory name.
     let pkg_name = pkg_path
         .file_name()
         .unwrap_or_default()
@@ -450,95 +449,25 @@ fn install_package(pkg_path: &std::path::Path) {
         .join(".loft")
         .join("lib")
         .join(&pkg_name);
-    // Create target directories.
-    let target_src = target.join("src");
-    if let Err(e) = std::fs::create_dir_all(&target_src) {
-        println!("loft install: cannot create {}: {e}", target_src.display());
-        std::process::exit(1);
-    }
-    // Copy loft.toml.
-    if let Err(e) = std::fs::copy(&manifest_file, target.join("loft.toml")) {
-        println!("loft install: cannot copy loft.toml: {e}");
-        std::process::exit(1);
-    }
-    // Copy src/*.loft files.
-    let src_dir = if let Some(entry) = &manifest.entry {
-        pkg_path.join(
-            std::path::Path::new(entry)
-                .parent()
-                .unwrap_or(std::path::Path::new("src")),
-        )
-    } else {
-        pkg_path.join("src")
+    // Copy exactly what `loft package` bundles — ONE include rule for both
+    // (`package::copy_package_tree`).  A whitelist here re-derived "what a package consists
+    // of" a second time, and the two answers disagreed twice: first `native/`, so a local
+    // install of an FFI library dropped its `n_*` symbols at link time, then `wasm/`, so a
+    // local install of a `[wasm.bridge]` library dropped the bridge — and since
+    // `~/.loft/lib/<name>` is searched BEFORE the registry cache, that incomplete copy
+    // shadowed a complete registry one, failing every `--html` build against it with an
+    // error pointing at the library rather than at the install (loft#667).
+    let copied = match loft::package_layout::copy_package_tree(pkg_path, &target) {
+        Ok(n) => n,
+        Err(e) => {
+            println!("loft install: cannot copy {}: {e}", pkg_path.display());
+            std::process::exit(1);
+        }
     };
-    let mut copied = 0;
-    if let Ok(entries) = std::fs::read_dir(&src_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
-            {
-                let dest = target_src.join(entry.file_name());
-                if let Err(e) = std::fs::copy(&path, &dest) {
-                    println!("loft install: cannot copy {}: {e}", path.display());
-                } else {
-                    copied += 1;
-                }
-            }
-        }
-    }
-    // Copy tests/ if present (for `loft test` on installed packages).
-    let tests_dir = pkg_path.join("tests");
-    if tests_dir.is_dir() {
-        let target_tests = target.join("tests");
-        let _ = std::fs::create_dir_all(&target_tests);
-        if let Ok(entries) = std::fs::read_dir(&tests_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    let _ = std::fs::copy(&path, target_tests.join(entry.file_name()));
-                }
-            }
-        }
-    }
-    // Copy native/ (the `#native` FFI crate) if present, so `--native` /
-    // `--native-android` can build it — mirroring `loft package`, which includes
-    // native/. Without this, a LOCAL `loft install <dir>` of a native lib silently
-    // dropped its FFI (undefined `n_*` symbols at link time), while the registry
-    // path (from the tarball) carried it — an asymmetry this closes. Build
-    // artifacts (`native/target/`) and dot-dirs are excluded, matching the tarball.
-    let native_dir = pkg_path.join("native");
-    if native_dir.is_dir() {
-        if let Err(e) = copy_native_crate(&native_dir, &target.join("native")) {
-            println!("loft install: cannot copy native/: {e}");
-        }
-    }
     println!(
-        "installed {pkg_name} ({copied} source files) → {}",
+        "installed {pkg_name} ({copied} files) → {}",
         target.display()
     );
-}
-
-/// Recursively copy a package's `native/` crate, excluding build artifacts
-/// (`target/`) and dot-directories — the same exclusions `loft package` applies,
-/// so a local install matches a registry install.
-fn copy_native_crate(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)?.flatten() {
-        let name = entry.file_name();
-        let n = name.to_string_lossy();
-        if n == "target" || n.starts_with('.') {
-            continue;
-        }
-        let (s, d) = (entry.path(), dst.join(&name));
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            copy_native_crate(&s, &d)?;
-        } else {
-            std::fs::copy(&s, &d)?;
-        }
-    }
-    Ok(())
 }
 
 /// REG.2: Install a package from the registry by name (optionally with `@version`).
@@ -4593,6 +4522,7 @@ fn compat_test_verdict(name: &str, version: &str, published: &std::path::Path) -
 /// and a test does `use <name>;`, so the two must sit in one package for the name to resolve.
 /// Staged in a temp directory because neither input may be written to: the install cache is
 /// shared, and the working tree is the user's.
+#[cfg(feature = "registry")]
 fn stage_package(
     src_from: &std::path::Path,
     tests_from: &std::path::Path,
@@ -4610,6 +4540,7 @@ fn stage_package(
 
 /// Recursive copy. Skips per-checkout build state, which would otherwise carry a stale build
 /// into the staged package and have it test something other than the source beside it.
+#[cfg(feature = "registry")]
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
     let meta = std::fs::metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
     if meta.is_file() {
@@ -4633,6 +4564,7 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String>
 
 /// Run a staged package's suite, returning whether it passed. Bounded by `LOFT_TIMEOUT` (the
 /// same bound library CI uses) so one hung old test cannot stall the check.
+#[cfg(feature = "registry")]
 fn run_package_tests(dir: &std::path::Path) -> bool {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("loft"));
     std::process::Command::new(exe)
@@ -4650,6 +4582,7 @@ fn run_package_tests(dir: &std::path::Path) -> bool {
 
 /// A package's entry `.loft` file: `[library] entry` when declared, else the
 /// `src/<name>.loft` default that `loft.toml`'s documentation specifies.
+#[cfg(feature = "registry")]
 fn entry_file_of(root: &std::path::Path, name: &str) -> String {
     let entry =
         loft::manifest::read_manifest(root.join("loft.toml").to_str().unwrap_or("loft.toml"))
@@ -5346,6 +5279,9 @@ fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     loft::crash_report::install("loft");
+    // loft#665 piece 3 — render an internal panic as a loft diagnostic pointing at
+    // the user's source, then fall through to the normal Rust report.
+    loft::crash_report::install_panic_hook();
     // @PLAN49 T1+T3 — arm the execution-timeout watchdog from the env
     // (`LOFT_TIMEOUT=<secs>`) BEFORE we parse argv.  An explicit
     // `--timeout` later in argv re-arms (no-op — `arm` is idempotent)
@@ -8134,6 +8070,36 @@ fn main() {
                     .filter(|m| *m != "loft_thread" && *m != "env")
                     .all(|m| m == "loft_io")
             });
+        // The host surface is decidable HERE: the program's imports are in `wasm_bytes`
+        // and the page's JS is fully assembled above.  Without this the boundary was
+        // invisible until the page loaded, and crossing it killed the whole page — a
+        // `LinkError` naming an import INDEX, no canvas, no `println`, and nothing
+        // pointing at the loft call responsible (loft#668).  Checked only for the full
+        // engine page: the minimal shell is chosen because the program imports `loft_io`
+        // alone, which that shell defines in full.
+        if !minimal_page {
+            let provided = format!("{gl_js}{host_js_extensions}{thread_js}");
+            let missing = crate::native_utils::missing_host_imports(&wasm_bytes, &provided);
+            if !missing.is_empty() {
+                eprintln!(
+                    "loft: --html: this program calls {} the browser host does not \
+                     provide:\n    {}\n  \
+                     The browser shim implements a SUBSET of the native surface — a canvas \
+                     cannot do everything a desktop window can.\n  \
+                     Drop the call on this target, or add a handler to \
+                     doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
+                     (No HTML was written — the page would fail to instantiate, showing \
+                     only a LinkError with an import index.)",
+                    if missing.len() == 1 {
+                        "a function"
+                    } else {
+                        "functions"
+                    },
+                    missing.join("\n    "),
+                );
+                std::process::exit(1);
+            }
+        }
         let html = if minimal_page {
             format!(
                 r#"<!DOCTYPE html>

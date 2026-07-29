@@ -68,9 +68,14 @@ on native.
 - **Text output** — `print` / `println` go to a `<pre>` box (or the JS console).
 - **Text input** — `host_input()` reads the bytes JavaScript hands in (§5). The
   mirror of `print`; the input channel for a headless compute module.
-- **Graphics + input** — the full WebGL2 canvas surface (`lib/graphics`): draw
-  calls, shaders, textures, plus keyboard and mouse polling. This is what games
-  use.
+- **Graphics + input** — a WebGL2 canvas surface (`lib/graphics`): draw calls,
+  shaders, textures, plus keyboard, mouse and wheel polling and the canvas size.
+  This is what games use. It is a **subset** of the native surface, because a
+  canvas cannot do everything a desktop window can — the event queue
+  (`gl_next_event` and friends), `gl_create_fullscreen_window` and `gl_screenshot`
+  have no browser handler. Calling one is a **build error** naming the function,
+  not a broken page: `loft --html` compares the program's imports against the
+  shim before writing any HTML (loft#668).
 - **Audio** — raw PCM playback via the Web Audio API.
 - **WebSocket** — a live network socket, through the `web` library (see §4b).
 

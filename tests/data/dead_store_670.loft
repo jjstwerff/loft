@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#670 fixture — the two edges of the dead-store lint a consumer walked into.
+// Driven by `tests/dead_code_lint.rs::alias_and_element_assign_670`, which asserts
+// both the warned set and the printed values on both backends.
+
+struct Row670 { id: integer, n: float }
+struct Bag670 { rows: vector<Row670> }
+
+// WARN — `copy_elem_assign` is a private copy and the whole-element assign lands in
+// it.  This lowers to `OpCopyRecord(obj, OpGetVector(w,…))`, whose destination is
+// arg 1, so the lint's first-arg write rule never saw it: a silent lost write, and
+// the exact second row of the consumer's matrix.
+fn ds670_elem_assign() -> float {
+  v = [Row670 { id: 1, n: 0.0 }];
+  copy_elem_assign = v;
+  copy_elem_assign[0] = Row670 { id: 2, n: 7.25 };
+  return v[0].n;
+}
+
+// WARN — the field write through the same private copy (already covered; here to
+// keep the two shapes side by side).
+fn ds670_field_write() -> float {
+  v = [Row670 { id: 1, n: 0.0 }];
+  copy_field_write = v;
+  copy_field_write[0].n = 7.25;
+  return v[0].n;
+}
+
+// SILENT — `&` on a local vector mints no buffer, so the bind takes `v`'s own
+// backing and the write reaches `v`.  The lint used to warn here, telling the author
+// to do the very thing they had done; warnings gate a library's CI.
+fn ds670_ref_local() -> float {
+  v = [Row670 { id: 1, n: 0.0 }];
+  ref_local = &v;
+  ref_local[0].n = 7.25;
+  return v[0].n;
+}
+
+// SILENT — `&` on a struct FIELD, whole-element assign and append through it.
+fn ds670_ref_field() -> float {
+  b = Bag670 { rows: [] };
+  b.rows += [Row670 { id: 1, n: 0.0 }];
+  ref_field = &b.rows;
+  ref_field[0] = Row670 { id: 2, n: 7.25 };
+  ref_field += [Row670 { id: 3, n: 1.0 }];
+  return b.rows[0].n + len(b.rows);
+}
+
+// SILENT — an element view is not itself a dead store: the write propagates into the
+// vector it views.  (`v` is read here, so `v` is not a candidate either.)
+fn ds670_element_view() -> float {
+  v = [Row670 { id: 1, n: 0.0 }];
+  elem = v[0];
+  elem.n = 7.25;
+  return v[0].n;
+}
+
+fn main() {
+  println("elem_assign={ds670_elem_assign()}");
+  println("field_write={ds670_field_write()}");
+  println("ref_local={ds670_ref_local()}");
+  println("ref_field={ds670_ref_field()}");
+  println("element_view={ds670_element_view()}");
+}

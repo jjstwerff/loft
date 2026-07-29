@@ -552,6 +552,9 @@ impl Parser {
                 }
                 l.push(Value::Line(line));
                 self.line = line;
+                // loft#665 piece 3 — publish where the compiler is, so an internal
+                // panic points at the user's line instead of a compiler source file.
+                crate::crash_report::note_compile_pos(self.lexer.pos());
             }
             if self.lexer.has_token(";") {
                 continue;
@@ -3508,11 +3511,18 @@ impl Parser {
             // the arm body — the hand-expanded form the single arm above equals.
             if let Some((body, tp)) = multi_extra {
                 for (disc, stmts_i) in multi_branches {
+                    // #673 — the clone carries the FIRST pattern's `text` payload
+                    // write-backs, but this branch binds the shared slots from its own
+                    // variant's offsets.  Retarget the write-backs to the place this
+                    // branch actually read, or `B { items }` reads its own field and
+                    // writes the result into `A`'s.
+                    let mut body_i = body.clone();
+                    self.retarget_text_payload_writes(&mut body_i, &stmts_i);
                     let code_i = if stmts_i.is_empty() {
-                        body.clone()
+                        body_i
                     } else {
                         let mut ops = stmts_i;
-                        ops.push(body.clone());
+                        ops.push(body_i);
                         v_block(ops, tp.clone(), "match_arm")
                     };
                     arms.push(EnumArm {
@@ -3795,16 +3805,98 @@ impl Parser {
     /// #429: the frame var a match-arm field binding BORROWS from — the
     /// subject's backing variable.  A heap match binding (`CMap { entries }`)
     /// is a DbRef into the subject's record, so its type must carry a borrow
-    /// dep on this var (see the call site).  Returns `Some(var)` only when the
-    /// subject reduces to a plain `Var` (the common `match m { … }` /
-    /// `match self.f { … }`-into-a-temp case, where `subject_val` is the
-    /// match temp or the parameter itself); a non-`Var` subject (a raw inline
-    /// field/index/call expression with no single backing var) yields `None`,
-    /// leaving the binding dep-free exactly as before.
-    fn match_borrow_source(subject_val: &Value) -> Option<u16> {
+    /// dep on this var (see the call site).
+    ///
+    /// A bare `Var` subject is the common `match m { … }` / `match self.f { … }`-
+    /// into-a-temp case.  A subject reached through GETTERS (`Wrap { inner: Holder
+    /// { items } }` binds from `OpGetField(w, …)`, and so does `match w.inner`)
+    /// still borrows from one variable — the root the chain starts at.  Reporting
+    /// `None` there left the binding dep-free, which reads as "owns its store", so
+    /// an append allocated a FRESH backing and repointed the local: the write
+    /// vanished, silently, on both backends (loft#664's shape).  A chain rooted in
+    /// a CALL has no backing variable and still yields `None`.
+    fn match_borrow_source(&self, subject_val: &Value) -> Option<u16> {
         match subject_val.unspan() {
             Value::Var(v) => Some(*v),
+            // Only the GETTER family forwards a borrow: `OpGetField` / `OpGetVector` /
+            // `OpGetEnum` read INTO their first argument's record, so the root of the
+            // chain still owns the store.  A user call produces a value of its own, and
+            // its first argument is just an argument.
+            Value::Call(d_nr, args) if self.data.def(*d_nr).name().starts_with("OpGet") => {
+                args.first().and_then(|a| self.match_borrow_source(a))
+            }
             _ => None,
+        }
+    }
+
+    /// #673 — record that `bind_nr` mirrors a struct-enum `text` payload, so a write
+    /// through the binding can be written back into the subject.
+    ///
+    /// A heap payload binding holds a DbRef INTO the subject's record, so
+    /// `items += …` reaches the subject with no help. A `text` payload binding is an
+    /// owned copy of the characters (`_mv_items = OpGetText(subj, off)` — see the
+    /// `skip_free` note at the call site), so the identical source line updated the
+    /// copy and left the enum untouched, on both backends and with no diagnostic.
+    /// Remembering the field read lets `parse_assign` mirror each write back with
+    /// `OpSetText(subj, off, binding)`; a binding that is only read never reaches
+    /// that path, so its bytecode is unchanged.
+    ///
+    /// Only a re-evaluable subject qualifies. The read is emitted once per write, so
+    /// a subject carrying a user call (`match make_e() { … }`) would run that call
+    /// again — and such a subject is a temporary the write could not outlive anyway.
+    fn record_text_payload_view(&mut self, bind_nr: u16, field_read: &Value) {
+        let Value::Call(d_nr, args) = field_read.unspan() else {
+            return;
+        };
+        if self.data.def(*d_nr).name() != "OpGetText"
+            || args.len() != 2
+            || self.ir_has_user_call(&args[0])
+        {
+            return;
+        }
+        let read = field_read.unspan().clone();
+        self.text_payload_views
+            .insert((self.context, bind_nr), read);
+    }
+
+    /// #673 / @PLN35 Phase 3 — point a multi-pattern branch's cloned body at the
+    /// field offsets THIS branch bound its captures from.
+    ///
+    /// Every extra listed pattern runs a clone of the one arm body, so a `text`
+    /// payload write-back (`record_text_payload_view`) reaches the clone carrying the
+    /// FIRST pattern's `(subject, offset)`. `stmts_i` — this branch's
+    /// `capture = OpGetText(subject, off_i)` binds — names the place the branch really
+    /// read, so swapping the write to match keeps read and write on one field.
+    /// Untouched when the two patterns put the field at the same offset.
+    fn retarget_text_payload_writes(&self, body: &mut Value, stmts_i: &[Value]) {
+        let get_nr = self.data.def_nr("OpGetText");
+        let set_nr = self.data.def_nr("OpSetText");
+        if get_nr == u32::MAX || set_nr == u32::MAX {
+            return;
+        }
+        for st in stmts_i {
+            let Value::Set(v_nr, rhs) = st.unspan() else {
+                continue;
+            };
+            let Value::Call(d_nr, args) = rhs.unspan() else {
+                continue;
+            };
+            let Some(Value::Call(_, first)) = self.text_payload_views.get(&(self.context, *v_nr))
+            else {
+                continue;
+            };
+            if *d_nr != get_nr || args.len() != 2 || first[..] == args[..] {
+                continue;
+            }
+            let from = Value::Call(
+                set_nr,
+                vec![first[0].clone(), first[1].clone(), Value::Var(*v_nr)],
+            );
+            let to = Value::Call(
+                set_nr,
+                vec![args[0].clone(), args[1].clone(), Value::Var(*v_nr)],
+            );
+            crate::parser::expressions::substitute_value(body, &from, &to);
         }
     }
 
@@ -3891,7 +3983,7 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
-                            arm_stmts.push(v_set(v_nr, field_read));
+                            arm_stmts.push(v_set(v_nr, field_read.clone()));
                             let old = self.vars.set_name(&field_name, v_nr);
                             name_aliases.push((field_name.clone(), old));
                             // B5 remaining half (2026-04-14): a HEAP match-arm
@@ -3918,7 +4010,9 @@ impl Parser {
                             // was taken (the whole p54 struct-enum / json-match
                             // family).  So skip_free HEAP bindings only; let a
                             // text binding free through normal scope cleanup.
-                            if !matches!(field_type.base(), Type::Text(_)) {
+                            if matches!(field_type.base(), Type::Text(_)) {
+                                self.record_text_payload_view(v_nr, &field_read);
+                            } else {
                                 self.vars.set_skip_free(v_nr);
                             }
                             // #429: the binding is a BORROWED VIEW of the
@@ -3939,8 +4033,19 @@ impl Parser {
                             if matches!(
                                 &field_type,
                                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                            ) && let Some(src) = Self::match_borrow_source(subject_val)
+                            ) && let Some(src) = self.match_borrow_source(subject_val)
                             {
+                                if std::env::var_os("LOFT_MV_DEP_TRACE").is_some() {
+                                    eprintln!(
+                                        "[mv-dep] fn={} pass{} binding={}({}) src={}({})",
+                                        self.data.def(self.context).name(),
+                                        u8::from(!self.first_pass) + 1,
+                                        self.vars.name(v_nr),
+                                        v_nr,
+                                        self.vars.name(src),
+                                        src,
+                                    );
+                                }
                                 let bound_tp = match self.vars.tp(v_nr).clone() {
                                     Type::Reference(td, _) => {
                                         Type::Reference(td, crate::data::Deps::frame1(src))
@@ -6670,7 +6775,7 @@ impl Parser {
         // source var (the caller's param/local), not the internal `_match_subj` copy `v`,
         // so the return-ownership chain reaches the caller's value. Fall back to `v` when
         // the subject isn't a plain var.
-        let borrow_src = Self::match_borrow_source(&subject).unwrap_or(v);
+        let borrow_src = self.match_borrow_source(&subject).unwrap_or(v);
 
         self.lexer.token("{");
         let mut result_type = Type::Void;
@@ -8431,11 +8536,13 @@ impl Parser {
             self.context = c;
             let before: std::collections::HashSet<u16> =
                 self.vars.work_texts().into_iter().collect();
-            // The caller was parsed against the UNPROMOTED callee, so its work-text pooling
-            // counter may lag the `__work_N` already in `names` (a format-arg buffer, say).
-            // Sync it first so every retbuf `add_defaults` mints below is a FRESH buffer,
-            // never an alias of a live arg buffer in the same call (native E0506/E0499).
-            self.vars.sync_work_text_counter();
+            // The caller was parsed against the UNPROMOTED callee, and storing it reset the
+            // pooling counters, so they lag the work names already in `names`.  Sync them
+            // ALL first — every retbuf `add_defaults` mints below has to be a FRESH buffer,
+            // never an alias of a live buffer in the same call: a stale `__work_N` collides
+            // with a format-arg buffer (native E0506/E0499), and a stale `__work_cN` hands
+            // the callee the very buffer holding its own argument (loft#671).
+            self.vars.sync_work_counters();
             let mut code =
                 std::mem::replace(&mut self.data.definitions[c as usize].code, Value::Null);
             self.patch_tret_call(&mut code, &force);

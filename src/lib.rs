@@ -143,6 +143,7 @@ pub(crate) mod net;
 pub mod ownership_cfg;
 #[cfg(feature = "remote-store")]
 pub mod paged_reader;
+pub mod portable_path;
 pub mod resolution;
 pub mod scopes;
 pub mod use_analysis;
@@ -207,6 +208,7 @@ pub mod native_gate;
 pub mod native_lib;
 #[cfg(feature = "registry")]
 pub mod package;
+pub mod package_layout;
 pub mod registry;
 #[cfg(feature = "registry")]
 pub mod registry_advisories;

@@ -562,6 +562,17 @@ pub struct Parser {
     /// non-zero literal) is provably fit and types NON-null; otherwise it types `τ?`. Same
     /// push/truncate/invalidate discipline as `narrowed_non_null`.
     pub(crate) divisor_nonzero: Vec<u16>,
+    /// #673 — struct-enum `text` payload bindings that WRITE THROUGH to the subject.
+    ///
+    /// A heap payload binding (`vector`/`ref`/struct-enum) holds a DbRef into the
+    /// subject's record, so `items += …` mutates the subject for free. A `text`
+    /// payload binding is an owned copy of the field's characters
+    /// (`_mv_items = OpGetText(subj, off)`), so the same write would land in the copy
+    /// and vanish. Keyed `(enclosing fn, binding var)` → the `OpGetText(subject, off)`
+    /// read the binding was initialised from, which `parse_assign` turns back into an
+    /// `OpSetText` after every write. Only bindings whose subject expression is
+    /// re-evaluable (no user call) are recorded.
+    pub(crate) text_payload_views: std::collections::HashMap<(u32, u16), Value>,
     /// @PLN25 DN3 fault-op (index) — set by `parse_vector_index` for each SCALAR `v[i]` read
     /// (true = the index is provably in-bounds: a non-negative constant, a for-loop iter var, or
     /// a var proven `< len(v)` by an enclosing guard), read immediately after by `parse_index` to
@@ -828,6 +839,7 @@ impl Parser {
             defended_field_reads: std::collections::HashSet::new(),
             narrowed_non_null: Vec::new(),
             divisor_nonzero: Vec::new(),
+            text_payload_views: std::collections::HashMap::new(),
             last_index_fit: false,
             index_bounded: Vec::new(),
             last_field_read_site: None,
@@ -1431,7 +1443,6 @@ impl Parser {
         // counts exactly.  Post-arity-cascade (signatures freeze at declaration)
         // this is an INVARIANT, not an aspiration — a divergence is a real
         // cross-pass bug, asserted below after pass 2.
-        #[cfg(debug_assertions)]
         let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
             .map(|d| self.data.attributes(d as u32))
             .collect();
@@ -1455,7 +1466,6 @@ impl Parser {
             // @PLN35 PC3 — reject a left-recursive sub-rule grammar (a cycle in the invocation
             // graph) at compile time, before it can hang at runtime.  Post-parse over pass-2 edges.
             self.check_subrule_wellformedness();
-            #[cfg(debug_assertions)]
             self.assert_pass2_def_attr_stable(&pass1_attr_counts);
             // @PLN104 P2 — oracle pass: flag frame-local text returns the interpreter would
             // orphan (#568) into `force_tret` (default-on; opt out with LOFT_NO_TRET_FIX).
@@ -1493,16 +1503,30 @@ impl Parser {
     /// @PLAN59 arity cascade (signatures freeze at declaration) this is an
     /// INVARIANT — a firing assert is a real cross-pass bug, not noise.
     ///
-    /// This attribute-count check is the COMPLETE H5 validation: the H5 spec's other
-    /// named residual — work-ref (`__ref_N`) counter equality per fn — was dissolved
-    /// by H1 (@PLAN59), exactly as the spec's item 3 ("re-evaluate after H1") foresaw.
-    /// `work_refs()` now fires zero times across the whole debug corpus, and the
-    /// counter's value in a stored table is unconditionally reset to 0 by
-    /// `Function::append` at store time, so a work-ref-counter assert here would be
-    /// permanently vacuous.  The one failure mode it could ever have caught — a
-    /// cross-pass `__ref_N` name shift making `ref_return` add a spurious attr — IS
-    /// caught here, because that spurious attr is itself an attribute-count divergence.
-    #[cfg(debug_assertions)]
+    /// Runs in EVERY build, not just `cfg(debug_assertions)`.  Those are switched
+    /// off inside this library by `[profile.dev.package.loft]`, so a cfg-gated
+    /// check here was dead in `cargo test` AND `target/debug/loft` AND `--release`
+    /// alike — live only in the nightly `-C debug-assertions=on` job.  That is how
+    /// loft#662 reached a release: the contract broke, nothing said so, and the
+    /// failure surfaced two subsystems later as a codegen panic naming a generated
+    /// symbol.  The project's convention for a load-bearing invariant is a plain
+    /// `assert!` (see `Data::rollback_to`), and this one costs a `Vec<usize>` of
+    /// one entry per definition, twice per parse — unmeasurable against a parse.
+    ///
+    /// The H5 spec's other named residual — work-ref (`__ref_N`) counter equality
+    /// per fn — was dissolved by H1 (@PLAN59), but NOT for the reason recorded here
+    /// before: `work_refs()` does not "fire zero times across the debug corpus", it
+    /// fires ~5500 times (measured, loft#665).  What actually dissolved it is the
+    /// signature-time `__retbuf`: the attribute exists before ANY body parses, so
+    /// `ref_return`'s promotion no longer re-finds it by work-ref NAME and therefore
+    /// no longer depends on `__ref_N` numbering being pass-stable.  A counter-equality
+    /// assert would be not vacuous but NOISY — 11 of the 19 `work_refs` call sites are
+    /// pass-2-only, so the counters legitimately diverge.
+    ///
+    /// That is the durable shape for this whole class, and it is why the text side
+    /// stayed vulnerable (loft#662): a `text_return` work buffer is discovered FROM
+    /// the body, so nothing reserves it at signature time and its numbering must be
+    /// kept pass-stable by hand instead (see `Function::work_text_p2`).
     fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
         // Pass-2 def GROWTH has exactly one legal form (the fuzzer's F1 catch):
         // the reduce/map/filter builtin family desugars on pass 2 only — pass 1
@@ -1528,7 +1552,7 @@ impl Parser {
                 || (matches!(dt, DefType::Struct) && name.starts_with("main_vector<"));
             let lazy_instantiation =
                 matches!(dt, DefType::Function) && self.h5_names_a_generic_template(name);
-            debug_assert!(
+            assert!(
                 lazy_wrapper || lazy_instantiation,
                 "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
                  wrapper or generic instantiation — a real cross-pass divergence \
@@ -1551,11 +1575,28 @@ impl Parser {
             if c2 > c1 {
                 for a in c1..c2 {
                     let n = self.data.attr_name(d as u32, a);
-                    debug_assert!(
+                    assert!(
                         n == "__closure" || n.starts_with("__work_"),
                         "H5 two-pass contract: def `{}` (#{d}) grew a pass-2-only \
                          attribute `{n}` (pass1={c1}, pass2={c2}) that is not a \
                          documented lazy append — a real cross-pass divergence",
+                        self.data.def(d as u32).name(),
+                    );
+                    // The `__work_` exemption is only safe while NO call has been
+                    // lowered against the old arity.  loft#662 was exactly this
+                    // append on a SELF-recursive function: its own body had already
+                    // emitted a call, so growing the signature left that call one
+                    // argument short — and the exemption waved it through, which is
+                    // why this assert never caught the bug it was built for.  A
+                    // caller is already lowered iff it is this def itself or a def
+                    // parsed before it, so that is the condition to reject.
+                    assert!(
+                        !n.starts_with("__work_") || !self.h5_has_lowered_caller(d as u32),
+                        "H5 two-pass contract: def `{}` (#{d}) grew a pass-2-only \
+                         work buffer `{n}` (pass1={c1}, pass2={c2}) AFTER a call to it \
+                         had already been lowered — the call now passes {c1} arguments \
+                         to a {c2}-argument signature (loft#662's class).  The buffer's \
+                         name counter is not pass-stable for this def.",
                         self.data.def(d as u32).name(),
                     );
                 }
@@ -1571,12 +1612,40 @@ impl Parser {
         }
     }
 
+    /// H5 helper: is there already-lowered code calling `d`?
+    ///
+    /// Pass 2 lowers defs in source order, so every def numbered at or below `d`
+    /// has emitted its calls by the time `d`'s body finishes and its return
+    /// promotion runs.  A signature that grows at that point leaves those calls
+    /// short an argument.  Only scanned when a def actually grew a pass-2-only
+    /// work buffer — rare (once across the whole test corpus), so the walk costs
+    /// nothing in the common case.
+    fn h5_has_lowered_caller(&self, d: u32) -> bool {
+        fn calls(node: &Value, target: u32) -> bool {
+            // Direct calls only.  A `CallRef` goes through the fn-ref dispatch,
+            // which allocates hidden buffers at runtime rather than baking the
+            // arity into the call site, so it is not committed to the old
+            // signature the way a lowered direct call is.
+            let hit = matches!(node.unspan(), Value::Call(op, _) if *op == target);
+            if hit {
+                return true;
+            }
+            let mut found = false;
+            node.for_each_child(&mut |c| {
+                if !found && calls(c, target) {
+                    found = true;
+                }
+            });
+            found
+        }
+        (0..=d).any(|e| calls(&self.data.def(e).code, d))
+    }
+
     /// H5 helper: does `name` carry the instantiation mangling
     /// `t_<LEN><SafeType>_<fn>` (see `try_generic_instantiation`) AND does the
     /// `n_<fn>` template exist as a `DefType::Generic`?  Only such defs are
     /// legal pass-2-only appends of the Function kind — a source-declared
     /// method parses in pass 1 and can never appear as a trailing pass-2 def.
-    #[cfg(debug_assertions)]
     fn h5_names_a_generic_template(&self, name: &str) -> bool {
         let Some(rest) = name.strip_prefix("t_") else {
             return false;
@@ -2294,7 +2363,7 @@ impl Parser {
     /// filtered to enum context.
     pub(crate) fn enum_hint(&self) -> Type {
         if self.enum_context(&self.expected) {
-            self.expected.clone()
+            self.expected.without_deps()
         } else {
             Type::Unknown(0)
         }
@@ -2304,7 +2373,7 @@ impl Parser {
     /// concrete narrow-element vector (#432; [`Self::seeds_vector_hint`]).
     pub(crate) fn vector_hint(&self) -> Type {
         if Self::seeds_vector_hint(&self.expected) {
-            self.expected.clone()
+            self.expected.without_deps()
         } else {
             Type::Unknown(0)
         }
@@ -2313,7 +2382,7 @@ impl Parser {
     /// Expected destination type for an `f#read` (no `(n)`, no `as T`) — the raw `⇐` push,
     /// any shape; the read infers its byte width from it.
     pub(crate) fn read_target_type(&self) -> Type {
-        self.expected.clone()
+        self.expected.without_deps()
     }
 
     /// @PLAN48 P2: true when converting `src` → `dst` narrows a loft integer to a
@@ -6937,6 +7006,39 @@ impl Parser {
         actual
     }
 
+    /// loft#663 — the caller buffer a heap-vector return is actually delivered
+    /// into, for a callee whose declared return deps cannot be read yet.
+    ///
+    /// A vector return names its hidden `__retbuf` attribute in `returned()`'s
+    /// deps, and `resolve_deps` maps that onto the buffer the call site
+    /// allocated.  But while a function's OWN body is being parsed its returned
+    /// type has not been re-promoted this pass, so a SELF- or MUTUALLY-recursive
+    /// call reads EMPTY deps.  The receiving local then looks like a vector that
+    /// owns nothing, and `vector_db` hands it a fresh backing store and repoints
+    /// it — discarding the value the call had just delivered into the buffer, so
+    /// `r = f(n-1); r += [x]; return r` returned only `[x]`.
+    ///
+    /// A body-carrying vector-returning function always has the unconditional H1
+    /// `__retbuf`, and `add_defaults` has already allocated the buffer for it
+    /// (that attribute's entry in `types` carries `Deps::frame1(vr)`), so when
+    /// the declared deps are silent that buffer is where the value is.  A
+    /// fallback only: a callee whose signature IS final resolves exactly as
+    /// before.
+    fn caller_vector_retbuf_dep(&self, d_nr: u32, types: &[Type]) -> Vec<u16> {
+        let attrs = self.data.def(d_nr).attributes();
+        for (i, a) in attrs.iter().enumerate() {
+            if !a.hidden || i >= types.len() {
+                continue;
+            }
+            if let Type::Vector(_, dep) = &types[i]
+                && !dep.is_empty()
+            {
+                return dep.into_iter().copied().collect();
+            }
+        }
+        Vec::new()
+    }
+
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
         let tp = self.data.def(d_nr).returned().clone();
@@ -6954,10 +7056,20 @@ impl Parser {
         if let Type::Text(d) = tp {
             Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
         } else if let Type::Vector(to, d) = tp {
-            Type::Vector(
-                to,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            // A vector return genuinely depends on its hidden retbuf (see above), so
+            // an EMPTY result here means the dep could not be read — not that the
+            // value owns nothing.  Fall back to the buffer this call site allocated
+            // (loft#663).
+            let mut dp = Self::resolve_deps(types, d.as_attr_indices());
+            // Only a callee that has NOT finished parsing this pass can have lost
+            // its dep — that is exactly a SELF (`d_nr == context`) or FORWARD
+            // (`d_nr > context`) reference.  A backward-ref callee is fully
+            // resolved, so an empty dep there is the truth and must be left alone
+            // (the same def_nr ordering test `tret_bind_ok` uses).
+            if dp.is_empty() && d_nr >= self.context {
+                dp = self.caller_vector_retbuf_dep(d_nr, types);
+            }
+            Type::Vector(to, Deps::frame(dp))
         } else if let Type::Sorted(to, key, d) = tp {
             Type::Sorted(
                 to,
@@ -7182,7 +7294,15 @@ impl Parser {
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
-                        let wv = self.vars.work_text(&mut self.lexer);
+                        // Its OWN counter, like the `work_refs` retbuf arm above
+                        // (loft#662): this buffer only exists once the callee's
+                        // `&text` ABI does, so for a self-/forward-recursive callee
+                        // it is minted on pass 2 ONLY.  Taking it from `work_text`
+                        // shifted every later `__work_N` by one, and since the
+                        // variable tables persist across passes by name, pass 2's
+                        // format buffers then re-found pass 1's variables under the
+                        // wrong roles.
+                        let wv = self.vars.caller_text_buf(&mut self.lexer);
                         // clear the work buffer before each call so loop
                         // iterations start fresh (matches fn-ref path in control.rs).
                         ls.push(v_set(wv, Value::Text(String::new())));

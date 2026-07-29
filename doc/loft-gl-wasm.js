@@ -69,7 +69,17 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
 
   let programs = [], vaos = [], textures = [], fbos = [];
   const keys = new Set();
-  let mouseX = 0, mouseY = 0, mouseBtn = 0;
+  let mouseX = 0, mouseY = 0, mouseBtn = 0, wheelAcc = 0;
+
+  // Handles are 1-BASED here, so 0 means failure and nothing else — the contract
+  // `lib/graphics` documents ("0 on failure") and what the native backend gives you,
+  // since a real GL object name is never 0.  These tables used to hand back the array
+  // index, so the FIRST shader, VAO or texture a page created came back as 0: the
+  // documented `if (prog == 0) { fail }` rejected working code, and a client using 0 as
+  // its "slot is free" sentinel lost the first mesh it uploaded and then handed that slot
+  // to the next one (loft#669).  `fbos` was already 1-based; these three now match.
+  const hold = (arr, obj) => arr.push(obj);          // push returns the new length = handle
+  const slot = (arr, h) => (h > 0 && h <= arr.length ? arr[h - 1] : null);
 
   function mapKey(code) {
     if (code.startsWith('Key')) return code.charCodeAt(3) + 32;
@@ -92,6 +102,13 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   });
   canvas.addEventListener('mousedown', e => { mouseBtn |= (1 << e.button); });
   canvas.addEventListener('mouseup', e => { mouseBtn &= ~(1 << e.button); });
+  // `gl_mouse_wheel` is documented as the delta accumulated since the last call,
+  // positive = UP, with pixel-delta (trackpad) scrolling quantised at 20 px/line.
+  // The browser's deltaY is positive DOWNWARD, hence the negation.
+  canvas.addEventListener('wheel', e => {
+    wheelAcc += e.deltaMode === 0 ? -e.deltaY / 20 : -e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
 
   let shouldClose = false, _fsQuad = null;
 
@@ -254,9 +271,9 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
           console.error('Link:', gl.getProgramInfoLog(p)); gl.deleteProgram(p); return 0;
         }
-        const idx = programs.length; programs.push(p); return idx;
+        return hold(programs, p);
       },
-      loft_gl_use_shader(p) { if (p >= 0 && p < programs.length) gl.useProgram(programs[p]); },
+      loft_gl_use_shader(p) { const o = slot(programs, p); if (o) gl.useProgram(o); },
       loft_gl_upload_vertices(ptr, count, stride) {
         const data = new Float32Array(getMem().buffer, ptr, count);
         const vao = gl.createVertexArray();
@@ -270,16 +287,16 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         if (stride >= 8) { gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, bpv, 24); }
         if (stride >= 10) { gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, bpv, 24); }
         gl.bindVertexArray(null);
-        const idx = vaos.length; vaos.push({ vao, vbo, n: count / stride }); return idx;
+        return hold(vaos, { vao, vbo, n: count / stride });
       },
       loft_gl_draw(vaoIdx, n) {
-        if (vaoIdx >= 0 && vaoIdx < vaos.length) { gl.bindVertexArray(vaos[vaoIdx].vao); gl.drawArrays(gl.TRIANGLES, 0, n); gl.bindVertexArray(null); }
+        const o = slot(vaos, vaoIdx); if (o) { gl.bindVertexArray(o.vao); gl.drawArrays(gl.TRIANGLES, 0, n); gl.bindVertexArray(null); }
       },
       loft_gl_draw_mode(v, n, m) {
-        if (v >= 0 && v < vaos.length) { gl.bindVertexArray(vaos[v].vao); gl.drawArrays(glMode(m), 0, n); gl.bindVertexArray(null); }
+        const o = slot(vaos, v); if (o) { gl.bindVertexArray(o.vao); gl.drawArrays(glMode(m), 0, n); gl.bindVertexArray(null); }
       },
       loft_gl_draw_elements(v, n, m) {
-        if (v >= 0 && v < vaos.length) { gl.bindVertexArray(vaos[v].vao); gl.drawElements(glMode(m), n, gl.UNSIGNED_INT, 0); gl.bindVertexArray(null); }
+        const o = slot(vaos, v); if (o) { gl.bindVertexArray(o.vao); gl.drawElements(glMode(m), n, gl.UNSIGNED_INT, 0); gl.bindVertexArray(null); }
       },
       loft_gl_draw_fullscreen_quad() {
         if (!_fsQuad) {
@@ -293,22 +310,23 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         gl.bindVertexArray(_fsQuad); gl.drawArrays(gl.TRIANGLES, 0, 6); gl.bindVertexArray(null);
       },
       loft_gl_set_mat4(prog, np, nl, mp, mc) {
-        if (prog >= 0 && prog < programs.length) {
+        const o = slot(programs, prog);
+        if (o) {
           const name = readStr(np, nl);
           const f64 = new Float64Array(getMem().buffer, mp, mc < 16 ? 0 : 16);
           const f32 = new Float32Array(16); for (let i = 0; i < 16; i++) f32[i] = f64[i];
-          const loc = gl.getUniformLocation(programs[prog], name);
+          const loc = gl.getUniformLocation(o, name);
           if (loc) gl.uniformMatrix4fv(loc, false, f32);
         }
       },
       loft_gl_set_uniform_float(p, np, nl, v) {
-        if (p >= 0 && p < programs.length) { const loc = gl.getUniformLocation(programs[p], readStr(np, nl)); if (loc) gl.uniform1f(loc, v); }
+        const o = slot(programs, p); if (o) { const loc = gl.getUniformLocation(o, readStr(np, nl)); if (loc) gl.uniform1f(loc, v); }
       },
       loft_gl_set_uniform_int(p, np, nl, v) {
-        if (p >= 0 && p < programs.length) { const loc = gl.getUniformLocation(programs[p], readStr(np, nl)); if (loc) gl.uniform1i(loc, v); }
+        const o = slot(programs, p); if (o) { const loc = gl.getUniformLocation(o, readStr(np, nl)); if (loc) gl.uniform1i(loc, v); }
       },
       loft_gl_set_uniform_vec3(p, np, nl, x, y, z) {
-        if (p >= 0 && p < programs.length) { const loc = gl.getUniformLocation(programs[p], readStr(np, nl)); if (loc) gl.uniform3f(loc, x, y, z); }
+        const o = slot(programs, p); if (o) { const loc = gl.getUniformLocation(o, readStr(np, nl)); if (loc) gl.uniform3f(loc, x, y, z); }
       },
       loft_gl_enable(c) { gl.enable(glCap(c)); },
       loft_gl_disable(c) { gl.disable(glCap(c)); },
@@ -318,12 +336,13 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_gl_viewport(x, y, w, h) { gl.viewport(x, y, w, h); },
       loft_gl_line_width(w) { gl.lineWidth(w); },
       loft_gl_point_size(_s) { /* use gl_PointSize in shader */ },
-      loft_gl_create_framebuffer() { const f = gl.createFramebuffer(); const i = fbos.length + 1; fbos.push(f); return i; },
-      loft_gl_bind_framebuffer(i) { gl.bindFramebuffer(gl.FRAMEBUFFER, i <= 0 ? null : fbos[i-1] || null); },
+      loft_gl_create_framebuffer() { return hold(fbos, gl.createFramebuffer()); },
+      loft_gl_bind_framebuffer(i) { gl.bindFramebuffer(gl.FRAMEBUFFER, slot(fbos, i)); },
       loft_gl_framebuffer_texture(fi, att, ti) {
-        if (fi > 0 && fi - 1 < fbos.length && ti >= 0 && ti < textures.length) {
-          gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[fi-1]);
-          gl.framebufferTexture2D(gl.FRAMEBUFFER, att === 1 ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[ti], 0);
+        const fb = slot(fbos, fi), tex = slot(textures, ti);
+        if (fb && tex) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, att === 1 ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
         }
       },
       loft_gl_create_depth_texture(w, h) {
@@ -333,16 +352,17 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        const i = textures.length; textures.push(t); return i;
+        return hold(textures, t);
       },
       loft_gl_create_color_texture(w, h) {
         const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        const i = textures.length; textures.push(t); return i;
+        return hold(textures, t);
       },
-      loft_gl_load_texture(pp, pl) { return -1; /* TODO: async asset loading */ },
+      // 0 = failure, the same sentinel every other handle here uses (loft#669).
+      loft_gl_load_texture(pp, pl) { return 0; /* TODO: async asset loading */ },
       loft_gl_upload_canvas(ptr, count, w, h) {
         // C58: no upload-side Y flip; canvas-top = GL TC.y=0.
         const data = new Int32Array(getMem().buffer, ptr, count);
@@ -356,17 +376,33 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        const i = textures.length; textures.push(t); return i;
+        return hold(textures, t);
       },
-      loft_gl_bind_texture(ti, u) { gl.activeTexture(gl.TEXTURE0 + u); if (ti >= 0 && ti < textures.length) gl.bindTexture(gl.TEXTURE_2D, textures[ti]); },
-      loft_gl_delete_texture(ti) { if (ti >= 0 && ti < textures.length && textures[ti]) { gl.deleteTexture(textures[ti]); textures[ti] = null; } },
-      loft_gl_delete_shader(p) { if (p >= 0 && p < programs.length && programs[p]) { gl.deleteProgram(programs[p]); programs[p] = null; } },
-      loft_gl_delete_vao(v) { if (v >= 0 && v < vaos.length && vaos[v]) { gl.deleteVertexArray(vaos[v].vao); gl.deleteBuffer(vaos[v].vbo); vaos[v] = null; } },
-      loft_gl_delete_framebuffer(fi) { const i = fi-1; if (i >= 0 && i < fbos.length && fbos[i]) { gl.deleteFramebuffer(fbos[i]); fbos[i] = null; } },
+      loft_gl_bind_texture(ti, u) { gl.activeTexture(gl.TEXTURE0 + u); const o = slot(textures, ti); if (o) gl.bindTexture(gl.TEXTURE_2D, o); },
+      loft_gl_delete_texture(ti) { const o = slot(textures, ti); if (o) { gl.deleteTexture(o); textures[ti - 1] = null; } },
+      loft_gl_delete_shader(p) { const o = slot(programs, p); if (o) { gl.deleteProgram(o); programs[p - 1] = null; } },
+      loft_gl_delete_vao(v) { const o = slot(vaos, v); if (o) { gl.deleteVertexArray(o.vao); gl.deleteBuffer(o.vbo); vaos[v - 1] = null; } },
+      loft_gl_delete_framebuffer(fi) { const o = slot(fbos, fi); if (o) { gl.deleteFramebuffer(o); fbos[fi - 1] = null; } },
       loft_gl_key_pressed(k) { return keys.has(k) ? 1 : 0; },
       loft_gl_mouse_x() { return mouseX; },
       loft_gl_mouse_y() { return mouseY; },
       loft_gl_mouse_button() { return mouseBtn; },
+      // The canvas IS the window here, so its size is the window's inner size in
+      // physical pixels — exactly what these are documented to report.  They used to be
+      // absent, and an absent import is not a missing feature but a dead page: the whole
+      // module fails to instantiate (loft#668).
+      loft_gl_window_width() { return canvas.width; },
+      loft_gl_window_height() { return canvas.height; },
+      // Delta since the last call, reset on read.
+      loft_gl_mouse_wheel() { const w = Math.trunc(wheelAcc); wheelAcc -= w; return w; },
+      // `lib/graphics` already documents this as non-fatal outside a user gesture in the
+      // browser, which is exactly what a rejected requestFullscreen() promise is.
+      loft_gl_set_fullscreen(on) {
+        try {
+          if (on) { const p = canvas.requestFullscreen?.(); if (p) p.catch(() => {}); }
+          else if (document.fullscreenElement) { const p = document.exitFullscreen?.(); if (p) p.catch(() => {}); }
+        } catch (e) { /* no gesture / not permitted — non-fatal by contract */ }
+      },
       loft_gl_load_font(pp, pl) { return -2147483648; /* i32::MIN = null sentinel */ },
       loft_gl_measure_text(fi, tp, tl, sz) { return 0.0; },
       loft_text_height(fi, sz) { return Math.ceil(sz * 1.2); },

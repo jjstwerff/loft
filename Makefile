@@ -116,7 +116,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
+.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook hooks libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -579,6 +579,13 @@ index:  ## Refresh index/tags.json via the loft scanner
 
 index-install-hook:
 	@./tools/indexer/install-hook.sh
+
+# Point git at the repo's checked-in hooks.  Currently one: `commit-msg` reminds you
+# that an issue referenced with `Refs #N` (or a bare `#N`) is NOT labelled
+# fixed-pending-merge by the push workflow, which reads `Fixes|Closes|Resolves #N`.
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "core.hooksPath = .githooks">&2
 
 # ── @I81 · @PLN92 feature catalogue sync (strand 3) — sync tooling ──
 # The `loft-lang/features` issues are the canonical, self-contained docs; these

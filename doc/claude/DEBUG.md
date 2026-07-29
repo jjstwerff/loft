@@ -97,10 +97,30 @@ Editors get the same engine over DAP (`loft-dap`); see [@I91](../features/I91.md
 | `static` | IR tree and bytecode only (no execution) | Codegen bugs, wrong IR, wrong opcode selection |
 | `crash_tail:N` | Last N lines before panic | Crash triage when full output is too large |
 | `locks` | Every store-lock / store-unlock event with store_nr + rec | "Write to locked store at rec=N fld=M" panics — pinpoints which op acquired the lock |
-| `type_timeline:<varname>` | Every type-mutation event for a specific named variable (old → new + origin) | "Why is var X type T at this point?" — flip / change_var_type / depend / substitute_type traces |
+| `type_timeline:<varname>` | Every type-mutation event for a specific named variable (old → new + origin + the SOURCE LINE that wrote it; set `LOFT_TIMELINE_BT=1` for the stack behind it) | "Why is var X type T at this point?" — flip / change_var_type / depend / substitute_type traces.  A dep list is REPLACED, not merged (`Type::depending`), so "who wrote this dep last" is usually the whole question |
 | `ir:<fn_name>` | IR tree dump for the named function only (no bytecode, no execution trace) | "What IR did the parser emit for fn X?" — focused codegen-bug diagnosis |
 | `slots:<fn_name>` | Slot-allocation summary for the named function — each var's final slot OR a reason why it was skipped | "Why is var X at slot 65535?" — `Incorrect var X[65535]` codegen panics |
 | `captures:<fn_name>` | Capture-pipeline summary for the named function + its lambdas — scalars_to_box, mutated_captures, closure_record attrs with auto-Reference status | "Why is closure-record attr X stored inline vs share-by-DbRef?" — closure-encoding diagnosis |
+
+`LOFT_VAR_TABLE=<fn substring>` is the companion to the IR dump, and NOT a `LOFT_LOG`
+preset — it prints after `scopes::check` on every path:
+
+```
+[vartable] n_f — returned Enum(650, true, Deps { items: [1] })
+[vartable]   0   n            int         scope=0  arg def OWNS
+[vartable]   1   __retbuf     enum(650)   scope=4  def
+[vartable]   3   e            enum(650)   scope=0  arg def OWNS
+[vartable]   5   _mv_items_1  vec<int>    scope=4  def deps=[__retbuf(1)]
+```
+
+Reach for it whenever a borrow points somewhere that makes no sense.  The IR dump
+names variables but never NUMBERS them, so a body reading `e` and a type dep printing
+`__retbuf` read as one consistent story — which is what made loft#666 look like a
+rename for two sessions.  Here the index is beside the name and each dep is resolved
+to `name(index)`, so a code/table desync is visible instead of inferred.  The flags
+answer the ownership question in the same line: `arg`, `def`, `skipfree`, `inlineref`,
+and `OWNS` (the `Function::owns_store` verdict — the ONE predicate every consumer
+reads; an element or a match binding must NOT show it).
 
 ---
 
@@ -929,6 +949,44 @@ Use `.warning("expected warning")` for non-fatal diagnostics.
 
 For end-to-end tests on `.loft` files, add to `tests/docs/` and the `wrap.rs`
 runner will pick it up automatically.
+
+---
+
+## Two false failures that look exactly like real ones
+
+Both waste a bisect if you take them at face value.  The rule underneath is the same:
+**a surprising red is a suspect environment before it is a suspect commit** — check the
+cheap environmental cause first, because each of these mimics a deterministic bug.
+
+**A stale server process on the port.**  A networked test
+(`tests/engine_host_connector.rs`, the `eh_*` family) failed in `make ci`, then failed
+standalone three runs in a row at an *identical* 15.80s, and it post-dated a green run
+— every tell of a real regression.  It was two leftover servers under
+`target/test-tmp/.loft/cache/` holding the ports; the test then waits out its deadline.
+Killing them made it pass in 3s.  So before bisecting one of these:
+
+```bash
+pgrep -af "target/test-tmp/.loft/cache/eh_"      # stale servers from an earlier run
+```
+
+**Identical timing across runs is the tell** — that is a deadline expiring, not logic
+failing.  Real logic bugs vary by a few ms; a deadline does not.
+
+**The installed binary is not always a "before" oracle.**  `$(which loft)` is only a
+pre-change reference if it was installed BEFORE the change.  A session used it to
+conclude a consumer-reported fault was pre-existing; the binary turned out to be dated
+*after* that morning's commits, and the fault was in fact a regression introduced by
+them.  `ls -l --time-style=long-iso $(which loft)` first, and when it is not older than
+the work, build the parent commit in a worktree instead:
+
+```bash
+git worktree add /tmp/pre <commit>^
+cd /tmp/pre && CARGO_TARGET_DIR=/tmp/pre-target cargo build --release --bin loft
+ln -s /tmp/pre/default /tmp/pre-target/release/default   # it loads default/ beside the binary
+```
+
+Related: **never run `find_problems.sh --bg` while building in the foreground** — they
+share `target/`, and the contention produces failures that vanish on a settled tree.
 
 ---
 
