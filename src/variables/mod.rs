@@ -225,6 +225,14 @@ pub struct Function {
     /// that closes the #433-residual (see `parse_assign_op`).
     annotated: HashSet<u16>,
     work_text: u16,
+    /// Separate counter for the caller-allocated `&text` out-param buffers
+    /// `caller_text_buf()` mints — the text twin of `work_vdb` below, and for
+    /// the same reason (loft#662).  A call only needs one once the callee's
+    /// `&text` ABI exists, which for a self-/forward-recursive callee is not
+    /// until pass 1 has promoted it; sharing `work_text` would shift the
+    /// `__work_N` names relative to pass 1 and break `text_return`'s name-based
+    /// attr matching.
+    work_ctext: u16,
     work_ref: u16,
     // Separate counter for vector-db work-refs created by `vector_db()`.
     // `vector_db` only runs on the second pass (first_pass guard), so it cannot
@@ -341,6 +349,7 @@ impl Function {
             current_loop: u16::MAX,
             loops: Vec::new(),
             work_text: 0,
+            work_ctext: 0,
             work_ref: 0,
             work_vdb: 0,
             variables: Vec::new(),
@@ -484,6 +493,7 @@ impl Function {
             v.uses = 0;
         }
         self.work_text = 0;
+        self.work_ctext = 0;
         self.work_ref = 0;
         self.work_vdb = 0;
         self.work_texts.clear();
@@ -523,6 +533,7 @@ impl Function {
             annotated: other.annotated.clone(),
             arm_consumed: other.arm_consumed.clone(),
             work_text: 0,
+            work_ctext: 0,
             work_ref: 0,
             work_vdb: 0,
             work_texts: BTreeSet::new(),
@@ -1777,6 +1788,18 @@ impl Function {
             if var.name.starts_with('_') || var.name.contains('#') {
                 continue;
             }
+            // A variable still typed `Unknown` after pass 2 is a pass-1 LEFTOVER, not
+            // something the user wrote and failed to read (loft#661).  Pass 1 parses a
+            // `match` whose subject type is not resolvable yet — e.g. a field whose type
+            // is declared later in the file — and binds each arm pattern to a plain
+            // variable; pass 2, with the enum resolved, binds the arm to its `_mv_<field>`
+            // variable instead and reads THAT.  Variables persist across passes, so the
+            // abandoned pass-1 binding survives with `uses == 0` and warned about a name
+            // the program does read.  Every variable pass 2 actually lowered has a
+            // resolved type, so this cannot silence a genuine unused local.
+            if matches!(var.type_def, Type::Unknown(_)) {
+                continue;
+            }
             if var.uses == 0 && !var.captured && data.def_nr(&var.name) == u32::MAX {
                 lexer.to(var.source);
                 diagnostic!(
@@ -1871,6 +1894,37 @@ impl Function {
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
         let n = format!("__work_{}", self.work_text + 1);
         self.work_text += 1;
+        let v = if let Some(nr) = self.names.get(&n) {
+            *nr
+        } else {
+            self.add_variable(&n, &Type::Text(Deps::none()), lexer)
+        };
+        self.work_texts.insert(v);
+        v
+    }
+
+    /// A buffer the CALLER allocates for a callee's hidden `&text` out-param —
+    /// the text twin of `work_refs`' `__ref_N` retbuf for a vector/enum callee.
+    ///
+    /// It gets its own `__work_c<N>` counter rather than sharing `work_text`'s
+    /// `__work_<N>` because the two are minted on different schedules, and the
+    /// variable tables persist across passes BY NAME (loft#662).  A call to a
+    /// text-returning function only needs this buffer once the callee's `&text`
+    /// ABI exists — which for a SELF- or forward-recursive callee is not until
+    /// pass 1 has promoted it.  Sharing one counter therefore let a pass-2-only
+    /// mint shift every later `__work_N` by one, so pass 2's format buffers
+    /// re-found pass 1's variables under the wrong roles: the return buffer
+    /// landed on a fresh name (growing the signature — "Too few parameters") and
+    /// a plain local landed on the variable pass 1 had promoted to a `&text`
+    /// parameter.  Separate counters keep `__work_N` driven only by the body's
+    /// format sites, which ARE pass-stable.
+    ///
+    /// The name keeps the `__work` prefix: the free/scope/coroutine/introspect
+    /// passes that key on it treat this buffer identically, and only
+    /// `sync_work_text_counter`'s `__work_<N>` parse is deliberately skipped.
+    pub fn caller_text_buf(&mut self, lexer: &mut Lexer) -> u16 {
+        let n = format!("__work_c{}", self.work_ctext + 1);
+        self.work_ctext += 1;
         let v = if let Some(nr) = self.names.get(&n) {
             *nr
         } else {
@@ -2003,6 +2057,21 @@ impl Function {
     #[must_use]
     pub fn is_compiler_generated(&self, v: u16) -> bool {
         self.variables[v as usize].name.starts_with('_')
+    }
+
+    /// Whether `v` is a vector-literal ELEMENT alias (`_elm_N`, minted by
+    /// `new_element`).
+    ///
+    /// Such a variable never owns a store: its record is the slot the enclosing
+    /// `OpNewRecord` carved out of the container, and `OpFinishRecord` commits
+    /// it there.  Allocating for it (`OpDatabase`) or freeing it independently
+    /// would both act on the wrong record.
+    ///
+    /// One home for a fact codegen and the parser both need — the store-owner
+    /// decision in `generation::dispatch` and the in-place-construction decision
+    /// in `parse_object` must not drift apart (loft#660).
+    pub fn is_element_alias(&self, v: u16) -> bool {
+        (v as usize) < self.variables.len() && self.variables[v as usize].name.starts_with("_elm")
     }
 
     /// Record that fn_ref variable `fn_ref` has its closure stored in `clos`.

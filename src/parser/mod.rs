@@ -7182,7 +7182,15 @@ impl Parser {
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
-                        let wv = self.vars.work_text(&mut self.lexer);
+                        // Its OWN counter, like the `work_refs` retbuf arm above
+                        // (loft#662): this buffer only exists once the callee's
+                        // `&text` ABI does, so for a self-/forward-recursive callee
+                        // it is minted on pass 2 ONLY.  Taking it from `work_text`
+                        // shifted every later `__work_N` by one, and since the
+                        // variable tables persist across passes by name, pass 2's
+                        // format buffers then re-found pass 1's variables under the
+                        // wrong roles.
+                        let wv = self.vars.caller_text_buf(&mut self.lexer);
                         // clear the work buffer before each call so loop
                         // iterations start fresh (matches fn-ref path in control.rs).
                         ls.push(v_set(wv, Value::Text(String::new())));

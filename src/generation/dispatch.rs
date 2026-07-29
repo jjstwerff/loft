@@ -999,8 +999,7 @@ impl Output<'_> {
         first: bool,
     ) -> std::io::Result<()> {
         let variables = self.data.def(self.def_nr).variables();
-        let var_raw_name = variables.name(var);
-        let is_elm = var_raw_name.starts_with("_elm");
+        let is_elm = variables.is_element_alias(var);
         // A `skip_free` variable is a BORROWED VIEW by construction — the parser /
         // scope analysis set the flag precisely to suppress its `OpFreeRef` because
         // it does not own a store (e.g. a match-arm binding `match e { V { v } =>
