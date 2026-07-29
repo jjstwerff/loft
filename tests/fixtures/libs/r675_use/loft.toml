@@ -1,0 +1,6 @@
+[package]
+name = "r675_use"
+version = "0.1.0"
+
+[dependencies]
+r675_geo = { path = "../r675_geo" }

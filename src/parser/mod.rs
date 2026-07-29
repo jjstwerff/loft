@@ -1443,6 +1443,25 @@ impl Parser {
         // counts exactly.  Post-arity-cascade (signatures freeze at declaration)
         // this is an INVARIANT, not an aspiration — a divergence is a real
         // cross-pass bug, asserted below after pass 2.
+        // #675 / @PLAN59 — reserve the heap-return buffer for the functions whose
+        // return type was not yet KNOWABLE at signature-parse time.
+        //
+        // The signature-time reservation asks "is the declared return a heap type",
+        // and for a type that lives in a dependency the honest pass-1 answer is
+        // "no idea": `glb`'s `-> Vec3` reads `Unknown(659)` there, and the stub's def
+        // number is LOWER than the real struct's, so the definitions it needs do not
+        // exist yet.  The reservation then never fires and `ref_return` grows the
+        // attribute in PASS 2 instead — the cross-pass arity growth @PLAN59 exists to
+        // prevent, and the one that stopped a published library from compiling once
+        // the H5 guard became always-on.
+        //
+        // Here — after pass 1 and its deferred-unknown resolution, before the H5
+        // snapshot and before pass 2 parses a single body — every type IS resolved.
+        // So the same question gets a real answer, the attribute lands before any
+        // pass-2 caller lowers a call, and pass 2's `ref_return` finds a buffer to
+        // RENAME instead of one to grow.  Reserving here rather than at the signature
+        // is what makes this cheap: no signature pre-pass, one O(defs) walk.
+        self.reserve_late_return_buffers();
         let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
             .map(|d| self.data.attributes(d as u32))
             .collect();
@@ -1527,6 +1546,64 @@ impl Parser {
     /// stayed vulnerable (loft#662): a `text_return` work buffer is discovered FROM
     /// the body, so nothing reserves it at signature time and its numbering must be
     /// kept pass-stable by hand instead (see `Function::work_text_p2`).
+    /// #675 / @PLAN59 — give every heap-returning function a `__retbuf` attribute
+    /// before pass 2 starts, including the ones whose return type only became
+    /// knowable after pass 1 finished.
+    ///
+    /// Mirrors the signature-time reservation's gate exactly, because the point is
+    /// that the two together cover every heap-returning function: a body-carrying,
+    /// non-`#rust`, non-lambda plain function whose declared return is a heap type
+    /// and which does not already carry a hidden heap buffer. The last condition is
+    /// why this reads the ATTRIBUTE SHAPE rather than the name `__retbuf`: pass 1's
+    /// `ref_return` RENAMES the reserved attribute to the promoted local, so a
+    /// function that already got its buffer no longer has one by that name.
+    ///
+    /// The variable is created alongside the attribute. `arguments()` yields argument
+    /// vars in number order, so appending puts it last — which is where the attribute
+    /// is too, and the position the callee's ABI expects.
+    fn reserve_late_return_buffers(&mut self) {
+        for d in 0..self.data.definitions.len() as u32 {
+            let def = self.data.def(d);
+            if !matches!(self.data.def_type(d), DefType::Function)
+                || *def.code() == Value::Null
+                || def.is_operator()
+                || !def.rust().is_empty()
+                || !def.native().is_empty()
+                || def.name().starts_with("n___lambda_")
+            {
+                continue;
+            }
+            let ret = def.returned().clone();
+            if !matches!(
+                ret,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            ) {
+                continue;
+            }
+            // Already served — either the signature-time reservation fired, or pass 1
+            // promoted a local into the buffer and renamed the attribute to it.
+            if def.attributes().iter().any(|a| {
+                a.hidden
+                    && matches!(
+                        a.typedef,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+            }) {
+                continue;
+            }
+            let a = self
+                .data
+                .add_attribute(&mut self.lexer, d, "__retbuf", ret.clone());
+            self.data.definitions[d as usize].attributes[a].hidden = true;
+            let f = &mut self.data.definitions[d as usize].variables;
+            let v = f.add_temp_var("__retbuf", &ret);
+            if v != u16::MAX {
+                f.become_argument(v);
+                f.mark_used(v);
+            }
+        }
+    }
+
     fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
         // Pass-2 def GROWTH has exactly one legal form (the fuzzer's F1 catch):
         // the reduce/map/filter builtin family desugars on pass 2 only — pass 1
@@ -1575,6 +1652,13 @@ impl Parser {
             if c2 > c1 {
                 for a in c1..c2 {
                     let n = self.data.attr_name(d as u32, a);
+                    // A heap RETURN buffer is NOT on this list, and #675 is why it does
+                    // not need to be: `__ref_N` / `__retbuf` growth in pass 2 was a real
+                    // divergence (`glb`'s `-> Vec3` is `Unknown` at pass-1 signature time,
+                    // so @PLAN59's reservation never fired), and it is now fixed at the
+                    // source — `reserve_late_return_buffers` reserves the buffer between
+                    // the passes, where every type IS resolved.  This assert stayed strict
+                    // through that fix, which is what proves the fix rather than a hole.
                     assert!(
                         n == "__closure" || n.starts_with("__work_"),
                         "H5 two-pass contract: def `{}` (#{d}) grew a pass-2-only \

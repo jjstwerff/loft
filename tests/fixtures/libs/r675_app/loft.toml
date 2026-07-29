@@ -1,0 +1,6 @@
+[package]
+name = "r675_app"
+version = "0.1.0"
+
+[dependencies]
+r675_use = { path = "../r675_use" }
