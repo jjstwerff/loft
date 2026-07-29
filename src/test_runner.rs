@@ -100,7 +100,18 @@ fn coverage_path(src: &str, test_file: &str, root: Option<&std::path::Path>) -> 
     let root = root?;
     let root = std::fs::canonicalize(root).ok()?;
     let rel = abs.strip_prefix(&root).ok()?;
-    Some(rel.to_string_lossy().into_owned())
+    // Joined with `/` explicitly rather than taken from the OS.  This string is a
+    // REPORT — something a reader copies into an editor, and something a test asserts
+    // on — not a path anything opens, so it must read the same on every platform.
+    // `to_string_lossy()` hands back the native separator, which made the Windows leg
+    // print `src\pos.loft` while this function's own contract (and `loft.toml`'s
+    // `entry = "src/<name>.loft"`) says `src/pos.loft`.
+    Some(
+        rel.components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
 }
 
 fn enter_source_dir(source_dir: &str, program_relative: bool) -> CwdGuard {
