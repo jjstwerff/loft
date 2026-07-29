@@ -1377,6 +1377,33 @@ impl Function {
             self.variables[var_nr as usize].type_def = type_def.clone();
             return self.is_new(var_nr);
         }
+        // loft#663 — an integer-element vector's element WIDTH is layout-bearing: it
+        // IS the store's stride.  `is_equal` deliberately collapses every integer
+        // width to one type, so the equality early-return below keeps whichever
+        // element type the variable was given FIRST.  When pass 1 could not resolve
+        // the callee — a FORWARD-declared or recursive function — that first type
+        // carries no declared width; pass 2 resolves the real one, and the collapse
+        // then discards it.  The append writes 8-byte elements into a 1-byte-strided
+        // store and they read back as 0.  Adopt a declared width over none; the
+        // reverse (declared → undeclared) is left to the collapse, so an annotated
+        // variable is never widened out from under its declaration.
+        let adopt_elem_width = matches!(
+            (var_tp, type_def),
+            (Type::Vector(cur, _), Type::Vector(new, _))
+                if matches!(
+                    (&**cur, &**new),
+                    (Type::Integer(c), Type::Integer(n))
+                        if c.forced_size.is_none() && n.forced_size.is_some()
+                )
+        );
+        if adopt_elem_width {
+            self.trace_type_change(var_nr, type_def, "change_var_type(#663 element width)");
+            self.variables[var_nr as usize].type_def = type_def.clone();
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
         // @P376 — assigning the `Never` poison (an errored struct construction,
         // pass 2) to an as-yet-`Unknown` variable must OVERWRITE it to `Never`,
         // NOT take the early-return below.  `is_equal(Unknown, Never)` is true,
@@ -1385,6 +1412,7 @@ impl Function {
         // variable" → format-string fatal).  Falling through re-types it to
         // `Never`, which field access / format interpolation / the unknown-type
         // sweep all skip — leaving the single `unknown type '…'` diagnostic.
+        let var_tp = &self.variables[var_nr as usize].type_def;
         let never_into_unknown = matches!(type_def, Type::Never) && var_tp.is_unknown();
         if !never_into_unknown && (type_def.is_unknown() || var_tp.is_equal(type_def)) {
             for on in type_def.depend() {

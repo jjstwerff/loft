@@ -6937,6 +6937,39 @@ impl Parser {
         actual
     }
 
+    /// loft#663 — the caller buffer a heap-vector return is actually delivered
+    /// into, for a callee whose declared return deps cannot be read yet.
+    ///
+    /// A vector return names its hidden `__retbuf` attribute in `returned()`'s
+    /// deps, and `resolve_deps` maps that onto the buffer the call site
+    /// allocated.  But while a function's OWN body is being parsed its returned
+    /// type has not been re-promoted this pass, so a SELF- or MUTUALLY-recursive
+    /// call reads EMPTY deps.  The receiving local then looks like a vector that
+    /// owns nothing, and `vector_db` hands it a fresh backing store and repoints
+    /// it — discarding the value the call had just delivered into the buffer, so
+    /// `r = f(n-1); r += [x]; return r` returned only `[x]`.
+    ///
+    /// A body-carrying vector-returning function always has the unconditional H1
+    /// `__retbuf`, and `add_defaults` has already allocated the buffer for it
+    /// (that attribute's entry in `types` carries `Deps::frame1(vr)`), so when
+    /// the declared deps are silent that buffer is where the value is.  A
+    /// fallback only: a callee whose signature IS final resolves exactly as
+    /// before.
+    fn caller_vector_retbuf_dep(&self, d_nr: u32, types: &[Type]) -> Vec<u16> {
+        let attrs = self.data.def(d_nr).attributes();
+        for (i, a) in attrs.iter().enumerate() {
+            if !a.hidden || i >= types.len() {
+                continue;
+            }
+            if let Type::Vector(_, dep) = &types[i]
+                && !dep.is_empty()
+            {
+                return dep.into_iter().copied().collect();
+            }
+        }
+        Vec::new()
+    }
+
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
         let tp = self.data.def(d_nr).returned().clone();
@@ -6954,10 +6987,20 @@ impl Parser {
         if let Type::Text(d) = tp {
             Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
         } else if let Type::Vector(to, d) = tp {
-            Type::Vector(
-                to,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            // A vector return genuinely depends on its hidden retbuf (see above), so
+            // an EMPTY result here means the dep could not be read — not that the
+            // value owns nothing.  Fall back to the buffer this call site allocated
+            // (loft#663).
+            let mut dp = Self::resolve_deps(types, d.as_attr_indices());
+            // Only a callee that has NOT finished parsing this pass can have lost
+            // its dep — that is exactly a SELF (`d_nr == context`) or FORWARD
+            // (`d_nr > context`) reference.  A backward-ref callee is fully
+            // resolved, so an empty dep there is the truth and must be left alone
+            // (the same def_nr ordering test `tret_bind_ok` uses).
+            if dp.is_empty() && d_nr >= self.context {
+                dp = self.caller_vector_retbuf_dep(d_nr, types);
+            }
+            Type::Vector(to, Deps::frame(dp))
         } else if let Type::Sorted(to, key, d) = tp {
             Type::Sorted(
                 to,
