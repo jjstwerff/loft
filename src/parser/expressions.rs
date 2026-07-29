@@ -367,7 +367,10 @@ impl Parser {
                     self.wrap_value_text_dest(a);
                 }
             }
-            let w = self.vars.work_text(&mut self.lexer);
+            // Pass-2-only mint (loft#665 piece 2): drawing from the both-pass
+            // `__work_N` sequence here would shift every later buffer relative to
+            // pass 1.  Its own sequence cannot perturb anyone else's numbering.
+            let w = self.vars.work_text_p2(&mut self.lexer);
             let call = std::mem::replace(v, Value::Null);
             *v = v_block(
                 vec![v_set(w, call), Value::Var(w)],
@@ -3445,7 +3448,8 @@ use a separate collection or add after the loop"
             if self.try_branch_text_bind(code, var_nr) {
                 // `code` is now a void branch of `Set(var_nr, …)`.
             } else if !self.first_pass && var_nr != u16::MAX && code.reads_var(var_nr) {
-                let work = self.vars.work_text(&mut self.lexer);
+                // Pass-2-only mint (loft#665 piece 2) — this arm is `!first_pass`.
+                let work = self.vars.work_text_p2(&mut self.lexer);
                 let ls = vec![
                     self.cl("OpClearText", &[Value::Var(work)]),
                     self.cl("OpAppendText", &[Value::Var(work), code.clone()]),

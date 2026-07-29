@@ -1501,15 +1501,20 @@ impl Parser {
     /// `assert!` (see `Data::rollback_to`), and this one costs a `Vec<usize>` of
     /// one entry per definition, twice per parse — unmeasurable against a parse.
     ///
-    /// This attribute-count check is the COMPLETE H5 validation: the H5 spec's other
-    /// named residual — work-ref (`__ref_N`) counter equality per fn — was dissolved
-    /// by H1 (@PLAN59), exactly as the spec's item 3 ("re-evaluate after H1") foresaw.
-    /// `work_refs()` now fires zero times across the whole debug corpus, and the
-    /// counter's value in a stored table is unconditionally reset to 0 by
-    /// `Function::append` at store time, so a work-ref-counter assert here would be
-    /// permanently vacuous.  The one failure mode it could ever have caught — a
-    /// cross-pass `__ref_N` name shift making `ref_return` add a spurious attr — IS
-    /// caught here, because that spurious attr is itself an attribute-count divergence.
+    /// The H5 spec's other named residual — work-ref (`__ref_N`) counter equality
+    /// per fn — was dissolved by H1 (@PLAN59), but NOT for the reason recorded here
+    /// before: `work_refs()` does not "fire zero times across the debug corpus", it
+    /// fires ~5500 times (measured, loft#665).  What actually dissolved it is the
+    /// signature-time `__retbuf`: the attribute exists before ANY body parses, so
+    /// `ref_return`'s promotion no longer re-finds it by work-ref NAME and therefore
+    /// no longer depends on `__ref_N` numbering being pass-stable.  A counter-equality
+    /// assert would be not vacuous but NOISY — 11 of the 19 `work_refs` call sites are
+    /// pass-2-only, so the counters legitimately diverge.
+    ///
+    /// That is the durable shape for this whole class, and it is why the text side
+    /// stayed vulnerable (loft#662): a `text_return` work buffer is discovered FROM
+    /// the body, so nothing reserves it at signature time and its numbering must be
+    /// kept pass-stable by hand instead (see `Function::work_text_p2`).
     fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
         // Pass-2 def GROWTH has exactly one legal form (the fuzzer's F1 catch):
         // the reduce/map/filter builtin family desugars on pass 2 only — pass 1

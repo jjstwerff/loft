@@ -233,6 +233,14 @@ pub struct Function {
     /// `__work_N` names relative to pass 1 and break `text_return`'s name-based
     /// attr matching.
     work_ctext: u16,
+    /// loft#665 piece 2 — the PASS-2-ONLY `__work` sequence.  A mint site that can
+    /// only fire on pass 2 must not draw from `work_text`: doing so shifts every
+    /// later `__work_N` relative to pass 1, and because the variable tables persist
+    /// BY NAME, pass 2's buffers then re-find pass 1's variables under the wrong
+    /// roles (loft#662).  Pass-availability is a STATIC property of each mint site
+    /// (measured: 19 both-pass sites, 15 pass-2-only, none mixed), so the split is
+    /// decidable at the call site.
+    work_text_p2: u16,
     work_ref: u16,
     // Separate counter for vector-db work-refs created by `vector_db()`.
     // `vector_db` only runs on the second pass (first_pass guard), so it cannot
@@ -350,6 +358,7 @@ impl Function {
             loops: Vec::new(),
             work_text: 0,
             work_ctext: 0,
+            work_text_p2: 0,
             work_ref: 0,
             work_vdb: 0,
             variables: Vec::new(),
@@ -494,6 +503,7 @@ impl Function {
         }
         self.work_text = 0;
         self.work_ctext = 0;
+        self.work_text_p2 = 0;
         self.work_ref = 0;
         self.work_vdb = 0;
         self.work_texts.clear();
@@ -534,6 +544,7 @@ impl Function {
             arm_consumed: other.arm_consumed.clone(),
             work_text: 0,
             work_ctext: 0,
+            work_text_p2: 0,
             work_ref: 0,
             work_vdb: 0,
             work_texts: BTreeSet::new(),
@@ -1919,9 +1930,36 @@ impl Function {
             }
         }
     }
+    #[track_caller]
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
         let n = format!("__work_{}", self.work_text + 1);
         self.work_text += 1;
+        let v = if let Some(nr) = self.names.get(&n) {
+            *nr
+        } else {
+            self.add_variable(&n, &Type::Text(Deps::none()), lexer)
+        };
+        self.work_texts.insert(v);
+        v
+    }
+
+    /// The pass-2-only twin of [`Function::work_text`] — same buffer, own sequence.
+    ///
+    /// Use it at any mint site that cannot fire on pass 1 (typically one gated
+    /// `!first_pass`, or one that needs a callee signature pass 1 has not promoted
+    /// yet).  Such a site drawing from `work_text` shifts every later `__work_N`
+    /// relative to pass 1; since the variable tables persist BY NAME, pass 2 then
+    /// re-finds pass 1's variables under the wrong roles — loft#662.  Drawing from
+    /// its own sequence, a pass-2-only mint cannot perturb anyone else's numbering,
+    /// and its own names simply have no pass-1 counterpart to collide with.
+    ///
+    /// The name keeps the `__work` prefix so the free/scope/coroutine/introspect
+    /// passes that key on it are unaffected; only `sync_work_text_counter`'s
+    /// `__work_<N>` parse skips it, as it does for `__work_c<N>`.
+    #[track_caller]
+    pub fn work_text_p2(&mut self, lexer: &mut Lexer) -> u16 {
+        let n = format!("__work_p2_{}", self.work_text_p2 + 1);
+        self.work_text_p2 += 1;
         let v = if let Some(nr) = self.names.get(&n) {
             *nr
         } else {
@@ -1950,6 +1988,7 @@ impl Function {
     /// The name keeps the `__work` prefix: the free/scope/coroutine/introspect
     /// passes that key on it treat this buffer identically, and only
     /// `sync_work_text_counter`'s `__work_<N>` parse is deliberately skipped.
+    #[track_caller]
     pub fn caller_text_buf(&mut self, lexer: &mut Lexer) -> u16 {
         let n = format!("__work_c{}", self.work_ctext + 1);
         self.work_ctext += 1;
@@ -1976,6 +2015,7 @@ impl Function {
         }
     }
 
+    #[track_caller]
     pub fn work_refs(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
         let n = format!("__ref_{}", self.work_ref + 1);
         self.work_ref += 1;
@@ -1994,19 +2034,13 @@ impl Function {
         v
     }
 
-    /// Like `work_refs` but uses a separate `__rref_N` counter/namespace.
-    /// Used by `add_defaults` for work-refs allocated for recursive self-calls
-    /// on the second pass.  This prevents the `__ref_N` counter from being
-    /// consumed by those recursive-call temporaries, so the outer function's
-    /// return-value work-ref continues to receive the same `__ref_N` name it
-    /// got on the first pass — allowing `ref_return` to find the name match
-    /// and reuse the existing attribute instead of adding a new one.
     /// Work-ref for `vector_db()` — uses a separate `__vdb_N` counter/namespace.
     /// `vector_db` only runs on the second pass (it is guarded by `!first_pass`),
     /// so it must NOT share the `work_ref` / `__ref_N` counter with `add_defaults`.
     /// Using a distinct counter prevents the name-shift that would cause
     /// `ref_return` to fail its name-based attr match and add a spurious attr.
     /// These variables are inserted into `work_refs` so they receive null-inits.
+    #[track_caller]
     pub fn work_vec_db(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
         let n = format!("__vdb_{}", self.work_vdb + 1);
         self.work_vdb += 1;
