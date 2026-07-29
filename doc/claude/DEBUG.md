@@ -932,6 +932,44 @@ runner will pick it up automatically.
 
 ---
 
+## Two false failures that look exactly like real ones
+
+Both waste a bisect if you take them at face value.  The rule underneath is the same:
+**a surprising red is a suspect environment before it is a suspect commit** — check the
+cheap environmental cause first, because each of these mimics a deterministic bug.
+
+**A stale server process on the port.**  A networked test
+(`tests/engine_host_connector.rs`, the `eh_*` family) failed in `make ci`, then failed
+standalone three runs in a row at an *identical* 15.80s, and it post-dated a green run
+— every tell of a real regression.  It was two leftover servers under
+`target/test-tmp/.loft/cache/` holding the ports; the test then waits out its deadline.
+Killing them made it pass in 3s.  So before bisecting one of these:
+
+```bash
+pgrep -af "target/test-tmp/.loft/cache/eh_"      # stale servers from an earlier run
+```
+
+**Identical timing across runs is the tell** — that is a deadline expiring, not logic
+failing.  Real logic bugs vary by a few ms; a deadline does not.
+
+**The installed binary is not always a "before" oracle.**  `$(which loft)` is only a
+pre-change reference if it was installed BEFORE the change.  A session used it to
+conclude a consumer-reported fault was pre-existing; the binary turned out to be dated
+*after* that morning's commits, and the fault was in fact a regression introduced by
+them.  `ls -l --time-style=long-iso $(which loft)` first, and when it is not older than
+the work, build the parent commit in a worktree instead:
+
+```bash
+git worktree add /tmp/pre <commit>^
+cd /tmp/pre && CARGO_TARGET_DIR=/tmp/pre-target cargo build --release --bin loft
+ln -s /tmp/pre/default /tmp/pre-target/release/default   # it loads default/ beside the binary
+```
+
+Related: **never run `find_problems.sh --bg` while building in the foreground** — they
+share `target/`, and the contention produces failures that vanish on a settled tree.
+
+---
+
 ## Bounding a run — `--timeout` / `LOFT_TIMEOUT` (@PLAN49)
 
 **loft has no process-wide default timeout, by design.** Long-running programs —
