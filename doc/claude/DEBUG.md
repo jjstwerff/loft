@@ -97,10 +97,30 @@ Editors get the same engine over DAP (`loft-dap`); see [@I91](../features/I91.md
 | `static` | IR tree and bytecode only (no execution) | Codegen bugs, wrong IR, wrong opcode selection |
 | `crash_tail:N` | Last N lines before panic | Crash triage when full output is too large |
 | `locks` | Every store-lock / store-unlock event with store_nr + rec | "Write to locked store at rec=N fld=M" panics — pinpoints which op acquired the lock |
-| `type_timeline:<varname>` | Every type-mutation event for a specific named variable (old → new + origin) | "Why is var X type T at this point?" — flip / change_var_type / depend / substitute_type traces |
+| `type_timeline:<varname>` | Every type-mutation event for a specific named variable (old → new + origin + the SOURCE LINE that wrote it; set `LOFT_TIMELINE_BT=1` for the stack behind it) | "Why is var X type T at this point?" — flip / change_var_type / depend / substitute_type traces.  A dep list is REPLACED, not merged (`Type::depending`), so "who wrote this dep last" is usually the whole question |
 | `ir:<fn_name>` | IR tree dump for the named function only (no bytecode, no execution trace) | "What IR did the parser emit for fn X?" — focused codegen-bug diagnosis |
 | `slots:<fn_name>` | Slot-allocation summary for the named function — each var's final slot OR a reason why it was skipped | "Why is var X at slot 65535?" — `Incorrect var X[65535]` codegen panics |
 | `captures:<fn_name>` | Capture-pipeline summary for the named function + its lambdas — scalars_to_box, mutated_captures, closure_record attrs with auto-Reference status | "Why is closure-record attr X stored inline vs share-by-DbRef?" — closure-encoding diagnosis |
+
+`LOFT_VAR_TABLE=<fn substring>` is the companion to the IR dump, and NOT a `LOFT_LOG`
+preset — it prints after `scopes::check` on every path:
+
+```
+[vartable] n_f — returned Enum(650, true, Deps { items: [1] })
+[vartable]   0   n            int         scope=0  arg def OWNS
+[vartable]   1   __retbuf     enum(650)   scope=4  def
+[vartable]   3   e            enum(650)   scope=0  arg def OWNS
+[vartable]   5   _mv_items_1  vec<int>    scope=4  def deps=[__retbuf(1)]
+```
+
+Reach for it whenever a borrow points somewhere that makes no sense.  The IR dump
+names variables but never NUMBERS them, so a body reading `e` and a type dep printing
+`__retbuf` read as one consistent story — which is what made loft#666 look like a
+rename for two sessions.  Here the index is beside the name and each dep is resolved
+to `name(index)`, so a code/table desync is visible instead of inferred.  The flags
+answer the ownership question in the same line: `arg`, `def`, `skipfree`, `inlineref`,
+and `OWNS` (the `Function::owns_store` verdict — the ONE predicate every consumer
+reads; an element or a match binding must NOT show it).
 
 ---
 

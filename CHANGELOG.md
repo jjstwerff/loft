@@ -21,6 +21,34 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — changing a value you matched on now sticks
+
+Destructuring in a `match` gives you a **view** of what you matched, so writing
+through it changes the value:
+
+```
+match e {
+    Holder { items } => { items += "y"; }     // `e`'s payload really is longer now
+    _ => { }
+}
+```
+
+That is what it always looked like it did, and for a vector payload it is what it did.
+For a `text` payload the write was silently thrown away — same syntax, same shape, no
+warning, and nothing in the code to tell you which one you had written. It now behaves
+the same whatever the payload type, including through nested patterns like
+`Wrap { inner: Holder { items } }`, where the write used to vanish for every type.
+
+Two crashes in the same corner are gone with it. A function that returns an enum,
+calls itself, and edits the payload before returning it used to segfault the
+interpreter while the compiled backend quietly got the right answer — a
+particularly unpleasant pair, because the browser runs the interpreter. And three
+enums in one file that happen to share a variant name (`Nil`, say) used to abort
+the compiler with an internal error, on perfectly ordinary code.
+
+If you had worked around any of these by rebuilding the value instead of editing it
+in place, that code keeps working — nothing you can write got slower or stricter.
+
 ### Unreleased — a big function no longer breaks its own loops
 
 A function whose body grew past about 32 KB started behaving impossibly: a

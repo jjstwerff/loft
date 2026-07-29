@@ -267,6 +267,27 @@ two-leg discriminator). Each site validated on BOTH backends:
   the typed `borrow_tail_copy` block). Fix = route through / replicate the proven path, not a bare
   `OpAppendVector`. (Not the tp, not interp execution — both ruled out by probe.)
 
+### The slot-level twin — `Function::owns_store` (loft#664)
+
+`ownership_of` answers "does this VALUE own its store"; the codegen and parser sites
+that decide whether to ALLOCATE into a slot ask the narrower slot-level question, and
+they used to answer it three ways at once: an empty dep list, the `_elm` NAME prefix,
+and the `inline_ref` / `skip_free` markers. `Function::owns_store(v)` is now the one
+predicate — `!inline_ref && !skip_free && is_independent` — and `is_element_alias` is
+deleted.
+
+**Deps alone cannot carry it.** A dep names the borrow SOURCE, so a borrow with no
+source VARIABLE — a vector inside an enum payload is addressed by a field DbRef —
+produced an empty list, and empty means OWNED. That is a wrong answer, not an unknown
+one, and it is why loft#660 had to fall back on a name. So the fact is now STATED where
+the non-owning slot is MINTED (`unique_elm_var` marks the element `inline_ref`), and the
+dep is still recorded where a container variable exists — the two carry different facts,
+which is what falsified the attractive "add a marker, delete the deps" version.
+
+The general rule this instance teaches: **when a fact cannot be represented for some
+inputs, the encoding is the bug — not the consumer that read it wrong.** An empty dep
+list conflates "owns" with "cannot say", and every consumer inherits the conflation.
+
 **The methodology that made this work** (vs the 9 thrash attempts): build the fact INERT and
 validate it against a ground-truth corpus FIRST (the accumulated per-fix regression tests ARE the
 spec), then collapse one chokepoint per commit reading that fact — and when a proven sibling path
