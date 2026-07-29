@@ -5347,6 +5347,9 @@ fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     loft::crash_report::install("loft");
+    // loft#665 piece 3 — render an internal panic as a loft diagnostic pointing at
+    // the user's source, then fall through to the normal Rust report.
+    loft::crash_report::install_panic_hook();
     // @PLAN49 T1+T3 — arm the execution-timeout watchdog from the env
     // (`LOFT_TIMEOUT=<secs>`) BEFORE we parse argv.  An explicit
     // `--timeout` later in argv re-arms (no-op — `arm` is idempotent)

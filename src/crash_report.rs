@@ -38,6 +38,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -82,6 +83,7 @@ impl Ctx {
 
 /// Used by the installer to ensure we only install once per process.
 static INSTALLED: AtomicBool = AtomicBool::new(false);
+static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Holds the program name for the diagnostic prefix.
 static PROGRAM: OnceLock<&'static str> = OnceLock::new();
@@ -146,6 +148,106 @@ pub fn source_loc_for_pc(pc: u32) -> Option<crate::lexer::Position> {
             .as_ref()
             .and_then(|m| m.range(..=pc).next_back().map(|(_, p)| p.clone()))
     })
+}
+
+thread_local! {
+    /// The loft source position the compiler is currently working on.
+    ///
+    /// A signal handler cannot allocate, so the SIGSEGV path above resolves its
+    /// position from a pc.  A PANIC handler runs on the normal stack and may
+    /// allocate freely, which is what lets this one carry a real `Position`.
+    static COMPILE_POS: RefCell<Option<crate::lexer::Position>> = const { RefCell::new(None) };
+}
+
+/// Publish the loft source position the compiler is currently working on, so an
+/// internal panic can point at the USER's program instead of at a compiler
+/// source file (loft#665 piece 3).
+///
+/// Called at two chokepoints — per source line while parsing, and per definition
+/// while generating code — rather than at the thousands of individual `assert!` /
+/// `unwrap` sites, which is the only reason this is one mechanism instead of a
+/// spray that would be silently incomplete the moment anyone adds an assert.
+pub fn note_compile_pos(pos: &crate::lexer::Position) {
+    COMPILE_POS.with(|p| {
+        if let Ok(mut slot) = p.try_borrow_mut() {
+            *slot = Some(pos.clone());
+        }
+    });
+}
+
+/// Forget the current compile position — call once compilation is done, so a
+/// RUNTIME panic is not misattributed to the last line that was compiled.
+pub fn clear_compile_pos() {
+    COMPILE_POS.with(|p| {
+        if let Ok(mut slot) = p.try_borrow_mut() {
+            *slot = None;
+        }
+    });
+}
+
+#[must_use]
+pub fn compile_pos() -> Option<crate::lexer::Position> {
+    COMPILE_POS.with(|p| p.try_borrow().ok().and_then(|b| b.clone()))
+}
+
+/// Render an internal compiler panic as a loft diagnostic pointing at the user's
+/// source, then defer to the previous hook for the Rust-side detail.
+///
+/// A compiler-internal invariant that breaks is still something the USER
+/// triggered with a specific program, and until now they were shown only
+/// `thread 'main' panicked at src/state/codegen.rs:2955` naming a generated
+/// symbol and an argument count they never wrote (loft#662).  Nothing in that
+/// says which line of their program to look at, or that a bug report is wanted.
+///
+/// Wrapping the hook rather than replacing it keeps the Rust location and
+/// backtrace, which are what make the report actionable.
+pub fn install_panic_hook() {
+    if PANIC_HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(pos) = compile_pos() {
+            let detail = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "internal error".to_string());
+            let at = info
+                .location()
+                .map_or_else(String::new, |l| format!(" [{}:{}]", l.file(), l.line()));
+            let msg = format!(
+                "internal compiler error — please report this program at \
+                 https://github.com/loft-lang/loft/issues\n  {detail}{at}"
+            );
+            let mut diags = crate::diagnostics::Diagnostics::new();
+            diags.add_at(
+                crate::diagnostics::Level::Fatal,
+                &msg,
+                &pos.file,
+                pos.line,
+                pos.pos,
+            );
+            let mode = crate::diagnostic_render::ErrorMode::from_cli_and_env(None);
+            if matches!(mode, crate::diagnostic_render::ErrorMode::Pretty) {
+                let loader = crate::diagnostic_render::FileSourceLoader::new();
+                eprint!(
+                    "{}",
+                    crate::diagnostic_render::render_pretty_all(
+                        &diags,
+                        &loader,
+                        crate::diagnostic_render::ColorMode::Auto,
+                    )
+                );
+            } else {
+                for entry in diags.entries() {
+                    eprintln!("{}", entry.to_string_compact());
+                }
+            }
+        }
+        prev(info);
+    }));
 }
 
 /// Install signal handlers for SIGSEGV / SIGABRT / SIGBUS.
@@ -413,5 +515,42 @@ mod tests {
         // Ensure the thread-local is unset at the start.
         set_source_spans(None);
         assert!(source_loc_for_pc(42).is_none());
+    }
+
+    /// loft#665 piece 3 — the compile position an internal panic reports.  It must
+    /// be publishable, readable, and above all CLEARABLE: a runtime panic that
+    /// still saw a stale compile position would point the user at whatever line
+    /// happened to compile last, which is worse than saying nothing.
+    #[test]
+    fn compile_pos_round_trips_and_clears() {
+        clear_compile_pos();
+        assert!(compile_pos().is_none(), "starts unset");
+
+        let pos = crate::lexer::Position {
+            file: "prog.loft".to_string(),
+            line: 12,
+            pos: 5,
+        };
+        note_compile_pos(&pos);
+        let got = compile_pos().expect("published position is readable");
+        assert_eq!((got.file.as_str(), got.line, got.pos), ("prog.loft", 12, 5));
+
+        // A later position replaces the earlier one — the report wants where the
+        // compiler IS, not where it started.
+        let later = crate::lexer::Position {
+            file: "prog.loft".to_string(),
+            line: 30,
+            pos: 1,
+        };
+        note_compile_pos(&later);
+        assert_eq!(compile_pos().unwrap().line, 30);
+
+        // Handing off to the runtime drops it, so a runtime panic is not
+        // misattributed to the last line compiled.
+        clear_compile_pos();
+        assert!(
+            compile_pos().is_none(),
+            "cleared at the compile/run boundary"
+        );
     }
 }

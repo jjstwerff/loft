@@ -4525,6 +4525,10 @@ impl State {
         // @PLAN49 T1 — runtime phase breadcrumb.  One call per
         // program; runtime cost is irrelevant.
         crate::timeout::checkpoint_fn("run-interpret", "<entry>", "", 0);
+        // loft#665 piece 3 — compilation is over, so drop the compile position: a
+        // RUNTIME panic must not be attributed to whatever line was compiled last.
+        // The runtime has its own, better attribution (pc -> source span).
+        crate::crash_report::clear_compile_pos();
         let _ = name;
         let d_nr = data.def_nr(&format!("n_{name}"));
         // A missing entry function (e.g. running a file with no `fn main()`, or a

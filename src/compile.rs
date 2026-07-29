@@ -90,6 +90,11 @@ pub fn byte_code_from(
         if !matches!(data.def(d_nr).def_type(), DefType::Function) || data.def(d_nr).is_operator() {
             continue;
         }
+        // loft#665 piece 3 — publish which definition is being generated, so an
+        // internal panic in codegen names the user's function rather than only a
+        // compiler source line (loft#662 reported `codegen.rs:2955`, which told the
+        // reporter nothing about their program).
+        crate::crash_report::note_compile_pos(data.def(d_nr).position());
         state.def_code(d_nr, data, program_store);
     }
     if start_d_nr == 0 {
