@@ -5,6 +5,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN34 — Native debugging — GDB / LLDB integration for `--native` builds
 
+**Status:** PARKED (2026-07-29) — **NDB.0 shipped, NDB.1/NDB.2 not built.**
+`--native-debug` exists (`-Cdebuginfo=2`, no `-O`, generated `.rs` preserved so
+`.debug_line` points at a real file), so a GDB user can step the generated RUST today.
+There is no `loft-gdb.py` / `loft-lldb.py` and no `.loft.map` sidecar, so `step` does not
+yet walk `.loft` lines.
+
+**Trigger to un-park:** a real user who wants source-level `.loft` debugging of a
+`--native` binary under stock GDB/LLDB — a CLI/Emacs/vim/Eclipse workflow DAP does not
+serve, or an IDE that can only drive GDB-MI. The justification below is a POPULATION
+argument, not a named consumer, and the debugging need people actually bring is served by
+@PLN120's interpreter debugger — so building NDB.1/NDB.2 now is speculative build
+(@PLN102's driver-consumer discipline). NDB.1 is the first phase to build when that
+arrives; it also buys "DAP-via-stock-adapter for free", so either consumer gets both.
+
+Note this is NOT the same tool as `loft debug`: that drives the **interpreter**; this is
+post-compilation debugging of the binary.
+
 `loft --native` produces a real ELF / Mach-O / PE binary via rustc.
 This doc covers how to make that binary debuggable with stock
 GDB or LLDB, so users in CLI workflows, Emacs gud, vim termdebug,
