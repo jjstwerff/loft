@@ -288,6 +288,30 @@ The general rule this instance teaches: **when a fact cannot be represented for 
 inputs, the encoding is the bug — not the consumer that read it wrong.** An empty dep
 list conflates "owns" with "cannot say", and every consumer inherits the conflation.
 
+### A placement rule may not delete a fact (loft#677)
+
+The same empty dep also arrives a third way: the fact is computed correctly and then
+**thrown away by a rule that was answering a different question**. `ref_return`'s ladder
+decides where a returned LOCAL should live — rename it onto `__retbuf`, bind it, promote
+it to a parameter — and one rung skips a local that looks reassigned. That rung sat
+*above* the rung that records which attribute the return borrows, so a PARAMETER reaching
+it lost its borrow: `fn add(o: Outer, …) -> Outer { o.tags += […]; o.items += […]; o }`
+returned with an empty dep, callers read the returned borrow as an owned store, and the
+second such call freed the caller's store while it was still being filled.
+
+Two rules come out of it:
+
+- **Placement never outranks provenance.** "Where does this value live" and "what does
+  this value borrow" are different questions; a var that is already an attribute has no
+  placement left to choose, so a promotion verdict must not pre-empt its dep merge.
+- **Name a predicate for what it measures, not for what you concluded from it.** The rung
+  asked `reassign_count(body, o) >= 2`, but the count walks `Set(_elm_k, OpNewRecord(v,
+  …))` — records allocated as CHILDREN of `v`, i.e. APPENDS. A rebind lowers to
+  `OpDatabase` and is invisible to it, so the predicate never saw the thing it was named
+  after, while two ordinary appends tripped it every time. It is `child_allocs` now. An
+  earlier carve-out had already exempted vector returns from the same false positive —
+  a per-type exemption is the tell that the predicate, not the type, is wrong.
+
 **The methodology that made this work** (vs the 9 thrash attempts): build the fact INERT and
 validate it against a ground-truth corpus FIRST (the accumulated per-fix regression tests ARE the
 spec), then collapse one chokepoint per commit reading that fact — and when a proven sibling path
