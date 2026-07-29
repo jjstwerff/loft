@@ -138,6 +138,10 @@ const imports = {
     // module links (an absent import would LinkError at instantiate).
     loft_host_http_get: () => 0xffffffff,
     loft_host_http_get_copy: () => {},
+    // loft#678 working-set loaders: refused here like the whole-file GET above — these
+    // harnesses never serve a store, and a MISSING import is a LinkError, not a skip.
+    loft_host_http_range: () => 0xffffffff,
+    loft_host_http_range_total: () => -1,
     loft_host_print: (ptr, len) => {
       if (instance) {
         const bytes = new Uint8Array(getMem().buffer, ptr, len);

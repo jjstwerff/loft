@@ -99,18 +99,16 @@ impl PageProvider for LocalFileProvider {
 /// pages a lookup touches across the network. The remote counterpart of
 /// [`LocalFileProvider`]; the paged reader + traversal + copy above it are
 /// identical, so only the byte source differs.
+/// The byte source is [`crate::net`], not a client held here, so this provider is
+/// target-independent: native builds range-GET over `ureq`, and the browser
+/// (`--html`) goes through the asyncify `fetch()` host import (loft#678). Nothing
+/// above this struct — the reader, the traversal, the relocating copy — knows
+/// which.
 pub struct HttpRangeProvider {
     url: String,
     size: u64,
-    agent: ureq::Agent,
     /// Every `(off, len)` fetched — for the "bytes fetched ≪ file" assertion.
     pub fetches: Vec<(u64, usize)>,
-}
-
-/// Parse the total from a `Content-Range` header value (`"bytes 0-0/12345"` →
-/// `12345`; an unknown total `"*"` → `None`).
-fn parse_content_range_total(h: &str) -> Option<u64> {
-    h.rsplit('/').next().and_then(|t| t.trim().parse().ok())
 }
 
 impl HttpRangeProvider {
@@ -120,23 +118,10 @@ impl HttpRangeProvider {
     /// # Errors
     /// Returns a message when the request fails or the size can't be determined.
     pub fn open(url: &str) -> Result<Self, String> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(30))
-            .build();
-        let resp = agent
-            .get(url)
-            .set("Range", "bytes=0-0")
-            .call()
-            .map_err(|e| e.to_string())?;
-        let size = resp
-            .header("Content-Range")
-            .and_then(parse_content_range_total)
-            .or_else(|| resp.header("Content-Length").and_then(|c| c.parse().ok()))
-            .ok_or_else(|| "remote store: could not determine size".to_string())?;
+        let size = crate::net::fetch_size(url)?;
         Ok(Self {
             url: url.to_string(),
             size,
-            agent,
             fetches: Vec::new(),
         })
     }
@@ -154,33 +139,21 @@ impl PageProvider for HttpRangeProvider {
     }
 
     fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
-        use std::io::Read;
         self.fetches.push((off, len));
         let mut buf = vec![0u8; len];
         if off >= self.size {
             return buf; // wholly past EOF — zero
         }
-        let last = (off + len as u64 - 1).min(self.size - 1);
-        let want = (last - off + 1) as usize;
-        if let Ok(resp) = self
-            .agent
-            .get(&self.url)
-            .set("Range", &format!("bytes={off}-{last}"))
-            .call()
-        {
-            if resp.status() == 206 {
-                // Partial content: the body IS the requested range.
-                let _ = resp.into_reader().read_exact(&mut buf[..want]);
-            } else {
-                // Server ignored Range (200, whole file): skip to `off`, then read.
-                // Correct (the prove-can-fail path), though it reads the prefix.
-                let mut r = resp.into_reader();
-                let mut skip = vec![0u8; off as usize];
-                if r.read_exact(&mut skip).is_ok() {
-                    let _ = r.read_exact(&mut buf[..want]);
-                }
-            }
+        // Clamp to EOF: asking past the end is legal for the caller (the contract
+        // zero-pads), but a server may answer an unsatisfiable range with 416.
+        let want = usize::try_from((self.size - off).min(len as u64)).unwrap_or(len);
+        if let Ok(got) = crate::net::fetch_range(&self.url, off, want) {
+            let n = got.len().min(buf.len());
+            buf[..n].copy_from_slice(&got[..n]);
         }
+        // A failed fetch reads as zeros, exactly as a past-EOF page does. The
+        // caller cannot tell them apart, which is why every loader re-checks the
+        // copy with `store_verify` rather than trusting the bytes.
         buf
     }
 }
@@ -249,7 +222,7 @@ pub fn check_sidecar(
 ) -> crate::schema_sidecar::SchemaVerdict {
     use crate::schema_sidecar::SchemaVerdict;
     if spec.starts_with("http://") || spec.starts_with("https://") {
-        match http_get_text(&format!("{spec}.dschema")) {
+        match crate::net::fetch_text(&format!("{spec}.dschema")) {
             Some(text) => crate::schema_sidecar::verdict_for_sidecar_text(&text, current),
             None => SchemaVerdict::Fresh, // 404 / unreachable → proceed (store_verify backstop)
         }
@@ -257,15 +230,6 @@ pub fn check_sidecar(
         crate::schema_sidecar::check_beside(std::path::Path::new(spec), current)
             .unwrap_or(SchemaVerdict::Fresh) // IO error (not NotFound) → proceed (backstop)
     }
-}
-
-/// GET a small text resource (the `.dschema` sidecar) in full. `None` on any
-/// non-2xx status (e.g. 404 = the sidecar is absent) or a transport error.
-fn http_get_text(url: &str) -> Option<String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(30))
-        .build();
-    agent.get(url).call().ok()?.into_string().ok()
 }
 
 /// A read-only, transient paged view: a sparse LRU page table + fetch-on-miss

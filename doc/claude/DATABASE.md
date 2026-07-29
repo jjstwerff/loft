@@ -112,6 +112,18 @@ recorded layout differs from the loading program's collection type is REFUSED
 sidecar (a legacy store) falls back to the `store_verify` backstop. Set
 `LOFT_LOADER_STATS=1` to observe `bytes_fetched` vs file size.
 
+These loaders work **on every target, the browser included** (loft#678). Only the
+byte source differs, and it is the sole thing that does: a native build issues
+`Range` GETs over `ureq`, while `--html` issues them through the asyncify
+`fetch()` host import that `store_load_url_trusted` already uses
+(`net::fetch_range`, behind `PageProvider`). Everything above that seam — the
+paged reader, the traversal, the relocating copy — is one code path, so a browser
+load reads the same pages a native one does: `tests/paged_browser.rs` runs a real
+`--html` bundle against a 3.8 MB store and pins the cost at a bounded handful of
+64 KiB pages (~7% of the image), the same fraction the native path reports.
+The build-time availability is the `paged_store` cfg (`build.rs`): the
+`remote-store` feature, or the browser target, which cannot use `ureq` at all.
+
 **Every paged refusal is reported on stderr** (`store loader: refusing <path> — …;
 loaded NOTHING (a refusal, not an absent key)`). These loaders signal failure as
 `false` / `0`, which is exactly what an ABSENT KEY looks like, so a silent refusal

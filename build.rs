@@ -101,13 +101,32 @@ fn main() {
     // has the threading feature switched on — `cargo clippy --all-features` does
     // — keeps the private native pool, because there is no page to install one.
     println!("cargo:rustc-check-cfg=cfg(browser_pool)");
-    let wasm_target = std::env::var("TARGET")
-        .unwrap_or_default()
-        .starts_with("wasm32");
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let wasm_target = target.starts_with("wasm32");
     let wasm_bindgen_build = std::env::var_os("CARGO_FEATURE_WASM").is_some();
     let loft_browser_threads = std::env::var_os("CARGO_FEATURE_WASM_NATIVE_THREADS").is_some();
     if wasm_bindgen_build || (loft_browser_threads && wasm_target) {
         println!("cargo:rustc-cfg=browser_pool");
+    }
+
+    // loft#678 — one name for "the working-set store loaders (`store_load_key`,
+    // `store_load_keys`, `store_load_key_text`, `store_load_range`) exist in this
+    // build".  Two builds qualify and they get their bytes differently: a native
+    // build with `remote-store` reads ranges over `ureq`, and the BROWSER
+    // (`--html`) reads them through the asyncify `fetch()` host import — the same
+    // split `net::fetch_bytes` already carries for `store_load_url_trusted`.
+    //
+    // It is a cfg rather than a feature because the browser rlib is built
+    // `--no-default-features --features random` (WASM.md pins that command, and
+    // the --html bundle check keys off it), so the capability cannot be selected
+    // there by a feature flag without changing a documented build line.  Naming it
+    // once also keeps the gate honest: it appeared in 25 `#[cfg]`s, and a
+    // hand-written `any(...)` at each is how a call site drifts out of step with
+    // its callee and breaks only the wasm compile gate.
+    println!("cargo:rustc-check-cfg=cfg(paged_store)");
+    let browser_wasm = wasm_target && !target.contains("wasi") && !wasm_bindgen_build;
+    if std::env::var_os("CARGO_FEATURE_REMOTE_STORE").is_some() || browser_wasm {
+        println!("cargo:rustc-cfg=paged_store");
     }
 
     // Re-run when anything that identifies this build changes: git HEAD / refs

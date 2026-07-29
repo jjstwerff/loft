@@ -7840,7 +7840,26 @@ fn main() {
         match status {
             Ok(s) if s.success() => {}
             Ok(_) => {
-                eprintln!("loft: browser WASM compilation failed");
+                // loft#678 — rustc has just printed errors against `prog.rs`, a file the
+                // consumer never wrote. Unattributed, that reads as a fault in their own
+                // program and sends them auditing loft source that is not the cause. Say
+                // whose code it is, and name the one shape that actually produces it: a
+                // builtin whose implementation is absent on this target compiles
+                // everywhere else and fails only here, as `no method named …` on a
+                // runtime type (the working-set store loaders did exactly this until
+                // they were bridged to the browser fetch).
+                eprintln!(
+                    "loft: browser WASM compilation failed.\n  \
+                     The errors above are against loft-GENERATED Rust (`prog.rs`), not \
+                     your .loft source — a location in it is not a location in your \
+                     program.\n  \
+                     If one reads `no method named …` on a loft runtime type, the \
+                     builtin it names has no implementation on the browser target: the \
+                     same program is expected to build on --native. Re-run with \
+                     LOFT_KEEP_NATIVE_RS=1 to keep `prog.rs` and see the call in \
+                     context, and please report the builtin — a builtin that --native \
+                     accepts and --html cannot is a gap in loft, not in your code."
+                );
                 std::process::exit(1);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -7893,7 +7912,17 @@ fn main() {
                 //     which unwinds to the event loop so `await fetch(url)` can
                 //     complete, then resumes with the bytes — the synchronous
                 //     loft API over an async fetch, without blocking the page.
-                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield,loft_io.loft_host_http_get",
+                //   loft_io.loft_host_http_range — the same yield for ONE BYTE
+                //     RANGE (loft#678): the working-set loaders
+                //     (`store_load_key(s)` / `store_load_key_text` /
+                //     `store_load_range`) fetch only the pages a lookup touches,
+                //     so a phone can read a few map tiles out of a multi-GB block.
+                //     It MUST be listed: a suspend import left out of this
+                //     allowlist is not instrumented, so the unwind corrupts the
+                //     stack instead of yielding.  Its companion
+                //     `loft_host_http_range_total` is deliberately absent — it
+                //     only reports what the completed fetch already learned.
+                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield,loft_io.loft_host_http_get,loft_io.loft_host_http_range",
             ])
             .arg("-o")
             .arg(&opt_path)
@@ -8135,7 +8164,7 @@ if(globalThis.loftInput!=null)inQ.push(enc.encode(String(globalThis.loftInput)))
 globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
 // @PLN97: asyncify controller (Step 2 sets `.ac`) + the raw bytes of the last
 // fetch, stashed between the unwind and rewind halves of loft_host_http_get.
-const ctrl={{ac:null,httpBytes:null}};
+const ctrl={{ac:null,httpBytes:null,httpTotal:-1}};
 const imports={{loft_io:{{
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
   // #620: the browser CLOCK bridge.  This target has no std clock, so without
@@ -8170,6 +8199,36 @@ const imports={{loft_io:{{
     return 0;
   }},
   loft_host_http_get_copy:(ptr)=>{{if(ctrl.httpBytes)new Uint8Array(mem.buffer,ptr,ctrl.httpBytes.length).set(ctrl.httpBytes);}},
+  // loft#678 working-set loaders: the same two-phase asyncify bridge as
+  // loft_host_http_get, but for ONE BYTE RANGE — `Range: bytes=off-(off+len-1)`.
+  // The response also carries the resource's total size in `Content-Range:
+  // bytes a-b/TOTAL`; stash it so loft_host_http_range_total can answer
+  // PageProvider::size() without a second round trip.  `off`/`len` arrive as
+  // plain JS numbers (the import declares f64 — exact below 2^53) so no BigInt
+  // conversion is needed here or in the headless stubs.
+  loft_host_http_range:(ptr,len,off,n)=>{{
+    if(ctrl.ac&&ctrl.ac.exports.asyncify_get_state()===2){{
+      ctrl.ac.suspend();
+      return ctrl.httpBytes?ctrl.httpBytes.length:0xFFFFFFFF;
+    }}
+    const url=dec.decode(new Uint8Array(mem.buffer,ptr,len));
+    ctrl.httpBytes=null;ctrl.httpTotal=-1;
+    const last=off+n-1;
+    fetch(url,{{headers:{{Range:`bytes=${{off}}-${{last}}`}}}}).then(async r=>{{
+      // 206 = the body IS the range.  200 = the server ignored Range and sent the
+      // whole file; slice out the window so the answer is right either way.
+      const cr=r.headers.get('Content-Range');
+      if(cr){{const t=cr.split('/').pop();ctrl.httpTotal=(t&&t!=='*')?Number(t):-1;}}
+      else{{const cl=r.headers.get('Content-Length');ctrl.httpTotal=cl?Number(cl):-1;}}
+      if(!r.ok){{ctrl.httpBytes=null;}}
+      else{{const b=new Uint8Array(await r.arrayBuffer());
+            ctrl.httpBytes=(r.status===206)?b:b.subarray(off,off+n);}}
+      ctrl.ac.resume('loft_start');
+    }}).catch(()=>{{ctrl.httpBytes=null;ctrl.ac.resume('loft_start');}});
+    if(ctrl.ac)ctrl.ac.suspend();
+    return 0;
+  }},
+  loft_host_http_range_total:()=>ctrl.httpTotal,
   // @PLN105 Phase 2 — deliver: reconstruct a live value from its raw linear-memory address + layout
   // descriptor (JSON) via the embedded readLoftValue (reader_js, inlined above), then hand the
   // finished value to globalThis.loftDeliver(tag, value, type_id). SYNCHRONOUS: read within this

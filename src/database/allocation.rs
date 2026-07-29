@@ -2756,7 +2756,7 @@ impl Stores {
     /// an untyped local store passes; `store_verify` stays the backstop. `path`
     /// is a local file or an `http(s)://` URL — the sidecar is read from beside
     /// it (`<path>.dschema`), over the same transport.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn layout_gate_ok(&self, path: &str, local: &DbRef) -> bool {
         let known_type = self.allocations[local.store_nr as usize].known_type;
         if known_type == u16::MAX {
@@ -2786,7 +2786,7 @@ impl Stores {
     /// (no per-element sort), then relocate each element's heap graph. Root + key
     /// schema come from `local`'s live type (same collection type ⇒ same
     /// structural root position in the image), NOT the raw bytes.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     pub fn load_range(&mut self, local: &DbRef, path: &str, lo: i64, hi: i64) -> i64 {
         if !self.layout_gate_ok(path, local) {
             return 0;
@@ -2914,7 +2914,7 @@ impl Stores {
     /// relocate. Text (type 5) and Reference (type 6) are POINTERS; vectors /
     /// nested structs / keyed collections are heap-owned — all need the
     /// relocating graph-copy (3b.2+), so they are NOT inline.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn is_inline_scalar(&self, tp: u16) -> bool {
         match self.types[tp as usize].parts {
             Parts::Int(..) | Parts::Byte(..) | Parts::Short(..) | Parts::ShortRaw(..) => true,
@@ -2931,7 +2931,7 @@ impl Stores {
     /// scalar-vector are BOTH a single flat sub-record behind a `u32` pointer, so
     /// they relocate with identical code. A `vector<struct>` / `vector<text>` /
     /// nested struct / reference still needs the recursive copy (3b.4+).
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn is_copyable_field(&self, tp: u16) -> bool {
         if self.is_inline_scalar(tp) || tp == 5 {
             return true;
@@ -2963,7 +2963,7 @@ impl Stores {
     /// failure as `false` / `0`, which is exactly what an ABSENT KEY looks like,
     /// so a silent refusal reads as "the data isn't there" and sends the caller
     /// hunting for missing data instead of an unsupported shape (#632).
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn refuse_paged(path: &str, reason: &str) {
         eprintln!(
             "store loader: refusing {path} — {reason}; loaded NOTHING (a refusal, \
@@ -2974,7 +2974,7 @@ impl Stores {
     /// The refusal reason when the bound store does not root the collection kind
     /// the loader needs (`want` names it, e.g. "a hash"). Spells out the
     /// commonest cause because the type name alone does not suggest the fix.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn wrong_collection_reason(&self, tp: u16, want: &str) -> String {
         format!(
             "its bound store roots `{}`, not {want} — a collection declared as a \
@@ -2987,7 +2987,7 @@ impl Stores {
 
     /// The refusal reason when an entry has a field the working-set copy cannot
     /// relocate into the local store.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn not_copyable_reason(&self, content_tp: u16) -> String {
         format!(
             "entry type `{}` has a field the working-set copy cannot relocate \
@@ -3009,7 +3009,7 @@ impl Stores {
     /// root claim in both the image and the target. So descend to the field at
     /// `local.pos` whose type is a keyed collection. `u16::MAX` when `tp` is a
     /// struct with no keyed-collection field there (a genuinely wrong shape).
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn paged_collection_type(&self, tp: u16) -> u16 {
         // `Ordered` is the PROMOTED form of `Sorted` (`finish()` renames a
         // sorted collection whose element is shared by >1 container), so a
@@ -3042,7 +3042,7 @@ impl Stores {
     /// True when an entry of type `content_tp` can be partially loaded today —
     /// every field is [copyable](Stores::is_copyable_field). Otherwise the
     /// collection is refused (safe-refusal, never a broken heap).
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn is_copyable_entry(&self, content_tp: u16) -> bool {
         match &self.types[content_tp as usize].parts {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
@@ -3052,7 +3052,7 @@ impl Stores {
         }
     }
 
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     pub fn load_key(&mut self, local: &DbRef, path: &str, key: i64) -> bool {
         self.load_keys(local, path, std::slice::from_ref(&key)) > 0
     }
@@ -3064,7 +3064,7 @@ impl Stores {
     /// hashes the `Content::Str`, and the entry's text key is compared over the
     /// reader. Returns false when absent / unreadable / not an integer-or-text
     /// -keyed copyable hash.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     pub fn load_key_text(&mut self, local: &DbRef, path: &str, key: &str) -> bool {
         if !self.layout_gate_ok(path, local) {
             return false;
@@ -3103,7 +3103,7 @@ impl Stores {
     /// is opened ONCE and shared across all keys, so its LRU cache is reused.
     /// See [`load_key`](Stores::load_key) for the single-key form. Same
     /// FLAT-struct restriction (scalar fields only — no relocation yet).
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
         if !self.layout_gate_ok(path, local) {
             return 0;
@@ -3177,7 +3177,7 @@ impl Stores {
     /// entry's field words (fld 8 .. size·8) hold only scalars, so a straight
     /// word copy into a fresh claim is correct — no internal `rec` pointers to
     /// relocate. Returns whether the key was found.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn load_one(
         &mut self,
         reader: &mut crate::paged_reader::PagedReader<crate::paged_reader::PageSource>,
@@ -3230,7 +3230,7 @@ impl Stores {
     /// a slot at a different local position. Handles: text / vector<scalar> (flat
     /// sub-record copy), inline nested struct (recurse, deeper base), vector<struct>
     /// (copy inner + recurse each element). Inline scalars are already correct.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     #[allow(clippy::too_many_arguments)] // dst/src (rec,base) + reader + tp + store — all essential
     fn relocate_ptr_fields<P: crate::paged_reader::PageProvider>(
         &mut self,
@@ -3279,7 +3279,7 @@ impl Stores {
     /// Copy a FLAT record (a string or a `vector<scalar>` inner record — no
     /// interior pointers) at `src_rec` into a fresh local claim; the size header
     /// (fld 0) is set by `claim`, so copy the length + payload from fld 4 on.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn copy_flat_subrecord<P: crate::paged_reader::PageProvider>(
         &mut self,
         reader: &mut crate::paged_reader::PagedReader<P>,
@@ -3301,7 +3301,7 @@ impl Stores {
     /// Copy a `vector<struct>` inner record: first the flat bytes (length + the
     /// contiguous element structs), then relocate EACH element's pointer fields
     /// (its text / vector / nested graph). Elements are at `8 + i·elem_size`.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     fn copy_vector_of_struct<P: crate::paged_reader::PageProvider>(
         &mut self,
         reader: &mut crate::paged_reader::PagedReader<P>,
@@ -3329,7 +3329,7 @@ impl Stores {
     /// used by BOTH backends (the interpreter handler and the `#rust` codegen
     /// body), so the element layout lives in one place. `integer` elements are
     /// i64 at `8 + i·8` within the vector's inner record.
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     pub fn load_keys_vec(&mut self, local: &DbRef, path: &str, keys_vec: &DbRef) -> i64 {
         let length = crate::vector::length_vector(keys_vec, &self.allocations);
         let inner = self.store(keys_vec).get_u32_raw(keys_vec.rec, keys_vec.pos);

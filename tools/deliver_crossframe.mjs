@@ -78,6 +78,12 @@ const loft_io = {
   loft_host_http_get_copy: (ptr) => {
     if (fakeBytes.length) new Uint8Array(mem.buffer, ptr, fakeBytes.length).set(fakeBytes);
   },
+  // loft#678 working-set loaders. Refused, and deliberately NOT wired to the yield
+  // above: this harness uses loft_host_http_get as its frame boundary, so making a
+  // range fetch suspend too would emit a second CROSSFRAME batch per frame and the
+  // expected output would drift. Declared because a missing import is a LinkError.
+  loft_host_http_range: () => 0xffffffff,
+  loft_host_http_range_total: () => -1,
   loft_host_deliver() {},
   loft_host_expose(tag, store_base, rec, pos, type_id, dptr, dlen) {
     const desc = JSON.parse(dec.decode(new Uint8Array(mem.buffer, dptr, dlen)));
