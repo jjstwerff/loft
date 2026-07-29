@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# Issue-trailer check.  `fixed-pending-merge` is applied by a push workflow that reads
+# `Fixes|Closes|Resolves #N` out of the commit message, so an issue referenced any other
+# way is fixed on a branch and never labelled — invisible to anyone reading the tracker.
+#
+# The rule was already in CLAUDE.md, ISSUE_TRACKING.md and two skills when a session
+# shipped three fixes under `Refs #N` anyway: prose does not fire at the moment you type
+# the message.  This does.
+#
+# It never BLOCKS.  It cannot tell a fix from a mention — a commit may legitimately
+# discuss an issue it does not resolve (this hook's own commit does) — and per the
+# repo's two-tier rule a diagnostic gates only when ignoring it yields a wrong result.
+# So it reports, and the choice stays the author's.
+#
+# Install: `make hooks` (sets core.hooksPath).
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+# Strip comments and the diff `git commit -v` appends.
+body=$(sed -e '/^#/d' -e '/^diff --git /,$d' "$msg_file")
+
+# `@`-prefixed tracker tags (@P259, @PLN3) are deliberately not `#`, so `#N` is
+# unambiguously a GitHub issue reference.
+mentions=$(printf '%s' "$body" | grep -oE '#[0-9]+' | tr -d '#' | sort -u)
+[ -n "$mentions" ] || exit 0
+
+closes=$(printf '%s' "$body" | grep -oiE '\<(fixes|closes|resolves) #[0-9]+' | grep -oE '[0-9]+' | sort -u)
+refs=$(printf '%s' "$body" | grep -oiE '\<refs #[0-9]+' | grep -oE '[0-9]+' | sort -u)
+
+bare=""
+deliberate=""
+for n in $mentions; do
+  if printf '%s\n' $closes | grep -qx "$n"; then continue; fi
+  if printf '%s\n' $refs | grep -qx "$n"; then deliberate="$deliberate $n"; continue; fi
+  bare="$bare $n"
+done
+
+if [ -n "$bare" ]; then
+  echo "commit-msg: issue mention with no trailer:$bare" >&2
+  echo "  Add \`Fixes #N\` if this commit resolves it (the push workflow labels it" >&2
+  echo "  fixed-pending-merge), or \`Refs #N\` if it deliberately does not." >&2
+fi
+
+if [ -n "$deliberate" ]; then
+  echo "commit-msg: using \`Refs\` for:$deliberate — these stay UNLABELLED." >&2
+  echo "  That is right only if the issue is not fully resolved here.  If it is," >&2
+  echo "  amend to \`Fixes #N\` so it gets fixed-pending-merge and closes on merge." >&2
+fi
+
+exit 0
