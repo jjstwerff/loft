@@ -1431,7 +1431,6 @@ impl Parser {
         // counts exactly.  Post-arity-cascade (signatures freeze at declaration)
         // this is an INVARIANT, not an aspiration — a divergence is a real
         // cross-pass bug, asserted below after pass 2.
-        #[cfg(debug_assertions)]
         let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
             .map(|d| self.data.attributes(d as u32))
             .collect();
@@ -1455,7 +1454,6 @@ impl Parser {
             // @PLN35 PC3 — reject a left-recursive sub-rule grammar (a cycle in the invocation
             // graph) at compile time, before it can hang at runtime.  Post-parse over pass-2 edges.
             self.check_subrule_wellformedness();
-            #[cfg(debug_assertions)]
             self.assert_pass2_def_attr_stable(&pass1_attr_counts);
             // @PLN104 P2 — oracle pass: flag frame-local text returns the interpreter would
             // orphan (#568) into `force_tret` (default-on; opt out with LOFT_NO_TRET_FIX).
@@ -1493,6 +1491,16 @@ impl Parser {
     /// @PLAN59 arity cascade (signatures freeze at declaration) this is an
     /// INVARIANT — a firing assert is a real cross-pass bug, not noise.
     ///
+    /// Runs in EVERY build, not just `cfg(debug_assertions)`.  Those are switched
+    /// off inside this library by `[profile.dev.package.loft]`, so a cfg-gated
+    /// check here was dead in `cargo test` AND `target/debug/loft` AND `--release`
+    /// alike — live only in the nightly `-C debug-assertions=on` job.  That is how
+    /// loft#662 reached a release: the contract broke, nothing said so, and the
+    /// failure surfaced two subsystems later as a codegen panic naming a generated
+    /// symbol.  The project's convention for a load-bearing invariant is a plain
+    /// `assert!` (see `Data::rollback_to`), and this one costs a `Vec<usize>` of
+    /// one entry per definition, twice per parse — unmeasurable against a parse.
+    ///
     /// This attribute-count check is the COMPLETE H5 validation: the H5 spec's other
     /// named residual — work-ref (`__ref_N`) counter equality per fn — was dissolved
     /// by H1 (@PLAN59), exactly as the spec's item 3 ("re-evaluate after H1") foresaw.
@@ -1502,7 +1510,6 @@ impl Parser {
     /// permanently vacuous.  The one failure mode it could ever have caught — a
     /// cross-pass `__ref_N` name shift making `ref_return` add a spurious attr — IS
     /// caught here, because that spurious attr is itself an attribute-count divergence.
-    #[cfg(debug_assertions)]
     fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
         // Pass-2 def GROWTH has exactly one legal form (the fuzzer's F1 catch):
         // the reduce/map/filter builtin family desugars on pass 2 only — pass 1
@@ -1528,7 +1535,7 @@ impl Parser {
                 || (matches!(dt, DefType::Struct) && name.starts_with("main_vector<"));
             let lazy_instantiation =
                 matches!(dt, DefType::Function) && self.h5_names_a_generic_template(name);
-            debug_assert!(
+            assert!(
                 lazy_wrapper || lazy_instantiation,
                 "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
                  wrapper or generic instantiation — a real cross-pass divergence \
@@ -1551,11 +1558,28 @@ impl Parser {
             if c2 > c1 {
                 for a in c1..c2 {
                     let n = self.data.attr_name(d as u32, a);
-                    debug_assert!(
+                    assert!(
                         n == "__closure" || n.starts_with("__work_"),
                         "H5 two-pass contract: def `{}` (#{d}) grew a pass-2-only \
                          attribute `{n}` (pass1={c1}, pass2={c2}) that is not a \
                          documented lazy append — a real cross-pass divergence",
+                        self.data.def(d as u32).name(),
+                    );
+                    // The `__work_` exemption is only safe while NO call has been
+                    // lowered against the old arity.  loft#662 was exactly this
+                    // append on a SELF-recursive function: its own body had already
+                    // emitted a call, so growing the signature left that call one
+                    // argument short — and the exemption waved it through, which is
+                    // why this assert never caught the bug it was built for.  A
+                    // caller is already lowered iff it is this def itself or a def
+                    // parsed before it, so that is the condition to reject.
+                    assert!(
+                        !n.starts_with("__work_") || !self.h5_has_lowered_caller(d as u32),
+                        "H5 two-pass contract: def `{}` (#{d}) grew a pass-2-only \
+                         work buffer `{n}` (pass1={c1}, pass2={c2}) AFTER a call to it \
+                         had already been lowered — the call now passes {c1} arguments \
+                         to a {c2}-argument signature (loft#662's class).  The buffer's \
+                         name counter is not pass-stable for this def.",
                         self.data.def(d as u32).name(),
                     );
                 }
@@ -1571,12 +1595,40 @@ impl Parser {
         }
     }
 
+    /// H5 helper: is there already-lowered code calling `d`?
+    ///
+    /// Pass 2 lowers defs in source order, so every def numbered at or below `d`
+    /// has emitted its calls by the time `d`'s body finishes and its return
+    /// promotion runs.  A signature that grows at that point leaves those calls
+    /// short an argument.  Only scanned when a def actually grew a pass-2-only
+    /// work buffer — rare (once across the whole test corpus), so the walk costs
+    /// nothing in the common case.
+    fn h5_has_lowered_caller(&self, d: u32) -> bool {
+        fn calls(node: &Value, target: u32) -> bool {
+            // Direct calls only.  A `CallRef` goes through the fn-ref dispatch,
+            // which allocates hidden buffers at runtime rather than baking the
+            // arity into the call site, so it is not committed to the old
+            // signature the way a lowered direct call is.
+            let hit = matches!(node.unspan(), Value::Call(op, _) if *op == target);
+            if hit {
+                return true;
+            }
+            let mut found = false;
+            node.for_each_child(&mut |c| {
+                if !found && calls(c, target) {
+                    found = true;
+                }
+            });
+            found
+        }
+        (0..=d).any(|e| calls(&self.data.def(e).code, d))
+    }
+
     /// H5 helper: does `name` carry the instantiation mangling
     /// `t_<LEN><SafeType>_<fn>` (see `try_generic_instantiation`) AND does the
     /// `n_<fn>` template exist as a `DefType::Generic`?  Only such defs are
     /// legal pass-2-only appends of the Function kind — a source-declared
     /// method parses in pass 1 and can never appear as a trailing pass-2 def.
-    #[cfg(debug_assertions)]
     fn h5_names_a_generic_template(&self, name: &str) -> bool {
         let Some(rest) = name.strip_prefix("t_") else {
             return false;
