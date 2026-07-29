@@ -41,6 +41,7 @@ mod android;
 mod native_utils;
 use loft::parser;
 use loft::platform;
+use loft::portable_path;
 use loft::scopes;
 use loft::state;
 mod test_runner;

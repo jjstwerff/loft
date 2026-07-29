@@ -546,7 +546,10 @@ impl Stores {
                 if let Some(name) = entry.path().to_str() {
                     // Normalise to forward slashes so loft paths are consistent on
                     // all platforms (Windows returns backslash-separated paths).
-                    res.insert(name.replace('\\', "/"), entry);
+                    // Through the shared helper, so a Unix filename that legitimately
+                    // contains a backslash is not split into a fake two-segment path —
+                    // this listing is data a loft program reads back.
+                    res.insert(crate::portable_path::portable_str(name), entry);
                 }
                 // A non-UTF-8 name degrades that ENTRY (skipped), never the
                 // listing: aborting here returned a silently truncated vector.

@@ -981,7 +981,7 @@ fn drive_prefixed(s: &str) -> bool {
 /// Every path→URI in the LSP surface MUST go through here.
 #[must_use]
 pub fn path_to_uri(p: &Path) -> String {
-    let plain = plain_path(p).replace('\\', "/");
+    let plain = crate::portable_path::portable_str(&plain_path(p));
     if plain.starts_with('/') {
         format!("file://{plain}")
     } else {
