@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I90 — Shared utilities & data structures
 
 //! One way to render a path so it reads the same on every platform.
 //!
