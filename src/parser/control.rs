@@ -3944,6 +3944,17 @@ impl Parser {
                                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
                             ) && let Some(src) = Self::match_borrow_source(subject_val)
                             {
+                                if std::env::var_os("LOFT_MV_DEP_TRACE").is_some() {
+                                    eprintln!(
+                                        "[mv-dep] fn={} pass{} binding={}({}) src={}({})",
+                                        self.data.def(self.context).name(),
+                                        u8::from(!self.first_pass) + 1,
+                                        self.vars.name(v_nr),
+                                        v_nr,
+                                        self.vars.name(src),
+                                        src,
+                                    );
+                                }
                                 let bound_tp = match self.vars.tp(v_nr).clone() {
                                     Type::Reference(td, _) => {
                                         Type::Reference(td, crate::data::Deps::frame1(src))
