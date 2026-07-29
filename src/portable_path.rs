@@ -46,6 +46,21 @@ pub fn portable_str(path: &str) -> String {
     }
 }
 
+/// Render `path` for a target format in which a backslash is **illegal**, not merely
+/// unidiomatic — a `file://` URI, where `\U` is an invalid JSON escape that silently
+/// corrupts the LSP message the URI is embedded in (the #640 Windows hang).
+///
+/// Deliberately NOT [`portable`], and the difference is the whole reason both exist:
+/// `portable` renders *this* platform's separator, so on Unix it correctly leaves a
+/// backslash alone as the ordinary filename character it is.  Here the input may have
+/// come from anywhere — an editor on another platform — and the output must satisfy the
+/// FORMAT regardless of who produced it.  A backslash that survives is a corrupt
+/// message, which beats preserving an exotic filename.
+#[must_use]
+pub fn for_uri(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,13 +96,37 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn an_absolute_windows_path_keeps_its_prefix() {
-        assert_eq!(portable(std::path::Path::new(r"C:\a\b.loft")), "C:/a/b.loft");
+        assert_eq!(
+            portable(std::path::Path::new(r"C:\a\b.loft")),
+            "C:/a/b.loft"
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn a_unix_path_is_unchanged() {
         assert_eq!(portable(std::path::Path::new("/a/b.loft")), "/a/b.loft");
+    }
+
+    /// The two are NOT interchangeable, and collapsing them is a real mistake I made:
+    /// routing `path_to_uri` through `portable` passed on Windows and broke on Linux,
+    /// because there the separator is `/` and the backslash was correctly left alone —
+    /// producing a URI carrying `\U`, an invalid JSON escape.  This pins the difference
+    /// so the next unification attempt fails here instead of in the LSP transport.
+    #[test]
+    fn uri_rendering_is_not_platform_rendering() {
+        let p = std::path::Path::new(r"C:\a\b.loft");
+        assert_eq!(
+            for_uri(p),
+            "C:/a/b.loft",
+            "a URI may never carry a backslash"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            portable(p),
+            r"C:\a\b.loft",
+            "on Unix those backslashes are filename characters, not separators"
+        );
     }
 
     /// The chokepoint has to STAY one.  Five sites had grown their own
@@ -101,7 +140,9 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut stack = vec![root];
         while let Some(dir) = stack.pop() {
-            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {
