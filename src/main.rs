@@ -457,7 +457,7 @@ fn install_package(pkg_path: &std::path::Path) {
     // `~/.loft/lib/<name>` is searched BEFORE the registry cache, that incomplete copy
     // shadowed a complete registry one, failing every `--html` build against it with an
     // error pointing at the library rather than at the install (loft#667).
-    let copied = match loft::package::copy_package_tree(pkg_path, &target) {
+    let copied = match loft::package_layout::copy_package_tree(pkg_path, &target) {
         Ok(n) => n,
         Err(e) => {
             println!("loft install: cannot copy {}: {e}", pkg_path.display());

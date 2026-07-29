@@ -45,106 +45,11 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::package_layout::{git_ignored_set, is_excluded_entry};
 use flate2::Compression;
 use flate2::GzBuilder;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
-
-/// Top-level paths that are never included in the tarball.
-const EXCLUDED_DIRS: &[&str] = &[
-    ".git",
-    "target",
-    ".loft",
-    "node_modules",
-    ".vscode",
-    ".idea",
-];
-
-/// File-name patterns excluded recursively.  The output `*.tar.gz` is
-/// excluded so a re-run from the same directory doesn't try to bundle
-/// the previous artefact.
-fn is_excluded_file(name: &str) -> bool {
-    has_suffix_ci(name, ".tar.gz") || has_suffix_ci(name, ".tar")
-}
-
-/// Is this directory entry excluded from a package?
-///
-/// **The single answer to "what does a package consist of."**  Both the tarball
-/// ([`package_create`]) and the local install ([`copy_package_tree`]) ask here.  They used
-/// to answer separately — the tarball by exclusion, `loft install <dir>` by a whitelist of
-/// `loft.toml` + `src/*.loft` + `tests/` + `native/` — and the two disagreed twice: first
-/// `native/`, so a local install of an FFI library silently dropped it, then `wasm/`, so a
-/// local install of a `[wasm.bridge]` library dropped the bridge and, because `~/.loft/lib`
-/// is searched before the registry cache, that incomplete copy SHADOWED a good registry one
-/// (loft#667).  A whitelist re-derives the answer, so it can only ever lag by one directory.
-fn is_excluded_entry(
-    root: &Path,
-    path: &Path,
-    name: &str,
-    is_dir: bool,
-    ignored: &std::collections::HashSet<PathBuf>,
-) -> bool {
-    // Anything git ignores — keeps a dirty tree byte-identical to a clean clone.
-    if path
-        .strip_prefix(root)
-        .is_ok_and(|rel| ignored.contains(rel))
-    {
-        return true;
-    }
-    // `EXCLUDED_DIRS` at any depth (`native/target/` nests).
-    if is_dir && EXCLUDED_DIRS.contains(&name) {
-        return true;
-    }
-    // Tar artefacts: the in-flight output, and any stale one a previous run left.
-    !is_dir && is_excluded_file(name)
-}
-
-/// Copy a package tree the way `loft package` bundles it — same include rule, so a local
-/// `loft install <dir>` carries exactly what the published tarball carries.  Returns the
-/// number of files copied.
-///
-/// # Errors
-/// Propagates any I/O error from reading `root` or writing under `dst`.
-pub fn copy_package_tree(root: &Path, dst: &Path) -> io::Result<usize> {
-    let ignored = git_ignored_set(root);
-    copy_tree_inner(root, root, dst, &ignored)
-}
-
-fn copy_tree_inner(
-    root: &Path,
-    dir: &Path,
-    dst: &Path,
-    ignored: &std::collections::HashSet<PathBuf>,
-) -> io::Result<usize> {
-    fs::create_dir_all(dst)?;
-    let mut copied = 0;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        let file_type = entry.file_type()?;
-        if is_excluded_entry(root, &path, name_str.as_ref(), file_type.is_dir(), ignored) {
-            continue;
-        }
-        if file_type.is_dir() {
-            copied += copy_tree_inner(root, &path, &dst.join(&name), ignored)?;
-        } else if file_type.is_file() {
-            fs::copy(&path, dst.join(&name))?;
-            copied += 1;
-        }
-    }
-    Ok(copied)
-}
-
-/// Case-insensitive ASCII suffix check.  `str::ends_with` is
-/// case-sensitive and `to_ascii_lowercase` allocates; this avoids
-/// both.
-fn has_suffix_ci(s: &str, suffix: &str) -> bool {
-    let sb = s.as_bytes();
-    let tb = suffix.as_bytes();
-    sb.len() >= tb.len() && sb[sb.len() - tb.len()..].eq_ignore_ascii_case(tb)
-}
 
 /// The three compatibility levels a package declares, each a promise on a
 /// different axis a consumer can be hurt on.
@@ -415,46 +320,6 @@ fn add_dir_contents(
     walk(builder, src_dir, src_dir, archive_prefix, &ignored)
 }
 
-/// Paths (relative to the package root) that git ignores — UNTRACKED files
-/// matched by `.gitignore` / `.git/info/exclude` / `core.excludesfile`.  We skip
-/// these when packaging so a tarball built from a DIRTY working tree (e.g. after
-/// `loft test` wrote gitignored scratch files such as `tests/_tmp_*.bin`) matches
-/// one built from a clean clone — the registry's gate-3 reproducible-build
-/// invariant.  `.gitignore` parsing is delegated to `git` itself rather than
-/// re-implemented.
-///
-/// Returns empty (skip nothing) when the dir is not a git repo or `git` is
-/// missing, so non-git packaging is unchanged.  Only *untracked* ignored files
-/// are listed, so a clean checkout (which has none) packages identically before
-/// and after this change — existing releases stay valid.
-fn git_ignored_set(root: &Path) -> std::collections::HashSet<PathBuf> {
-    let mut set = std::collections::HashSet::new();
-    let Ok(out) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "ls-files",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "-z",
-        ])
-        .output()
-    else {
-        return set; // git not installed → behave as before
-    };
-    if !out.status.success() {
-        return set; // not inside a git repo → behave as before
-    }
-    for p in out.stdout.split(|&b| b == 0) {
-        if !p.is_empty() {
-            let s = String::from_utf8_lossy(p);
-            set.insert(PathBuf::from(s.trim_end_matches('/')));
-        }
-    }
-    set
-}
-
 fn walk(
     builder: &mut tar::Builder<GzEncoder<fs::File>>,
     root: &Path,
@@ -621,6 +486,9 @@ pub fn print_summary(out: &PackageOutput, w: &mut dyn Write) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The parity test lives here because this is where the TARBALL side is; the install
+    // side moved to `package_layout` so it compiles without the `registry` feature.
+    use crate::package_layout::copy_package_tree;
     use std::env;
 
     /// Per-test tmpdir.  Includes the test name + process id so

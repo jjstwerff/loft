@@ -208,6 +208,7 @@ pub mod native_gate;
 pub mod native_lib;
 #[cfg(feature = "registry")]
 pub mod package;
+pub mod package_layout;
 pub mod registry;
 #[cfg(feature = "registry")]
 pub mod registry_advisories;
