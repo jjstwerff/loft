@@ -277,11 +277,12 @@ fn run() -> integer {
 
 #[test]
 fn par_form2_method() {
-    // Note: under the `code!()` harness, the parser warns "Variable s
-    // is never read" when the body doesn't reference `s` (it sees the
-    // method-receiver `s.dbl()` as a structural call, not a read of s).
-    // 22-threading.loft sidesteps this by always using both x and r in
-    // the body; we acknowledge the warning here so the test passes.
+    // This used to acknowledge a false "Variable s is never read": the lint counted
+    // `uses`, which the method-receiver position of `s.dbl()` never incremented, so a
+    // variable the program plainly reads was reported unread.  The lint now asks whether
+    // the emitted body NAMES the variable, and the receiver is right there in it — so the
+    // warning is gone and the acknowledgement with it.  `22-threading.loft` sidestepped
+    // the same false positive by always using both `x` and `r` in the body.
     code!(
         "struct Score { value: integer }
 fn dbl(self: const Score) -> integer { self.value * 2 }
@@ -292,7 +293,6 @@ fn run() -> integer {
     sum
 }"
     )
-    .warning("Variable s is never read at par_form2_method:6:26")
     .expr("run()")
     .result(Value::Int(12));
 }

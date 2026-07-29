@@ -1519,7 +1519,8 @@ impl Parser {
                 self.vars.debug_dead_store_dump(fn_name, body, &self.data);
             }
             if !is_stub {
-                self.vars.test_used(&mut self.lexer, &self.data);
+                let body = self.data.definitions[self.context as usize].code().clone();
+                self.vars.test_used(&mut self.lexer, &self.data, &body);
             }
             // P246 follow-up — UPPER_CASE locals without `const`
             // violate the "UPPER_CASE means immutable constant"

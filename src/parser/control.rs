@@ -8434,6 +8434,23 @@ impl Parser {
                     );
                     bl.operators
                         .insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                } else if Self::ir_diverges(&bl.operators[last]) {
+                    // The tail YIELDS NOTHING: every path through it returns
+                    // (`fn f() -> text { if c { return a; } else { return b; } }`, and the
+                    // same after a `match` lowers to nested `If`).  Binding it as a value
+                    // emits `__tret = (if … { return … } else { return … })` — a store
+                    // control can never reach.  The interpreter survives that (the
+                    // `return` leaves before the store completes), but rustc cannot type
+                    // `.to_string()` on `!` and rejects the whole function with E0282, so
+                    // an ordinary shape compiled on one backend and not the other.
+                    //
+                    // It is the same job the loop above does for every EARLIER operator,
+                    // just reached at the tail: route each inner `return <e>` through the
+                    // buffer.  The trailing `Var(tv)` keeps the block's result the
+                    // `text["__tret"]` shape `text_return` and `av_renumber_retbuf` expect;
+                    // it is unreachable, exactly like the value it replaces.
+                    Self::rewrite_text_returns_into(&mut bl.operators[last], tv);
+                    bl.operators.push(Value::Var(tv));
                 } else {
                     let call = std::mem::replace(&mut bl.operators[last], Value::Var(tv));
                     bl.operators.insert(last, crate::data::v_set(tv, call));
@@ -8647,6 +8664,22 @@ impl Parser {
     /// `return <e>` → `{ Set(tv, <e>); return tv }`.  The companion of the tail
     /// rebind in `promote_monomorph_text_return`, applied to the EARLY returns so
     /// all paths write the one caller buffer (no orphaned owned copy).
+    /// Does every path through `op` leave the block — i.e. does it yield no value?
+    ///
+    /// A `return` diverges; an `if` diverges when BOTH arms do (a one-armed `if` falls
+    /// through); a block diverges when any operator in it does. Used to tell a tail that
+    /// produces the function's value from one that only ever returns, which decide
+    /// different lowerings (`promote_text_return_def`).
+    fn ir_diverges(op: &Value) -> bool {
+        match op.unspan() {
+            Value::Return(_) => true,
+            Value::If(_, t, e) => Self::ir_diverges(t) && Self::ir_diverges(e),
+            Value::Block(bl) => bl.operators.iter().any(Self::ir_diverges),
+            Value::Insert(ops) => ops.iter().any(Self::ir_diverges),
+            _ => false,
+        }
+    }
+
     fn rewrite_text_returns_into(op: &mut Value, tv: u16) {
         match op {
             Value::Span(b) => Self::rewrite_text_returns_into(&mut b.1, tv),
