@@ -1916,19 +1916,59 @@ impl Function {
         }
     }
 
-    /// Advance the pooling counter past every `__work_N` already in `names`, so the next
-    /// `work_text()` mints a genuinely-fresh buffer instead of aliasing a live one.  Needed
-    /// when a def's work-texts live in `names` but the counter is out of sync — e.g. a
-    /// post-parse retbuf injection into an already-parsed caller (loft#568 @PLN104 Phase B),
-    /// where re-using `__work_1` would collide with a live format-arg buffer in the SAME call.
-    pub fn sync_work_text_counter(&mut self) {
+    /// Advance EVERY pooled work-name counter past the names already in `names`, so the
+    /// next mint yields a genuinely-fresh variable instead of aliasing a live one.
+    ///
+    /// A mint helper reuses the name it finds in `names`.  That pooling is deliberate
+    /// during a parse — it is what lets pass 2 re-find pass 1's buffer in the same role.
+    /// Re-entering an ALREADY-PARSED function is where the reuse turns into aliasing: the
+    /// counters were reset to 0 when the function was stored (`append`), so the first mint
+    /// hands back the buffer the parse already gave to something still live.
+    ///
+    /// Call this at every such re-entry.  @PLN104 Phase B (`patch_tret_callers`) is the
+    /// one today, and the buffer it aliased went to a callee AS ITS OWN ARGUMENT:
+    /// `wrap(s())` gave `s`'s result buffer to `wrap` to build its return in, so `wrap`
+    /// overwrote the bytes it was reading — `[hi]` came out `[[i]`, and `--native` dropped
+    /// the backing `String` while a `&str` still pointed into it, a null-pointer copy
+    /// (loft#671).
+    ///
+    /// **Every sequence belongs in this list.**  Syncing only `__work_N` is what left that
+    /// hole: the caller retbuf moved to its own `__work_cN` counter (loft#662) and silently
+    /// stopped being covered.  The shared `__work` stem self-disambiguates — `strip_prefix`
+    /// leaves `c1` / `p2_1`, which do not parse as a number.
+    pub fn sync_work_counters(&mut self) {
+        fn index(name: &str, prefix: &str) -> Option<u16> {
+            name.strip_prefix(prefix)?.parse::<u16>().ok()
+        }
+        let (mut text, mut ctext, mut p2, mut refs, mut vdb) = (
+            self.work_text,
+            self.work_ctext,
+            self.work_text_p2,
+            self.work_ref,
+            self.work_vdb,
+        );
         for name in self.names.keys() {
-            if let Some(rest) = name.strip_prefix("__work_")
-                && let Ok(k) = rest.parse::<u16>()
-            {
-                self.work_text = self.work_text.max(k);
+            if let Some(k) = index(name, "__work_") {
+                text = text.max(k);
+            }
+            if let Some(k) = index(name, "__work_c") {
+                ctext = ctext.max(k);
+            }
+            if let Some(k) = index(name, "__work_p2_") {
+                p2 = p2.max(k);
+            }
+            if let Some(k) = index(name, "__ref_") {
+                refs = refs.max(k);
+            }
+            if let Some(k) = index(name, "__vdb_") {
+                vdb = vdb.max(k);
             }
         }
+        self.work_text = text;
+        self.work_ctext = ctext;
+        self.work_text_p2 = p2;
+        self.work_ref = refs;
+        self.work_vdb = vdb;
     }
     #[track_caller]
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
