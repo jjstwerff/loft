@@ -29,6 +29,19 @@ run() {  # $1 = query, $2 = seconds to wait for the page's line
   local ch=$!; await_report "$REPORT" "$2"; stop_browser $ch
   head -1 "$REPORT"
 }
+# The FIRST page of the FIRST gate in a job pays a one-time cost the rest never
+# see: chromium's cold profile plus compiling the threaded wasm bundle.  Measured
+# on a 4-vCPU CI runner, four WARM runs of the sibling gate cost 11s total while
+# this cold one blew a 54s budget and reported nothing — read as "the page
+# produced nothing", i.e. a red gate for a working build.  Padding every budget
+# would hide a page that really hangs, so pay the cost ONCE here instead, in a
+# discarded run with a cap of its own.  The elapsed time is printed rather than
+# swallowed: a warm-up that takes minutes is itself a finding.
+echo "== warm-up (cold chromium + wasm compile; result discarded) =="
+_w0=$SECONDS
+run '?threads=4' 90 >/dev/null
+echo "  warm-up took $(( SECONDS - _w0 ))s"
+
 echo "== parallel (initThreadPool 4) =="
 P="$(run '?threads=4' 18)"; echo "  $P"
 echo "== sequential fallback (no initThreadPool) =="
