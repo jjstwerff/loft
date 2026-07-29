@@ -11,8 +11,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status (REQUIRED)
 
-**Shipped** — `scripts/lib_audit.sh` implements Q1–Q5 (commit 772b1857) and runs
-read-only in the nightly `.github/workflows/miri.yml` (`--no-native`); § First live
+**COMPLETE (2026-07-29)** — every phase P1–P6 done and all five open design questions
+resolved (§ Open design questions).  `scripts/lib_audit.sh` implements Q1–Q5 (commit
+772b1857) and runs read-only in the nightly `.github/workflows/miri.yml` — interpreter
+tier plus, since P6 closed, a provisioned native tier; § First live
 run records the 2026-07-12 results.  Originally motivated by a concrete miss: `loft-libs-net`
 sat **unvalidated against current loft for ~2 weeks** — its `main` CI last ran
 2026-05-31 (before June's #354/#357/#361 stability work), its one in-flight branch
@@ -242,7 +244,7 @@ replaces, or leaves alone) so the plan neither reinvents nor silently drops a to
 | **P3** — correctness: per-package interp+native with cache-clear + native-ran proof + verdict enum | Q4 | **Done** — verdict enum live; A1 native-ran proof is output-grep (not the artifact-freshness ideal), A2 cache-clear is `--clean-cache` opt-in |
 | **P4** — registry currency: wrap `check_registry_coverage.sh` | Q5 | **Done** |
 | **P5** — report + exit status: intended-vs-reached, verdict tally, provenance stamp | invariant gate | **Done** |
-| **P6** — automation: nightly scheduled job (interp every PR is cheap; native nightly per #363 wall-clock) | C1 fix | **Partial** — interp nightly in `miri.yml`; native-nightly still open (q. 3) |
+| **P6** — automation: nightly scheduled job | C1 fix | **Done** — interp + native tiers both nightly in `miri.yml`; native provisioned with ALSA/GL and bounded, overrun reported (q. 3) |
 
 ## Phase ordering
 
@@ -296,24 +298,43 @@ The gate rule already fits it — a fix PR that tracks the migration (graphics #
 *known/acceptable*; no working fix (hex_terrain) means the work is still owed.  See
 Open question 5 for whether this deserves its own verdict tag.
 
-## Open design questions
+## Open design questions — all resolved (2026-07-29)
 
-1. **File `@PLN20`** on `loft-lang/plans` to claim the id (outward-facing — not done
-   yet); label `plan` + `subject:libs` + `status:future`.
-2. **Exit-code policy** (untracked-work-fails is now firm — see Gate condition).
-   Remaining: do `DEGRADED`/`BLIND` fail the gate? (Recommend yes — A-class lies.)
-   Do `EMPTY`/`SKIP-ENV` fail, or surface only? (Recommend surface, don't fail.)
-3. **Native on every PR vs nightly-only** — native compiles are the slow/fragile part;
-   #363 just halved PR wall-clock, so the recommended split is interp-all per PR,
-   native-all nightly.
-4. **Supersede or fold in `verify_external_libs.sh`** — this audit is its honest
-   superset (auto-discovery + verdict taxonomy + branch/registry); decide whether to
-   retire it or keep it as the thin local subset.
-5. **A `LAGGING` verdict?** The first run's two reds (§ First live run) are libraries
-   lagging a *deliberate* loft change (C86), not library bugs.  Consider a distinct
-   REPORT tag so a migration-gap reads differently from a true `FAIL` — and, like
-   untracked work, counts as *known* once a fix PR tracks it (graphics #10) rather
-   than owed (hex_terrain).
+1. **File `@PLN20`** — **DONE.** The issue exists on `loft-lang/plans` and is labelled
+   `subject:libs`; the "unfiled" note above is historical.
+2. **Exit-code policy** — **DONE, and it was already implemented.** `DEGRADED` gates,
+   `EMPTY` / `SKIP-ENV` are surfaced without gating (`lib_audit.sh` § THE GATE). What was
+   genuinely missing is `BLIND`: it was named in the gate list and in A3 with **no
+   producer**, and the mechanism meant to make it "impossible" — the intended-vs-reached
+   completeness check — was vacuous, because `INTENDED` and `REACHED` were appended on the
+   same line before the tests ran. A package could not be found-but-unrun *by measurement*;
+   it merely could not be *observed*. Now `INTENDED` is claimed at discovery, `REACHED`
+   only once a verdict exists, and an empty verdict becomes `BLIND` and gates. Proven with
+   a positive control (a producer returning nothing ⇒ `BLIND` + 1 gate failure; a normal
+   verdict ⇒ 0), because a guard nobody has seen fire is not a guard.
+3. **Native on every PR vs nightly-only** — **DONE: nightly-only, both tiers.** The
+   per-PR half of the original recommendation is superseded by CI_BUDGET's rule that this
+   job measures the WORLD, not the diff, so it does not belong on a PR at all. The native
+   tier is now a second nightly step (`miri.yml` § library-health) with `mold` + ALSA +
+   headless GL provisioned — without those, `graphics`/`input` fail at native CRATE build
+   and read as library rot, a B-class false alarm that is worse than having no native tier.
+   It is a SEPARATE step from the interpreter sweep so a native overrun can never cost us
+   the interpreter verdict, and the 45m bound REPORTS an overrun rather than truncating:
+   a sweep cut short is incomplete, not green.
+4. **Supersede or fold in `verify_external_libs.sh`** — **RETIRED.** It had no CI or
+   Makefile caller, and `lib_audit.sh --repo <r> --local --no-native` does its job by
+   auto-discovery. Its one distinguishing feature was a hardcoded package list covering 8
+   of 15 — which is precisely the A3 blind spot this audit exists to remove, so keeping it
+   as "the thin local subset" would have kept a false-clean generator on the shelf. Live
+   instructions pointing at it were repointed; the historical references in PROBLEMS.md
+   (bugs found while building it) are left as written.
+5. **A `LAGGING` verdict?** — **DECLINED.** The gate rule already carries the
+   distinction: a lagging library with a fix PR reads *known/acceptable* through branch
+   hygiene, and one without reads *owed*. Adding a verdict would also undo D1's
+   deliberate collapse of the taxonomy. The deciding objection is A-class: a verdict
+   meaning "failing, but for a reason we accept" turns a red into an amber, while the
+   user-facing truth is that the library does not work against current loft. The *cause*
+   is already reported separately by the C86 write-through lint.
 
 ## Cross-arc dependencies
 

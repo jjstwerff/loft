@@ -225,18 +225,35 @@ for repo in $REPOS; do
       done < <(python3 "$ROOT/scripts/c86_lint.py" "$p" 2>/dev/null)
     fi
     [ -d "$p/tests" ] || { ROWS+=("$repo/$name|interp -|native -|no tests/"); continue; }
-    INTENDED+=("loft-libs-$repo/$name"); REACHED+=("loft-libs-$repo/$name")
+    # INTENDED is claimed at DISCOVERY; REACHED only once a verdict actually exists.
+    # These used to be pushed together on one line, which made the completeness check
+    # below vacuous — a package was "reached" before its tests ran, so the A3 blind
+    # spot the check exists to catch could not be detected.
+    INTENDED+=("loft-libs-$repo/$name")
     IFS='|' read -r iv inote <<<"$(run_tests interpret "$p")"
     nv="-"; nnote=""
     if [ "$RUN_NATIVE" = 1 ] && [ "$NATIVE_ENV_OK" = 1 ]; then
       IFS='|' read -r nv nnote <<<"$(run_tests native "$p")"
     elif [ "$RUN_NATIVE" = 1 ]; then nv="SKIP-ENV"; fi
+    # A3 · BLIND — the package was FOUND but produced no verdict (run_tests died, the
+    # subshell was killed, a timeout).  The design calls this "designed to be
+    # impossible"; the point of emitting it is that "impossible" must still be
+    # OBSERVABLE if it happens, because the alternative is an empty verdict reading as
+    # a silent pass — the exact false-clean this taxonomy exists to prevent.
+    if [ -z "$iv" ]; then
+      iv="BLIND"; inote="found but unrun — no verdict produced"
+    fi
+    REACHED+=("loft-libs-$repo/$name")
     note="$inote"; [ -n "$nnote" ] && [ "$nnote" != "$inote" ] && note="${note:+$note; }$nnote"
     ROWS+=("$repo/$name|interp $iv|native $nv|$note")
-    case "$iv" in FAIL) gate "loft-libs-$repo/$name [interpret]: FAIL — $inote" ;; esac
+    case "$iv" in
+      FAIL)  gate "loft-libs-$repo/$name [interpret]: FAIL — $inote" ;;
+      BLIND) gate "loft-libs-$repo/$name [interpret]: BLIND — $inote" ;;
+    esac
     case "$nv" in
       FAIL)     gate "loft-libs-$repo/$name [native]: FAIL — $nnote" ;;
       DEGRADED) gate "loft-libs-$repo/$name [native]: DEGRADED — $nnote" ;;
+      BLIND)    gate "loft-libs-$repo/$name [native]: BLIND — $nnote" ;;
     esac
   done
   git -C "$clone" worktree remove --force "$wt" 2>/dev/null

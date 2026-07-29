@@ -128,7 +128,7 @@ considered and rejected — see that section.)
   a narrow-vector element path).
 - @P368 golden baselines were already regenerated for the wording change; re-run
   `find_problems.sh` to confirm the whole suite is green on both backends.
-- Re-verify external libs: `scripts/verify_external_libs.sh` (rand must now give
+- Re-verify external libs: `scripts/lib_audit.sh --local` (rand must now give
   `null` for `rand(lo>hi)` on **both** backends — the original @P370 acceptance).
 
 ### Lesson (for the pacing)
