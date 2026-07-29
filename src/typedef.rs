@@ -569,6 +569,27 @@ pub(crate) fn register_and_lay_out_synth(data: &mut Data, database: &mut Stores,
     database.lay_out_synth(enum_kt, some_kt);
 }
 
+/// A free DB structure name for an enum VARIANT whose bare and source-qualified
+/// names are both taken — `<parent enum's DB name>::<variant>`.
+///
+/// The parent enum is itself a registered structure, so its DB name is already
+/// unique and the variant name below it cannot collide. `None` when the def is not
+/// a variant, when the parent has no registered type yet, or (defensively) when
+/// even that name is taken — the caller then keeps the source-qualified name and
+/// the registration aborts with its own diagnostic rather than a silent alias.
+fn variant_parent_qualified_name(data: &Data, database: &Stores, d_nr: u32) -> Option<String> {
+    if data.def_type(d_nr) != DefType::EnumValue {
+        return None;
+    }
+    let parent = data.def(d_nr).parent;
+    let parent_name = database.type_name(data.def(parent).known_type);
+    if parent_name.is_empty() {
+        return None;
+    }
+    let name = format!("{parent_name}::{}", data.def(d_nr).name);
+    (!database.has_type(&name)).then_some(name)
+}
+
 pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     if data.def(d_nr).name == "Unknown(0)" {
         return;
@@ -634,7 +655,21 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     } else if let Some(name) = synth_variant_name {
         name
     } else if database.has_type(&data.def(d_nr).name) {
-        data.qualified_type_name(d_nr)
+        // The source qualifier separates two LIBRARIES that define the same name.  It
+        // cannot separate two definitions in ONE source, so a third same-named
+        // structure aborted the compiler — `enum A { Nil, … } enum B { Nil, … }
+        // enum C { Nil, … }` in one file is enough, and the abort read as an internal
+        // error on legal code.  A variant's parent enum is itself a registered type,
+        // so qualifying with the parent's DB name is unique by construction; it is the
+        // same escape the synthetic `__nullable<S>` variants take above.  Reached only
+        // once the source-qualified name is ALSO taken, so every program that compiles
+        // today keeps the name it has.
+        let qualified = data.qualified_type_name(d_nr);
+        if database.has_type(&qualified) {
+            variant_parent_qualified_name(data, database, d_nr).unwrap_or(qualified)
+        } else {
+            qualified
+        }
     } else {
         data.def(d_nr).name.clone()
     };

@@ -3511,11 +3511,18 @@ impl Parser {
             // the arm body — the hand-expanded form the single arm above equals.
             if let Some((body, tp)) = multi_extra {
                 for (disc, stmts_i) in multi_branches {
+                    // #673 — the clone carries the FIRST pattern's `text` payload
+                    // write-backs, but this branch binds the shared slots from its own
+                    // variant's offsets.  Retarget the write-backs to the place this
+                    // branch actually read, or `B { items }` reads its own field and
+                    // writes the result into `A`'s.
+                    let mut body_i = body.clone();
+                    self.retarget_text_payload_writes(&mut body_i, &stmts_i);
                     let code_i = if stmts_i.is_empty() {
-                        body.clone()
+                        body_i
                     } else {
                         let mut ops = stmts_i;
-                        ops.push(body.clone());
+                        ops.push(body_i);
                         v_block(ops, tp.clone(), "match_arm")
                     };
                     arms.push(EnumArm {
@@ -3811,6 +3818,77 @@ impl Parser {
         }
     }
 
+    /// #673 — record that `bind_nr` mirrors a struct-enum `text` payload, so a write
+    /// through the binding can be written back into the subject.
+    ///
+    /// A heap payload binding holds a DbRef INTO the subject's record, so
+    /// `items += …` reaches the subject with no help. A `text` payload binding is an
+    /// owned copy of the characters (`_mv_items = OpGetText(subj, off)` — see the
+    /// `skip_free` note at the call site), so the identical source line updated the
+    /// copy and left the enum untouched, on both backends and with no diagnostic.
+    /// Remembering the field read lets `parse_assign` mirror each write back with
+    /// `OpSetText(subj, off, binding)`; a binding that is only read never reaches
+    /// that path, so its bytecode is unchanged.
+    ///
+    /// Only a re-evaluable subject qualifies. The read is emitted once per write, so
+    /// a subject carrying a user call (`match make_e() { … }`) would run that call
+    /// again — and such a subject is a temporary the write could not outlive anyway.
+    fn record_text_payload_view(&mut self, bind_nr: u16, field_read: &Value) {
+        let Value::Call(d_nr, args) = field_read.unspan() else {
+            return;
+        };
+        if self.data.def(*d_nr).name() != "OpGetText"
+            || args.len() != 2
+            || self.ir_has_user_call(&args[0])
+        {
+            return;
+        }
+        let read = field_read.unspan().clone();
+        self.text_payload_views
+            .insert((self.context, bind_nr), read);
+    }
+
+    /// #673 / @PLN35 Phase 3 — point a multi-pattern branch's cloned body at the
+    /// field offsets THIS branch bound its captures from.
+    ///
+    /// Every extra listed pattern runs a clone of the one arm body, so a `text`
+    /// payload write-back (`record_text_payload_view`) reaches the clone carrying the
+    /// FIRST pattern's `(subject, offset)`. `stmts_i` — this branch's
+    /// `capture = OpGetText(subject, off_i)` binds — names the place the branch really
+    /// read, so swapping the write to match keeps read and write on one field.
+    /// Untouched when the two patterns put the field at the same offset.
+    fn retarget_text_payload_writes(&self, body: &mut Value, stmts_i: &[Value]) {
+        let get_nr = self.data.def_nr("OpGetText");
+        let set_nr = self.data.def_nr("OpSetText");
+        if get_nr == u32::MAX || set_nr == u32::MAX {
+            return;
+        }
+        for st in stmts_i {
+            let Value::Set(v_nr, rhs) = st.unspan() else {
+                continue;
+            };
+            let Value::Call(d_nr, args) = rhs.unspan() else {
+                continue;
+            };
+            let Some(Value::Call(_, first)) = self.text_payload_views.get(&(self.context, *v_nr))
+            else {
+                continue;
+            };
+            if *d_nr != get_nr || args.len() != 2 || first[..] == args[..] {
+                continue;
+            }
+            let from = Value::Call(
+                set_nr,
+                vec![first[0].clone(), first[1].clone(), Value::Var(*v_nr)],
+            );
+            let to = Value::Call(
+                set_nr,
+                vec![args[0].clone(), args[1].clone(), Value::Var(*v_nr)],
+            );
+            crate::parser::expressions::substitute_value(body, &from, &to);
+        }
+    }
+
     /// @PLN35 Phase 2 (P-Cap-View) — mark a slice-element capture that reads a HEAP
     /// element as a borrowed VIEW of the subject, the same way a struct-enum field
     /// binding is (`parse_match_enum_field_bindings`, #429). A slice binding
@@ -3894,7 +3972,7 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
-                            arm_stmts.push(v_set(v_nr, field_read));
+                            arm_stmts.push(v_set(v_nr, field_read.clone()));
                             let old = self.vars.set_name(&field_name, v_nr);
                             name_aliases.push((field_name.clone(), old));
                             // B5 remaining half (2026-04-14): a HEAP match-arm
@@ -3921,7 +3999,9 @@ impl Parser {
                             // was taken (the whole p54 struct-enum / json-match
                             // family).  So skip_free HEAP bindings only; let a
                             // text binding free through normal scope cleanup.
-                            if !matches!(field_type.base(), Type::Text(_)) {
+                            if matches!(field_type.base(), Type::Text(_)) {
+                                self.record_text_payload_view(v_nr, &field_read);
+                            } else {
                                 self.vars.set_skip_free(v_nr);
                             }
                             // #429: the binding is a BORROWED VIEW of the

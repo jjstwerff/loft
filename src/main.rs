@@ -4522,6 +4522,7 @@ fn compat_test_verdict(name: &str, version: &str, published: &std::path::Path) -
 /// and a test does `use <name>;`, so the two must sit in one package for the name to resolve.
 /// Staged in a temp directory because neither input may be written to: the install cache is
 /// shared, and the working tree is the user's.
+#[cfg(feature = "registry")]
 fn stage_package(
     src_from: &std::path::Path,
     tests_from: &std::path::Path,
@@ -4539,6 +4540,7 @@ fn stage_package(
 
 /// Recursive copy. Skips per-checkout build state, which would otherwise carry a stale build
 /// into the staged package and have it test something other than the source beside it.
+#[cfg(feature = "registry")]
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
     let meta = std::fs::metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
     if meta.is_file() {
@@ -4562,6 +4564,7 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String>
 
 /// Run a staged package's suite, returning whether it passed. Bounded by `LOFT_TIMEOUT` (the
 /// same bound library CI uses) so one hung old test cannot stall the check.
+#[cfg(feature = "registry")]
 fn run_package_tests(dir: &std::path::Path) -> bool {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("loft"));
     std::process::Command::new(exe)
@@ -4579,6 +4582,7 @@ fn run_package_tests(dir: &std::path::Path) -> bool {
 
 /// A package's entry `.loft` file: `[library] entry` when declared, else the
 /// `src/<name>.loft` default that `loft.toml`'s documentation specifies.
+#[cfg(feature = "registry")]
 fn entry_file_of(root: &std::path::Path, name: &str) -> String {
     let entry =
         loft::manifest::read_manifest(root.join("loft.toml").to_str().unwrap_or("loft.toml"))

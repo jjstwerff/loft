@@ -562,6 +562,17 @@ pub struct Parser {
     /// non-zero literal) is provably fit and types NON-null; otherwise it types `τ?`. Same
     /// push/truncate/invalidate discipline as `narrowed_non_null`.
     pub(crate) divisor_nonzero: Vec<u16>,
+    /// #673 — struct-enum `text` payload bindings that WRITE THROUGH to the subject.
+    ///
+    /// A heap payload binding (`vector`/`ref`/struct-enum) holds a DbRef into the
+    /// subject's record, so `items += …` mutates the subject for free. A `text`
+    /// payload binding is an owned copy of the field's characters
+    /// (`_mv_items = OpGetText(subj, off)`), so the same write would land in the copy
+    /// and vanish. Keyed `(enclosing fn, binding var)` → the `OpGetText(subject, off)`
+    /// read the binding was initialised from, which `parse_assign` turns back into an
+    /// `OpSetText` after every write. Only bindings whose subject expression is
+    /// re-evaluable (no user call) are recorded.
+    pub(crate) text_payload_views: std::collections::HashMap<(u32, u16), Value>,
     /// @PLN25 DN3 fault-op (index) — set by `parse_vector_index` for each SCALAR `v[i]` read
     /// (true = the index is provably in-bounds: a non-negative constant, a for-loop iter var, or
     /// a var proven `< len(v)` by an enclosing guard), read immediately after by `parse_index` to
@@ -828,6 +839,7 @@ impl Parser {
             defended_field_reads: std::collections::HashSet::new(),
             narrowed_non_null: Vec::new(),
             divisor_nonzero: Vec::new(),
+            text_payload_views: std::collections::HashMap::new(),
             last_index_fit: false,
             index_bounded: Vec::new(),
             last_field_read_site: None,

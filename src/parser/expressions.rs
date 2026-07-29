@@ -2894,7 +2894,7 @@ use a separate collection or add after the loop"
     /// sub-expression?  Builtin `Op*` accessors/arithmetic are pure given stable
     /// args and may be re-evaluated freely; a place addressing sub-expression that
     /// reaches a user call must be bound once (compound-assign place-once, C92).
-    fn ir_has_user_call(&self, v: &Value) -> bool {
+    pub(crate) fn ir_has_user_call(&self, v: &Value) -> bool {
         match v {
             Value::Span(b) => self.ir_has_user_call(&b.1),
             Value::Call(d, args) => {
@@ -3343,6 +3343,22 @@ use a separate collection or add after the loop"
                 if let Some(setup) = f2_setup {
                     let assign = std::mem::replace(code, Value::Null);
                     *code = Value::Insert(vec![setup, assign]);
+                }
+                // #673 — a write to a struct-enum `text` payload binding lands in the
+                // binding's own copy of the characters, so mirror it straight back into
+                // the subject's field.  A heap payload binding is a DbRef into the
+                // subject and needs nothing; only the text copy does.  See
+                // `record_text_payload_view` for which bindings are registered.
+                if let Value::Var(v) = to.unspan()
+                    && let Some(read) = self.text_payload_views.get(&(self.context, *v)).cloned()
+                    && let Value::Call(_, read_args) = &read
+                {
+                    let write = self.cl(
+                        "OpSetText",
+                        &[read_args[0].clone(), read_args[1].clone(), Value::Var(*v)],
+                    );
+                    let assign = std::mem::replace(code, Value::Null);
+                    *code = Value::Insert(vec![assign, write]);
                 }
                 // @PLN25 DN3: reassigning a proven-non-null var invalidates its narrowing. The
                 // RHS above was parsed WITH the narrowing (so `if a!=null { a = a+1 }` reads `a`
