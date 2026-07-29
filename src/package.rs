@@ -67,6 +67,76 @@ fn is_excluded_file(name: &str) -> bool {
     has_suffix_ci(name, ".tar.gz") || has_suffix_ci(name, ".tar")
 }
 
+/// Is this directory entry excluded from a package?
+///
+/// **The single answer to "what does a package consist of."**  Both the tarball
+/// ([`package_create`]) and the local install ([`copy_package_tree`]) ask here.  They used
+/// to answer separately — the tarball by exclusion, `loft install <dir>` by a whitelist of
+/// `loft.toml` + `src/*.loft` + `tests/` + `native/` — and the two disagreed twice: first
+/// `native/`, so a local install of an FFI library silently dropped it, then `wasm/`, so a
+/// local install of a `[wasm.bridge]` library dropped the bridge and, because `~/.loft/lib`
+/// is searched before the registry cache, that incomplete copy SHADOWED a good registry one
+/// (loft#667).  A whitelist re-derives the answer, so it can only ever lag by one directory.
+fn is_excluded_entry(
+    root: &Path,
+    path: &Path,
+    name: &str,
+    is_dir: bool,
+    ignored: &std::collections::HashSet<PathBuf>,
+) -> bool {
+    // Anything git ignores — keeps a dirty tree byte-identical to a clean clone.
+    if path
+        .strip_prefix(root)
+        .is_ok_and(|rel| ignored.contains(rel))
+    {
+        return true;
+    }
+    // `EXCLUDED_DIRS` at any depth (`native/target/` nests).
+    if is_dir && EXCLUDED_DIRS.contains(&name) {
+        return true;
+    }
+    // Tar artefacts: the in-flight output, and any stale one a previous run left.
+    !is_dir && is_excluded_file(name)
+}
+
+/// Copy a package tree the way `loft package` bundles it — same include rule, so a local
+/// `loft install <dir>` carries exactly what the published tarball carries.  Returns the
+/// number of files copied.
+///
+/// # Errors
+/// Propagates any I/O error from reading `root` or writing under `dst`.
+pub fn copy_package_tree(root: &Path, dst: &Path) -> io::Result<usize> {
+    let ignored = git_ignored_set(root);
+    copy_tree_inner(root, root, dst, &ignored)
+}
+
+fn copy_tree_inner(
+    root: &Path,
+    dir: &Path,
+    dst: &Path,
+    ignored: &std::collections::HashSet<PathBuf>,
+) -> io::Result<usize> {
+    fs::create_dir_all(dst)?;
+    let mut copied = 0;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let file_type = entry.file_type()?;
+        if is_excluded_entry(root, &path, name_str.as_ref(), file_type.is_dir(), ignored) {
+            continue;
+        }
+        if file_type.is_dir() {
+            copied += copy_tree_inner(root, &path, &dst.join(&name), ignored)?;
+        } else if file_type.is_file() {
+            fs::copy(&path, dst.join(&name))?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
 /// Case-insensitive ASCII suffix check.  `str::ends_with` is
 /// case-sensitive and `to_ascii_lowercase` allocates; this avoids
 /// both.
@@ -307,7 +377,7 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
             .write(tar_gz, Compression::default());
         let mut builder = tar::Builder::new(enc);
         builder.follow_symlinks(false);
-        add_dir_contents(&mut builder, pkg_dir, &archive_prefix, &out_name)?;
+        add_dir_contents(&mut builder, pkg_dir, &archive_prefix)?;
         let enc = builder.into_inner()?;
         enc.finish()?;
     }
@@ -332,27 +402,17 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
     })
 }
 
-/// Recursively add the contents of `src_dir` to `builder`, prefixing
-/// each entry with `archive_prefix/`.  Skips the exclusion list.
-///
-/// `out_name` is the name of the tarball-in-progress, so a `loft
-/// package` invocation that targets its own directory doesn't include
-/// the partially-written archive in itself.
+/// Recursively add the contents of `src_dir` to `builder`, prefixing each entry with
+/// `archive_prefix/`.  Skips whatever [`is_excluded_entry`] excludes — which covers the
+/// tarball-in-progress, so a `loft package` run targeting its own directory does not bundle
+/// the partially-written archive into itself.
 fn add_dir_contents(
     builder: &mut tar::Builder<GzEncoder<fs::File>>,
     src_dir: &Path,
     archive_prefix: &str,
-    out_name: &str,
 ) -> io::Result<()> {
     let ignored = git_ignored_set(src_dir);
-    walk(
-        builder,
-        src_dir,
-        src_dir,
-        archive_prefix,
-        out_name,
-        &ignored,
-    )
+    walk(builder, src_dir, src_dir, archive_prefix, &ignored)
 }
 
 /// Paths (relative to the package root) that git ignores — UNTRACKED files
@@ -400,7 +460,6 @@ fn walk(
     root: &Path,
     current: &Path,
     archive_prefix: &str,
-    out_name: &str,
     ignored: &std::collections::HashSet<PathBuf>,
 ) -> io::Result<()> {
     // Collect + sort entries so the resulting tarball is deterministic
@@ -415,34 +474,10 @@ fn walk(
         let name_str = file_name.to_string_lossy();
         let file_type = entry.file_type()?;
 
-        // Skip anything git ignores (see git_ignored_set) — keeps a dirty-tree
-        // package byte-identical to a clean clone (gate-3 reproducible build).
-        if path
-            .strip_prefix(root)
-            .is_ok_and(|rel| ignored.contains(rel))
-        {
-            continue;
-        }
-
-        // Top-level dir exclusions.
-        if file_type.is_dir()
-            && path.parent() == Some(root)
-            && EXCLUDED_DIRS.contains(&name_str.as_ref())
-        {
-            continue;
-        }
-        // Per-component exclusion of nested EXCLUDED_DIRS (e.g.
-        // `native/target/` — target appears nested too).
-        if file_type.is_dir() && EXCLUDED_DIRS.contains(&name_str.as_ref()) {
-            continue;
-        }
-        if file_type.is_file() && is_excluded_file(&name_str) && name_str == out_name {
-            // Skip the in-flight tarball itself.
-            continue;
-        }
-        if file_type.is_file() && is_excluded_file(&name_str) {
-            // Skip stale `*.tar.gz` artefacts too — the publisher
-            // shouldn't accidentally embed last release's tarball.
+        // The shared include rule — git-ignored entries, `EXCLUDED_DIRS` at any depth, and
+        // tar artefacts (the tarball being written, and any stale one).  `loft install <dir>`
+        // reads the same rule via `copy_package_tree`, so the two cannot drift (loft#667).
+        if is_excluded_entry(root, &path, name_str.as_ref(), file_type.is_dir(), ignored) {
             continue;
         }
 
@@ -453,7 +488,7 @@ fn walk(
         let archive_rel = PathBuf::from(archive_prefix).join(rel);
 
         if file_type.is_dir() {
-            walk(builder, root, &path, archive_prefix, out_name, ignored)?;
+            walk(builder, root, &path, archive_prefix, ignored)?;
         } else if file_type.is_file() {
             // Deterministic file entry: hand-construct the tar header
             // with mtime=0, uid=0, gid=0, mode=0o644, empty owner
@@ -922,5 +957,122 @@ mod tests {
         let err = package_create(&pkg, None).expect_err("should fail");
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// loft#667 — a local `loft install <dir>` must carry EXACTLY what the published
+    /// tarball carries.
+    ///
+    /// The two used to answer "what does a package consist of" separately, and drifted
+    /// twice: `native/` (a local install of an FFI library lost its `n_*` symbols) and then
+    /// `wasm/` + the `[wasm.bridge] host_js` file (a local install of a browser library lost
+    /// its bridge, and because `~/.loft/lib` is searched before the registry cache, the
+    /// incomplete copy shadowed a complete registry one).  Both now read `is_excluded_entry`,
+    /// so this diffs the two trees rather than trusting that they agree.
+    #[test]
+    fn local_install_matches_the_tarball() {
+        let dir = tmpdir("install_parity");
+        let pkg = dir.join("web");
+        write(
+            &pkg.join("loft.toml"),
+            "[package]\nname = \"web\"\nversion = \"0.3.2\"\n\
+             [library]\nentry = \"src/web.loft\"\n\
+             [wasm.bridge]\ncrate = \"web-wasm\"\nhost_js = \"wasm/host.js\"\n",
+        );
+        write(
+            &pkg.join("src/web.loft"),
+            "pub fn ws_open(url: text) -> integer { return 1; }\n",
+        );
+        write(
+            &pkg.join("tests/web_test.loft"),
+            "fn test_ws() { assert(true, \"ok\"); }\n",
+        );
+        // The two directories the whitelist forgot, plus a nested file in each.
+        write(
+            &pkg.join("native/Cargo.toml"),
+            "[package]\nname = \"web-native\"\n",
+        );
+        write(&pkg.join("native/src/lib.rs"), "// ffi\n");
+        write(
+            &pkg.join("wasm/Cargo.toml"),
+            "[package]\nname = \"web-wasm\"\n",
+        );
+        write(&pkg.join("wasm/src/lib.rs"), "// bridge\n");
+        write(&pkg.join("wasm/host.js"), "// host shim\n");
+        write(&pkg.join("README.md"), "# web\n");
+        // Excluded on both paths: build output, a nested build dir, a stale artefact.
+        write(&pkg.join("target/debug/junk.bin"), "x\n");
+        write(&pkg.join("native/target/debug/junk.bin"), "x\n");
+        write(&pkg.join("node_modules/dep/index.js"), "x\n");
+        write(&pkg.join("web-0.3.1.tar.gz"), "stale\n");
+
+        // The install path.
+        let installed = dir.join("installed");
+        copy_package_tree(&pkg, &installed).expect("copy_package_tree");
+        let mut local: Vec<String> = Vec::new();
+        collect_rel(&installed, &installed, &mut local);
+        local.sort();
+
+        // The tarball path — entry names with the `<pkg>-<version>/` prefix stripped.
+        let out = package_create(&pkg, Some(&dir)).expect("package_create");
+        let f = fs::File::open(&out.tarball).expect("open tarball");
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(f));
+        let mut packaged: Vec<String> = archive
+            .entries()
+            .expect("entries")
+            .filter_map(Result::ok)
+            .filter(|e| e.header().entry_type().is_file())
+            .filter_map(|e| {
+                let p = e.path().ok()?.to_path_buf();
+                Some(
+                    p.strip_prefix("web-0.3.2")
+                        .unwrap_or(&p)
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                )
+            })
+            .collect();
+        packaged.sort();
+        // The tarball run wrote its own output into `dir`, not into `pkg`, so nothing new
+        // appeared under the package between the two walks.
+        assert_eq!(
+            local, packaged,
+            "a local install and the tarball must carry the same files"
+        );
+
+        // Non-vacuous: the parity assert would also pass if BOTH dropped the bridge.
+        for want in [
+            "wasm/host.js",
+            "wasm/src/lib.rs",
+            "native/src/lib.rs",
+            "src/web.loft",
+        ] {
+            assert!(
+                local.iter().any(|f| f == want),
+                "the local install must carry `{want}`, got {local:?}"
+            );
+        }
+        for unwanted in [
+            "target/debug/junk.bin",
+            "native/target/debug/junk.bin",
+            "web-0.3.1.tar.gz",
+        ] {
+            assert!(
+                !local.iter().any(|f| f == unwanted),
+                "the local install must NOT carry `{unwanted}`"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Relative paths of every file under `dir`, `/`-separated.
+    fn collect_rel(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect_rel(root, &p, out);
+            } else if let Ok(rel) = p.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
     }
 }
