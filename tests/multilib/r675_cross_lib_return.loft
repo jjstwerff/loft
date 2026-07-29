@@ -1,0 +1,6 @@
+use r675_app;
+
+fn main() {
+  p = app675(7);
+  assert(p.x == 7, "cross-library heap return: {p.x}");
+}

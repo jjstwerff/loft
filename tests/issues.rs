@@ -17111,3 +17111,94 @@ fn build664() -> E664 {
         "#664: the probe found no element variable — it proves nothing"
     );
 }
+
+// loft#675 — a heap-returning function carries exactly one hidden return buffer, and a
+// cross-package return still works end to end.
+//
+// @PLAN59 reserves the hidden `__retbuf` at SIGNATURE parse, gated on the declared return
+// already being a heap type. For a struct owned by a dependency resolved LAZILY (a
+// registry package pulled in through the pending-deps loop) that is not knowable on pass
+// 1: `glb`'s `fn glb_pos_min(…) -> Vec3` reads `Unknown(659)` there, and the stub's def
+// number is LOWER than the real struct's, so the definitions it needs do not exist yet.
+// The reservation never fired, `ref_return` grew the attribute in pass 2 instead, and
+// that cross-pass arity growth stopped the published `input` package from compiling once
+// the H5 guard became always-on. `reserve_late_return_buffers` closes it between the
+// passes, where every type IS resolved.
+//
+// BE HONEST ABOUT WHAT THIS TEST IS. It pins the invariant and the end-to-end behaviour
+// on a `path =` dependency chain, and it is NOT a reproduction of the bug: a `path` dep
+// is parsed eagerly, so its types resolve at signature time and the late reservation
+// never has to fire here. I could not vendor the lazy-registry ordering into a fixture.
+// What actually catches a recurrence is `assert_pass2_def_attr_stable` — always-on, in
+// every build, and the thing that caught this one; the fix was verified by re-running the
+// real `input 0.2.0` suite with that assert at FULL strictness.
+#[test]
+fn issue_675_cross_library_heap_return_reserves_its_buffer() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).expect("stdlib");
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
+    p.parse("tests/multilib/r675_cross_lib_return.loft", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "#675 fixture must parse clean: {errors:?}"
+    );
+
+    let d_nr = p.data.def_nr("n_pick675");
+    assert_ne!(d_nr, u32::MAX, "#675: pick675 must be defined");
+    // A heap-returning function carries exactly one hidden heap buffer, and it was there
+    // before pass 2 started — otherwise `ref_return` had to GROW the signature, and any
+    // caller already lowered against the short arity passes one argument too few (#662).
+    // The count also has to be exactly one: reserving a second buffer for a function that
+    // already has one would break the ABI just as thoroughly.
+    let attrs: Vec<(String, bool)> = p
+        .data
+        .def(d_nr)
+        .attributes()
+        .iter()
+        .map(|a| (a.name.clone(), a.hidden))
+        .collect();
+    let hidden_heap = p
+        .data
+        .def(d_nr)
+        .attributes()
+        .iter()
+        .filter(|a| {
+            a.hidden
+                && matches!(
+                    a.typedef,
+                    loft::data::Type::Reference(_, _)
+                        | loft::data::Type::Vector(_, _)
+                        | loft::data::Type::Enum(_, true, _)
+                )
+        })
+        .count();
+    assert_eq!(
+        hidden_heap, 1,
+        "#675: a function returning a struct from a DEPENDENCY must carry exactly one heap \
+         return buffer — attributes: {attrs:?}"
+    );
+
+    // And it must still run: the buffer is an ABI change, so a wrong one shows up as a
+    // caller/callee argument mismatch rather than a wrong number.
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let config = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(config, None))));
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "#675: the cross-library heap return failed at runtime"
+    );
+}
