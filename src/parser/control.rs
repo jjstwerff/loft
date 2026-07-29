@@ -3805,15 +3805,26 @@ impl Parser {
     /// #429: the frame var a match-arm field binding BORROWS from — the
     /// subject's backing variable.  A heap match binding (`CMap { entries }`)
     /// is a DbRef into the subject's record, so its type must carry a borrow
-    /// dep on this var (see the call site).  Returns `Some(var)` only when the
-    /// subject reduces to a plain `Var` (the common `match m { … }` /
-    /// `match self.f { … }`-into-a-temp case, where `subject_val` is the
-    /// match temp or the parameter itself); a non-`Var` subject (a raw inline
-    /// field/index/call expression with no single backing var) yields `None`,
-    /// leaving the binding dep-free exactly as before.
-    fn match_borrow_source(subject_val: &Value) -> Option<u16> {
+    /// dep on this var (see the call site).
+    ///
+    /// A bare `Var` subject is the common `match m { … }` / `match self.f { … }`-
+    /// into-a-temp case.  A subject reached through GETTERS (`Wrap { inner: Holder
+    /// { items } }` binds from `OpGetField(w, …)`, and so does `match w.inner`)
+    /// still borrows from one variable — the root the chain starts at.  Reporting
+    /// `None` there left the binding dep-free, which reads as "owns its store", so
+    /// an append allocated a FRESH backing and repointed the local: the write
+    /// vanished, silently, on both backends (loft#664's shape).  A chain rooted in
+    /// a CALL has no backing variable and still yields `None`.
+    fn match_borrow_source(&self, subject_val: &Value) -> Option<u16> {
         match subject_val.unspan() {
             Value::Var(v) => Some(*v),
+            // Only the GETTER family forwards a borrow: `OpGetField` / `OpGetVector` /
+            // `OpGetEnum` read INTO their first argument's record, so the root of the
+            // chain still owns the store.  A user call produces a value of its own, and
+            // its first argument is just an argument.
+            Value::Call(d_nr, args) if self.data.def(*d_nr).name().starts_with("OpGet") => {
+                args.first().and_then(|a| self.match_borrow_source(a))
+            }
             _ => None,
         }
     }
@@ -4022,7 +4033,7 @@ impl Parser {
                             if matches!(
                                 &field_type,
                                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                            ) && let Some(src) = Self::match_borrow_source(subject_val)
+                            ) && let Some(src) = self.match_borrow_source(subject_val)
                             {
                                 if std::env::var_os("LOFT_MV_DEP_TRACE").is_some() {
                                     eprintln!(
@@ -6764,7 +6775,7 @@ impl Parser {
         // source var (the caller's param/local), not the internal `_match_subj` copy `v`,
         // so the return-ownership chain reaches the caller's value. Fall back to `v` when
         // the subject isn't a plain var.
-        let borrow_src = Self::match_borrow_source(&subject).unwrap_or(v);
+        let borrow_src = self.match_borrow_source(&subject).unwrap_or(v);
 
         self.lexer.token("{");
         let mut result_type = Type::Void;

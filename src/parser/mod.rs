@@ -2363,7 +2363,7 @@ impl Parser {
     /// filtered to enum context.
     pub(crate) fn enum_hint(&self) -> Type {
         if self.enum_context(&self.expected) {
-            self.expected.clone()
+            self.expected.without_deps()
         } else {
             Type::Unknown(0)
         }
@@ -2373,7 +2373,7 @@ impl Parser {
     /// concrete narrow-element vector (#432; [`Self::seeds_vector_hint`]).
     pub(crate) fn vector_hint(&self) -> Type {
         if Self::seeds_vector_hint(&self.expected) {
-            self.expected.clone()
+            self.expected.without_deps()
         } else {
             Type::Unknown(0)
         }
@@ -2382,7 +2382,7 @@ impl Parser {
     /// Expected destination type for an `f#read` (no `(n)`, no `as T`) — the raw `⇐` push,
     /// any shape; the read infers its byte width from it.
     pub(crate) fn read_target_type(&self) -> Type {
-        self.expected.clone()
+        self.expected.without_deps()
     }
 
     /// @PLAN48 P2: true when converting `src` → `dst` narrows a loft integer to a

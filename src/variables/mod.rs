@@ -38,7 +38,7 @@ pub use intervals::compute_intervals;
 // it directly via `assign_slots_v2` + `apply_v2_result`.
 #[allow(unused_imports)]
 pub use slots_v2::{AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2};
-pub use validate::dump_variables;
+pub use validate::{dump_var_tables, dump_variables};
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
 // shadow mode can invoke it from any build profile (integration
 // tests compile against loft without debug_assertions).  The
@@ -1009,6 +1009,7 @@ impl Function {
         }
     }
 
+    #[track_caller]
     pub fn depend(&mut self, var_nr: u16, on: u16) {
         if on != u16::MAX {
             let new_tp = self.variables[var_nr as usize].type_def.depending(on);
@@ -2237,6 +2238,11 @@ impl Function {
     /// variable's name.  No-op fast path when the env var is unset
     /// or has a different value (one `env::var` read per call;
     /// type-mutations are rare).
+    /// `#[track_caller]` so the timeline names the SOURCE LINE that rewrote the type.
+    /// A dep list is overwritten, not merged (`Type::depending`), so "who wrote this
+    /// dep last" is the whole question when a borrow points at the wrong variable
+    /// (loft#666) — and the origin word alone ("depend") cannot answer it.
+    #[track_caller]
     fn trace_type_change(&self, var_nr: u16, new_tp: &Type, origin: &str) {
         let Some(target) = crate::log_config::type_timeline_target() else {
             return;
@@ -2249,14 +2255,23 @@ impl Function {
             return;
         }
         eprintln!(
-            "[type_timeline] {name} (v_nr={v_nr}) {old:?} -> {new:?}  origin={origin}",
+            "[type_timeline] {name} (v_nr={v_nr}) {old:?} -> {new:?}  origin={origin} at {site}",
             name = v.name,
             v_nr = var_nr,
             old = v.type_def,
             new = new_tp,
+            site = std::panic::Location::caller(),
         );
+        // `LOFT_TIMELINE_BT=1` adds the stack behind that line.  The immediate caller is
+        // often a shared helper (`change_var_type`'s adopt-deps branch rewrites a dep list
+        // on behalf of whoever assigned), and the question is always which PARSE site is
+        // behind it.
+        if std::env::var_os("LOFT_TIMELINE_BT").is_some() {
+            eprintln!("{}", std::backtrace::Backtrace::force_capture());
+        }
     }
 
+    #[track_caller]
     pub fn set_type(&mut self, var_nr: u16, tp: Type) {
         self.trace_type_change(var_nr, &tp, "set_type");
         self.variables[var_nr as usize].type_def = tp;
