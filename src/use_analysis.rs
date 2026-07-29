@@ -202,6 +202,7 @@ pub(crate) fn dead_store_accesses(body: &Value, n_vars: usize, data: &Data) -> V
         data,
         projs: &projs,
         writes: &writes,
+        copy_record: data.def_nr("OpCopyRecord"),
     };
     classify_access(body, &cx, &mut acc);
     acc
@@ -217,6 +218,10 @@ struct AccessCx<'a> {
     /// write-DESTINATION, never a read (this is what makes the `d = s.f` copy-fill append
     /// stop counting `d` as read).
     writes: &'a HashSet<u32>,
+    /// `OpCopyRecord` — the one write op whose destination is arg **1**, not arg 0
+    /// (`OpCopyRecord(source, dest, type)`).  `w[i] = Row{…}` lowers to it, so without
+    /// this the whole-element assign was invisible to the dead-store lint (loft#670).
+    copy_record: u32,
 }
 
 fn is_setter(op: u32, data: &Data) -> bool {
@@ -261,6 +266,20 @@ fn classify_access(node: &Value, cx: &AccessCx, acc: &mut [(u16, u16)]) {
         Value::Call(op, args) if cx.writes.contains(op) && !args.is_empty() => {
             classify_write_base(&args[0], cx, acc, is_setter(*op, cx.data));
             for a in &args[1..] {
+                classify_access(a, cx, acc);
+            }
+        }
+        // `OpCopyRecord(source, dest, type)` — the destination is arg 1.  It counts as a
+        // copy-mutate write only when it is a PROJECTION of a var (`w[i] = Row{…}`, which
+        // overwrites an element of an existing container).  A BARE var destination is a
+        // definitional fill (`d = s.f` materialising a value-struct copy), which is neither
+        // a read nor the dead-store signal — the same split `classify_write_base` already
+        // draws for the append family (loft#670).
+        Value::Call(op, args) if *op == cx.copy_record && args.len() >= 2 => {
+            classify_access(&args[0], cx, acc);
+            let elem_write = !matches!(args[1].unspan(), Value::Var(_));
+            classify_write_base(&args[1], cx, acc, elem_write);
+            for a in &args[2..] {
                 classify_access(a, cx, acc);
             }
         }
@@ -2073,6 +2092,29 @@ fn is_value_struct_local(ty: &crate::data::Type, data: &Data) -> bool {
     matches!(ty, crate::data::Type::Reference(d, _) if data.is_value_struct(*d))
 }
 
+/// Does another variable resolve to the same synthesized backing buffer as `v`?
+///
+/// A synth base normally reads as "owns its store, held via that delivery buffer": the
+/// buffer was minted to back `v` alone, so `v` is a private copy and a write into it is
+/// lost.  `w = &v` on a local vector mints nothing — `w` takes `v`'s existing buffer — so
+/// BOTH resolve to it and the write through `w` reaches `v`.  Sharing is what separates
+/// the two, and it is the same fact `--show-ownership` renders when two rows come back
+/// `Owned (backing=__vdb_1)`.
+///
+/// Without this the dead-store lint fired on `w = &v` — the write-through cure its own
+/// message recommends — and a warning gates a library's CI (loft#670).
+fn is_shared_backing(data: &Data, d_nr: u32, func: &Function, v: u16, base: u16) -> bool {
+    (0..func.var_count())
+        .map(|u| u as u16)
+        .filter(|&u| u != v && u != base)
+        .any(|u| {
+            matches!(
+                ownership_of(data, d_nr, &Value::Var(u)),
+                Own::Borrowed { base: b } | Own::Join { base: b } if b == base
+            )
+        })
+}
+
 /// @PLN103 P1.4 — render `own` for the ownership overlay (the P0.2 rendering rule,
 /// corrected in P1): `ownership_of` reports a bare argument as `Borrowed{base=self}`
 /// (self-base) and an owned delivery buffer as `Borrowed{base=<buffer>}`, neither of
@@ -2268,7 +2310,10 @@ pub fn warn_dead_stores(
                 || match ownership_of(data, d_nr, &Value::Var(v)) {
                     Own::Owned => true,
                     Own::Borrowed { base } | Own::Join { base } => {
-                        base == v || (base != u16::MAX && is_synth_buffer(func.name(base)))
+                        base == v
+                            || (base != u16::MAX
+                                && is_synth_buffer(func.name(base))
+                                && !is_shared_backing(data, d_nr, func, v, base))
                     }
                 };
             if !owns {

@@ -913,27 +913,41 @@ no-op — don't add it.
 ### Capture-into-local before indexing (skip-pattern 5)
 
 The parser's skip-pattern 5 recognises `if idx < len(vec) { … vec[idx] … }`
-and silences the `v[i]` may-be-null warning inside the then-block.
-**The pattern only matches when `vec` is a bare local `Var`, not a
-struct-field deref.**  So `if i < len(self.results) { self.results[i] }`
-does NOT match.  Capture into a local first:
+and silences the `v[i]` may-be-null warning inside the then-block.  It
+matches a struct-field deref too, so **index the field directly — do not
+capture it into a local first:**
 
 ```loft
-// BAD — warning fires on self.results[i]:
+// GOOD — bound-guard the field itself; the pattern matches:
 if i < len(self.results) {
   self.results[i] = "true";
 }
-
-// GOOD — capture self.results into `results`, then bound-guard:
-results = self.results;        // local Var; same backing vector
-if i < len(results) {
-  results[i] = "true";         // skip-pattern 5 silences the warning
-}
 ```
 
-The local aliases the same underlying vector, so indexed writes
-propagate.  Field-level writes still go through `self.field` (the
-capture's slot doesn't track appends).
+**Never capture a vector into a local in order to write through it.**  A
+whole-value bind COPIES the heap value (C86), so every write lands in the
+copy and is silently lost — indexed writes, whole-element assigns and
+appends alike:
+
+```loft
+// BAD — `results` is a COPY; all three writes are discarded:
+results = self.results;
+results[i] = "true";               // lost
+results[i] = Row { id: 1 };        // lost
+results += [Row { id: 2 }];        // lost
+
+// If you need a local at all, bind a live reference with `&`:
+results = &self.results;           // aliases the field
+results[i] = "true";               // propagates
+```
+
+Reads through a plain copy are correct, which is what makes this
+expensive to find: `len`, indexing and field reads all behave, and only
+the writes vanish — arbitrarily far from where the value is later found
+missing (loft#670).  The compiler warns on the simple shape (`w = v`
+followed by an unread `w[i] = …`), but a bound-guard such as
+`if i < len(results)` counts as a read and silences it, so the diagnostic
+is a backstop, not a guarantee.
 
 ### Capture-and-null-check (v[i] preserves null semantics)
 
@@ -950,10 +964,9 @@ if !self.results[mi] {
   return false
 }
 
-// GOOD — capture and null-check, preserves the "missing → null" contract:
-results = self.results;
-if mi < len(results) {
-  val = results[mi];
+// GOOD — bound-guard and null-check, preserves the "missing → null" contract:
+if mi < len(self.results) {
+  val = self.results[mi];
   if val == null {
     self.err = "Required option missing";
     return false
@@ -961,9 +974,10 @@ if mi < len(results) {
 }
 ```
 
-The capture into a local is required (for skip-pattern 5 to recognise
-the bound guard); the null check then satisfies the parser's "x = v[i];
-if x != null" hint.
+The bound guard satisfies skip-pattern 5 and the null check satisfies the
+parser's "x = v[i]; if x != null" hint.  Index the field directly: binding
+it to a local first would COPY it (C86), which is harmless while you only
+read but silently discards any later write.
 
 ### Why these idioms specifically
 
@@ -976,9 +990,10 @@ when-to-reach-for-which:
   (e.g. `?? Pixel{r:0,g:0,b:0}`).  Changes runtime behaviour:
   on OOB you get the sentinel back instead of null.
 - **`if i < len(v)` bound** — use when the access is index-bounded
-  in practice but the parser can't see it.  Requires bare-Var vec
-  (capture into a local).  Zero-cost — dead-code guard the optimizer
-  drops when the bound is provable.
+  in practice but the parser can't see it.  Works on a struct field
+  directly (`if i < len(self.results)`), so no capture is needed.
+  Zero-cost — dead-code guard the optimizer drops when the bound is
+  provable.
 - **capture-and-null-check** — use when the value is genuinely
   nullable and the consumer's contract is "missing → null".
   Preserves the null semantics.
