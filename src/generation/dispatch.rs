@@ -649,7 +649,26 @@ impl Output<'_> {
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
                 write!(w, "let mut var_{name}: {tp_str} = ")?;
             }
-            self.output_code_inner(w, &ops[ops.len() - 1])?;
+            // The tail is the assigned VALUE, so it needs the same storage-form coercion
+            // the plain-RHS path applies below: a `boolean` variable stores as `u8`, and a
+            // narrow-int value-block widens to the `integer` slot.  Emitting it raw dropped
+            // both — `return <record-returning-call>.<field> == <lit>` lifts the call into a
+            // `__lift_N` temp, which makes the RHS an `Insert`, and the boolean landed here
+            // uncast: `let mut var___ret_1: u8 = <bool>` (E0308, loft#672).  Binding the
+            // record to a local first needs no lift, which is why only the call form broke.
+            let tail = &ops[ops.len() - 1];
+            let wrap_bool =
+                !matches!(tail, Value::Null) && matches!(variables.tp(var).base(), Type::Boolean);
+            let widen_block = block_needs_i64_widen(tail, variables.tp(var));
+            if wrap_bool || widen_block {
+                write!(w, "(")?;
+            }
+            self.output_code_inner(w, tail)?;
+            if wrap_bool {
+                write!(w, ") as u8")?;
+            } else if widen_block {
+                write!(w, ") as i64")?;
+            }
             return Ok(());
         }
         // Hoist call arguments that mutate stores into temporaries to prevent
