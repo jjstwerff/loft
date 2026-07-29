@@ -1280,9 +1280,14 @@ fn issue623_routeless_native_reports_missing_wasm_bridge_route() {
     // supplies the import.  Only the BARE `#native` form — symbol == the fn's own
     // emitted `n_<name>` — is the #623 shape.  Guard it: an over-broad
     // "routeless is an error" rule breaks every WebGL `--html` program.
+    // The symbol must be one the browser shell ACTUALLY provides.  It used to be a
+    // made-up `host_scalar_op`, which no shell defines — so the case asserted that a
+    // page importing a function nothing supplies builds fine, and such a page dies at
+    // instantiate with a LinkError (loft#668, which now rejects it at build time).
+    // `loft_gl_key_pressed` is real, and its `integer -> integer` shape is the same.
     std::fs::write(
         lib_src.join("nobridge.loft"),
-        "pub fn scalar_op(n: integer) -> integer;\n#native \"host_scalar_op\"\n",
+        "pub fn scalar_op(n: integer) -> integer;\n#native \"loft_gl_key_pressed\"\n",
     )
     .expect("rewrite fixture lib source");
     let distinct = build(
