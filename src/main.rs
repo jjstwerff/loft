@@ -8066,6 +8066,36 @@ fn main() {
                     .filter(|m| *m != "loft_thread" && *m != "env")
                     .all(|m| m == "loft_io")
             });
+        // The host surface is decidable HERE: the program's imports are in `wasm_bytes`
+        // and the page's JS is fully assembled above.  Without this the boundary was
+        // invisible until the page loaded, and crossing it killed the whole page — a
+        // `LinkError` naming an import INDEX, no canvas, no `println`, and nothing
+        // pointing at the loft call responsible (loft#668).  Checked only for the full
+        // engine page: the minimal shell is chosen because the program imports `loft_io`
+        // alone, which that shell defines in full.
+        if !minimal_page {
+            let provided = format!("{gl_js}{host_js_extensions}{thread_js}");
+            let missing = crate::native_utils::missing_host_imports(&wasm_bytes, &provided);
+            if !missing.is_empty() {
+                eprintln!(
+                    "loft: --html: this program calls {} the browser host does not \
+                     provide:\n    {}\n  \
+                     The browser shim implements a SUBSET of the native surface — a canvas \
+                     cannot do everything a desktop window can.\n  \
+                     Drop the call on this target, or add a handler to \
+                     doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
+                     (No HTML was written — the page would fail to instantiate, showing \
+                     only a LinkError with an import index.)",
+                    if missing.len() == 1 {
+                        "a function"
+                    } else {
+                        "functions"
+                    },
+                    missing.join("\n    "),
+                );
+                std::process::exit(1);
+            }
+        }
         let html = if minimal_page {
             format!(
                 r#"<!DOCTYPE html>
