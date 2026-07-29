@@ -772,12 +772,20 @@ pub fn dump_var_tables(data: &Data, from: u32) {
             } else {
                 var.scope.to_string()
             };
+            let idx16 = u16::try_from(idx).unwrap_or(u16::MAX);
             eprintln!(
-                "[vartable]   {idx:<3} {:<18} {:<14} scope={scope:<4} {}{}{}",
+                "[vartable]   {idx:<3} {:<18} {:<14} scope={scope:<4} {}{}{}{}{}{}",
                 var.name,
                 short_type(&var.type_def),
                 if var.argument { "arg " } else { "" },
                 if var.defined { "def " } else { "" },
+                if var.skip_free { "skipfree " } else { "" },
+                if vars.is_inline_ref(idx16) {
+                    "inlineref "
+                } else {
+                    ""
+                },
+                if vars.owns_store(idx16) { "OWNS " } else { "" },
                 if deps.is_empty() {
                     String::new()
                 } else {

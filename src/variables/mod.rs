@@ -2162,19 +2162,32 @@ impl Function {
         self.variables[v as usize].name.starts_with('_')
     }
 
-    /// Whether `v` is a vector-literal ELEMENT alias (`_elm_N`, minted by
-    /// `new_element`).
+    /// Does `v` own the store it points at — i.e. may a site allocate into its
+    /// slot and free it independently?
     ///
-    /// Such a variable never owns a store: its record is the slot the enclosing
-    /// `OpNewRecord` carved out of the container, and `OpFinishRecord` commits
-    /// it there.  Allocating for it (`OpDatabase`) or freeing it independently
-    /// would both act on the wrong record.
+    /// ONE home for a fact three different derivations used to answer separately
+    /// (loft#664): an empty dep list, the `_elm` NAME prefix loft#660 had to match
+    /// on, and the structural "defined by `OpNewRecord`" scan.  Deps alone cannot
+    /// carry it — a dep names the borrow SOURCE, so a borrow with no source
+    /// VARIABLE (a vector inside an enum payload is addressed by a field DbRef)
+    /// came back with an empty list and read as OWNING, which is a wrong answer
+    /// rather than an unknown one.  So the two markers are read first and the deps
+    /// only decide what they do not cover:
     ///
-    /// One home for a fact codegen and the parser both need — the store-owner
-    /// decision in `generation::dispatch` and the in-place-construction decision
-    /// in `parse_object` must not drift apart (loft#660).
-    pub fn is_element_alias(&self, v: u16) -> bool {
-        (v as usize) < self.variables.len() && self.variables[v as usize].name.starts_with("_elm")
+    /// - `inline_ref` — "borrow, don't allocate", set at every producer of a
+    ///   non-owning slot (a vector-literal element, a lift temp, a rebind backing);
+    /// - `skip_free` — the free-time half of the same fact;
+    /// - otherwise a non-empty dep list means the value is a view of something
+    ///   else, and a lone SELF dep is the @P302 owned-keyed-local marker.
+    #[must_use]
+    pub fn owns_store(&self, v: u16) -> bool {
+        // `u16::MAX` reaches here from a file-scope construction with no destination
+        // slot; report "does not own" so the caller allocates fresh, as `is_independent`
+        // does for the same sentinel.
+        if v as usize >= self.variables.len() {
+            return false;
+        }
+        !self.is_inline_ref(v) && !self.is_skip_free(v) && self.is_independent(v)
     }
 
     /// Record that fn_ref variable `fn_ref` has its closure stored in `clos`.

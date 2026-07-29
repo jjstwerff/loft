@@ -2442,16 +2442,12 @@ impl Parser {
             // its payload lands on an outer struct's field, or the read walks a
             // bogus rec-id and SIGSEGVs.
             //
-            // Normally the element's TYPE carries a dep on its container variable,
-            // so `is_independent` is false and construction falls through to the
-            // `Value::Insert` path.  But a vector living inside an ENUM PAYLOAD has
-            // no container VARIABLE to depend on — the container is a field DbRef —
-            // so the dep list is empty and the element read as independent.
-            // Ownership is the invariant, not the presence of a dep, so test it
-            // directly (the same predicate `generation::dispatch` uses to decide
-            // that an element does not own a store).
-            if self.vars.is_independent(*v_nr) && type_matches && !self.vars.is_element_alias(*v_nr)
-            {
+            // Ownership is the invariant, not the presence of a dep: an element
+            // whose container is a field DbRef (a vector inside an enum payload) has
+            // no container VARIABLE to depend on, so a dep-only test read it as
+            // owning.  `owns_store` is the one predicate that answers it, shared with
+            // `generation::dispatch` so parser and codegen cannot drift (loft#664).
+            if self.vars.owns_store(*v_nr) && type_matches {
                 // #330: remember the in-place target — a field initialiser
                 // that READS it must be hoisted ABOVE the OpDatabase re-init
                 // (see the hoist in parse_object_field and the splice after

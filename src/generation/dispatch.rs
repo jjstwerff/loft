@@ -1018,36 +1018,15 @@ impl Output<'_> {
         first: bool,
     ) -> std::io::Result<()> {
         let variables = self.data.def(self.def_nr).variables();
-        let is_elm = variables.is_element_alias(var);
-        // A `skip_free` variable is a BORROWED VIEW by construction — the parser /
-        // scope analysis set the flag precisely to suppress its `OpFreeRef` because
-        // it does not own a store (e.g. a match-arm binding `match e { V { v } =>
-        // … }`, which aliases the subject's payload record).  Such a slot is always
-        // overwritten by the borrowing read (`InitRefSentinel` → `OpGetField`), so
-        // allocating a backing store here would orphan it: no free is emitted, so
-        // the store leaks (one per evaluation).  The interpreter's `InitRefSentinel`
-        // never allocates; this reads the same ownership fact rather than
-        // re-deriving it from the dep list — a vector-typed match-bind carries an
-        // EMPTY dep (it is not dep-tracked), so `owns_store` below would wrongly
-        // read it as owning.  The `??`-coalesce borrow (`__ncc_*`) instead carries a
-        // non-empty dep, so it already lands on the sentinel via `owns_store`.
-        let is_skip_free = variables.is_skip_free(var);
-        let owns_store = match variables.tp(var) {
-            Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => {
-                dep.is_empty()
-            }
-            // @P302 — a keyed local backed by its own store carries a self-dep
-            // `[var]` (added by the `s = []` clear path so a later `s += …`
-            // re-inits in place).  That is an ownership marker, not a borrow.
-            Type::Sorted(_, _, dep)
-            | Type::Hash(_, _, dep)
-            | Type::Index(_, _, dep)
-            | Type::Radix(_, _, dep) => dep.is_empty() || (dep.len() == 1 && dep[0] == var),
-            _ => false,
-        };
-        if is_elm || variables.is_inline_ref(var) || is_skip_free || !owns_store {
-            write!(w, "DbRef::NULL")?;
-        } else {
+        // Only a slot that OWNS its store gets a backing allocation here.  Reading
+        // the one `owns_store` predicate rather than re-deriving ownership from the
+        // dep list is what keeps this correct for the borrows the deps cannot see: a
+        // match-arm binding (`match e { V { v } => … }`) aliases the subject's
+        // payload record and carries an EMPTY dep, so a dep-only test would allocate
+        // a store the borrowing read immediately overwrites — orphaned, and never
+        // freed because the binding emits no `OpFreeRef`.  Same for a vector-literal
+        // element whose container is a field DbRef (loft#664).
+        if variables.owns_store(var) {
             let ref_buf_type_id = {
                 let var_tp = variables.tp(var).clone();
                 match &var_tp {
@@ -1140,6 +1119,8 @@ impl Output<'_> {
                 // old store).  The caller already wrote the `var_{name} = `.
                 write!(w, "OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)")?;
             }
+        } else {
+            write!(w, "DbRef::NULL")?;
         }
         Ok(())
     }
