@@ -185,6 +185,10 @@ they merge-conflict across files and have destroyed sessions. **Always commit be
 that changes the working tree.** Compare without switching: `git diff main -- <file>`,
 `git show origin/main:<file>`.
 
+Run **`make hooks`** once per clone: the `commit-msg` hook reports an issue mentioned without a
+`Fixes #N` trailer (that trailer is what the push workflow labels `fixed-pending-merge` off — see
+the bug-filing policy above). It never blocks.
+
 ---
 
 ## Documentation index
