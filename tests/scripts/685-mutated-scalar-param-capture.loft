@@ -1,0 +1,187 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#685): a closure that MUTATES a captured scalar worked when the scalar
+// was a local and crashed when it was a PARAMETER of the enclosing function.
+//
+// Two producers of one fact disagreed. `box_captured_names_for_outer_scalars` gave the
+// closure record a 12-byte cell `DbRef` field for the capture, while
+// `flip_scalars_to_box_types` skipped arguments outright — so the parameter stayed an
+// 8-byte stack scalar and `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an
+// 8-byte slot, corrupting the 16-byte fn-ref being built beside it. The interpreter then
+// dispatched a garbage `d_nr` (`fn_call_ref: … out of range`) or segfaulted; `--native`
+// emitted field access on a bare `i64` and would not compile.
+//
+// The argument-skip could not simply be removed: flipping a parameter's own type to a
+// 12-byte cell reference would change the call ABI. Instead the parameter is promoted to
+// a shadow local seeded at function entry — the same move the text-argument promotion
+// already makes, and exactly what the hand-written workaround (`acc = n;`) did — so the
+// argument case lowers identically to the local case that always worked, for every type.
+//
+// Axes worth pinning, because the filed report showed only one cell of each:
+//   * TYPE: integer · float · boolean · character · text (boolean and character have
+//     their own cell-write ops; text uses the write-back path, not a cell at all)
+//   * whether the closure is CALLED, and whether the value is READ BACK — neither is
+//     part of the trigger; creating the closure is enough
+//   * CARDINALITY: a parameter capture beside a local one, and two parameter captures
+//   * the SEMANTIC edge a fix must not break: a scalar parameter is by value, so the
+//     writes must stay inside the callee
+
+// ── the reported shape, per type ───────────────────────────────────────────────
+
+fn p685_int(n: integer) -> integer {
+  b = fn(k: integer) { n = n + k; };
+  b(1);
+  b(2);
+  n
+}
+
+fn p685_float(n: float) -> float {
+  b = fn(k: float) { n = n + k; };
+  b(1.0);
+  b(2.0);
+  n
+}
+
+fn p685_bool(n: boolean) -> boolean {
+  b = fn() { n = !n; };
+  b();
+  n
+}
+
+fn p685_char(n: character) -> character {
+  b = fn(k: character) { n = k; };
+  b('z');
+  n
+}
+
+// text in a NON-text-returning parent takes the cell path like the others.  (A mutated
+// text parameter inside a *text*-returning function has no representation and is refused
+// by name — see `issue_685_text_param_in_text_returning_fn_is_refused`.)
+fn p685_text_len(n: text) -> integer {
+  b = fn(k: text) { n = n + k; };
+  b("x");
+  b("y");
+  len(n)
+}
+
+// ── the axes that turned out NOT to be triggers ────────────────────────────────
+
+// The enclosing function never reads the mutated value back.
+fn p685_no_readback(n: integer) -> integer {
+  b = fn(k: integer) { n = n + k; };
+  b(1);
+  b(2);
+  99
+}
+
+// The closure is never called — creating it was already enough to corrupt the frame.
+// @EXPECT_WARNING: Variable b is never read
+fn p685_uncalled(n: integer) -> integer {
+  b = fn(k: integer) { n = n + k; };
+  99
+}
+
+// A set BEFORE the lambda does not help: this is the cell that falsified "the cell is
+// never allocated because allocation happens on first set".
+fn p685_preset(n: integer) -> integer {
+  n = n + 0;
+  b = fn(k: integer) { n = n + k; };
+  b(1);
+  b(2);
+  n
+}
+
+// The closure lives in a nested block rather than at body top level.
+fn p685_nested_block(n: integer) -> integer {
+  if n > 0 {
+    b = fn(k: integer) { n = n + k; };
+    b(5);
+  }
+  n
+}
+
+// ── cardinality ───────────────────────────────────────────────────────────────
+
+// A mutated PARAMETER capture beside a mutated LOCAL capture, one closure each.
+fn p685_param_and_local(p: integer) -> integer {
+  q = 100;
+  bp = fn(k: integer) { p = p + k; };
+  bq = fn(k: integer) { q = q + k; };
+  bp(1);
+  bq(7);
+  p + q
+}
+
+// TWO mutated parameter captures.
+fn p685_two_params(a: integer, b: integer) -> integer {
+  ba = fn(k: integer) { a = a + k; };
+  bb = fn(k: integer) { b = b + k; };
+  ba(10);
+  bb(20);
+  a + b
+}
+
+// ── controls: the far sides of the boundary, which must not move ───────────────
+
+// A LOCAL source — the side that always worked.
+fn p685_local(seed: integer) -> integer {
+  n = seed;
+  b = fn(k: integer) { n = n + k; };
+  b(1);
+  b(2);
+  n
+}
+
+// A READ-ONLY parameter capture is copied by value and never boxed.
+fn p685_readonly(n: integer) -> integer {
+  b = fn(k: integer) -> integer { n * k };
+  b(3)
+}
+
+// A const parameter copied into a local first: the escape hatch the const refusal names.
+// The `const` is load-bearing here even though nothing writes `n` — it is what makes this
+// the far side of that refusal — so its "no effect" advice is expected.
+// @EXPECT_WARNING: is const but is never modified
+fn p685_const_copied(n: const integer) -> integer {
+  m = n;
+  b = fn(k: integer) { m = m + k; };
+  b(1);
+  m
+}
+
+fn main() {
+  assert(p685_int(10) == 13, "int param: 10+1+2, got {p685_int(10)}");
+  assert(p685_float(10.0) == 13.0, "float param: got {p685_float(10.0)}");
+  assert(p685_bool(false) == true, "boolean param: !false");
+  assert(p685_char('a') == 'z', "character param: got {p685_char('a')}");
+  assert(p685_text_len("a") == 3, "text param: len(a+x+y), got {p685_text_len(\"a\")}");
+
+  assert(p685_no_readback(10) == 99, "no read-back: got {p685_no_readback(10)}");
+  assert(p685_uncalled(10) == 99, "closure uncalled: got {p685_uncalled(10)}");
+  assert(p685_preset(10) == 13, "set before the lambda: got {p685_preset(10)}");
+  assert(p685_nested_block(10) == 15, "nested block: got {p685_nested_block(10)}");
+
+  assert(p685_param_and_local(5) == 113, "param+local: 6+107, got {p685_param_and_local(5)}");
+  assert(p685_two_params(1, 2) == 33, "two params: 11+22, got {p685_two_params(1, 2)}");
+
+  // Controls.
+  assert(p685_local(10) == 13, "local control: got {p685_local(10)}");
+  assert(p685_readonly(10) == 30, "read-only capture: got {p685_readonly(10)}");
+  assert(p685_const_copied(10) == 11, "const copied to a local: got {p685_const_copied(10)}");
+
+  // A scalar parameter is BY VALUE: the closure's writes must not reach the caller.
+  // This is what a shadow local buys that flipping the parameter in place would not.
+  v = 10;
+  inner = p685_int(v);
+  assert(inner == 13, "by-value: callee sees its own writes, got {inner}");
+  assert(v == 10, "by-value: the CALLER's value is untouched, got {v}");
+
+  // Repeat calls: the cell is minted per call and reclaimed with the closure record, so a
+  // second call must start from the argument again rather than from the last cell.
+  assert(p685_int(10) == 13, "repeat call 1");
+  assert(p685_int(100) == 103, "repeat call 2 with a different argument");
+  assert(p685_two_params(1, 2) == 33, "repeat call, two params");
+
+  println("685-mutated-scalar-param-capture ok");
+}

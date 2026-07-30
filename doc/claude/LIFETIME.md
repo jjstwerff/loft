@@ -381,6 +381,45 @@ Both `dbref` shapes are registered **together**, from either entry point: type
 numbers are positional and `--native` replays the registration sequence to rebuild
 the schema, so a shape present in only some programs would shift every id after it.
 
+### A mutated scalar PARAMETER is boxed through a shadow local (#685)
+
+`flip_scalars_to_box_types` cannot flip an argument in place: its slot receives the
+caller's scalar, and a 12-byte cell `DbRef` type there would change the call ABI. It
+used to skip arguments outright — but `box_captured_names_for_outer_scalars` did not,
+so the closure record got a 12-byte cell field fed from an 8-byte stack slot, and
+`emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of 8 and corrupted the fn-ref
+being built beside it. **The two halves of "is this capture boxed?" must be decided by
+one fact.**
+
+They are, by making the argument case *be* the local case:
+`promote_boxed_scalar_arg` mints `__bx_<name>` with the argument's own type,
+`set_promoted_from` + `remap_name` point the name at it before the body parses, and
+`parse_code`'s promoted-argument preamble seeds it at function entry. The emitted IR is
+then byte-identical to the working local shape — which is why every boxable type is
+covered with no per-type work, and why the caller's value stays untouched (a scalar
+parameter is by value; the argument slot is never written).
+
+Two constraints worth knowing before touching this:
+
+- The shadow is marked **`defined` at creation**, so the body's first write does not
+  ALSO prepend an allocation (`maybe_prepend_cell_alloc`). A second `OpDatabase` would
+  replace the seeded cell and silently lose the argument's value.
+- `RefVar` arguments are excluded. A user `&T` out-parameter's writes must reach the
+  caller (a private cell would swallow them), and a mutable text local the compiler
+  already promoted to a hidden `&text` out-parameter is itself the working path — a
+  first attempt without this exclusion refused code that worked.
+
+The seed shares `boxed_cell_alloc_and_set` with the first-assignment path — one home
+for "a boxed scalar comes into existence", because the seed is the only assignment a
+parameter's cell is guaranteed to have (the mutation may live entirely inside the
+closure).
+
+`text` inside a **text-returning** function is the one shape this cannot serve: there
+the flip is skipped (plan-22 02d-vii) and mutable text travels as a hidden `&text`
+out-parameter, which cannot be added from pass 2 without growing the signature after
+pass 1 fixed it — the H5 two-pass contract rejects exactly that. It is refused by name
+with the working alternative (#687).
+
 ### Inside the lambda: `__closure` is a struct parameter
 
 When parsing the lambda body, the compiler adds a hidden `__closure` parameter:

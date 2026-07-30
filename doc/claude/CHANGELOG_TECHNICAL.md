@@ -9,6 +9,76 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### #685: a mutated scalar capture sourced from a PARAMETER corrupted the frame (2026-07-30)
+
+Two producers of one fact disagreed. `box_captured_names_for_outer_scalars` gave the
+closure record a 12-byte `__cell_<T>` `DbRef` field for a mutated scalar capture, while
+`flip_scalars_to_box_types` skipped arguments outright — so the parameter stayed an
+8-byte stack scalar and `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an
+8-byte slot, corrupting the 16-byte fn-ref being built beside it. The interpreter then
+dispatched a garbage `d_nr` (`fn_call_ref: … out of range`) or SIGSEGV'd; `--native`
+emitted field access on a bare `i64` and would not compile.
+
+**The filed scope was one cell of each axis; the boundary is a single fact.** The
+trigger is only "the mutated capture's source is a parameter": every boxable type
+fails (integer / float / boolean / character, and text — the last as a SIGSEGV, via a
+different lowering), the closure need not be CALLED, the enclosing function need not
+read the value back, the closure may sit in a nested block, and a set before the
+lambda does not help. **That last cell falsified the filed hypothesis** ("the cell is
+never allocated because allocation happens on first set"), which is why the fix does
+not touch allocation timing. Two or more captures in one frame crash at a *different*
+site (`allocation.rs`) — the same corruption seen through slot reuse.
+
+The argument-skip could not simply be dropped: flipping a parameter's own type to a
+12-byte cell reference changes the call ABI. The fix promotes it instead —
+`promote_boxed_scalar_arg` mints a shadow local of the same type, `set_promoted_from`
++ `remap_name` point the name at it before the body parses, and the existing
+promoted-argument preamble in `parse_code` seeds it at function entry. Every read,
+write and capture then routes through the shadow and the emitted IR is byte-identical
+to the LOCAL case that already worked — which is why all five types are covered with
+no per-type work. It is the hand-written workaround (`acc = n;`) done by the compiler,
+and it follows the mutated-text-argument promotion the codebase already had.
+
+Reusing the local path exactly is also what preserves by-value semantics: the
+parameter slot is untouched, so the caller cannot see the closure's writes.
+
+Supporting changes:
+
+- `boxed_cell_alloc_and_set` extracted as the ONE home for "a boxed scalar comes into
+  existence" — the first assignment to a boxed local and the parameter's entry seed
+  need the identical `Set(v,Null)` + `OpDatabase` + `OpSet<T>` trio, and the seed has
+  no assignment of its own to hang it on. The shadow is marked `defined` at creation
+  so the body's first write does not prepend a SECOND allocation, which would replace
+  the seeded cell and lose the argument's value.
+- `Type::Boolean => "OpSetBoolean"` added to the cell-write table. It had been
+  deferred on the premise that a boolean cell needs a 4-arg `OpSetByte`; the premise
+  was wrong — the working boxed-boolean lowering emits the 3-arg `OpSetBoolean`. The
+  unit test that pinned the fall-through now pins the write.
+- A value-const parameter mutated through a closure is now rejected at the promotion
+  site. The closure-side write never reaches `validate_write`'s guard (inside the
+  lambda the name is a capture, not a binding carrying the flag), so without this the
+  fix would have quietly handed the closure a writable cell for a read-only parameter
+  — a silently accepted contract violation in place of a loud crash.
+- `RefVar` arguments are excluded from both branches: a user `&T` out-parameter's
+  writes must reach the caller, and a mutable text local the compiler already promoted
+  to a hidden `&text` out-parameter is itself the working path. The first attempt
+  omitted this and refused `local = n; … local = local + k;` — code that worked.
+
+**Residual, refused by name rather than corrupted (#687):** a mutated `text` parameter
+inside a text-returning function. There `flip_scalars_to_box_types` skips text boxing
+(plan-22 02d-vii) and mutable text travels as a hidden `&text` out-parameter instead,
+which cannot be added from pass 2 without growing the signature after pass 1 fixed it.
+The **H5 two-pass contract caught that attempt** — the assert doing exactly the job
+#662 showed it had been blind to. The diagnostic names the working alternative.
+
+Guards, all four verified RED with the promotion disabled:
+`tests/scripts/685-mutated-scalar-param-capture.loft` (values, both backends — every
+type, both non-trigger axes, cardinality, and the by-value edge) plus
+`issue_685_mutated_scalar_param_is_boxed_like_a_local` (the invariant: the record's
+field type and the frame's binding for that name are the same cell, and the arity is
+unchanged), `issue_685_text_param_in_text_returning_fn_is_refused`, and
+`issue_685_const_scalar_param_mutated_by_closure_is_rejected`.
+
 ### #682: the closure-record cascade freed captures the record never owned (2026-07-30)
 
 A reference / collection capture is stored in `__closure_N` as a 12-byte `DbRef`

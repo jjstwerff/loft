@@ -1343,12 +1343,68 @@ impl Parser {
         let parent_returns_text = matches!(self.data.def(self.context).returned(), Type::Text(_));
         let names = self.data.def(self.context).scalars_to_box().to_vec();
         for name in &names {
-            let v_nr = self.vars.var(name);
+            let mut v_nr = self.vars.var(name);
             if v_nr == u16::MAX {
                 continue;
             }
-            if self.vars.is_argument(v_nr) {
-                continue;
+            // #685 — an ARGUMENT cannot be flipped in place: its slot receives the
+            // caller's scalar, and giving it a 12-byte cell DbRef type would change
+            // the call ABI.  Promote it to a shadow LOCAL seeded from the argument
+            // instead (the same move the text-argument promotion in
+            // `parse_assign_op` makes), and flip that.  This runs before the body is
+            // parsed, so the name remap sends every later read, write and capture to
+            // the shadow — leaving the argument case indistinguishable from the local
+            // case that already works for every boxable type.
+            //
+            // Without it the two halves of "is this capture boxed?" disagreed:
+            // `box_captured_names_for_outer_scalars` gave the closure record a
+            // 12-byte DbRef field while the argument stayed an 8-byte stack scalar,
+            // so `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an 8-byte
+            // slot and corrupted the fn-ref being built beside it.
+            //
+            // The one shape this cannot serve is a mutated TEXT capture inside a
+            // text-returning function, where the flip below is skipped and mutable
+            // text instead travels as a hidden `&text` out-parameter — creating that
+            // shadow in pass 2 would grow the signature after pass 1 fixed it (the H5
+            // two-pass contract catches it).  Refuse it by name rather than corrupt.
+            // A `RefVar` argument is NOT a by-value parameter and never reaches either
+            // branch: it is either a user `&T` out-parameter (whose writes must reach
+            // the caller, so a private cell would be wrong) or a mutable text local the
+            // compiler already promoted to a hidden `&text` out-parameter — and that
+            // promotion is exactly the working path the refusal below points people at.
+            if self.vars.is_argument(v_nr) && !matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
+                // A value-const parameter is read-only, and the closure-side write never
+                // reaches `validate_write`'s guard — inside the lambda `name` is a
+                // capture, not a binding that carries the const flag.  This is the first
+                // point that knows a closure mutates it, so the guard belongs here;
+                // without it the promotion below would quietly hand the closure a
+                // writable cell (the crash it replaced at least failed loudly).
+                if self.vars.is_value_const(v_nr) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot modify {} '{name}' from a closure; remove 'const' or \
+                         capture a local copy",
+                        self.vars.const_kind(v_nr),
+                    );
+                    continue;
+                }
+                if parent_returns_text && matches!(self.vars.tp(v_nr), Type::Text(_)) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "closure mutates the text parameter `{name}` of a function that \
+                         itself returns text; that combination has no representation \
+                         (mutable text travels as a hidden out-parameter, which cannot be \
+                         added for a parameter) — copy it into a local first and capture \
+                         that: `local = {name};` then mutate `local` in the closure (#687)"
+                    );
+                    continue;
+                }
+                match self.promote_boxed_scalar_arg(name, v_nr) {
+                    Some(shadow) => v_nr = shadow,
+                    None => continue,
+                }
             }
             let original_tp = self.vars.tp(v_nr).clone();
             // Skip if already flipped.
@@ -1403,6 +1459,50 @@ impl Parser {
             self.vars
                 .set_type(v_nr, Type::Reference(cell_d_nr, Deps::none()));
         }
+    }
+
+    /// #685 — replace a boxable scalar ARGUMENT with a shadow local of the same
+    /// type, seeded from the argument at function entry, and point `name` at it.
+    /// Returns the shadow, or `None` for a type with no cell struct (the caller
+    /// then leaves the argument alone, as before).
+    ///
+    /// This is what the hand-written workaround did — `acc = n;` as the first
+    /// statement — so the shadow inherits whichever lowering the LOCAL case uses:
+    /// a `__cell_<T>` for integer / float / boolean / character, or the text
+    /// write-back path when the flip below skips text.  Nothing here needs to know
+    /// which.
+    ///
+    /// The seed is emitted by the promoted-argument preamble in `parse_code`, which
+    /// already exists for text-argument promotion.  The shadow is marked `defined`
+    /// so the body's first write does not ALSO prepend an allocation
+    /// (`maybe_prepend_cell_alloc`) — a second `OpDatabase` would replace the
+    /// seeded cell and lose the argument's value.
+    ///
+    /// Const-ness travels with it: a `const` parameter's shadow stays const, so the
+    /// guard that rejects mutating it still fires on the shadow instead of being
+    /// silently dropped along with the argument.
+    fn promote_boxed_scalar_arg(&mut self, name: &str, arg: u16) -> Option<u16> {
+        let tp = self.vars.tp(arg).clone();
+        cell_struct_name(&tp, &self.data)?;
+        let shadow = self
+            .vars
+            .add_variable(&format!("__bx_{name}"), &tp, &mut self.lexer);
+        if shadow == u16::MAX || shadow == arg {
+            return None;
+        }
+        self.vars.set_promoted_from(shadow, arg);
+        self.vars.defined(shadow);
+        if self.vars.is_value_const(arg) {
+            self.vars.set_value_const(shadow);
+        }
+        if self.vars.is_const_binding(arg) {
+            self.vars.set_const_binding(shadow);
+        }
+        // The argument is now read only by the seed, which the preamble inserts
+        // after `test_used` would otherwise have flagged it unused.
+        self.vars.mark_used(arg);
+        self.vars.remap_name(name, shadow);
+        Some(shadow)
     }
 
     /// #314 (closed by decision — GOALS.md § "Stability trumps
@@ -4697,16 +4797,25 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
     }
 
     #[test]
-    fn boolean_falls_through() {
-        // OpSetByte takes (ref, fld, min, val); this helper
-        // doesn't yet handle the 4-arg shape.  Phase 02d-iii.e
-        // (or later) extends boolean.
+    fn boolean_first_set_uses_op_set_boolean() {
+        // This case used to fall through, deferred on the premise that a boolean cell
+        // needs the 4-arg `OpSetByte(ref, fld, min, val)`.  The premise was wrong: the
+        // working boxed-boolean lowering emits the 3-arg `OpSetBoolean`, the same shape
+        // as every other cell write.  #685 needed it for a boxed boolean PARAMETER's
+        // entry seed, which has no assignment of its own to route through.
         let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(&Type::Boolean, "__cell_boolean", "b");
-        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Boolean(true));
-        assert!(
-            result.is_none(),
-            "boolean cell falls through in 02d-iii.c; got {result:?}"
-        );
+        let op_set = p.data.def_nr("OpSetBoolean");
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Boolean(true))
+            .expect("expected rewrite IR");
+        if let Value::Insert(ops) = &ir
+            && let Value::Call(d, args) = &ops[2]
+        {
+            assert_eq!(*d, op_set);
+            assert_eq!(args.len(), 3, "OpSetBoolean is a 3-arg write");
+        } else {
+            panic!("expected Insert([_, _, Call(OpSetBoolean, _)]); got {ir:?}");
+        }
     }
 
     #[test]

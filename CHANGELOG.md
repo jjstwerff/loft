@@ -21,6 +21,29 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — a closure can now count with one of your parameters
+
+The accumulator closure is an old friend:
+
+```
+total = 0;
+add = fn(n: integer) { total = total + n; };
+```
+
+It worked over a local, and crashed the moment `total` was a **parameter** of the
+enclosing function — with a garbage function id, a segfault, or, on the compiled
+backend, generated code that would not build. Every scalar type was affected, and you
+did not even have to call the closure: creating it was enough.
+
+Now a mutated parameter behaves like a mutated local, which is what it looks like. The
+closure's writes are visible for the rest of the function, and your **caller's value is
+untouched** — a scalar parameter is still passed by value. Mutating a `const` parameter
+through a closure is refused, as it is anywhere else.
+
+One combination is refused with a message instead of supported: mutating a captured
+`text` parameter inside a function that itself returns `text`. Copy it into a local and
+capture that — the error says so.
+
 ### Unreleased — a lambda that captures your value no longer eats it
 
 Handing a lambda a value from the surrounding scope is the ordinary way to give a

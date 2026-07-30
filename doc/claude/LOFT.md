@@ -905,13 +905,20 @@ add5(10)               // 15
 ```
 
 **Capture rules:**
-- Integers, floats, booleans: copied by value at definition time — unless the
-  closure MUTATES the capture, in which case the scalar is promoted to a
+- Integers, floats, booleans, characters: copied by value at definition time —
+  unless the closure MUTATES the capture, in which case the scalar is promoted to a
   shared heap cell and writes propagate both ways (plan-22; the
   single-closure accumulator pattern).  A mutated scalar may be captured by
-  only ONE closure (C74, #314).
+  only ONE closure (C74, #314).  The captured binding may be a local **or a
+  parameter**: a mutated parameter is copied into a hidden local first, so the
+  closure's writes are visible for the rest of the function and the CALLER's value
+  is untouched — a scalar parameter stays by-value (#685).  Mutating a `const`
+  parameter through a closure is rejected, like any other write to it.
 - Text: deep-copied (independent of original after capture); mutated text
-  captures are cell-promoted like scalars.
+  captures are cell-promoted like scalars.  One combination is refused with a
+  message rather than supported: mutating a captured `text` **parameter** inside a
+  function that itself returns `text` — copy it into a local and capture that
+  (#687).
 - Struct references: the DbRef is copied — both point to the same store
   record while both are alive, and mutations from either side are visible to
   the other (#318/C75 bound such closures to the frame that owns the

@@ -17359,3 +17359,157 @@ fn issue_682_closure_capture_ownership_marker() {
          the record owns it however the original binding was reached (plan-22 / C74)"
     );
 }
+
+/// loft#685 — a MUTATED scalar capture whose source is a PARAMETER.
+///
+/// The closure record stored the capture as a 12-byte cell `DbRef`
+/// (`box_captured_names_for_outer_scalars`) while `flip_scalars_to_box_types`
+/// skipped arguments, so the parameter stayed an 8-byte stack scalar and
+/// `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an 8-byte slot — taking
+/// the fn-ref being built beside it with it.
+///
+/// Values live in `tests/scripts/685-mutated-scalar-param-capture.loft`; this
+/// asserts the FACT the fix rests on, because the value test cannot distinguish
+/// "the two halves agree" from "they disagree but the garbage happened to work".
+/// The invariant: for a mutated capture, the closure record's field type and the
+/// binding the enclosing frame holds under that name must be the SAME cell.
+#[test]
+fn issue_685_mutated_scalar_param_is_boxed_like_a_local() {
+    let src_path = std::env::temp_dir().join("loft_i685_param_box.loft");
+    std::fs::write(
+        &src_path,
+        "fn p685_arg(n: integer) -> integer { b = fn(k: integer) { n = n + k; }; b(1); n }\n\
+         fn p685_loc(s: integer) -> integer { n = s; b = fn(k: integer) { n = n + k; }; b(1); n }\n\
+         fn main() { p685_arg(1); p685_loc(1); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#685 fixture must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+
+    // Both functions must lower to the SAME shape — the argument case is the local
+    // case, which is the whole point of the promotion.
+    for (fname, record) in [("n_p685_arg", "__closure_0"), ("n_p685_loc", "__closure_1")] {
+        let rec = p.data.def_nr(record);
+        assert_ne!(rec, u32::MAX, "#685: {record} must exist");
+        let a = p.data.attr(rec, "n");
+        assert_ne!(a, usize::MAX, "#685: {record} must carry the `n` capture");
+        let cell = match p.data.attr_type(rec, a) {
+            loft::data::Type::Reference(d, _) => d,
+            other => panic!("#685: {record}.n must be a cell Reference, got {other:?}"),
+        };
+        assert!(
+            p.data.def(cell).name().starts_with("__cell_"),
+            "#685: {record}.n must point at a `__cell_<T>`, got `{}`",
+            p.data.def(cell).name()
+        );
+
+        // The frame's binding for `n` must be that same cell.  A binding that is still
+        // a bare scalar here is the bug: the record would hold a 12-byte DbRef field
+        // fed from an 8-byte slot.
+        let d_nr = p.data.def_nr(fname);
+        assert_ne!(d_nr, u32::MAX, "#685: {fname} must be defined");
+        let vars = &p.data.def(d_nr).variables;
+        let v = vars.var("n");
+        assert_ne!(v, u16::MAX, "#685: {fname} must bind the name `n`");
+        assert!(
+            matches!(vars.tp(v), loft::data::Type::Reference(d, _)
+                if p.data.def(*d).name().starts_with("__cell_")),
+            "#685: `n` in {fname} must be the boxed cell the record points at, got {:?} \
+             — a bare scalar here means the closure record is fed 12 bytes from an \
+             8-byte slot",
+            vars.tp(v)
+        );
+        assert!(
+            !vars.is_argument(v),
+            "#685: `n` in {fname} must resolve to a shadow LOCAL, not the argument — \
+             flipping the argument itself would change the call ABI"
+        );
+    }
+
+    // The by-value contract: the argument is still an argument, untouched, so the
+    // caller's value cannot be reached through the cell.
+    let d_nr = p.data.def_nr("n_p685_arg");
+    let vars = &p.data.def(d_nr).variables;
+    let args = vars.arguments();
+    assert_eq!(
+        args.len(),
+        1,
+        "#685: promoting must not change the arity of `p685_arg` (the H5 two-pass \
+         contract catches this too) — got {args:?}"
+    );
+    assert!(
+        matches!(vars.tp(args[0]), loft::data::Type::Integer(_)),
+        "#685: the parameter slot must stay a plain scalar, got {:?}",
+        vars.tp(args[0])
+    );
+}
+
+/// loft#685 residual — a mutated TEXT parameter inside a TEXT-RETURNING function has
+/// no representation, so it is refused by name instead of corrupting the frame.
+///
+/// Mutable text travels as a hidden `&text` out-parameter, and that cannot be added
+/// for a parameter from pass 2 without growing the signature after pass 1 fixed it
+/// (the H5 two-pass contract rejects exactly that).  The refusal names the working
+/// alternative; `p685_text_len` in the script covers the same type when the parent
+/// does NOT return text, where the cell path applies normally.
+#[test]
+fn issue_685_text_param_in_text_returning_fn_is_refused() {
+    let src_path = std::env::temp_dir().join("loft_i685_text_refusal.loft");
+    std::fs::write(
+        &src_path,
+        "fn t685(n: text) -> text { b = fn(k: text) { n = n + k; }; b(\"x\"); n }\n\
+         fn main() { t685(\"a\"); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    let lines = p.diagnostics.lines().join("\n");
+    assert!(
+        p.diagnostics.level() >= loft::diagnostics::Level::Error,
+        "#685: a mutated text parameter in a text-returning fn must be REFUSED, not \
+         compiled — it used to segfault at runtime.  Diagnostics: {lines}"
+    );
+    assert!(
+        lines.contains("copy it into a local first"),
+        "#685: the refusal must name the working alternative, got: {lines}"
+    );
+}
+
+/// loft#685 boundary — a value-const scalar parameter mutated through a closure stays
+/// an error.
+///
+/// The closure-side write never reaches `validate_write`'s const guard (inside the
+/// lambda the name is a capture, not a binding carrying the flag), so the check lives
+/// at the promotion site.  Without it the fix would have quietly handed the closure a
+/// writable cell for a read-only parameter — turning a crash into a silently accepted
+/// contract violation, which is worse.
+#[test]
+fn issue_685_const_scalar_param_mutated_by_closure_is_rejected() {
+    let src_path = std::env::temp_dir().join("loft_i685_const_param.loft");
+    std::fs::write(
+        &src_path,
+        "fn c685(n: const integer) -> integer { b = fn(k: integer) { n = n + k; }; b(1); n }\n\
+         fn main() { c685(1); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    let lines = p.diagnostics.lines().join("\n");
+    assert!(
+        p.diagnostics.level() >= loft::diagnostics::Level::Error,
+        "#685: mutating a const parameter from a closure must stay an error.  \
+         Diagnostics: {lines}"
+    );
+    assert!(
+        lines.contains("const parameter") && lines.contains("from a closure"),
+        "#685: the const refusal must say which binding and why, got: {lines}"
+    );
+}
