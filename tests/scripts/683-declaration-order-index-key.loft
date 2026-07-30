@@ -1,0 +1,113 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#683): an index key whose type comes from a function declared
+// LOWER in the file was rejected with "Invalid index key", while the identical
+// code with the callee moved up compiled and ran.  File order is not otherwise
+// significant in loft — `fn`s see each other regardless — which is what made it
+// surprising, and the caret pointed at the indexing line rather than at the call.
+//
+// Cause: the check ran in the FIRST parse pass.  Pass 1 collects definitions, so
+// it sees an incomplete table by construction — a callee below the current point
+// does not exist yet and its return type reads as unknown.  The conversion then
+// failed for a reason that has nothing to do with the program, and because pass 2
+// only runs when pass 1 is error-free, the parse aborted before the pass that
+// knows every signature could check it properly.
+//
+// Three of the four "Invalid index key" sites in `parse_key` were missing the
+// pass-2 guard its fourth sibling already had — the upper bound of a keyed range
+// was patched at some point and the lower bound, the single key, and the extra
+// keys of a multi-key index were left behind.
+//
+// Axes: WHERE the below-declared type enters (loop iterable, direct call in the
+// key, a local bound from a call), the KEY type (integer, text), and the index
+// FORM (single key, multi-key, keyed range) — the forms map one-to-one onto the
+// four check sites.  The loop is incidental: the reported shape iterated a call,
+// but a direct `h[below()]` fails identically, so it is covered here too.
+
+struct R683      { k: integer, v: integer }
+struct N683      { name: text, v: integer }
+struct Pair683   { a: integer, b: integer, v: integer }
+
+// ── every callee below is declared AFTER the function that uses it ────────────
+
+// The reported shape: the loop iterable is a call declared lower down.
+fn f683_loop(h: hash<R683[k]>) -> integer {
+  n = 0;
+  for k in k683_keys() { r = h[k]; if r != null { n += r.v; } }
+  n
+}
+
+// No loop at all — the key is the call itself.  This is why the filed scope
+// ("iterating a call declared later") was narrower than the defect.
+fn f683_direct(h: hash<R683[k]>) -> integer {
+  r = h[k683_one()];
+  if r != null { return r.v; }
+  0
+}
+
+// The call's result goes through an UNTYPED local first.  Reported as a working
+// workaround; it was not — only an explicitly typed local dodged the check.
+fn f683_local(h: hash<R683[k]>) -> integer {
+  x = k683_one();
+  r = h[x];
+  if r != null { return r.v; }
+  0
+}
+
+// The declared-type local, which did work before the fix.  Kept as the control
+// that tells a lost fix from a lost test.
+fn f683_typed_local(h: hash<R683[k]>) -> integer {
+  ks: vector<integer> = k683_keys();
+  n = 0;
+  for k in ks { r = h[k]; if r != null { n += r.v; } }
+  n
+}
+
+// A TEXT key — the fault was never integer-specific.
+fn f683_text(h: hash<N683[name]>) -> integer {
+  n = 0;
+  for s in k683_names() { r = h[s]; if r != null { n += r.v; } }
+  n
+}
+
+// A MULTI-key index: the second and later key components are a separate check
+// site from the first, and were missing the same guard.
+fn f683_multi(h: hash<Pair683[a, b]>) -> integer {
+  r = h[k683_one(), k683_two()];
+  if r != null { return r.v; }
+  0
+}
+
+// ── the callees, all below their callers ─────────────────────────────────────
+
+fn k683_keys()  -> vector<integer> { [1, 2] }
+fn k683_names() -> vector<text>    { ["ab", "cd"] }
+fn k683_one()   -> integer         { 1 }
+fn k683_two()   -> integer         { 2 }
+
+fn main() {
+  h: hash<R683[k]> = [];
+  h += R683 { k: 1, v: 10 };
+  h += R683 { k: 2, v: 20 };
+
+  nh: hash<N683[name]> = [];
+  nh += N683 { name: "ab", v: 3 };
+  nh += N683 { name: "cd", v: 4 };
+
+  ph: hash<Pair683[a, b]> = [];
+  ph += Pair683 { a: 1, b: 2, v: 99 };
+
+  assert(f683_loop(h) == 30, "loop over a call declared below: 10+20, got {f683_loop(h)}");
+  assert(f683_direct(h) == 10, "direct h[below()]: got {f683_direct(h)}");
+  assert(f683_local(h) == 10, "untyped local from a call declared below: got {f683_local(h)}");
+  assert(f683_typed_local(h) == 30, "typed local control: 10+20, got {f683_typed_local(h)}");
+  assert(f683_text(nh) == 7, "text key from a call declared below: 3+4, got {f683_text(nh)}");
+  assert(f683_multi(ph) == 99, "multi-key index, both keys from below: got {f683_multi(ph)}");
+
+  // A key that is genuinely absent still misses — the fix must not have turned
+  // the lookup itself into something that always finds a record.
+  assert(h[9] == null, "an absent key is still null");
+
+  println("683-declaration-order-index-key ok");
+}

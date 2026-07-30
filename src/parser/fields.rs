@@ -1388,6 +1388,20 @@ impl Parser {
         typedef.clone()
     }
 
+    /// Parse the key expression(s) of an index — `h[k]`, `h[k1, k2]`, `h[lo..hi]`.
+    ///
+    /// loft#683 — every "Invalid index key" below is reported in the SECOND pass only.
+    /// Pass 1 collects definitions, so it sees an incomplete table by construction: a
+    /// key whose type comes from a function declared further down the file reads as
+    /// unknown there, and the conversion fails for a reason that has nothing to do
+    /// with the program.  Raising it anyway aborted the parse before pass 2 — which
+    /// knows every signature — ever ran, so `h[keys_declared_below()]` was rejected
+    /// while the identical code with the callee moved up compiled.  File order is not
+    /// otherwise significant in loft, which is what made it surprising.
+    ///
+    /// Nothing is lost by waiting: pass 2 re-parses the whole file and re-runs each
+    /// check with the full type picture, so a genuinely wrong key is still rejected —
+    /// just once, and pointing at a real mismatch.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
         // detect open-start `col[..hi]` or `col[..]` before parsing expression.
@@ -1397,7 +1411,7 @@ impl Parser {
             Type::Null // from=[] → no lower bound
         } else {
             let t = self.expression(&mut p);
-            if !self.convert(&mut p, &t, &key_types[0]) {
+            if !self.convert(&mut p, &t, &key_types[0]) && !self.first_pass {
                 diagnostic!(self.lexer, Level::Error, "Invalid index key");
             }
             t
@@ -1420,7 +1434,7 @@ impl Parser {
                 }
                 let mut ex = Value::Null;
                 let ex_t = self.expression(&mut ex);
-                if !self.convert(&mut ex, &ex_t, &key_types[nr]) {
+                if !self.convert(&mut ex, &ex_t, &key_types[nr]) && !self.first_pass {
                     diagnostic!(self.lexer, Level::Error, "Invalid index key");
                 }
                 key.push(ex);
@@ -1476,7 +1490,7 @@ impl Parser {
                     }
                     let mut ex = Value::Null;
                     let ex_t = self.expression(&mut ex);
-                    if !self.convert(&mut ex, &ex_t, &key_types[nr]) {
+                    if !self.convert(&mut ex, &ex_t, &key_types[nr]) && !self.first_pass {
                         diagnostic!(self.lexer, Level::Error, "Invalid index key");
                     }
                     key.push(ex);

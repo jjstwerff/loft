@@ -17672,3 +17672,52 @@ fn issue_686_nameless_unknown_is_not_resolved_against_def_zero() {
         "#686: the capture must be the struct it projects out of, got {got:?}"
     );
 }
+
+/// loft#683 — an index key whose type comes from a definition declared LOWER in the
+/// file must not be rejected.  The check ran in pass 1, which sees only what is
+/// declared above the current point, so `h[keys_declared_below()]` failed while the
+/// same code with the callee moved up compiled.  Pass 2 knows every signature, but it
+/// only runs when pass 1 is error-free — so the premature error aborted the parse.
+///
+/// The values live in `tests/scripts/683-declaration-order-index-key.loft`.  This is
+/// the must-fail half: deferring the check must not DELETE it.  A genuinely wrong key
+/// type has to stay an error in BOTH declaration orders — a fix that simply stopped
+/// reporting would pass the value test and fail here.
+#[test]
+fn issue_683_wrong_index_key_is_still_rejected_in_both_orders() {
+    // (label, source) — identical programs, differing only in where `t683` sits.
+    let cases = [
+        (
+            "callee above",
+            "struct K683 { k: integer, v: integer }\n\
+             fn t683() -> text { \"z\" }\n\
+             fn u683(h: hash<K683[k]>) -> integer { r = h[t683()]; if r != null { return r.v; } 0 }\n\
+             fn main() { h: hash<K683[k]> = []; u683(h); }\n",
+        ),
+        (
+            "callee below",
+            "struct K683 { k: integer, v: integer }\n\
+             fn u683(h: hash<K683[k]>) -> integer { r = h[t683()]; if r != null { return r.v; } 0 }\n\
+             fn t683() -> text { \"z\" }\n\
+             fn main() { h: hash<K683[k]> = []; u683(h); }\n",
+        ),
+    ];
+    for (label, src) in cases {
+        let src_path = std::env::temp_dir().join("loft_i683_wrong_key.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "#683 ({label}): a text key on an integer-keyed hash must stay an error.  \
+             Diagnostics: {lines}"
+        );
+        assert!(
+            lines.contains("Invalid index key"),
+            "#683 ({label}): the rejection must still be the index-key diagnostic, got: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+}
