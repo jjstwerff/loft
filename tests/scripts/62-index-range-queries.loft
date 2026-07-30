@@ -65,10 +65,20 @@ fn test_index_range_with_secondary() {
     irs_sum += irs_e.val;
     irs_cnt += 1;
   }
-  // Range nr in [20..40), secondary label from "gamma" (descending).
-  // Actual results depend on how the range+secondary filter works.
-  assert(irs_cnt > 0, "range+secondary found elements: {irs_cnt}");
-  assert(irs_sum == 35, "range+secondary sum: {irs_sum}");
+  // The index is `[nr, -label]`, so its order is nr ASCENDING then label
+  // DESCENDING:
+  //   (10,alpha,1) (20,gamma,3) (20,beta,2) (30,epsilon,5) (30,delta,4)
+  //   (30,alpha,6) (40,zeta,7)  (50,eta,8)
+  // `[20..40, "gamma"]` is the half-open range from the partial key `(20)` — which
+  // compares on `nr` alone — up to `(40,"gamma")`.  `(40,"zeta")` sorts BEFORE
+  // `(40,"gamma")` because the label descends, so it is inside; `(50,eta)` is not.
+  //   3 + 2 + 5 + 4 + 6 + 7 = 27 over 6 elements.
+  //
+  // loft#691 — this read 35 before, i.e. 27 + `(50,eta,8)`: an exclusive upper bound
+  // that fell between stored keys leaked one element past the end.  The old value was
+  // recorded from what the code did rather than derived, which is what let it stand.
+  assert(irs_cnt == 6, "range+secondary count: {irs_cnt}");
+  assert(irs_sum == 27, "range+secondary sum: {irs_sum}");
 }
 
 fn test_index_range_single_element() {

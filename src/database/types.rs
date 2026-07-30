@@ -10,6 +10,13 @@ use crate::keys::Content;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
+/// Type-table name of the 12-byte `DbRef` storage shape a closure record
+/// ADOPTS — `free_named`'s cascade reclaims what it points at.
+pub(crate) const DBREF_OWNED: &str = "dbref";
+/// Type-table name of the BORROWED 12-byte `DbRef` shape (#682) — same bytes,
+/// but the target belongs to someone else, so the cascade leaves it alone.
+pub(crate) const DBREF_BORROW: &str = "dbref_borrow";
+
 /// Compute the `Key::type_nr` discriminator for a struct field's `content`
 /// type.  Built-in base types (0..=5: integer/long/single/float/boolean/text)
 /// map to `1 + content` (1..=6) so the legacy 8-byte-int hash paths
@@ -411,6 +418,25 @@ impl Stores {
         }
     }
 
+    /// #686 — lay out a SINGLE closure record on demand (field positions + size), the
+    /// sibling of [`Stores::lay_out_synth`] and deferred for the same reason: a capture
+    /// whose type was a FORWARD reference in pass 1 can only be typed during pass-2 body
+    /// parse, and the lambda's body bakes the field offsets into its IR right then — so
+    /// the record must be positioned before it, not by the `finish()` at the end of the
+    /// pass.  The full `finish()` is not an option mid-parse: it re-runs every type and
+    /// re-appends keyed-index bookkeeping.
+    ///
+    /// Empty `linked` is correct here: a closure record holds its captures as scalars or
+    /// 12-byte DbRefs, never as an inline keyed collection, so no `Vector → Array`
+    /// promotion applies.
+    pub(crate) fn lay_out_record(&mut self, kt: u16) {
+        let linked: HashSet<u16> = HashSet::new();
+        let mut in_progress: HashSet<usize> = HashSet::new();
+        if kt != u16::MAX && (kt as usize) < self.types.len() {
+            self.finish_type(&linked, kt as usize, &mut in_progress);
+        }
+    }
+
     pub(super) fn finish_type(
         &mut self,
         linked: &HashSet<u16>,
@@ -652,42 +678,60 @@ impl Stores {
 
     pub(super) fn determine_keys(&mut self) {
         for t_nr in 0..self.types.len() {
-            match self.types[t_nr].parts.clone() {
-                // Hash and Radix both key on a bare `Vec<u16>` of ascending field
-                // numbers.  Radix's key positions are what the Morton oracle reads
-                // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
-                // order.
-                Parts::Hash(c, key_fields) | Parts::Radix(c, key_fields) => {
-                    self.types[t_nr].keys.clear();
-                    for key_field in key_fields {
-                        if let Some((content, position)) = self.key_field(c, key_field) {
-                            let tp = key_type_nr_for_content(content, &self.types);
-                            self.types[t_nr].keys.push(crate::keys::Key {
-                                type_nr: tp,
-                                position,
-                            });
-                        }
+            self.determine_keys_for(t_nr);
+        }
+    }
+
+    /// Compute the runtime key descriptors of ONE collection type.
+    ///
+    /// `determine_keys` runs this over every type at the end of a parse, which is late
+    /// enough for anything the parse only READS.  It is not late enough for a fact the
+    /// parse BAKES: `fill_iter` writes the descriptor list straight into the `OpIterate`
+    /// operand, so a collection type first created in pass 2 — after pass 1's `finish()`
+    /// and before pass 2's — baked an EMPTY list and the range iterator then indexed
+    /// `keys[0]` on it (loft#689: SIGSEGV on the interpreter, and on `--native` an
+    /// out-of-bounds in `key_compare`).  Calling this on demand at the bake site closes
+    /// the window, the same shape as `lay_out_record` for a pass-2-created struct's
+    /// layout (loft#686).
+    ///
+    /// Idempotent: it clears and recomputes, so the end-of-parse sweep still produces the
+    /// identical table whether or not a bake site ran it earlier.
+    pub(crate) fn determine_keys_for(&mut self, t_nr: usize) {
+        match self.types[t_nr].parts.clone() {
+            // Hash and Radix both key on a bare `Vec<u16>` of ascending field
+            // numbers.  Radix's key positions are what the Morton oracle reads
+            // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
+            // order.
+            Parts::Hash(c, key_fields) | Parts::Radix(c, key_fields) => {
+                self.types[t_nr].keys.clear();
+                for key_field in key_fields {
+                    if let Some((content, position)) = self.key_field(c, key_field) {
+                        let tp = key_type_nr_for_content(content, &self.types);
+                        self.types[t_nr].keys.push(crate::keys::Key {
+                            type_nr: tp,
+                            position,
+                        });
                     }
                 }
-                Parts::Ordered(c, key_fields)
-                | Parts::Sorted(c, key_fields)
-                | Parts::Index(c, key_fields, _) => {
-                    self.types[t_nr].keys.clear();
-                    for (key_field, asc) in &key_fields {
-                        if let Some((content, position)) = self.key_field(c, *key_field) {
-                            let mut tp = key_type_nr_for_content(content, &self.types);
-                            if !asc {
-                                tp = -tp;
-                            }
-                            self.types[t_nr].keys.push(crate::keys::Key {
-                                type_nr: tp,
-                                position,
-                            });
-                        }
-                    }
-                }
-                _ => (),
             }
+            Parts::Ordered(c, key_fields)
+            | Parts::Sorted(c, key_fields)
+            | Parts::Index(c, key_fields, _) => {
+                self.types[t_nr].keys.clear();
+                for (key_field, asc) in &key_fields {
+                    if let Some((content, position)) = self.key_field(c, *key_field) {
+                        let mut tp = key_type_nr_for_content(content, &self.types);
+                        if !asc {
+                            tp = -tp;
+                        }
+                        self.types[t_nr].keys.push(crate::keys::Key {
+                            type_nr: tp,
+                            position,
+                        });
+                    }
+                }
+            }
+            _ => (),
         }
     }
 
@@ -1686,16 +1730,76 @@ impl Stores {
     /// auto-Reference closure record fails with `field 's' has no
     /// position (u16::MAX)` until align=4.
     pub fn dbref(&mut self) -> u16 {
-        let name = "dbref".to_string();
-        if let Some(nr) = self.names.get(&name) {
-            *nr
-        } else {
-            let num = self.types.len() as u16;
-            let mut tp = Type::new(&name, Parts::DbRef, 12);
+        self.dbref_shapes().0
+    }
+
+    /// #682 — the BORROWED sibling of [`Stores::dbref`]: byte-for-byte the same
+    /// 12-byte `DbRef`, registered under its own name so `free_named`'s
+    /// closure-record cascade can tell "a store this record adopted" from "a
+    /// store it only points at".  Same shape means every read/write path and the
+    /// layout descriptor are unchanged; only the free decision differs (see
+    /// [`crate::data::Deps::borrowed_share_sentinel`]).
+    pub fn dbref_borrow(&mut self) -> u16 {
+        self.dbref_shapes().1
+    }
+
+    /// Register BOTH 12-byte `DbRef` storage shapes, owned first, and return
+    /// their numbers.
+    ///
+    /// The pair is registered together, from either entry point, because type
+    /// numbers are POSITIONAL and `--native` replays the registration sequence to
+    /// rebuild the schema: its generated `init()` refers to every other type by
+    /// the compile-time `tN` it had here, so a shape that appears only in some
+    /// programs would shift every id after it and the replay would register
+    /// fields against the wrong types.  Registering both unconditionally keeps
+    /// the numbering independent of which captures turn out to be borrowed — a
+    /// verdict that is not even known until scope analysis has run.
+    fn dbref_shapes(&mut self) -> (u16, u16) {
+        if let (Some(&owned), Some(&borrow)) =
+            (self.names.get(DBREF_OWNED), self.names.get(DBREF_BORROW))
+        {
+            return (owned, borrow);
+        }
+        let register = |s: &mut Self, name: &str| -> u16 {
+            if let Some(&nr) = s.names.get(name) {
+                return nr;
+            }
+            let num = s.types.len() as u16;
+            let mut tp = Type::new(name, Parts::DbRef, 12);
             tp.align = 4;
-            self.types.push(tp);
-            self.names.insert(name, num);
+            s.types.push(tp);
+            s.names.insert(name.to_string(), num);
             num
+        };
+        let owned = register(self, DBREF_OWNED);
+        let borrow = register(self, DBREF_BORROW);
+        (owned, borrow)
+    }
+
+    /// Is `content` the 12-byte `DbRef` shape a closure record ADOPTS — i.e. may
+    /// `free_named`'s cascade reclaim the store this field points at?  False for
+    /// the borrowed shape and for every non-`DbRef` field.
+    #[must_use]
+    pub(crate) fn dbref_is_adopted(&self, content: u16) -> bool {
+        let tp = &self.types[content as usize];
+        matches!(tp.parts, Parts::DbRef) && tp.name != DBREF_BORROW
+    }
+
+    /// #682 — re-point field `field_name` of struct type `tp` at the BORROWED
+    /// 12-byte `DbRef` shape.  Layout-preserving by construction (both shapes are
+    /// 12 bytes at align 4), which is why this may run after `finish()` has
+    /// positioned the record; it changes only the cascade's free decision.
+    /// Returns whether the field was found.
+    pub(crate) fn borrow_dbref_field(&mut self, tp: u16, field_name: &str) -> bool {
+        let borrow = self.dbref_borrow();
+        let Parts::Struct(fields) = &mut self.types[tp as usize].parts else {
+            return false;
+        };
+        if let Some(f) = fields.iter_mut().find(|f| f.name == field_name) {
+            f.content = borrow;
+            true
+        } else {
+            false
         }
     }
 

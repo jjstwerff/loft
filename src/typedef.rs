@@ -98,7 +98,17 @@ pub(crate) fn nullable_vector_elem(
 
 fn copy_unknown_fields(data: &mut Data, d: u32) {
     for nr in 0..data.attributes(d) {
-        if let Type::Unknown(was) = data.attr_type(d, nr) {
+        // `Unknown(was)` names the forward-referenced type's STUB def — except for
+        // `Unknown(0)`, which is the codebase-wide "no type known" sentinel and names
+        // nothing (`Type::Unknown(0)` is what every unresolved expression carries).
+        // Resolving THAT against definition #0 hands the field whatever the first
+        // definition in the program happens to return — `text`, in practice — so a
+        // field with no type silently acquires a plausible wrong one instead of staying
+        // visibly unresolved (#686).  The `Vector` arm below already guarded it; this is
+        // the same guard on the bare case.
+        if let Type::Unknown(was) = data.attr_type(d, nr)
+            && was != 0
+        {
             data.set_attr_type(d, nr, data.def(was).returned.clone());
         } else if let Type::Vector(content, dep) = &data.attr_type(d, nr)
             && let Type::Unknown(was) = **content
@@ -192,6 +202,62 @@ pub fn actual_types_deferred(
             _ => {}
         }
     }
+}
+
+/// #682 — carry the post-`scopes::check` capture-ownership verdict into the
+/// already-registered schema, so `free_named`'s cascade frees exactly the
+/// captures the closure record adopted.
+///
+/// The interpreter's schema is laid out during parse, but which captures a record
+/// owns is only settled by scope analysis (`scopes::mark_borrowed_captures`) —
+/// hence this second, layout-preserving pass rather than a decision inside
+/// `fill_database`.  `--native` needs no equivalent: its schema is emitted from
+/// these same attribute types AFTER scope analysis has run.
+///
+/// Idempotent, and safe to run before scope analysis has marked anything (it then
+/// finds no borrowed attribute and changes nothing).
+pub fn sync_capture_ownership(data: &Data, database: &mut Stores) {
+    for d in 0..data.definitions() {
+        if !data.def(d).name.starts_with("__closure_") {
+            continue;
+        }
+        let known = data.def(d).known_type();
+        if known == u16::MAX {
+            continue;
+        }
+        for a in 0..data.attributes(d) {
+            if matches!(data.attr_type(d, a), Type::Reference(_, ref deps) if deps.is_borrowed_share())
+            {
+                database.borrow_dbref_field(known, &data.attr_name(d, a));
+            }
+        }
+    }
+}
+
+/// #686 — does `d` still carry a NAMELESS unknown attribute, i.e. one no resolver can
+/// ever fix?
+///
+/// `Unknown(stub)` names a forward-referenced type and `copy_unknown_fields` resolves it
+/// before the layout loop.  `Unknown(0)` names nothing: it is what a field typed from an
+/// EXPRESSION carries, and the only producer of those is the closure record (a capture's
+/// type is the type of `w.chunks[1]`, not of a written-down name).
+///
+/// Laying such a struct out anyway is what made #686 corrupt instead of merely fail: the
+/// field loop SKIPS an attribute it cannot size, but the type is still registered and
+/// `finish` still sizes it — so the field keeps `position == u16::MAX` forever, and
+/// `finish_type` will not revisit an already-sized type.  The closure body then read and
+/// wrote its capture at offset 65535.  Deferring instead costs nothing: the layout loop
+/// is keyed on `known_type == u16::MAX`, so pass 2 picks the record up once
+/// `parse_lambda`'s `resolve_forward_captures` has repaired it.  A field that never
+/// resolves leaves the struct unregistered, which is harmless — the parser has already
+/// reported the error and the program cannot run.
+fn has_nameless_unknown_attr(data: &Data, d: u32) -> bool {
+    (0..data.attributes(d)).any(|a| {
+        let tp = data.attr_type(d, a);
+        let tp = tp.base();
+        matches!(tp, Type::Unknown(0))
+            || matches!(tp, Type::Vector(c, _) if matches!(**c, Type::Unknown(0)))
+    })
 }
 
 pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
@@ -324,6 +390,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
             && data.def(d_nr).known_type == u16::MAX
+            && !has_nameless_unknown_attr(data, d_nr)
         {
             fill_database(data, database, d_nr);
             // @PLN25 E2 — right after building a struct `S`, build its synthetic
@@ -913,7 +980,17 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     // code path always has empty deps so the
                     // legacy inline-bytes path stays active for
                     // every existing struct field.
-                    database.dbref()
+                    //
+                    // #682: which of the two markers decides whether the
+                    // record ADOPTS the captured store (cascade-freed with
+                    // the record) or merely BORROWS it (freed by its real
+                    // owner).  Same 12 bytes either way — `generation` picks
+                    // the same pair for `--native`.
+                    if deps.is_borrowed_share() {
+                        database.dbref_borrow()
+                    } else {
+                        database.dbref()
+                    }
                 }
                 _ => {
                     // A struct/enum-reference field stored INLINE (`inner: Cell`,

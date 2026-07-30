@@ -498,9 +498,25 @@ impl Parser {
             for wt in self.vars.work_texts() {
                 ls.insert(0, v_set(wt, Value::Text(String::new())));
             }
-            // copy text arguments into promoted shadow locals at function entry.
+            // copy promoted arguments into their shadow locals at function entry.
+            // #685 — a shadow that was flipped to a `__cell_<T>` (a scalar argument a
+            // closure mutates) needs its cell ALLOCATED here as well: the seed is the
+            // only assignment it is guaranteed to have, since the mutation lives
+            // inside the closure and may be its sole write.  Text shadows keep the
+            // plain copy.
             for (shadow, original) in self.vars.promoted_text_args() {
-                ls.insert(0, v_set(shadow, Value::Var(original)));
+                let seed = match self.vars.tp(shadow).clone() {
+                    Type::Reference(cell, _)
+                        if self.data.def(cell).name().starts_with("__cell_") =>
+                    {
+                        self.boxed_cell_alloc_and_set(shadow, cell, Value::Var(original))
+                    }
+                    _ => None,
+                };
+                ls.insert(
+                    0,
+                    seed.unwrap_or_else(|| v_set(shadow, Value::Var(original))),
+                );
             }
             for r in self.vars.work_references() {
                 if std::env::var("LOFT_TRACE_PREAMBLE").is_ok() {
@@ -3671,38 +3687,69 @@ use a separate collection or add after the loop"
         if value_attr.name != "value" {
             return None;
         }
-        let value_tp = value_attr.typedef.clone();
-        let op_set_name = match &value_tp {
+        let op_set_d_nr = self.cell_value_set_op(*cell_d_nr)?;
+        if self.vars.is_defined(var_nr) {
+            // Subsequent: write value field of existing cell.
+            Some(Value::Call(
+                op_set_d_nr,
+                vec![Value::Var(var_nr), Value::Int(0), rhs],
+            ))
+        } else {
+            // First-set: allocate cell + fill value field.
+            self.boxed_cell_alloc_and_set(var_nr, *cell_d_nr, rhs)
+        }
+    }
+
+    /// The `OpSet<T>` that writes a `__cell_<T>`'s `value` field, or `None` for a
+    /// cell whose payload type has no such op.
+    ///
+    /// Boolean is in the table because the working path emits `OpSetBoolean` for a
+    /// boxed boolean local — this is the same op, read off that lowering rather
+    /// than re-derived (the earlier "boolean needs a 4-arg `OpSetByte`" note
+    /// described a different write path).
+    fn cell_value_set_op(&self, cell_d_nr: u32) -> Option<u32> {
+        let value_attr = self.data.def(cell_d_nr).attributes().first()?;
+        if value_attr.name != "value" {
+            return None;
+        }
+        let op_set_name = match &value_attr.typedef {
             Type::Integer(_) => "OpSetInt",
             Type::Float => "OpSetFloat",
             Type::Single => "OpSetSingle",
             Type::Text(_) => "OpSetText",
             Type::Character => "OpSetCharacter",
+            Type::Boolean => "OpSetBoolean",
             Type::Enum(_, false, _) => "OpSetEnum",
-            // Boolean / exotic types: phase 02d-iii.e or later.
             _ => return None,
         };
-        let op_set_d_nr = self.data.def_nr(op_set_name);
-        if op_set_d_nr == u32::MAX {
-            return None;
-        }
+        let d = self.data.def_nr(op_set_name);
+        if d == u32::MAX { None } else { Some(d) }
+    }
+
+    /// Allocate a fresh `__cell_<T>` for `var_nr` and initialise its `value` field
+    /// from `rhs` — the ONE home for "a boxed scalar comes into existence".
+    ///
+    /// Two callers need exactly this: the first assignment to a boxed local
+    /// ([`Self::boxed_scalar_assign_rewrite`]), and the function-entry seed for a
+    /// boxed scalar PARAMETER promoted to a shadow local (#685), which has no
+    /// assignment of its own to hang the allocation on.
+    pub(crate) fn boxed_cell_alloc_and_set(
+        &self,
+        var_nr: u16,
+        cell_d_nr: u32,
+        rhs: Value,
+    ) -> Option<Value> {
+        let op_set_d_nr = self.cell_value_set_op(cell_d_nr)?;
         let op_db_d_nr = self.data.def_nr("OpDatabase");
         if op_db_d_nr == u32::MAX {
             return None;
         }
-        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type());
-        let pos = Value::Int(0);
-        if self.vars.is_defined(var_nr) {
-            // Subsequent: write value field of existing cell.
-            Some(Value::Call(op_set_d_nr, vec![Value::Var(var_nr), pos, rhs]))
-        } else {
-            // First-set: allocate cell + fill value field.
-            Some(Value::Insert(vec![
-                v_set(var_nr, Value::Null),
-                Value::Call(op_db_d_nr, vec![Value::Var(var_nr), Value::Int(cell_kt)]),
-                Value::Call(op_set_d_nr, vec![Value::Var(var_nr), pos, rhs]),
-            ]))
-        }
+        let cell_kt = i32::from(self.data.def(cell_d_nr).known_type());
+        Some(Value::Insert(vec![
+            v_set(var_nr, Value::Null),
+            Value::Call(op_db_d_nr, vec![Value::Var(var_nr), Value::Int(cell_kt)]),
+            Value::Call(op_set_d_nr, vec![Value::Var(var_nr), Value::Int(0), rhs]),
+        ]))
     }
 
     /// Determine the variable number for an assignment target.

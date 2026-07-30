@@ -17263,3 +17263,665 @@ fn issue_677_returned_mutated_param_keeps_its_borrow() {
         p.data.def(fresh).returned().depend()
     );
 }
+
+/// loft#682 — a closure record must free only the captures it ADOPTED.
+///
+/// Each reference / collection capture is stored as a 12-byte `DbRef`, and
+/// `free_named`'s cascade used to free every one of them when the record died.
+/// That is right for a store the defining frame owned and handed over (the frame's
+/// scope-exit free is suppressed for it, which is what lets an escaping factory
+/// closure outlive its frame, #323), and wrong for a captured PARAMETER, whose
+/// caller owns the store and outlives the frame.  The consumer lost a whole
+/// `hex_world::World` to it.
+///
+/// The value-level guard is `tests/scripts/682-closure-capture-borrow.loft`; this
+/// one asserts the FACT, because an over-free is only sometimes fatal.  With one
+/// call the freed store is never re-read and every value still checks out — which
+/// is why the report arrived as a panic thousands of ops later in an unrelated
+/// function, and why a value test alone can pass on slot-reuse luck.
+///
+/// Two directions matter, so both are asserted: a parameter / projection capture
+/// must be BORROWED (over-free), and an owned local must stay ADOPTED (marking it
+/// borrowed leaks instead).  The verdict is only knowable after `scopes::check` —
+/// `p682_proj`'s `ch` parses as "borrows `w`" and a call-result capture parses as
+/// a borrow that scope analysis later rewrites to owned — so the test runs the
+/// check first, exactly as compilation does.
+#[test]
+fn issue_682_closure_capture_ownership_marker() {
+    let src_path = std::env::temp_dir().join("loft_i682_capture_marker.loft");
+    std::fs::write(
+        &src_path,
+        "struct P682C { v: float }\n\
+         struct P682W { cells: vector<P682C>, tick: integer }\n\
+         fn p682_param(w: P682W, x: float) -> float { f = fn(s: float) -> float { w.tick as float * s }; x }\n\
+         fn p682_proj(w: P682W, x: float) -> float { c = w.cells[0]; f = fn(s: float) -> float { c.v * s }; x }\n\
+         fn p682_owned(x: float) -> float { o = P682W { cells: [], tick: 3 }; f = fn(s: float) -> float { o.tick as float * s }; f(x) }\n\
+         fn p682_cell(x: integer) -> integer { acc = 0; b = fn(n: integer) { acc = acc + n; }; b(x); acc }\n\
+         fn main() { w = P682W { cells: [P682C { v: 1.0 }], tick: 7 };\n\
+                     p682_param(w, 1.0); p682_proj(w, 1.0); p682_owned(1.0); p682_cell(2); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#682 fixture must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+
+    // The lambdas are numbered in source order, so each closure record pairs with
+    // the function above that defines it.
+    let marker = |record: &str, capture: &str| -> bool {
+        let d_nr = p.data.def_nr(record);
+        assert_ne!(d_nr, u32::MAX, "#682: {record} must exist");
+        let a = p.data.attr(d_nr, capture);
+        assert_ne!(
+            a,
+            usize::MAX,
+            "#682: {record} must carry the `{capture}` capture"
+        );
+        match p.data.attr_type(d_nr, a) {
+            loft::data::Type::Reference(_, deps) => {
+                assert!(
+                    !deps.is_empty(),
+                    "#682: {record}.{capture} must keep a share marker (a 12-byte DbRef); \
+                     empty deps would store inline bytes and the closure would read a \
+                     stale snapshot"
+                );
+                deps.is_borrowed_share()
+            }
+            other => panic!("#682: {record}.{capture} should be a Reference, got {other:?}"),
+        }
+    };
+
+    assert!(
+        marker("__closure_0", "w"),
+        "#682: a captured PARAMETER must be marked BORROWED — its caller owns the store \
+         and outlives this frame, so the record's cascade freeing it destroys the \
+         caller's value (that is the whole bug)"
+    );
+    assert!(
+        marker("__closure_1", "c"),
+        "#682: a PROJECTION local (`c = w.cells[0]`) views into someone else's store, so \
+         it must be marked BORROWED too — a parameter-only fix leaves this half broken"
+    );
+    assert!(
+        !marker("__closure_2", "o"),
+        "#682: a local the frame OWNS must stay ADOPTED — `get_free_vars` suppresses its \
+         scope-exit free, so the record's cascade is the only free there is and marking \
+         it borrowed leaks the store instead"
+    );
+    assert!(
+        !marker("__closure_3", "acc"),
+        "#682: a mutated scalar boxed into a `__cell_<T>` is minted FOR this closure, so \
+         the record owns it however the original binding was reached (plan-22 / C74)"
+    );
+}
+
+/// loft#685 — a MUTATED scalar capture whose source is a PARAMETER.
+///
+/// The closure record stored the capture as a 12-byte cell `DbRef`
+/// (`box_captured_names_for_outer_scalars`) while `flip_scalars_to_box_types`
+/// skipped arguments, so the parameter stayed an 8-byte stack scalar and
+/// `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an 8-byte slot — taking
+/// the fn-ref being built beside it with it.
+///
+/// Values live in `tests/scripts/685-mutated-scalar-param-capture.loft`; this
+/// asserts the FACT the fix rests on, because the value test cannot distinguish
+/// "the two halves agree" from "they disagree but the garbage happened to work".
+/// The invariant: for a mutated capture, the closure record's field type and the
+/// binding the enclosing frame holds under that name must be the SAME cell.
+#[test]
+fn issue_685_mutated_scalar_param_is_boxed_like_a_local() {
+    let src_path = std::env::temp_dir().join("loft_i685_param_box.loft");
+    std::fs::write(
+        &src_path,
+        "fn p685_arg(n: integer) -> integer { b = fn(k: integer) { n = n + k; }; b(1); n }\n\
+         fn p685_loc(s: integer) -> integer { n = s; b = fn(k: integer) { n = n + k; }; b(1); n }\n\
+         fn main() { p685_arg(1); p685_loc(1); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#685 fixture must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+
+    // Both functions must lower to the SAME shape — the argument case is the local
+    // case, which is the whole point of the promotion.
+    for (fname, record) in [("n_p685_arg", "__closure_0"), ("n_p685_loc", "__closure_1")] {
+        let rec = p.data.def_nr(record);
+        assert_ne!(rec, u32::MAX, "#685: {record} must exist");
+        let a = p.data.attr(rec, "n");
+        assert_ne!(a, usize::MAX, "#685: {record} must carry the `n` capture");
+        let cell = match p.data.attr_type(rec, a) {
+            loft::data::Type::Reference(d, _) => d,
+            other => panic!("#685: {record}.n must be a cell Reference, got {other:?}"),
+        };
+        assert!(
+            p.data.def(cell).name().starts_with("__cell_"),
+            "#685: {record}.n must point at a `__cell_<T>`, got `{}`",
+            p.data.def(cell).name()
+        );
+
+        // The frame's binding for `n` must be that same cell.  A binding that is still
+        // a bare scalar here is the bug: the record would hold a 12-byte DbRef field
+        // fed from an 8-byte slot.
+        let d_nr = p.data.def_nr(fname);
+        assert_ne!(d_nr, u32::MAX, "#685: {fname} must be defined");
+        let vars = &p.data.def(d_nr).variables;
+        let v = vars.var("n");
+        assert_ne!(v, u16::MAX, "#685: {fname} must bind the name `n`");
+        assert!(
+            matches!(vars.tp(v), loft::data::Type::Reference(d, _)
+                if p.data.def(*d).name().starts_with("__cell_")),
+            "#685: `n` in {fname} must be the boxed cell the record points at, got {:?} \
+             — a bare scalar here means the closure record is fed 12 bytes from an \
+             8-byte slot",
+            vars.tp(v)
+        );
+        assert!(
+            !vars.is_argument(v),
+            "#685: `n` in {fname} must resolve to a shadow LOCAL, not the argument — \
+             flipping the argument itself would change the call ABI"
+        );
+    }
+
+    // The by-value contract: the argument is still an argument, untouched, so the
+    // caller's value cannot be reached through the cell.
+    let d_nr = p.data.def_nr("n_p685_arg");
+    let vars = &p.data.def(d_nr).variables;
+    let args = vars.arguments();
+    assert_eq!(
+        args.len(),
+        1,
+        "#685: promoting must not change the arity of `p685_arg` (the H5 two-pass \
+         contract catches this too) — got {args:?}"
+    );
+    assert!(
+        matches!(vars.tp(args[0]), loft::data::Type::Integer(_)),
+        "#685: the parameter slot must stay a plain scalar, got {:?}",
+        vars.tp(args[0])
+    );
+}
+
+/// loft#687 — a mutated TEXT capture's STORAGE is decided per BINDING, not per function.
+///
+/// #685 could not serve a mutated `text` PARAMETER in a text-returning function and
+/// refused it by name; plan-22 02d-vii had skipped text boxing whenever the parent
+/// returned text.  That condition was a proxy for one real case — a text local that is
+/// the function's RETURN SOURCE, which the return machinery already gives its own hidden
+/// `&text` out-parameter — and as a proxy it was too wide (it also skipped a text local
+/// the function does not return) and useless for a parameter, which has no indirection to
+/// reuse.  Both halves now ask the binding: `RefVar` means "already has one".
+///
+/// The fixture puts BOTH bindings in ONE text-returning function, which is what no
+/// per-function condition can get right: `keep` is returned (stays inline + write-back),
+/// `side` is not (takes a shared cell).  Values live in
+/// `tests/scripts/687-mutated-text-param-capture.loft`; this asserts the storage, because
+/// mixing the two representations for one binding is what used to segfault, and a value
+/// test cannot see which one a green run picked.
+#[test]
+fn issue_687_mutated_text_capture_storage_is_per_binding() {
+    let src_path = std::env::temp_dir().join("loft_i687_text_storage.loft");
+    std::fs::write(
+        &src_path,
+        "fn ret687(seed: text) -> text { keep = seed; b = fn(k: text) { keep = keep + k; }; b(\"x\"); keep }\n\
+         fn side687(seed: text) -> text { side = seed; b = fn(k: text) { side = side + k; }; b(\"x\"); \"p\" + side }\n\
+         fn par687(n: text) -> text { b = fn(k: text) { n = n + k; }; b(\"x\"); n }\n\
+         fn main() { ret687(\"a\"); side687(\"a\"); par687(\"a\"); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#687: a mutated text parameter in a text-returning fn must COMPILE now: {:?}",
+        p.diagnostics.lines()
+    );
+
+    let is_cell = |record: &str, capture: &str| -> bool {
+        let rec = p.data.def_nr(record);
+        assert_ne!(rec, u32::MAX, "#687: {record} must exist");
+        let a = p.data.attr(rec, capture);
+        assert_ne!(a, usize::MAX, "#687: {record} must carry `{capture}`");
+        matches!(p.data.attr_type(rec, a),
+            loft::data::Type::Reference(d, _) if p.data.def(d).name().starts_with("__cell_"))
+    };
+
+    // All three functions return text, so the retired per-function proxy gave all three
+    // the same answer.  Each binding needs a different one.
+
+    // `keep` IS the returned text, so the return machinery already gave it a hidden
+    // `&text` out-parameter.  Boxing it too is the mismatch that segfaulted: the record
+    // would hold a cell DbRef while the binding stayed a `&text` stack pointer.
+    assert!(
+        !is_cell("__closure_0", "keep"),
+        "#687: a text local that is the function's RETURN SOURCE must stay INLINE in the \
+         record — it already has a hidden `&text` out-parameter, and two indirections for \
+         one binding is the crash"
+    );
+    // `side` is not returned, so nothing else claims it and the shared cell is right.
+    // The retired proxy skipped this one purely as collateral — the "too wide" half.
+    assert!(
+        is_cell("__closure_1", "side"),
+        "#687: a mutated text local the function does NOT return must take a shared cell"
+    );
+    // A parameter has no indirection of its own to reuse, so #685's shadow local takes
+    // the cell like every other type.  This is the combination that used to be refused.
+    assert!(
+        is_cell("__closure_2", "n"),
+        "#687: a mutated text PARAMETER's shadow local must take a shared cell"
+    );
+}
+
+/// loft#685 boundary — a value-const scalar parameter mutated through a closure stays
+/// an error.
+///
+/// The closure-side write never reaches `validate_write`'s const guard (inside the
+/// lambda the name is a capture, not a binding carrying the flag), so the check lives
+/// at the promotion site.  Without it the fix would have quietly handed the closure a
+/// writable cell for a read-only parameter — turning a crash into a silently accepted
+/// contract violation, which is worse.
+#[test]
+fn issue_685_const_scalar_param_mutated_by_closure_is_rejected() {
+    let src_path = std::env::temp_dir().join("loft_i685_const_param.loft");
+    std::fs::write(
+        &src_path,
+        "fn c685(n: const integer) -> integer { b = fn(k: integer) { n = n + k; }; b(1); n }\n\
+         fn main() { c685(1); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    let lines = p.diagnostics.lines().join("\n");
+    assert!(
+        p.diagnostics.level() >= loft::diagnostics::Level::Error,
+        "#685: mutating a const parameter from a closure must stay an error.  \
+         Diagnostics: {lines}"
+    );
+    assert!(
+        lines.contains("const parameter") && lines.contains("from a closure"),
+        "#685: the const refusal must say which binding and why, got: {lines}"
+    );
+}
+
+/// loft#686 — a capture whose type comes from a struct declared LATER in the file.
+///
+/// Two faults composed. `Unknown(0)` is the "no type known" sentinel and names no
+/// definition, but `copy_unknown_fields` read the `0` as a def number and gave the
+/// field whatever definition #0 returns — `text` — so the closure body type-checked
+/// against a type nothing in the program mentions. With that invented type gone the
+/// field became unsized, and `fill_database` registers a struct while SKIPPING an
+/// attribute it cannot size, so `finish` sized the record with the field left at
+/// `position == u16::MAX` and the closure read its capture at offset 65535.
+///
+/// Values live in `tests/scripts/686-forward-declared-capture.loft`; these assert the
+/// two FACTS, because the second fault was INTERMITTENT — a positionless field only
+/// crashes when the bytes at offset 65535 happen to be fatal, so a green value run
+/// proves much less than it looks.
+#[test]
+fn issue_686_forward_declared_capture_is_typed_and_positioned() {
+    let src_path = std::env::temp_dir().join("loft_i686_forward_capture.loft");
+    std::fs::write(
+        &src_path,
+        "fn q686(w: W686) -> float { ch = w.inner; f = fn(x: float) -> float { ch.q * x }; f(2.0) }\n\
+         struct I686 { q: float }\n\
+         struct W686 { inner: I686, tick: integer }\n\
+         fn main() { w = W686 { inner: I686 { q: 5.0 }, tick: 7 }; q686(w); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#686 fixture must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+
+    let rec = p.data.def_nr("__closure_0");
+    assert_ne!(rec, u32::MAX, "#686: the closure record must exist");
+    let a = p.data.attr(rec, "ch");
+    assert_ne!(
+        a,
+        usize::MAX,
+        "#686: the record must carry the `ch` capture"
+    );
+
+    // FACT 1 — the capture is typed as what it is, not as definition #0's return type.
+    match p.data.attr_type(rec, a) {
+        loft::data::Type::Reference(d, _) => assert_eq!(
+            p.data.def(d).name(),
+            "I686",
+            "#686: the capture must resolve to the forward-declared struct, got `{}`",
+            p.data.def(d).name()
+        ),
+        other => panic!(
+            "#686: a struct capture must be a Reference; got {other:?}.  `Text` here is \
+             the original bug — `Unknown(0)` resolved against definition #0"
+        ),
+    }
+
+    // FACT 2 — the record's field is POSITIONED.  Skipping an unsized attribute while
+    // still registering the struct left this at u16::MAX forever, and `finish_type`
+    // will not revisit a sized type, so nothing downstream could repair it.
+    let known = p.data.def(rec).known_type();
+    assert_ne!(
+        known,
+        u16::MAX,
+        "#686: the closure record must be laid out — a record left unregistered makes \
+         `OpDatabase` allocate type u16::MAX"
+    );
+    let pos = p.database.position(known, "ch");
+    assert_ne!(
+        pos,
+        u16::MAX,
+        "#686: the `ch` field must have a real byte position; u16::MAX means the record \
+         was sized while the field was still unresolved, and the closure then reads and \
+         writes at offset 65535 (an INTERMITTENT crash, which is why this asserts the \
+         position rather than trusting a green run)"
+    );
+}
+
+/// loft#686 sibling — `Unknown(0)` must never be resolved as a reference to definition
+/// #0.
+///
+/// It is the codebase-wide "no type known" sentinel (`Type::Unknown(0)` is what every
+/// unresolved expression carries), so reading the `0` as a def number invents a type
+/// from whatever happens to be defined first.  That is a lying fact rather than a
+/// missing one: the field looked resolved, so nothing downstream questioned it, and the
+/// error surfaced as `Unknown field text.cells` on a program with no `text` in sight.
+#[test]
+fn issue_686_nameless_unknown_is_not_resolved_against_def_zero() {
+    let src_path = std::env::temp_dir().join("loft_i686_sentinel.loft");
+    std::fs::write(
+        &src_path,
+        "fn s686(w: S686W) -> float { p = w.inner; f = fn(x: float) -> float { p.q * x }; f(1.0) }\n\
+         struct S686I { q: float }\n\
+         struct S686W { inner: S686I }\n\
+         fn main() { w = S686W { inner: S686I { q: 2.0 } }; s686(w); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+
+    // Definition #0's return type is what the old resolution handed the field.  Whatever
+    // it is, no capture may end up with it by accident.
+    let def_zero_ret = p.data.def(0).returned().clone();
+    let rec = p.data.def_nr("__closure_0");
+    assert_ne!(rec, u32::MAX, "#686: the closure record must exist");
+    let a = p.data.attr(rec, "p");
+    assert_ne!(a, usize::MAX, "#686: the record must carry the `p` capture");
+    let got = p.data.attr_type(rec, a);
+    assert!(
+        !matches!(&got, t if *t == def_zero_ret),
+        "#686: the capture took definition #0's return type ({def_zero_ret:?}) — \
+         `Unknown(0)` was resolved as a def reference again"
+    );
+    assert!(
+        matches!(&got, loft::data::Type::Reference(d, _) if p.data.def(*d).name() == "S686I"),
+        "#686: the capture must be the struct it projects out of, got {got:?}"
+    );
+}
+
+/// loft#683 — an index key whose type comes from a definition declared LOWER in the
+/// file must not be rejected.  The check ran in pass 1, which sees only what is
+/// declared above the current point, so `h[keys_declared_below()]` failed while the
+/// same code with the callee moved up compiled.  Pass 2 knows every signature, but it
+/// only runs when pass 1 is error-free — so the premature error aborted the parse.
+///
+/// The values live in `tests/scripts/683-declaration-order-index-key.loft`.  This is
+/// the must-fail half: deferring the check must not DELETE it.  A genuinely wrong key
+/// type has to stay an error in BOTH declaration orders — a fix that simply stopped
+/// reporting would pass the value test and fail here.
+#[test]
+fn issue_683_wrong_index_key_is_still_rejected_in_both_orders() {
+    // (label, source) — identical programs, differing only in where `t683` sits.
+    let cases = [
+        (
+            "callee above",
+            "struct K683 { k: integer, v: integer }\n\
+             fn t683() -> text { \"z\" }\n\
+             fn u683(h: hash<K683[k]>) -> integer { r = h[t683()]; if r != null { return r.v; } 0 }\n\
+             fn main() { h: hash<K683[k]> = []; u683(h); }\n",
+        ),
+        (
+            "callee below",
+            "struct K683 { k: integer, v: integer }\n\
+             fn u683(h: hash<K683[k]>) -> integer { r = h[t683()]; if r != null { return r.v; } 0 }\n\
+             fn t683() -> text { \"z\" }\n\
+             fn main() { h: hash<K683[k]> = []; u683(h); }\n",
+        ),
+    ];
+    for (label, src) in cases {
+        let src_path = std::env::temp_dir().join("loft_i683_wrong_key.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "#683 ({label}): a text key on an integer-keyed hash must stay an error.  \
+             Diagnostics: {lines}"
+        );
+        assert!(
+            lines.contains("Invalid index key"),
+            "#683 ({label}): the rejection must still be the index-key diagnostic, got: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+}
+
+/// loft#689 — a range asks a collection to walk its keys IN ORDER, so only an ordered
+/// collection can answer it.  `hash` is unordered and `spatial` is Morton-ordered (its
+/// range form is the coordinate slice `s[(x1,y1)..(x2,y2)]`), and neither could step a
+/// scalar range: both walked off the end of their iterator and SIGSEGV'd.  An open
+/// `coll[..]` crashed too — it is the same walk without bounds.
+///
+/// These are now refused at parse time.  The values for the collections that CAN answer
+/// a range live in `tests/scripts/689-keyed-range-slice.loft`; this pins the refusal, and
+/// the second half pins what must keep working — a fix that simply rejected every index
+/// on a `hash` would pass the first half alone.
+#[test]
+fn issue_689_range_is_refused_on_an_unordered_collection() {
+    let refused = [
+        (
+            "hash, bounded range",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; n = 0; for r in h[1..3] { n += r.v; } }\n",
+            "unordered",
+        ),
+        (
+            "hash, open range",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; n = 0; for r in h[..] { n += r.v; } }\n",
+            "unordered",
+        ),
+        (
+            "spatial, scalar range",
+            "struct S689 { x: integer, y: integer, v: integer }\n\
+             fn main() { s: spatial<S689[x,y]> = []; n = 0; for r in s[1..3] { n += r.v; } }\n",
+            "COORDINATE slice",
+        ),
+    ];
+    for (label, src, needle) in refused {
+        let src_path = std::env::temp_dir().join("loft_i689_refused.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "#689 ({label}): a range on an unordered collection must be refused, not run.  \
+             Diagnostics: {lines}"
+        );
+        assert!(
+            lines.contains(needle),
+            "#689 ({label}): the refusal must say WHY and what to use instead \
+             (expected {needle:?}), got: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+
+    // The forms a hash / spatial collection CAN answer must still compile.
+    let allowed = [
+        (
+            "hash single-key lookup",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; r = h[1]; if r != null { } }\n",
+        ),
+        (
+            "hash whole-collection iteration",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; n = 0; for r in h { n += r.v; } }\n",
+        ),
+        (
+            "spatial coordinate slice",
+            "struct S689 { x: integer, y: integer, v: integer }\n\
+             fn main() { s: spatial<S689[x,y]> = []; n = 0; \
+             for r in s[(0,0)..(5,5)] { n += r.v; } }\n",
+        ),
+    ];
+    for (label, src) in allowed {
+        let src_path = std::env::temp_dir().join("loft_i689_allowed.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "#689 ({label}): this form is what the refusal tells users to write — \
+             it must still compile.  Diagnostics: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+}
+
+/// loft#690 — a `for` loop whose variable name is already bound to a DIFFERENT type
+/// must be rejected, not silently reuse the earlier binding.
+///
+/// The reuse check existed but compared with `Type::is_same`, which answers "same KIND
+/// of type": it reports any two `Reference`s as the same whatever struct they name.  So
+/// `for r in as_a { … }  for r in as_b { … }` slipped through, `add_variable` handed the
+/// second loop the FIRST binding — old var, old type, old dep — and the body read B's
+/// records through A's layout.  No diagnostic and no crash, just wrong numbers.
+///
+/// This asserts the DIAGNOSTIC rather than values on purpose: whether the corruption is
+/// *visible* depends on the two layouts.  Two structs with identical fields returned the
+/// right answer while still being undefined, so a value test would have passed on three
+/// of the four shapes below and proved almost nothing.
+#[test]
+fn issue_690_loop_variable_may_not_change_type() {
+    let rejected = [
+        (
+            "two struct types",
+            "struct A690 { k: integer, v: integer }\n\
+             struct B690 { k: text, v: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,v:10}]; b: vector<B690> = [B690{k:\"x\",v:1}];\n\
+             n = 0; for r in a { n += r.v; } for r in b { n += r.v; } }\n",
+        ),
+        (
+            "two structs with IDENTICAL fields — still different types",
+            "struct A690 { k: integer, v: integer }\n\
+             struct C690 { k: integer, v: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,v:10}]; c: vector<C690> = [C690{k:2,v:20}];\n\
+             n = 0; for r in a { n += r.v; } for r in c { n += r.v; } }\n",
+        ),
+        (
+            "two enum types",
+            "enum E690 { Red, Green }\n\
+             enum F690 { Up, Down }\n\
+             fn main() { a: vector<E690> = [E690.Red]; b: vector<F690> = [F690.Up];\n\
+             n = 0; for r in a { n += 1; } for r in b { n += 1; } }\n",
+        ),
+        (
+            "nested vectors of different element structs",
+            "struct A690 { v: integer }\n\
+             struct B690 { v: integer }\n\
+             fn main() { a: vector<vector<A690>> = [[A690{v:1}]]; \
+             b: vector<vector<B690>> = [[B690{v:2}]];\n\
+             n = 0; for r in a { n += len(r); } for r in b { n += len(r); } }\n",
+        ),
+    ];
+    for (label, src) in rejected {
+        let src_path = std::env::temp_dir().join("loft_i690_rejected.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "#690 ({label}): reusing a loop variable at a different type must be an error, \
+             not a silent reinterpretation.  Diagnostics: {lines}"
+        );
+        assert!(
+            lines.contains("loop variable 'r'") && lines.contains("previously used as"),
+            "#690 ({label}): the diagnostic must name the variable and the earlier type, \
+             got: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+
+    // The tolerances are load-bearing: loft has FLAT variable scoping, so reusing one
+    // loop name at the SAME type is idiomatic and must keep compiling.  Tightening the
+    // comparison to `is_equal` must not reach any of these.
+    let accepted = [
+        (
+            "same struct, two loops",
+            "struct A690 { v: integer }\n\
+             fn main() { a: vector<A690> = [A690{v:1}]; b: vector<A690> = [A690{v:2}];\n\
+             n = 0; for r in a { n += r.v; } for r in b { n += r.v; } }\n",
+        ),
+        (
+            "same struct through DIFFERENT collection kinds",
+            "struct A690 { k: integer, v: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,v:10}]; s: sorted<A690[k]> = []; \
+             s += A690{k:2,v:20};\n\
+             n = 0; for r in a { n += r.v; } for r in s { n += r.v; } }\n",
+        ),
+        (
+            "integers in both loops (differing ranges stay the same type)",
+            "fn main() { a: vector<integer> = [1,2]; b: vector<integer> = [3];\n\
+             n = 0; for r in a { n += r; } for r in b { n += r; } }\n",
+        ),
+        (
+            "text in both loops (differing deps stay the same type)",
+            "fn main() { a: vector<text> = [\"xy\"]; b: vector<text> = [\"z\"];\n\
+             n = 0; for r in a { n += len(r); } for r in b { n += len(r); } }\n",
+        ),
+        (
+            "`_` stays exempt across different structs",
+            "struct A690 { v: integer }\n\
+             struct B690 { v: integer }\n\
+             fn main() { a: vector<A690> = [A690{v:1}]; b: vector<B690> = [B690{v:2}];\n\
+             n = 0; for _ in a { n += 1; } for _ in b { n += 1; } }\n",
+        ),
+    ];
+    for (label, src) in accepted {
+        let src_path = std::env::temp_dir().join("loft_i690_accepted.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "#690 ({label}): this reuse is idiomatic under loft's flat scoping and must \
+             still compile.  Diagnostics: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+}

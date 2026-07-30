@@ -1,0 +1,192 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#688): a local returned from ONE branch leaked its store on
+// every path that returned something else — one orphan per call, so a parse-one-
+// record-per-line loop exhausted the 65,535-entry store table and died.  It was
+// invisible below 65k iterations, so it passed every test we had and first showed
+// up on a country-sized OpenStreetMap extract.
+//
+// Cause: `classify_ret_promotion` renamed the returned local to BE the caller's
+// return buffer (NRVO) and `become_argument`'d it into scope 0.  Scope 0 is "never
+// freed here" by definition — `scopes::variables` stops at it, because a true
+// parameter belongs to the caller.  But this local is not a parameter: the callee
+// MINTS its store with `OpDatabase`, and the body tail is a different return site
+// delivering a different store.  On that path the minted store was returned by
+// nobody and freed by nobody.
+//
+// Fix: the buffer is now routed through the same hoist + `OpFreeRefIfDistinct`
+// leg the null-arm join already used, so each return path frees it unless it is
+// the store that path transfers.  Refusing the promotion instead was tried and is
+// too wide — an explicit `return out;` is a mid-body return even when it is a
+// function's only exit, where the rename is sound and the sandbox admission walk
+// reads it to know a write escapes.
+//
+// This file is its own gate: `run_test`'s leak check fails on ANY store left
+// unfreed at program exit, so a single leaked candidate here is a test failure.
+// Every function is called in a LOOP, because the fault is one store per call and
+// a single call leaks one store that the exit sweep could plausibly excuse.
+//
+// Axes: whether the abandoned local owns a COLLECTION (the issue said it had to —
+// it does not), whether the early branch is ever TAKEN, the NUMBER of candidate
+// locals, and the return type (struct / struct-with-vector).  Controls at the end
+// pin the shapes that must keep their NRVO rename.
+
+struct P688    { lat: float, lon: float }
+struct Way688  { name: text, coords: vector<P688> }
+struct Flat688 { name: text, id: integer }
+struct Node688 { name: text, kid: Flat688 }
+
+// ── the reported shape: a struct owning a collection, built then abandoned ────
+
+fn w688_build(k: integer) -> Way688 {
+  none = Way688 { name: "", coords: [] };
+  if k < 0 { return none; }
+  v: vector<P688> = [];
+  for i in 0..3 { v += [P688 { lat: 52.0, lon: 6.0 + i }]; }
+  Way688 { name: "x", coords: v }
+}
+
+// NO collection anywhere — the issue reported the collection as necessary, but a
+// plain struct leaks identically.  The trigger is the branch-return, not the field.
+fn f688_flat(k: integer) -> Flat688 {
+  none = Flat688 { name: "", id: 0 };
+  if k < 0 { return none; }
+  Flat688 { name: "x", id: 1 }
+}
+
+// The early branch is actually TAKEN for some inputs: the leak is one per call
+// that returns something OTHER than the local, so both legs must stay clean.
+fn f688_taken(k: integer) -> Flat688 {
+  none = Flat688 { name: "n", id: 7 };
+  if k < 3 { return none; }
+  Flat688 { name: "x", id: 1 }
+}
+
+// TWO candidate locals and three exit paths — the fall-through returns neither.
+fn f688_two(k: integer) -> Flat688 {
+  a = Flat688 { name: "a", id: 2 };
+  b = Flat688 { name: "b", id: 3 };
+  if k < 0 { return a; }
+  if k > 99 { return b; }
+  Flat688 { name: "x", id: 1 }
+}
+
+// ── sibling shapes: every one of these leaked identically before the fix ──────
+
+// The tail is an explicit `return` too, not a bare trailing expression.
+fn f688_tail_return(k: integer) -> Flat688 {
+  none = Flat688 { name: "", id: 0 };
+  if k < 0 { return none; }
+  return Flat688 { name: "x", id: 1 };
+}
+
+// The early return sits inside a LOOP, so the free cannot be pinned to the
+// straight-line block the reported shape happened to use.
+fn f688_in_loop(k: integer) -> Flat688 {
+  none = Flat688 { name: "", id: 0 };
+  for j in 0..3 { if k < 0 && j >= 0 { return none; } }
+  Flat688 { name: "x", id: 1 }
+}
+
+// A record owning another record — the orphan is a whole subtree, not one store.
+fn f688_nested(k: integer) -> Node688 {
+  none = Node688 { name: "", kid: Flat688 { name: "", id: 0 } };
+  if k < 0 { return none; }
+  Node688 { name: "x", kid: Flat688 { name: "y", id: 1 } }
+}
+
+// The buffer is minted AFTER an earlier return, so on that path it is still the
+// null sentinel when the conditional free runs — `free` must ignore it rather
+// than treat 65535 as a store number.
+fn f688_late_mint(k: integer) -> Flat688 {
+  if k > 99 { return Flat688 { name: "e", id: 9 }; }
+  none = Flat688 { name: "", id: 0 };
+  if k < 0 { return none; }
+  Flat688 { name: "x", id: 1 }
+}
+
+// One path returns a RECURSIVE call's store — a return source that is not a
+// local of this frame at all.
+fn f688_recursive(k: integer) -> Flat688 {
+  none = Flat688 { name: "", id: 0 };
+  if k < 0 { return none; }
+  if k > 0 { return f688_recursive(k - 1); }
+  Flat688 { name: "x", id: 1 }
+}
+
+// ── controls: shapes whose promotion is SOUND and must keep working ───────────
+
+// The local is the value on EVERY returning path — the rename is correct here,
+// and this control tells a lost fix from a lost NRVO.
+fn f688_sole(k: integer) -> Flat688 {
+  only = Flat688 { name: "s", id: k };
+  if k < 0 { return only; }
+  only
+}
+
+// Built, never returned at all: a plain local on every path, and it never leaked.
+fn f688_unused(k: integer) -> Flat688 {
+  spare = Flat688 { name: "u", id: 0 };
+  Flat688 { name: "x", id: k }
+}
+
+// Construction on the returned path — the workaround the reporter fell back to.
+fn f688_inline(k: integer) -> Flat688 {
+  if k < 0 { return Flat688 { name: "", id: 0 }; }
+  Flat688 { name: "x", id: 1 }
+}
+
+fn main() {
+  // Enough calls that a per-call orphan is unmistakable, few enough to stay fast.
+  ways = 0;
+  for i in 0..20 { w = w688_build(i); ways += len(w.coords); }
+  assert(ways == 60, "struct-with-collection: 20 calls x 3 coords, got {ways}");
+
+  flat = 0;
+  for i in 0..20 { r = f688_flat(i); flat += r.id; }
+  assert(flat == 20, "no collection: 20 calls x id 1, got {flat}");
+
+  taken = 0;
+  for i in 0..20 { r = f688_taken(i); taken += r.id; }
+  assert(taken == 38, "branch taken 3x (7 each) + 17x id 1, got {taken}");
+
+  two = 0;
+  for i in 0..20 { r = f688_two(i); two += r.id; }
+  assert(two == 20, "two candidates, fall-through returns neither, got {two}");
+
+  sole = 0;
+  for i in 0..20 { r = f688_sole(i); sole += r.id; }
+  assert(sole == 190, "sole-return control: 0+1+..+19, got {sole}");
+
+  unused = 0;
+  for i in 0..20 { r = f688_unused(i); unused += r.id; }
+  assert(unused == 190, "unused-local control: 0+1+..+19, got {unused}");
+
+  inline = 0;
+  for i in 0..20 { r = f688_inline(i); inline += r.id; }
+  assert(inline == 20, "inline-construction control, got {inline}");
+
+  // The sibling shapes — each leaked one store per call before the fix.
+  tail = 0;
+  for i in 0..20 { rt = f688_tail_return(i); tail += rt.id; }
+  assert(tail == 20, "explicit tail return, got {tail}");
+
+  inloop = 0;
+  for i in 0..20 { ri = f688_in_loop(i); inloop += ri.id; }
+  assert(inloop == 20, "early return inside a loop, got {inloop}");
+
+  nested = 0;
+  for i in 0..20 { rn = f688_nested(i); nested += rn.kid.id; }
+  assert(nested == 20, "nested record, got {nested}");
+
+  late = 0;
+  for i in 0..20 { rl = f688_late_mint(i); late += rl.id; }
+  assert(late == 20, "buffer minted after an earlier return, got {late}");
+
+  rec = 0;
+  for i in 0..20 { rr = f688_recursive(i); rec += rr.id; }
+  assert(rec == 20, "recursive call on one path, got {rec}");
+
+  println("688-abandoned-return-candidate-leak ok");
+}

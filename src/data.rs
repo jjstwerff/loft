@@ -1275,10 +1275,36 @@ impl Deps {
     }
 
     /// Closure auto-Reference share-sentinel (`vectors.rs` — a stand-in
-    /// for a not-yet-known OUTER var; frame space).
+    /// for a not-yet-known OUTER var; frame space).  Says TWO things: the
+    /// attribute stores a 12-byte `DbRef` rather than inline bytes, AND the
+    /// closure record ADOPTS the captured store — `free_named`'s cascade
+    /// reclaims it when the record dies (which is what lets an escaping
+    /// factory closure outlive the frame that minted the capture, #323).
     #[must_use]
     pub fn share_sentinel() -> Deps {
         Self::frame(vec![u16::MAX])
+    }
+
+    /// The BORROWED half of [`Deps::share_sentinel`] (#682): identical 12-byte
+    /// `DbRef` storage, but the captured store stays owned by whoever owned it
+    /// — a parameter's caller, or the vector a projection local views into — so
+    /// the record's cascade must NOT reclaim it.  Adoption is only available
+    /// when the defining frame owned the capture in the first place; without
+    /// this second marker the one sentinel had to mean both, and a captured
+    /// parameter was freed out from under its caller.
+    #[must_use]
+    pub fn borrowed_share_sentinel() -> Deps {
+        Self::frame(vec![u16::MAX, u16::MAX])
+    }
+
+    /// Does this closure-record attribute carry the BORROWED share marker
+    /// ([`Deps::borrowed_share_sentinel`]) rather than the adopting one?  The
+    /// two layout producers — `typedef::fill_database` (interpreter) and
+    /// `generation` (native) — ask this to pick the storage shape, so both
+    /// backends agree on which captures the cascade may free.
+    #[must_use]
+    pub fn is_borrowed_share(&self) -> bool {
+        self.items == [u16::MAX, u16::MAX]
     }
 
     /// In-band per-entry tag (H2 step 5): marks a callee-internal
@@ -1818,6 +1844,20 @@ impl Type {
         }
     }
 
+    /// Do these two types belong to the same KIND — *not* are they the same type.
+    ///
+    /// Any two `Reference`s are "same" here whatever struct they name, and likewise any
+    /// two `Enum`s or `Vector`s; only the outer constructor is compared. That is what
+    /// callers asking "is this the same shape of thing" want, and it is a trap for
+    /// callers asking "may this binding hold that value" — loft#690: the loop-variable
+    /// reuse check asked with `is_same`, so `for r in as_a { … } for r in as_b { … }`
+    /// over two different structs passed, and the second loop then read B's records
+    /// through A's layout with no diagnostic and no crash.
+    ///
+    /// **Use [`Type::is_equal`] for type IDENTITY** — it compares the struct a
+    /// `Reference` names and the element of a `Vector`, while still ignoring the
+    /// differences that are not type differences (integer ranges, text deps, fn-ref
+    /// capture lists).
     #[must_use]
     pub fn is_same(&self, other: &Type) -> bool {
         // @P352: two `Type::Function`s compare by SHAPE (params + return),
@@ -4326,6 +4366,36 @@ impl Data {
         } else {
             self.definitions[d_nr as usize].attributes[a_nr].typedef = tp;
         }
+    }
+
+    /// #682 — downgrade a closure-record capture attribute from the ADOPTING
+    /// share marker ([`Deps::share_sentinel`]) to the BORROWED one, once scope
+    /// analysis has settled who really owns the captured store.
+    ///
+    /// Separate from [`Data::set_attr_type`] (which refuses to overwrite a type
+    /// that is already set) because this rewrites only the dep MARKER of an
+    /// already-typed `Reference` attribute.  The storage shape — 12 bytes,
+    /// align 4 — is the same either way, which is what makes rewriting it after
+    /// the record has been laid out safe: no position, size or alignment moves,
+    /// only the cascade's free decision.
+    pub fn mark_capture_borrowed(&mut self, record: u32, a_nr: usize) {
+        if let Type::Reference(_, deps) =
+            &mut self.definitions[record as usize].attributes[a_nr].typedef
+        {
+            *deps = Deps::borrowed_share_sentinel();
+        }
+    }
+
+    /// #687 — retype a closure-record capture attribute whose storage the parent's
+    /// pass-1 body end has just settled.
+    ///
+    /// Separate from [`Data::set_attr_type`] (which refuses to overwrite a set type)
+    /// because the lambda's own epilogue has to write SOMETHING before the parent's
+    /// body finishes, and only the body end knows whether the captured binding ended
+    /// up with its own indirection.  Safe to run there: the record's db layout is
+    /// built by `fill_all` at the end of the pass, after this.
+    pub fn retype_capture_attr(&mut self, record: u32, a_nr: usize, tp: Type) {
+        self.definitions[record as usize].attributes[a_nr].typedef = tp;
     }
 
     #[must_use]

@@ -21,6 +21,87 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — declaration order no longer changes what a closure sees
+
+Loft lets you use a struct before you declare it, and that is meant to be invisible.
+Inside a lambda it was not:
+
+```
+fn take(w: World) -> float {
+  chunk = w.chunks[1];                                   // World declared further down
+  f = fn(x: float) -> float { chunk.cells[2].v * x };
+  f(2.0)
+}
+```
+
+That failed with `Unknown field text.cells` — a complaint about `text`, in a program with
+no `text` anywhere. Moving the `struct World` above the function fixed it, which is a
+confusing thing to have to discover.
+
+The capture now resolves exactly as it does when the declaration comes first, whatever it
+was projected out of — a field, a vector element, a whole vector, or a scalar read out of
+one. Declaration order is invisible again.
+
+### Unreleased — the last corner of mutable text captures
+
+Making mutated parameter captures work (below) left exactly one combination refused with
+a message: mutating a captured `text` **parameter** inside a function that itself returns
+`text`. That works now too, so the rule for closures is finally uniform — a mutated
+capture behaves the same whether it started as a local or a parameter, and whatever the
+enclosing function returns.
+
+What was behind it: a text value the function *returns* is already handled specially (the
+caller supplies the buffer), and the compiler had been keying off "does this function
+return text?" rather than "is this the value being returned?". The first question is the
+wrong one — a function can return one text while a closure mutates another, and only the
+second question tells them apart.
+
+### Unreleased — a closure can now count with one of your parameters
+
+The accumulator closure is an old friend:
+
+```
+total = 0;
+add = fn(n: integer) { total = total + n; };
+```
+
+It worked over a local, and crashed the moment `total` was a **parameter** of the
+enclosing function — with a garbage function id, a segfault, or, on the compiled
+backend, generated code that would not build. Every scalar type was affected, and you
+did not even have to call the closure: creating it was enough.
+
+Now a mutated parameter behaves like a mutated local, which is what it looks like. The
+closure's writes are visible for the rest of the function, and your **caller's value is
+untouched** — a scalar parameter is still passed by value. Mutating a `const` parameter
+through a closure is refused, as it is anywhere else.
+
+### Unreleased — a lambda that captures your value no longer eats it
+
+Handing a lambda a value from the surrounding scope is the ordinary way to give a
+library a function it can call:
+
+```
+sampler = fn(x: float, z: float) -> float { terrain_y(x, z, world) };
+rest = ground_axle(sampler, cx, cz, yaw, half, radius);
+```
+
+If `world` was a **parameter** of the enclosing function, that closure destroyed the
+caller's `world`. Nothing said so at the time — the value stayed readable for a
+while — and the failure landed later, in some unrelated function that happened to
+touch the same value next, with a crash pointing hundreds of lines away from the
+lambda. Capturing a value that only *views* into another (`chunk = world.chunks[1]`,
+or a `for` loop's element) did the same thing.
+
+The rule is now the one you would expect, and it needs nothing from you: capturing a
+value the function **owns** hands it to the closure, which is what lets a factory
+return a closure over its own local; capturing a **parameter** or a view **borrows**,
+because the real owner outlives the closure either way. So passing a value into a
+function that captures it in a lambda cannot damage your copy, and a returned closure
+never reads something already freed.
+
+Nothing you can write got stricter — code that avoided closures over store-backed
+values by hand keeps working, and can now stop avoiding them.
+
 ### Unreleased — changing a value you matched on now sticks
 
 Destructuring in a `match` gives you a **view** of what you matched, so writing

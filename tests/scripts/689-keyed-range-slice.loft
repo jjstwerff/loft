@@ -1,0 +1,143 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#689): a keyed range slice over a `sorted<…>` collection crashed —
+// SIGSEGV on the interpreter, an out-of-bounds in `key_compare` on `--native`.
+//
+// Two independent faults, one construct:
+//
+//  1. `fill_iter` BAKES the collection's key descriptors into the `OpIterate` operand,
+//     but that table is only filled by `determine_keys` at the end of a parse.  A
+//     collection type first created in PASS 2 — `sorted<Rec[k]>` here — therefore baked
+//     an EMPTY list, and the range walk then compared against `keys[0]` on it.  The keys
+//     are now determined on demand at the bake site (`determine_keys_for`), the same
+//     shape as `lay_out_record` for a pass-2-created struct's layout (loft#686).
+//     `index<…>` escaped only because its type happened to exist before pass 1's
+//     `finish()`, and an OPEN range never compares — which is why `coll[..]` looked fine.
+//
+//  2. The native `OpIterate` had no "no bound on this side" case for a sorted
+//     collection, so an open END finished at position 0 and the loop visited NOTHING:
+//     `for r in s[1..]` summed to zero on `--native` while the interpreter returned the
+//     right answer.  A wrong ANSWER on one backend only, which is why it needs value
+//     assertions rather than a does-it-crash check.
+//
+// Axes: the collection kind (`sorted` / `index`), which SIDE is bounded (both / open
+// end / open start / fully open), the key type (integer, text), the element COUNT
+// (including empty, which took a different panic), and direction (forward / `rev`).
+// Every expectation below is hand-computed; the upper bound is EXCLUSIVE.
+//
+// Every loop below uses a DISTINCT variable name on purpose: reusing one name across
+// collections of different struct types silently corrupts the reader, which is a
+// separate pre-existing defect (it needs no range at all) filed on its own.
+//
+// Also not covered here: `rev(coll[lo..])` ignores its lower bound on BOTH backends — a
+// separate defect this fix made reachable (the crash used to hide it), filed on its own.
+
+struct R689 { k: integer, v: integer }
+struct T689 { k: text,    v: integer }
+
+fn main() {
+  // keys 1,2,3 — values 10,20,30
+  s: sorted<R689[k]> = [];
+  s += R689 { k: 1, v: 10 };
+  s += R689 { k: 2, v: 20 };
+  s += R689 { k: 3, v: 30 };
+
+  x: index<R689[k]> = [];
+  x += R689 { k: 1, v: 10 };
+  x += R689 { k: 2, v: 20 };
+  x += R689 { k: 3, v: 30 };
+
+  // ── sorted: the reported shape and every bound form ──────────────────────
+  n = 0;
+  for a1 in s[1..3] { n += a1.v; }
+  assert(n == 30, "sorted [1..3) is keys 1,2 = 30, got {n}");
+
+  n2 = 0;
+  for a2 in s[1..] { n2 += a2.v; }
+  assert(n2 == 60, "sorted [1..] is every key = 60, got {n2}");
+
+  n3 = 0;
+  for a3 in s[..3] { n3 += a3.v; }
+  assert(n3 == 30, "sorted [..3) is keys 1,2 = 30, got {n3}");
+
+  n4 = 0;
+  for a4 in s[..] { n4 += a4.v; }
+  assert(n4 == 60, "sorted [..] is every key = 60, got {n4}");
+
+  n5 = 0;
+  for a5 in s[2..3] { n5 += a5.v; }
+  assert(n5 == 20, "sorted [2..3) is key 2 only = 20, got {n5}");
+
+  n6 = 0;
+  for a6 in s[4..9] { n6 += a6.v; }
+  assert(n6 == 0, "sorted range past every key is empty, got {n6}");
+
+  // ── index: the control that never crashed, same answers ──────────────────
+  m = 0;
+  for b1 in x[1..3] { m += b1.v; }
+  assert(m == 30, "index [1..3) is keys 1,2 = 30, got {m}");
+
+  m2 = 0;
+  for b2 in x[1..] { m2 += b2.v; }
+  assert(m2 == 60, "index [1..] is every key = 60, got {m2}");
+
+  m3 = 0;
+  for b3 in x[..] { m3 += b3.v; }
+  assert(m3 == 60, "index [..] is every key = 60, got {m3}");
+
+  // ── a TEXT key: the fault was never integer-specific ─────────────────────
+  t: sorted<T689[k]> = [];
+  t += T689 { k: "ant", v: 1 };
+  t += T689 { k: "bee", v: 2 };
+  t += T689 { k: "cow", v: 4 };
+
+  tn = 0;
+  for c1 in t["ant".."cow"] { tn += c1.v; }
+  assert(tn == 3, "text range [ant..cow) is ant,bee = 3, got {tn}");
+
+  tn2 = 0;
+  for c2 in t[..] { tn2 += c2.v; }
+  assert(tn2 == 7, "text range [..] is every key = 7, got {tn2}");
+
+  // ── an EMPTY collection took a different panic than a populated one ──────
+  e: sorted<R689[k]> = [];
+  en = 0;
+  for d1 in e[1..3] { en += d1.v; }
+  assert(en == 0, "a range over an empty sorted collection yields nothing, got {en}");
+
+  en2 = 0;
+  for d2 in e[..] { en2 += d2.v; }
+  assert(en2 == 0, "an open range over an empty sorted collection yields nothing, got {en2}");
+
+  // ── direction: `rev` reaches the same cursor set-up from the other end ───
+  // Order matters here, so build the visited-key string rather than a sum.
+  rs = "";
+  for g1 in rev(s[..]) { rs = "{rs}{g1.k}"; }
+  assert(rs == "321", "rev over a fully open sorted range, got {rs}");
+
+  rs2 = "";
+  for g2 in rev(s[..3]) { rs2 = "{rs2}{g2.k}"; }
+  assert(rs2 == "21", "rev [..3) is keys 2,1, got {rs2}");
+
+  rs3 = "";
+  for g3 in rev(s[1..3]) { rs3 = "{rs3}{g3.k}"; }
+  assert(rs3 == "21", "rev [1..3) is keys 2,1, got {rs3}");
+
+  // Forward order, for the same reason.
+  fs = "";
+  for g4 in s[..] { fs = "{fs}{g4.k}"; }
+  assert(fs == "123", "forward open range visits ascending, got {fs}");
+
+  // ── single-key lookup and whole-collection iteration must be untouched ───
+  one = s[2];
+  assert(one != null, "a present key still looks up");
+  assert(one.v == 20, "single-key lookup on a sorted collection, got {one.v}");
+  assert(s[9] == null, "an absent key is still null");
+
+  all = 0;
+  for g5 in s { all += g5.v; }
+  assert(all == 60, "plain iteration is unaffected, got {all}");
+
+  println("689-keyed-range-slice ok");
+}

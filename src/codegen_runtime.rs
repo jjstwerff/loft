@@ -846,44 +846,66 @@ pub fn OpIterate(
     match on & 63 {
         2 => {
             // sorted vector: arg = element size in bytes
+            //
+            // An EMPTY from/till means "no constraint on this side" and must be read as
+            // the collection's own edge — `sorted_find` with no key returns 0, which is a
+            // real position, so using it unguarded made an open END finish at 0 and the
+            // loop visit nothing.  `for r in s[1..]` and `s[..]` silently summed to zero
+            // on `--native` while the interpreter (`State::iterate`, which has always had
+            // these cases) returned the right answer: a wrong ANSWER, not a crash, and
+            // only on one backend (loft#689).  Mirror `State::iterate` exactly.
             let size = arg as u16;
+            let sorted_rec_raw = all[data.store_nr as usize].get_i32_raw(data.rec, data.pos);
+            let sorted_rec = if sorted_rec_raw <= 0 {
+                0
+            } else {
+                sorted_rec_raw as u32
+            };
+            let vec_len = if sorted_rec == 0 {
+                0
+            } else {
+                all[data.store_nr as usize].get_u32_raw(sorted_rec, 4)
+            };
             if reverse {
-                let s = vector::sorted_find(&data, ex, size, all, keys, till).0 + u32::from(!ex);
-                let f = vector::sorted_find(&data, ex, size, all, keys, from).0 + 1;
+                // loft#691 (and see `State::iterate`, the shared contract) — `start` is
+                // one PAST the first element to visit (`>= vec_len` is the not-started
+                // sentinel) and `finish` is the LOWEST position to visit.  The lower
+                // bound is always INCLUSIVE — `ex` describes the upper one — so it is
+                // searched with `true`, exactly as the forward branch does.
+                let s = if till.is_empty() {
+                    vec_len
+                } else {
+                    vector::sorted_find(&data, ex, size, all, keys, till).0
+                };
+                let f = if from.is_empty() {
+                    0
+                } else {
+                    vector::sorted_find(&data, true, size, all, keys, from).0
+                };
                 pack_iter(s, f)
             } else {
-                let s = vector::sorted_find(&data, true, size, all, keys, from).0;
+                let s = if from.is_empty() {
+                    0
+                } else {
+                    vector::sorted_find(&data, true, size, all, keys, from).0
+                };
                 let start = if s == 0 { u32::MAX } else { s - 1 };
-                let (t, cmp) = vector::sorted_find(&data, ex, size, all, keys, till);
-                let finish = if ex || cmp { t } else { t + 1 };
+                let finish = if till.is_empty() {
+                    vec_len
+                } else {
+                    let (t, cmp) = vector::sorted_find(&data, ex, size, all, keys, till);
+                    if ex || cmp { t } else { t + 1 }
+                };
                 pack_iter(start, finish)
             }
         }
         1 => {
-            // red-black tree / index: arg = fields offset
-            let fields = arg as u16;
-            let store = crate::keys::store(&data, all);
-            if reverse {
-                // start = one past last element, finish = one before first.
-                let till_node = tree::find(&data, true, fields, all, keys, till);
-                let start = if ex {
-                    tree::next(store, &iter_ref(&data, till_node, fields))
-                } else {
-                    let till_match = tree::find(&data, false, fields, all, keys, till);
-                    tree::next(store, &iter_ref(&data, till_match, fields))
-                };
-                let finish = tree::find(&data, true, fields, all, keys, from);
-                pack_iter(start, finish)
-            } else {
-                let start = tree::find(&data, true, fields, all, keys, from);
-                let t = tree::find(&data, ex, fields, all, keys, till);
-                let finish = if ex {
-                    t
-                } else {
-                    tree::previous(store, &iter_ref(&data, t, fields))
-                };
-                pack_iter(start, finish)
-            }
+            // red-black tree / index: arg = fields offset.  The cursor derivation is
+            // shared with `State::iterate` (loft#691) — the two had their own copies
+            // and drifted apart.
+            let (start, finish) =
+                tree::range_cursors(&data, arg as u16, all, keys, from, till, ex, reverse);
+            pack_iter(start, finish)
         }
         3 | 4 => {
             // C60 piece 3: Ordered iteration — `data` points at a
@@ -945,6 +967,12 @@ pub fn OpStep(
             };
             if reverse {
                 vector::vector_step_rev(&data, &mut pos, all);
+                // loft#691 — mirror of the forward `pos >= finish` below: stop once the
+                // cursor drops below the lowest in-range position.  `finish == 0` (no
+                // lower bound) never trips.
+                if pos != i32::MAX && (pos as u32) < finish {
+                    pos = i32::MAX;
+                }
                 if pos == i32::MAX {
                     finish = u32::MAX;
                 }

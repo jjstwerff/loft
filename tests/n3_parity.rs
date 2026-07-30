@@ -517,9 +517,21 @@ fn interdependent_libraries_are_fully_native() {
 /// struct-literal `make_v3` ignores its retbuf and returns a fresh store — orphaning
 /// the fallback, one leaked store per call, ONLY across the interp↔cdylib boundary
 /// (whole-native has no bridge and never leaked).  The fix frees the orphaned
-/// fallback after the call; `LOFT_NO_BRIDGE_ORPHAN_FREE=1` reproduces the pre-fix
-/// leak, which is the differential POSITIVE CONTROL here (proves the assertion is
-/// not vacuous and that the fix is load-bearing).
+/// fallback after the call.
+///
+/// loft#688 added a SECOND, upstream guard against the same orphan: the NRVO return
+/// buffer is a promoted local that lives in the never-swept argument scope, and it is
+/// now freed at each return that delivers a different store.  The bridge's fallback
+/// dest is exactly that shape, so `LOFT_NO_BRIDGE_ORPHAN_FREE=1` no longer reproduces
+/// the leak — it was the differential positive control here, and it is now defence in
+/// depth instead.  Both cells therefore assert leak-free: if EITHER mechanism regresses
+/// into leaking, this fails.
+///
+/// Non-vacuity of the leak instrument itself now rides on
+/// `tests/scripts/688-abandoned-return-candidate-leak.loft`, which was verified to
+/// report leaks against a pre-fix binary and is swept by `run_test`'s leak gate.
+/// The bridge-level free may now be redundant for this shape; proving it dead needs
+/// its own sentinel sweep, so it stays.
 #[test]
 fn shared_bridge_nested_return_no_orphan_leak() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -590,14 +602,20 @@ fn shared_bridge_nested_return_no_orphan_leak() {
         fixed.stderr
     );
 
-    // Positive control: with the orphan-free disabled the pre-fix leak MUST return —
-    // otherwise the assertion above is vacuous (it would pass even if nothing leaked).
+    // Defence in depth: with the bridge's own orphan-free disabled, loft#688's
+    // ownership sweep must still reclaim the fallback dest — it is an NRVO buffer
+    // that this call does not deliver, which is precisely what that sweep frees.
     let control = run_interp(&[("LOFT_NO_BRIDGE_ORPHAN_FREE", "1")]);
     assert!(control.success, "control run failed:\n{}", control.stderr);
+    assert_eq!(
+        control.stdout.trim(),
+        "1225",
+        "the second guard must not change the value"
+    );
     assert!(
-        control.stderr.contains(LEAK_MARK),
-        "positive control did NOT reproduce the leak with LOFT_NO_BRIDGE_ORPHAN_FREE=1 — \
-         the regression guard is vacuous (the bridge path may have changed).\nstderr:\n{}",
+        !control.stderr.contains(LEAK_MARK),
+        "loft#688 REGRESSION: with the bridge orphan-free disabled the ownership sweep \
+         no longer reclaims the fallback dest, so the orphan is back.\nstderr:\n{}",
         control.stderr
     );
 

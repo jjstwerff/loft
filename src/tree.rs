@@ -64,14 +64,142 @@ pub fn find(
         );
         rec = if to >= 0 { to as u32 } else { 0 };
     }
+    result.pos = u32::from(fields);
     if cmp == Ordering::Equal {
-        result.pos = u32::from(fields);
         if before {
             return previous(store, &result);
         }
         return next(store, &result);
     }
-    result.rec
+    // loft#691 — the key is NOT in the tree, so the descent stopped at the leaf where it
+    // would be inserted.  That leaf sits on whichever side the tree shape put it, so
+    // returning it raw answered "a neighbour" rather than "the neighbour asked for":
+    // `ix[0..9]` over keys 1..5 skipped key 1, because the descent for the missing `0`
+    // ended on key 1 (its SUCCESSOR) and the caller then stepped one past it.  Step to
+    // the requested side so `before` always means the last node strictly BELOW `key`,
+    // and `!before` the first node strictly ABOVE it — which is what the exact-match
+    // lookup, the forward cursors and the reverse cursors all already assumed.
+    // `cmp` compares `key` against that leaf.
+    if before {
+        if cmp == Ordering::Greater {
+            result.rec
+        } else {
+            previous(store, &result)
+        }
+    } else if cmp == Ordering::Less {
+        result.rec
+    } else {
+        next(store, &result)
+    }
+}
+
+/// The `(start, finish)` cursor pair for iterating the range `from ..(=) till`.
+///
+/// The single home for the fact both the interpreter (`State::iterate`) and the native
+/// runtime (`codegen_runtime::OpIterate`) need — they derived it separately before, and
+/// the copies drifted: reverse iteration ignored its lower bound, an inclusive upper
+/// bound stepped one too far, and an empty range iterated the whole collection
+/// (loft#691).
+///
+/// The range is TWO facts — the lowest and the highest node it contains, both in TREE
+/// order — and each direction only names which end it starts from:
+/// * forward — `start` = one before `low` (`step` applies `next` before yielding),
+///   `finish` = `high`, which `step` yields and then stops on.
+/// * reverse — `start` = one past `high`, `finish` = `low`.
+///
+/// `0` is "no such node", and `next`/`previous` also return it walking off an end, so an
+/// EMPTY range cannot be reported as `finish = 0` — `step` reads that as "walk to the
+/// tree's end". It returns `finish = u32::MAX` instead, which `step` refuses outright.
+/// For the same reason an ABSENT bound keeps `0` rather than the concrete first/last
+/// node: `#remove` during iteration restructures the tree under the walk, so a baked end
+/// node can stop it early.
+///
+/// `from` is always INCLUSIVE and `ex` describes `till` — but a DESCENDING primary key
+/// reverses tree order, so there `till` is the tree-earlier bound and `from` the
+/// tree-later one. Reading that off `keys[0]` is what keeps a descending index
+/// (`index<T[-cat]>`) iterating its range instead of coming back empty.
+#[must_use]
+// The arguments are the range's own description; bundling them into a struct would add a
+// type whose only job is to be unpacked here and packed at the two call sites.
+#[allow(clippy::too_many_arguments)]
+pub fn range_cursors(
+    data: &DbRef,
+    fields: u16,
+    stores: &[Store],
+    keys: &[Key],
+    from: &[Content],
+    till: &[Content],
+    ex: bool,
+    reverse: bool,
+) -> (u32, u32) {
+    let store = keys::store(data, stores);
+    let node = |rec: u32| DbRef {
+        store_nr: data.store_nr,
+        rec,
+        pos: u32::from(fields),
+    };
+    // Which user bound sits at which end of TREE order.
+    let descending = keys.first().is_some_and(|k| k.type_nr < 0);
+    let (lo_key, lo_inclusive, hi_key, hi_inclusive) = if descending {
+        (till, !ex, from, true)
+    } else {
+        (from, true, till, !ex)
+    };
+
+    let low = if lo_key.is_empty() {
+        first(data, fields, stores).rec
+    } else if lo_inclusive {
+        let below = find(data, true, fields, stores, keys, lo_key);
+        if below == 0 {
+            first(data, fields, stores).rec
+        } else {
+            next(store, &node(below))
+        }
+    } else {
+        find(data, false, fields, stores, keys, lo_key)
+    };
+    let high = if hi_key.is_empty() {
+        last(data, fields, stores).rec
+    } else if hi_inclusive {
+        let above = find(data, false, fields, stores, keys, hi_key);
+        if above == 0 {
+            last(data, fields, stores).rec
+        } else {
+            previous(store, &node(above))
+        }
+    } else {
+        find(data, true, fields, stores, keys, hi_key)
+    };
+
+    // Each end existing is not yet "the range is non-empty": an inverted or degenerate
+    // range (`ix[4..2]`, `ix[3..3]`) leaves both set with `low` past `high`. Comparing
+    // the upper bound against `low`'s record settles it without needing tree order.
+    let empty = low == 0
+        || high == 0
+        || (!hi_key.is_empty() && {
+            let mut low_ref = node(low);
+            low_ref.pos = 8;
+            let c = keys::key_compare(hi_key, &low_ref, stores, keys);
+            c == Ordering::Less || (!hi_inclusive && c == Ordering::Equal)
+        });
+    if empty {
+        return (0, u32::MAX);
+    }
+    if reverse {
+        let start = if hi_key.is_empty() {
+            0
+        } else {
+            next(store, &node(high))
+        };
+        (start, if lo_key.is_empty() { 0 } else { low })
+    } else {
+        let start = if lo_key.is_empty() {
+            0
+        } else {
+            previous(store, &node(low))
+        };
+        (start, if hi_key.is_empty() { 0 } else { high })
+    }
 }
 
 /// Add a new record

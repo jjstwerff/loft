@@ -905,13 +905,18 @@ add5(10)               // 15
 ```
 
 **Capture rules:**
-- Integers, floats, booleans: copied by value at definition time — unless the
-  closure MUTATES the capture, in which case the scalar is promoted to a
+- Integers, floats, booleans, characters: copied by value at definition time —
+  unless the closure MUTATES the capture, in which case the scalar is promoted to a
   shared heap cell and writes propagate both ways (plan-22; the
   single-closure accumulator pattern).  A mutated scalar may be captured by
-  only ONE closure (C74, #314).
+  only ONE closure (C74, #314).  The captured binding may be a local **or a
+  parameter**: a mutated parameter is copied into a hidden local first, so the
+  closure's writes are visible for the rest of the function and the CALLER's value
+  is untouched — a scalar parameter stays by-value (#685).  Mutating a `const`
+  parameter through a closure is rejected, like any other write to it.
 - Text: deep-copied (independent of original after capture); mutated text
-  captures are cell-promoted like scalars.
+  captures are cell-promoted like scalars, including from a parameter and
+  including inside a function that itself returns `text` (#687).
 - Struct references: the DbRef is copied — both point to the same store
   record while both are alive, and mutations from either side are visible to
   the other (#318/C75 bound such closures to the frame that owns the
@@ -924,6 +929,24 @@ add5(10)               // 15
   **point-assign** (`h[key] = value`), and **append** (`h += Row { … }`;
   vectors take the unambiguous `xs += [elem]` push form).  Two closures that
   capture the same collection both mutate the one shared store (@PLN93 / #511).
+
+**Who frees a shared capture (#682).**  A struct-reference or collection capture
+travels as a DbRef, so exactly one owner must reclaim the store.  Which one depends
+on where the capture came from, and the language does the bookkeeping for you:
+
+- Capturing a local the function **owns** hands ownership to the closure, so the
+  store lives as long as the closure — that is what makes a factory (`fn make() ->
+  fn(…)` returning a closure over a local) sound.
+- Capturing a **parameter**, or a local that only views into something else
+  (`ch = w.chunks[1]`, a `for ch in w.chunks` element), **borrows**: the store still
+  belongs to its original owner, which outlives the closure.
+
+Both directions are automatic and need no annotation.  What you can rely on is the
+consequence: **passing a value into a function that captures it in a lambda never
+damages your copy**, and a returned closure never reads a store that has been
+freed.  Until #682 the first half was untrue — a captured parameter was freed when
+the closure record died, and the caller's value went dangling, typically surfacing
+as a crash much later in an unrelated function that touched the same value.
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.

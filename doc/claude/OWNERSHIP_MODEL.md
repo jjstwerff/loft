@@ -312,6 +312,37 @@ Two rules come out of it:
   earlier carve-out had already exempted vector returns from the same false positive —
   a per-type exemption is the tell that the predicate, not the type, is wrong.
 
+### A promoted local is not a parameter (loft#688)
+
+The same ladder's `Rename` rung `become_argument`s a returned local so it IS the caller's
+return buffer. That moves it into scope 0 — and `scopes::variables` stops at scope 0 under
+the comment *"never return function arguments"*, because a true parameter belongs to the
+caller and the callee must not free it.
+
+An NRVO buffer does not satisfy that contract. It is a **promoted local**: this function
+mints its store with `OpDatabase`, and a sibling return site can deliver a different one.
+On that path the minted store was returned by nobody and freed by nobody — one orphan per
+call. `fn parse(line) -> Way { none = Way{…}; if bad { return none; } Way{…} }` in a loop
+therefore exhausted the 65,535-entry store table, and *nothing* was visible below 65k
+iterations, so it passed the whole suite and first appeared on a country-sized input.
+
+- **Scope class is a claim about ownership, and moving a variable into one must earn it.**
+  Scope 0 encodes "the caller owns this". The rename put a callee-minted store there, so a
+  fact that was true of every other member of that class was silently false for this one.
+  The repair states the remaining obligation instead of asserting the class: the buffer is
+  routed through the same hoist + `OpFreeRefIfDistinct` leg the null-arm join uses, so each
+  return frees it *unless* it is the store that path transfers.
+- **Refusing the promotion is the wrong altitude.** It was measured: an explicit
+  `return out;` parses as a `MidReturn` even when it is a function's ONLY exit, where the
+  rename is both sound and load-bearing — the sandbox admission walk reads it to know a
+  write escapes, and suppressing it regressed plan86's laundering guard. The leak is an
+  ownership fact, so it belongs in the ownership sweep, not the placement ladder.
+- **Two axes the report named were not the trigger.** The abandoned struct need not own a
+  collection (a plain `text`+`integer` struct leaks identically), and building the local
+  without the branch-return is clean. Guard:
+  `tests/scripts/688-abandoned-return-candidate-leak.loft` (seven shapes plus three
+  controls, each verified leaking against a pre-fix binary).
+
 **The methodology that made this work** (vs the 9 thrash attempts): build the fact INERT and
 validate it against a ground-truth corpus FIRST (the accumulated per-fix regression tests ARE the
 spec), then collapse one chokepoint per commit reading that fact — and when a proven sibling path

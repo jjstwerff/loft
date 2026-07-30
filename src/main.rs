@@ -5468,10 +5468,36 @@ fn main() {
     // Direct = only manifest.dependencies, Transitive = also deps-of-deps.
     let mut test_deps: Option<&'static str> = None;
     let mut user_args: Vec<String> = Vec::new();
+    // loft#684 — an explicit `--` ends the CLI's own options: every token after it
+    // is the script path (if still unknown) or a program argument, whatever it
+    // spells.  The end-of-options marker is the convention a consumer reaches for
+    // first, so it has to work even for a token the CLI would otherwise claim.
+    let mut forward_all = false;
 
     while i < argv.len() {
         let a = argv[i].as_str();
         i += 1;
+        // loft#684 — a program argument that happens to spell a subcommand
+        // (`test`, `layout`, `build`, …) belongs to the program, not to the CLI.
+        // Once the script path is known, a POSITIONAL token can only be a program
+        // argument: every subcommand is the FIRST positional, never a later one.
+        // Without this, `loft prog.loft <store> layout` printed the usage line for
+        // `loft layout` and the program never ran — a failure that reads like a
+        // broken script rather than a taken word.  Flags keep their existing
+        // meaning (the `starts_with('-')` arm below forwards unrecognised ones);
+        // after an explicit `--`, so does everything else.
+        if forward_all || (!file_name.is_empty() && !a.starts_with('-')) {
+            if file_name.is_empty() {
+                file_name = a.to_string();
+            } else {
+                user_args.push(a.to_string());
+            }
+            continue;
+        }
+        if a == "--" {
+            forward_all = true;
+            continue;
+        }
         if a == "--version" {
             println!("loft {}", env!("CARGO_PKG_VERSION"));
             return;
@@ -6681,12 +6707,10 @@ fn main() {
             // token (including `--*` ones) as a script argument and forward
             // it to the script's `arguments()`. The loft CLI cannot ambiguate
             // its own options from script options after the script path is
-            // known. Use of `--` as an explicit forwarding boundary is also
-            // supported (an explicit `--` is consumed and skipped).
+            // known. `--` never reaches here: it is the end-of-options marker,
+            // consumed at the top of the loop.
             if !file_name.is_empty() {
-                if a != "--" {
-                    user_args.push(a.to_string());
-                }
+                user_args.push(a.to_string());
             } else {
                 println!("unknown option: {a}");
                 println!("usage: loft [options] <file>");

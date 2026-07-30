@@ -9,6 +9,248 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### #687: a mutated text capture's STORAGE is decided per binding, not per function (2026-07-30)
+
+#685 fixed mutated scalar PARAMETER captures for every type but one and refused the
+remainder by name: a `text` parameter inside a function that itself returns `text`. Plan-22
+phase 02d-vii skipped text boxing whenever the parent returned text, so mutable text
+travelled as a hidden `&text` out-parameter that pass 2 cannot add without growing the
+signature (the H5 two-pass contract catches it).
+
+**`parent_returns_text` was a proxy for one real case, and wrong in both directions.** The
+case it protected is a text local that is the function's RETURN SOURCE, which the return
+machinery has already given its own hidden `&text` out-parameter — that binding cannot
+*also* be a shared cell, and does not need to be, since the record stores the value inline
+and the existing per-call write-back propagates the closure's writes. As a proxy it was too
+WIDE (it also skipped a text local the function does not return, which boxes cleanly) and
+no help at all for a PARAMETER, which has no indirection of its own to reuse. A boundary
+sweep separated all four combinations, and the discriminator turned out to be a fact
+already used elsewhere in the same function: **`RefVar` means "this binding already has an
+indirection"**.
+
+The two halves that must agree are the record's attribute type
+(`box_captured_names_for_outer_scalars`, at the LAMBDA's epilogue) and the binding's own
+type (`flip_scalars_to_box_types`, pass 2) — and measurement showed the epilogue simply
+cannot be right: a to-be-returned text local is still a plain `Text` there and only becomes
+`RefVar(Text)` later in the body, which is exactly why the two disagreed. So the epilogue
+boxes PROVISIONALLY (the common case, and it must write something because pass 1 freezes
+the record's storage — leaving the raw scalar lays the field out 8B inline instead of a 12B
+shared DbRef), and `Parser::finalize_capture_storage` corrects it at the parent's **pass-1
+body end**: the first moment the fact is final, still before `fill_all` lays the record out,
+and the same hook `reject_shared_mutable_scalar_captures` already uses for the same reason.
+It runs first — the rejection consumes the parent's lambda list.
+
+Net effect is a SUBTRACTION: both `parent_returns_text` guards and #685's refusal are gone,
+replaced by asking the binding. One text-returning function can now need both answers at
+once (`keep` returned → inline, `side` not → cell), which is what no per-function condition
+could ever get right.
+
+Two measurements worth recording, because both contradicted the obvious reading:
+
+- Removing only ONE of the two guards leaves them disagreeing and SIGSEGVs — they are one
+  fact re-derived twice, so they move together.
+- `box_captured_names_for_outer_scalars` and `synthesize_closure_record` run in **pass 1
+  only**: in pass 2 the lambda records zero captures (its pass-1 placeholder vars are
+  restored into its own table, so the capture branch is never reached). The record's
+  attribute types are a pass-1 decision, full stop — which is why the correction has to be
+  a pass-1 hook and not a pass-2 repair like #686's.
+
+Guards: `tests/scripts/687-mutated-text-param-capture.loft` (values, both backends — the
+capture's source, whether it is the returned value, the parent's return type, cardinality,
+by-value, repeat calls) and `issue_687_mutated_text_capture_storage_is_per_binding`, which
+asserts the STORAGE for three bindings whose only difference is what claims them. Both
+verified RED with `finalize_capture_storage` disabled. #685's
+`issue_685_text_param_in_text_returning_fn_is_refused` is replaced by it — that test pinned
+the refusal, which was always a placeholder for this issue.
+
+### #686: a capture of a FORWARD-declared type was mis-typed, then mis-positioned (2026-07-30)
+
+A lambda capturing a local whose type came from a struct declared LATER in the file read
+that capture as `text` — `Unknown field text.cells`, on a program with no `text` in it.
+Two faults composed, and the first hid the second.
+
+**Fault 1 — a sentinel read as a def number.** A capture's type is the type of an
+EXPRESSION (`ch = w.chunks[1]`), so with the struct not yet declared it is `Unknown(0)`:
+the codebase-wide "no type known" marker, which names nothing. `copy_unknown_fields` read
+the `0` as a forward-reference stub and set the field to `data.def(0).returned` — whatever
+the first definition in the program happens to return, in practice `text`. The `Vector`
+arm of that same function already guarded `was != 0`; the bare arm did not. This is a
+LYING fact, not a missing one: the field looked resolved, so nothing downstream
+questioned it. Guarded now, which turns the symptom honest (`unknown`, not `text`) and is
+what exposed the second fault.
+
+**Fault 2 — a struct laid out while a field was unsized.** `fill_database`'s field loop
+SKIPS an attribute whose type it cannot size (deliberately — so the user sees the parser's
+diagnostic rather than a panic), but the struct is still registered and `finish` still
+sizes it, leaving the field at `position == u16::MAX` forever: `finish_type` never
+revisits a sized type. The closure then read and wrote its capture at **offset 65535** —
+an INTERMITTENT crash, which is what made the readings during investigation worthless
+until a repeat-run harness replaced them (two byte-identical probe files disagreed;
+single runs had been "confirming" three different stories).
+
+The invariant: **a struct is laid out only once its fields are sized.** Enforced at the
+one place that lays them out — `fill_all` skips a def carrying a NAMELESS unknown
+attribute (`has_nameless_unknown_attr`). Narrow by construction: `Unknown(stub)` names a
+type and `copy_unknown_fields` resolves it before the loop, so only `Unknown(0)` — an
+expression-typed field, and the closure record is the sole producer of those — can reach
+the layout unsized. The loop is keyed on `known_type == u16::MAX`, so deferring costs
+nothing; a field that never resolves leaves the struct unregistered, which is harmless
+because the parser has already reported the error.
+
+Pass 2 then re-types the attribute from `capture_context` (`resolve_forward_captures`, at
+lambda entry — NOT at the record-synthesis epilogue, which runs after the body) and lays
+that one record out on demand via `Stores::lay_out_record`. The on-demand layout is
+required, not a shortcut: the body bakes field offsets into its IR as it parses, so the
+end-of-pass `finish()` is too late, and a full `finish()` mid-parse re-appends keyed-index
+bookkeeping. `lay_out_record` is the sibling of `lay_out_synth`, which solved exactly this
+for a forward-referenced synth enum — same deferral, same reason, same empty `linked` set
+(a closure record holds scalars and 12-byte DbRefs, never an inline keyed collection).
+
+The pass-1 storage-encoding `match` moved into `closure_attr_type` so the synthesis and
+the repair cannot drift on which captures store as a shared DbRef.
+
+Guards: `tests/scripts/686-forward-declared-capture.loft` (values, both backends — field /
+element / whole-vector / scalar projections, cardinality, and repeat calls) plus
+`issue_686_forward_declared_capture_is_typed_and_positioned` and
+`issue_686_nameless_unknown_is_not_resolved_against_def_zero`. The two facts are asserted
+separately because they fail separately, and each half of the fix was verified to break
+its own: with the sentinel guard off both fail; with only the layout deferral off, the
+type is right and the POSITION is still 65535. A value test alone cannot see that — a
+positionless field only crashes when the bytes at offset 65535 happen to be fatal.
+
+### #685: a mutated scalar capture sourced from a PARAMETER corrupted the frame (2026-07-30)
+
+Two producers of one fact disagreed. `box_captured_names_for_outer_scalars` gave the
+closure record a 12-byte `__cell_<T>` `DbRef` field for a mutated scalar capture, while
+`flip_scalars_to_box_types` skipped arguments outright — so the parameter stayed an
+8-byte stack scalar and `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an
+8-byte slot, corrupting the 16-byte fn-ref being built beside it. The interpreter then
+dispatched a garbage `d_nr` (`fn_call_ref: … out of range`) or SIGSEGV'd; `--native`
+emitted field access on a bare `i64` and would not compile.
+
+**The filed scope was one cell of each axis; the boundary is a single fact.** The
+trigger is only "the mutated capture's source is a parameter": every boxable type
+fails (integer / float / boolean / character, and text — the last as a SIGSEGV, via a
+different lowering), the closure need not be CALLED, the enclosing function need not
+read the value back, the closure may sit in a nested block, and a set before the
+lambda does not help. **That last cell falsified the filed hypothesis** ("the cell is
+never allocated because allocation happens on first set"), which is why the fix does
+not touch allocation timing. Two or more captures in one frame crash at a *different*
+site (`allocation.rs`) — the same corruption seen through slot reuse.
+
+The argument-skip could not simply be dropped: flipping a parameter's own type to a
+12-byte cell reference changes the call ABI. The fix promotes it instead —
+`promote_boxed_scalar_arg` mints a shadow local of the same type, `set_promoted_from`
++ `remap_name` point the name at it before the body parses, and the existing
+promoted-argument preamble in `parse_code` seeds it at function entry. Every read,
+write and capture then routes through the shadow and the emitted IR is byte-identical
+to the LOCAL case that already worked — which is why all five types are covered with
+no per-type work. It is the hand-written workaround (`acc = n;`) done by the compiler,
+and it follows the mutated-text-argument promotion the codebase already had.
+
+Reusing the local path exactly is also what preserves by-value semantics: the
+parameter slot is untouched, so the caller cannot see the closure's writes.
+
+Supporting changes:
+
+- `boxed_cell_alloc_and_set` extracted as the ONE home for "a boxed scalar comes into
+  existence" — the first assignment to a boxed local and the parameter's entry seed
+  need the identical `Set(v,Null)` + `OpDatabase` + `OpSet<T>` trio, and the seed has
+  no assignment of its own to hang it on. The shadow is marked `defined` at creation
+  so the body's first write does not prepend a SECOND allocation, which would replace
+  the seeded cell and lose the argument's value.
+- `Type::Boolean => "OpSetBoolean"` added to the cell-write table. It had been
+  deferred on the premise that a boolean cell needs a 4-arg `OpSetByte`; the premise
+  was wrong — the working boxed-boolean lowering emits the 3-arg `OpSetBoolean`. The
+  unit test that pinned the fall-through now pins the write.
+- A value-const parameter mutated through a closure is now rejected at the promotion
+  site. The closure-side write never reaches `validate_write`'s guard (inside the
+  lambda the name is a capture, not a binding carrying the flag), so without this the
+  fix would have quietly handed the closure a writable cell for a read-only parameter
+  — a silently accepted contract violation in place of a loud crash.
+- `RefVar` arguments are excluded from both branches: a user `&T` out-parameter's
+  writes must reach the caller, and a mutable text local the compiler already promoted
+  to a hidden `&text` out-parameter is itself the working path. The first attempt
+  omitted this and refused `local = n; … local = local + k;` — code that worked.
+
+**Residual, refused by name rather than corrupted (#687):** a mutated `text` parameter
+inside a text-returning function. There `flip_scalars_to_box_types` skips text boxing
+(plan-22 02d-vii) and mutable text travels as a hidden `&text` out-parameter instead,
+which cannot be added from pass 2 without growing the signature after pass 1 fixed it.
+The **H5 two-pass contract caught that attempt** — the assert doing exactly the job
+#662 showed it had been blind to. The diagnostic names the working alternative.
+
+Guards, all four verified RED with the promotion disabled:
+`tests/scripts/685-mutated-scalar-param-capture.loft` (values, both backends — every
+type, both non-trigger axes, cardinality, and the by-value edge) plus
+`issue_685_mutated_scalar_param_is_boxed_like_a_local` (the invariant: the record's
+field type and the frame's binding for that name are the same cell, and the arity is
+unchanged), `issue_685_text_param_in_text_returning_fn_is_refused`, and
+`issue_685_const_scalar_param_mutated_by_closure_is_rejected`.
+
+### #682: the closure-record cascade freed captures the record never owned (2026-07-30)
+
+A reference / collection capture is stored in `__closure_N` as a 12-byte `DbRef`
+(P260), and `free_named`'s cascade freed every one of them when the record died.
+That is correct for a store the defining frame OWNED and handed over — `get_free_vars`
+suppresses the frame's own `OpFreeRef` for a captured reference, and the cascade being
+the sole free is exactly what lets an escaping factory closure outlive its frame
+(#323). The pairing only holds where a frame free existed to suppress, and for two
+common capture sources it never did: a **parameter** is excluded from the scope-exit
+sweep entirely (`variables()`: "never return function arguments"), and a **projection
+local** (`ch = w.chunks[1]`, a `for` element) is `owns == false`. Both were cascaded
+anyway, so the caller's store was freed under it.
+
+**The filed scope was a lambda handed to a library as `fn(float,float)->float`;
+neither the hand-off nor the call is a trigger.** The minimal cell captures a struct
+parameter and never invokes the lambda. The axes that matter are the ones deciding who
+owns the capture — capture SOURCE (parameter / projection / for-element / owned local)
+and KIND (struct reference / vector / hash / boxed `__cell_`) — and the class covers
+every store-backed capture of a borrowed binding, not just the reported struct.
+The symptom was three steps removed: a freed-but-unreused store still reads correctly,
+so the fault surfaced when the next allocation recycled the slot, in an unrelated
+function ~900 lines from the closure.
+
+One dep marker had to carry two facts, which is the encoding bug behind it:
+`Deps::share_sentinel()` meant both "store a 12-byte DbRef" and "the record owns the
+target". It is now a pair — `share_sentinel()` (adopted, `dbref`) and
+`borrowed_share_sentinel()` (borrowed, `dbref_borrow`) — two type-table entries of the
+same 12-byte / align-4 shape, so no position, size, read or write path moves; only
+`free_named`'s filter (`Stores::dbref_is_adopted`) reads the difference.
+
+**The verdict cannot be computed at record synthesis, which is why it is not.** A
+capture's ownership is not final at parse time: `ch = pick(w, 1)` parses as "borrows
+`w`" from the callee's declared return, and only `scopes::check`'s call-result rewrite
+(`make_independent`, the `!adopts_fresh_store` arm) turns it into OWNED once it knows
+the return ABI deep-copies into a fresh store. A first attempt read the parse-time dep
+and leaked that copy. The decision is therefore `scopes::mark_borrowed_captures`, run
+after every dep rewrite has settled, reusing `get_free_vars`' own `owns` test so the
+two cannot drift. It reaches each record through the defining frame's `___clos_N`
+LOCAL; the lambda's hidden `__closure` PARAMETER has the same type, and reading it too
+flipped verdicts by definition order.
+
+`--native` picks the marker up from the attribute type directly (its schema is emitted
+after scope analysis); the interpreter's schema is laid out during parse, so
+`typedef::sync_capture_ownership` re-points the field from `compile::byte_code_from` —
+the one funnel every `byte_code*` entry point passes through. A `__cell_<T>` capture
+(plan-22's boxed mutated scalar / text) is always adopted: the cell is minted for that
+closure alone, so the record is its only possible owner however the binding was
+reached — including from a parameter.
+
+Both `dbref` shapes register **together** from either entry point. Type numbers are
+positional and `--native` replays the registration sequence to rebuild its schema, so
+a shape appearing in only some programs shifted every id after it — `505-collection-
+capture` failed native with `Cannot add to none-structure 'State'` until the pair
+became unconditional.
+
+Guards: `tests/scripts/682-closure-capture-borrow.loft` (values, both backends — every
+borrow cell called twice so the recycled slot shows, every adopt cell three times so a
+wrongly-borrowed verdict shows up as a leak) and
+`tests/issues.rs::issue_682_closure_capture_ownership_marker` (the marker itself, both
+directions). Both verified to go RED with the pass disabled. Reproduced and fixed
+against the consumer's real `hex_world::World`, which the pre-fix binary corrupted from
+the second tick on.
+
 ### #654: jump displacements were 16-bit — a body past 32 KB jumped somewhere arbitrary (2026-07-28)
 
 `OpGotoWord` / `OpGotoFalseWord` carried a `const i16` displacement, computed with an

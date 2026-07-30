@@ -10428,6 +10428,16 @@ impl Parser {
         // once ANY earlier site chained into the placeholder (`dep` already
         // names the buffer attr), renaming would retire the placeholder var
         // those sites reference — the later candidate must copy instead.
+        //
+        // A RECORD mid-return still renames, and loft#688 is what that costs when
+        // a sibling path returns a different store: the renamed local is minted by
+        // this function but lives in scope 0, which never frees.  Refusing the
+        // rename here fixes the leak but is too wide — an explicit `return out;`
+        // is a `MidReturn` even when it is the function's ONLY exit, where the
+        // rename is both sound and load-bearing (the sandbox admission walk reads
+        // the promotion to know the write escapes).  So the leak is repaired where
+        // the ownership invariant lives, in `scopes::free_vars`, and the promotion
+        // ladder is left alone.
         let bound_already = self.return_buffer().is_some_and(|(a, _)| dep.contains(&a));
         // #425 — the return value is a struct/enum FIELD projection of THIS
         // candidate (`return d.value`, where `d` is the container local).

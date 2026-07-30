@@ -3332,10 +3332,18 @@ extern crate loft;"
         // `claim_child_rec`'s byte-copy to truncate at native's
         // smaller size and the lambda body reads garbage instead of
         // the captured DbRef.
+        //
+        // #682: mirror the ADOPTED / BORROWED split too.  Both shapes are 12
+        // bytes, so getting it wrong costs no layout mismatch — it silently
+        // gives native the interpreter's old over-free instead.
         if let Type::Reference(_, deps) = typedef
             && !deps.is_empty()
         {
-            emit_db_field(w, s_var, field_name, "dbref", "db.dbref()")?;
+            if deps.is_borrowed_share() {
+                emit_db_field(w, s_var, field_name, "dbref_borrow", "db.dbref_borrow()")?;
+            } else {
+                emit_db_field(w, s_var, field_name, "dbref", "db.dbref()")?;
+            }
             return Ok(());
         }
         if known_type != u16::MAX {

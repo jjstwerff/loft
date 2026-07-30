@@ -194,6 +194,81 @@ fn p131_arguments_returns_only_script_args() {
     );
 }
 
+// ── loft#684: a program argument that spells a subcommand reaches the program ──
+
+/// loft#684: a positional argument after the script path belongs to the program,
+/// even when it spells a loft subcommand (`layout`, `test`, `build`, …).  Before
+/// the fix the CLI claimed the word and printed the usage line for an unrelated
+/// subcommand, so the program never ran — and `--` did not stop it either.
+///
+/// The `--` cell also pins the end-of-options marker: after it, even a token the
+/// CLI would otherwise recognise as its own flag is forwarded verbatim.
+#[test]
+fn issue684_subcommand_word_is_a_program_argument() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("loft_issue684_subcommand_arg.loft");
+    std::fs::write(&path, "fn main() { for a in arguments() { println(a) } }\n")
+        .expect("write temp file");
+
+    // Each cell: the args after the script path, and what `arguments()` must yield.
+    let cells: [(&[&str], &[&str]); 4] = [
+        // A plain word is unaffected — the control that proves the harness reads args.
+        (&["hello", "world"], &["hello", "world"]),
+        // The reported shape: a subcommand word as a later positional.
+        (&["hello", "layout"], &["hello", "layout"]),
+        // Several at once, one of them the very first program argument.
+        (
+            &["test", "build", "install", "fmt"],
+            &["test", "build", "install", "fmt"],
+        ),
+        // `--` forwards everything after it, including a recognised loft flag.
+        (&["--", "--lib", "layout"], &["--lib", "layout"]),
+    ];
+
+    for (args, expected) in cells {
+        let out = Command::new(loft_bin())
+            .arg("--interpret")
+            .arg(&path)
+            .args(args)
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "expected exit 0 for args {args:?}; stdout={stdout:?}; stderr={stderr:?}"
+        );
+        let lines: Vec<&str> = stdout.lines().collect();
+        assert_eq!(
+            lines, expected,
+            "args {args:?} should reach the program verbatim; got {lines:?}"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// loft#684 guard: the fix must not stop a subcommand from working as the FIRST
+/// positional — that is the only place a subcommand can appear.  Without this the
+/// test above would pass on a CLI that had simply lost `loft layout` entirely.
+#[test]
+fn issue684_subcommand_still_works_as_first_positional() {
+    let out = Command::new(loft_bin())
+        .arg("layout")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("loft layout:"),
+        "`loft layout` must still dispatch to the layout subcommand; got {combined:?}"
+    );
+}
+
 // ── W1.1: --html produces a self-contained HTML file ──────────────────────
 
 /// W1.1: `--html` must produce a valid HTML file with embedded WASM.

@@ -1,0 +1,171 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#686): a lambda capturing a local whose type came from a struct
+// declared LATER in the file read that capture as `text` — `Unknown field text.cells`.
+//
+// Two faults composed, and the first hid the second:
+//
+//   1. A capture's type is the type of an EXPRESSION (`w.chunks[1]`), so when the struct
+//      is not declared yet it is `Unknown(0)` — the codebase-wide "no type known"
+//      sentinel, which names nothing.  `copy_unknown_fields` read the `0` as a def
+//      number and resolved the field to whatever definition #0 returns: `text`.  The
+//      `Vector` arm of that same function already guarded `was != 0`; the bare arm did
+//      not.
+//   2. With the invented type gone, the field became unsized — and `fill_database`'s
+//      field loop SKIPS an attribute it cannot size while still registering the struct,
+//      so `finish` sized the record with the field left at `position == u16::MAX` and
+//      `finish_type` never revisits a sized type.  The closure then read and wrote its
+//      capture at offset 65535: an INTERMITTENT crash, not a deterministic one, which is
+//      why every cell here is worth running more than once.
+//
+// So the record is now laid out only once its captures are known: pass 2 re-types the
+// attribute from `capture_context` and lays that one record out on demand (`lay_out_record`,
+// the sibling of the synth-enum `lay_out_synth` deferral) — the body bakes field offsets
+// into its IR as it parses, so the end-of-pass `finish()` is too late.
+//
+// Axes: what the capture DERIVES from (a field, a vector element, a whole vector, a
+// scalar read out of one), the DEPTH of the read inside the lambda, and cardinality
+// (a resolved capture beside an unresolved one; two lambdas each needing a layout).
+
+struct F686Cell  { v: float }
+struct F686Row   { q: float }
+
+// ── the reported shape: every type below is declared AFTER this function ──────
+
+fn f686_nested(w: F686World) -> float {
+  ch = w.chunks[1];
+  f = fn(x: float) -> float { ch.cells[2].v * x };
+  f(2.0)
+}
+
+// A FLAT projection — no vector inside the captured struct.
+fn f686_flat(w: F686World) -> float {
+  inr = w.inner;
+  f = fn(x: float) -> float { inr.q * x };
+  f(2.0)
+}
+
+// The capture is a plain SCALAR read out of the forward-declared struct.  Its own type
+// is a float, and it still read as `text`.
+fn f686_scalar(w: F686World) -> float {
+  inr = w.inner;
+  q = inr.q;
+  f = fn(x: float) -> float { q * x };
+  f(2.0)
+}
+
+// The projection is a vector ELEMENT.
+fn f686_element(w: F686World) -> float {
+  r = w.rows[1];
+  f = fn(x: float) -> float { r.q * x };
+  f(2.0)
+}
+
+// A whole VECTOR projected out — a different attribute encoding (shared DbRef).  This
+// one APPEARED to work before the fix: the body reads a collection capture's logical
+// type from `capture_context`, so only the record's storage was wrong.
+fn f686_vector(w: F686World) -> float {
+  rs = w.rows;
+  f = fn(x: float) -> float { rs[1].q * x };
+  f(2.0)
+}
+
+// CARDINALITY — one unresolved capture beside a resolved one.  The repair must leave the
+// sibling's position alone.
+fn f686_mixed(w: F686World) -> float {
+  inr = w.inner;
+  k = 3.0;
+  f = fn(x: float) -> float { inr.q * k * x };
+  f(2.0)
+}
+
+// CARDINALITY — two lambdas, two records, each needing its own on-demand layout.
+fn f686_two_lambdas(w: F686World) -> float {
+  a = w.inner;
+  b = w.other;
+  f = fn(x: float) -> float { a.q * x };
+  g = fn(x: float) -> float { b.q * x };
+  f(2.0) + g(3.0)
+}
+
+// The forward-resolved capture is also MUTATED, so it takes the boxed `__cell_`
+// encoding (#685's path) on top of the forward resolution.  Also worked before — the
+// boxed path never consulted the mis-typed attribute — so it is a control for the fix
+// not disturbing that encoding.
+fn f686_mutated(w: F686World) -> integer {
+  n = w.inner.n;
+  b = fn(k: integer) { n = n + k; };
+  b(1);
+  b(2);
+  n
+}
+
+// ── CONTROLS: the far sides of the boundary, which must not move ──────────────
+
+// The PARAMETER captured directly.  Its type comes from the written signature, which the
+// by-name deferred resolver already handled, so this always worked.
+fn f686_param(w: F686World) -> float {
+  f = fn(x: float) -> float { w.chunks[1].cells[1].v * x };
+  f(2.0)
+}
+
+// The projection local used with NO lambda — no closure record, nothing to mis-type.
+fn f686_no_lambda(w: F686World) -> float {
+  inr = w.inner;
+  inr.q * 2.0
+}
+
+struct F686Chunk { cx: integer, cells: vector<F686Cell> }
+struct F686Inner { q: float, n: integer }
+struct F686World {
+  chunks: vector<F686Chunk>,
+  rows:   vector<F686Row>,
+  inner:  F686Inner,
+  other:  F686Inner,
+  tick:   integer,
+}
+
+fn f686_world() -> F686World {
+  F686World {
+    chunks: [ F686Chunk { cx: 0, cells: [F686Cell { v: 1.0 }] },
+              F686Chunk { cx: 1, cells: [F686Cell { v: 10.0 },
+                                         F686Cell { v: 20.0 },
+                                         F686Cell { v: 30.0 }] } ],
+    rows:   [ F686Row { q: 1.0 }, F686Row { q: 5.0 } ],
+    inner:  F686Inner { q: 5.0, n: 5 },
+    other:  F686Inner { q: 7.0, n: 0 },
+    tick:   7,
+  }
+}
+
+fn main() {
+  w = f686_world();
+
+  assert(f686_nested(w) == 60.0, "nested projection: 30*2, got {f686_nested(w)}");
+  assert(f686_flat(w) == 10.0, "flat projection: 5*2, got {f686_flat(w)}");
+  assert(f686_scalar(w) == 10.0, "scalar from projection: got {f686_scalar(w)}");
+  assert(f686_element(w) == 10.0, "element projection: 5*2, got {f686_element(w)}");
+  assert(f686_vector(w) == 10.0, "vector capture: 5*2, got {f686_vector(w)}");
+  assert(f686_mixed(w) == 30.0, "resolved capture beside unresolved: 5*3*2, got {f686_mixed(w)}");
+  assert(f686_two_lambdas(w) == 31.0, "two records: 5*2 + 7*3, got {f686_two_lambdas(w)}");
+  assert(f686_mutated(w) == 8, "mutated forward capture: 5+1+2, got {f686_mutated(w)}");
+
+  // Controls.
+  assert(f686_param(w) == 40.0, "param capture: chunks[1].cells[1]=20 * 2, got {f686_param(w)}");
+  assert(f686_no_lambda(w) == 10.0, "no lambda: 5*2, got {f686_no_lambda(w)}");
+
+  // The World must survive every one of those closures intact (#682's cascade rule
+  // applies to a forward-declared capture exactly as it does to a resolved one).
+  assert(w.tick == 7, "the World survives: tick, got {w.tick}");
+  assert(len(w.chunks) == 2, "the World survives: chunks, got {len(w.chunks)}");
+  assert(w.chunks[1].cells[2].v == 30.0, "the World survives: cell, got {w.chunks[1].cells[2].v}");
+  assert(w.inner.q == 5.0, "the World survives: inner, got {w.inner.q}");
+
+  // Repeat: the fault was intermittent, so once through proves less than it looks.
+  assert(f686_nested(w) == 60.0, "nested projection, second call");
+  assert(f686_two_lambdas(w) == 31.0, "two records, second call");
+  assert(w.chunks[1].cells[2].v == 30.0, "the World survives repeat calls");
+
+  println("686-forward-declared-capture ok");
+}

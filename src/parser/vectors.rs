@@ -746,6 +746,9 @@ impl Parser {
         if !self.first_pass {
             let closure_rec = self.data.def(d_nr).closure_record();
             if closure_rec != u32::MAX {
+                // #686 — repair any attribute pass 1 had to leave unresolved BEFORE the
+                // body reads it for its type-check and storage shape.
+                self.resolve_forward_captures(closure_rec);
                 let closure_tp = Type::Reference(closure_rec, Deps::none());
                 // Add as definition attribute so codegen positions it on the stack.
                 self.data
@@ -1330,41 +1333,67 @@ impl Parser {
         if self.context == u32::MAX || (self.context as usize) >= self.data.definitions.len() {
             return;
         }
-        // Plan-22 phase 02d-vii — skip text-cell boxing when the
-        // parent function returns text.  In a text-returning fn,
-        // the work-text result-buffer machinery locks the
-        // closure record's store before `emit_lambda_code`'s
-        // SetDbRef can capture the boxed-text DbRef, panicking
-        // with "Write to locked store".  Reverting text vars to
-        // their pre-02d-vi behaviour (no flip → text mutation
-        // flows through the existing void-return write-back
-        // mechanism, which works for the b_d1 shape that
-        // text-returning fns are most likely to use).
-        let parent_returns_text = matches!(self.data.def(self.context).returned(), Type::Text(_));
+        // Plan-22 phase 02d-vii's blanket "skip text when the parent returns text" is
+        // RETIRED (#687).  It stood in for one real case — a text local that is the
+        // function's RETURN SOURCE, which the text-return machinery has already given a
+        // hidden `&text` out-parameter — and the `RefVar` test below names that case
+        // directly.  As a proxy it was both too wide (it also skipped a text local the
+        // function does not return, which boxes fine) and useless for a PARAMETER, which
+        // has no indirection of its own to reuse.
         let names = self.data.def(self.context).scalars_to_box().to_vec();
         for name in &names {
-            let v_nr = self.vars.var(name);
+            let mut v_nr = self.vars.var(name);
             if v_nr == u16::MAX {
                 continue;
             }
-            if self.vars.is_argument(v_nr) {
-                continue;
+            // #685 — an ARGUMENT cannot be flipped in place: its slot receives the
+            // caller's scalar, and giving it a 12-byte cell DbRef type would change
+            // the call ABI.  Promote it to a shadow LOCAL seeded from the argument
+            // instead (the same move the text-argument promotion in
+            // `parse_assign_op` makes), and flip that.  This runs before the body is
+            // parsed, so the name remap sends every later read, write and capture to
+            // the shadow — leaving the argument case indistinguishable from the local
+            // case that already works for every boxable type.
+            //
+            // Without it the two halves of "is this capture boxed?" disagreed:
+            // `box_captured_names_for_outer_scalars` gave the closure record a
+            // 12-byte DbRef field while the argument stayed an 8-byte stack scalar,
+            // so `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an 8-byte
+            // slot and corrupted the fn-ref being built beside it.
+            //
+            // A `RefVar` argument is excluded: it already HAS its own indirection.  It is
+            // either a user `&T` out-parameter (whose writes must reach the caller, so a
+            // private cell would swallow them) or a text local the return machinery
+            // promoted to a hidden `&text` out-parameter — and for that one the record
+            // stores the value inline and the existing write-back propagates it, which is
+            // the pairing `finalize_capture_storage` keeps in step (#687).
+            if self.vars.is_argument(v_nr) && !matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
+                // A value-const parameter is read-only, and the closure-side write never
+                // reaches `validate_write`'s guard — inside the lambda `name` is a
+                // capture, not a binding that carries the const flag.  This is the first
+                // point that knows a closure mutates it, so the guard belongs here;
+                // without it the promotion below would quietly hand the closure a
+                // writable cell (the crash it replaced at least failed loudly).
+                if self.vars.is_value_const(v_nr) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot modify {} '{name}' from a closure; remove 'const' or \
+                         capture a local copy",
+                        self.vars.const_kind(v_nr),
+                    );
+                    continue;
+                }
+                match self.promote_boxed_scalar_arg(name, v_nr) {
+                    Some(shadow) => v_nr = shadow,
+                    None => continue,
+                }
             }
             let original_tp = self.vars.tp(v_nr).clone();
             // Skip if already flipped.
             if matches!(&original_tp, Type::Reference(d, _)
                 if self.data.def(*d).name().starts_with("__cell_"))
             {
-                continue;
-            }
-            // Plan-22 phase 02d-vii — text-skip when parent
-            // returns text (see above for rationale).  Skips
-            // both bare Text and RefVar(Text) (mutable stack
-            // text locals).
-            let is_text_or_reftext = matches!(&original_tp, Type::Text(_))
-                || matches!(&original_tp, Type::RefVar(inner)
-                    if matches!(inner.as_ref(), Type::Text(_)));
-            if parent_returns_text && is_text_or_reftext {
                 continue;
             }
             // Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
@@ -1405,6 +1434,50 @@ impl Parser {
         }
     }
 
+    /// #685 — replace a boxable scalar ARGUMENT with a shadow local of the same
+    /// type, seeded from the argument at function entry, and point `name` at it.
+    /// Returns the shadow, or `None` for a type with no cell struct (the caller
+    /// then leaves the argument alone, as before).
+    ///
+    /// This is what the hand-written workaround did — `acc = n;` as the first
+    /// statement — so the shadow inherits whichever lowering the LOCAL case uses:
+    /// a `__cell_<T>` for integer / float / boolean / character, or the text
+    /// write-back path when the flip below skips text.  Nothing here needs to know
+    /// which.
+    ///
+    /// The seed is emitted by the promoted-argument preamble in `parse_code`, which
+    /// already exists for text-argument promotion.  The shadow is marked `defined`
+    /// so the body's first write does not ALSO prepend an allocation
+    /// (`maybe_prepend_cell_alloc`) — a second `OpDatabase` would replace the
+    /// seeded cell and lose the argument's value.
+    ///
+    /// Const-ness travels with it: a `const` parameter's shadow stays const, so the
+    /// guard that rejects mutating it still fires on the shadow instead of being
+    /// silently dropped along with the argument.
+    fn promote_boxed_scalar_arg(&mut self, name: &str, arg: u16) -> Option<u16> {
+        let tp = self.vars.tp(arg).clone();
+        cell_struct_name(&tp, &self.data)?;
+        let shadow = self
+            .vars
+            .add_variable(&format!("__bx_{name}"), &tp, &mut self.lexer);
+        if shadow == u16::MAX || shadow == arg {
+            return None;
+        }
+        self.vars.set_promoted_from(shadow, arg);
+        self.vars.defined(shadow);
+        if self.vars.is_value_const(arg) {
+            self.vars.set_value_const(shadow);
+        }
+        if self.vars.is_const_binding(arg) {
+            self.vars.set_const_binding(shadow);
+        }
+        // The argument is now read only by the seed, which the preamble inserts
+        // after `test_used` would otherwise have flagged it unused.
+        self.vars.mark_used(arg);
+        self.vars.remap_name(name, shadow);
+        Some(shadow)
+    }
+
     /// #314 (closed by decision — GOALS.md § "Stability trumps
     /// features"): a mutated scalar captured by MORE THAN ONE closure
     /// is rejected at compile time.
@@ -1425,6 +1498,66 @@ impl Parser {
     /// caller in `definitions.rs` is the flip's sibling).  The
     /// single-closure accumulator (one record, one owner) stays
     /// supported.
+    /// #687 — settle how each mutated scalar capture is STORED, now that the parent's
+    /// pass-1 body is complete.
+    ///
+    /// A mutated capture is normally boxed into a shared `__cell_<T>` so writes from the
+    /// closure and reads from the enclosing body see one location.  The exception is a
+    /// binding that already has an indirection of its own: a text local the function
+    /// RETURNS, which the text-return machinery promotes to a hidden `&text`
+    /// out-parameter so the caller supplies the buffer.  That binding cannot also be a
+    /// cell, and it does not need to be — the record stores the value inline and the
+    /// existing per-call write-back propagates the closure's changes.
+    ///
+    /// Both halves must agree, and this is the first moment either could be right:
+    /// `box_captured_names_for_outer_scalars` types the record's attribute at the
+    /// LAMBDA's epilogue, where a to-be-returned text local still looks like a plain
+    /// `Text`, while `flip_scalars_to_box_types` (pass 2) sees the finished `RefVar` and
+    /// skips it.  That disagreement is what plan-22 02d-vii papered over with "skip text
+    /// when the parent returns text" — too wide (it also skipped a text local the
+    /// function does not return) and no help at all for a PARAMETER, which has no
+    /// indirection to reuse.  Asking the binding instead covers all three.
+    ///
+    /// Runs before `fill_all`, so the corrected attribute is what gets laid out.
+    pub(crate) fn finalize_capture_storage(&mut self, parent_d: u32) {
+        if !self.first_pass
+            || parent_d == u32::MAX
+            || (parent_d as usize) >= self.data.definitions.len()
+        {
+            return;
+        }
+        let Some(lambdas) = self.fn_lambdas.get(&parent_d).cloned() else {
+            return;
+        };
+        for name in self.data.def(parent_d).scalars_to_box().to_vec() {
+            let v_nr = self.vars.var(&name);
+            // `RefVar` is the fact: this binding already carries its own indirection.
+            if v_nr == u16::MAX || !matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
+                continue;
+            }
+            let inline_tp = match self.vars.tp(v_nr) {
+                Type::RefVar(inner) => (**inner).clone(),
+                other => other.clone(),
+            };
+            for lam in &lambdas {
+                let rec = self.data.def(*lam).closure_record();
+                if rec == u32::MAX {
+                    continue;
+                }
+                let a_nr = self.data.attr(rec, &name);
+                if a_nr == usize::MAX {
+                    continue;
+                }
+                // Only undo the provisional boxing; anything else is already right.
+                let is_cell = matches!(self.data.attr_type(rec, a_nr),
+                    Type::Reference(d, _) if self.data.def(d).name().starts_with("__cell_"));
+                if is_cell {
+                    self.data.retype_capture_attr(rec, a_nr, inline_tp.clone());
+                }
+            }
+        }
+    }
+
     pub(crate) fn reject_shared_mutable_scalar_captures(&mut self, parent_d: u32) {
         if !self.first_pass
             || parent_d == u32::MAX
@@ -1462,6 +1595,104 @@ impl Parser {
         }
     }
 
+    /// The closure-record ATTRIBUTE type for a capture whose logical type is `tp` —
+    /// the STORAGE encoding, which is deliberately not the same thing.
+    ///
+    /// P260 (2026-05-13): ALL Reference captures store as a 12-byte `Parts::DbRef`
+    /// pointing at the live original (`typedef::fill_database`'s arm fires on non-empty
+    /// deps).  Inline-byte storage was wrong even for a read-only capture — the closure
+    /// then reads a stale snapshot when the outer scope mutates a non-scalar field of
+    /// the source struct, and closure-side writes to compound fields (a vector field, a
+    /// nested struct, an element) silently no-op against the inline copy.  The arm was
+    /// once gated on `is_mutated(name)`, and that gate was wrong: this is an
+    /// architectural decision ("don't deep-copy a possibly-large struct into a closure
+    /// record"), not a property of whether THIS closure writes to the capture.
+    ///
+    /// @PLN93 (#511): a captured COLLECTION borrows the outer collection, so it takes
+    /// the same shared-DbRef representation — the whole schema / read / write path on
+    /// both backends then reuses the proven Reference-DbRef machinery, and the body
+    /// recovers the real collection type from `capture_context` (`parser/objects.rs`).
+    /// The `Reference` content def is inert for a DbRef field (never laid out inline);
+    /// carrying the collection's content def keeps it meaningful.
+    ///
+    /// The share marker itself is only read by `fill_database` and by `generation`'s
+    /// native mirror, and closure records are its sole producer, so none of this reaches
+    /// user-defined struct fields.  Ownership (which marker) is decided later, after
+    /// scope analysis — see `scopes::mark_borrowed_captures` (#682).
+    fn closure_attr_type(&mut self, tp: &Type) -> Type {
+        match tp {
+            Type::Reference(d, _) => Type::Reference(*d, Deps::share_sentinel()),
+            Type::Hash(c, _, _)
+            | Type::Sorted(c, _, _)
+            | Type::Index(c, _, _)
+            | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
+            Type::Vector(elm, _) => {
+                Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
+            }
+            _ => tp.clone(),
+        }
+    }
+
+    /// #686 — re-type any closure-record attribute that pass 1 had to leave UNRESOLVED,
+    /// now that pass 2 knows what the capture really is.
+    ///
+    /// A capture whose type mentions a type declared LATER in the file is
+    /// `Unknown(0)` when pass 1 freezes the record's attributes (`ch = w.chunks[1]`
+    /// where `World` comes further down).  Pass 2 has the resolved type in
+    /// `capture_context`, and the body is about to read the attribute for BOTH its own
+    /// type-check (`parser/objects.rs`) and the field's storage shape — so the repair
+    /// has to happen here, before `parse_code`, not at the record-synthesis epilogue
+    /// that runs after the body.
+    ///
+    /// Attributes are matched by NAME against `capture_context`, which holds every
+    /// enclosing binding: `captured_names` is still empty at this point (it fills as
+    /// the body parses).  Only unresolved attributes are touched, so a record that
+    /// pass 1 typed correctly is left exactly as it was.
+    ///
+    /// The record is then laid out here rather than by `fill_all`.  `fill_all` runs at
+    /// the END of the pass, but `emit_lambda_code` needs the record's `known_type` for
+    /// its `OpDatabase` the moment this lambda finishes — and `typedef` deliberately
+    /// deferred the layout while the attribute was unresolved
+    /// (`has_nameless_unknown_attr`), because registering it then bakes a field with no
+    /// position.  Field positions still come from `Stores::finish()` at the end of the
+    /// pass, so laying out early only fixes the ORDER, not the mechanism.
+    fn resolve_forward_captures(&mut self, closure_rec: u32) {
+        if self.first_pass || closure_rec == u32::MAX {
+            return;
+        }
+        let unresolved: Vec<(usize, String)> = (0..self.data.attributes(closure_rec))
+            .filter(|&a| self.data.attr_type(closure_rec, a).is_unknown())
+            .map(|a| (a, self.data.attr_name(closure_rec, a)))
+            .collect();
+        if unresolved.is_empty() {
+            return;
+        }
+        for (a_nr, name) in unresolved {
+            let Some((_, ctype)) = self
+                .capture_context
+                .iter()
+                .find(|(n, _)| *n == name)
+                .cloned()
+            else {
+                continue;
+            };
+            if ctype.is_unknown() {
+                continue;
+            }
+            ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, &ctype);
+            let attr_tp = self.closure_attr_type(&ctype);
+            self.data.set_attr_type(closure_rec, a_nr, attr_tp);
+        }
+        if self.data.def(closure_rec).known_type() == u16::MAX
+            && !(0..self.data.attributes(closure_rec))
+                .any(|a| self.data.attr_type(closure_rec, a).is_unknown())
+        {
+            crate::typedef::fill_database(&mut self.data, &mut self.database, closure_rec);
+            self.database
+                .lay_out_record(self.data.def(closure_rec).known_type());
+        }
+    }
+
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");
         let captures = self.captured_names.clone();
@@ -1482,48 +1713,7 @@ impl Parser {
                 // panicking with "Incomplete record" at
                 // `src/store.rs:227`.
                 ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, tp);
-                let attr_tp = match tp {
-                    Type::Reference(d, _) => {
-                        // P260 (2026-05-13): ALL Reference captures
-                        // store as 12B Parts::DbRef pointing at the
-                        // live original (typedef.rs:529 arm fires on
-                        // non-empty deps).  Inline-byte storage was
-                        // wrong even for read-only captures — the
-                        // closure read sees a stale snapshot when the
-                        // outer scope mutates a non-scalar field of
-                        // the source struct, AND closure-side writes
-                        // to compound fields (vector field, nested
-                        // struct, vector element) silently no-op
-                        // against the inline copy.  Originally this
-                        // arm was gated on `is_mutated(name)` (phase
-                        // 02c) but the gate is wrong: storage
-                        // encoding is an architectural decision
-                        // ("don't deep-copy a possibly-large struct
-                        // into a closure record"), not a property of
-                        // whether THIS closure mutates the capture.
-                        // The auto-Reference marker (vec![u16::MAX])
-                        // is only consumed by `typedef.rs::fill_database`
-                        // — closure records are the sole producer, so
-                        // this doesn't affect user-defined struct
-                        // fields.
-                        Type::Reference(*d, Deps::share_sentinel())
-                    }
-                    // @PLN93 (#511): a captured collection borrows the outer collection —
-                    // store it as a shared DbRef, the SAME representation as a Reference
-                    // capture, so the whole schema / read / write path (both backends)
-                    // reuses the proven Reference-DbRef machinery.  The body recovers the
-                    // real collection type from capture_context (parser/objects.rs).  The
-                    // Reference content d_nr is inert for a DbRef field (never laid out
-                    // inline) — carry the collection's content def so it stays meaningful.
-                    Type::Hash(c, _, _)
-                    | Type::Sorted(c, _, _)
-                    | Type::Index(c, _, _)
-                    | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
-                    Type::Vector(elm, _) => {
-                        Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
-                    }
-                    _ => tp.clone(),
-                };
+                let attr_tp = self.closure_attr_type(tp);
                 self.data
                     .add_attribute(&mut self.lexer, record_d_nr, name, attr_tp);
             }
@@ -3253,20 +3443,17 @@ fn box_captured_names_for_outer_scalars(
         return;
     }
     let scalars = data.def(outer_context).scalars_to_box().to_vec();
-    // Plan-22 phase 02d-vii — symmetric guard with
-    // `flip_scalars_to_box_types`: skip text when the parent
-    // function returns text (avoid the "Write to locked
-    // store" panic at closure-record init in text-returning
-    // fns).
-    let parent_returns_text = matches!(data.def(outer_context).returned(), Type::Text(_));
+    // #687 — this is PROVISIONAL.  Whether the binding really takes a cell depends on
+    // whether it ends up with its own indirection (a hidden `&T` out-parameter), and at
+    // the lambda's epilogue that is not settled yet: a text local the function RETURNS is
+    // still a plain `Text` here and only becomes `RefVar(Text)` later in the body.  The
+    // parent's pass-1 body end knows, and `Parser::finalize_capture_storage` corrects the
+    // attribute there — still before `fill_all` lays the record out.  Boxing is the right
+    // default because it is the common case, and because the attribute has to say
+    // something now: pass 1 freezes the record's storage, so leaving the un-flipped
+    // scalar here would lay the field out as 8B inline instead of a 12B shared DbRef.
     for (name, tp) in captured_names {
         if !scalars.iter().any(|s| s == name) {
-            continue;
-        }
-        let is_text_or_reftext = matches!(tp, Type::Text(_))
-            || matches!(tp, Type::RefVar(inner)
-                if matches!(inner.as_ref(), Type::Text(_)));
-        if parent_returns_text && is_text_or_reftext {
             continue;
         }
         if let Some(cell_name) = cell_struct_name(tp, data) {
@@ -4697,16 +4884,25 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
     }
 
     #[test]
-    fn boolean_falls_through() {
-        // OpSetByte takes (ref, fld, min, val); this helper
-        // doesn't yet handle the 4-arg shape.  Phase 02d-iii.e
-        // (or later) extends boolean.
+    fn boolean_first_set_uses_op_set_boolean() {
+        // This case used to fall through, deferred on the premise that a boolean cell
+        // needs the 4-arg `OpSetByte(ref, fld, min, val)`.  The premise was wrong: the
+        // working boxed-boolean lowering emits the 3-arg `OpSetBoolean`, the same shape
+        // as every other cell write.  #685 needed it for a boxed boolean PARAMETER's
+        // entry seed, which has no assignment of its own to route through.
         let (p, _cell_d_nr, v_nr) = parser_with_boxed_local(&Type::Boolean, "__cell_boolean", "b");
-        let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Boolean(true));
-        assert!(
-            result.is_none(),
-            "boolean cell falls through in 02d-iii.c; got {result:?}"
-        );
+        let op_set = p.data.def_nr("OpSetBoolean");
+        let ir = p
+            .boxed_scalar_assign_rewrite(v_nr, "=", Value::Boolean(true))
+            .expect("expected rewrite IR");
+        if let Value::Insert(ops) = &ir
+            && let Value::Call(d, args) = &ops[2]
+        {
+            assert_eq!(*d, op_set);
+            assert_eq!(args.len(), 3, "OpSetBoolean is a 3-arg write");
+        } else {
+            panic!("expected Insert([_, _, Call(OpSetBoolean, _)]); got {ir:?}");
+        }
     }
 
     #[test]
