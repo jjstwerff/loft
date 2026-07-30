@@ -398,15 +398,27 @@ fn pe_x_default_on_bare_enum_record() {
   assert(s.start == 0, "unreached");
 }
 
-// loft#697 — a NON-EMPTY collection default is refused.  Its building block carries
-// work-refs numbered in the var space the DEFAULT was parsed in (the struct definition),
-// not the one it is replayed in at each construction site, so applying it re-allocated
-// the struct mid-construction: a hang for a vector, a SIGSEGV one struct deeper.  The
-// empty form `= []` IS supported (tests/scripts/697-defaulted-collection-field.loft);
-// this pins that the unsupported form fails at COMPILE time rather than at runtime.
+// loft#698 — a default needing a TEMPORARY is refused at the struct, because it cannot be
+// replayed at a construction site: `object_init` rewrites the block's `Var(0)` to the
+// record, which is right for an `Object` block (it builds the nested struct in place) and
+// wrong for every other kind.  `= [1, 2]` re-allocated the record mid-construction (a
+// hang) and `= "a" + "b"` used the record as a text buffer (a SIGSEGV).  Literals and
+// struct literals are unaffected; the empty `= []` IS supported (loft#697).
 struct Pe697 { pe_x: integer, pe_ids: vector<integer> = [1, 2] }
-// @EXPECT_ERROR: non-empty collection default
+// @EXPECT_ERROR: needs a temporary value
 fn pe_non_empty_collection_default() {
   p = Pe697 { pe_x: 1 };
+  assert(p.pe_x == 1, "unreached");
+}
+
+// loft#698 — the same refusal for a default that is not a collection at all.  `= "a" + "b"`
+// lowers to an "Add text" block wanting `Var(0)` as its text buffer; the replay rewrite
+// handed it the record, so construction ran `OpClearText` on the struct and SIGSEGV'd.
+// This case is why the guard tests the block KIND rather than the variable index — the
+// SAFE `Object` block (a struct-literal default) writes `Var(0)` exactly as these do.
+struct Pe698 { pe_x: integer, pe_s: text = "a" + "b" }
+// @EXPECT_ERROR: needs a temporary value
+fn pe_default_needing_a_temporary() {
+  p = Pe698 { pe_x: 1 };
   assert(p.pe_x == 1, "unreached");
 }

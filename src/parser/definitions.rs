@@ -3097,6 +3097,35 @@ impl Parser {
                         if a_type.is_unknown() {
                             a_type = tp;
                         }
+                        // loft#698 — a field default is lowered HERE, in the struct's
+                        // context, and replayed at every construction site inside some
+                        // FUNCTION.  So it may reference only the record being built
+                        // (`Var(0)`, the `$` placeholder) — any other variable is an index
+                        // into this struct's variable table, which is discarded before
+                        // replay.  The indices then resolve against whatever locals the
+                        // construction site happens to have, and the default's own
+                        // `OpDatabase` re-allocates one of them mid-construction.
+                        //
+                        // Every default that needs no temporary is fine and stays fine: a
+                        // scalar, a text literal, arithmetic, a struct literal, `= []`.
+                        // The ones that need one were silently miscompiled — `= [1, 2]`
+                        // hung, `text = "a" + "b"` SIGSEGV'd, and a nested struct made it a
+                        // SIGSEGV either way.  Refusing here makes the boundary explicit at
+                        // the ONE place defaults are stored, instead of leaving it to be
+                        // discovered as corruption at each construction site.  Lifting the
+                        // restriction means storing defaults so they can be re-lowered per
+                        // site — see loft#698.
+                        if !self.first_pass && default_needs_temporary(&value) {
+                            let tn = a_type.name(&self.data);
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "the default for `{a_name}: {tn}` needs a temporary value, \
+                                 which a field default cannot carry — use a literal (a \
+                                 number, text, `[]`, or a struct literal), or set the field \
+                                 at each construction site"
+                            );
+                        }
                     }
                     // @PLN86 P6.4 — links after a scalar/named field type.
                     self.parse_field_links(d_nr, a_name);
@@ -3306,4 +3335,35 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
         | Value::FnRefDnr(_)
         | Value::ParFor(_) => false,
     }
+}
+
+/// loft#698 — can this field default survive being replayed at a construction site?
+///
+/// A default is lowered in the STRUCT's context and replayed inside whatever function
+/// builds the record, where `object_init` rewrites `Var(0)` to that record. Whether that
+/// rewrite is CORRECT depends on what the default's block does with `Var(0)`:
+///
+/// * a literal (`= 7`, `= "hi"`, `= []`) names no variable at all — always safe;
+/// * an `Object` block builds the nested struct IN PLACE through `Var(0)`, so pointing it
+///   at the record is exactly right — that is how `= P { px: 1, py: 2 }` works;
+/// * an `EnumUnitLit` block is re-homed to a fresh work-ref by `object_init`;
+/// * any other block wanted `Var(0)` as its OWN temporary, and the rewrite hands it the
+///   record instead. `= "a" + "b"` then used the record as a text buffer (`OpClearText`
+///   on the struct — a SIGSEGV) and `= [1, 2]` re-allocated it mid-construction (a hang).
+///
+/// So the test is the block KIND, not the variable index: an index-based check cannot
+/// separate these, because the safe `Object` case and the broken ones all write `Var(0)`.
+/// A variable other than `Var(0)` is refused outright — it indexes the struct's variable
+/// table, which is discarded before replay.
+fn default_needs_temporary(value: &crate::data::Value) -> bool {
+    use crate::data::Value;
+    let mut needs = false;
+    let mut probe = value.clone();
+    probe.map_nodes(&mut |n| match n {
+        Value::Block(b) if b.name != "Object" && b.name != "EnumUnitLit" => needs = true,
+        Value::Var(v) if *v != 0 => needs = true,
+        Value::Set(v, _) if *v != 0 => needs = true,
+        _ => {}
+    });
+    needs
 }
