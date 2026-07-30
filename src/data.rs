@@ -1844,6 +1844,20 @@ impl Type {
         }
     }
 
+    /// Do these two types belong to the same KIND — *not* are they the same type.
+    ///
+    /// Any two `Reference`s are "same" here whatever struct they name, and likewise any
+    /// two `Enum`s or `Vector`s; only the outer constructor is compared. That is what
+    /// callers asking "is this the same shape of thing" want, and it is a trap for
+    /// callers asking "may this binding hold that value" — loft#690: the loop-variable
+    /// reuse check asked with `is_same`, so `for r in as_a { … } for r in as_b { … }`
+    /// over two different structs passed, and the second loop then read B's records
+    /// through A's layout with no diagnostic and no crash.
+    ///
+    /// **Use [`Type::is_equal`] for type IDENTITY** — it compares the struct a
+    /// `Reference` names and the element of a `Vector`, while still ignoring the
+    /// differences that are not type differences (integer ranges, text deps, fn-ref
+    /// capture lists).
     #[must_use]
     pub fn is_same(&self, other: &Type) -> bool {
         // @P352: two `Type::Function`s compare by SHAPE (params + return),

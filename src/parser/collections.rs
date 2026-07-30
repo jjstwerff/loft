@@ -1505,12 +1505,23 @@ use #count instead"
         // Same-type reuse is idiomatic in loft (flat variable scoping).
         // `_` is exempt — it's the universal "unused" name and must work
         // across different element types within the same function.
+        //
+        // loft#690 — this compares with `is_equal`, NOT `is_same`.  `is_same` answers
+        // "same KIND of type": it reports ANY two `Reference`s as the same whatever
+        // struct they name, so `for r in as_a { … }  for r in as_b { … }` over two
+        // different structs slipped through.  `add_variable` then handed the second
+        // loop the FIRST binding — old var, old type, old dep — and the body read B's
+        // records through A's layout: no diagnostic, no crash, just wrong numbers
+        // (`m=8589934636` for a sum of 3).  `is_equal` compares the struct a
+        // `Reference` names while keeping the looseness that matters here — differing
+        // integer ranges, text deps, and fn-ref capture lists still count as the same
+        // type, so same-struct reuse stays idiomatic.
         let existing_var = self.vars.var(id);
         if !self.first_pass
             && id != "_"
             && existing_var != u16::MAX
             && self.vars.is_defined(existing_var)
-            && !self.vars.var_type(existing_var).is_same(&var_tp)
+            && !self.vars.var_type(existing_var).is_equal(&var_tp)
             && !self.vars.var_type(existing_var).is_unknown()
             // text_return converts text variables to RefVar(Text) work buffers
             // for the return path.  When a for-loop variable was converted this

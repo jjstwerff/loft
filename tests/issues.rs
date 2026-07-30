@@ -17808,3 +17808,120 @@ fn issue_689_range_is_refused_on_an_unordered_collection() {
         let _ = std::fs::remove_file(&src_path);
     }
 }
+
+/// loft#690 — a `for` loop whose variable name is already bound to a DIFFERENT type
+/// must be rejected, not silently reuse the earlier binding.
+///
+/// The reuse check existed but compared with `Type::is_same`, which answers "same KIND
+/// of type": it reports any two `Reference`s as the same whatever struct they name.  So
+/// `for r in as_a { … }  for r in as_b { … }` slipped through, `add_variable` handed the
+/// second loop the FIRST binding — old var, old type, old dep — and the body read B's
+/// records through A's layout.  No diagnostic and no crash, just wrong numbers.
+///
+/// This asserts the DIAGNOSTIC rather than values on purpose: whether the corruption is
+/// *visible* depends on the two layouts.  Two structs with identical fields returned the
+/// right answer while still being undefined, so a value test would have passed on three
+/// of the four shapes below and proved almost nothing.
+#[test]
+fn issue_690_loop_variable_may_not_change_type() {
+    let rejected = [
+        (
+            "two struct types",
+            "struct A690 { k: integer, v: integer }\n\
+             struct B690 { k: text, v: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,v:10}]; b: vector<B690> = [B690{k:\"x\",v:1}];\n\
+             n = 0; for r in a { n += r.v; } for r in b { n += r.v; } }\n",
+        ),
+        (
+            "two structs with IDENTICAL fields — still different types",
+            "struct A690 { k: integer, v: integer }\n\
+             struct C690 { k: integer, v: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,v:10}]; c: vector<C690> = [C690{k:2,v:20}];\n\
+             n = 0; for r in a { n += r.v; } for r in c { n += r.v; } }\n",
+        ),
+        (
+            "two enum types",
+            "enum E690 { Red, Green }\n\
+             enum F690 { Up, Down }\n\
+             fn main() { a: vector<E690> = [E690.Red]; b: vector<F690> = [F690.Up];\n\
+             n = 0; for r in a { n += 1; } for r in b { n += 1; } }\n",
+        ),
+        (
+            "nested vectors of different element structs",
+            "struct A690 { v: integer }\n\
+             struct B690 { v: integer }\n\
+             fn main() { a: vector<vector<A690>> = [[A690{v:1}]]; \
+             b: vector<vector<B690>> = [[B690{v:2}]];\n\
+             n = 0; for r in a { n += len(r); } for r in b { n += len(r); } }\n",
+        ),
+    ];
+    for (label, src) in rejected {
+        let src_path = std::env::temp_dir().join("loft_i690_rejected.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "#690 ({label}): reusing a loop variable at a different type must be an error, \
+             not a silent reinterpretation.  Diagnostics: {lines}"
+        );
+        assert!(
+            lines.contains("loop variable 'r'") && lines.contains("previously used as"),
+            "#690 ({label}): the diagnostic must name the variable and the earlier type, \
+             got: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+
+    // The tolerances are load-bearing: loft has FLAT variable scoping, so reusing one
+    // loop name at the SAME type is idiomatic and must keep compiling.  Tightening the
+    // comparison to `is_equal` must not reach any of these.
+    let accepted = [
+        (
+            "same struct, two loops",
+            "struct A690 { v: integer }\n\
+             fn main() { a: vector<A690> = [A690{v:1}]; b: vector<A690> = [A690{v:2}];\n\
+             n = 0; for r in a { n += r.v; } for r in b { n += r.v; } }\n",
+        ),
+        (
+            "same struct through DIFFERENT collection kinds",
+            "struct A690 { k: integer, v: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,v:10}]; s: sorted<A690[k]> = []; \
+             s += A690{k:2,v:20};\n\
+             n = 0; for r in a { n += r.v; } for r in s { n += r.v; } }\n",
+        ),
+        (
+            "integers in both loops (differing ranges stay the same type)",
+            "fn main() { a: vector<integer> = [1,2]; b: vector<integer> = [3];\n\
+             n = 0; for r in a { n += r; } for r in b { n += r; } }\n",
+        ),
+        (
+            "text in both loops (differing deps stay the same type)",
+            "fn main() { a: vector<text> = [\"xy\"]; b: vector<text> = [\"z\"];\n\
+             n = 0; for r in a { n += len(r); } for r in b { n += len(r); } }\n",
+        ),
+        (
+            "`_` stays exempt across different structs",
+            "struct A690 { v: integer }\n\
+             struct B690 { v: integer }\n\
+             fn main() { a: vector<A690> = [A690{v:1}]; b: vector<B690> = [B690{v:2}];\n\
+             n = 0; for _ in a { n += 1; } for _ in b { n += 1; } }\n",
+        ),
+    ];
+    for (label, src) in accepted {
+        let src_path = std::env::temp_dir().join("loft_i690_accepted.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "#690 ({label}): this reuse is idiomatic under loft's flat scoping and must \
+             still compile.  Diagnostics: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+}
