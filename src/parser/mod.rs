@@ -6337,6 +6337,35 @@ impl Parser {
                     &[field_ref, val_code, Value::Int(i32::from(elem_db_tp))],
                 )
             }
+            Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Sorted(_, _, _)
+                if f_nr != usize::MAX
+                    && !matches!(val_code.unspan(), Value::Int(_))
+                    && self.keyed_field_kt(&tp).is_some() =>
+            {
+                // A KEYED collection field written from a whole VALUE — a `hash<K[k]>`
+                // field taking its default from a call (loft#698).  Deep-copy it into
+                // the field the same way `objects.rs::handle_field` does for a supplied
+                // `F { h: build() }`: `OpReplaceKeyed` = remove_claims(field) (a no-op on
+                // the zero-inited field) + copy_claims(source, field).  The `OpSetInt4`
+                // below would instead write the source's 4-byte header straight into the
+                // field, leaving two owners of one record set — it panicked in `store.rs`
+                // on the first insert through the aliased header.  `0x8000` frees the
+                // call's fresh return storage after the copy, or it leaks per construction.
+                let kt = self.keyed_field_kt(&tp).unwrap_or(u16::MAX);
+                let tp_val = if self.is_struct_returning_call(&val_code) {
+                    i32::from(kt) | 0x8000
+                } else {
+                    i32::from(kt)
+                };
+                let field_ref = self.cl(
+                    "OpGetField",
+                    &[ref_code, pos_val, Value::Int(i32::from(kt))],
+                );
+                self.cl("OpReplaceKeyed", &[val_code, field_ref, Value::Int(tp_val)])
+            }
             Type::Vector(_, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)

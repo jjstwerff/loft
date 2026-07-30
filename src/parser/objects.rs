@@ -2817,15 +2817,6 @@ impl Parser {
                 {
                     continue;
                 }
-                // A NON-EMPTY collection default cannot be replayed here — its block
-                // wanted `Var(0)` as its own store, and the rewrite below would hand it
-                // the record instead.  `default_needs_temporary` (definitions.rs) already
-                // REPORTED this at the struct, which is the one place it can be said once
-                // for every construction site; this only has to stop the broken IR being
-                // emitted in the same pass.  See loft#698 for lifting it.
-                if matches!(&default, Value::Block(b) if b.name == "Vector") {
-                    continue;
-                }
             }
             // #328/#332: a POINTER field (`reference<T>`, the u16::MAX share
             // marker) is a 12-byte DbRef — its omitted default is the null
@@ -2892,6 +2883,21 @@ impl Parser {
                 default = Self::replace_record_ref(default, &Value::Var(fresh));
             } else {
                 default = Self::replace_record_ref(default, code);
+            }
+            // loft#698 — a default that CALLS something (the function a default needing a
+            // temporary is lowered into, or a plain `= mk()`) is stored with its user
+            // arguments only.  A call returning a heap value also takes a caller-allocated
+            // return buffer, and "caller" is THIS frame, not the struct the default was
+            // written in — so the hidden slots are filled here, once per construction site,
+            // exactly as `patch_tret_call` fills them for a promoted return.  Left unfilled
+            // the call reached codegen a parameter short and tripped its arity assert.
+            if let Value::Call(d, args) = &default
+                && args.len() < self.data.attributes(*d)
+            {
+                let (d, mut actual) = (*d, args.clone());
+                let mut types = vec![Type::Unknown(0); actual.len()];
+                self.add_defaults(d, &mut actual, &mut types);
+                default = Value::Call(d, actual);
             }
             list.push(self.set_field_no_check(td_nr, aid, pos, code.clone(), default));
         }

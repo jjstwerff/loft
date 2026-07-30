@@ -462,6 +462,23 @@ impl Parser {
             self.data.def(self.context).returned().clone()
         };
         self.parse_block("return from block", &mut v, &result);
+        self.finish_body(v, result)
+    }
+
+    /// Finish a function body: everything a parsed `{ … }` needs before it can be
+    /// stored as the current definition's code — the entry preamble (work-text and
+    /// work-ref null-inits, promoted-argument seeds, rebind witnesses), the
+    /// value-position text-destination wrapping, and the loop return-buffer rotation.
+    ///
+    /// Split out of [`parse_code`](Self::parse_code) so a body the parser BUILDS can
+    /// get the same treatment as one it reads from source: a field default that needs
+    /// a temporary is lowered into a function of its own (loft#698), and its body is
+    /// one expression rather than a braced block, so there is no `{` for
+    /// `parse_block` to consume.  The preamble is exactly what such a body needs —
+    /// its temporaries are work-refs, and an uninitialised work-ref is a wild store
+    /// pointer — so sharing this is what makes the generated function identical to the
+    /// hand-written one it stands in for.
+    pub(crate) fn finish_body(&mut self, mut v: Value, result: Type) -> Type {
         // @PLN10 — synth a scope-bound work-text destination for every text-dest
         // native called in *value position*, so its result lives in a freed temp
         // instead of the never-cleared `stores.scratch` buffer.  Runs on the final

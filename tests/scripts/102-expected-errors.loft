@@ -398,27 +398,28 @@ fn pe_x_default_on_bare_enum_record() {
   assert(s.start == 0, "unreached");
 }
 
-// loft#698 — a default needing a TEMPORARY is refused at the struct, because it cannot be
-// replayed at a construction site: `object_init` rewrites the block's `Var(0)` to the
-// record, which is right for an `Object` block (it builds the nested struct in place) and
-// wrong for every other kind.  `= [1, 2]` re-allocated the record mid-construction (a
-// hang) and `= "a" + "b"` used the record as a text buffer (a SIGSEGV).  Literals and
-// struct literals are unaffected; the empty `= []` IS supported (loft#697).
-struct Pe697 { pe_x: integer, pe_ids: vector<integer> = [1, 2] }
-// @EXPECT_ERROR: needs a temporary value
-fn pe_non_empty_collection_default() {
-  p = Pe697 { pe_x: 1 };
+// loft#698 — a default needing a temporary is now LOWERED into a function of its own
+// (`tests/scripts/698-default-needing-a-temporary.loft` covers what works).  Two shapes
+// stay refused, each for its own reason.
+//
+// A KEYED collection: loft has no non-empty keyed literal as a VALUE — `[K { … }]` is a
+// `vector<K>` wherever it stands alone, so a plain local `h: hash<K[k]> = [K { … }]` is
+// refused too.  It is only ever built by writing THROUGH a keyed destination, which is
+// what a default has none of.  So this is a language fact, not a defaults one.
+struct Pe697 { pe_k: integer, pe_v: integer }
+struct Pe697h { pe_x: integer, pe_h: hash<Pe697[pe_k]> = [Pe697 { pe_k: 1, pe_v: 2 }] }
+// @EXPECT_ERROR: no expression form
+fn pe_non_empty_keyed_default() {
+  p = Pe697h { pe_x: 1 };
   assert(p.pe_x == 1, "unreached");
 }
 
-// loft#698 — the same refusal for a default that is not a collection at all.  `= "a" + "b"`
-// lowers to an "Add text" block wanting `Var(0)` as its text buffer; the replay rewrite
-// handed it the record, so construction ran `OpClearText` on the struct and SIGSEGV'd.
-// This case is why the guard tests the block KIND rather than the variable index — the
-// SAFE `Object` block (a struct-literal default) writes `Var(0)` exactly as these do.
-struct Pe698 { pe_x: integer, pe_s: text = "a" + "b" }
-// @EXPECT_ERROR: needs a temporary value
-fn pe_default_needing_a_temporary() {
+// A default that reads `$` AND needs a temporary cannot move into a function of its own:
+// `$` is the record being built, which that function does not have.  Either half alone is
+// fine — `= $.pe_x + 1` stays a plain replayed default, and `= "a" + "b"` is lowered.
+struct Pe698 { pe_x: integer, pe_s: text = "a" + $.pe_x }
+// @EXPECT_ERROR: both reads `$` and needs a temporary
+fn pe_default_reading_the_record_and_needing_a_temporary() {
   p = Pe698 { pe_x: 1 };
   assert(p.pe_x == 1, "unreached");
 }

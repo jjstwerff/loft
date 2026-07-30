@@ -3091,40 +3091,84 @@ impl Parser {
                         if self.enum_context(&a_type) {
                             self.expected = a_type.clone();
                         }
+                        // loft#698 — where the default's value is BUILT decides whether it
+                        // can be replayed.  Mark the source position first: a default that
+                        // turns out to need a temporary is re-parsed from here into a
+                        // function of its own (`default_value_fn`).
+                        let value_start = self.lexer.link();
                         let tp = self.expression(&mut value);
                         self.expected = Type::Unknown(0);
                         self.init_field_tracking = false;
                         if a_type.is_unknown() {
                             a_type = tp;
                         }
-                        // loft#698 — a field default is lowered HERE, in the struct's
-                        // context, and replayed at every construction site inside some
+                        // A default is lowered HERE, in the STRUCT's context, which has no
+                        // frame, and replayed at every construction site inside some
                         // FUNCTION.  So it may reference only the record being built
-                        // (`Var(0)`, the `$` placeholder) — any other variable is an index
+                        // (`Var(0)`, the `$` placeholder); any other variable is an index
                         // into this struct's variable table, which is discarded before
-                        // replay.  The indices then resolve against whatever locals the
-                        // construction site happens to have, and the default's own
-                        // `OpDatabase` re-allocates one of them mid-construction.
+                        // replay.  The indices then resolved against whatever locals the
+                        // construction site happened to have, and the default's own
+                        // `OpDatabase` re-allocated one of them mid-construction — `= [1, 2]`
+                        // hung, `text = "a" + "b"` SIGSEGV'd.
                         //
-                        // Every default that needs no temporary is fine and stays fine: a
-                        // scalar, a text literal, arithmetic, a struct literal, `= []`.
-                        // The ones that need one were silently miscompiled — `= [1, 2]`
-                        // hung, `text = "a" + "b"` SIGSEGV'd, and a nested struct made it a
-                        // SIGSEGV either way.  Refusing here makes the boundary explicit at
-                        // the ONE place defaults are stored, instead of leaving it to be
-                        // discovered as corruption at each construction site.  Lifting the
-                        // restriction means storing defaults so they can be re-lowered per
-                        // site — see loft#698.
-                        if !self.first_pass && default_needs_temporary(&value) {
-                            let tn = a_type.name(&self.data);
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "the default for `{a_name}: {tn}` needs a temporary value, \
-                                 which a field default cannot carry — use a literal (a \
-                                 number, text, `[]`, or a struct literal), or set the field \
-                                 at each construction site"
+                        // Every default that needs no temporary needs no help: a scalar, a
+                        // text literal, arithmetic, a struct literal, `= []`.  One that DOES
+                        // is re-parsed into a function of its own, and the stored default
+                        // becomes the var-free call to it — so nothing crosses tables.
+                        //
+                        // A default reading `$` is the one shape that cannot move: it needs
+                        // the record, which the function it would move into does not have.
+                        // Needing BOTH `$` and a temporary stays refused, and says so.
+                        // `$` is `Var(0)`, and so is the first temporary the struct's empty
+                        // table hands out — the dep tracking above is what tells the two
+                        // apart, so the replay question cannot be asked without it.
+                        let reads_record = !self.init_field_deps.is_empty();
+                        if !default_replayable_in_place(&value, reads_record) {
+                            // A KEYED collection has no literal EXPRESSION form at all:
+                            // `[K { … }]` is a `vector<K>` wherever it stands on its own, so
+                            // even `h: hash<K[k]> = [K { … }]` on a plain LOCAL is refused.
+                            // It is only ever built through a keyed destination — a field
+                            // named in the literal — which is exactly what a default is not.
+                            // So this one stays refused, on a language fact rather than on
+                            // anything about defaults, and points at the two forms that work.
+                            let keyed = matches!(
+                                a_type,
+                                Type::Hash(_, _, _)
+                                    | Type::Sorted(_, _, _)
+                                    | Type::Index(_, _, _)
+                                    | Type::Radix(_, _, _)
                             );
+                            if keyed {
+                                if !self.first_pass {
+                                    let tn = a_type.name(&self.data);
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "the default for `{a_name}: {tn}` is a non-empty keyed \
+                                         collection, which loft has no expression form for — \
+                                         `[…]` builds a vector unless it is written straight \
+                                         into a keyed destination (the same reason a local \
+                                         `h: {tn} = […]` is refused); use `= []` and fill the \
+                                         field after construction, or name it at each \
+                                         construction site"
+                                    );
+                                }
+                            } else if !reads_record {
+                                self.lexer.revert(value_start);
+                                value = self.default_value_fn(d_nr, a_name, &a_type);
+                            } else if !self.first_pass {
+                                let tn = a_type.name(&self.data);
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "the default for `{a_name}: {tn}` both reads `$` and \
+                                     needs a temporary value — one that reads `$` is built \
+                                     against the record at every construction site, so it \
+                                     cannot be built once and shared; drop the `$` reference \
+                                     or set the field at each construction site"
+                                );
+                            }
                         }
                     }
                     // @PLN86 P6.4 — links after a scalar/named field type.
@@ -3274,6 +3318,85 @@ impl Parser {
         }
         (is_computed, is_init)
     }
+
+    /// loft#698 — lower a field default that needs a temporary into a function of its
+    /// own, and return the call that stands in for it.
+    ///
+    /// The lexer must sit at the start of the default's expression: it is parsed HERE,
+    /// in the new function's context, so every temporary it needs is numbered in that
+    /// function's variable table and never leaves it.  What gets stored on the field is
+    /// then a var-free `Call` — the one shape every construction site can already
+    /// replay, and the shape `default_replayable_in_place` already calls safe.
+    ///
+    /// The value comes back BY RETURN rather than being written in place.  That is what
+    /// keeps an INLINE nested struct working: the caller writes the field, so it applies
+    /// its own `pos + fld` offset — a function writing through the record could only bake
+    /// offsets that are right at the top level.  It also means the whole class is covered
+    /// by one mechanism, because "a value returned from a call" is what a construction
+    /// site already handles for a supplied `S { v: build() }`, on both backends.
+    ///
+    /// The definition is minted on BOTH passes.  `default_replayable_in_place` reads the same
+    /// on each (a `[1, 2]` default is a `Vector` block in pass 1 as well), so the decision
+    /// cannot diverge — which it must not, because H5 rejects any definition that first
+    /// appears in pass 2.
+    fn default_value_fn(&mut self, td_nr: u32, a_name: &str, a_type: &Type) -> Value {
+        let fn_name = format!("__dflt_{}_{a_name}", self.data.def(td_nr).name());
+        let stored_name = format!("n_{fn_name}");
+        let outer_context = self.context;
+        let outer_vars = std::mem::replace(
+            &mut self.vars,
+            Function::new(&fn_name, &self.lexer.pos().file),
+        );
+        let outer_loop = self.in_loop;
+        self.in_loop = false;
+        self.context = if self.first_pass {
+            self.data.add_fn(&mut self.lexer, &fn_name, &[])
+        } else {
+            self.data.def_nr(&stored_name)
+        };
+        if self.context == u32::MAX {
+            self.context = outer_context;
+            self.vars = outer_vars;
+            self.in_loop = outer_loop;
+            return Value::Null;
+        }
+        let d_nr = self.context;
+        if self.first_pass {
+            self.data.set_returned(d_nr, a_type.clone());
+        }
+        self.vars
+            .append(&mut self.data.definitions[d_nr as usize].variables);
+        // The declared field type is the hint the default was already parsed under, and
+        // the collection kinds NEED it: `= [K { … }]` is a `vector<K>` literal until the
+        // expected type says the field is a `hash<K[k]>`.
+        let result = self.data.def(d_nr).returned().clone();
+        let mut expr = Value::Null;
+        self.expected = result.clone();
+        let tp = self.expression(&mut expr);
+        self.expected = Type::Unknown(0);
+        if !self.first_pass && !result.is_unknown() {
+            self.convert(&mut expr, &tp, &result);
+        }
+        // The tail still has to be DELIVERED, which for a body read from source is what
+        // `parse_block`'s "return from block" context does — it binds the value to the
+        // function's return buffer (threading that buffer into a tail call, so the callee
+        // writes straight into it) and wraps the tail in a `Return`.  Skipped, a heap
+        // value belonged to nobody: it was freed at scope exit and the function returned
+        // null, so the caller read a freed store — invisible in a normal run, a SIGSEGV
+        // under the POISON gate.
+        let mut ops = vec![expr];
+        let pos = self.lexer.pos().clone();
+        let tail = self.block_result("return from block", &result, &tp, &mut ops, &pos);
+        self.finish_body(v_block(ops, tail, "block"), Type::Void);
+        self.data.definitions[d_nr as usize]
+            .variables
+            .append(&mut self.vars);
+        self.context = outer_context;
+        self.vars = outer_vars;
+        self.in_loop = outer_loop;
+        self.data.def_used(d_nr);
+        Value::Call(d_nr, Vec::new())
+    }
 }
 
 /// Visit every variable index a constant's initialiser carries, in place.
@@ -3337,33 +3460,89 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
     }
 }
 
-/// loft#698 — can this field default survive being replayed at a construction site?
+/// loft#698 — can this field default be replayed at a construction site AS IT STANDS?
 ///
-/// A default is lowered in the STRUCT's context and replayed inside whatever function
-/// builds the record, where `object_init` rewrites `Var(0)` to that record. Whether that
-/// rewrite is CORRECT depends on what the default's block does with `Var(0)`:
+/// A default is lowered in the STRUCT's context, which has no frame, and replayed inside
+/// whatever function builds the record, where `object_init` rewrites `Var(0)` to that
+/// record.  So the question is what variables the default names, and whether `Var(0)`
+/// really is the record:
 ///
-/// * a literal (`= 7`, `= "hi"`, `= []`) names no variable at all — always safe;
+/// * a literal (`= 7`, `= "hi"`, `= []`) names no variable at all — always replayable;
+/// * `reads_record` says the default read `$`, which IS `Var(0)` — so `= $.x + 1` is
+///   replayable, and that is the only thing `Var(0)` may legitimately be;
 /// * an `Object` block builds the nested struct IN PLACE through `Var(0)`, so pointing it
 ///   at the record is exactly right — that is how `= P { px: 1, py: 2 }` works;
 /// * an `EnumUnitLit` block is re-homed to a fresh work-ref by `object_init`;
-/// * any other block wanted `Var(0)` as its OWN temporary, and the rewrite hands it the
-///   record instead. `= "a" + "b"` then used the record as a text buffer (`OpClearText`
-///   on the struct — a SIGSEGV) and `= [1, 2]` re-allocated it mid-construction (a hang).
+/// * anything else naming a variable wanted its OWN temporary, and the struct's table is
+///   discarded before replay, so the index resolves against the construction site's
+///   locals.  `= "a" + "b"` used the record as a text buffer (`OpClearText` on the
+///   struct — a SIGSEGV), `= [1, 2]` re-allocated it mid-construction (a hang), and
+///   `= mk()` handed the callee the RECORD as its return buffer (a hang) — that last one
+///   survived an earlier index-based check, because a call's return buffer is the FIRST
+///   work-ref the struct's empty table hands out and so lands on `Var(0)`, the very index
+///   that check read as "the record, therefore safe".
 ///
-/// So the test is the block KIND, not the variable index: an index-based check cannot
-/// separate these, because the safe `Object` case and the broken ones all write `Var(0)`.
-/// A variable other than `Var(0)` is refused outright — it indexes the struct's variable
-/// table, which is discarded before replay.
-fn default_needs_temporary(value: &crate::data::Value) -> bool {
+/// Which is why this is a WHITELIST and returns `false` for anything it does not
+/// recognise: an unrecognised shape gets lowered into a function of its own, which is
+/// always sound, where guessing it replayable is silent corruption.  The match is
+/// exhaustive on purpose — a new IR variant has to be classified here rather than
+/// inheriting whichever answer happened to be the fallback.
+fn default_replayable_in_place(value: &crate::data::Value, reads_record: bool) -> bool {
     use crate::data::Value;
-    let mut needs = false;
-    let mut probe = value.clone();
-    probe.map_nodes(&mut |n| match n {
-        Value::Block(b) if b.name != "Object" && b.name != "EnumUnitLit" => needs = true,
-        Value::Var(v) if *v != 0 => needs = true,
-        Value::Set(v, _) if *v != 0 => needs = true,
-        _ => {}
-    });
-    needs
+    let every = |vs: &[Value]| {
+        vs.iter()
+            .all(|v| default_replayable_in_place(v, reads_record))
+    };
+    match value.unspan() {
+        // The two blocks `object_init` re-homes by hand; every other block builds in a
+        // temporary of its own.
+        Value::Block(b) => b.name == "Object" || b.name == "EnumUnitLit",
+
+        // A variable is the record only when the default actually read `$`.
+        Value::Var(v) => *v == 0 && reads_record,
+        Value::Set(v, inner) => {
+            *v == 0 && reads_record && default_replayable_in_place(inner, reads_record)
+        }
+
+        // Operands carry the variables; the callee/branch structure itself carries none.
+        Value::Call(_, args) => every(args),
+        Value::Insert(items) | Value::Tuple(items) | Value::Parallel(items) => every(items),
+        Value::If(c, t, e) => {
+            default_replayable_in_place(c, reads_record)
+                && default_replayable_in_place(t, reads_record)
+                && default_replayable_in_place(e, reads_record)
+        }
+        Value::Return(b) | Value::Drop(b) | Value::BreakWith(_, b) | Value::Yield(b) => {
+            default_replayable_in_place(b, reads_record)
+        }
+
+        // Literals name nothing.
+        Value::Null
+        | Value::Line(_)
+        | Value::Int(_)
+        | Value::Enum(..)
+        | Value::Boolean(_)
+        | Value::Float(_)
+        | Value::Long(_)
+        | Value::Single(_)
+        | Value::Text(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::RawExpr(_) => true,
+
+        // Each names a variable in a form whose meaning cannot be recovered here, or is
+        // not something a default is built from at all.  Lower it into its own function.
+        Value::Loop(_)
+        | Value::CallRef(..)
+        | Value::Iter(..)
+        | Value::Keys(_)
+        | Value::TupleGet(..)
+        | Value::TuplePut(..)
+        | Value::FnRef(..)
+        | Value::FnRefDnr(_)
+        | Value::ParFor(_) => false,
+
+        // `unspan` above already peeled the outer wrapper; peel any nested one too.
+        Value::Span(b) => default_replayable_in_place(&b.1, reads_record),
+    }
 }
