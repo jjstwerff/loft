@@ -237,11 +237,30 @@ bug-heavy weeks* — W27–W29 closed 2, 2 and 0 bugs, because they were plan an
 work. *The transcripts are outside the repo* and nothing here preserves them; if they are
 pruned this baseline cannot be recomputed.
 
-**The precise complement is a `steered` label** the owner applies when they had to
-intervene on a specific issue. The transcript rate is continuous and needs no behaviour
-change but cannot attribute; the label attributes exactly but only where it is worth a
-click. Neither depends on the agent noticing it needed help — which self-reporting would,
-and which is the one thing an agent that needed steering is least likely to do.
+**The precise complement is the [`steered`](../../.github/LABELS.md) label** (live since
+2026-07-30), which the owner applies when they had to intervene on a specific issue. The
+transcript rate is continuous and needs no behaviour change but cannot attribute to a bug;
+the label attributes exactly but only where it is worth a click. Neither depends on the
+agent noticing it needed help — which self-reporting would, and which is the one thing an
+agent that needed steering is least likely to do. **Agents must never apply or remove it.**
+
+Read it against the same denominator as `wa:` — as a SHARE of the bugs fixed in a window,
+not a count, or it just tracks how many bugs there were:
+
+```sh
+# steered share of bugs closed in a window
+gh issue list --state closed --limit 500 --label bug --json number,labels,closedAt \
+  --jq '[.[] | select(.closedAt > "2026-08-01")] as $all
+        | ($all | length) as $n
+        | ($all | map(select([.labels[].name] | index("steered"))) | length) as $s
+        | "steered \($s) of \($n) closed bugs"'
+```
+
+Two readings to keep apart once it has data. A FALLING steered share with a steady bug
+count is the thing worth wanting: the fixes are landing right the first time. A falling
+share with a falling bug count says nothing on its own — it can just mean less was
+attempted. Pair it with the `wa:` table above, which is usage-normalised, before drawing
+either conclusion.
 
 1. **Seal the memory model — the non-negotiable gate.** The store-lifetime /
    return-bind-ownership class (loft's stated #1 weakness, REOPENED 2026-06-21) must be

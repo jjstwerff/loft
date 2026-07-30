@@ -55,6 +55,7 @@ statically-typed language.  Source flows: **text → parser → IR → codegen �
 |---|---|
 | `both-backends` | reproduces on BOTH `--interpret` and `--native` (vs a single-backend divergence) |
 | `needs-design` | the fix needs a design decision, not a mechanical change — don't just patch it |
+| `steered` | **owner-applied only.** The owner had to step in to get this fixed, or fixed thoroughly — a shallow first fix, a missed sibling, a matrix that needed asking for. One click, no prose: it is a *counter*, not a complaint, and it pairs with [`scripts/steering_rate.py`](../scripts/steering_rate.py) (see [STABILITY_ROADMAP § how much STEERING the fixing took](../doc/claude/STABILITY_ROADMAP.md)). **An agent must never apply or remove it** — the agent that needed steering is the least likely to notice, so self-reporting would bias exactly where the signal lives. Absence therefore means "not marked", never "no steering needed". |
 | `bug` / `enhancement` / `documentation` / … | the GitHub defaults; keep `bug` on every bug |
 | `proposal` | a proposed new library or API change/rewrite (the `library_proposal` intake → the @PLN112 provenance view) |
 | `showcase` | an accepted COMMUNITY app, listed in the @PLN112 applications tier (first-party apps self-describe in their own repo via a `.loft-showcase.toml` + the `loft-showcase` topic, no label) |
