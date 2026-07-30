@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I90 — Shared utilities & data structures
 
 //! Content integrity — "are these the bytes I was promised?"
 //!
