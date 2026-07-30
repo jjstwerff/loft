@@ -1,0 +1,141 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#687): a mutated `text` PARAMETER captured inside a function that
+// itself returns `text`.  #685 fixed mutated scalar parameter captures for every other
+// type by promoting the parameter to a shadow local; this one combination it had to
+// refuse by name, because plan-22 phase 02d-vii skipped text boxing whenever the parent
+// returned text, and mutable text then travelled as a hidden `&text` out-parameter that
+// pass 2 cannot add without growing the signature.
+//
+// `parent_returns_text` was a PROXY for one real case: a text local that is the
+// function's RETURN SOURCE, which the return machinery has already given its own hidden
+// `&text` out-parameter.  That binding cannot also be a shared cell — and does not need
+// to be, since the record stores the value inline and the existing per-call write-back
+// propagates the closure's writes.  As a proxy it was both too wide (it also skipped a
+// text local the function does NOT return, which boxes cleanly) and no help at all for a
+// PARAMETER, which has no indirection of its own to reuse.
+//
+// Both halves now ask the binding instead: `RefVar` means "already has an indirection".
+// The decision is settled at the parent's pass-1 body END, the first moment it can be
+// right — at the lambda's epilogue a to-be-returned text local still looks like a plain
+// `Text`, which is exactly why the two halves used to disagree.
+//
+// Axes: the capture's SOURCE (parameter vs local), whether the capture IS the returned
+// value, the parent's RETURN type, and cardinality (one returned and one not, in one
+// function).  Non-text captures are here too: the retired proxy only ever skipped text,
+// so they must keep boxing.
+
+// ── THE CASE and its immediate neighbours ─────────────────────────────────────
+
+// A mutated text PARAMETER captured, and the parent returns text.  Refused before.
+fn p687_param_returned(n: text) -> text {
+  b = fn(k: text) { n = n + k; };
+  b("x");
+  b("y");
+  n
+}
+
+// The same with a LOCAL source — the one shape the retired proxy really protected: the
+// local IS the returned text, so it carries a hidden `&text` out-parameter and must NOT
+// also be boxed.  Always worked; must stay working.
+fn p687_local_returned(seed: text) -> text {
+  n = seed;
+  b = fn(k: text) { n = n + k; };
+  b("x");
+  b("y");
+  n
+}
+
+// A text PARAMETER capture in a text-returning parent that is NOT the returned value.
+fn p687_param_not_returned(n: text) -> text {
+  b = fn(k: text) { n = n + k; };
+  b("x");
+  b("y");
+  "got:" + n
+}
+
+// A LOCAL capture that is not the returned value — the proxy skipped this too, which was
+// the "too wide" half.  It boxes cleanly.
+fn p687_local_not_returned(seed: text) -> text {
+  n = seed;
+  b = fn(k: text) { n = n + k; };
+  b("x");
+  b("y");
+  "got:" + n
+}
+
+// The returned text is built through a CALL, so the parent's return source is a work
+// buffer rather than the capture.
+fn p687_shout(s: text) -> text { s.to_uppercase() }
+fn p687_param_nested_return(n: text) -> text {
+  b = fn(k: text) { n = n + k; };
+  b("x");
+  b("y");
+  p687_shout(n)
+}
+
+// ── the axes the fix must NOT have moved ──────────────────────────────────────
+
+// A non-text parent return: the ordinary cell path, untouched here.
+fn p687_param_int_parent(n: text) -> integer {
+  b = fn(k: text) { n = n + k; };
+  b("x");
+  b("y");
+  len(n)
+}
+
+// A NON-text mutated capture in a text-returning parent.  The retired proxy only ever
+// skipped text, so this always boxed and must keep boxing.
+fn p687_scalar_in_text_parent(n: integer) -> text {
+  b = fn(k: integer) { n = n + k; };
+  b(1);
+  b(2);
+  "n{n}"
+}
+
+// CARDINALITY — in ONE text-returning function, a text local that IS returned (stays
+// inline) beside one that is NOT (boxes), each mutated by its own closure.  A per-function
+// proxy cannot tell these apart; a per-binding fact can.
+fn p687_two_locals(seed: text) -> text {
+  keep = seed;
+  side = "s";
+  bk = fn(k: text) { keep = keep + k; };
+  bs = fn(k: text) { side = side + k; };
+  bk("x");
+  bs("y");
+  keep + "|" + side
+}
+
+fn main() {
+  assert(p687_param_returned("a") == "axy", "text param returned: got '{p687_param_returned(\"a\")}'");
+  assert(p687_local_returned("a") == "axy", "text local returned: got '{p687_local_returned(\"a\")}'");
+  assert(p687_param_not_returned("a") == "got:axy",
+         "text param not returned: got '{p687_param_not_returned(\"a\")}'");
+  assert(p687_local_not_returned("a") == "got:axy",
+         "text local not returned: got '{p687_local_not_returned(\"a\")}'");
+  assert(p687_param_nested_return("a") == "AXY",
+         "returned through a call: got '{p687_param_nested_return(\"a\")}'");
+
+  assert(p687_param_int_parent("a") == 3, "non-text parent: got {p687_param_int_parent(\"a\")}");
+  assert(p687_scalar_in_text_parent(10) == "n13",
+         "integer capture in a text-returning fn: got '{p687_scalar_in_text_parent(10)}'");
+  assert(p687_two_locals("a") == "ax|sy",
+         "one returned + one not: got '{p687_two_locals(\"a\")}'");
+
+  // A `text` parameter is passed BY VALUE, so the closure's writes must not reach the
+  // caller — the shadow local is what buys that.
+  t = "a";
+  inner = p687_param_returned(t);
+  assert(inner == "axy", "by-value: the callee sees its own writes, got '{inner}'");
+  assert(t == "a", "by-value: the CALLER's text is untouched, got '{t}'");
+
+  // Repeat calls: the cell is minted per call, so each must start from its own argument
+  // rather than from the previous call's cell.
+  assert(p687_param_returned("b") == "bxy", "repeat call with a different argument");
+  assert(p687_param_returned("a") == "axy", "repeat call, original argument");
+  assert(p687_local_returned("c") == "cxy", "repeat call, local source");
+  assert(p687_two_locals("z") == "zx|sy", "repeat call, two locals");
+
+  println("687-mutated-text-param-capture ok");
+}

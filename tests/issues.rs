@@ -17450,35 +17450,74 @@ fn issue_685_mutated_scalar_param_is_boxed_like_a_local() {
     );
 }
 
-/// loft#685 residual — a mutated TEXT parameter inside a TEXT-RETURNING function has
-/// no representation, so it is refused by name instead of corrupting the frame.
+/// loft#687 — a mutated TEXT capture's STORAGE is decided per BINDING, not per function.
 ///
-/// Mutable text travels as a hidden `&text` out-parameter, and that cannot be added
-/// for a parameter from pass 2 without growing the signature after pass 1 fixed it
-/// (the H5 two-pass contract rejects exactly that).  The refusal names the working
-/// alternative; `p685_text_len` in the script covers the same type when the parent
-/// does NOT return text, where the cell path applies normally.
+/// #685 could not serve a mutated `text` PARAMETER in a text-returning function and
+/// refused it by name; plan-22 02d-vii had skipped text boxing whenever the parent
+/// returned text.  That condition was a proxy for one real case — a text local that is
+/// the function's RETURN SOURCE, which the return machinery already gives its own hidden
+/// `&text` out-parameter — and as a proxy it was too wide (it also skipped a text local
+/// the function does not return) and useless for a parameter, which has no indirection to
+/// reuse.  Both halves now ask the binding: `RefVar` means "already has one".
+///
+/// The fixture puts BOTH bindings in ONE text-returning function, which is what no
+/// per-function condition can get right: `keep` is returned (stays inline + write-back),
+/// `side` is not (takes a shared cell).  Values live in
+/// `tests/scripts/687-mutated-text-param-capture.loft`; this asserts the storage, because
+/// mixing the two representations for one binding is what used to segfault, and a value
+/// test cannot see which one a green run picked.
 #[test]
-fn issue_685_text_param_in_text_returning_fn_is_refused() {
-    let src_path = std::env::temp_dir().join("loft_i685_text_refusal.loft");
+fn issue_687_mutated_text_capture_storage_is_per_binding() {
+    let src_path = std::env::temp_dir().join("loft_i687_text_storage.loft");
     std::fs::write(
         &src_path,
-        "fn t685(n: text) -> text { b = fn(k: text) { n = n + k; }; b(\"x\"); n }\n\
-         fn main() { t685(\"a\"); }\n",
+        "fn ret687(seed: text) -> text { keep = seed; b = fn(k: text) { keep = keep + k; }; b(\"x\"); keep }\n\
+         fn side687(seed: text) -> text { side = seed; b = fn(k: text) { side = side + k; }; b(\"x\"); \"p\" + side }\n\
+         fn par687(n: text) -> text { b = fn(k: text) { n = n + k; }; b(\"x\"); n }\n\
+         fn main() { ret687(\"a\"); side687(\"a\"); par687(\"a\"); }\n",
     )
     .unwrap();
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
     p.parse(src_path.to_str().unwrap(), false);
-    let lines = p.diagnostics.lines().join("\n");
     assert!(
-        p.diagnostics.level() >= loft::diagnostics::Level::Error,
-        "#685: a mutated text parameter in a text-returning fn must be REFUSED, not \
-         compiled — it used to segfault at runtime.  Diagnostics: {lines}"
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#687: a mutated text parameter in a text-returning fn must COMPILE now: {:?}",
+        p.diagnostics.lines()
     );
+
+    let is_cell = |record: &str, capture: &str| -> bool {
+        let rec = p.data.def_nr(record);
+        assert_ne!(rec, u32::MAX, "#687: {record} must exist");
+        let a = p.data.attr(rec, capture);
+        assert_ne!(a, usize::MAX, "#687: {record} must carry `{capture}`");
+        matches!(p.data.attr_type(rec, a),
+            loft::data::Type::Reference(d, _) if p.data.def(d).name().starts_with("__cell_"))
+    };
+
+    // All three functions return text, so the retired per-function proxy gave all three
+    // the same answer.  Each binding needs a different one.
+
+    // `keep` IS the returned text, so the return machinery already gave it a hidden
+    // `&text` out-parameter.  Boxing it too is the mismatch that segfaulted: the record
+    // would hold a cell DbRef while the binding stayed a `&text` stack pointer.
     assert!(
-        lines.contains("copy it into a local first"),
-        "#685: the refusal must name the working alternative, got: {lines}"
+        !is_cell("__closure_0", "keep"),
+        "#687: a text local that is the function's RETURN SOURCE must stay INLINE in the \
+         record — it already has a hidden `&text` out-parameter, and two indirections for \
+         one binding is the crash"
+    );
+    // `side` is not returned, so nothing else claims it and the shared cell is right.
+    // The retired proxy skipped this one purely as collateral — the "too wide" half.
+    assert!(
+        is_cell("__closure_1", "side"),
+        "#687: a mutated text local the function does NOT return must take a shared cell"
+    );
+    // A parameter has no indirection of its own to reuse, so #685's shadow local takes
+    // the cell like every other type.  This is the combination that used to be refused.
+    assert!(
+        is_cell("__closure_2", "n"),
+        "#687: a mutated text PARAMETER's shadow local must take a shared cell"
     );
 }
 

@@ -4372,6 +4372,18 @@ impl Data {
         }
     }
 
+    /// #687 — retype a closure-record capture attribute whose storage the parent's
+    /// pass-1 body end has just settled.
+    ///
+    /// Separate from [`Data::set_attr_type`] (which refuses to overwrite a set type)
+    /// because the lambda's own epilogue has to write SOMETHING before the parent's
+    /// body finishes, and only the body end knows whether the captured binding ended
+    /// up with its own indirection.  Safe to run there: the record's db layout is
+    /// built by `fill_all` at the end of the pass, after this.
+    pub fn retype_capture_attr(&mut self, record: u32, a_nr: usize, tp: Type) {
+        self.definitions[record as usize].attributes[a_nr].typedef = tp;
+    }
+
     #[must_use]
     pub fn attr_value(&self, d_nr: u32, a_nr: usize) -> Value {
         self.def(d_nr).attributes[a_nr].value.clone()

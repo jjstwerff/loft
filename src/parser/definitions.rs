@@ -1472,6 +1472,11 @@ impl Parser {
             // reject any mutated scalar that more than one closure
             // captures (GOALS.md § "Stability trumps features").
             if self.first_pass {
+                // #687 — same moment, same reason: a capture's STORAGE also depends on
+                // facts that are only final now (whether the binding ended up with a
+                // hidden out-parameter of its own).  Runs first: the rejection below
+                // consumes this parent's lambda list.
+                self.finalize_capture_storage(self.context);
                 self.reject_shared_mutable_scalar_captures(self.context);
             }
             // reset transient closure state after each function body.

@@ -42,6 +42,20 @@ The capture now resolves exactly as it does when the declaration comes first, wh
 was projected out of — a field, a vector element, a whole vector, or a scalar read out of
 one. Declaration order is invisible again.
 
+### Unreleased — the last corner of mutable text captures
+
+Making mutated parameter captures work (below) left exactly one combination refused with
+a message: mutating a captured `text` **parameter** inside a function that itself returns
+`text`. That works now too, so the rule for closures is finally uniform — a mutated
+capture behaves the same whether it started as a local or a parameter, and whatever the
+enclosing function returns.
+
+What was behind it: a text value the function *returns* is already handled specially (the
+caller supplies the buffer), and the compiler had been keying off "does this function
+return text?" rather than "is this the value being returned?". The first question is the
+wrong one — a function can return one text while a closure mutates another, and only the
+second question tells them apart.
+
 ### Unreleased — a closure can now count with one of your parameters
 
 The accumulator closure is an old friend:
@@ -60,10 +74,6 @@ Now a mutated parameter behaves like a mutated local, which is what it looks lik
 closure's writes are visible for the rest of the function, and your **caller's value is
 untouched** — a scalar parameter is still passed by value. Mutating a `const` parameter
 through a closure is refused, as it is anywhere else.
-
-One combination is refused with a message instead of supported: mutating a captured
-`text` parameter inside a function that itself returns `text`. Copy it into a local and
-capture that — the error says so.
 
 ### Unreleased — a lambda that captures your value no longer eats it
 

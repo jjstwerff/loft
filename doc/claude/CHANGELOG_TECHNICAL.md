@@ -9,6 +9,60 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### #687: a mutated text capture's STORAGE is decided per binding, not per function (2026-07-30)
+
+#685 fixed mutated scalar PARAMETER captures for every type but one and refused the
+remainder by name: a `text` parameter inside a function that itself returns `text`. Plan-22
+phase 02d-vii skipped text boxing whenever the parent returned text, so mutable text
+travelled as a hidden `&text` out-parameter that pass 2 cannot add without growing the
+signature (the H5 two-pass contract catches it).
+
+**`parent_returns_text` was a proxy for one real case, and wrong in both directions.** The
+case it protected is a text local that is the function's RETURN SOURCE, which the return
+machinery has already given its own hidden `&text` out-parameter — that binding cannot
+*also* be a shared cell, and does not need to be, since the record stores the value inline
+and the existing per-call write-back propagates the closure's writes. As a proxy it was too
+WIDE (it also skipped a text local the function does not return, which boxes cleanly) and
+no help at all for a PARAMETER, which has no indirection of its own to reuse. A boundary
+sweep separated all four combinations, and the discriminator turned out to be a fact
+already used elsewhere in the same function: **`RefVar` means "this binding already has an
+indirection"**.
+
+The two halves that must agree are the record's attribute type
+(`box_captured_names_for_outer_scalars`, at the LAMBDA's epilogue) and the binding's own
+type (`flip_scalars_to_box_types`, pass 2) — and measurement showed the epilogue simply
+cannot be right: a to-be-returned text local is still a plain `Text` there and only becomes
+`RefVar(Text)` later in the body, which is exactly why the two disagreed. So the epilogue
+boxes PROVISIONALLY (the common case, and it must write something because pass 1 freezes
+the record's storage — leaving the raw scalar lays the field out 8B inline instead of a 12B
+shared DbRef), and `Parser::finalize_capture_storage` corrects it at the parent's **pass-1
+body end**: the first moment the fact is final, still before `fill_all` lays the record out,
+and the same hook `reject_shared_mutable_scalar_captures` already uses for the same reason.
+It runs first — the rejection consumes the parent's lambda list.
+
+Net effect is a SUBTRACTION: both `parent_returns_text` guards and #685's refusal are gone,
+replaced by asking the binding. One text-returning function can now need both answers at
+once (`keep` returned → inline, `side` not → cell), which is what no per-function condition
+could ever get right.
+
+Two measurements worth recording, because both contradicted the obvious reading:
+
+- Removing only ONE of the two guards leaves them disagreeing and SIGSEGVs — they are one
+  fact re-derived twice, so they move together.
+- `box_captured_names_for_outer_scalars` and `synthesize_closure_record` run in **pass 1
+  only**: in pass 2 the lambda records zero captures (its pass-1 placeholder vars are
+  restored into its own table, so the capture branch is never reached). The record's
+  attribute types are a pass-1 decision, full stop — which is why the correction has to be
+  a pass-1 hook and not a pass-2 repair like #686's.
+
+Guards: `tests/scripts/687-mutated-text-param-capture.loft` (values, both backends — the
+capture's source, whether it is the returned value, the parent's return type, cardinality,
+by-value, repeat calls) and `issue_687_mutated_text_capture_storage_is_per_binding`, which
+asserts the STORAGE for three bindings whose only difference is what claims them. Both
+verified RED with `finalize_capture_storage` disabled. #685's
+`issue_685_text_param_in_text_returning_fn_is_refused` is replaced by it — that test pinned
+the refusal, which was always a placeholder for this issue.
+
 ### #686: a capture of a FORWARD-declared type was mis-typed, then mis-positioned (2026-07-30)
 
 A lambda capturing a local whose type came from a struct declared LATER in the file read

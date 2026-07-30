@@ -414,11 +414,33 @@ for "a boxed scalar comes into existence", because the seed is the only assignme
 parameter's cell is guaranteed to have (the mutation may live entirely inside the
 closure).
 
-`text` inside a **text-returning** function is the one shape this cannot serve: there
-the flip is skipped (plan-22 02d-vii) and mutable text travels as a hidden `&text`
-out-parameter, which cannot be added from pass 2 without growing the signature after
-pass 1 fixed it — the H5 two-pass contract rejects exactly that. It is refused by name
-with the working alternative (#687).
+### Which mutated captures take a CELL, and which stay inline (#687)
+
+A mutated capture is normally boxed into a shared `__cell_<T>` so the closure's writes and
+the enclosing body's reads hit one location.  The exception is a binding that **already
+carries its own indirection**: a text local that is the function's RETURN SOURCE, which the
+return machinery promotes to a hidden `&text` out-parameter so the caller supplies the
+buffer.  That binding cannot also be a cell — and does not need to be, because the record
+stores the value inline and the existing per-call write-back propagates the closure's
+changes.  Two indirections for one binding is a crash: the record holds a cell DbRef while
+the binding is a `&text` stack pointer.
+
+**`RefVar` is the fact.**  Plan-22 02d-vii used to stand in for it with "skip text boxing
+when the parent returns text", which was wrong in both directions — too wide (it also
+skipped a text local the function does NOT return, which boxes cleanly) and no help for a
+PARAMETER, which has no indirection to reuse and so was refused outright.
+
+**Where the decision lives.**  Two halves have to agree — the record's attribute type
+(`box_captured_names_for_outer_scalars`, at the LAMBDA's epilogue) and the binding's own
+type (`flip_scalars_to_box_types`, pass 2) — and the epilogue is too early to be right: a
+to-be-returned text local is still a plain `Text` there and only becomes `RefVar(Text)`
+later in the body.  So the epilogue boxes PROVISIONALLY (the common case, and the attribute
+must say something because pass 1 freezes the record's storage), and
+`Parser::finalize_capture_storage` corrects it at the parent's **pass-1 body end** — the
+first moment the fact is final, and still before `fill_all` lays the record out.
+
+One text-returning function can need both answers at once (`keep` returned, `side` not),
+which is why no per-function condition can work.
 
 ### A capture of a FORWARD-declared type is typed and laid out in pass 2 (#686)
 

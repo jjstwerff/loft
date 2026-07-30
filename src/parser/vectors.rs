@@ -1333,17 +1333,13 @@ impl Parser {
         if self.context == u32::MAX || (self.context as usize) >= self.data.definitions.len() {
             return;
         }
-        // Plan-22 phase 02d-vii — skip text-cell boxing when the
-        // parent function returns text.  In a text-returning fn,
-        // the work-text result-buffer machinery locks the
-        // closure record's store before `emit_lambda_code`'s
-        // SetDbRef can capture the boxed-text DbRef, panicking
-        // with "Write to locked store".  Reverting text vars to
-        // their pre-02d-vi behaviour (no flip → text mutation
-        // flows through the existing void-return write-back
-        // mechanism, which works for the b_d1 shape that
-        // text-returning fns are most likely to use).
-        let parent_returns_text = matches!(self.data.def(self.context).returned(), Type::Text(_));
+        // Plan-22 phase 02d-vii's blanket "skip text when the parent returns text" is
+        // RETIRED (#687).  It stood in for one real case — a text local that is the
+        // function's RETURN SOURCE, which the text-return machinery has already given a
+        // hidden `&text` out-parameter — and the `RefVar` test below names that case
+        // directly.  As a proxy it was both too wide (it also skipped a text local the
+        // function does not return, which boxes fine) and useless for a PARAMETER, which
+        // has no indirection of its own to reuse.
         let names = self.data.def(self.context).scalars_to_box().to_vec();
         for name in &names {
             let mut v_nr = self.vars.var(name);
@@ -1365,16 +1361,12 @@ impl Parser {
             // so `emit_lambda_code`'s `OpSetDbRef` read 12 bytes out of an 8-byte
             // slot and corrupted the fn-ref being built beside it.
             //
-            // The one shape this cannot serve is a mutated TEXT capture inside a
-            // text-returning function, where the flip below is skipped and mutable
-            // text instead travels as a hidden `&text` out-parameter — creating that
-            // shadow in pass 2 would grow the signature after pass 1 fixed it (the H5
-            // two-pass contract catches it).  Refuse it by name rather than corrupt.
-            // A `RefVar` argument is NOT a by-value parameter and never reaches either
-            // branch: it is either a user `&T` out-parameter (whose writes must reach
-            // the caller, so a private cell would be wrong) or a mutable text local the
-            // compiler already promoted to a hidden `&text` out-parameter — and that
-            // promotion is exactly the working path the refusal below points people at.
+            // A `RefVar` argument is excluded: it already HAS its own indirection.  It is
+            // either a user `&T` out-parameter (whose writes must reach the caller, so a
+            // private cell would swallow them) or a text local the return machinery
+            // promoted to a hidden `&text` out-parameter — and for that one the record
+            // stores the value inline and the existing write-back propagates it, which is
+            // the pairing `finalize_capture_storage` keeps in step (#687).
             if self.vars.is_argument(v_nr) && !matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
                 // A value-const parameter is read-only, and the closure-side write never
                 // reaches `validate_write`'s guard — inside the lambda `name` is a
@@ -1392,18 +1384,6 @@ impl Parser {
                     );
                     continue;
                 }
-                if parent_returns_text && matches!(self.vars.tp(v_nr), Type::Text(_)) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "closure mutates the text parameter `{name}` of a function that \
-                         itself returns text; that combination has no representation \
-                         (mutable text travels as a hidden out-parameter, which cannot be \
-                         added for a parameter) — copy it into a local first and capture \
-                         that: `local = {name};` then mutate `local` in the closure (#687)"
-                    );
-                    continue;
-                }
                 match self.promote_boxed_scalar_arg(name, v_nr) {
                     Some(shadow) => v_nr = shadow,
                     None => continue,
@@ -1414,16 +1394,6 @@ impl Parser {
             if matches!(&original_tp, Type::Reference(d, _)
                 if self.data.def(*d).name().starts_with("__cell_"))
             {
-                continue;
-            }
-            // Plan-22 phase 02d-vii — text-skip when parent
-            // returns text (see above for rationale).  Skips
-            // both bare Text and RefVar(Text) (mutable stack
-            // text locals).
-            let is_text_or_reftext = matches!(&original_tp, Type::Text(_))
-                || matches!(&original_tp, Type::RefVar(inner)
-                    if matches!(inner.as_ref(), Type::Text(_)));
-            if parent_returns_text && is_text_or_reftext {
                 continue;
             }
             // Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
@@ -1528,6 +1498,66 @@ impl Parser {
     /// caller in `definitions.rs` is the flip's sibling).  The
     /// single-closure accumulator (one record, one owner) stays
     /// supported.
+    /// #687 — settle how each mutated scalar capture is STORED, now that the parent's
+    /// pass-1 body is complete.
+    ///
+    /// A mutated capture is normally boxed into a shared `__cell_<T>` so writes from the
+    /// closure and reads from the enclosing body see one location.  The exception is a
+    /// binding that already has an indirection of its own: a text local the function
+    /// RETURNS, which the text-return machinery promotes to a hidden `&text`
+    /// out-parameter so the caller supplies the buffer.  That binding cannot also be a
+    /// cell, and it does not need to be — the record stores the value inline and the
+    /// existing per-call write-back propagates the closure's changes.
+    ///
+    /// Both halves must agree, and this is the first moment either could be right:
+    /// `box_captured_names_for_outer_scalars` types the record's attribute at the
+    /// LAMBDA's epilogue, where a to-be-returned text local still looks like a plain
+    /// `Text`, while `flip_scalars_to_box_types` (pass 2) sees the finished `RefVar` and
+    /// skips it.  That disagreement is what plan-22 02d-vii papered over with "skip text
+    /// when the parent returns text" — too wide (it also skipped a text local the
+    /// function does not return) and no help at all for a PARAMETER, which has no
+    /// indirection to reuse.  Asking the binding instead covers all three.
+    ///
+    /// Runs before `fill_all`, so the corrected attribute is what gets laid out.
+    pub(crate) fn finalize_capture_storage(&mut self, parent_d: u32) {
+        if !self.first_pass
+            || parent_d == u32::MAX
+            || (parent_d as usize) >= self.data.definitions.len()
+        {
+            return;
+        }
+        let Some(lambdas) = self.fn_lambdas.get(&parent_d).cloned() else {
+            return;
+        };
+        for name in self.data.def(parent_d).scalars_to_box().to_vec() {
+            let v_nr = self.vars.var(&name);
+            // `RefVar` is the fact: this binding already carries its own indirection.
+            if v_nr == u16::MAX || !matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
+                continue;
+            }
+            let inline_tp = match self.vars.tp(v_nr) {
+                Type::RefVar(inner) => (**inner).clone(),
+                other => other.clone(),
+            };
+            for lam in &lambdas {
+                let rec = self.data.def(*lam).closure_record();
+                if rec == u32::MAX {
+                    continue;
+                }
+                let a_nr = self.data.attr(rec, &name);
+                if a_nr == usize::MAX {
+                    continue;
+                }
+                // Only undo the provisional boxing; anything else is already right.
+                let is_cell = matches!(self.data.attr_type(rec, a_nr),
+                    Type::Reference(d, _) if self.data.def(d).name().starts_with("__cell_"));
+                if is_cell {
+                    self.data.retype_capture_attr(rec, a_nr, inline_tp.clone());
+                }
+            }
+        }
+    }
+
     pub(crate) fn reject_shared_mutable_scalar_captures(&mut self, parent_d: u32) {
         if !self.first_pass
             || parent_d == u32::MAX
@@ -3413,20 +3443,17 @@ fn box_captured_names_for_outer_scalars(
         return;
     }
     let scalars = data.def(outer_context).scalars_to_box().to_vec();
-    // Plan-22 phase 02d-vii — symmetric guard with
-    // `flip_scalars_to_box_types`: skip text when the parent
-    // function returns text (avoid the "Write to locked
-    // store" panic at closure-record init in text-returning
-    // fns).
-    let parent_returns_text = matches!(data.def(outer_context).returned(), Type::Text(_));
+    // #687 — this is PROVISIONAL.  Whether the binding really takes a cell depends on
+    // whether it ends up with its own indirection (a hidden `&T` out-parameter), and at
+    // the lambda's epilogue that is not settled yet: a text local the function RETURNS is
+    // still a plain `Text` here and only becomes `RefVar(Text)` later in the body.  The
+    // parent's pass-1 body end knows, and `Parser::finalize_capture_storage` corrects the
+    // attribute there — still before `fill_all` lays the record out.  Boxing is the right
+    // default because it is the common case, and because the attribute has to say
+    // something now: pass 1 freezes the record's storage, so leaving the un-flipped
+    // scalar here would lay the field out as 8B inline instead of a 12B shared DbRef.
     for (name, tp) in captured_names {
         if !scalars.iter().any(|s| s == name) {
-            continue;
-        }
-        let is_text_or_reftext = matches!(tp, Type::Text(_))
-            || matches!(tp, Type::RefVar(inner)
-                if matches!(inner.as_ref(), Type::Text(_)));
-        if parent_returns_text && is_text_or_reftext {
             continue;
         }
         if let Some(cell_name) = cell_struct_name(tp, data) {

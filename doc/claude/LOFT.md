@@ -915,10 +915,8 @@ add5(10)               // 15
   is untouched — a scalar parameter stays by-value (#685).  Mutating a `const`
   parameter through a closure is rejected, like any other write to it.
 - Text: deep-copied (independent of original after capture); mutated text
-  captures are cell-promoted like scalars.  One combination is refused with a
-  message rather than supported: mutating a captured `text` **parameter** inside a
-  function that itself returns `text` — copy it into a local and capture that
-  (#687).
+  captures are cell-promoted like scalars, including from a parameter and
+  including inside a function that itself returns `text` (#687).
 - Struct references: the DbRef is copied — both point to the same store
   record while both are alive, and mutations from either side are visible to
   the other (#318/C75 bound such closures to the frame that owns the
