@@ -264,7 +264,15 @@ Fields are declared as `name: type` with optional modifiers **after** the type:
 - `limit(min, max)` — constrain an integer field to a range
 - `not null` — **deprecated no-op** (fields are non-null by default; it parses but
   warns). Delete it; write the type as `T?` if the field should allow `null`.
-- `= expr` — stored default value, applied when field is omitted in constructor
+- `= expr` — stored default value, applied when field is omitted in constructor.
+  The expression may build a value of its own — `= [1, 2]`, `= "a" + "b"`, `= mk()` —
+  and is evaluated once per construction. Two forms are refused, and say so: a
+  **non-empty keyed** collection (`= [K { … }]` for a `hash`/`sorted`/`index`/`spatial`
+  field), because loft builds a keyed collection only by writing THROUGH a keyed
+  destination — a plain local `h: hash<K[k]> = [K { … }]` is refused for the same
+  reason — so use `= []` and fill the field after construction; and an expression that
+  reads `$` **and** needs a temporary, since a `$`-reading default is built against the
+  record at each construction site and so cannot be built once and shared.
 - `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
 - `computed(expr)` — calculated on every access, **not stored** in the record
 

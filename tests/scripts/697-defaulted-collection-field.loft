@@ -25,11 +25,10 @@
 // literal SUPPLIES, and a defaulted `text`, which was never affected because it is not
 // header-shaped.
 //
-// Not covered here, because it is refused at compile time: a NON-EMPTY collection default
-// (`= [1, 2]`).  Its building block carries work-refs numbered in the var space the
-// DEFAULT was parsed in, and that table is discarded before replay, so the types cannot
-// be recovered to re-home them — loft#698 has the localisation and the options.
-// `tests/scripts/102-expected-errors.loft` pins the refusal.
+// Not covered here: a NON-EMPTY collection default (`= [1, 2]`).  Its building block
+// carries work-refs numbered in the var space the DEFAULT was parsed in, and that table
+// is discarded before replay — so it is lowered into a function of its own instead
+// (loft#698), and `tests/scripts/698-default-needing-a-temporary.loft` covers it.
 
 struct It697  { it_a: integer, it_b: integer }
 struct Kv697  { kv_k: integer, kv_a: integer }
