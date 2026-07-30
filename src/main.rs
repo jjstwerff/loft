@@ -56,6 +56,71 @@ use loft::state::State;
 use std::env;
 use std::sync::{Arc, Mutex};
 
+/// loft#680 — print the per-target builtin surface: which stdlib builtins are NOT
+/// available on a target, and why that answer can be trusted.
+///
+/// The data is `index/target_surface.json`, DERIVED by asking rustc which runtime methods
+/// exist per target (`scripts/gen_target_surface.py`), so it cannot drift from the `cfg`s
+/// the real build obeys. It is embedded here so an installed loft can answer without the
+/// source tree.
+fn print_target_surface(want: Option<&str>) {
+    use loft::json::Parsed;
+    const SURFACE: &str = include_str!("../index/target_surface.json");
+    let Ok(Parsed::Object(root)) = loft::json::parse(SURFACE) else {
+        eprintln!("loft targets: embedded surface data is not valid JSON");
+        return;
+    };
+    let field = |obj: &Vec<(String, usize, Parsed)>, key: &str| -> Option<Parsed> {
+        obj.iter()
+            .find(|(k, _, _)| k == key)
+            .map(|(_, _, v)| v.clone())
+    };
+    let Some(Parsed::Object(targets)) = field(&root, "targets") else {
+        eprintln!("loft targets: embedded surface data has no targets");
+        return;
+    };
+    let mut any = false;
+    for (_, _, entry) in &targets {
+        let Parsed::Object(t) = entry else { continue };
+        let text = |key: &str| match field(t, key) {
+            Some(Parsed::Str(v)) => v,
+            _ => String::new(),
+        };
+        let (triple, describe) = (text("triple"), text("describe"));
+        if want.is_some_and(|w| !triple.contains(w) && !describe.contains(w)) {
+            continue;
+        }
+        any = true;
+        let names: Vec<String> = match field(t, "unavailable_builtins") {
+            Some(Parsed::Array(items)) => items
+                .into_iter()
+                .filter_map(|i| match i {
+                    Parsed::Str(v) => Some(v),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        println!("{triple} — {describe}");
+        if names.is_empty() {
+            println!("  every stdlib builtin is available here.");
+        } else {
+            println!("  {} builtin(s) NOT available:", names.len());
+            for n in &names {
+                println!("    {n}");
+            }
+        }
+    }
+    if any {
+        println!(
+            "\nDerived by asking rustc which runtime methods exist per target, so it \
+             cannot drift from the cfgs (scripts/gen_target_surface.py)."
+        );
+    } else {
+        eprintln!("loft targets: no such target (try `loft targets` for all)");
+    }
+}
+
 fn print_help() {
     println!("usage: loft [options] <file>     run a loft program");
     println!("       loft                       start the interactive REPL");
@@ -146,6 +211,13 @@ fn print_help() {
     println!(
         "                                default: <script>.html) — guide: doc/claude/WEB_APPS.md"
     );
+    println!(
+        "  --host-provided               with --html: you drive the emitted wasm from your own"
+    );
+    println!("                                JS host, so an import loft's page shim lacks is a");
+    println!("                                warning, not a refusal (alias: --no-host-check)");
+    println!("  targets [<target>]            which stdlib builtins are NOT available on a target");
+    println!("                                (ask before designing, not after the build fails)");
     println!(
         "  --tests [dir]                 discover and run fn test*() functions in .loft files"
     );
@@ -1414,7 +1486,7 @@ fn bundle_export(outdir: &str, packages: Option<&[String]>, all: bool) -> i32 {
                 return 1;
             }
         };
-        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+        if let Err(e) = loft::integrity::verify_sha256(&bytes, &ver.sha256) {
             eprintln!("  FAILED: {e}");
             return 1;
         }
@@ -1566,7 +1638,7 @@ fn bundle_import(indir: &str) -> i32 {
                 return 1;
             }
         };
-        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+        if let Err(e) = loft::integrity::verify_sha256(&bytes, &ver.sha256) {
             eprintln!("  sha256 MISMATCH for {fname}: {e}");
             return 1;
         }
@@ -5362,6 +5434,9 @@ fn main() {
     // @PLN117 — `--threads` / `--no-threads`; `None` = decide from whether the
     // program actually uses `par`.
     let mut html_threads: Option<bool> = None;
+    // loft#681 — the consumer supplies its OWN host for the emitted wasm, so the page
+    // loft would write is never used and its shim's surface is not the relevant one.
+    let mut html_host_provided = false;
     let mut tests_dir: Option<String> = None;
     // Plan-08 phase 01: --introspect mode collects per-section
     // selectors, output paths, and filters into one Options bundle.
@@ -5631,6 +5706,11 @@ fn main() {
             html_threads = Some(true);
         } else if a == "--no-threads" {
             html_threads = Some(false);
+        } else if a == "--host-provided" || a == "--no-host-check" {
+            // Extract-the-wasm workflows drive the module from their own JS (see
+            // BROWSER_INTEROP's "loft owns the loop"), so an import loft's shim lacks is
+            // not a defect to prevent — the shim is discarded with the page.
+            html_host_provided = true;
         } else if a == "--tests" {
             // Optional directory/file: consume next non-flag arg.
             // Skip --native/--no-warnings/--deny-warnings that may appear between --tests and the path.
@@ -5723,6 +5803,13 @@ fn main() {
             }
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
+            return;
+        } else if a == "targets" {
+            // loft#680 — answer "does this builtin exist on that target?" BEFORE a design
+            // commits to it. The alternative was writing the program, building it for
+            // `--html`, and reading a rustc error against generated Rust — which arrives
+            // after the plan that assumed the builtin, not before it.
+            print_target_surface(argv.get(i).map(String::as_str));
             return;
         } else if a == "repl" || a == "--repl" {
             // @PLN12 phase 04 — interactive `loft>` prompt.  Prompts + errors go
@@ -7840,7 +7927,26 @@ fn main() {
         match status {
             Ok(s) if s.success() => {}
             Ok(_) => {
-                eprintln!("loft: browser WASM compilation failed");
+                // loft#678 — rustc has just printed errors against `prog.rs`, a file the
+                // consumer never wrote. Unattributed, that reads as a fault in their own
+                // program and sends them auditing loft source that is not the cause. Say
+                // whose code it is, and name the one shape that actually produces it: a
+                // builtin whose implementation is absent on this target compiles
+                // everywhere else and fails only here, as `no method named …` on a
+                // runtime type (the working-set store loaders did exactly this until
+                // they were bridged to the browser fetch).
+                eprintln!(
+                    "loft: browser WASM compilation failed.\n  \
+                     The errors above are against loft-GENERATED Rust (`prog.rs`), not \
+                     your .loft source — a location in it is not a location in your \
+                     program.\n  \
+                     If one reads `no method named …` on a loft runtime type, the \
+                     builtin it names has no implementation on the browser target: the \
+                     same program is expected to build on --native. Re-run with \
+                     LOFT_KEEP_NATIVE_RS=1 to keep `prog.rs` and see the call in \
+                     context, and please report the builtin — a builtin that --native \
+                     accepts and --html cannot is a gap in loft, not in your code."
+                );
                 std::process::exit(1);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -7893,7 +7999,17 @@ fn main() {
                 //     which unwinds to the event loop so `await fetch(url)` can
                 //     complete, then resumes with the bytes — the synchronous
                 //     loft API over an async fetch, without blocking the page.
-                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield,loft_io.loft_host_http_get",
+                //   loft_io.loft_host_http_range — the same yield for ONE BYTE
+                //     RANGE (loft#678): the working-set loaders
+                //     (`store_load_key(s)` / `store_load_key_text` /
+                //     `store_load_range`) fetch only the pages a lookup touches,
+                //     so a phone can read a few map tiles out of a multi-GB block.
+                //     It MUST be listed: a suspend import left out of this
+                //     allowlist is not instrumented, so the unwind corrupts the
+                //     stack instead of yielding.  Its companion
+                //     `loft_host_http_range_total` is deliberately absent — it
+                //     only reports what the completed fetch already learned.
+                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield,loft_io.loft_host_http_get,loft_io.loft_host_http_range",
             ])
             .arg("-o")
             .arg(&opt_path)
@@ -8081,23 +8197,40 @@ fn main() {
             let provided = format!("{gl_js}{host_js_extensions}{thread_js}");
             let missing = crate::native_utils::missing_host_imports(&wasm_bytes, &provided);
             if !missing.is_empty() {
-                eprintln!(
-                    "loft: --html: this program calls {} the browser host does not \
-                     provide:\n    {}\n  \
-                     The browser shim implements a SUBSET of the native surface — a canvas \
-                     cannot do everything a desktop window can.\n  \
-                     Drop the call on this target, or add a handler to \
-                     doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
-                     (No HTML was written — the page would fail to instantiate, showing \
-                     only a LinkError with an import index.)",
-                    if missing.len() == 1 {
-                        "a function"
-                    } else {
-                        "functions"
-                    },
-                    missing.join("\n    "),
-                );
-                std::process::exit(1);
+                // loft#681 — the check assumes the page it is about to write is the one
+                // that will run the module.  A consumer that extracts the wasm and drives
+                // it from its own JS has already broken that assumption on purpose, and
+                // for them a missing import in loft's shim says nothing about whether
+                // their host provides it.  Report, but do not stand in the way.
+                let verb = if missing.len() == 1 {
+                    "a function"
+                } else {
+                    "functions"
+                };
+                let list = missing.join("\n    ");
+                if html_host_provided {
+                    eprintln!(
+                        "loft: --html: {} not provided by loft's page shim:\n    {}\n  \
+                         Building anyway (--host-provided): your host supplies the imports. \
+                         The emitted wasm is unchanged — only this check is relaxed, so a \
+                         name your host does NOT define still fails at instantiate.",
+                        verb, list,
+                    );
+                } else {
+                    eprintln!(
+                        "loft: --html: this program calls {verb} the browser host does not \
+                         provide:\n    {list}\n  \
+                         The browser shim implements a SUBSET of the native surface — a canvas \
+                         cannot do everything a desktop window can.\n  \
+                         Drop the call on this target, or add a handler to \
+                         doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
+                         If you drive the emitted wasm from your OWN host instead of loft's \
+                         page, pass --host-provided and this becomes a warning.\n  \
+                         (No HTML was written — the page would fail to instantiate, showing \
+                         only a LinkError with an import index.)"
+                    );
+                    std::process::exit(1);
+                }
             }
         }
         let html = if minimal_page {
@@ -8135,7 +8268,7 @@ if(globalThis.loftInput!=null)inQ.push(enc.encode(String(globalThis.loftInput)))
 globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
 // @PLN97: asyncify controller (Step 2 sets `.ac`) + the raw bytes of the last
 // fetch, stashed between the unwind and rewind halves of loft_host_http_get.
-const ctrl={{ac:null,httpBytes:null}};
+const ctrl={{ac:null,httpBytes:null,httpTotal:-1}};
 const imports={{loft_io:{{
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
   // #620: the browser CLOCK bridge.  This target has no std clock, so without
@@ -8170,6 +8303,36 @@ const imports={{loft_io:{{
     return 0;
   }},
   loft_host_http_get_copy:(ptr)=>{{if(ctrl.httpBytes)new Uint8Array(mem.buffer,ptr,ctrl.httpBytes.length).set(ctrl.httpBytes);}},
+  // loft#678 working-set loaders: the same two-phase asyncify bridge as
+  // loft_host_http_get, but for ONE BYTE RANGE — `Range: bytes=off-(off+len-1)`.
+  // The response also carries the resource's total size in `Content-Range:
+  // bytes a-b/TOTAL`; stash it so loft_host_http_range_total can answer
+  // PageProvider::size() without a second round trip.  `off`/`len` arrive as
+  // plain JS numbers (the import declares f64 — exact below 2^53) so no BigInt
+  // conversion is needed here or in the headless stubs.
+  loft_host_http_range:(ptr,len,off,n)=>{{
+    if(ctrl.ac&&ctrl.ac.exports.asyncify_get_state()===2){{
+      ctrl.ac.suspend();
+      return ctrl.httpBytes?ctrl.httpBytes.length:0xFFFFFFFF;
+    }}
+    const url=dec.decode(new Uint8Array(mem.buffer,ptr,len));
+    ctrl.httpBytes=null;ctrl.httpTotal=-1;
+    const last=off+n-1;
+    fetch(url,{{headers:{{Range:`bytes=${{off}}-${{last}}`}}}}).then(async r=>{{
+      // 206 = the body IS the range.  200 = the server ignored Range and sent the
+      // whole file; slice out the window so the answer is right either way.
+      const cr=r.headers.get('Content-Range');
+      if(cr){{const t=cr.split('/').pop();ctrl.httpTotal=(t&&t!=='*')?Number(t):-1;}}
+      else{{const cl=r.headers.get('Content-Length');ctrl.httpTotal=cl?Number(cl):-1;}}
+      if(!r.ok){{ctrl.httpBytes=null;}}
+      else{{const b=new Uint8Array(await r.arrayBuffer());
+            ctrl.httpBytes=(r.status===206)?b:b.subarray(off,off+n);}}
+      ctrl.ac.resume('loft_start');
+    }}).catch(()=>{{ctrl.httpBytes=null;ctrl.ac.resume('loft_start');}});
+    if(ctrl.ac)ctrl.ac.suspend();
+    return 0;
+  }},
+  loft_host_http_range_total:()=>ctrl.httpTotal,
   // @PLN105 Phase 2 — deliver: reconstruct a live value from its raw linear-memory address + layout
   // descriptor (JSON) via the embedded readLoftValue (reader_js, inlined above), then hand the
   // finished value to globalThis.loftDeliver(tag, value, type_id). SYNCHRONOUS: read within this

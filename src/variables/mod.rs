@@ -1823,9 +1823,31 @@ impl Function {
         self.variables[var_nr as usize].source
     }
 
-    pub fn test_used(&self, lexer: &mut Lexer, data: &Data) {
-        for var in &self.variables {
+    pub fn test_used(&self, lexer: &mut Lexer, data: &Data, body: &Value) {
+        for (nr, var) in self.variables.iter().enumerate() {
             if var.name.starts_with('_') || var.name.contains('#') {
+                continue;
+            }
+            // A variable the emitted body never even NAMES is a pass-1 leftover, not an
+            // unread local (loft#661's class, second half).  Pass 1 could not resolve the
+            // match subject — a forward-declared callee is enough — so it bound the arm to
+            // a plain variable; pass 2, with the callee resolved, bound the arm to its
+            // `_mv_<field>` variable and read THAT.  Variables persist across passes, so
+            // the abandoned pass-1 binding survives with `uses == 0` and warns about a
+            // name the program does read.  The `Unknown`-type test below catches the
+            // leftovers that never got a type; this catches the ones that did.
+            //
+            // It cannot silence a genuine unused local: `reads_var` counts `Set` TARGETS,
+            // so `x = 5` with no read still names `x` and still warns.  Only a LOCAL
+            // absent from the body entirely is skipped — a local that is not in the code
+            // cannot be one the user failed to read.
+            //
+            // ARGUMENTS are exempt from the exemption, and that is not a detail: a
+            // parameter is declared in the SIGNATURE, so "never appears in the body" is
+            // exactly what an unread parameter looks like.  Skipping those silenced
+            // `Parameter b is never read` outright — caught by keeping an unused-parameter
+            // case in the matrix rather than only unused-local ones.
+            if !var.argument && u16::try_from(nr).is_ok_and(|n| !body.reads_var(n)) {
                 continue;
             }
             // A variable still typed `Unknown` after pass 2 is a pass-1 LEFTOVER, not

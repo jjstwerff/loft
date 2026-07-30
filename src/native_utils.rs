@@ -949,24 +949,53 @@ pub(crate) fn html_wasm_imports(
 /// shim is a fixed file compiled into this binary — so the answer is decidable before the
 /// page is ever written.
 ///
-/// `provided_js` is the shim source; a host function is provided iff it appears as an
-/// object METHOD (`name(` at the start of a line's content) or a property (`name:`).
-/// Reading the shim rather than a hand-kept list is deliberate: a second list would drift
-/// from the shim exactly the way `loft install`'s whitelist drifted from `loft package`.
-/// Only FUNCTION imports (kind 0) are judged — a threaded build's `env.memory` is
-/// supplied by the loader, not the shim.
+/// `provided_js` is the shim source; a host function is provided iff it appears there as a
+/// definition. Reading the shim rather than a hand-kept list is deliberate: a second list
+/// would drift from the shim exactly the way `loft install`'s whitelist drifted from
+/// `loft package`. Only FUNCTION imports (kind 0) are judged — a threaded build's
+/// `env.memory` is supplied by the loader, not the shim.
+///
+/// Three definition forms count, because JS has three and a library may use any:
+/// `name(…) {` (method shorthand), `name:` (property), and `name =` (assignment, as in
+/// `ns.ws_yield = function () {…}`). The assignment form was missing, and the omission was
+/// not cosmetic — it REJECTED a program whose library bridge did provide the handler, with
+/// a message telling the author to add the very handler they had already written
+/// (loft#681, `web`'s `[wasm.bridge] host_js`).
+///
+/// The asymmetry of the two errors decides how strict to be. Failing to recognise a
+/// definition BLOCKS a program that would have run; recognising one too eagerly lets a
+/// genuinely missing import through to the `LinkError` this check exists to pre-empt —
+/// the status quo before it existed. So when the two are in tension, prefer to admit: a
+/// false accept costs the diagnostic, a false reject costs the build.
 pub(crate) fn missing_host_imports(wasm: &[u8], provided_js: &str) -> Vec<String> {
     let Some(imports) = html_wasm_imports(wasm) else {
         return Vec::new();
     };
     let defined = |name: &str| {
         provided_js.match_indices(name).any(|(i, _)| {
-            match provided_js[i + name.len()..].chars().next() {
+            // The occurrence must be a whole identifier, not a suffix of a longer one.
+            if provided_js[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
+                return false;
+            }
+            let rest = &provided_js[i + name.len()..];
+            let mut after = rest.chars();
+            match after.next() {
                 // `name(...) {` — a method shorthand; `name:` — a property.
-                Some('(' | ':') => !provided_js[..i]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|c| c.is_alphanumeric() || c == '_'),
+                Some('(' | ':') => true,
+                // `name = …` / `name= …` — an assignment.  `==` / `===` is a COMPARISON,
+                // not a definition, so it must not count.
+                Some('=') => after.next() != Some('='),
+                // `name  = …` / `name :` — allow horizontal space before the punctuation
+                // only, so a bare mention in prose (`// ws_yield is the shim`) still does
+                // not qualify.
+                Some(' ' | '\t') => {
+                    let t = rest.trim_start_matches([' ', '\t']);
+                    t.starts_with(':') || (t.starts_with('=') && !t.starts_with("=="))
+                }
                 _ => false,
             }
         })
@@ -1903,5 +1932,93 @@ mod atomics_sysroot_tests {
             "dep rlib copied into the fallback sysroot"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod host_import_tests {
+    use super::missing_host_imports;
+
+    /// A minimal wasm importing exactly one function: `loft_web.ws_yield`.
+    /// Hand-built so the test does not need a toolchain: magic + version, a type
+    /// section with one `() -> ()`, and an import section naming the function.
+    fn wasm_importing(module: &str, field: &str) -> Vec<u8> {
+        let mut w = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        // type section: one type, `() -> ()`
+        w.extend_from_slice(&[0x01, 0x04, 0x01, 0x60, 0x00, 0x00]);
+        // import section: one entry, kind 0 (function), type index 0
+        let mut body = vec![0x01];
+        body.push(u8::try_from(module.len()).unwrap());
+        body.extend_from_slice(module.as_bytes());
+        body.push(u8::try_from(field.len()).unwrap());
+        body.extend_from_slice(field.as_bytes());
+        body.extend_from_slice(&[0x00, 0x00]);
+        w.push(0x02);
+        w.push(u8::try_from(body.len()).unwrap());
+        w.extend_from_slice(&body);
+        w
+    }
+
+    /// loft#681 — `ns.ws_yield = function () {…}` is how a library's
+    /// `[wasm.bridge] host_js` installs a handler, and it was invisible to the check.
+    /// The program was refused with a message telling its author to add the handler
+    /// they had already written, and there was no way to overrule it.
+    #[test]
+    fn assignment_form_counts_as_provided() {
+        let wasm = wasm_importing("loft_web", "ws_yield");
+        let js = "  ns.ws_yield = function () { return 0; };\n";
+        assert!(
+            missing_host_imports(&wasm, js).is_empty(),
+            "an assigned handler is provided"
+        );
+    }
+
+    /// The two forms that already worked must keep working.
+    #[test]
+    fn method_and_property_forms_still_count() {
+        let wasm = wasm_importing("loft_web", "ws_yield");
+        assert!(
+            missing_host_imports(&wasm, "  ws_yield() { return 0; },\n").is_empty(),
+            "method shorthand"
+        );
+        assert!(
+            missing_host_imports(&wasm, "  ws_yield: () => 0,\n").is_empty(),
+            "property"
+        );
+        assert!(
+            missing_host_imports(&wasm, "  ws_yield : () => 0,\n").is_empty(),
+            "property with a space before the colon is still a colon form"
+        );
+    }
+
+    /// The check must still be able to FAIL, or widening it would have quietly
+    /// disabled loft#668's whole point. A prose mention is not a definition, and
+    /// neither is a comparison.
+    #[test]
+    fn a_mention_or_comparison_is_not_a_definition() {
+        let wasm = wasm_importing("loft_web", "ws_yield");
+        for js in [
+            "// ws_yield is the asyncify suspend shim\n",
+            "if (name === ws_yield) { }\n",
+            "  other_thing = function () {};\n",
+            "",
+        ] {
+            assert_eq!(
+                missing_host_imports(&wasm, js),
+                vec!["loft_web.ws_yield".to_string()],
+                "must report missing for: {js:?}"
+            );
+        }
+    }
+
+    /// A longer identifier that merely ENDS with the name is a different function.
+    #[test]
+    fn a_longer_identifier_is_not_the_same_name() {
+        let wasm = wasm_importing("loft_web", "ws_yield");
+        assert_eq!(
+            missing_host_imports(&wasm, "  do_ws_yield = function () {};\n"),
+            vec!["loft_web.ws_yield".to_string()],
+            "`do_ws_yield` does not define `ws_yield`"
+        );
     }
 }

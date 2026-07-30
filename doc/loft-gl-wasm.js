@@ -196,6 +196,48 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         if (asyncCtrl && asyncCtrl.httpBytes)
           new Uint8Array(getMem().buffer, ptr, asyncCtrl.httpBytes.length).set(asyncCtrl.httpBytes);
       },
+      // loft#678 — the RANGE arm of the same bridge, behind the working-set store
+      // loaders (store_load_key / store_load_keys / store_load_key_text /
+      // store_load_range): one `Range: bytes=off-(off+len-1)` GET instead of a whole
+      // file, so a page reads the few pages a lookup touches out of a large hosted
+      // store. Same two-phase asyncify shape as loft_host_http_get above, and it
+      // shares the one response stash — safe because a suspend bridges a SYNCHRONOUS
+      // loft call, so a second request cannot start before this one has rewound.
+      // off/len arrive as plain numbers (the import declares f64: exact below 2^53).
+      loft_host_http_range(ptr, len, off, n) {
+        const ac = asyncCtrl && asyncCtrl.ac;
+        if (ac && ac.exports.asyncify_get_state() === 2) {
+          ac.suspend();
+          return asyncCtrl.httpBytes ? asyncCtrl.httpBytes.length : 0xffffffff;
+        }
+        if (!ac) return 0xffffffff;  // no asyncify driver -> fetch unavailable
+        const url = readStr(ptr, len);
+        asyncCtrl.httpBytes = null;
+        asyncCtrl.httpTotal = -1;
+        const last = off + n - 1;
+        fetch(url, { headers: { Range: `bytes=${off}-${last}` } })
+          .then(async r => {
+            // The total comes from Content-Range (`bytes a-b/TOTAL`) so size() needs
+            // no second round trip; Content-Length is the fallback for a 200.
+            const cr = r.headers.get('Content-Range');
+            if (cr) { const t = cr.split('/').pop(); asyncCtrl.httpTotal = (t && t !== '*') ? Number(t) : -1; }
+            else { const cl = r.headers.get('Content-Length'); asyncCtrl.httpTotal = cl ? Number(cl) : -1; }
+            if (!r.ok) { asyncCtrl.httpBytes = null; }
+            else {
+              // 206 = the body IS the range. 200 = the server ignored Range and sent
+              // the whole file; slice the window so the answer is right either way.
+              const b = new Uint8Array(await r.arrayBuffer());
+              asyncCtrl.httpBytes = (r.status === 206) ? b : b.subarray(off, off + n);
+            }
+            ac.resume('loft_start');
+          })
+          .catch(() => { asyncCtrl.httpBytes = null; ac.resume('loft_start'); });
+        ac.suspend();
+        return 0;
+      },
+      loft_host_http_range_total() {
+        return asyncCtrl && asyncCtrl.httpTotal != null ? asyncCtrl.httpTotal : -1;
+      },
       // @PLN105 Phase 2 — deliver(tag, value): the JS host receives the value's store base +
       // DbRef (store_base, rec, pos) + its layout descriptor (JSON), and reconstructs the value
       // with no serialization via readLoftValue (embedded reader — main.rs inlines

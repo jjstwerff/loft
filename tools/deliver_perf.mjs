@@ -47,6 +47,10 @@ const loft_io = {
   loft_host_output() {},
   loft_host_http_get: () => 0xffffffff,
   loft_host_http_get_copy: () => {},
+  // loft#678 working-set loaders: refused here like the whole-file GET above — these
+  // harnesses never serve a store, and a MISSING import is a LinkError, not a skip.
+  loft_host_http_range: () => 0xffffffff,
+  loft_host_http_range_total: () => -1,
   loft_host_deliver(tag, store_base, rec, pos, type_id, dptr, dlen) {
     const desc = JSON.parse(dec.decode(new Uint8Array(mem.buffer, dptr, dlen)));
     const kind = desc.nodes[type_id]?.kind; // (1) loft-side: `vector` = no materialisation

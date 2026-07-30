@@ -118,7 +118,7 @@ fn fetch_prebuilt(r: &ResolvedPackage, opts: &InstallOptions) -> bool {
     let Ok(bytes) = registry_index::download_tarball(&bin.url, &dest) else {
         return false;
     };
-    if registry_index::verify_sha256(&bytes, &bin.sha256).is_err() {
+    if crate::integrity::verify_sha256(&bytes, &bin.sha256).is_err() {
         let _ = std::fs::remove_file(&dest);
         return false;
     }
@@ -200,7 +200,7 @@ pub fn install_one(
         } else {
             registry_index::download_tarball(&r.version.url, &tarball_path)?
         };
-        registry_index::verify_sha256(&bytes, &r.version.sha256)?;
+        crate::integrity::verify_sha256(&bytes, &r.version.sha256)?;
         extract_tarball(&tarball_path, &registry_index::cache_dir())?;
         // Tarball is consumed — remove it to save space.  The
         // extracted dir is the canonical install.

@@ -1,0 +1,183 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#677): a function that appends to TWO fields of a struct parameter and
+// then returns that parameter lost the `["o"]` borrow from its return type, so callers
+// read the returned borrow as an OWNED store and freed the CALLER's store.
+//
+// The reported symptom was three steps removed from the cause: an interpreter SIGSEGV in
+// a consumer, reduced to "two by-value levels with the return discarded, then an append
+// to the caller's own local".  None of that is the trigger.  `ref_return`'s promotion
+// ladder asked `child_allocs(body, o) >= 2` — a count of records allocated as CHILDREN of
+// `o`, i.e. of APPENDS — and read ≥2 as "this local was reassigned, do not NRVO-promote
+// it".  For a local that verdict only chooses a placement, but `o` is already a
+// PARAMETER: there was nothing left to promote, and the skip merely deleted the borrow
+// fact from the signature.  Vector returns had been carved out of the same rule earlier,
+// which is why only struct returns still showed it.
+//
+// The discarded return and the two call levels only decide whether the resulting
+// over-free is survivable: one call frees a store nothing reads again, two frees the
+// store the caller is still filling.  So the cells that matter here are the APPEND COUNT
+// in the callee (one vs two — the boundary the fix moves) and the CALL COUNT at the site
+// (one vs several — the boundary that made it visible).  Both are asserted below, since a
+// guard on either alone passes while the other half is broken.
+
+struct RbItem  { x: float }
+struct RbRig   { r: vector<integer> }
+struct RbFlat  { n: integer }
+struct RbOuter {
+  name: text,
+  tags: vector<integer>,
+  items: vector<RbItem>,
+  rigs: vector<RbRig>,
+  flats: vector<RbFlat>,
+}
+
+fn rb_new() -> RbOuter {
+  RbOuter { name: "cart", tags: [], items: [], rigs: [], flats: [] }
+}
+
+// THE CASE — two appends into fields of the parameter, then return it.  This is the
+// signature that lost its `["o"]` dep.
+fn rb_add2(o: RbOuter, t: integer, it: RbItem) -> RbOuter {
+  o.tags += [t];
+  o.items += [it];
+  o
+}
+
+// CONTROL — ONE append.  Always kept the dep; it is the far side of the fix's boundary.
+fn rb_add1(o: RbOuter, t: integer) -> RbOuter {
+  o.tags += [t];
+  o
+}
+
+// Two appends into the SAME field: the count is what mattered, not the field identity.
+fn rb_add_same(o: RbOuter, t: integer) -> RbOuter {
+  o.tags += [t];
+  o.tags += [t + 100];
+  o
+}
+
+// A second by-value level that DISCARDS the return and relies on aliasing.
+fn rb_level2(o: RbOuter, i: integer) -> boolean {
+  rb_add2(o, i, RbItem { x: i as float });
+  true
+}
+
+// CONTROL — a second level that USES the return.  Never broke; if this ever regresses the
+// fix went too wide.
+fn rb_level2_used(o: RbOuter, i: integer) -> RbOuter {
+  rb_add2(o, i, RbItem { x: i as float })
+}
+
+// The caller's own local is appended to AFTER the mutating calls — the step that read the
+// freed store.  A struct element with no vector of its own (`RbFlat`) reproduced it too,
+// so the trailing append is asserted in both nesting shapes.
+fn rb_build_discarded(n: integer) -> RbOuter {
+  out = rb_new();
+  for i in 1..(n + 1) { rb_level2(out, i); }
+  out.rigs += [RbRig { r: [7] }];
+  out
+}
+
+fn rb_build_used(n: integer) -> RbOuter {
+  out = rb_new();
+  for i in 1..(n + 1) { out = rb_level2_used(out, i); }
+  out.rigs += [RbRig { r: [7] }];
+  out
+}
+
+fn rb_build_flat(n: integer) -> RbOuter {
+  out = rb_new();
+  for i in 1..(n + 1) { rb_level2(out, i); }
+  out.flats += [RbFlat { n: 7 }];
+  out
+}
+
+// ONE level: the callee is called directly by the owner of the local.
+fn rb_build_one_level(n: integer) -> RbOuter {
+  out = rb_new();
+  for i in 1..(n + 1) { rb_add2(out, i, RbItem { x: i as float }); }
+  out.rigs += [RbRig { r: [7] }];
+  out
+}
+
+fn rb_build_one_append(n: integer) -> RbOuter {
+  out = rb_new();
+  for i in 1..(n + 1) { rb_add1(out, i); }
+  out.rigs += [RbRig { r: [7] }];
+  out
+}
+
+fn rb_build_same_field(n: integer) -> RbOuter {
+  out = rb_new();
+  for i in 1..(n + 1) { rb_add_same(out, i); }
+  out.rigs += [RbRig { r: [7] }];
+  out
+}
+
+// CONTROL — no trailing append on the caller's local.  This one always printed the right
+// answer even while the store was being freed underneath it, so it pins that the guard is
+// not accidentally passing for the same reason the original probes did.
+fn rb_build_no_append(n: integer) -> RbOuter {
+  out = rb_new();
+  for i in 1..(n + 1) { rb_level2(out, i); }
+  out
+}
+
+fn test_return_borrow_of_mutated_arg() {
+  // The call-count axis.  ONE call survived the over-free; TWO and THREE did not, so the
+  // guard would be vacuous if it only ever called once.
+  one = rb_build_discarded(1);
+  assert(one.name == "cart", "1 call: name survives, got '{one.name}'");
+  assert(len(one.tags) == 1, "1 call: tags, got {len(one.tags)}");
+  assert(len(one.items) == 1, "1 call: items, got {len(one.items)}");
+  assert(len(one.rigs) == 1, "1 call: rigs, got {len(one.rigs)}");
+
+  two = rb_build_discarded(2);
+  assert(two.name == "cart", "2 calls: name survives, got '{two.name}'");
+  assert(len(two.tags) == 2, "2 calls: tags, got {len(two.tags)}");
+  assert(len(two.items) == 2, "2 calls: items, got {len(two.items)}");
+  assert(len(two.rigs) == 1, "2 calls: rigs, got {len(two.rigs)}");
+
+  three = rb_build_discarded(3);
+  assert(three.name == "cart", "3 calls: name survives, got '{three.name}'");
+  assert(len(three.tags) == 3, "3 calls: tags, got {len(three.tags)}");
+  assert(len(three.items) == 3, "3 calls: items, got {len(three.items)}");
+  assert(len(three.rigs) == 1, "3 calls: rigs, got {len(three.rigs)}");
+
+  // The element of the trailing append holds no vector of its own.
+  flat = rb_build_flat(3);
+  assert(flat.name == "cart", "flat element: name survives, got '{flat.name}'");
+  assert(len(flat.tags) == 3, "flat element: tags, got {len(flat.tags)}");
+  assert(len(flat.flats) == 1, "flat element: flats, got {len(flat.flats)}");
+
+  // ONE by-value level — the owner calls the appending function itself.
+  lvl1 = rb_build_one_level(3);
+  assert(lvl1.name == "cart", "one level: name survives, got '{lvl1.name}'");
+  assert(len(lvl1.tags) == 3, "one level: tags, got {len(lvl1.tags)}");
+  assert(len(lvl1.rigs) == 1, "one level: rigs, got {len(lvl1.rigs)}");
+
+  // The append-count axis in the callee: one append is the side that always worked.
+  app1 = rb_build_one_append(3);
+  assert(app1.name == "cart", "one append: name survives, got '{app1.name}'");
+  assert(len(app1.tags) == 3, "one append: tags, got {len(app1.tags)}");
+  assert(len(app1.rigs) == 1, "one append: rigs, got {len(app1.rigs)}");
+
+  // Two appends into the same field: two child allocations, one field.
+  same = rb_build_same_field(3);
+  assert(same.name == "cart", "same field twice: name survives, got '{same.name}'");
+  assert(len(same.tags) == 6, "same field twice: tags, got {len(same.tags)}");
+  assert(len(same.rigs) == 1, "same field twice: rigs, got {len(same.rigs)}");
+
+  // CONTROLS — these were already correct before the fix and must stay correct.
+  used = rb_build_used(3);
+  assert(used.name == "cart", "returns used: name, got '{used.name}'");
+  assert(len(used.tags) == 3, "returns used: tags, got {len(used.tags)}");
+  assert(len(used.rigs) == 1, "returns used: rigs, got {len(used.rigs)}");
+
+  noapp = rb_build_no_append(3);
+  assert(noapp.name == "cart", "no trailing append: name, got '{noapp.name}'");
+  assert(len(noapp.tags) == 3, "no trailing append: tags, got {len(noapp.tags)}");
+  assert(len(noapp.rigs) == 0, "no trailing append: rigs, got {len(noapp.rigs)}");
+}

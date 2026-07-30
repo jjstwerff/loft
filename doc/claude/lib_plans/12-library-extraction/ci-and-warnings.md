@@ -174,7 +174,7 @@ new chunks may surface different latent bugs.
    - capture-into-local before indexing (skip-pattern 5 needs bare-Var vec)
    - capture-and-null-check (the `x = v[i]; if x != null` hint)
 
-4. **Verify locally first** via `scripts/verify_external_libs.sh`
+4. **Verify locally first** via `scripts/lib_audit.sh --repo <chunk> --local --no-native`
    in the monorepo, which mirrors the chunk's CI but builds loft from
    the current working tree.  This catches a) compiler bugs that need
    a `libraries → main` PR first, b) source-syntax issues, c) any
@@ -231,7 +231,7 @@ new chunks may surface different latent bugs.
 
 **Done when (Stage A):** all matrix jobs green on the chunk's CI
 under `LOFT_DENY_WARNINGS=1`, no `.allow_warnings` opt-out files
-in the chunk, `scripts/verify_external_libs.sh --src <chunk>=…`
+in the chunk, `scripts/lib_audit.sh --src <chunk>=…`
 is green against the latest monorepo `lib/<name>/` source, and
 the registry PR adding the new version is merged with all three
 validator gates green.

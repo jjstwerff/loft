@@ -53,6 +53,10 @@ const loft_io = {
   },
   loft_host_http_get: () => 0xffffffff,
   loft_host_http_get_copy: () => {},
+  // loft#678 working-set loaders: refused here like the whole-file GET above — these
+  // harnesses never serve a store, and a MISSING import is a LinkError, not a skip.
+  loft_host_http_range: () => 0xffffffff,
+  loft_host_http_range_total: () => -1,
   // @PLN105 Phase 2 — the value is handed over as (store_base, rec, pos, type_id) + the descriptor
   // JSON blob (dptr,dlen). Read it synchronously here (the borrow ends when this returns), copying
   // out of the zero-copy typed-array views so the captured value survives past the call.

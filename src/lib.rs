@@ -62,6 +62,36 @@ unsafe extern "C" {
     // the `len`-then-`copy` shape `loft_host_input_len`/`copy` already proves.
     pub(crate) safe fn loft_host_http_get(url_ptr: *const u8, url_len: usize) -> usize;
     pub(crate) safe fn loft_host_http_get_copy(ptr: *mut u8);
+    // loft#678 — the RANGE arm of the same bridge, behind the working-set store
+    // loaders (`store_load_key(s)` / `store_load_key_text` / `store_load_range`):
+    // one `Range: bytes=off-(off+len-1)` GET instead of a whole-file one, so a
+    // phone reads the few pages a lookup touches out of a multi-GB hosted block.
+    // Suspends exactly like `loft_host_http_get` (it is in the same asyncify
+    // allowlist) and returns the byte count fetched, or `usize::MAX` on a network
+    // / non-2xx error.  The bytes are then copied out by `loft_host_http_get_copy`
+    // — the two share the shell's one response stash, which is safe because a
+    // suspend bridges a SYNCHRONOUS loft call: the next request cannot begin until
+    // this one has rewound and copied.
+    //
+    // `off`/`len` cross as `f64` deliberately.  A JS number represents every
+    // integer below 2^53 exactly — eight petabytes, so no store offset can lose
+    // precision — while `u64` would arrive in JS as a `BigInt` and each of the six
+    // headless harnesses that stub these imports would have to return one too; a
+    // plain `0` there traps at the call rather than at link, which is the kind of
+    // failure that shows up as a wrong answer in one target only.
+    pub(crate) safe fn loft_host_http_range(
+        url_ptr: *const u8,
+        url_len: usize,
+        off: f64,
+        len: f64,
+    ) -> usize;
+    // The total size of the resource the LAST `loft_host_http_range` call read,
+    // parsed from its `Content-Range: bytes a-b/TOTAL` (or `-1` when the server
+    // did not say).  SYNCHRONOUS — it reports what the completed fetch already
+    // learned, so it needs no suspend and is not in the asyncify allowlist.  This
+    // is how the browser provider answers `PageProvider::size()` without a second
+    // round trip: the `bytes=0-0` probe that opens the source carries the total.
+    pub(crate) safe fn loft_host_http_range_total() -> f64;
     // #620 — the browser CLOCK bridge.  `--native-wasm` (wasip2) reads a real
     // clock through `std`, but this target has no `std` clock at all, so
     // `now()`/`ticks()` used to return a hardcoded 0: a frame timer read the
@@ -135,13 +165,18 @@ pub mod native;
 // `net::fetch_bytes` (behind `store_load_url*`) exists exactly where `load_url`
 // does: a native `registry` build, or the browser (`--html`) target.
 pub mod host;
+// `registry` and `remote-store` each pull `ureq` (the native client); the browser
+// arm needs no dependency at all.  `remote-store` is listed because the paged
+// loaders' range GETs live here too (loft#678) and that feature can be selected
+// without `registry`.
 #[cfg(any(
     feature = "registry",
+    feature = "remote-store",
     all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
 ))]
 pub(crate) mod net;
 pub mod ownership_cfg;
-#[cfg(feature = "remote-store")]
+#[cfg(paged_store)]
 pub mod paged_reader;
 pub mod portable_path;
 pub mod resolution;
@@ -198,6 +233,7 @@ pub mod fuzz_keyed;
 pub mod fuzz_oracle;
 #[cfg(feature = "registry")]
 pub mod install;
+pub mod integrity;
 pub mod introspect;
 pub mod libscan;
 pub mod lockfile;

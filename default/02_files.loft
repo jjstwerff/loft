@@ -489,9 +489,16 @@ pub fn store_verify(r: reference) -> boolean;
 // into the empty local hash `local`, reading only the pages the lookup touches
 // — not the whole file. The bounded-fetch counterpart of `store_load`, for when
 // `local` should hold only the entries actually asked for (a phone pulling the
-// few map tiles a route needs from a large block). Returns false when the key
-// is absent, the file is unreadable, or the collection is not an integer-keyed
-// hash of a FLAT (scalar-field) struct. @PLN97 arc G (loft#522).
+// few map tiles a route needs from a large block). `path` is a local file or an
+// `http(s)://` URL served with `Range`, on every target including the browser
+// (`--html`), where the fetch goes through the same bridge `store_load_url_trusted`
+// uses. Returns false when the key is absent, the file is unreadable, or the
+// collection is not an integer-keyed hash.
+//
+// The entry's own fields are RELOCATED into the local store, so `text`, nested
+// structs and flat vectors all come across; only a `vector<text>` or a
+// `vector<vector>` is refused (its element pointers would dangle), and a refusal
+// says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522).
 //   tiles: hash<Tile[id]> = []
 //   store_load_key(tiles, "block.store", 42)   // tiles now holds entry 42 only
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
@@ -511,7 +518,7 @@ pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean f
 // Plural form of `store_load_key`: fetch the given integer keys' entries into
 // `local` in one call (the paged reader is opened once and its cache reused),
 // returning how many were found. Keys absent from the remote are skipped. Same
-// FLAT-struct restriction. @PLN97 arc G (loft#522).
+// relocation rules as `store_load_key`. @PLN97 arc G (loft#522).
 //   tiles: hash<Tile[id]> = []
 //   got = store_load_keys(tiles, "block.store", [7, 13, 42])   // got == 3
 pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> integer fs#read;

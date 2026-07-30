@@ -8434,6 +8434,23 @@ impl Parser {
                     );
                     bl.operators
                         .insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                } else if Self::ir_diverges(&bl.operators[last]) {
+                    // The tail YIELDS NOTHING: every path through it returns
+                    // (`fn f() -> text { if c { return a; } else { return b; } }`, and the
+                    // same after a `match` lowers to nested `If`).  Binding it as a value
+                    // emits `__tret = (if … { return … } else { return … })` — a store
+                    // control can never reach.  The interpreter survives that (the
+                    // `return` leaves before the store completes), but rustc cannot type
+                    // `.to_string()` on `!` and rejects the whole function with E0282, so
+                    // an ordinary shape compiled on one backend and not the other.
+                    //
+                    // It is the same job the loop above does for every EARLIER operator,
+                    // just reached at the tail: route each inner `return <e>` through the
+                    // buffer.  The trailing `Var(tv)` keeps the block's result the
+                    // `text["__tret"]` shape `text_return` and `av_renumber_retbuf` expect;
+                    // it is unreachable, exactly like the value it replaces.
+                    Self::rewrite_text_returns_into(&mut bl.operators[last], tv);
+                    bl.operators.push(Value::Var(tv));
                 } else {
                     let call = std::mem::replace(&mut bl.operators[last], Value::Var(tv));
                     bl.operators.insert(last, crate::data::v_set(tv, call));
@@ -8647,6 +8664,22 @@ impl Parser {
     /// `return <e>` → `{ Set(tv, <e>); return tv }`.  The companion of the tail
     /// rebind in `promote_monomorph_text_return`, applied to the EARLY returns so
     /// all paths write the one caller buffer (no orphaned owned copy).
+    /// Does every path through `op` leave the block — i.e. does it yield no value?
+    ///
+    /// A `return` diverges; an `if` diverges when BOTH arms do (a one-armed `if` falls
+    /// through); a block diverges when any operator in it does. Used to tell a tail that
+    /// produces the function's value from one that only ever returns, which decide
+    /// different lowerings (`promote_text_return_def`).
+    fn ir_diverges(op: &Value) -> bool {
+        match op.unspan() {
+            Value::Return(_) => true,
+            Value::If(_, t, e) => Self::ir_diverges(t) && Self::ir_diverges(e),
+            Value::Block(bl) => bl.operators.iter().any(Self::ir_diverges),
+            Value::Insert(ops) => ops.iter().any(Self::ir_diverges),
+            _ => false,
+        }
+    }
+
     fn rewrite_text_returns_into(op: &mut Value, tv: u16) {
         match op {
             Value::Span(b) => Self::rewrite_text_returns_into(&mut b.1, tv),
@@ -10187,10 +10220,17 @@ impl Parser {
     }
 
     /// Plan-57: the count of DISTINCT element-temps (`Set(_elm_k,
-    /// OpNewRecord(v, …))`) building into `v` — each fresh vector literal uses
-    /// one, so ≥2 ⇒ the local is reassigned.  Visible on the FIRST pass (where
-    /// promotion happens), unlike the later `OpPreAllocVector` form.
-    fn reassign_count(body: &[Value], v: u16, nr: u32) -> usize {
+    /// OpNewRecord(v, …))`) allocated as CHILDREN of `v`.  Visible on the FIRST
+    /// pass (where promotion happens), unlike the later `OpPreAllocVector` form.
+    ///
+    /// Read it as what it measures — child allocations — not as "how often `v`
+    /// was reassigned".  A rebind (`r = S{…}; r = S{…}`) lowers to
+    /// `OpDatabase(r, …)` and is invisible here; what the count actually sees is
+    /// a fresh vector literal (one temp per element) AND an ordinary append
+    /// (`v.items += [x]`), which is why `classify_ret_promotion` reads ≥2 as
+    /// "reassigned" only for a LOCAL still awaiting a placement decision, and
+    /// carves out the vector body-tail that legitimately appends twice.
+    fn child_allocs(body: &[Value], v: u16, nr: u32) -> usize {
         fn collect(node: &Value, v: u16, nr: u32, temps: &mut std::collections::HashSet<u16>) {
             if let Value::Set(w, val) = node
                 && let Value::Call(op, args) = val.unspan()
@@ -10319,23 +10359,16 @@ impl Parser {
         let a1b =
             crate::keys::a1b_materialise_enabled() && self.tail_call_borrows_temp_subject(body);
         let a1b_site = a1b && ctx.site_value == Some(v);
-        // A reassigned returned local must NOT be NRVO-promoted — but a NAMED
-        // local at a vector fn's body tail still DELIVERS: it falls through to
-        // the `Bind` copy leg (reassignment is irrelevant to a single
-        // copy-at-exit).  Skipping it entirely leaves the fn value-returning
-        // while callers — who can only consult the signature (a forward caller
-        // parses before this body) — assume buffer delivery and free the
-        // buffer alone: the returned store leaks (#355 fallout, the 93-vsort
-        // suite leak).
-        let reassigned = Self::reassign_count(body, v, ctx.newrecord_nr) >= 2;
-        if reassigned
-            && !(!is_work_ref
-                && ctx.is_plain_fn
-                && ctx.site == RetSite::BlockTail
-                && matches!(ctx.ret, Type::Vector(_, _)))
-        {
-            return RetPromotion::SkipReassigned;
-        }
+        // A var that is ALREADY an attribute outranks every promotion rung below.
+        // Those rungs decide where a LOCAL lives (rename it onto `__retbuf`, bind
+        // it, promote it to a param); an attribute has nothing left to place, so
+        // the only thing left to say about it is which attr the return borrows.
+        // That is a FACT about the signature, not a placement choice — a promotion
+        // rule that pre-empts it does not avoid a bad promotion, it deletes the
+        // borrow (loft#677: `fn add(o: Outer, …) -> Outer { o.tags += […];
+        // o.items += […]; o }` scored two child allocations under `o`, tripped the
+        // reassignment skip below, and lost the `["o"]` dep — callers then read
+        // the returned borrow as owned and freed the CALLER's store).
         if let Some(a) = self.data.def(self.context).attr_names.get(n) {
             let a = *a as u16;
             // #356: pass 2 re-finds a pass-1-promoted site work ref by name
@@ -10345,6 +10378,24 @@ impl Parser {
                 && !transitive
                 && self.data.def(self.context).attributes()[a as usize].hidden;
             return RetPromotion::MergeAttr { a, chain_site };
+        }
+        // A reassigned returned LOCAL must NOT be NRVO-promoted — but a NAMED
+        // local at a vector fn's body tail still DELIVERS: it falls through to
+        // the `Bind` copy leg (reassignment is irrelevant to a single
+        // copy-at-exit).  Skipping it entirely leaves the fn value-returning
+        // while callers — who can only consult the signature (a forward caller
+        // parses before this body) — assume buffer delivery and free the
+        // buffer alone: the returned store leaks (#355 fallout, the 93-vsort
+        // suite leak).  `child_allocs` counts appends, so that vector carve-out
+        // is the same false positive #677 hit on the attribute path above.
+        let reassigned = Self::child_allocs(body, v, ctx.newrecord_nr) >= 2;
+        if reassigned
+            && !(!is_work_ref
+                && ctx.is_plain_fn
+                && ctx.site == RetSite::BlockTail
+                && matches!(ctx.ret, Type::Vector(_, _)))
+        {
+            return RetPromotion::SkipReassigned;
         }
         if transitive {
             return RetPromotion::MergeOnly;

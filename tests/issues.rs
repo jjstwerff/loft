@@ -17202,3 +17202,64 @@ fn issue_675_cross_library_heap_return_reserves_its_buffer() {
         "#675: the cross-library heap return failed at runtime"
     );
 }
+
+/// loft#677 — a function that appends to a struct PARAMETER and returns it must keep that
+/// parameter in its return deps, so callers see the result for what it is: a borrow of the
+/// argument, not a store of its own.
+///
+/// The value-level guard lives in `tests/scripts/return-borrow-of-mutated-arg.loft`; this
+/// one asserts the FACT, because losing the dep is only sometimes fatal.  With a single
+/// call the over-free lands on a store nothing reads again and every value still checks
+/// out — which is exactly why the four minimal cases on the issue all passed while the
+/// consumer segfaulted.  A signature assertion fails the moment the dep goes missing.
+///
+/// The append count is the axis: `ref_return`'s ladder counted records allocated as
+/// CHILDREN of `o` and read ≥2 as "reassigned local, do not NRVO-promote".  For a
+/// parameter there is nothing to promote, so the skip only deleted the borrow.
+#[test]
+fn issue_677_returned_mutated_param_keeps_its_borrow() {
+    let src_path = std::env::temp_dir().join("loft_i677_ret_borrow.loft");
+    std::fs::write(
+        &src_path,
+        "struct I677 { x: float }\n\
+         struct S677 { name: text, tags: vector<integer>, items: vector<I677> }\n\
+         fn one677(o: S677, t: integer) -> S677 { o.tags += [t]; o }\n\
+         fn two677(o: S677, t: integer, it: I677) -> S677 { o.tags += [t]; o.items += [it]; o }\n\
+         fn same677(o: S677, t: integer) -> S677 { o.tags += [t]; o.tags += [t]; o }\n\
+         fn fresh677(o: S677) -> S677 { S677 { name: o.name, tags: [], items: [] } }\n\
+         fn main() { s = S677 { name: \"c\", tags: [], items: [] }; two677(s, 1, I677 { x: 1.0 }); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#677 fixture must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+
+    // `o` is attribute 0 in each of these, so the return dep must name index 0.
+    for (name, appends) in [("n_one677", 1), ("n_two677", 2), ("n_same677", 2)] {
+        let d_nr = p.data.def_nr(name);
+        assert_ne!(d_nr, u32::MAX, "#677: {name} must be defined");
+        let deps = p.data.def(d_nr).returned().depend().clone();
+        assert!(
+            deps.contains(&0),
+            "#677: {name} returns its own parameter `o` after {appends} append(s), so the \
+             return type must borrow attr 0 — got deps {deps:?}.  An empty dep list tells \
+             every caller the result is an owned store, and the caller then frees the store \
+             it passed in."
+        );
+    }
+
+    // The other side of the boundary: a function that really does build a FRESH record
+    // must NOT claim to borrow its argument, or callers leak it instead.
+    let fresh = p.data.def_nr("n_fresh677");
+    assert_ne!(fresh, u32::MAX, "#677: fresh677 must be defined");
+    assert!(
+        p.data.def(fresh).returned().depend().is_empty(),
+        "#677: fresh677 allocates its own record, so its return must stay dep-free — got {:?}",
+        p.data.def(fresh).returned().depend()
+    );
+}

@@ -212,6 +212,39 @@ impl Parser {
                 }
             }
         }
+        // @PLN22 Phase 1, unqualified twin — a bare `Variant { … }` / `Variant` resolves
+        // through the FLAT def key, which is first-wins: with two enums declaring an
+        // `Item`, every mention meant the first one's, so `p: PV2 = Item { v: 42 }` failed
+        // with "Cannot assign integer to field Item.v of type text" — naming a field the
+        // program never mentioned, from an enum it never named.  The annotation says which
+        // enum is meant, so route the name through the SAME `variant_of` chokepoint an
+        // explicit `PV2::Item` uses.
+        //
+        // Additive by construction: it fires only for a `{`-CONSTRUCTION whose expected
+        // type is an enum that HAS this variant.  If that enum is the first definer the
+        // answer is unchanged; if it is not, the program does not compile today.  With no
+        // expected enum (a bare `p = Item { … }`) nothing changes and first-wins decides.
+        //
+        // The `{` is load-bearing, not cosmetic.  Without it a bare UNIT variant
+        // (`a: Q1 = Nil` with three enums declaring `Nil`) resolved to the wrong enum and
+        // broke a program that compiles today — caught by keeping shared-unit-variant and
+        // no-annotation rows in the matrix beside the constructor ones.  A unit variant
+        // already resolves correctly through its own path; only the construction form
+        // needed the annotation.
+        let qualifier_enum = if qualifier_enum == u32::MAX && self.lexer.peek_token("{") {
+            let want = match &*parent_tp {
+                Type::Enum(e, _, _) => *e,
+                Type::Reference(d, _) if self.data.def_type(*d) == DefType::Enum => *d,
+                _ => u32::MAX,
+            };
+            if want != u32::MAX && self.data.variant_of(want, &nm) != u32::MAX {
+                want
+            } else {
+                u32::MAX
+            }
+        } else {
+            qualifier_enum
+        };
         let mut t = self.parse_constant_value(code, source, &nm, name_pos, qualifier_enum);
         if t != Type::Null {
             return t;

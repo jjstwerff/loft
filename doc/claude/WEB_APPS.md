@@ -76,6 +76,28 @@ on native.
   have no browser handler. Calling one is a **build error** naming the function,
   not a broken page: `loft --html` compares the program's imports against the
   shim before writing any HTML (loft#668).
+
+  A library's own `[wasm.bridge] host_js` counts as part of that shim, in all three
+  ways JS defines a handler — `name(…) {`, `name:` and `name = function` (loft#681;
+  the assignment form used to be invisible, so a program was refused for a handler
+  its library had already written).
+
+  If you **drive the emitted wasm from your own JS host** rather than loft's page —
+  extracting the module and supplying the imports yourself — the check's premise
+  does not hold, because the page it inspects is discarded. Pass **`--host-provided`**
+  (alias `--no-host-check`) and a missing import becomes a warning instead of a
+  refusal. The wasm is unchanged either way: a name your host does not define still
+  fails at instantiate, so this relaxes the diagnostic, never the requirement.
+
+**Ask before you design: `loft targets`.** It lists the stdlib builtins that do NOT
+exist on a target, so a plan can be checked in seconds instead of discovering the
+hole when its first executable step fails to build (loft#680 — a coverage plan was
+written on the assumption that the working-set store loaders worked in the browser,
+and only the first `--html` build said otherwise). The answer is **derived, never
+hand-written**: `scripts/gen_target_surface.py` asks rustc which runtime methods each
+builtin's `#rust` body can reach on that target, so it cannot drift from the `cfg`s
+the real build obeys, and `make ci` fails if the committed table goes stale. As of
+this writing every stdlib builtin is available on the browser target.
 - **Audio** — raw PCM playback via the Web Audio API.
 - **WebSocket** — a live network socket, through the `web` library (see §4b).
 

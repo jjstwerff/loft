@@ -777,7 +777,10 @@ jobs:
     # Nightly-only: measures the WORLD (or exceeds the 20-min PR ceiling), not this diff — @CI_BUDGET.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 75, not 30: @PLN20 P6 adds the NATIVE tier below, which compiles every published
+    # package with rustc.  The interpreter step keeps its own fast signal regardless —
+    # see the two-step split there.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust stable
@@ -804,9 +807,40 @@ jobs:
         run: |
           out=$(scripts/lib_audit.sh --no-native 2>&1 || true)
           echo "$out"
-          { echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '## interpreter tier'; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           echo "$out" | grep -q "NOT GREEN" && \
             echo "::warning::library audit not green — orphaned branches / drift / correctness (see job summary)" || true
+
+      # @PLN20 P6 / open question 3 — the NATIVE tier, nightly only.
+      #
+      # `mold` is loft's pinned linker; `libasound2-dev` provides the ALSA headers
+      # `alsa-sys` (a transitive native dep of `graphics`' `rodio`) builds against;
+      # `xvfb` + `libgl1-mesa-dri` give a headless software GL.  Without them the
+      # graphics/input legs fail at native CRATE build and read as library rot —
+      # a B-class false alarm, which is worse than no native tier at all.  Same
+      # provisioning as registry-validation.yml, for the same reason.
+      - name: Install native toolchain deps (mold + ALSA + headless GL)
+        run: sudo apt-get update -y && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
+      - name: Library health audit — native tier
+        # A SECOND step rather than dropping `--no-native` above: native compiles are
+        # the slow, fragile part, and the interpreter sweep is the signal we already
+        # rely on.  Splitting them means a native overrun can never cost us the
+        # interpreter verdict, which one combined step would.
+        #
+        # Bounded at 45m and an overrun is REPORTED, never silently truncated: a
+        # sweep that was cut short is INCOMPLETE, not green, and saying so is the
+        # whole point of a taxonomy that refuses to collapse into a silent pass.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if out=$(timeout 45m scripts/lib_audit.sh 2>&1); then rc=0; else rc=$?; fi
+          echo "$out"
+          { echo '## native tier'; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" = 124 ]; then
+            echo "::warning::library audit NATIVE tier hit the 45m bound and was cut short — the sweep is INCOMPLETE, not green"
+          elif echo "$out" | grep -q "NOT GREEN"; then
+            echo "::warning::library audit (native) not green — see job summary"
+          fi
 
   # @PLN54 S7 — the nightly's own smoke alarm.  Nothing gates on this workflow, and
   # `continue-on-error` / `fail-fast: false` legs keep the OVERALL run green even

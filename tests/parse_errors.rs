@@ -2111,3 +2111,49 @@ fn multi_buffer_text_constant_rejected() {
          `fn a() -> text { … }`, then call `a()` at multi_buffer_text_constant_rejected:1:32",
     );
 }
+
+// A pass-1 LEFTOVER binding must not be reported as an unread variable.
+//
+// Pass 1 could not resolve the match subject — a FORWARD-declared callee is enough, no
+// recursion needed — so it bound the arm to a plain variable named after the field. Pass
+// 2, with the callee resolved, bound the arm to its `_mv_<field>` variable and read THAT.
+// Variables persist across passes, so the abandoned pass-1 binding survived with
+// `uses == 0` and warned about a name the program plainly does read. loft#661 fixed the
+// half where the leftover kept an `Unknown` type; this is the half where it got a real
+// one, so that test could not see it.
+//
+// It matters beyond noise: `LOFT_DENY_WARNINGS=1` gates library CI, so a false warning
+// fails a build for code that is correct.
+#[test]
+fn pass1_leftover_binding_is_not_reported_unread() {
+    code!(
+        "enum LB { LbNil, LbHolder { items: vector<u8> } }
+fn fwd() -> LB {
+    e = seed();
+    match e { LbHolder { items } => { items += [121]; assert(len(items) == 2, \"x\"); }, _ => { } };
+    return e;
+}
+fn seed() -> LB { return LbHolder { items: [120] }; }
+fn test() { match fwd() { LbHolder { items } => { assert(len(items) == 2, \"read\"); }, _ => { } }; }"
+    );
+}
+
+// The other side of the same predicate: a local the body really never reads still warns,
+// and so does an unread PARAMETER. A parameter is declared in the SIGNATURE, so "never
+// appears in the body" is exactly what an unread one looks like — the leftover exemption
+// must not swallow it.
+#[test]
+fn genuinely_unread_local_and_parameter_still_warn() {
+    code!(
+        "fn takes(a: integer, b: integer) -> integer { return a; }
+fn test() {
+    unused = 42;
+    used = takes(1, 2);
+    assert(used == 1, \"used\");
+}"
+    )
+    .warning("Parameter b is never read at genuinely_unread_local_and_parameter_still_warn:1:46")
+    .warning(
+        "Variable unused is never read at genuinely_unread_local_and_parameter_still_warn:3:13",
+    );
+}

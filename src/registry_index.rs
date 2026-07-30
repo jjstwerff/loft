@@ -890,32 +890,6 @@ pub fn download_tarball(url: &str, dest: &std::path::Path) -> Result<Vec<u8>, St
     Ok(bytes)
 }
 
-/// Verify the SHA-256 of `bytes` against `expected_hex` (lowercase).
-/// Returns `Ok(())` on match, `Err` with a clear message otherwise.
-///
-/// # Errors
-///
-/// Returns `Err` on mismatch.  Lowercases the computed digest before
-/// comparing so casing in the index doesn't cause false negatives.
-pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let actual = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for b in actual {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{b:02x}");
-    }
-    if hex.eq_ignore_ascii_case(expected_hex) {
-        Ok(())
-    } else {
-        Err(format!(
-            "sha256 mismatch: expected `{expected_hex}`, got `{hex}`"
-        ))
-    }
-}
-
 pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     // @PLAN12 Phase 6.11 — support `file://` URLs for offline
     // mirrors + bundle-import-served indexes.  Same contract as the
@@ -1596,44 +1570,6 @@ mod tests {
                 .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string()),
             registry_url()
         );
-    }
-
-    // ── verify_sha256 ────────────────────────────────────────────
-
-    /// `b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9`
-    /// is the SHA-256 of `b"hello world"` (well-known test vector).
-    const HELLO_WORLD_SHA: &str =
-        "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-
-    #[test]
-    fn verify_sha256_accepts_match() {
-        assert!(verify_sha256(b"hello world", HELLO_WORLD_SHA).is_ok());
-    }
-
-    #[test]
-    fn verify_sha256_rejects_mismatch() {
-        let result = verify_sha256(
-            b"hello world",
-            "0000000000000000000000000000000000000000000000000000000000000000",
-        );
-        let err = result.expect_err("should reject");
-        assert!(err.contains("sha256 mismatch"), "msg: {err}");
-        assert!(err.contains(HELLO_WORLD_SHA), "msg: {err}");
-    }
-
-    #[test]
-    fn verify_sha256_case_insensitive() {
-        // Upper-case hex from a hand-written PR should still match.
-        let upper = HELLO_WORLD_SHA.to_ascii_uppercase();
-        assert!(verify_sha256(b"hello world", &upper).is_ok());
-    }
-
-    #[test]
-    fn verify_sha256_rejects_corruption() {
-        // Flip one byte → mismatch.
-        let mut bytes = b"hello world".to_vec();
-        bytes[0] ^= 0x01;
-        assert!(verify_sha256(&bytes, HELLO_WORLD_SHA).is_err());
     }
 
     fn ver_api(semver: &str, api: Vec<ApiItem>) -> Version {

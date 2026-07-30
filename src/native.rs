@@ -167,20 +167,25 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_persist_bind", n_store_persist_bind),
     ("n_store_load", n_store_load),
     ("n_store_verify", n_store_verify),
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     ("n_store_load_key", n_store_load_key),
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     ("n_store_load_key_text", n_store_load_key_text),
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     ("n_store_load_keys", n_store_load_keys),
-    #[cfg(feature = "remote-store")]
+    #[cfg(paged_store)]
     ("n_store_load_range", n_store_load_range),
-    #[cfg(feature = "registry")]
+    // Whole-image URL loads, verified and trusted. BOTH are available on the browser
+    // (`--html`) target, where the fetch is bridged to JS `fetch()` via the asyncify
+    // host import (same synchronous loft API as native). The verified one used to be
+    // `registry`-only because `verify_sha256` lived in that module; the check needs
+    // nothing but `sha2` and now sits in `crate::integrity`, so the pair no longer
+    // splits by target (loft#678).
+    #[cfg(any(
+        feature = "registry",
+        all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+    ))]
     ("n_store_load_url", n_store_load_url),
-    // Trusted whole-image URL load: also available on the browser (`--html`)
-    // target, where the fetch is bridged to JS `fetch()` via the asyncify host
-    // import (same synchronous loft API as native).  `n_store_load_url` (SHA-
-    // verified) stays `registry`-only — it needs `verify_sha256`.
     #[cfg(any(
         feature = "registry",
         all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
@@ -1248,7 +1253,7 @@ fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
 /// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from
 /// a persisted hash image, fetching only the pages the lookup touches.  Args
 /// pop in reverse: key, path, local.  @PLN97 arc G Phase 3a.
-#[cfg(feature = "remote-store")]
+#[cfg(paged_store)]
 fn n_store_load_key(stores: &mut Stores, stack: &mut DbRef) {
     let v_key = *stores.get::<i64>(stack);
     let v_path = *stores.get::<Str>(stack);
@@ -1259,7 +1264,7 @@ fn n_store_load_key(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Interpreter handler for `store_load_key_text` — load ONE text-keyed entry.
 /// Args pop in reverse: key, path, local.  @PLN97 arc G Phase 3b.6.
-#[cfg(feature = "remote-store")]
+#[cfg(paged_store)]
 fn n_store_load_key_text(stores: &mut Stores, stack: &mut DbRef) {
     let v_key = *stores.get::<Str>(stack);
     let v_path = *stores.get::<Str>(stack);
@@ -1271,7 +1276,7 @@ fn n_store_load_key_text(stores: &mut Stores, stack: &mut DbRef) {
 /// Interpreter handler for `store_load_range` — load the entries with integer
 /// key in [lo, hi] from a persisted SORTED collection; returns the count.  Args
 /// pop in reverse: hi, lo, path, local.  @PLN97 arc G Phase 4.
-#[cfg(feature = "remote-store")]
+#[cfg(paged_store)]
 fn n_store_load_range(stores: &mut Stores, stack: &mut DbRef) {
     let v_hi = *stores.get::<i64>(stack);
     let v_lo = *stores.get::<i64>(stack);
@@ -1285,7 +1290,7 @@ fn n_store_load_range(stores: &mut Stores, stack: &mut DbRef) {
 /// entries from a persisted hash image, fetching only the pages the lookups
 /// touch; returns the count found.  Args pop in reverse: keys, path, local.
 /// @PLN97 arc G Phase 3a.
-#[cfg(feature = "remote-store")]
+#[cfg(paged_store)]
 fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
     let v_keys = *stores.get::<DbRef>(stack);
     let v_path = *stores.get::<Str>(stack);
@@ -1299,7 +1304,10 @@ fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
 /// caller-pinned digest, and (only on a match) HEAP-load it into the collection's
 /// slot.  A fetch error or hash mismatch refuses (returns false, adopts nothing).
 /// Args pop in reverse: sha256, url, local.  @PLN97 arc G Phase 0.
-#[cfg(feature = "registry")]
+#[cfg(any(
+    feature = "registry",
+    all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+))]
 fn n_store_load_url(stores: &mut Stores, stack: &mut DbRef) {
     let v_sha = *stores.get::<Str>(stack);
     let v_url = *stores.get::<Str>(stack);
