@@ -998,37 +998,13 @@ impl State {
         let trace_iter = std::env::var("LOFT_ITERATE_TRACE").is_ok();
         match on & 63 {
             1 => {
-                // index points to the record position inside the store
-                if reverse {
-                    // for reverse, start must be ONE PAST the last
-                    // element to visit (so previous(start) = last element).
-                    // finish must be ONE BEFORE the first element to visit
-                    // (so when n == finish, iteration is done).
-                    // This mirrors the forward case where start is one before
-                    // the first and finish is the last to visit.
-                    let store = crate::keys::store(&data, all);
-                    let till_node = tree::find(&data, true, arg, all, &keys, &till);
-                    // till_node = previous(first_node >= till).
-                    // For exclusive [lo..hi), till_node IS the last element to visit.
-                    // We need start = next(till_node) so previous(start) = till_node.
-                    start = if ex {
-                        tree::next(store, &new_ref(&data, till_node, arg))
-                    } else {
-                        // Inclusive: till_node = previous(till_match), need next of till_match
-                        let till_match = tree::find(&data, false, arg, all, &keys, &till);
-                        tree::next(store, &new_ref(&data, till_match, arg))
-                    };
-                    // finish = previous(first_from_node) — same as forward start
-                    finish = tree::find(&data, true, arg, all, &keys, &from);
-                } else {
-                    start = tree::find(&data, true, arg, all, &keys, &from);
-                    let t = tree::find(&data, ex, arg, all, &keys, &till);
-                    finish = if ex {
-                        t
-                    } else {
-                        tree::previous(crate::keys::store(&data, all), &new_ref(&data, t, arg))
-                    };
-                }
+                // index points to the record position inside the store.  The cursor
+                // derivation is shared with the native runtime (loft#691) — the two
+                // had their own copies and drifted apart.
+                let (s_cur, f_cur) =
+                    tree::range_cursors(&data, arg, all, &keys, &from, &till, ex, reverse);
+                start = s_cur;
+                finish = f_cur;
                 if trace_iter {
                     eprintln!(
                         "[iterate] on=index reverse={reverse} ex={ex} start={start} finish={finish} from_keys={} till_keys={}",
@@ -1056,17 +1032,26 @@ impl State {
                     all[data.store_nr as usize].get_u32_raw(sorted_rec, 4)
                 };
                 if reverse {
+                    // loft#691 — `start` is the cursor `vector_step_rev` pre-decrements
+                    // from, so it is one PAST the first element to visit (`>= vec_len` is
+                    // its not-started sentinel), and `finish` is the LOWEST position to
+                    // visit.  Both were off: the `+ !ex` made an inclusive upper bound
+                    // begin one element too high, and searching `from` with `ex` asked
+                    // the wrong question — the lower bound is always INCLUSIVE (`ex`
+                    // describes the upper one), which is why the forward branch below
+                    // hardcodes `true` for it.  The stepper then never compared against
+                    // `finish` at all, so a reverse range ran to the first element.
                     start = if till.is_empty() {
                         // no upper bound → start past the last element
                         vec_len
                     } else {
-                        vector::sorted_find(&data, ex, arg, all, &keys, &till).0 + u32::from(!ex)
+                        vector::sorted_find(&data, ex, arg, all, &keys, &till).0
                     };
                     finish = if from.is_empty() {
                         // no lower bound → finish at 0 (visit all elements down to first)
                         0
                     } else {
-                        vector::sorted_find(&data, ex, arg, all, &keys, &from).0 + 1
+                        vector::sorted_find(&data, true, arg, all, &keys, &from).0
                     };
                 } else {
                     let s = if from.is_empty() {
@@ -1205,6 +1190,14 @@ impl State {
                         // (pos >= length is treated as past-the-end in vector_step_rev).
                         vector::vector_step_rev(&data, &mut pos, &self.database.allocations);
                         self.put_var(state_var - 8, pos as u32);
+                        // loft#691 — stop once the cursor drops below the lowest in-range
+                        // position, the mirror of the forward `pos >= finish` below.
+                        // Without it a reverse range ignored its lower bound entirely and
+                        // ran on to the first element.  `finish == 0` (no lower bound)
+                        // never trips, so the open forms walk to the end as before.
+                        if pos != i32::MAX && (pos as u32) < finish {
+                            pos = i32::MAX;
+                        }
                         if pos == i32::MAX {
                             self.put_var(state_var - 12, u32::MAX);
                         }
