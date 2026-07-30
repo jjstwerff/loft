@@ -1272,6 +1272,26 @@ pub fn toolchain_failure_hint(stderr: &str) -> Option<String> {
     // same link carrying the same StableCrateId, which rustc refuses.  Name it
     // explicitly so a consumer does not read the raw rustc dump as a bug in their own
     // code or in the library — it is neither, and loft falls back to interpreting.
+    // loft#693 — the generated code calls a loft runtime method the linked
+    // `libloft.rlib` does not have, i.e. this BINARY and that RLIB are from different
+    // builds.  Left raw, the message blames the LIBRARY whose cdylib was being built
+    // ("library 'gridmesh-0.2.0' failed to build native", `no method named
+    // dbref_borrow`) — the one thing that is certainly not at fault, and a consumer
+    // reasonably reads it as the library being broken and starts bisecting versions.
+    // Naming the rlib in use is the fastest way to see the mismatch.
+    if stderr.contains("E0599") && stderr.contains("Stores") {
+        let rlib = find_loft_rlib().map_or_else(
+            || "none found".to_string(),
+            |(p, _)| p.display().to_string(),
+        );
+        return Some(format!(
+            "NOTE: the generated code calls a loft runtime method that the \
+             `libloft.rlib` being linked does NOT have, so this loft binary and that \
+             rlib come from different builds.  This is not a bug in the library being \
+             built, nor in your program.  Re-install the pair as one unit — `make all \
+             && make install` in the loft tree.  The rlib in use is: {rlib}"
+        ));
+    }
     if stderr.contains("StableCrateId") {
         return Some(
             "NOTE: this is the known loft_ffi duplicate-crate collision — two copies of \
@@ -1551,6 +1571,40 @@ mod toolchain_hint_tests {
     fn genuine_compile_error_gets_no_hint() {
         // A real type error must pass through untouched so its diagnostics show.
         let stderr = "error[E0308]: mismatched types\n  expected `i32`, found `&str`";
+        assert!(toolchain_failure_hint(stderr).is_none());
+    }
+
+    /// loft#693 — verbatim rustc output from the reported failure: the installed
+    /// `libloft.rlib` predated the borrowed-capture helper the binary emits calls to.
+    /// Raw, it names the LIBRARY whose cdylib was building, which is the one thing not
+    /// at fault, so the hint must say the binary and the rlib disagree.
+    #[test]
+    fn flags_a_runtime_method_the_linked_rlib_lacks() {
+        let stderr = "error[E0599]: no method named `dbref_borrow` found for mutable \
+                      reference `&mut Stores` in the current scope\n \
+                      429 |     let dbref_borrow_w = db.dbref_borrow();\n\
+                      error: aborting due to 1 previous error";
+        let hint = toolchain_failure_hint(stderr).expect("a missing runtime method must hint");
+        assert!(
+            hint.contains("libloft.rlib") && hint.contains("different builds"),
+            "the hint must name the rlib/binary mismatch: {hint}"
+        );
+        assert!(
+            hint.contains("make install"),
+            "the hint must name the fix: {hint}"
+        );
+        assert!(
+            hint.contains("not a bug in the library"),
+            "the hint must clear the library being built: {hint}"
+        );
+    }
+
+    /// The guard above keys on E0599 + `Stores`; an E0599 in a library's OWN code must
+    /// still pass through, or a real user error gets blamed on the install.
+    #[test]
+    fn unrelated_missing_method_gets_no_hint() {
+        let stderr = "error[E0599]: no method named `frobnicate` found for struct \
+                      `MyOwnType` in the current scope";
         assert!(toolchain_failure_hint(stderr).is_none());
     }
 }
