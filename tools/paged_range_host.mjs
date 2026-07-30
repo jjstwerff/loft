@@ -46,9 +46,16 @@ const loft_io = {
   loft_host_output(ptr, len) {
     process.stderr.write("[out] " + dec.decode(new Uint8Array(mem.buffer, ptr, len)));
   },
-  // Whole-file GET is refused: this test is about the paged path, and letting it succeed
-  // would let a regression that silently falls back to a whole load still pass.
-  loft_host_http_get: () => 0xffffffff,
+  // Whole-file GET is refused BY DEFAULT: the paged test must not pass over a regression
+  // that silently falls back to a whole-image load. LOFT_WHOLE_GET=1 enables it for the
+  // `store_load_url` tests, which are about that path on purpose.
+  loft_host_http_get: () => {
+    if (!process.env.LOFT_WHOLE_GET) return 0xffffffff;
+    httpBytes = store;
+    bytesFetched += store.length;
+    requests += 1;
+    return store.length;
+  },
   loft_host_http_get_copy: (ptr) => {
     if (httpBytes) new Uint8Array(mem.buffer, ptr, httpBytes.length).set(httpBytes);
   },

@@ -1414,7 +1414,7 @@ fn bundle_export(outdir: &str, packages: Option<&[String]>, all: bool) -> i32 {
                 return 1;
             }
         };
-        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+        if let Err(e) = loft::integrity::verify_sha256(&bytes, &ver.sha256) {
             eprintln!("  FAILED: {e}");
             return 1;
         }
@@ -1566,7 +1566,7 @@ fn bundle_import(indir: &str) -> i32 {
                 return 1;
             }
         };
-        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+        if let Err(e) = loft::integrity::verify_sha256(&bytes, &ver.sha256) {
             eprintln!("  sha256 MISMATCH for {fname}: {e}");
             return 1;
         }

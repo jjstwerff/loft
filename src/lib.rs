@@ -233,6 +233,7 @@ pub mod fuzz_keyed;
 pub mod fuzz_oracle;
 #[cfg(feature = "registry")]
 pub mod install;
+pub mod integrity;
 pub mod introspect;
 pub mod libscan;
 pub mod lockfile;

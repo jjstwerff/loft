@@ -2682,21 +2682,30 @@ impl Stores {
     /// pinned `sha256_hex`, and only on a match adopt it in memory (the bytes
     /// never touch disk).  A fetch error OR a hash mismatch REFUSES the load
     /// (returns `false`, adopts nothing) — the same fetch→verify→trust discipline
-    /// the registry install path uses (`registry_index::verify_sha256`), bridged
+    /// the registry install path uses (`integrity::verify_sha256`), bridged
     /// onto the store loader.  `url` may be `http(s)://` or `file://`
     /// (offline / testing).  This is the whole-file counterpart of the paged
     /// `load_key(s)` / `load_range` loaders; per-page authenticity for the paged
     /// path is a separate (Merkle-tree) problem, out of Phase 0's scope.
-    #[cfg(feature = "registry")]
+    ///
+    /// Available wherever [`crate::net::fetch_bytes`] can fetch — including the
+    /// browser (loft#678).  It must track its TRUSTED twin
+    /// [`load_url`](Stores::load_url) exactly: a target that can fetch a whole image
+    /// but cannot PIN its hash offers only the weaker of the two, which is the wrong
+    /// asymmetry to ship to a page loading third-party bytes.
+    #[cfg(any(
+        feature = "registry",
+        all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+    ))]
     pub fn load_url_verified(&mut self, slot: u16, url: &str, sha256_hex: &str) -> bool {
-        let bytes = match crate::registry_index::http_get_bytes(url) {
+        let bytes = match crate::net::fetch_bytes(url) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("store loader: refusing {url} — fetch failed: {e}");
                 return false;
             }
         };
-        if let Err(e) = crate::registry_index::verify_sha256(&bytes, sha256_hex) {
+        if let Err(e) = crate::integrity::verify_sha256(&bytes, sha256_hex) {
             eprintln!("store loader: refusing {url} — {e}");
             return false;
         }

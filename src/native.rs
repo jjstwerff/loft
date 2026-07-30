@@ -175,12 +175,17 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load_keys", n_store_load_keys),
     #[cfg(paged_store)]
     ("n_store_load_range", n_store_load_range),
-    #[cfg(feature = "registry")]
+    // Whole-image URL loads, verified and trusted. BOTH are available on the browser
+    // (`--html`) target, where the fetch is bridged to JS `fetch()` via the asyncify
+    // host import (same synchronous loft API as native). The verified one used to be
+    // `registry`-only because `verify_sha256` lived in that module; the check needs
+    // nothing but `sha2` and now sits in `crate::integrity`, so the pair no longer
+    // splits by target (loft#678).
+    #[cfg(any(
+        feature = "registry",
+        all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+    ))]
     ("n_store_load_url", n_store_load_url),
-    // Trusted whole-image URL load: also available on the browser (`--html`)
-    // target, where the fetch is bridged to JS `fetch()` via the asyncify host
-    // import (same synchronous loft API as native).  `n_store_load_url` (SHA-
-    // verified) stays `registry`-only — it needs `verify_sha256`.
     #[cfg(any(
         feature = "registry",
         all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
@@ -1299,7 +1304,10 @@ fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
 /// caller-pinned digest, and (only on a match) HEAP-load it into the collection's
 /// slot.  A fetch error or hash mismatch refuses (returns false, adopts nothing).
 /// Args pop in reverse: sha256, url, local.  @PLN97 arc G Phase 0.
-#[cfg(feature = "registry")]
+#[cfg(any(
+    feature = "registry",
+    all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+))]
 fn n_store_load_url(stores: &mut Stores, stack: &mut DbRef) {
     let v_sha = *stores.get::<Str>(stack);
     let v_url = *stores.get::<Str>(stack);

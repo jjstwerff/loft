@@ -220,3 +220,132 @@ fn store_load_key_pages_over_the_browser_fetch_bridge() {
          which is what a silent whole-file fallback looks like: {paged}"
     );
 }
+
+/// loft#678 sibling — `store_load_url` (the SHA-VERIFIED whole-image loader) was still
+/// browser-unavailable after the paged family was bridged, for a reason that had nothing
+/// to do with what it needs: its hash check lived in the `registry`-gated module, and a
+/// gate is contagious. The trusted twin `store_load_url_trusted` had already been widened,
+/// so the browser could fetch a whole store but could not PIN its hash — exactly the wrong
+/// half to be missing on the target most likely to load third-party bytes.
+///
+/// Both directions are asserted in one run. Accepting a correct digest alone would pass on
+/// a loader that verifies nothing at all, which is the failure that matters here.
+#[test]
+fn store_load_url_verifies_the_hash_in_the_browser() {
+    if !which("node") {
+        eprintln!("SKIP: node not installed");
+        return;
+    }
+    if !wasm32_installed() {
+        eprintln!("SKIP: wasm32-unknown-unknown target/rlib not built");
+        return;
+    }
+    if !loft_bin().exists() {
+        eprintln!("SKIP: target/release/loft not built");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join("loft_verified_browser");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).expect("create test dir");
+    let store = tmp.join("v.store");
+
+    let writer = tmp.join("write.loft");
+    std::fs::write(
+        &writer,
+        "struct Rec { id: integer not null, val: integer not null }\n\
+         fn main() {\n\
+         \x20 path = env_variable(\"LOFT_VERIFIED_WRITE_PATH\");\n\
+         \x20 h: hash<Rec[id]> = [];\n\
+         \x20 h += Rec { id: 7, val: 700 };\n\
+         \x20 h += Rec { id: 13, val: 1300 };\n\
+         \x20 if !store_persist_bind(h, path) { println(\"FAIL write-bind\"); return }\n\
+         \x20 println(\"write ok\");\n\
+         }\n",
+    )
+    .expect("write writer script");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&writer)
+        .env("LOFT_VERIFIED_WRITE_PATH", &store)
+        .current_dir(repo_root())
+        .output()
+        .expect("invoke loft to write the store");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("write ok"),
+        "fixture not written: {} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let bytes = std::fs::read(&store).expect("read fixture");
+    let good = loft::integrity::sha256_hex(&bytes);
+    let bad = "0".repeat(64);
+
+    let src = tmp.join("verified.loft");
+    std::fs::write(
+        &src,
+        format!(
+            "struct Rec {{ id: integer not null, val: integer not null }}\n\
+             fn main() {{\n\
+             \x20 ok: hash<Rec[id]> = [];\n\
+             \x20 a = store_load_url(ok, \"http://127.0.0.1:1/v.store\", \"{good}\");\n\
+             \x20 println(\"good sha ok={{a}} len={{len(ok)}}\");\n\
+             \x20 no: hash<Rec[id]> = [];\n\
+             \x20 b = store_load_url(no, \"http://127.0.0.1:1/v.store\", \"{bad}\");\n\
+             \x20 println(\"bad sha ok={{b}} len={{len(no)}}\");\n\
+             }}\n"
+        ),
+    )
+    .expect("write browser script");
+
+    let html = tmp.join("verified.html");
+    let status = Command::new(loft_bin())
+        .args([
+            "--html",
+            html.to_str().unwrap(),
+            "--path",
+            &format!("{}/", repo_root().display()),
+        ])
+        .arg(src.to_str().unwrap())
+        .current_dir(repo_root())
+        .status()
+        .expect("invoke loft --html");
+    assert!(
+        status.success(),
+        "loft --html must build a program that calls store_load_url — it failed with \
+         E0599 on `load_url_verified` while only the trusted twin was bridged"
+    );
+
+    let page = std::fs::read_to_string(&html).expect("read html");
+    let marker = "const wasmB64=\"";
+    let start = page.find(marker).expect("wasmB64 marker") + marker.len();
+    let end = start + page[start..].find('"').expect("wasmB64 closing quote");
+    let wasm = tmp.join("verified.wasm");
+    std::fs::write(&wasm, loft::base64::decode(&page[start..end])).expect("write wasm");
+
+    let run = Command::new("node")
+        .arg(repo_root().join("tools/paged_range_host.mjs"))
+        .arg(&wasm)
+        .env("LOFT_PAGED_FILE", &store)
+        .env("LOFT_WHOLE_GET", "1")
+        .current_dir(repo_root())
+        .output()
+        .expect("invoke node harness");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert!(
+        run.status.success(),
+        "browser run failed\n  stdout:\n{stdout}\n  stderr:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    assert!(
+        stdout.contains("good sha ok=true len=2"),
+        "a matching digest must ADOPT the image in the browser\n  stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("bad sha ok=false len=0"),
+        "a mismatched digest must REFUSE and adopt nothing — a loader that accepts \
+         anything would still satisfy the match case above\n  stdout:\n{stdout}"
+    );
+}
