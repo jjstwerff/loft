@@ -89,6 +89,87 @@ surfaces a contract-level defect, the freeze waits until it is fixed and re-veri
 breadth stays clean through the soak, the door opens. Consumer coverage is tracked as
 [GOALS.md Goal C](GOALS.md#goal-c--capability-via-dogfood)'s build matrix.
 
+### Reading the soak — measure `wa:`, not the ticket rate
+
+**The ticket rate does not measure stability.** It rises and falls with how much
+dogfood is flowing: a new consumer coming online produces a burst whatever the code
+is like, and a quiet week can just mean nobody was looking. Counting tickets measures
+throughput.
+
+**The `wa:` distribution does measure it, because it is normalised by usage.** It asks
+how BAD each defect was for whoever hit it, not how many there were. As the language
+settles, the remaining defects should be increasingly *routable* — a consumer meets one
+and keeps working. So the share of `wa:clean` should RISE and `wa:partial` should FALL,
+and `wa:none` — nothing works, the consumer is blocked — is the number that decides the
+gate. `LABELS.md` already weights it that way: *"the most urgent triage axis, often
+above `sev:`"*.
+
+Two cuts matter more than the totals:
+
+- **`wa:none` by AREA, as a rate** (`wa:none` ÷ that area's bugs), not a count. A count
+  just tracks where the bugs are; the rate tracks where the *blocking* is.
+- **Core vs fringe, over time.** A language-level bug usually has a workaround, because
+  you can write the code differently. A packaging / CLI / install bug usually does not,
+  because the program never starts — there is no "write it differently" when the file
+  will not run. So blockers migrating OUT of codegen/parser/store-lifetime and INTO the
+  toolchain surface is the shape of a language settling, even while the raw count holds.
+
+Reproduce all of it from the tracker (needs `gh` + `jq`):
+
+```sh
+# wa: share per month — the headline trend.  Exclude the un-labelled from the
+# shares, or better hygiene reads as better stability.
+gh issue list --state all --limit 500 --label bug --json createdAt,labels \
+  --jq '.[] | (.createdAt[0:7]) as $m
+        | ([.labels[].name | select(startswith("wa:"))]
+           | if length==0 then "wa:MISSING" else .[0] end) as $w
+        | "\($m) \($w)"' | sort | uniq -c
+
+# blocking RATE per area — for each area, its bug count and its wa:none count.
+for a in packages runtime store-lifetime codegen parser wasm closures stdlib native; do
+  t=$(gh issue list --state all --limit 500 --label bug --label area:$a --json number --jq 'length')
+  n=$(gh issue list --state all --limit 500 --label bug --label area:$a --label wa:none --json number --jq 'length')
+  echo "area:$a bugs=$t wa:none=$n"
+done
+
+# every blocker with its date and area — the core-vs-fringe read is a JUDGEMENT
+# over these titles, not a label query.  Read them; do not trust the area label
+# alone (a Windows LSP hang carries `area:runtime` and is not the runtime).
+gh issue list --state all --limit 500 --label bug --label wa:none \
+  --json number,title,createdAt,labels \
+  --jq '.[] | "\(.createdAt[0:10])  #\(.number)  [\([.labels[].name
+        | select(startswith("area:"))] | join(","))]  \(.title[0:72])"' | sort
+```
+
+**Baseline — 2026-07-30** (106 bug issues, all closed; shares exclude un-labelled):
+
+| | June (n=48) | July (n=49) |
+|---|---|---|
+| `wa:clean` | 48% | **63%** |
+| `wa:partial` | 42% | **24%** |
+| `wa:none` | 10% | 12% |
+
+Blocking rate by area, all-time: packages 4/16, runtime 3/16, store-lifetime 3/25,
+parser 1/13, codegen 1/20.
+
+**The core-vs-fringe read at this baseline.** Of June's 5 blockers, 4 were core
+(nested-vector compound-assign `#246`, store-pressure `#306`, error-cascade `#376`,
+corrupt enum discriminant `#406`). Of July's 6, one was core (`#497`, a `len`-on-freed-
+vector SIGSEGV) and five were fringe: the wasm bridge (`#623`), the registry cache
+(`#634`), Windows LSP transport (`#639`), `--html` import validation (`#681`), and the
+issue tracker's own label guard (`#626` — not the language at all). So the unroutable
+tail did not merely shrink in share, it MOVED off the core.
+
+**What would falsify that read**, and is therefore the thing to watch: a NEW core
+blocker — `area:codegen`/`parser`/`store-lifetime` carrying `wa:none` — filed by one of
+the consumers still to come online. Store-lifetime is where to expect it if it comes: it
+produced two of June's four core blockers and July's only one.
+
+**Two limits on the metric, so it is not over-read.** The `wa:` labels are applied by
+whoever fixes the bug and the policy says *verified*, so there is an optimism bias no
+query can audit. And two months is two data points; a third turns this from a reading
+into a trend.
+
 1. **Seal the memory model — the non-negotiable gate.** The store-lifetime /
    return-bind-ownership class (loft's stated #1 weakness, REOPENED 2026-06-21) must be
    **closed, not merely quiet**. At one dogfooding agent a residual UAF/over-free
