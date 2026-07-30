@@ -191,6 +191,58 @@ trend. And the nine back-filled labels above were judged from each report's own 
 a closed bug cannot be re-tested for its workaround, since the bug is gone — so they are
 weaker evidence than a label applied while the bug was live. Label at fix time.
 
+### The other half — how much STEERING the fixing took
+
+`wa:` measures how bad the bugs were for whoever hit them. It says nothing about the
+second question, which is at least as good a stability signal: **how hard did the owner
+have to push to get them fixed, and fixed thoroughly?** A language settles when defects
+get routable AND when fixing one stops needing supervision.
+
+That effort is not in the repository at all — it happens in conversation. But it leaves
+a timestamped trace in Claude Code's transcripts, and
+**[`scripts/steering_rate.py`](../../scripts/steering_rate.py)** extracts it. The signal
+is the owner interrupting a running turn; the discriminator is TIMING, because not every
+interruption is steering:
+
+- a **short** gap after the owner's own previous message means they never waited for the
+  turn to process — their own flow, adding a fact they forgot;
+- a **long** gap means they had been watching the work and stopped it.
+
+A correction of the agent is uncorrelated with the owner's typing rhythm; an amendment to
+themselves follows it within seconds. Reading the extremes confirms the split — under 20s
+gives *"it is merged"*, over 5 minutes gives *"The fix is not committed"* and *"Are you
+introducing runtime errors? Remove that immediately"*.
+
+**Baseline — 2026-07-30** (`scripts/steering_rate.py`, de-duplicated, `>=60s` = steering):
+
+| week | msgs | interrupts | int/100 | steering | steer/100 |
+|---|---|---|---|---|---|
+| W27 | 379 | 24 | 6.3 | 15 | 4.0 |
+| W28 | 610 | 55 | 9.0 | 27 | 4.4 |
+| W29 | 406 | 38 | 9.4 | 26 | 6.4 |
+| W30 | 482 | 42 | 8.7 | 27 | 5.6 |
+| W31 | 188 | 7 | 3.7 | 2 | 1.1 |
+
+**The reading: FLAT at 4–6 per 100 across W27–W30, no step change.** The transcripts start
+`2026-06-30`, and the owner reports the real improvement in steering came earlier than
+that — so this instrument, like the tracker, was built after the transition it would most
+want to show. It records a LEVEL to measure the next months against, not a turn.
+
+**Four things that keep this honest.** *W31 is n=2* — the per-bug figure computes to 0.06
+against W30's 1.69, which is arithmetic, not evidence; a partial week containing one long
+productive session. *The threshold is arbitrary*: the gap distribution is unimodal with a
+long tail (`--histogram`), so the populations overlap and the LEVEL moves with the cut —
+the flatness does not (at 120s: 3.2, 2.5, 4.7, 4.4). *Per-bug only means anything in
+bug-heavy weeks* — W27–W29 closed 2, 2 and 0 bugs, because they were plan and feature
+work. *The transcripts are outside the repo* and nothing here preserves them; if they are
+pruned this baseline cannot be recomputed.
+
+**The precise complement is a `steered` label** the owner applies when they had to
+intervene on a specific issue. The transcript rate is continuous and needs no behaviour
+change but cannot attribute; the label attributes exactly but only where it is worth a
+click. Neither depends on the agent noticing it needed help — which self-reporting would,
+and which is the one thing an agent that needed steering is least likely to do.
+
 1. **Seal the memory model — the non-negotiable gate.** The store-lifetime /
    return-bind-ownership class (loft's stated #1 weakness, REOPENED 2026-06-21) must be
    **closed, not merely quiet**. At one dogfooding agent a residual UAF/over-free
