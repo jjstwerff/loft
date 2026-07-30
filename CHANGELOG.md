@@ -21,6 +21,27 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — declaration order no longer changes what a closure sees
+
+Loft lets you use a struct before you declare it, and that is meant to be invisible.
+Inside a lambda it was not:
+
+```
+fn take(w: World) -> float {
+  chunk = w.chunks[1];                                   // World declared further down
+  f = fn(x: float) -> float { chunk.cells[2].v * x };
+  f(2.0)
+}
+```
+
+That failed with `Unknown field text.cells` — a complaint about `text`, in a program with
+no `text` anywhere. Moving the `struct World` above the function fixed it, which is a
+confusing thing to have to discover.
+
+The capture now resolves exactly as it does when the declaration comes first, whatever it
+was projected out of — a field, a vector element, a whole vector, or a scalar read out of
+one. Declaration order is invisible again.
+
 ### Unreleased — a closure can now count with one of your parameters
 
 The accumulator closure is an old friend:

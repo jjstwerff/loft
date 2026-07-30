@@ -17513,3 +17513,123 @@ fn issue_685_const_scalar_param_mutated_by_closure_is_rejected() {
         "#685: the const refusal must say which binding and why, got: {lines}"
     );
 }
+
+/// loft#686 — a capture whose type comes from a struct declared LATER in the file.
+///
+/// Two faults composed. `Unknown(0)` is the "no type known" sentinel and names no
+/// definition, but `copy_unknown_fields` read the `0` as a def number and gave the
+/// field whatever definition #0 returns — `text` — so the closure body type-checked
+/// against a type nothing in the program mentions. With that invented type gone the
+/// field became unsized, and `fill_database` registers a struct while SKIPPING an
+/// attribute it cannot size, so `finish` sized the record with the field left at
+/// `position == u16::MAX` and the closure read its capture at offset 65535.
+///
+/// Values live in `tests/scripts/686-forward-declared-capture.loft`; these assert the
+/// two FACTS, because the second fault was INTERMITTENT — a positionless field only
+/// crashes when the bytes at offset 65535 happen to be fatal, so a green value run
+/// proves much less than it looks.
+#[test]
+fn issue_686_forward_declared_capture_is_typed_and_positioned() {
+    let src_path = std::env::temp_dir().join("loft_i686_forward_capture.loft");
+    std::fs::write(
+        &src_path,
+        "fn q686(w: W686) -> float { ch = w.inner; f = fn(x: float) -> float { ch.q * x }; f(2.0) }\n\
+         struct I686 { q: float }\n\
+         struct W686 { inner: I686, tick: integer }\n\
+         fn main() { w = W686 { inner: I686 { q: 5.0 }, tick: 7 }; q686(w); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#686 fixture must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+
+    let rec = p.data.def_nr("__closure_0");
+    assert_ne!(rec, u32::MAX, "#686: the closure record must exist");
+    let a = p.data.attr(rec, "ch");
+    assert_ne!(
+        a,
+        usize::MAX,
+        "#686: the record must carry the `ch` capture"
+    );
+
+    // FACT 1 — the capture is typed as what it is, not as definition #0's return type.
+    match p.data.attr_type(rec, a) {
+        loft::data::Type::Reference(d, _) => assert_eq!(
+            p.data.def(d).name(),
+            "I686",
+            "#686: the capture must resolve to the forward-declared struct, got `{}`",
+            p.data.def(d).name()
+        ),
+        other => panic!(
+            "#686: a struct capture must be a Reference; got {other:?}.  `Text` here is \
+             the original bug — `Unknown(0)` resolved against definition #0"
+        ),
+    }
+
+    // FACT 2 — the record's field is POSITIONED.  Skipping an unsized attribute while
+    // still registering the struct left this at u16::MAX forever, and `finish_type`
+    // will not revisit a sized type, so nothing downstream could repair it.
+    let known = p.data.def(rec).known_type();
+    assert_ne!(
+        known,
+        u16::MAX,
+        "#686: the closure record must be laid out — a record left unregistered makes \
+         `OpDatabase` allocate type u16::MAX"
+    );
+    let pos = p.database.position(known, "ch");
+    assert_ne!(
+        pos,
+        u16::MAX,
+        "#686: the `ch` field must have a real byte position; u16::MAX means the record \
+         was sized while the field was still unresolved, and the closure then reads and \
+         writes at offset 65535 (an INTERMITTENT crash, which is why this asserts the \
+         position rather than trusting a green run)"
+    );
+}
+
+/// loft#686 sibling — `Unknown(0)` must never be resolved as a reference to definition
+/// #0.
+///
+/// It is the codebase-wide "no type known" sentinel (`Type::Unknown(0)` is what every
+/// unresolved expression carries), so reading the `0` as a def number invents a type
+/// from whatever happens to be defined first.  That is a lying fact rather than a
+/// missing one: the field looked resolved, so nothing downstream questioned it, and the
+/// error surfaced as `Unknown field text.cells` on a program with no `text` in sight.
+#[test]
+fn issue_686_nameless_unknown_is_not_resolved_against_def_zero() {
+    let src_path = std::env::temp_dir().join("loft_i686_sentinel.loft");
+    std::fs::write(
+        &src_path,
+        "fn s686(w: S686W) -> float { p = w.inner; f = fn(x: float) -> float { p.q * x }; f(1.0) }\n\
+         struct S686I { q: float }\n\
+         struct S686W { inner: S686I }\n\
+         fn main() { w = S686W { inner: S686I { q: 2.0 } }; s686(w); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+
+    // Definition #0's return type is what the old resolution handed the field.  Whatever
+    // it is, no capture may end up with it by accident.
+    let def_zero_ret = p.data.def(0).returned().clone();
+    let rec = p.data.def_nr("__closure_0");
+    assert_ne!(rec, u32::MAX, "#686: the closure record must exist");
+    let a = p.data.attr(rec, "p");
+    assert_ne!(a, usize::MAX, "#686: the record must carry the `p` capture");
+    let got = p.data.attr_type(rec, a);
+    assert!(
+        !matches!(&got, t if *t == def_zero_ret),
+        "#686: the capture took definition #0's return type ({def_zero_ret:?}) — \
+         `Unknown(0)` was resolved as a def reference again"
+    );
+    assert!(
+        matches!(&got, loft::data::Type::Reference(d, _) if p.data.def(*d).name() == "S686I"),
+        "#686: the capture must be the struct it projects out of, got {got:?}"
+    );
+}

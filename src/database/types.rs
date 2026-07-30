@@ -418,6 +418,25 @@ impl Stores {
         }
     }
 
+    /// #686 — lay out a SINGLE closure record on demand (field positions + size), the
+    /// sibling of [`Stores::lay_out_synth`] and deferred for the same reason: a capture
+    /// whose type was a FORWARD reference in pass 1 can only be typed during pass-2 body
+    /// parse, and the lambda's body bakes the field offsets into its IR right then — so
+    /// the record must be positioned before it, not by the `finish()` at the end of the
+    /// pass.  The full `finish()` is not an option mid-parse: it re-runs every type and
+    /// re-appends keyed-index bookkeeping.
+    ///
+    /// Empty `linked` is correct here: a closure record holds its captures as scalars or
+    /// 12-byte DbRefs, never as an inline keyed collection, so no `Vector → Array`
+    /// promotion applies.
+    pub(crate) fn lay_out_record(&mut self, kt: u16) {
+        let linked: HashSet<u16> = HashSet::new();
+        let mut in_progress: HashSet<usize> = HashSet::new();
+        if kt != u16::MAX && (kt as usize) < self.types.len() {
+            self.finish_type(&linked, kt as usize, &mut in_progress);
+        }
+    }
+
     pub(super) fn finish_type(
         &mut self,
         linked: &HashSet<u16>,

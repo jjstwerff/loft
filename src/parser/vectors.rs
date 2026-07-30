@@ -746,6 +746,9 @@ impl Parser {
         if !self.first_pass {
             let closure_rec = self.data.def(d_nr).closure_record();
             if closure_rec != u32::MAX {
+                // #686 — repair any attribute pass 1 had to leave unresolved BEFORE the
+                // body reads it for its type-check and storage shape.
+                self.resolve_forward_captures(closure_rec);
                 let closure_tp = Type::Reference(closure_rec, Deps::none());
                 // Add as definition attribute so codegen positions it on the stack.
                 self.data
@@ -1562,6 +1565,104 @@ impl Parser {
         }
     }
 
+    /// The closure-record ATTRIBUTE type for a capture whose logical type is `tp` —
+    /// the STORAGE encoding, which is deliberately not the same thing.
+    ///
+    /// P260 (2026-05-13): ALL Reference captures store as a 12-byte `Parts::DbRef`
+    /// pointing at the live original (`typedef::fill_database`'s arm fires on non-empty
+    /// deps).  Inline-byte storage was wrong even for a read-only capture — the closure
+    /// then reads a stale snapshot when the outer scope mutates a non-scalar field of
+    /// the source struct, and closure-side writes to compound fields (a vector field, a
+    /// nested struct, an element) silently no-op against the inline copy.  The arm was
+    /// once gated on `is_mutated(name)`, and that gate was wrong: this is an
+    /// architectural decision ("don't deep-copy a possibly-large struct into a closure
+    /// record"), not a property of whether THIS closure writes to the capture.
+    ///
+    /// @PLN93 (#511): a captured COLLECTION borrows the outer collection, so it takes
+    /// the same shared-DbRef representation — the whole schema / read / write path on
+    /// both backends then reuses the proven Reference-DbRef machinery, and the body
+    /// recovers the real collection type from `capture_context` (`parser/objects.rs`).
+    /// The `Reference` content def is inert for a DbRef field (never laid out inline);
+    /// carrying the collection's content def keeps it meaningful.
+    ///
+    /// The share marker itself is only read by `fill_database` and by `generation`'s
+    /// native mirror, and closure records are its sole producer, so none of this reaches
+    /// user-defined struct fields.  Ownership (which marker) is decided later, after
+    /// scope analysis — see `scopes::mark_borrowed_captures` (#682).
+    fn closure_attr_type(&mut self, tp: &Type) -> Type {
+        match tp {
+            Type::Reference(d, _) => Type::Reference(*d, Deps::share_sentinel()),
+            Type::Hash(c, _, _)
+            | Type::Sorted(c, _, _)
+            | Type::Index(c, _, _)
+            | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
+            Type::Vector(elm, _) => {
+                Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
+            }
+            _ => tp.clone(),
+        }
+    }
+
+    /// #686 — re-type any closure-record attribute that pass 1 had to leave UNRESOLVED,
+    /// now that pass 2 knows what the capture really is.
+    ///
+    /// A capture whose type mentions a type declared LATER in the file is
+    /// `Unknown(0)` when pass 1 freezes the record's attributes (`ch = w.chunks[1]`
+    /// where `World` comes further down).  Pass 2 has the resolved type in
+    /// `capture_context`, and the body is about to read the attribute for BOTH its own
+    /// type-check (`parser/objects.rs`) and the field's storage shape — so the repair
+    /// has to happen here, before `parse_code`, not at the record-synthesis epilogue
+    /// that runs after the body.
+    ///
+    /// Attributes are matched by NAME against `capture_context`, which holds every
+    /// enclosing binding: `captured_names` is still empty at this point (it fills as
+    /// the body parses).  Only unresolved attributes are touched, so a record that
+    /// pass 1 typed correctly is left exactly as it was.
+    ///
+    /// The record is then laid out here rather than by `fill_all`.  `fill_all` runs at
+    /// the END of the pass, but `emit_lambda_code` needs the record's `known_type` for
+    /// its `OpDatabase` the moment this lambda finishes — and `typedef` deliberately
+    /// deferred the layout while the attribute was unresolved
+    /// (`has_nameless_unknown_attr`), because registering it then bakes a field with no
+    /// position.  Field positions still come from `Stores::finish()` at the end of the
+    /// pass, so laying out early only fixes the ORDER, not the mechanism.
+    fn resolve_forward_captures(&mut self, closure_rec: u32) {
+        if self.first_pass || closure_rec == u32::MAX {
+            return;
+        }
+        let unresolved: Vec<(usize, String)> = (0..self.data.attributes(closure_rec))
+            .filter(|&a| self.data.attr_type(closure_rec, a).is_unknown())
+            .map(|a| (a, self.data.attr_name(closure_rec, a)))
+            .collect();
+        if unresolved.is_empty() {
+            return;
+        }
+        for (a_nr, name) in unresolved {
+            let Some((_, ctype)) = self
+                .capture_context
+                .iter()
+                .find(|(n, _)| *n == name)
+                .cloned()
+            else {
+                continue;
+            };
+            if ctype.is_unknown() {
+                continue;
+            }
+            ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, &ctype);
+            let attr_tp = self.closure_attr_type(&ctype);
+            self.data.set_attr_type(closure_rec, a_nr, attr_tp);
+        }
+        if self.data.def(closure_rec).known_type() == u16::MAX
+            && !(0..self.data.attributes(closure_rec))
+                .any(|a| self.data.attr_type(closure_rec, a).is_unknown())
+        {
+            crate::typedef::fill_database(&mut self.data, &mut self.database, closure_rec);
+            self.database
+                .lay_out_record(self.data.def(closure_rec).known_type());
+        }
+    }
+
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");
         let captures = self.captured_names.clone();
@@ -1582,48 +1683,7 @@ impl Parser {
                 // panicking with "Incomplete record" at
                 // `src/store.rs:227`.
                 ensure_tuple_defs_for_capture(&mut self.data, &mut self.lexer, tp);
-                let attr_tp = match tp {
-                    Type::Reference(d, _) => {
-                        // P260 (2026-05-13): ALL Reference captures
-                        // store as 12B Parts::DbRef pointing at the
-                        // live original (typedef.rs:529 arm fires on
-                        // non-empty deps).  Inline-byte storage was
-                        // wrong even for read-only captures — the
-                        // closure read sees a stale snapshot when the
-                        // outer scope mutates a non-scalar field of
-                        // the source struct, AND closure-side writes
-                        // to compound fields (vector field, nested
-                        // struct, vector element) silently no-op
-                        // against the inline copy.  Originally this
-                        // arm was gated on `is_mutated(name)` (phase
-                        // 02c) but the gate is wrong: storage
-                        // encoding is an architectural decision
-                        // ("don't deep-copy a possibly-large struct
-                        // into a closure record"), not a property of
-                        // whether THIS closure mutates the capture.
-                        // The auto-Reference marker (vec![u16::MAX])
-                        // is only consumed by `typedef.rs::fill_database`
-                        // — closure records are the sole producer, so
-                        // this doesn't affect user-defined struct
-                        // fields.
-                        Type::Reference(*d, Deps::share_sentinel())
-                    }
-                    // @PLN93 (#511): a captured collection borrows the outer collection —
-                    // store it as a shared DbRef, the SAME representation as a Reference
-                    // capture, so the whole schema / read / write path (both backends)
-                    // reuses the proven Reference-DbRef machinery.  The body recovers the
-                    // real collection type from capture_context (parser/objects.rs).  The
-                    // Reference content d_nr is inert for a DbRef field (never laid out
-                    // inline) — carry the collection's content def so it stays meaningful.
-                    Type::Hash(c, _, _)
-                    | Type::Sorted(c, _, _)
-                    | Type::Index(c, _, _)
-                    | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
-                    Type::Vector(elm, _) => {
-                        Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
-                    }
-                    _ => tp.clone(),
-                };
+                let attr_tp = self.closure_attr_type(tp);
                 self.data
                     .add_attribute(&mut self.lexer, record_d_nr, name, attr_tp);
             }

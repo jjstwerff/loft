@@ -98,7 +98,17 @@ pub(crate) fn nullable_vector_elem(
 
 fn copy_unknown_fields(data: &mut Data, d: u32) {
     for nr in 0..data.attributes(d) {
-        if let Type::Unknown(was) = data.attr_type(d, nr) {
+        // `Unknown(was)` names the forward-referenced type's STUB def — except for
+        // `Unknown(0)`, which is the codebase-wide "no type known" sentinel and names
+        // nothing (`Type::Unknown(0)` is what every unresolved expression carries).
+        // Resolving THAT against definition #0 hands the field whatever the first
+        // definition in the program happens to return — `text`, in practice — so a
+        // field with no type silently acquires a plausible wrong one instead of staying
+        // visibly unresolved (#686).  The `Vector` arm below already guarded it; this is
+        // the same guard on the bare case.
+        if let Type::Unknown(was) = data.attr_type(d, nr)
+            && was != 0
+        {
             data.set_attr_type(d, nr, data.def(was).returned.clone());
         } else if let Type::Vector(content, dep) = &data.attr_type(d, nr)
             && let Type::Unknown(was) = **content
@@ -222,6 +232,32 @@ pub fn sync_capture_ownership(data: &Data, database: &mut Stores) {
             }
         }
     }
+}
+
+/// #686 — does `d` still carry a NAMELESS unknown attribute, i.e. one no resolver can
+/// ever fix?
+///
+/// `Unknown(stub)` names a forward-referenced type and `copy_unknown_fields` resolves it
+/// before the layout loop.  `Unknown(0)` names nothing: it is what a field typed from an
+/// EXPRESSION carries, and the only producer of those is the closure record (a capture's
+/// type is the type of `w.chunks[1]`, not of a written-down name).
+///
+/// Laying such a struct out anyway is what made #686 corrupt instead of merely fail: the
+/// field loop SKIPS an attribute it cannot size, but the type is still registered and
+/// `finish` still sizes it — so the field keeps `position == u16::MAX` forever, and
+/// `finish_type` will not revisit an already-sized type.  The closure body then read and
+/// wrote its capture at offset 65535.  Deferring instead costs nothing: the layout loop
+/// is keyed on `known_type == u16::MAX`, so pass 2 picks the record up once
+/// `parse_lambda`'s `resolve_forward_captures` has repaired it.  A field that never
+/// resolves leaves the struct unregistered, which is harmless — the parser has already
+/// reported the error and the program cannot run.
+fn has_nameless_unknown_attr(data: &Data, d: u32) -> bool {
+    (0..data.attributes(d)).any(|a| {
+        let tp = data.attr_type(d, a);
+        let tp = tp.base();
+        matches!(tp, Type::Unknown(0))
+            || matches!(tp, Type::Vector(c, _) if matches!(**c, Type::Unknown(0)))
+    })
 }
 
 pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
@@ -354,6 +390,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
             && data.def(d_nr).known_type == u16::MAX
+            && !has_nameless_unknown_attr(data, d_nr)
         {
             fill_database(data, database, d_nr);
             // @PLN25 E2 — right after building a struct `S`, build its synthetic

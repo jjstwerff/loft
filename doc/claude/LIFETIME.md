@@ -420,6 +420,39 @@ out-parameter, which cannot be added from pass 2 without growing the signature a
 pass 1 fixed it — the H5 two-pass contract rejects exactly that. It is refused by name
 with the working alternative (#687).
 
+### A capture of a FORWARD-declared type is typed and laid out in pass 2 (#686)
+
+A capture's type is the type of an EXPRESSION (`ch = w.chunks[1]`), so it cannot be
+deferred by name the way a written-down `f: World` field can.  With `World` declared later
+in the file, pass 1 freezes the record's attribute as `Unknown(0)` — the "no type known"
+sentinel.  Two things then went wrong, and the first hid the second:
+
+1. `copy_unknown_fields` read the `0` as a stub def number and set the field to
+   `data.def(0).returned` — in practice `text`.  A LYING fact: the field looked resolved,
+   so the closure body type-checked against a type the program never mentions
+   (`Unknown field text.cells`).  Guarded now (`was != 0`, matching the `Vector` arm).
+2. With no invented type, the field was unsized — and `fill_database`'s field loop SKIPS an
+   attribute it cannot size while still registering the struct, so `finish` sized the
+   record with `position == u16::MAX` and `finish_type` never revisits a sized type.  The
+   closure read and wrote its capture at **offset 65535**, intermittently fatal.
+
+**The invariant: a struct is laid out only once its fields are sized.**  `fill_all` skips a
+def with a nameless-unknown attribute (`has_nameless_unknown_attr`); the loop is keyed on
+`known_type == u16::MAX`, so this defers rather than drops.  `parse_lambda`'s
+`resolve_forward_captures` then re-types the attribute from `capture_context` at LAMBDA
+ENTRY — not at the synthesis epilogue, which runs after the body — and lays that one record
+out via `Stores::lay_out_record`.
+
+Why the on-demand layout is required: the body bakes field offsets into its IR as it
+parses, so the end-of-pass `finish()` is too late, and a full `finish()` mid-parse
+re-appends keyed-index bookkeeping.  This is the same deferral `lay_out_synth` already makes
+for a forward-referenced synth enum.
+
+⚠ **The second fault was INTERMITTENT** — a positionless field only crashes when the bytes
+at offset 65535 happen to be fatal.  Two byte-identical probe files disagreed during the
+investigation, and single runs "confirmed" three different stories before a repeat-run
+harness (N≥12) replaced them.  Any probe in this area needs one.
+
 ### Inside the lambda: `__closure` is a struct parameter
 
 When parsing the lambda body, the compiler adds a hidden `__closure` parameter:

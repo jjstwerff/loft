@@ -9,6 +9,61 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### #686: a capture of a FORWARD-declared type was mis-typed, then mis-positioned (2026-07-30)
+
+A lambda capturing a local whose type came from a struct declared LATER in the file read
+that capture as `text` — `Unknown field text.cells`, on a program with no `text` in it.
+Two faults composed, and the first hid the second.
+
+**Fault 1 — a sentinel read as a def number.** A capture's type is the type of an
+EXPRESSION (`ch = w.chunks[1]`), so with the struct not yet declared it is `Unknown(0)`:
+the codebase-wide "no type known" marker, which names nothing. `copy_unknown_fields` read
+the `0` as a forward-reference stub and set the field to `data.def(0).returned` — whatever
+the first definition in the program happens to return, in practice `text`. The `Vector`
+arm of that same function already guarded `was != 0`; the bare arm did not. This is a
+LYING fact, not a missing one: the field looked resolved, so nothing downstream
+questioned it. Guarded now, which turns the symptom honest (`unknown`, not `text`) and is
+what exposed the second fault.
+
+**Fault 2 — a struct laid out while a field was unsized.** `fill_database`'s field loop
+SKIPS an attribute whose type it cannot size (deliberately — so the user sees the parser's
+diagnostic rather than a panic), but the struct is still registered and `finish` still
+sizes it, leaving the field at `position == u16::MAX` forever: `finish_type` never
+revisits a sized type. The closure then read and wrote its capture at **offset 65535** —
+an INTERMITTENT crash, which is what made the readings during investigation worthless
+until a repeat-run harness replaced them (two byte-identical probe files disagreed;
+single runs had been "confirming" three different stories).
+
+The invariant: **a struct is laid out only once its fields are sized.** Enforced at the
+one place that lays them out — `fill_all` skips a def carrying a NAMELESS unknown
+attribute (`has_nameless_unknown_attr`). Narrow by construction: `Unknown(stub)` names a
+type and `copy_unknown_fields` resolves it before the loop, so only `Unknown(0)` — an
+expression-typed field, and the closure record is the sole producer of those — can reach
+the layout unsized. The loop is keyed on `known_type == u16::MAX`, so deferring costs
+nothing; a field that never resolves leaves the struct unregistered, which is harmless
+because the parser has already reported the error.
+
+Pass 2 then re-types the attribute from `capture_context` (`resolve_forward_captures`, at
+lambda entry — NOT at the record-synthesis epilogue, which runs after the body) and lays
+that one record out on demand via `Stores::lay_out_record`. The on-demand layout is
+required, not a shortcut: the body bakes field offsets into its IR as it parses, so the
+end-of-pass `finish()` is too late, and a full `finish()` mid-parse re-appends keyed-index
+bookkeeping. `lay_out_record` is the sibling of `lay_out_synth`, which solved exactly this
+for a forward-referenced synth enum — same deferral, same reason, same empty `linked` set
+(a closure record holds scalars and 12-byte DbRefs, never an inline keyed collection).
+
+The pass-1 storage-encoding `match` moved into `closure_attr_type` so the synthesis and
+the repair cannot drift on which captures store as a shared DbRef.
+
+Guards: `tests/scripts/686-forward-declared-capture.loft` (values, both backends — field /
+element / whole-vector / scalar projections, cardinality, and repeat calls) plus
+`issue_686_forward_declared_capture_is_typed_and_positioned` and
+`issue_686_nameless_unknown_is_not_resolved_against_def_zero`. The two facts are asserted
+separately because they fail separately, and each half of the fix was verified to break
+its own: with the sentinel guard off both fail; with only the layout deferral off, the
+type is right and the POSITION is still 65535. A value test alone cannot see that — a
+positionless field only crashes when the bytes at offset 65535 happen to be fatal.
+
 ### #685: a mutated scalar capture sourced from a PARAMETER corrupted the frame (2026-07-30)
 
 Two producers of one fact disagreed. `box_captured_names_for_outer_scalars` gave the
