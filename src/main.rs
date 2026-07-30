@@ -147,6 +147,11 @@ fn print_help() {
         "                                default: <script>.html) — guide: doc/claude/WEB_APPS.md"
     );
     println!(
+        "  --host-provided               with --html: you drive the emitted wasm from your own"
+    );
+    println!("                                JS host, so an import loft's page shim lacks is a");
+    println!("                                warning, not a refusal (alias: --no-host-check)");
+    println!(
         "  --tests [dir]                 discover and run fn test*() functions in .loft files"
     );
     println!("                                recursively (default dir: current directory)");
@@ -5362,6 +5367,9 @@ fn main() {
     // @PLN117 — `--threads` / `--no-threads`; `None` = decide from whether the
     // program actually uses `par`.
     let mut html_threads: Option<bool> = None;
+    // loft#681 — the consumer supplies its OWN host for the emitted wasm, so the page
+    // loft would write is never used and its shim's surface is not the relevant one.
+    let mut html_host_provided = false;
     let mut tests_dir: Option<String> = None;
     // Plan-08 phase 01: --introspect mode collects per-section
     // selectors, output paths, and filters into one Options bundle.
@@ -5631,6 +5639,11 @@ fn main() {
             html_threads = Some(true);
         } else if a == "--no-threads" {
             html_threads = Some(false);
+        } else if a == "--host-provided" || a == "--no-host-check" {
+            // Extract-the-wasm workflows drive the module from their own JS (see
+            // BROWSER_INTEROP's "loft owns the loop"), so an import loft's shim lacks is
+            // not a defect to prevent — the shim is discarded with the page.
+            html_host_provided = true;
         } else if a == "--tests" {
             // Optional directory/file: consume next non-flag arg.
             // Skip --native/--no-warnings/--deny-warnings that may appear between --tests and the path.
@@ -8110,23 +8123,40 @@ fn main() {
             let provided = format!("{gl_js}{host_js_extensions}{thread_js}");
             let missing = crate::native_utils::missing_host_imports(&wasm_bytes, &provided);
             if !missing.is_empty() {
-                eprintln!(
-                    "loft: --html: this program calls {} the browser host does not \
-                     provide:\n    {}\n  \
-                     The browser shim implements a SUBSET of the native surface — a canvas \
-                     cannot do everything a desktop window can.\n  \
-                     Drop the call on this target, or add a handler to \
-                     doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
-                     (No HTML was written — the page would fail to instantiate, showing \
-                     only a LinkError with an import index.)",
-                    if missing.len() == 1 {
-                        "a function"
-                    } else {
-                        "functions"
-                    },
-                    missing.join("\n    "),
-                );
-                std::process::exit(1);
+                // loft#681 — the check assumes the page it is about to write is the one
+                // that will run the module.  A consumer that extracts the wasm and drives
+                // it from its own JS has already broken that assumption on purpose, and
+                // for them a missing import in loft's shim says nothing about whether
+                // their host provides it.  Report, but do not stand in the way.
+                let verb = if missing.len() == 1 {
+                    "a function"
+                } else {
+                    "functions"
+                };
+                let list = missing.join("\n    ");
+                if html_host_provided {
+                    eprintln!(
+                        "loft: --html: {} not provided by loft's page shim:\n    {}\n  \
+                         Building anyway (--host-provided): your host supplies the imports. \
+                         The emitted wasm is unchanged — only this check is relaxed, so a \
+                         name your host does NOT define still fails at instantiate.",
+                        verb, list,
+                    );
+                } else {
+                    eprintln!(
+                        "loft: --html: this program calls {verb} the browser host does not \
+                         provide:\n    {list}\n  \
+                         The browser shim implements a SUBSET of the native surface — a canvas \
+                         cannot do everything a desktop window can.\n  \
+                         Drop the call on this target, or add a handler to \
+                         doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
+                         If you drive the emitted wasm from your OWN host instead of loft's \
+                         page, pass --host-provided and this becomes a warning.\n  \
+                         (No HTML was written — the page would fail to instantiate, showing \
+                         only a LinkError with an import index.)"
+                    );
+                    std::process::exit(1);
+                }
             }
         }
         let html = if minimal_page {
