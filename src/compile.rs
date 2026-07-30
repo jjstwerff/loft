@@ -63,6 +63,11 @@ pub fn byte_code_from(
     // the browser kernel down at compile time (@PLN18 08-S6 gate).
     let timing = std::env::var("LOFT_TIMING").is_ok();
     let t_init = timing.then(std::time::Instant::now);
+    // #682 — the interpreter's closure-record schema was laid out during parse,
+    // before scope analysis knew which captures the record actually owns.  Carry
+    // that verdict in now, while `Data` and the live schema are both in hand; this
+    // is the single funnel every `byte_code*` entry point goes through.
+    crate::typedef::sync_capture_ownership(data, &mut state.database);
     if start_d_nr == 0 {
         native::init(state);
         register_native_stubs(state, data);

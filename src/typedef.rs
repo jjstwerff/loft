@@ -194,6 +194,36 @@ pub fn actual_types_deferred(
     }
 }
 
+/// #682 — carry the post-`scopes::check` capture-ownership verdict into the
+/// already-registered schema, so `free_named`'s cascade frees exactly the
+/// captures the closure record adopted.
+///
+/// The interpreter's schema is laid out during parse, but which captures a record
+/// owns is only settled by scope analysis (`scopes::mark_borrowed_captures`) —
+/// hence this second, layout-preserving pass rather than a decision inside
+/// `fill_database`.  `--native` needs no equivalent: its schema is emitted from
+/// these same attribute types AFTER scope analysis has run.
+///
+/// Idempotent, and safe to run before scope analysis has marked anything (it then
+/// finds no borrowed attribute and changes nothing).
+pub fn sync_capture_ownership(data: &Data, database: &mut Stores) {
+    for d in 0..data.definitions() {
+        if !data.def(d).name.starts_with("__closure_") {
+            continue;
+        }
+        let known = data.def(d).known_type();
+        if known == u16::MAX {
+            continue;
+        }
+        for a in 0..data.attributes(d) {
+            if matches!(data.attr_type(d, a), Type::Reference(_, ref deps) if deps.is_borrowed_share())
+            {
+                database.borrow_dbref_field(known, &data.attr_name(d, a));
+            }
+        }
+    }
+}
+
 pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
     // Detect type cycles before computing sizes.
     for d_nr in start_def..data.definitions() {
@@ -913,7 +943,17 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     // code path always has empty deps so the
                     // legacy inline-bytes path stays active for
                     // every existing struct field.
-                    database.dbref()
+                    //
+                    // #682: which of the two markers decides whether the
+                    // record ADOPTS the captured store (cascade-freed with
+                    // the record) or merely BORROWS it (freed by its real
+                    // owner).  Same 12 bytes either way — `generation` picks
+                    // the same pair for `--native`.
+                    if deps.is_borrowed_share() {
+                        database.dbref_borrow()
+                    } else {
+                        database.dbref()
+                    }
                 }
                 _ => {
                     // A struct/enum-reference field stored INLINE (`inner: Cell`,

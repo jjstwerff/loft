@@ -21,6 +21,33 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — a lambda that captures your value no longer eats it
+
+Handing a lambda a value from the surrounding scope is the ordinary way to give a
+library a function it can call:
+
+```
+sampler = fn(x: float, z: float) -> float { terrain_y(x, z, world) };
+rest = ground_axle(sampler, cx, cz, yaw, half, radius);
+```
+
+If `world` was a **parameter** of the enclosing function, that closure destroyed the
+caller's `world`. Nothing said so at the time — the value stayed readable for a
+while — and the failure landed later, in some unrelated function that happened to
+touch the same value next, with a crash pointing hundreds of lines away from the
+lambda. Capturing a value that only *views* into another (`chunk = world.chunks[1]`,
+or a `for` loop's element) did the same thing.
+
+The rule is now the one you would expect, and it needs nothing from you: capturing a
+value the function **owns** hands it to the closure, which is what lets a factory
+return a closure over its own local; capturing a **parameter** or a view **borrows**,
+because the real owner outlives the closure either way. So passing a value into a
+function that captures it in a lambda cannot damage your copy, and a returned closure
+never reads something already freed.
+
+Nothing you can write got stricter — code that avoided closures over store-backed
+values by hand keeps working, and can now stop avoiding them.
+
 ### Unreleased — changing a value you matched on now sticks
 
 Destructuring in a `match` gives you a **view** of what you matched, so writing

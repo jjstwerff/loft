@@ -9,6 +9,69 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### #682: the closure-record cascade freed captures the record never owned (2026-07-30)
+
+A reference / collection capture is stored in `__closure_N` as a 12-byte `DbRef`
+(P260), and `free_named`'s cascade freed every one of them when the record died.
+That is correct for a store the defining frame OWNED and handed over — `get_free_vars`
+suppresses the frame's own `OpFreeRef` for a captured reference, and the cascade being
+the sole free is exactly what lets an escaping factory closure outlive its frame
+(#323). The pairing only holds where a frame free existed to suppress, and for two
+common capture sources it never did: a **parameter** is excluded from the scope-exit
+sweep entirely (`variables()`: "never return function arguments"), and a **projection
+local** (`ch = w.chunks[1]`, a `for` element) is `owns == false`. Both were cascaded
+anyway, so the caller's store was freed under it.
+
+**The filed scope was a lambda handed to a library as `fn(float,float)->float`;
+neither the hand-off nor the call is a trigger.** The minimal cell captures a struct
+parameter and never invokes the lambda. The axes that matter are the ones deciding who
+owns the capture — capture SOURCE (parameter / projection / for-element / owned local)
+and KIND (struct reference / vector / hash / boxed `__cell_`) — and the class covers
+every store-backed capture of a borrowed binding, not just the reported struct.
+The symptom was three steps removed: a freed-but-unreused store still reads correctly,
+so the fault surfaced when the next allocation recycled the slot, in an unrelated
+function ~900 lines from the closure.
+
+One dep marker had to carry two facts, which is the encoding bug behind it:
+`Deps::share_sentinel()` meant both "store a 12-byte DbRef" and "the record owns the
+target". It is now a pair — `share_sentinel()` (adopted, `dbref`) and
+`borrowed_share_sentinel()` (borrowed, `dbref_borrow`) — two type-table entries of the
+same 12-byte / align-4 shape, so no position, size, read or write path moves; only
+`free_named`'s filter (`Stores::dbref_is_adopted`) reads the difference.
+
+**The verdict cannot be computed at record synthesis, which is why it is not.** A
+capture's ownership is not final at parse time: `ch = pick(w, 1)` parses as "borrows
+`w`" from the callee's declared return, and only `scopes::check`'s call-result rewrite
+(`make_independent`, the `!adopts_fresh_store` arm) turns it into OWNED once it knows
+the return ABI deep-copies into a fresh store. A first attempt read the parse-time dep
+and leaked that copy. The decision is therefore `scopes::mark_borrowed_captures`, run
+after every dep rewrite has settled, reusing `get_free_vars`' own `owns` test so the
+two cannot drift. It reaches each record through the defining frame's `___clos_N`
+LOCAL; the lambda's hidden `__closure` PARAMETER has the same type, and reading it too
+flipped verdicts by definition order.
+
+`--native` picks the marker up from the attribute type directly (its schema is emitted
+after scope analysis); the interpreter's schema is laid out during parse, so
+`typedef::sync_capture_ownership` re-points the field from `compile::byte_code_from` —
+the one funnel every `byte_code*` entry point passes through. A `__cell_<T>` capture
+(plan-22's boxed mutated scalar / text) is always adopted: the cell is minted for that
+closure alone, so the record is its only possible owner however the binding was
+reached — including from a parameter.
+
+Both `dbref` shapes register **together** from either entry point. Type numbers are
+positional and `--native` replays the registration sequence to rebuild its schema, so
+a shape appearing in only some programs shifted every id after it — `505-collection-
+capture` failed native with `Cannot add to none-structure 'State'` until the pair
+became unconditional.
+
+Guards: `tests/scripts/682-closure-capture-borrow.loft` (values, both backends — every
+borrow cell called twice so the recycled slot shows, every adopt cell three times so a
+wrongly-borrowed verdict shows up as a leak) and
+`tests/issues.rs::issue_682_closure_capture_ownership_marker` (the marker itself, both
+directions). Both verified to go RED with the pass disabled. Reproduced and fixed
+against the consumer's real `hex_world::World`, which the pre-fix binary corrupted from
+the second tick on.
+
 ### #654: jump displacements were 16-bit — a body past 32 KB jumped somewhere arbitrary (2026-07-28)
 
 `OpGotoWord` / `OpGotoFalseWord` carried a `const i16` displacement, computed with an

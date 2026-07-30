@@ -1,0 +1,218 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#682): a lambda capturing a store-backed value destroyed the CALLER's
+// store.  A closure record holds each reference / collection capture as a 12-byte DbRef,
+// and `free_named`'s cascade freed every one of them when the record died.  That is right
+// for a store the defining frame OWNED and handed over — the frame's own free is
+// suppressed for it, which is what lets an escaping factory closure outlive the frame
+// (#323) — but a captured PARAMETER belongs to the caller, and a projection local
+// (`ch = w.chunks[1]`) belongs to whatever it views into.  Both were freed anyway.
+//
+// The report arrived as a non-unwinding panic ~900 lines away from the closure, inside an
+// unrelated function that also took the same World, so the axes worth pinning are the ones
+// that decide WHO owns the capture — not the ones the symptom suggested:
+//
+//   * capture SOURCE: parameter · projection local · owned local · for-loop element
+//   * capture KIND: struct reference · vector · hash · mutated scalar (a boxed `__cell_`)
+//   * HAND-OFF: called in place vs passed as `fn(float,float)->float` into another fn
+//
+// Neither the hand-off nor the call is a trigger: the parameter cell below never invokes
+// its lambda and still lost the World.  What the axes separate is adoption from borrowing,
+// and both directions are asserted here — the borrow cells for the over-free, the adopt
+// cells because marking them borrowed instead leaks (the store checker catches that half).
+
+struct C682Cell  { v: float }
+struct C682Chunk { cx: integer, cells: vector<C682Cell> }
+struct C682World { chunks: vector<C682Chunk>, tick: integer }
+struct C682Flat  { a: float, b: float, tick: integer }
+struct C682Row   { k: integer, n: integer }
+struct C682Db    { rows: hash<C682Row[k]> }
+
+fn c682_world() -> C682World {
+  C682World {
+    chunks: [
+      C682Chunk { cx: 0, cells: [C682Cell { v: 1.0 }, C682Cell { v: 2.0 }, C682Cell { v: 3.0 }] },
+      C682Chunk { cx: 1, cells: [C682Cell { v: 10.0 }, C682Cell { v: 20.0 }, C682Cell { v: 30.0 }] },
+    ],
+    tick: 7,
+  }
+}
+
+fn c682_terrain(x: float, z: float, w: C682World) -> float {
+  c = w.chunks[(x as integer) % 2];
+  c.cells[(z as integer) % 3].v
+}
+
+// The library side of the reported shape: takes the sampler as a value and calls it in a
+// loop, with a defaulted trailing parameter as `moros_sim::ground_axle` has.
+fn c682_axle(sample: fn(float, float) -> float, cx: float, cz: float,
+             rounds: integer = 3) -> float {
+  acc = 0.0;
+  round = 0;
+  while round < rounds {
+    acc = acc + sample(cx, cz) + sample(cx + 1.0, cz + 1.0);
+    round = round + 1;
+  }
+  acc
+}
+
+// ── BORROW cells: the frame does not own the capture, so the record must not free it ──
+
+// THE CASE, minimal: a struct PARAMETER captured, the lambda never even called.  The
+// unused-lambda warning IS the cell: neither invoking the closure nor handing it off is
+// part of the trigger, so the guard has to keep a version that does neither.
+// @EXPECT_WARNING: Variable sampler is never read
+fn c682_param_unused(wld: C682Flat, cx: float) -> float {
+  sampler = fn(sx: float) -> float { wld.a * sx };
+  cx + 1.0
+}
+
+// The reported shape in full: parameter captured, handed off as a fn value.
+fn c682_param_handoff(wld: C682World, cx: float, cz: float) -> float {
+  sampler = fn(sx: float, sz: float) -> float { c682_terrain(sx, sz, wld) };
+  c682_axle(sampler, cx, cz, 3)
+}
+
+// A PROJECTION local — not a parameter itself, so a parameter-only fix misses it.
+fn c682_projection(w: C682World) -> float {
+  ch = w.chunks[1];
+  f = fn(x: float) -> float { ch.cells[2].v * x };
+  f(2.0)
+}
+
+// The for-loop element variable is a view into the parameter's vector.
+fn c682_loop_elem(w: C682World) -> float {
+  tot = 0.0;
+  for ch in w.chunks {
+    f = fn(x: float) -> float { ch.cells[0].v * x };
+    tot = tot + f(1.0);
+  }
+  tot
+}
+
+// A captured COLLECTION parameter takes the same DbRef storage as a struct reference.
+fn c682_param_vector(v: vector<integer>) -> integer {
+  f = fn(i: integer) -> integer { v[i] ?? -1 };
+  f(1)
+}
+
+fn c682_param_hash(h: hash<C682Row[k]>) -> integer {
+  f = fn(k: integer) -> integer { (h[k] ?? C682Row { k: 0, n: -1 }).n };
+  f(2)
+}
+
+// A captured `text` parameter is deep-copied, not shared — the far side of the boundary.
+fn c682_param_text(s: text) -> integer {
+  f = fn(n: integer) -> integer { len(s) + n };
+  f(1)
+}
+
+// ── ADOPT cells: the frame owns the capture, so the record must keep freeing it ──
+
+// An owned local: the frame's scope-exit free is suppressed and the record's cascade is
+// the only free there is.  Marking this borrowed leaks the store instead.
+fn c682_owned_local(cx: float, cz: float) -> float {
+  wld = C682Flat { a: 2.0, b: 3.0, tick: 7 };
+  sampler = fn(sx: float, sz: float) -> float { wld.a * sx + wld.b * sz + 1.0 };
+  c682_axle(sampler, cx, cz, 3)
+}
+
+// #323 — the closure ESCAPES its defining frame carrying an owned capture, so ownership
+// must genuinely transfer or the returned closure reads a freed store.
+fn c682_factory(k: integer) -> fn(integer) -> integer {
+  b = C682Flat { a: k as float, b: 0.0, tick: 0 };
+  fn(x: integer) -> integer { (b.a as integer) + x }
+}
+
+// plan-22 / C74 — a MUTATED scalar capture is boxed into a `__cell_<T>` minted for this
+// closure alone, so the record owns it however the original binding was reached.
+fn c682_mutated_scalar() -> integer {
+  acc = 0;
+  bump = fn(n: integer) { acc = acc + n; };
+  bump(1);
+  bump(2);
+  bump(3);
+  acc
+}
+
+// A local the frame owns, in a frame that ALSO has a parameter of the same type: the two
+// verdicts are per-capture, not per-frame.
+fn c682_owned_beside_param(w: C682Flat, x: float) -> float {
+  own = C682Flat { a: 5.0, b: 0.0, tick: 1 };
+  f = fn(s: float) -> float { own.a * s };
+  f(x) + w.a
+}
+
+fn main() {
+  // Each borrow cell is called TWICE against the same value: the first call plants the
+  // wrong free, and the damage only shows once the next allocation reuses the slot.  A
+  // single call reads clean even when the store was freed.
+  flat = C682Flat { a: 2.0, b: 3.0, tick: 7 };
+  assert(c682_param_unused(flat, 5.0) == 6.0, "param/unused: first call");
+  assert(flat.tick == 7, "param/unused: tick after 1 call, got {flat.tick}");
+  assert(c682_param_unused(flat, 5.0) == 6.0, "param/unused: second call");
+  assert(flat.tick == 7, "param/unused: tick after 2 calls, got {flat.tick}");
+  assert(flat.a == 2.0, "param/unused: a after 2 calls, got {flat.a}");
+
+  // c682_terrain(0,0) = 1.0 and c682_terrain(1,1) = 20.0 -> 21.0 a round, 3 rounds = 63.0
+  w = c682_world();
+  assert(c682_param_handoff(w, 0.0, 0.0) == 63.0, "param/handoff: first call");
+  assert(c682_param_handoff(w, 0.0, 0.0) == 63.0, "param/handoff: second call");
+  assert(w.tick == 7, "param/handoff: tick, got {w.tick}");
+  assert(len(w.chunks) == 2, "param/handoff: chunks, got {len(w.chunks)}");
+  assert(w.chunks[1].cells[2].v == 30.0, "param/handoff: cell, got {w.chunks[1].cells[2].v}");
+
+  w2 = c682_world();
+  assert(c682_projection(w2) == 60.0, "projection: first call");
+  assert(c682_projection(w2) == 60.0, "projection: second call");
+  assert(w2.tick == 7, "projection: tick, got {w2.tick}");
+  assert(len(w2.chunks) == 2, "projection: chunks, got {len(w2.chunks)}");
+  assert(w2.chunks[0].cells[0].v == 1.0, "projection: cell, got {w2.chunks[0].cells[0].v}");
+
+  // chunk 0 cell 0 = 1.0, chunk 1 cell 0 = 10.0 -> 11.0
+  w3 = c682_world();
+  assert(c682_loop_elem(w3) == 11.0, "loop elem: first call");
+  assert(c682_loop_elem(w3) == 11.0, "loop elem: second call");
+  assert(w3.tick == 7, "loop elem: tick, got {w3.tick}");
+  assert(w3.chunks[1].cells[2].v == 30.0, "loop elem: cell, got {w3.chunks[1].cells[2].v}");
+
+  xs = [10, 20, 30];
+  assert(c682_param_vector(xs) == 20, "param/vector: first call");
+  assert(c682_param_vector(xs) == 20, "param/vector: second call");
+  assert(len(xs) == 3, "param/vector: length, got {len(xs)}");
+  assert(xs[2] == 30, "param/vector: last element, got {xs[2]}");
+
+  db = C682Db { rows: [C682Row { k: 1, n: 100 }, C682Row { k: 2, n: 200 }] };
+  assert(c682_param_hash(db.rows) == 200, "param/hash: first call");
+  assert(c682_param_hash(db.rows) == 200, "param/hash: second call");
+  assert((db.rows[1] ?? C682Row { k: 0, n: -1 }).n == 100, "param/hash: key 1 survives");
+  assert((db.rows[2] ?? C682Row { k: 0, n: -1 }).n == 200, "param/hash: key 2 survives");
+
+  t = "hello";
+  assert(c682_param_text(t) == 6, "param/text: first call");
+  assert(c682_param_text(t) == 6, "param/text: second call");
+  assert(t == "hello", "param/text: source survives, got '{t}'");
+
+  // ADOPT cells.  Three calls each: a leaked store per call is what a wrong verdict here
+  // looks like, and the suite's end-of-program store check is the assertion.
+  // wld.a*0 + wld.b*0 + 1 = 1.0 and wld.a*1 + wld.b*1 + 1 = 6.0 -> 7.0 a round, x3 = 21.0
+  assert(c682_owned_local(0.0, 0.0) == 21.0, "owned local: call 1");
+  assert(c682_owned_local(0.0, 0.0) == 21.0, "owned local: call 2");
+  assert(c682_owned_local(0.0, 0.0) == 21.0, "owned local: call 3");
+
+  add5 = c682_factory(5);
+  add7 = c682_factory(7);
+  assert(add5(2) == 7, "factory: first closure, got {add5(2)}");
+  assert(add7(2) == 9, "factory: second closure, got {add7(2)}");
+  assert(add5(2) == 7, "factory: first closure again, got {add5(2)}");
+
+  assert(c682_mutated_scalar() == 6, "mutated scalar: writes propagate out");
+  assert(c682_mutated_scalar() == 6, "mutated scalar: second call");
+
+  assert(c682_owned_beside_param(flat, 3.0) == 17.0, "owned beside param: call 1");
+  assert(c682_owned_beside_param(flat, 3.0) == 17.0, "owned beside param: call 2");
+  assert(flat.a == 2.0, "owned beside param: the parameter still survives, got {flat.a}");
+
+  println("682-closure-capture-borrow ok");
+}

@@ -10,6 +10,13 @@ use crate::keys::Content;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
+/// Type-table name of the 12-byte `DbRef` storage shape a closure record
+/// ADOPTS — `free_named`'s cascade reclaims what it points at.
+pub(crate) const DBREF_OWNED: &str = "dbref";
+/// Type-table name of the BORROWED 12-byte `DbRef` shape (#682) — same bytes,
+/// but the target belongs to someone else, so the cascade leaves it alone.
+pub(crate) const DBREF_BORROW: &str = "dbref_borrow";
+
 /// Compute the `Key::type_nr` discriminator for a struct field's `content`
 /// type.  Built-in base types (0..=5: integer/long/single/float/boolean/text)
 /// map to `1 + content` (1..=6) so the legacy 8-byte-int hash paths
@@ -1686,16 +1693,76 @@ impl Stores {
     /// auto-Reference closure record fails with `field 's' has no
     /// position (u16::MAX)` until align=4.
     pub fn dbref(&mut self) -> u16 {
-        let name = "dbref".to_string();
-        if let Some(nr) = self.names.get(&name) {
-            *nr
-        } else {
-            let num = self.types.len() as u16;
-            let mut tp = Type::new(&name, Parts::DbRef, 12);
+        self.dbref_shapes().0
+    }
+
+    /// #682 — the BORROWED sibling of [`Stores::dbref`]: byte-for-byte the same
+    /// 12-byte `DbRef`, registered under its own name so `free_named`'s
+    /// closure-record cascade can tell "a store this record adopted" from "a
+    /// store it only points at".  Same shape means every read/write path and the
+    /// layout descriptor are unchanged; only the free decision differs (see
+    /// [`crate::data::Deps::borrowed_share_sentinel`]).
+    pub fn dbref_borrow(&mut self) -> u16 {
+        self.dbref_shapes().1
+    }
+
+    /// Register BOTH 12-byte `DbRef` storage shapes, owned first, and return
+    /// their numbers.
+    ///
+    /// The pair is registered together, from either entry point, because type
+    /// numbers are POSITIONAL and `--native` replays the registration sequence to
+    /// rebuild the schema: its generated `init()` refers to every other type by
+    /// the compile-time `tN` it had here, so a shape that appears only in some
+    /// programs would shift every id after it and the replay would register
+    /// fields against the wrong types.  Registering both unconditionally keeps
+    /// the numbering independent of which captures turn out to be borrowed — a
+    /// verdict that is not even known until scope analysis has run.
+    fn dbref_shapes(&mut self) -> (u16, u16) {
+        if let (Some(&owned), Some(&borrow)) =
+            (self.names.get(DBREF_OWNED), self.names.get(DBREF_BORROW))
+        {
+            return (owned, borrow);
+        }
+        let register = |s: &mut Self, name: &str| -> u16 {
+            if let Some(&nr) = s.names.get(name) {
+                return nr;
+            }
+            let num = s.types.len() as u16;
+            let mut tp = Type::new(name, Parts::DbRef, 12);
             tp.align = 4;
-            self.types.push(tp);
-            self.names.insert(name, num);
+            s.types.push(tp);
+            s.names.insert(name.to_string(), num);
             num
+        };
+        let owned = register(self, DBREF_OWNED);
+        let borrow = register(self, DBREF_BORROW);
+        (owned, borrow)
+    }
+
+    /// Is `content` the 12-byte `DbRef` shape a closure record ADOPTS — i.e. may
+    /// `free_named`'s cascade reclaim the store this field points at?  False for
+    /// the borrowed shape and for every non-`DbRef` field.
+    #[must_use]
+    pub(crate) fn dbref_is_adopted(&self, content: u16) -> bool {
+        let tp = &self.types[content as usize];
+        matches!(tp.parts, Parts::DbRef) && tp.name != DBREF_BORROW
+    }
+
+    /// #682 — re-point field `field_name` of struct type `tp` at the BORROWED
+    /// 12-byte `DbRef` shape.  Layout-preserving by construction (both shapes are
+    /// 12 bytes at align 4), which is why this may run after `finish()` has
+    /// positioned the record; it changes only the cascade's free decision.
+    /// Returns whether the field was found.
+    pub(crate) fn borrow_dbref_field(&mut self, tp: u16, field_name: &str) -> bool {
+        let borrow = self.dbref_borrow();
+        let Parts::Struct(fields) = &mut self.types[tp as usize].parts else {
+            return false;
+        };
+        if let Some(f) = fields.iter_mut().find(|f| f.name == field_name) {
+            f.content = borrow;
+            true
+        } else {
+            false
         }
     }
 

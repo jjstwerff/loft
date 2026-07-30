@@ -17263,3 +17263,99 @@ fn issue_677_returned_mutated_param_keeps_its_borrow() {
         p.data.def(fresh).returned().depend()
     );
 }
+
+/// loft#682 — a closure record must free only the captures it ADOPTED.
+///
+/// Each reference / collection capture is stored as a 12-byte `DbRef`, and
+/// `free_named`'s cascade used to free every one of them when the record died.
+/// That is right for a store the defining frame owned and handed over (the frame's
+/// scope-exit free is suppressed for it, which is what lets an escaping factory
+/// closure outlive its frame, #323), and wrong for a captured PARAMETER, whose
+/// caller owns the store and outlives the frame.  The consumer lost a whole
+/// `hex_world::World` to it.
+///
+/// The value-level guard is `tests/scripts/682-closure-capture-borrow.loft`; this
+/// one asserts the FACT, because an over-free is only sometimes fatal.  With one
+/// call the freed store is never re-read and every value still checks out — which
+/// is why the report arrived as a panic thousands of ops later in an unrelated
+/// function, and why a value test alone can pass on slot-reuse luck.
+///
+/// Two directions matter, so both are asserted: a parameter / projection capture
+/// must be BORROWED (over-free), and an owned local must stay ADOPTED (marking it
+/// borrowed leaks instead).  The verdict is only knowable after `scopes::check` —
+/// `p682_proj`'s `ch` parses as "borrows `w`" and a call-result capture parses as
+/// a borrow that scope analysis later rewrites to owned — so the test runs the
+/// check first, exactly as compilation does.
+#[test]
+fn issue_682_closure_capture_ownership_marker() {
+    let src_path = std::env::temp_dir().join("loft_i682_capture_marker.loft");
+    std::fs::write(
+        &src_path,
+        "struct P682C { v: float }\n\
+         struct P682W { cells: vector<P682C>, tick: integer }\n\
+         fn p682_param(w: P682W, x: float) -> float { f = fn(s: float) -> float { w.tick as float * s }; x }\n\
+         fn p682_proj(w: P682W, x: float) -> float { c = w.cells[0]; f = fn(s: float) -> float { c.v * s }; x }\n\
+         fn p682_owned(x: float) -> float { o = P682W { cells: [], tick: 3 }; f = fn(s: float) -> float { o.tick as float * s }; f(x) }\n\
+         fn p682_cell(x: integer) -> integer { acc = 0; b = fn(n: integer) { acc = acc + n; }; b(x); acc }\n\
+         fn main() { w = P682W { cells: [P682C { v: 1.0 }], tick: 7 };\n\
+                     p682_param(w, 1.0); p682_proj(w, 1.0); p682_owned(1.0); p682_cell(2); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "#682 fixture must parse clean: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+
+    // The lambdas are numbered in source order, so each closure record pairs with
+    // the function above that defines it.
+    let marker = |record: &str, capture: &str| -> bool {
+        let d_nr = p.data.def_nr(record);
+        assert_ne!(d_nr, u32::MAX, "#682: {record} must exist");
+        let a = p.data.attr(d_nr, capture);
+        assert_ne!(
+            a,
+            usize::MAX,
+            "#682: {record} must carry the `{capture}` capture"
+        );
+        match p.data.attr_type(d_nr, a) {
+            loft::data::Type::Reference(_, deps) => {
+                assert!(
+                    !deps.is_empty(),
+                    "#682: {record}.{capture} must keep a share marker (a 12-byte DbRef); \
+                     empty deps would store inline bytes and the closure would read a \
+                     stale snapshot"
+                );
+                deps.is_borrowed_share()
+            }
+            other => panic!("#682: {record}.{capture} should be a Reference, got {other:?}"),
+        }
+    };
+
+    assert!(
+        marker("__closure_0", "w"),
+        "#682: a captured PARAMETER must be marked BORROWED — its caller owns the store \
+         and outlives this frame, so the record's cascade freeing it destroys the \
+         caller's value (that is the whole bug)"
+    );
+    assert!(
+        marker("__closure_1", "c"),
+        "#682: a PROJECTION local (`c = w.cells[0]`) views into someone else's store, so \
+         it must be marked BORROWED too — a parameter-only fix leaves this half broken"
+    );
+    assert!(
+        !marker("__closure_2", "o"),
+        "#682: a local the frame OWNS must stay ADOPTED — `get_free_vars` suppresses its \
+         scope-exit free, so the record's cascade is the only free there is and marking \
+         it borrowed leaks the store instead"
+    );
+    assert!(
+        !marker("__closure_3", "acc"),
+        "#682: a mutated scalar boxed into a `__cell_<T>` is minted FOR this closure, so \
+         the record owns it however the original binding was reached (plan-22 / C74)"
+    );
+}

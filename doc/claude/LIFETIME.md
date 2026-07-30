@@ -338,6 +338,49 @@ variable, and that dep must keep the closure store allocation alive.
 - The record's `DbRef` is embedded in the 16-byte fn-ref slot
 - Work variable `__clos_N` has type `Type::Reference(closure_d_nr, [])` — owned
 
+### Adopted vs borrowed captures — who frees the store behind a capture (#682)
+
+A reference / collection capture is stored as a 12-byte `DbRef`, so exactly one owner
+must reclaim it.  `free_named`'s cascade (`src/database/allocation.rs`) frees the
+record's `DbRef` fields when the record dies, and `get_free_vars`' `captured_ref`
+suppresses the defining frame's own `OpFreeRef` for a captured reference.  Those two
+are a PAIR: the suppression is what hands the store over, and it is what makes an
+escaping factory closure sound (#323).
+
+The pairing only holds where a frame free existed to suppress.  A captured
+**parameter** never enters the scope-exit sweep at all (`variables()`: "never return
+function arguments"), and a **projection local** (`ch = w.chunks[1]`, a `for` element)
+is `owns == false` — so for both, the cascade was a second free of a live store.  It
+destroyed the caller's value, and because a freed-but-unreused store still reads
+correctly, the crash surfaced thousands of ops later in whatever function next
+touched it.
+
+The two cases are now distinct in the schema.  Both are 12 bytes at align 4, so
+nothing about layout, reads or writes changes — only the free decision:
+
+| Marker (`Deps`) | Field storage type | Cascade frees it? |
+|---|---|---|
+| `share_sentinel()` | `dbref` | yes — the record ADOPTED the store |
+| `borrowed_share_sentinel()` | `dbref_borrow` | no — someone else owns it |
+
+**The verdict is not knowable at parse time**, which is why it is not decided in
+`synthesize_closure_record`.  `ch = pick(w, 1)` parses as "borrows `w`" from the
+callee's declared return, and only `scopes::check`'s call-result rewrite
+(`make_independent`, the `!adopts_fresh_store` arm) turns it into OWNED once it knows
+the return ABI deep-copies into a fresh store.  Reading the parse-time dep leaked
+that copy.  So the decision is `scopes::mark_borrowed_captures`, run after every dep
+rewrite has settled; `--native` reads the marked attribute type directly, while the
+interpreter's already-registered schema is synced by
+`typedef::sync_capture_ownership` from `compile::byte_code_from`.
+
+A `__cell_<T>` capture (plan-22's boxed mutated scalar / text) is ALWAYS adopted: the
+cell is minted for that closure alone, so the record is its only possible owner
+however the original binding was reached.
+
+Both `dbref` shapes are registered **together**, from either entry point: type
+numbers are positional and `--native` replays the registration sequence to rebuild
+the schema, so a shape present in only some programs would shift every id after it.
+
 ### Inside the lambda: `__closure` is a struct parameter
 
 When parsing the lambda body, the compiler adds a hidden `__closure` parameter:

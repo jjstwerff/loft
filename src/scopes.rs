@@ -2211,9 +2211,115 @@ pub fn check(data: &mut Data) {
     // `get_free_vars` has inserted the frees into `def.code` above. Self-gates on
     // `LOFT_OWN_ORACLE=check-dev`; observer only (SI-1), a no-op on the default `check` path.
     crate::ownership_cfg::oracle_free_checks(data);
+    // #682 — record which closure captures the record ADOPTS, now that every dep
+    // rewrite above has settled.  Must run after the loop, not inside it: the
+    // verdict is the same `owns` fact `get_free_vars` uses, and that fact is only
+    // final once the call-result rewrites (`make_independent`) have run.
+    mark_borrowed_captures(data);
     // `LOFT_VAR_TABLE=<fn substring>` — the variable table beside the IR dump, with
     // each type dep resolved to `name(index)`.  Observer only; a no-op when unset.
     crate::variables::dump_var_tables(data, 0);
+}
+
+/// #682 — decide, per closure-record capture, whether the record ADOPTS the
+/// captured store (`free_named`'s cascade reclaims it) or merely BORROWS it, and
+/// mark the borrowed ones on the record's attribute.
+///
+/// Adoption exists for exactly one reason: a store the DEFINING frame owned and
+/// would otherwise free at scope exit.  `get_free_vars` suppresses that free for
+/// a captured reference and hands the store to the record, which is what keeps an
+/// escaping factory closure's capture alive past the frame that minted it (#323).
+/// A capture with no such free to hand over is a BORROW — a PARAMETER (whose
+/// caller owns the store and outlives this frame) or a projection local viewing
+/// into someone else's store — and cascading there is a second free of a live
+/// store: the caller's value went dangling and the crash surfaced thousands of
+/// ops later in whatever function next touched it.
+///
+/// Why here and not at record synthesis: a capture's ownership is not knowable
+/// while parsing.  `ch = pick(w, 1)` parses as "borrows `w`" from the callee's
+/// declared return, and only the scan above rewrites it to OWNED once it knows
+/// the return ABI deep-copies into a fresh store (`make_independent`, the
+/// `!adopts_fresh_store` arm).  Reading the parse-time dep leaked that copy.
+///
+/// The record is reached through the enclosing frame's `___clos_N` variable
+/// rather than by walking the IR: `emit_lambda_code` always mints one, and it
+/// lives in exactly the frame whose variables decide the verdict.
+fn mark_borrowed_captures(data: &mut Data) {
+    let mut borrowed: Vec<(u32, usize)> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        if !matches!(data.def(d_nr).def_type, DefType::Function) {
+            continue;
+        }
+        let function = &data.def(d_nr).variables;
+        for v in 0..function.next_var() {
+            // The DEFINING frame holds the record in the `___clos_N` local
+            // `emit_lambda_code` mints for it.  A frame that receives the record as
+            // an ARGUMENT is the closure BODY (its hidden `__closure` parameter),
+            // whose own variable table knows nothing about who owns the captures —
+            // reading it flipped the verdict depending on definition order.
+            if function.is_argument(v) {
+                continue;
+            }
+            let Type::Reference(record, _) = function.tp(v) else {
+                continue;
+            };
+            let record = *record;
+            if !data.def(record).name.starts_with("__closure_") {
+                continue;
+            }
+            for a in 0..data.attributes(record) {
+                // Only the two share markers are cascade-relevant; an
+                // inline-bytes capture (empty deps, e.g. a `text` copy) holds no
+                // DbRef for the cascade to follow.
+                if !matches!(data.attr_type(record, a), Type::Reference(_, ref deps) if !deps.is_empty())
+                {
+                    continue;
+                }
+                if !record_adopts_capture(data, function, record, a) {
+                    borrowed.push((record, a));
+                }
+            }
+        }
+    }
+    for (record, a) in borrowed {
+        data.mark_capture_borrowed(record, a);
+    }
+}
+
+/// Does the closure record own the store behind capture `a` of `record`, as seen
+/// from the defining frame `function`?  See [`mark_borrowed_captures`].
+fn record_adopts_capture(data: &Data, function: &Function, record: u32, a: usize) -> bool {
+    // A `__cell_<T>` is minted FOR this closure (plan-22 boxes a mutated scalar /
+    // text capture into one), so the record is its only possible owner however the
+    // original binding was reached — including from a parameter.
+    if let Type::Reference(cell, _) = data.attr_type(record, a)
+        && data.def(cell).name.starts_with("__cell_")
+    {
+        return true;
+    }
+    let v = function.var(&data.attr_name(record, a));
+    // An unresolvable name defaults to BORROW: an unfreed store is a leak the
+    // store checker reports, while an extra free silently corrupts a caller.
+    // A parameter never enters the scope-exit sweep at all (`variables()`:
+    // "never return function arguments"), so it has no free to hand over.
+    if v == u16::MAX || function.is_argument(v) {
+        return false;
+    }
+    // The same test as `get_free_vars`' `owns`, so the two cannot drift: empty
+    // deps means owned, and a keyed collection's self-dep is an ownership marker
+    // rather than a borrow (@P302).
+    let tp = function.tp(v);
+    let dep = tp.depend();
+    dep.is_empty()
+        || (dep.len() == 1
+            && dep[0] == v
+            && matches!(
+                tp,
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+            ))
 }
 
 /// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a
@@ -3895,6 +4001,16 @@ impl Scopes {
                 // escaping AND in-frame captures (in-frame: the fn-ref's
                 // own scope-exit free triggers the cascade).  Mirrored by
                 // the captured-Reference exemption in `check_ref_leaks`.
+                //
+                // The handover is only sound where this free EXISTS to be
+                // suppressed — `owns` — so the record's cascade must reach
+                // no further.  #682 is what happens when it does: a captured
+                // PARAMETER never enters this sweep (see `variables()`: "never
+                // return function arguments") and a projection local is
+                // `owns == false`, yet the cascade freed both, destroying the
+                // caller's store.  `mark_borrowed_captures` recomputes this same
+                // verdict once every function is scanned and marks those captures
+                // borrowed on the record, which is what stops the cascade.
                 let captured_ref =
                     function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _));
                 // @PLN94 TEST-ONLY over-free injection (never set in production): force the scope-exit
