@@ -2822,10 +2822,13 @@ impl Parser {
                 // in — the struct definition — not the one it is replayed in here.  Applying
                 // it re-allocated the struct variable mid-construction and clobbered the
                 // fields already written: a hang for `= [1, 2]`, a SIGSEGV one struct deeper.
-                // Re-homing `Var(0)` the way a unit-enum default does is not enough, because
-                // the block carries several.  Refuse it with a message that names the
-                // supported form rather than emitting code that hangs at runtime — nothing
-                // in the corpus uses this, because it has never worked.
+                // Re-homing `Var(0)` the way a unit-enum default does is not enough: the
+                // block carries several, and their TYPES are unrecoverable — the struct's
+                // variable table reads empty by replay time, so the indices point at a
+                // table that no longer exists.  Lifting this needs the default stored as
+                // something replayable (source, or a var-free lowering) rather than IR
+                // bound to a discarded table — see loft#698.  Refuse it with a message
+                // naming the supported form rather than emitting code that hangs.
                 if matches!(&default, Value::Block(b) if b.name == "Vector") && !self.first_pass {
                     let tn = tp.name(&self.data);
                     diagnostic!(
