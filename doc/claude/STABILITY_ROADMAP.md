@@ -141,34 +141,55 @@ gh issue list --state all --limit 500 --label bug --label wa:none \
         | select(startswith("area:"))] | join(","))]  \(.title[0:72])"' | sort
 ```
 
-**Baseline — 2026-07-30** (106 bug issues, all closed; shares exclude un-labelled):
+**Baseline — 2026-07-30** (107 bug issues; every one carries a `wa:`):
 
-| | June (n=48) | July (n=49) |
+| | June (n=54) | July (n=53) |
 |---|---|---|
-| `wa:clean` | 48% | **63%** |
-| `wa:partial` | 42% | **24%** |
-| `wa:none` | 10% | 12% |
+| `wa:clean` | 43% | **62%** |
+| `wa:partial` | 43% | **25%** |
+| `wa:none` | 15% | **13%** |
 
-Blocking rate by area, all-time: packages 4/16, runtime 3/16, store-lifetime 3/25,
-parser 1/13, codegen 1/20.
+Blocking rate by area, all-time — packages 6/18 and wasm 3/11 dominate, the core is far
+lower, and three areas have never produced a blocker:
 
-**The core-vs-fringe read at this baseline.** Of June's 5 blockers, 4 were core
+| area | bugs | `wa:none` | rate |
+|---|---|---|---|
+| packages | 18 | 6 | 33% |
+| wasm | 11 | 3 | 27% |
+| runtime | 16 | 3 | 19% |
+| store-lifetime | 27 | 4 | 15% |
+| parser | 13 | 1 | 8% |
+| codegen | 20 | 1 | 5% |
+| closures / stdlib / native | 7 / 3 / 12 | 0 | 0% |
+
+**Label hygiene is not cosmetic — it changed this reading.** Nine bugs carried no `wa:`
+when the metric was first run, and they skewed June-heavy. Excluding them made the
+blocking tail look FLAT-to-worsening (10%→12%); labelling them showed it actually
+SHRINKING (15%→13%), because three of the un-labelled June bugs were blockers
+(`#407`, `#408`, `#457`). An incomplete denominator does not just add noise, it can
+invert the sign of the trend. Keep `wa:MISSING` at zero.
+
+**The core-vs-fringe read at this baseline.** Of June's 8 blockers, 5 were core
 (nested-vector compound-assign `#246`, store-pressure `#306`, error-cascade `#376`,
-corrupt enum discriminant `#406`). Of July's 6, one was core (`#497`, a `len`-on-freed-
-vector SIGSEGV) and five were fringe: the wasm bridge (`#623`), the registry cache
-(`#634`), Windows LSP transport (`#639`), `--html` import validation (`#681`), and the
-issue tracker's own label guard (`#626` — not the language at all). So the unroutable
-tail did not merely shrink in share, it MOVED off the core.
+corrupt enum discriminant `#406`, `vector<text>` arg corruption `#457`). Of July's 7,
+ONE was core (`#497`, a `len`-on-freed-vector SIGSEGV); the other six were fringe — the
+wasm bridge (`#623`), the registry cache (`#634`), Windows LSP transport (`#639`),
+`--html` import validation (`#681`), the binary↔rlib install mismatch (`#693`), and the
+issue tracker's own label guard (`#626`, not the language at all). Core blockers went
+**5-of-8 → 1-of-7**: the unroutable tail did not merely shrink in share, it MOVED off
+the core.
 
 **What would falsify that read**, and is therefore the thing to watch: a NEW core
 blocker — `area:codegen`/`parser`/`store-lifetime` carrying `wa:none` — filed by one of
 the consumers still to come online. Store-lifetime is where to expect it if it comes: it
 produced two of June's four core blockers and July's only one.
 
-**Two limits on the metric, so it is not over-read.** The `wa:` labels are applied by
+**Three limits on the metric, so it is not over-read.** The `wa:` labels are applied by
 whoever fixes the bug and the policy says *verified*, so there is an optimism bias no
-query can audit. And two months is two data points; a third turns this from a reading
-into a trend.
+query can audit. Two months is two data points; a third turns this from a reading into a
+trend. And the nine back-filled labels above were judged from each report's own text —
+a closed bug cannot be re-tested for its workaround, since the bug is gone — so they are
+weaker evidence than a label applied while the bug was live. Label at fix time.
 
 1. **Seal the memory model — the non-negotiable gate.** The store-lifetime /
    return-bind-ownership class (loft's stated #1 weakness, REOPENED 2026-06-21) must be
