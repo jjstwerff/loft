@@ -17721,3 +17721,90 @@ fn issue_683_wrong_index_key_is_still_rejected_in_both_orders() {
         let _ = std::fs::remove_file(&src_path);
     }
 }
+
+/// loft#689 — a range asks a collection to walk its keys IN ORDER, so only an ordered
+/// collection can answer it.  `hash` is unordered and `spatial` is Morton-ordered (its
+/// range form is the coordinate slice `s[(x1,y1)..(x2,y2)]`), and neither could step a
+/// scalar range: both walked off the end of their iterator and SIGSEGV'd.  An open
+/// `coll[..]` crashed too — it is the same walk without bounds.
+///
+/// These are now refused at parse time.  The values for the collections that CAN answer
+/// a range live in `tests/scripts/689-keyed-range-slice.loft`; this pins the refusal, and
+/// the second half pins what must keep working — a fix that simply rejected every index
+/// on a `hash` would pass the first half alone.
+#[test]
+fn issue_689_range_is_refused_on_an_unordered_collection() {
+    let refused = [
+        (
+            "hash, bounded range",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; n = 0; for r in h[1..3] { n += r.v; } }\n",
+            "unordered",
+        ),
+        (
+            "hash, open range",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; n = 0; for r in h[..] { n += r.v; } }\n",
+            "unordered",
+        ),
+        (
+            "spatial, scalar range",
+            "struct S689 { x: integer, y: integer, v: integer }\n\
+             fn main() { s: spatial<S689[x,y]> = []; n = 0; for r in s[1..3] { n += r.v; } }\n",
+            "COORDINATE slice",
+        ),
+    ];
+    for (label, src, needle) in refused {
+        let src_path = std::env::temp_dir().join("loft_i689_refused.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "#689 ({label}): a range on an unordered collection must be refused, not run.  \
+             Diagnostics: {lines}"
+        );
+        assert!(
+            lines.contains(needle),
+            "#689 ({label}): the refusal must say WHY and what to use instead \
+             (expected {needle:?}), got: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+
+    // The forms a hash / spatial collection CAN answer must still compile.
+    let allowed = [
+        (
+            "hash single-key lookup",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; r = h[1]; if r != null { } }\n",
+        ),
+        (
+            "hash whole-collection iteration",
+            "struct H689 { k: integer, v: integer }\n\
+             fn main() { h: hash<H689[k]> = []; n = 0; for r in h { n += r.v; } }\n",
+        ),
+        (
+            "spatial coordinate slice",
+            "struct S689 { x: integer, y: integer, v: integer }\n\
+             fn main() { s: spatial<S689[x,y]> = []; n = 0; \
+             for r in s[(0,0)..(5,5)] { n += r.v; } }\n",
+        ),
+    ];
+    for (label, src) in allowed {
+        let src_path = std::env::temp_dir().join("loft_i689_allowed.loft");
+        std::fs::write(&src_path, src).unwrap();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse(src_path.to_str().unwrap(), false);
+        let lines = p.diagnostics.lines().join("\n");
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "#689 ({label}): this form is what the refusal tells users to write — \
+             it must still compile.  Diagnostics: {lines}"
+        );
+        let _ = std::fs::remove_file(&src_path);
+    }
+}

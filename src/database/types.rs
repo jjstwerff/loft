@@ -678,42 +678,60 @@ impl Stores {
 
     pub(super) fn determine_keys(&mut self) {
         for t_nr in 0..self.types.len() {
-            match self.types[t_nr].parts.clone() {
-                // Hash and Radix both key on a bare `Vec<u16>` of ascending field
-                // numbers.  Radix's key positions are what the Morton oracle reads
-                // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
-                // order.
-                Parts::Hash(c, key_fields) | Parts::Radix(c, key_fields) => {
-                    self.types[t_nr].keys.clear();
-                    for key_field in key_fields {
-                        if let Some((content, position)) = self.key_field(c, key_field) {
-                            let tp = key_type_nr_for_content(content, &self.types);
-                            self.types[t_nr].keys.push(crate::keys::Key {
-                                type_nr: tp,
-                                position,
-                            });
-                        }
+            self.determine_keys_for(t_nr);
+        }
+    }
+
+    /// Compute the runtime key descriptors of ONE collection type.
+    ///
+    /// `determine_keys` runs this over every type at the end of a parse, which is late
+    /// enough for anything the parse only READS.  It is not late enough for a fact the
+    /// parse BAKES: `fill_iter` writes the descriptor list straight into the `OpIterate`
+    /// operand, so a collection type first created in pass 2 — after pass 1's `finish()`
+    /// and before pass 2's — baked an EMPTY list and the range iterator then indexed
+    /// `keys[0]` on it (loft#689: SIGSEGV on the interpreter, and on `--native` an
+    /// out-of-bounds in `key_compare`).  Calling this on demand at the bake site closes
+    /// the window, the same shape as `lay_out_record` for a pass-2-created struct's
+    /// layout (loft#686).
+    ///
+    /// Idempotent: it clears and recomputes, so the end-of-parse sweep still produces the
+    /// identical table whether or not a bake site ran it earlier.
+    pub(crate) fn determine_keys_for(&mut self, t_nr: usize) {
+        match self.types[t_nr].parts.clone() {
+            // Hash and Radix both key on a bare `Vec<u16>` of ascending field
+            // numbers.  Radix's key positions are what the Morton oracle reads
+            // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
+            // order.
+            Parts::Hash(c, key_fields) | Parts::Radix(c, key_fields) => {
+                self.types[t_nr].keys.clear();
+                for key_field in key_fields {
+                    if let Some((content, position)) = self.key_field(c, key_field) {
+                        let tp = key_type_nr_for_content(content, &self.types);
+                        self.types[t_nr].keys.push(crate::keys::Key {
+                            type_nr: tp,
+                            position,
+                        });
                     }
                 }
-                Parts::Ordered(c, key_fields)
-                | Parts::Sorted(c, key_fields)
-                | Parts::Index(c, key_fields, _) => {
-                    self.types[t_nr].keys.clear();
-                    for (key_field, asc) in &key_fields {
-                        if let Some((content, position)) = self.key_field(c, *key_field) {
-                            let mut tp = key_type_nr_for_content(content, &self.types);
-                            if !asc {
-                                tp = -tp;
-                            }
-                            self.types[t_nr].keys.push(crate::keys::Key {
-                                type_nr: tp,
-                                position,
-                            });
-                        }
-                    }
-                }
-                _ => (),
             }
+            Parts::Ordered(c, key_fields)
+            | Parts::Sorted(c, key_fields)
+            | Parts::Index(c, key_fields, _) => {
+                self.types[t_nr].keys.clear();
+                for (key_field, asc) in &key_fields {
+                    if let Some((content, position)) = self.key_field(c, *key_field) {
+                        let mut tp = key_type_nr_for_content(content, &self.types);
+                        if !asc {
+                            tp = -tp;
+                        }
+                        self.types[t_nr].keys.push(crate::keys::Key {
+                            type_nr: tp,
+                            position,
+                        });
+                    }
+                }
+            }
+            _ => (),
         }
     }
 

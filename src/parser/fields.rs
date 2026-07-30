@@ -1463,6 +1463,31 @@ impl Parser {
                      comprehension (`[for x in coll[lo..hi] {{ x }}]`)"
                 );
             }
+            // loft#689 — a range asks the collection to walk its keys IN ORDER, which only
+            // an ordered one can answer.  `hash` is unordered, and `spatial` is ordered by
+            // Morton code rather than by a scalar key, so neither can step a scalar range:
+            // both walked off the end of their iterator and SIGSEGV'd (open `coll[..]`
+            // included — it is the same walk without bounds).  Single-key lookup `h[k]` and
+            // whole-collection iteration are unaffected; they never step a range.
+            if !self.first_pass {
+                match typedef {
+                    Type::Hash(_, _, _) => diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a range needs an ordered collection, and `hash` is unordered — use \
+                         `sorted<…>` or `index<…>` for a range, look one key up with `h[key]`, \
+                         or iterate the whole collection with `for x in h`"
+                    ),
+                    Type::Radix(_, _, _) => diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a `spatial` range is a COORDINATE slice, not a scalar one — write \
+                         `s[(x1, y1)..(x2, y2)]` (the bounding box), or iterate the whole \
+                         collection with `for x in s`"
+                    ),
+                    _ => {}
+                }
+            }
             let iter = self.create_unique("iter", &crate::data::I64);
             let mut ls = Vec::new();
             if !self.first_pass {
@@ -1658,6 +1683,17 @@ impl Parser {
         let loop_db_tp = if on & 63 == 1 { known } else { arg };
         self.vars.set_loop(on, loop_db_tp, code);
         if add_keys {
+            // loft#689 — the descriptor list is BAKED into the operand here, but the
+            // table it reads is only filled by `determine_keys` at the end of a parse.
+            // A collection type first created in pass 2 (`sorted<Rec[k]>` reached here
+            // before any `finish()` had seen it) therefore baked an EMPTY list, and the
+            // bounded range iterator then compared against `keys[0]` on it: SIGSEGV on
+            // the interpreter, an out-of-bounds in `key_compare` on `--native`.  An open
+            // range never compares, which is why `coll[..]` looked fine.
+            //
+            // Determine this one type's keys on demand instead of waiting for the sweep.
+            // It is idempotent, so the end-of-parse pass still produces the same table.
+            self.database.determine_keys_for(known as usize);
             ls.push(Value::Keys(
                 self.database.types[known as usize].keys.clone(),
             ));
