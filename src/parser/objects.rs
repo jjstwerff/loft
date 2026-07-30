@@ -2780,6 +2780,64 @@ impl Parser {
                 continue;
             }
             let mut default = self.data.attr_value(td_nr, aid);
+            // #697 — a COLLECTION field MENTIONED in the literal is primed first: the
+            // mentioned-field path emits `OpSetInt4(pos, 0)` to zero the 4-byte header
+            // before anything writes through it (see `sinks.vector_headers`).  A field
+            // left to its DEFAULT never reached that code, so its header kept whatever
+            // the record's bytes happened to hold and every later read followed a garbage
+            // rec number — `Bag { … }` omitting one `vector<integer> = []` panicked on the
+            // FIRST access to an unrelated field, with an index that changed run to run.
+            //
+            // Prime it here too, and note this covers keyed collections as well: a
+            // `hash<T[k]> = []` failed identically, and `text` never did because it is not
+            // header-shaped.
+            if matches!(
+                &tp,
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+            ) {
+                let prime = self.cl(
+                    "OpSetInt4",
+                    &[
+                        code.clone(),
+                        Value::Int(i32::from(pos + fld)),
+                        Value::Int(0),
+                    ],
+                );
+                list.push(prime);
+                // An EMPTY collection default (`= []`) parses to `Insert([Null])`, and the
+                // zeroed header above already IS the empty collection.  Letting it through
+                // to `set_field_no_check` emitted `OpAppendVector(field, null)` — appending
+                // the Null as an element, which is the garbage the reader then walked.
+                if matches!(&default, Value::Insert(items)
+                    if items.iter().all(|i| matches!(i, Value::Null)))
+                {
+                    continue;
+                }
+                // A NON-EMPTY collection default is a self-contained building block whose
+                // `Var(0..n)` are work-refs numbered in the var space the DEFAULT was parsed
+                // in — the struct definition — not the one it is replayed in here.  Applying
+                // it re-allocated the struct variable mid-construction and clobbered the
+                // fields already written: a hang for `= [1, 2]`, a SIGSEGV one struct deeper.
+                // Re-homing `Var(0)` the way a unit-enum default does is not enough, because
+                // the block carries several.  Refuse it with a message that names the
+                // supported form rather than emitting code that hangs at runtime — nothing
+                // in the corpus uses this, because it has never worked.
+                if matches!(&default, Value::Block(b) if b.name == "Vector") && !self.first_pass {
+                    let tn = tp.name(&self.data);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field `{nm}: {tn}` has a non-empty collection default, which is not \
+                         supported — use `= []` and fill it after construction, or pass the \
+                         value at every construction site"
+                    );
+                    continue;
+                }
+            }
             // #328/#332: a POINTER field (`reference<T>`, the u16::MAX share
             // marker) is a 12-byte DbRef — its omitted default is the null
             // sentinel.  The inline recursion below would write the INNER
