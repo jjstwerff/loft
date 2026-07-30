@@ -4133,7 +4133,33 @@ impl Scopes {
                         .any(|e| matches!(e, crate::data::DepEntry::CalleeFrame(w) if w == v))
                 });
                 let in_ret = tp.depend().contains(&v) || ret_carries;
-                let emit = !in_ret && !function.is_skip_free(v);
+                // The free above is what TRIGGERS the capture cascade (see the
+                // `captured_ref` note earlier in this function: the frame's own free of a
+                // captured cell is suppressed, so the record's cascade is its sole
+                // owner).  That makes this fn-ref's scope the lifetime of everything it
+                // captured — which is only right while the fn-ref is not scoped TIGHTER
+                // than the record it points at.
+                //
+                // A closure written in a nested block is exactly that: the binding lives
+                // in the block, the `___clos_N` record and the `__bx_<n>` cell are frame
+                // vars one scope out.  Freeing through the binding at the block's end
+                // then cascaded into a cell the frame still reads —
+                // `fn f(n) { { b = fn(k) { n = n + k }; b(1); } n + 4 }` read
+                // 0xDEADBEEF under LOFT_POISON, and plausible-looking stale bytes
+                // without it.  Both backends, every scalar type, and a captured LOCAL as
+                // readily as a parameter.
+                //
+                // The record carries its own scope-exit free (it is a plain OWNS frame
+                // var, not a capture, so nothing suppresses it), and that one runs at the
+                // right time.  So when the record sits in a different scope, leave the
+                // cascade to it.  A fn-ref with no local record — a parameter, a call
+                // result — keeps its free: nothing else would ever release it.
+                let record_outlives = function.tp(v).depend().iter().any(|&r| {
+                    r != v
+                        && (r as usize) < function.count() as usize
+                        && self.var_scope.get(&r) != self.var_scope.get(&v)
+                });
+                let emit = !in_ret && !function.is_skip_free(v) && !record_outlives;
                 if emit {
                     if scope_debug {
                         eprintln!(
