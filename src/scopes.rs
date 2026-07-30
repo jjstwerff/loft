@@ -3430,6 +3430,48 @@ impl Scopes {
                     }
                 }
             }
+            // loft#688 — the NRVO return buffer is an ARGUMENT, and `variables()`
+            // stops at scope 0 ("never return function arguments"): a true
+            // parameter belongs to the caller, so the callee must not free it.
+            // An NRVO buffer breaks that premise.  It is a promoted LOCAL — the
+            // rename in `classify_ret_promotion` gives the hidden `__retbuf` attr
+            // the local's name and `become_argument`s it — and THIS function mints
+            // its store with `OpDatabase`.  When a sibling return path delivers a
+            // different store, the minted one is returned by nobody and freed by
+            // nobody: one orphan per call, which exhausted the 65,535-entry store
+            // table after 65,535 calls and was invisible below that.
+            //
+            // So treat it like any other candidate source that may or may not be
+            // the returned store: route it through the same hoist +
+            // `OpFreeRefIfDistinct` leg the null-arm join uses.  On the path that
+            // DOES return it, `return_sources` holds it and it is skipped here; on
+            // a path that returns something else the runtime comparison frees it,
+            // and a buffer not yet minted on this path is the null sentinel, which
+            // `free` ignores.
+            //
+            // A promoted buffer is exactly an argument whose attribute is HIDDEN
+            // and no longer called `__retbuf`: `ref_return` renames the attr to the
+            // local's name but leaves `hidden` set, and a user-declared parameter
+            // is never hidden.  The un-renamed `__retbuf` placeholder is left alone
+            // — no local was promoted onto it, so it holds no store of ours.
+            for v in 0..function.count() {
+                if function.is_argument(v)
+                    && !sources.contains(&v)
+                    && !null_arm_record_sources.contains(&v)
+                    && matches!(
+                        function.tp(v),
+                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    let n = function.name(v);
+                    if n != "__retbuf"
+                        && let Some(&a) = data.def(self.d_nr).attr_names.get(n)
+                        && data.def(self.d_nr).attributes()[a].hidden
+                    {
+                        null_arm_record_sources.push(v);
+                    }
+                }
+            }
             sources.into_iter().collect()
         } else {
             HashSet::new()
