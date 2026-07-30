@@ -56,6 +56,71 @@ use loft::state::State;
 use std::env;
 use std::sync::{Arc, Mutex};
 
+/// loft#680 — print the per-target builtin surface: which stdlib builtins are NOT
+/// available on a target, and why that answer can be trusted.
+///
+/// The data is `index/target_surface.json`, DERIVED by asking rustc which runtime methods
+/// exist per target (`scripts/gen_target_surface.py`), so it cannot drift from the `cfg`s
+/// the real build obeys. It is embedded here so an installed loft can answer without the
+/// source tree.
+fn print_target_surface(want: Option<&str>) {
+    use loft::json::Parsed;
+    const SURFACE: &str = include_str!("../index/target_surface.json");
+    let Ok(Parsed::Object(root)) = loft::json::parse(SURFACE) else {
+        eprintln!("loft targets: embedded surface data is not valid JSON");
+        return;
+    };
+    let field = |obj: &Vec<(String, usize, Parsed)>, key: &str| -> Option<Parsed> {
+        obj.iter()
+            .find(|(k, _, _)| k == key)
+            .map(|(_, _, v)| v.clone())
+    };
+    let Some(Parsed::Object(targets)) = field(&root, "targets") else {
+        eprintln!("loft targets: embedded surface data has no targets");
+        return;
+    };
+    let mut any = false;
+    for (_, _, entry) in &targets {
+        let Parsed::Object(t) = entry else { continue };
+        let text = |key: &str| match field(t, key) {
+            Some(Parsed::Str(v)) => v,
+            _ => String::new(),
+        };
+        let (triple, describe) = (text("triple"), text("describe"));
+        if want.is_some_and(|w| !triple.contains(w) && !describe.contains(w)) {
+            continue;
+        }
+        any = true;
+        let names: Vec<String> = match field(t, "unavailable_builtins") {
+            Some(Parsed::Array(items)) => items
+                .into_iter()
+                .filter_map(|i| match i {
+                    Parsed::Str(v) => Some(v),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        println!("{triple} — {describe}");
+        if names.is_empty() {
+            println!("  every stdlib builtin is available here.");
+        } else {
+            println!("  {} builtin(s) NOT available:", names.len());
+            for n in &names {
+                println!("    {n}");
+            }
+        }
+    }
+    if any {
+        println!(
+            "\nDerived by asking rustc which runtime methods exist per target, so it \
+             cannot drift from the cfgs (scripts/gen_target_surface.py)."
+        );
+    } else {
+        eprintln!("loft targets: no such target (try `loft targets` for all)");
+    }
+}
+
 fn print_help() {
     println!("usage: loft [options] <file>     run a loft program");
     println!("       loft                       start the interactive REPL");
@@ -151,6 +216,8 @@ fn print_help() {
     );
     println!("                                JS host, so an import loft's page shim lacks is a");
     println!("                                warning, not a refusal (alias: --no-host-check)");
+    println!("  targets [<target>]            which stdlib builtins are NOT available on a target");
+    println!("                                (ask before designing, not after the build fails)");
     println!(
         "  --tests [dir]                 discover and run fn test*() functions in .loft files"
     );
@@ -5736,6 +5803,13 @@ fn main() {
             }
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
+            return;
+        } else if a == "targets" {
+            // loft#680 — answer "does this builtin exist on that target?" BEFORE a design
+            // commits to it. The alternative was writing the program, building it for
+            // `--html`, and reading a rustc error against generated Rust — which arrives
+            // after the plan that assumed the builtin, not before it.
+            print_target_surface(argv.get(i).map(String::as_str));
             return;
         } else if a == "repl" || a == "--repl" {
             // @PLN12 phase 04 — interactive `loft>` prompt.  Prompts + errors go

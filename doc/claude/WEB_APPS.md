@@ -88,6 +88,16 @@ on native.
   (alias `--no-host-check`) and a missing import becomes a warning instead of a
   refusal. The wasm is unchanged either way: a name your host does not define still
   fails at instantiate, so this relaxes the diagnostic, never the requirement.
+
+**Ask before you design: `loft targets`.** It lists the stdlib builtins that do NOT
+exist on a target, so a plan can be checked in seconds instead of discovering the
+hole when its first executable step fails to build (loft#680 — a coverage plan was
+written on the assumption that the working-set store loaders worked in the browser,
+and only the first `--html` build said otherwise). The answer is **derived, never
+hand-written**: `scripts/gen_target_surface.py` asks rustc which runtime methods each
+builtin's `#rust` body can reach on that target, so it cannot drift from the `cfg`s
+the real build obeys, and `make ci` fails if the committed table goes stale. As of
+this writing every stdlib builtin is available on the browser target.
 - **Audio** — raw PCM playback via the Web Audio API.
 - **WebSocket** — a live network socket, through the `web` library (see §4b).
 

@@ -73,6 +73,10 @@ dist/
 # offline generator input for `make features-gen` / `features-check`); tags.json
 # stays generated/ignored.  index/ is not a scan root, so this adds no tag noise.
 !/index/features.json
+# loft#680: the per-target builtin surface is committed for the same reason —
+# `make ci`'s drift guard compares against it, `loft targets` embeds it, and a
+# consumer reading it should not have to run a wasm build to get an answer.
+!/index/target_surface.json
 
 # Python __pycache__ from tools/indexer/migrate.py.
 __pycache__/
