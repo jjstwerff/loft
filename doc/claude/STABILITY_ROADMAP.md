@@ -89,6 +89,179 @@ surfaces a contract-level defect, the freeze waits until it is fixed and re-veri
 breadth stays clean through the soak, the door opens. Consumer coverage is tracked as
 [GOALS.md Goal C](GOALS.md#goal-c--capability-via-dogfood)'s build matrix.
 
+### Reading the soak — measure `wa:`, not the ticket rate
+
+**The ticket rate does not measure stability.** It rises and falls with how much
+dogfood is flowing: a new consumer coming online produces a burst whatever the code
+is like, and a quiet week can just mean nobody was looking. Counting tickets measures
+throughput.
+
+**The `wa:` distribution does measure it, because it is normalised by usage.** It asks
+how BAD each defect was for whoever hit it, not how many there were. As the language
+settles, the remaining defects should be increasingly *routable* — a consumer meets one
+and keeps working. So the share of `wa:clean` should RISE and `wa:partial` should FALL,
+and `wa:none` — nothing works, the consumer is blocked — is the number that decides the
+gate. `LABELS.md` already weights it that way: *"the most urgent triage axis, often
+above `sev:`"*.
+
+Two cuts matter more than the totals:
+
+- **`wa:none` by AREA, as a rate** (`wa:none` ÷ that area's bugs), not a count. A count
+  just tracks where the bugs are; the rate tracks where the *blocking* is.
+- **Core vs fringe, over time.** A language-level bug usually has a workaround, because
+  you can write the code differently. A packaging / CLI / install bug usually does not,
+  because the program never starts — there is no "write it differently" when the file
+  will not run. So blockers migrating OUT of codegen/parser/store-lifetime and INTO the
+  toolchain surface is the shape of a language settling, even while the raw count holds.
+
+Reproduce all of it from the tracker (needs `gh` + `jq`):
+
+```sh
+# wa: share per month — the headline trend.  Exclude the un-labelled from the
+# shares, or better hygiene reads as better stability.
+gh issue list --state all --limit 500 --label bug --json createdAt,labels \
+  --jq '.[] | (.createdAt[0:7]) as $m
+        | ([.labels[].name | select(startswith("wa:"))]
+           | if length==0 then "wa:MISSING" else .[0] end) as $w
+        | "\($m) \($w)"' | sort | uniq -c
+
+# blocking RATE per area — for each area, its bug count and its wa:none count.
+for a in packages runtime store-lifetime codegen parser wasm closures stdlib native; do
+  t=$(gh issue list --state all --limit 500 --label bug --label area:$a --json number --jq 'length')
+  n=$(gh issue list --state all --limit 500 --label bug --label area:$a --label wa:none --json number --jq 'length')
+  echo "area:$a bugs=$t wa:none=$n"
+done
+
+# every blocker with its date and area — the core-vs-fringe read is a JUDGEMENT
+# over these titles, not a label query.  Read them; do not trust the area label
+# alone (a Windows LSP hang carries `area:runtime` and is not the runtime).
+gh issue list --state all --limit 500 --label bug --label wa:none \
+  --json number,title,createdAt,labels \
+  --jq '.[] | "\(.createdAt[0:10])  #\(.number)  [\([.labels[].name
+        | select(startswith("area:"))] | join(","))]  \(.title[0:72])"' | sort
+```
+
+**Baseline — 2026-07-30** (107 bug issues; every one carries a `wa:`):
+
+| | June (n=54) | July (n=53) |
+|---|---|---|
+| `wa:clean` | 43% | **62%** |
+| `wa:partial` | 43% | **25%** |
+| `wa:none` | 15% | **13%** |
+
+Blocking rate by area, all-time — packages 6/18 and wasm 3/11 dominate, the core is far
+lower, and three areas have never produced a blocker:
+
+| area | bugs | `wa:none` | rate |
+|---|---|---|---|
+| packages | 18 | 6 | 33% |
+| wasm | 11 | 3 | 27% |
+| runtime | 16 | 3 | 19% |
+| store-lifetime | 27 | 4 | 15% |
+| parser | 13 | 1 | 8% |
+| codegen | 20 | 1 | 5% |
+| closures / stdlib / native | 7 / 3 / 12 | 0 | 0% |
+
+**Label hygiene is not cosmetic — it changed this reading.** Nine bugs carried no `wa:`
+when the metric was first run, and they skewed June-heavy. Excluding them made the
+blocking tail look FLAT-to-worsening (10%→12%); labelling them showed it actually
+SHRINKING (15%→13%), because three of the un-labelled June bugs were blockers
+(`#407`, `#408`, `#457`). An incomplete denominator does not just add noise, it can
+invert the sign of the trend. Keep `wa:MISSING` at zero.
+
+**The core-vs-fringe read at this baseline.** Of June's 8 blockers, 5 were core
+(nested-vector compound-assign `#246`, store-pressure `#306`, error-cascade `#376`,
+corrupt enum discriminant `#406`, `vector<text>` arg corruption `#457`). Of July's 7,
+ONE was core (`#497`, a `len`-on-freed-vector SIGSEGV); the other six were fringe — the
+wasm bridge (`#623`), the registry cache (`#634`), Windows LSP transport (`#639`),
+`--html` import validation (`#681`), the binary↔rlib install mismatch (`#693`), and the
+issue tracker's own label guard (`#626`, not the language at all). Core blockers went
+**5-of-8 → 1-of-7**: the unroutable tail did not merely shrink in share, it MOVED off
+the core.
+
+**What would falsify that read**, and is therefore the thing to watch: a NEW core
+blocker — `area:codegen`/`parser`/`store-lifetime` carrying `wa:none` — filed by one of
+the consumers still to come online. Store-lifetime is where to expect it if it comes: it
+produced two of June's four core blockers and July's only one.
+
+**Three limits on the metric, so it is not over-read.** The `wa:` labels are applied by
+whoever fixes the bug and the policy says *verified*, so there is an optimism bias no
+query can audit. Two months is two data points; a third turns this from a reading into a
+trend. And the nine back-filled labels above were judged from each report's own text —
+a closed bug cannot be re-tested for its workaround, since the bug is gone — so they are
+weaker evidence than a label applied while the bug was live. Label at fix time.
+
+### The other half — how much STEERING the fixing took
+
+`wa:` measures how bad the bugs were for whoever hit them. It says nothing about the
+second question, which is at least as good a stability signal: **how hard did the owner
+have to push to get them fixed, and fixed thoroughly?** A language settles when defects
+get routable AND when fixing one stops needing supervision.
+
+That effort is not in the repository at all — it happens in conversation. But it leaves
+a timestamped trace in Claude Code's transcripts, and
+**[`scripts/steering_rate.py`](../../scripts/steering_rate.py)** extracts it. The signal
+is the owner interrupting a running turn; the discriminator is TIMING, because not every
+interruption is steering:
+
+- a **short** gap after the owner's own previous message means they never waited for the
+  turn to process — their own flow, adding a fact they forgot;
+- a **long** gap means they had been watching the work and stopped it.
+
+A correction of the agent is uncorrelated with the owner's typing rhythm; an amendment to
+themselves follows it within seconds. Reading the extremes confirms the split — under 20s
+gives *"it is merged"*, over 5 minutes gives *"The fix is not committed"* and *"Are you
+introducing runtime errors? Remove that immediately"*.
+
+**Baseline — 2026-07-30** (`scripts/steering_rate.py`, de-duplicated, `>=60s` = steering):
+
+| week | msgs | interrupts | int/100 | steering | steer/100 |
+|---|---|---|---|---|---|
+| W27 | 379 | 24 | 6.3 | 15 | 4.0 |
+| W28 | 610 | 55 | 9.0 | 27 | 4.4 |
+| W29 | 406 | 38 | 9.4 | 26 | 6.4 |
+| W30 | 482 | 42 | 8.7 | 27 | 5.6 |
+| W31 | 188 | 7 | 3.7 | 2 | 1.1 |
+
+**The reading: FLAT at 4–6 per 100 across W27–W30, no step change.** The transcripts start
+`2026-06-30`, and the owner reports the real improvement in steering came earlier than
+that — so this instrument, like the tracker, was built after the transition it would most
+want to show. It records a LEVEL to measure the next months against, not a turn.
+
+**Four things that keep this honest.** *W31 is n=2* — the per-bug figure computes to 0.06
+against W30's 1.69, which is arithmetic, not evidence; a partial week containing one long
+productive session. *The threshold is arbitrary*: the gap distribution is unimodal with a
+long tail (`--histogram`), so the populations overlap and the LEVEL moves with the cut —
+the flatness does not (at 120s: 3.2, 2.5, 4.7, 4.4). *Per-bug only means anything in
+bug-heavy weeks* — W27–W29 closed 2, 2 and 0 bugs, because they were plan and feature
+work. *The transcripts are outside the repo* and nothing here preserves them; if they are
+pruned this baseline cannot be recomputed.
+
+**The precise complement is the [`steered`](../../.github/LABELS.md) label** (live since
+2026-07-30), which the owner applies when they had to intervene on a specific issue. The
+transcript rate is continuous and needs no behaviour change but cannot attribute to a bug;
+the label attributes exactly but only where it is worth a click. Neither depends on the
+agent noticing it needed help — which self-reporting would, and which is the one thing an
+agent that needed steering is least likely to do. **Agents must never apply or remove it.**
+
+Read it against the same denominator as `wa:` — as a SHARE of the bugs fixed in a window,
+not a count, or it just tracks how many bugs there were:
+
+```sh
+# steered share of bugs closed in a window
+gh issue list --state closed --limit 500 --label bug --json number,labels,closedAt \
+  --jq '[.[] | select(.closedAt > "2026-08-01")] as $all
+        | ($all | length) as $n
+        | ($all | map(select([.labels[].name] | index("steered"))) | length) as $s
+        | "steered \($s) of \($n) closed bugs"'
+```
+
+Two readings to keep apart once it has data. A FALLING steered share with a steady bug
+count is the thing worth wanting: the fixes are landing right the first time. A falling
+share with a falling bug count says nothing on its own — it can just mean less was
+attempted. Pair it with the `wa:` table above, which is usage-normalised, before drawing
+either conclusion.
+
 1. **Seal the memory model — the non-negotiable gate.** The store-lifetime /
    return-bind-ownership class (loft's stated #1 weakness, REOPENED 2026-06-21) must be
    **closed, not merely quiet**. At one dogfooding agent a residual UAF/over-free

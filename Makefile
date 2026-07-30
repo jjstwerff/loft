@@ -250,6 +250,28 @@ install:
 	fi; \
 	rm -f "$$smoke" "$$smoke.err"; \
 	echo "install: post-install smoke OK (installed loft runs the installed stdlib)"
+	@# loft#693 — the smoke above proves binary<->STDLIB.  It cannot prove
+	@# binary<->RLIB: generated cdylib source calls loft runtime methods, so a
+	@# libloft.rlib older than the binary fails to compile and the program cannot
+	@# start at all.  That shipped once (a new borrowed-capture helper the installed
+	@# rlib lacked) and surfaced to the consumer as "library X failed to build
+	@# native".  Building one throwaway cdylib against the INSTALLED rlib closes it.
+	@# The capture below is a PROJECTION on purpose — a borrowed capture, the newest
+	@# emission path — and any drift in the shared type-registration replay fails here.
+	@sdir="$${TMPDIR:-/tmp}/loft-install-smoke-lib"; \
+	rm -rf "$$sdir"; mkdir -p "$$sdir/libs/smokelib/src"; \
+	printf '[package]\nname = "smokelib"\nversion = "0.1.0"\nloft = ">=0.8"\n[library]\nentry = "src/smokelib.loft"\n' > "$$sdir/libs/smokelib/loft.toml"; \
+	printf 'pub fn smoke_sum(v: vector<integer>) -> integer {\n  t = 0;\n  for e in v { t += e; }\n  t\n}\n' > "$$sdir/libs/smokelib/src/smokelib.loft"; \
+	printf 'use smokelib;\nstruct SmIn { items: vector<integer> }\nstruct SmOut { inner: SmIn }\nfn smk() -> SmOut { SmOut { inner: SmIn { items: [1, 2, 3] } } }\nfn app(f: fn(float) -> float, x: float) -> float { f(x) }\nfn main() {\n  o = smk();\n  w = o.inner;\n  g = fn(a: float) -> float { a + (len(w.items) as float) };\n  println("smoke {app(g, 1.0)} {smoke_sum([1, 2, 3])}");\n}\n' > "$$sdir/main.loft"; \
+	if ! /usr/local/bin/loft --interpret --lib "$$sdir/libs" "$$sdir/main.loft" >/dev/null 2>"$$sdir/err"; then \
+		echo "ERROR: 'make install' left a broken binary<->rlib pair —"; \
+		echo "the installed loft cannot build a library cdylib against the installed libloft.rlib:"; \
+		sed 's/^/    /' "$$sdir/err"; \
+		echo "Fix: rebuild + reinstall as one unit:  make all && make install"; \
+		rm -rf "$$sdir"; exit 1; \
+	fi; \
+	rm -rf "$$sdir"; \
+	echo "install: cdylib smoke OK (a library builds against the installed rlib)"
 uninstall:
 	sudo rm -f /usr/local/bin/loft
 	sudo rm -rf /usr/local/share/loft

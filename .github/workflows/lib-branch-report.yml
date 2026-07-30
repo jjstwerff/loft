@@ -61,6 +61,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -uo pipefail
           f=doc/claude/LIBRARY_BRANCHES.md
           # Idempotent: the doc has no timestamp, so it changes ONLY when the unmerged-branch
           # set changes -> no diff, no PR, no churn.
@@ -71,15 +72,47 @@ jobs:
           git config user.name "loft-catalogue-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           branch="lib-branches-refresh"
-          git checkout -B "$branch"
-          git add "$f"
-          git commit -m "chore(@PLN112): refresh in-flight library-branches doc"
-          git push -f origin "$branch"
+          git checkout -B "$branch" || exit 1
+          git add "$f" || exit 1
+          git commit -m "chore(@PLN112): refresh in-flight library-branches doc" || exit 1
+          # The push is the step that must not fail: it is what preserves the refresh.
+          git push -f origin "$branch" || exit 1
           if gh pr view "$branch" --json number >/dev/null 2>&1; then
             echo "PR already open — updated by the force-push."
-          else
-            gh pr create --base main --head "$branch" \
-              --title "chore(@PLN112): refresh in-flight library-branches doc" \
-              --body "Automated refresh of \`doc/claude/LIBRARY_BRANCHES.md\` (unmerged branches across the loft-libs-* repos, squash-safe). Idempotent — this PR only exists because the in-flight branch set changed."
-            gh pr merge "$branch" --auto --squash || echo "auto-merge not enabled — PR left open for review."
+            exit 0
           fi
+          if out="$(gh pr create --base main --head "$branch" \
+              --title "chore(@PLN112): refresh in-flight library-branches doc" \
+              --body "Automated refresh of \`doc/claude/LIBRARY_BRANCHES.md\` (unmerged branches across the loft-libs-* repos, squash-safe). Idempotent — this PR only exists because the in-flight branch set changed." 2>&1)"; then
+            echo "$out"
+            gh pr merge "$branch" --auto --squash || echo "auto-merge not enabled — PR left open for review."
+            exit 0
+          fi
+          echo "$out"
+          # "Allow GitHub Actions to create and approve pull requests" is a repo/org
+          # SETTING, and with it off `createPullRequest` is refused however the workflow
+          # is permissioned — so this nightly went red every night it had something to
+          # report, which is the fastest way to teach everyone to ignore a nightly.
+          # The refresh is NOT lost: the branch above is pushed, so opening the PR once
+          # by hand makes every later run a force-push onto it (the branch above already
+          # short-circuits on an open PR).  Surface the one command that does it and stay
+          # green; any OTHER `gh pr create` failure is still a real red.
+          if printf '%s' "$out" | grep -q 'not permitted to create or approve pull requests'; then
+            {
+              echo "### Library-branches doc refreshed on \`$branch\` — PR not opened"
+              echo
+              echo "\`gh pr create\` is refused by the repository setting *Allow GitHub"
+              echo "Actions to create and approve pull requests*, so this run pushed the"
+              echo "branch but could not open the PR. Nothing is lost. Either:"
+              echo
+              echo '```sh'
+              echo "gh pr create --base main --head $branch \\"
+              echo "  --title 'chore(@PLN112): refresh in-flight library-branches doc'"
+              echo '```'
+              echo
+              echo "…once (later runs then force-push onto that PR), or enable the setting"
+              echo "in Settings → Actions → General → Workflow permissions."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit 1
