@@ -66,6 +66,12 @@ def main() -> None:
     ap.add_argument("--dir", required=True, help="directory holding the release zips")
     ap.add_argument("--out", help="write here instead of stdout")
     ap.add_argument("--published", help="RFC3339 timestamp (default: the tag's date)")
+    ap.add_argument(
+        "--splice-into",
+        metavar="INDEX_JSON",
+        help="merge the entry into a registry index in place, instead of writing the "
+        "entry on its own",
+    )
     args = ap.parse_args()
 
     ver, root = args.version, pathlib.Path(args.dir)
@@ -118,11 +124,47 @@ def main() -> None:
         },
     }
 
+    if args.splice_into:
+        splice(pathlib.Path(args.splice_into), entry, ver)
+        return
+
     out = json.dumps({"loft": entry}, indent=2, sort_keys=False) + "\n"
     if args.out:
         pathlib.Path(args.out).write_text(out)
     else:
         sys.stdout.write(out)
+
+
+def splice(index_path: pathlib.Path, entry: dict, ver: str) -> None:
+    """Merge the entry into a registry index in place.
+
+    A script rather than a hand-edit for one reason that is easy to get wrong by hand:
+    the versions map ADDS.  A toolchain entry pasted over the previous one drops every
+    release before it, and the users it strands are exactly the ones on an old version
+    -- `find_best_version` would still resolve, so nothing fails loudly; those releases
+    just quietly cease to exist.  Refusing to overwrite an existing version is the other
+    half: a re-submitted version with different hashes is either a rebuild or tampering,
+    and neither should land silently.
+    """
+    index = json.loads(index_path.read_text())
+    packages = index.setdefault("packages", {})
+    existing = packages.get("loft")
+    if existing:
+        prior = existing.get("versions", {})
+        if ver in prior:
+            sys.exit(
+                f"{index_path}: `loft` {ver} is already in the index.  Re-publishing a "
+                f"version is not a splice -- if this is a rebuild, yank and use a new "
+                f"version number."
+            )
+        entry["versions"] = {**prior, **entry["versions"]}
+        # `yanked` is the maintainer's, not ours to reset.
+        entry["yanked"] = existing.get("yanked", [])
+    packages["loft"] = entry
+    index["updated"] = entry["versions"][ver]["published"]
+    index_path.write_text(json.dumps(index, indent=2) + "\n")
+    kept = len(entry["versions"]) - 1
+    print(f"spliced loft {ver} into {index_path} ({kept} earlier version(s) kept)")
 
 
 if __name__ == "__main__":
