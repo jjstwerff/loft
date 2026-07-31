@@ -110,59 +110,32 @@ it could be, and shrinking alone reclaims almost nothing.
   `mergeable_free_pairs` is 0 afterwards.
 - **Does not:** get called from anywhere.
 
-### A3 — expose it as an explicit call: `store_reclaim(collection)`
+### A3 — call it, behind an env gate (behaviour, off by default)
 
-**A is OPT-IN, and stays opt-in.** The earlier draft of this step gated it on
-`used_pct()` inside `Store::delete`; that is wrong twice over, and both are worth
-writing down because the second is the load-bearing one.
-
-*It cannot be cheap enough to be automatic.* `used_pct()` comes from `usage()`,
-an O(blocks) chain walk — per delete. Any always-on form needs an O(1) trigger
-instead: a `freed_words_since_reclaim` counter maintained in `delete` (an add,
-nothing more), and only when it crosses a threshold may anything walk. That is
-the shape to use even for the explicit call's internals, so `delete` never grows
-a walk.
-
-*And the benefit is near-zero in almost every workload.* Measured, this plan's
-own numbers: steady-state churn held capacity flat at 0.30 MB across 36,000
-insert+remove operations, and refill (3000 → shrink to 300 → refill to 3000)
-reused every byte with capacity never moving. Only a live set that drops far
-below its peak **and stays there** has anything to give back. An always-on
-reclaimer would walk, coalesce, and find nothing — for everyone.
-
-*The thrash case is the one it targets.* A store that shrinks and then grows
-again — a world unloading and reloading regions, the most plausible long-lived
-shrink pattern there is — would be truncated and immediately re-grown at 7/3.
-Whether a drop is permanent is something the program knows and the runtime
-cannot infer, so the program says when.
-
-- **Surface:** `store_reclaim(collection) -> integer` — bytes returned to the
-  filesystem, 0 when there was nothing to give. A compiler special-case beside
-  `reserve` (`src/parser/collections.rs`), lowering to an op that calls
-  `Store::reclaim_tail` on the collection's store.
-- **Code point for the counter:** `src/store.rs::Store::delete` (846), which
-  already sets `needs_coalesce` — add the freed-words tally there, nothing else.
+- **Code point:** `src/database/allocation.rs::Stores::remove_owned`'s callers are
+  the wrong altitude — the decision is per-STORE, not per-removal. Put the check
+  where a store learns it lost something: `src/store.rs::Store::delete` (846),
+  which already sets `needs_coalesce`.
+- **Trigger:** only when all of — the store is file-backed (`self.file.is_some()`,
+  the "long-lived" gate, free to test), `used_pct()` is below a threshold, and at
+  least N words would come back. Cheap enough to sit on the free path: one
+  `Option::is_some` for every store that is not bound.
+- **Gate:** `LOFT_STORE_RECLAIM=1` reads the threshold; unset = today's behaviour
+  exactly.
 - **Decide here:** F4 — a store with a live `.dmeta` sidecar either re-seals
-  (`store_durable_seal`) or refuses to shrink. Refusing is the safe default.
-- **Verify:** the loft-level probe (bind 300 → grow 3000 → shrink 300) on both
-  backends: the file falls when `store_reclaim` is called, is byte-identical when
-  it is not, and the digest is unchanged either way.
-- **Measure:** F7 — call it in a loop against the steady-state churn probe and
-  confirm capacity does not thrash.
+  (`store_durable_seal`) or refuses to shrink. Refusing is the safe default and
+  can be relaxed later.
+- **Verify:** the loft-level probe (bind 300 → grow 3000 → shrink 300) run with
+  the gate on and off, both backends, asserting the file falls with the gate on,
+  is byte-identical without it, and the digest is unchanged either way.
+- **Measure:** F7 — the churn cost. Run the steady-state churn probe (36,000
+  insert+remove) with the gate on and confirm capacity does not thrash.
 
-**The cost of opt-in, stated plainly:** a knob nobody knows about is a knob
-nobody uses, so a shrunk store stays 5.8× in the wild. What makes that
-acceptable is that the condition is already self-diagnosing — `store_memory()`
-reports `inner%` / `tail%` — so the path is "notice the number, call the thing"
-rather than loft unmapping a file under a running program. That fits *loft is
-boring: noticed only in its absence* better than the automatic form does.
+### A4 — default it on, document, graduate the probes
 
-### A4 — document and graduate the probes
-
-Document `store_reclaim` in [STDLIB.md](../../STDLIB.md) beside `reserve`, and in
-[DATABASE.md](../../DATABASE.md) beside the high-water-mark image, each pointing
-at the `inner%` reading that tells a consumer whether to bother. Probes graduate
-to `tests/scripts/`. No default to flip — there is no automatic mode for A.
+Flip the default once A3's measurements are in, keeping `LOFT_STORE_RECLAIM=0` as
+the escape hatch. Probes graduate to `tests/scripts/`. Document in
+[DATABASE.md](../../DATABASE.md) beside the high-water-mark image section.
 
 ---
 
@@ -201,19 +174,7 @@ against B0's oracle on the same fixture and compare size, time and digest.
 - **Code point:** `src/database/allocation.rs::bind_path` (2514), the fresh-image
   branch, next to `store_image_live_end` / `build_padded_store_image` — this is
   already the one place an image is composed.
-- Gate on the live-vs-mark ratio so a dense store is never rewritten.
-
-**B is AUTOMATIC, and that is not inconsistent with A being opt-in.** The
-difference is who already pays for the information: persist ALREADY walks the
-chain — `store_image_live_end` does it today to size the image — so the ratio is
-a subtraction on a walk that happens regardless. A dense store pays one
-comparison and is written exactly as it is now. A's trigger, by contrast, would
-have to walk on a path that does not otherwise walk at all.
-
-The second difference is timing. B runs at a moment the program already chose,
-once, and produces a fresh file; there is no mapping to invalidate and no
-re-grow to thrash, because the live store is untouched. A mutates the store a
-running program is using.
+- Gate on `used_pct()` so a dense store is never rewritten.
 
 ### B3 — on by default, documented, probes graduated
 

@@ -50,10 +50,18 @@ reading `store_memory()` now carries:
 
 ## Sub-arcs
 
+Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
+
 | Item | Source | Status |
 |---|---|---|
-| **A** — a bound store's file shrinks to its high-water mark | this README | Open — designed |
-| **B** — compact the image when writing it, gated on `used%` | this README + [DATABASE.md](../../DATABASE.md) | Open — needs the relocation walk |
+| **A0** — trust the high-water mark (assertion only) | [DESIGN.md](DESIGN.md) | Open — inert |
+| **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
+| **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
+| **A3** — call it from `delete`, env-gated off | [DESIGN.md](DESIGN.md) | Open — first behaviour change |
+| **A4** — default on, docs, probes graduate | [DESIGN.md](DESIGN.md) | Open |
+| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open |
+| **B1** — relocate vs re-insert, decided by measurement | [DESIGN.md](DESIGN.md) | Open |
+| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open |
 
 ### A — truncate the tail
 
