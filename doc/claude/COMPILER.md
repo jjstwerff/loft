@@ -240,6 +240,34 @@ pass-2-only def or attr.  The appends are safe precisely because they are
 name-keyed and trailing: call sites are re-parsed in pass 2 against the final
 attr list, and no pass-1 number moves.
 
+### Reading a verdict off the IR — read the TYPE, not the shape
+
+The corollary for any predicate that decides something by inspecting IR: **the two passes
+see different IR for the same source**, so a verdict read off the shape can differ between
+them — and by H5 above, a definition that first appears in pass 2 is fatal. In practice
+the branch that mints it simply never runs on pass 1, and the lexer revert that was going
+to feed it finds nothing to lower, so the failure surfaces as a syntax error pointing at
+the end of an unrelated construct.
+
+Two differences bite (both loft#699/#701):
+
+- **No struct layouts on pass 1.** Field offsets are the `u16::MAX` placeholder, so a
+  nested struct literal is an offset-less `Insert` in pass 1 and an `Object` block in
+  pass 2. Asking "is this a nested struct literal?" of the IR answered no, then yes.
+  Ask the field's **declared type** instead — both passes agree on that.
+- **No `Span` wrappers on pass 1.** Positions are recorded in pass 2, so a tree that was
+  a bare `Call` becomes `Span(pos, Call)`. A walker written as a `match` with a catch-all
+  `other => other` arm silently returns the whole tree unrewritten: that is how
+  `remap_var_nr` left a parameter default holding the callee's raw slot numbers on pass 2
+  only. Walk with the exhaustive walker (`visit_constant_vars`), which returns `false` for
+  a shape it cannot rewrite — the caller then treats the unrewritten indices as
+  "not replayable" and takes the sound path, so the hole cannot re-form silently.
+
+The same asymmetry applies to what gets STORED: a constant's initialiser was kept from
+pass 1, so every field offset in it was the placeholder — which is why a struct-element
+vector constant pre-built at the wrong stride (loft#702). A vector constant now adopts
+the pass-2 initialiser.
+
 ### Synthesised-identity stability — the counter-coupling hazard
 
 A recurring bug class spans the parser **and** the native backend. Both synthesise
