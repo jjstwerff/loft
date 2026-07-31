@@ -211,18 +211,28 @@ Operations on `vector<T>` — the primary ordered collection type.
 | `len(v: vector) -> integer` | Number of elements in the vector. Use in loop bounds: `for i in 0..v.len()`. |
 | `reserve(v: vector, n: integer)` | Give `v` room for `n` elements so filling it does not repeatedly reallocate. Changes capacity only — never `len(v)`, its contents, or anything holding it — and an `n` at or below the current capacity does nothing. |
 
-**When `reserve` is worth it.** Appending grows a vector by doubling, so filling
-one of N costs about log N reallocations, each claiming a fresh block and
-orphaning the old one, and leaves the last block up to twice the length. That is
-invisible for a handful of vectors. It stops being invisible when *many* grow at
-once — a streaming generator appending each incoming item to whichever collection
-owns it — because the block after any one vector is then another vector, so the
-grow can never extend in place and every step copies.
+**When `reserve` is worth it — it is the INTERLEAVING that decides, not the
+number of vectors.** Appending grows a vector by doubling, so filling one of N
+costs about log N reallocations, each claiming a fresh block and orphaning the
+old one, and leaves the last block up to twice the length. A grow can extend in
+place when the block after it is free, so what costs is how often growth
+*alternates* between vectors: alternate on every element and no grow ever extends
+in place, so every step copies.
 
-That cost is also *persisted*: a store written with `store_persist_bind` carries
-the claimed capacity, not the length. Reserving the counts up front on a
-125-record × 2312-coordinate store took the file from 3,816,152 to 2,609,736
-bytes — from 1.65× its payload to 1.13× — for identical data (loft#710).
+Many vectors growing at once is not enough on its own. Fed by sorted or
+spatially-coherent input, each vector grows in long runs and rarely reallocates
+against a neighbour, and there is little overshoot to reclaim — `reserve` then
+costs a counting pass and buys nothing. Measured by the consumer that asked for
+it (loft#710): a synthetic generator switching collection on *every* element went
+3,816,152 → 2,609,808 bytes (−31.6%), while their real OSM generator — which
+switches tile only **3.8%** of the time, because the input arrives in roughly
+spatial order — moved +0.7%, inside its own run-to-run noise.
+
+So reach for it when growth genuinely interleaves; measure before keeping it when
+your input is ordered. The cost it removes is also *persisted*: a store written
+with `store_persist_bind` carries the claimed capacity, not the length, so on the
+interleaved shape the file went from 1.65× its payload to 1.13× for identical
+data.
 
 ```loft
 for tile in tiles { reserve(tile.points, expected_count(tile)); }
