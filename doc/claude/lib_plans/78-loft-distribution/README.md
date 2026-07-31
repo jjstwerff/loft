@@ -5,7 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # lib-plan 30 — loft binary distribution + self-update + advisory integration
 
-**Status:** FUTURE (slot created 2026-05-31).  Filed because the
+**Status:** FUTURE (slot created 2026-05-31).  **The concrete implementation
+design is [design.md](design.md) (2026-07-31)** — it supersedes the phase sizing
+below, which predates the package trust chain: most of what these phases propose
+to build has since been built for packages, and 30.5 is already done.  The threat
+model and trust-chain analysis here still stand.
+
+Filed because the
 @PLAN12 § Phase 6.7 security-advisory channel needs a signed,
 installable binary distribution to act on yank signals against the
 loft binary itself — `loft self-update` to a fixed version is the
