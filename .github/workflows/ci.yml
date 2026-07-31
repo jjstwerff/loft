@@ -167,6 +167,28 @@ jobs:
             exit 1
           fi
 
+  # @PLN78 — a release is two halves, and only the GitHub half fails loudly.  If the
+  # registry entry never lands, `loft self-update` just reports "nothing published"
+  # forever and nobody is paged by a feature quietly not existing.  So the drift is
+  # caught on the release-prep PR: shipping N+1 while N never reached the registry is
+  # how the gap becomes permanent, because N's assets freeze at publish and a release
+  # that missed its entry can often never get a correct one afterwards.
+  #
+  # Deliberately gated on that PR alone.  Red on EVERY PR for the window between
+  # publish and registry-merge would be red for hours after each release, across work
+  # that has nothing to do with it — which teaches everyone to merge past a red check.
+  release-published:
+    name: previous release reached the registry
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the last release is fully published
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-release-published.py
+
   # Shim for the complementary (docs-only) case — see the `changes` comment.
   # Emits the required per-OS `Test (<os>)` contexts as trivially green so branch
   # protection is satisfied without spinning up the real matrix.  Windows is NOT

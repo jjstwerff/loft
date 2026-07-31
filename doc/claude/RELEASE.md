@@ -645,6 +645,17 @@ ordering — the owner never publishes an empty release and then waits for binar
    failure a signature cannot catch — an index that is correctly signed and names
    the wrong bytes.
 
+**Forgetting step 4 is caught on the NEXT release, not by anyone noticing.**  Only
+step 2 fails loudly; a missing registry entry just leaves `loft self-update`
+reporting "no releases published to compare against" forever, which nobody is paged
+by.  So the `previous release reached the registry` CI job goes red on the PR that
+bumps `Cargo.toml`, unless the last release's entry is in the signed index with a
+binary per published triple and a `manifest_sha256` on each
+(`scripts/check-release-published.py`).  It gates that PR only — red on every PR
+during the publish→merge window would just teach everyone to merge past it.  A
+release with no `loft-<v>-src.zip` is exempt as predating the mechanism, derived
+from the assets rather than a version constant someone has to maintain.
+
 **Never** create-and-publish a release in one step (the pre-2026.7 flow):
 publishing creates the tag and freezes the release before the binaries are built,
 so immutable releases then reject the upload — v2026.7.0 shipped binary-less
