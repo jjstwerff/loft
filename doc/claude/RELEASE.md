@@ -887,6 +887,36 @@ The registry already re-checks reproducibility for *libraries* (gate 3 clones th
 tag and re-runs `loft package`); the toolchain is exempt because it is not a
 `loft package`, so this is the gap that exemption leaves.
 
+**Measured 2026-07-31 — what actually blocks it, so this is not re-derived.**
+
+1. *The compiler already matches.*  The published v2026.7.2 binary embeds
+   `/rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452`, which is byte-for-byte the
+   local stable 1.97.1.  The usual hardest variable is already pinned by
+   `dtolnay/rust-toolchain@stable` plus `Cargo.lock`.
+2. *Absolute build paths are the blocker.*  The release binary carries
+   `/home/runner/.cargo/registry/...`; a local build carries `/home/jurjens/...`
+   — **192 occurrences**.  v2026.7.2 is therefore unreproducible by anyone,
+   including us: the runner's paths cannot be recreated.
+3. *`trim-paths` is NOT the answer.*  The `[profile.release] trim-paths` option is
+   still unstable in Cargo 1.97.1 and refuses to parse the manifest.
+4. *`--remap-path-prefix` works — 192 → 2.*  Stable rustc, no nightly.
+5. *…and the last 2 are self-inflicted.*  `build.rs` exports
+   `LOFT_BUILD_RUSTFLAGS` **verbatim**, and `cache.rs` reads it back with
+   `env!("LOFT_BUILD_RUSTFLAGS")` to key native artifacts — so the remap FLAGS,
+   which contain the very paths being removed, get baked in as a string literal.
+   The fix is to hash in `build.rs` and embed the `u64`, never the string;
+   `rustflags_fp_of` already does exactly that hashing, just at runtime.
+6. *Comparing to a GitHub artifact needs the musl target.*  Releases ship
+   `x86_64-unknown-linux-musl`; a local `cargo build --release` is `-gnu`.  Those
+   are different binaries by construction — `rustup target add
+   x86_64-unknown-linux-musl` plus `musl-tools` before any comparison means
+   anything.
+
+So the remaining work is three bounded changes — remap flags in
+`make-release.sh`, a hashed `LOFT_BUILD_RUSTFLAGS`, and a CI leg that builds
+twice in different directories and diffs — not the "M, ~3-5 days" the plan
+guessed against a world where this needed nightly.
+
 ---
 
 ## Tooling prerequisites for release verification
