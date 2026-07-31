@@ -146,14 +146,41 @@ means nothing for the toolchain.
 *Verify:* an OLD loft still resolves packages from the new index (it will skip the
 toolchain entry if it cannot read it, which is what step 1 bought).
 
-**Step 2 — `loft verify-self` (read-only).**
-Fetch the signed index, find the entry for the running version + host triple,
-hash the running executable, compare.  Report agreement / mismatch / no-entry.
-Mutates nothing.  This is the step that proves the whole chain end to end —
-signature, entry lookup, hash — with zero risk, and it is independently useful:
-it answers "is my binary the one that was published?"
-*Verify:* passes on a release binary; fails loudly on a locally built one (that
-failure is the positive control — a check that cannot fail is not a check).
+**Step 2 — `loft verify-self` (read-only).**  DONE 2026-07-31, local half.
+
+The design said "hash the running executable, compare against the published
+entry".  What is published is the sha256 of the **zip**, not of the binary, and
+after installation the user has an unpacked bundle — so there is nothing to
+compare a running executable against until step 1b decides what artifact the
+version-level entry names.  The half that does not depend on that is what shipped.
+
+A release bundle carries two manifests: `stdlib.manifest` (a digest per
+`default/*.loft` plus a `combined` trailer) and `SHA256SUMS` (every file,
+`bin/loft` included).  `verify-self` checks the installation against both,
+offline, and changes nothing.
+
+**Both manifests ship inside the bundle they describe**, so they establish that
+the installation is INTACT, not that it is AUTHENTIC — someone who replaced the
+binary could rewrite the manifest beside it.  The output says exactly that, in
+those words.  Reporting a bare "verified" would be the same species of claim step
+0 just removed from the catalogue: a check that sounds like more than it did.
+
+Intactness is worth having on its own, because it names the failure that actually
+happens: a **partial upgrade** — a new `bin/loft` beside an old `default/`.  loft
+resolves its stdlib at `<binary-dir>/../default`, so such an installation runs,
+misbehaves subtly, and reads as a compiler bug.  `verify-self` names the file.
+
+*Verified:* on a constructed release bundle it reports `stdlib: 6 file(s) match` /
+`bundle: 8 file(s) match` and exits 0; editing one stdlib file makes it report
+`FAILED  stdlib: 1 changed: default/01_code.loft` and exit 1 — the positive
+control, since a check that cannot fail is not a check.  In a source checkout it
+says "not a release bundle" and exits 0 rather than failing vacuously.  Seven unit
+tests cover the manifest dialects, the intact / edited / missing cases, a manifest
+path that tries to escape the bundle, and the dev-tree skip.
+
+*Remaining for after 1b:* the `--published` half — fetch the signed index, find
+this release's entry, compare.  That is the line the output prints today as
+"no signed registry entry for this release yet".
 
 **Step 3 — `loft self-update --dry-run`.**
 Resolve the newest non-yanked version for the host triple, download it to a temp

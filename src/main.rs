@@ -293,6 +293,13 @@ fn print_help() {
     println!("  pin <script.loft>             pin every registry library the script uses");
     println!("                                writes <script>.loft.lock next to the script;");
     println!("                                subsequent runs use the pinned versions");
+    println!("  verify-self                   check this installation against the manifests its");
+    println!(
+        "                                release bundle shipped (stdlib.manifest, SHA256SUMS)"
+    );
+    println!(
+        "                                — detects corruption and partial upgrades; read-only"
+    );
     println!("  list-installed                list every registry package installed locally");
     println!("                                (from ~/.loft/registry/), annotated with sha256");
     println!("                                + size + index status (active / yanked / orphan)");
@@ -1025,6 +1032,72 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
             loft::registry_index::render_catalog(&index),
         );
     }
+}
+
+/// @PLN78 step 2 — `loft verify-self`: check this installation against the manifests
+/// its release bundle ships.  Read-only.  Exit 0 when nothing failed, 1 otherwise.
+///
+/// The output labels what each line establishes, because the honest answer here is
+/// narrower than the command's name suggests: both manifests travel INSIDE the bundle
+/// they describe, so they prove the installation is INTACT, not that it is AUTHENTIC.
+/// Saying only "verified" would be the same kind of claim @PLN78 step 0 removed from
+/// the catalogue — a check that sounds like more than it did.
+fn verify_self_cmd() -> i32 {
+    use loft::verify_self::{Check, bundle_root, local_checks};
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("loft verify-self: cannot locate the running binary");
+        return 1;
+    };
+    let Some(root) = bundle_root(&exe) else {
+        eprintln!(
+            "loft verify-self: cannot resolve a bundle root from {}",
+            exe.display()
+        );
+        return 1;
+    };
+    println!("loft verify-self — {}", root.display());
+    let checks = local_checks(&root);
+    let mut failed = false;
+    let mut skipped = 0;
+    for c in &checks {
+        match c {
+            Check::Ok(m) => println!("  ok      {m}"),
+            Check::Skipped(m) => {
+                skipped += 1;
+                println!("  --      {m}");
+            }
+            Check::Failed(m) => {
+                failed = true;
+                println!("  FAILED  {m}");
+            }
+        }
+    }
+    println!("  --      published: no signed registry entry for this release yet (@PLN78 step 1b)");
+    println!();
+    if failed {
+        println!(
+            "This installation does not match the manifests it shipped with.  A changed\n\
+             stdlib file with an unchanged binary is the usual cause — a partial upgrade —\n\
+             and loft loads its stdlib from <binary-dir>/../default, so it would run with\n\
+             the mismatch.  Reinstall the release rather than replacing single files."
+        );
+        return 1;
+    }
+    if skipped == checks.len() {
+        println!(
+            "Nothing to check: this is not a release bundle (a source build has no\n\
+             stdlib.manifest / SHA256SUMS).  That is expected in a checkout."
+        );
+        return 0;
+    }
+    println!(
+        "The installation is INTACT — every file matches the manifest it shipped with.\n\
+         That is not proof of AUTHENTICITY: both manifests travel inside the bundle they\n\
+         describe, so they detect corruption and partial upgrades, not substitution.\n\
+         Authenticity needs a digest from outside the bundle — the signed registry entry\n\
+         (@PLN78 step 1b), which this will check once releases are published there."
+    );
+    0
 }
 
 /// @PLAN12 Phase 6.6 — `loft list-installed` enumerates packages
@@ -6421,6 +6494,10 @@ fn main() {
                 eprintln!("loft audit: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
+        } else if a == "verify-self" {
+            // @PLN78 step 2 — read-only: hash the installation against the manifests
+            // the release bundle ships, and say what that does and does not prove.
+            std::process::exit(verify_self_cmd());
         } else if a == "list-installed" {
             // @PLAN12 Phase 6.6 — enumerate ~/.loft/registry/<pkg>-<ver>/
             // dirs, annotate with sha256 + size from the cached index.

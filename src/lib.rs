@@ -261,6 +261,7 @@ pub mod schema_sidecar;
 mod stack;
 pub mod timeout;
 pub mod triggers;
+pub mod verify_self;
 
 pub mod documentation;
 pub mod migrate_long;
