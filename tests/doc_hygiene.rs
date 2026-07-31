@@ -1205,3 +1205,48 @@ fn readme_brick_buster_line_count_is_current() {
          Update the number in README.md (it is the proof behind the one-file claim)."
     );
 }
+
+/// @PLN78 step 6 — the installer's target triples must be ones a release publishes.
+///
+/// `scripts/install.sh` derives the artifact name from `uname`, and
+/// `self_update::host_triple` derives the registry lookup key the same way.  They are
+/// two hand-written derivations of one fact, in different languages, and the failure
+/// when they drift is silent: the installer 404s, or `self-update` reports "published,
+/// but not built for your platform" about the artifact meant for that host.  That
+/// already happened once — Linux composed `-gnu` while releases ship `-musl`.
+///
+/// So pin them together: every triple the shell can produce must appear in
+/// `PUBLISHED_TRIPLES`, which is itself checked against a real release.
+#[test]
+fn installer_and_self_update_agree_on_the_published_triples() {
+    let sh = std::fs::read_to_string("scripts/install.sh").expect("read install.sh");
+    let published = loft::self_update::PUBLISHED_TRIPLES;
+    // The shell composes `$arch-<rest>`; check each literal suffix it can emit.
+    for suffix in ["-apple-darwin", "-unknown-linux-musl", "-pc-windows-msvc"] {
+        if !sh.contains(suffix) {
+            continue;
+        }
+        assert!(
+            published.iter().any(|t| t.ends_with(suffix)),
+            "install.sh can produce a `{suffix}` triple that no release publishes"
+        );
+    }
+    for arch in ["x86_64", "aarch64"] {
+        assert!(
+            sh.contains(arch),
+            "install.sh must map uname's output to `{arch}`, which releases publish"
+        );
+    }
+    // And the reverse: a published UNIX target the installer cannot name is a target
+    // nobody can install with it.
+    for t in published {
+        if t.contains("windows") {
+            continue; // the installer sends Windows users to the releases page
+        }
+        let suffix = t.split_once('-').expect("triple has an arch prefix").1;
+        assert!(
+            sh.contains(suffix),
+            "release publishes `{t}` but install.sh cannot name it"
+        );
+    }
+}

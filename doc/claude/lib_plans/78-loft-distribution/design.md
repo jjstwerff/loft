@@ -316,12 +316,37 @@ of user-facing text entirely — a user asking whether an update exists deserves
 answer, not our backlog.  The first draft had all of these, which is how the
 principle earned its section.
 
-**Step 6 — `install.sh` (bootstrap).**
-Deliberately last and deliberately dumb: detect OS/arch, fetch the release
-tarball, check the one pinned sha256, unpack, then run `loft verify-self` and
-print its verdict.  Nothing else.
-*Verify:* on a clean container per target, `curl … | sh` installs a loft whose
-`verify-self` passes.
+**Step 6 — `install.sh` (bootstrap).**  DONE 2026-07-31.
+
+The only step that works TODAY without 1b, because it fetches from the GitHub
+release rather than the registry — and releases already carry per-target zips with
+`.zip.sha256` sidecars.
+
+Deliberately the least clever piece, and that is the design: a shell script cannot
+verify a signed index, so rather than teach it to try, its job is small enough to
+audit in one sitting — pick the artifact for this host, check one sha256, unpack,
+hand off to `loft verify-self`.  Everything it is trusted for fits on one page.
+The script says so itself: the sidecar catches a truncated or corrupted download,
+which is the failure that actually happens, but it is not a signature — script and
+artifact arrive over the same transport, so anyone who could substitute one could
+substitute the other.  Authenticity comes from the installed binary checking the
+signed index.
+
+`--prefix`, `--version`, `--list`, and `LOFT_INSTALL_BASE` for a mirror or an
+air-gapped copy — the same "always allow a local route" that shaped step 4.
+
+*Found by writing it:* `self_update::host_triple` composed `x86_64-unknown-linux-gnu`
+(the BUILD triple) while releases publish `x86_64-unknown-linux-musl`.  Every Linux
+user would have been told "published, but not built for your platform" about the
+artifact meant for them.  Deriving the same name in shell is what surfaced it; the
+two derivations are now pinned together by `PUBLISHED_TRIPLES` and a doc-hygiene
+test, because they are one fact written twice in two languages and drift between
+them is silent.
+
+*Verified:* against a real release zip built and served locally — installs, the
+installed loft runs, `verify-self` passes; a corrupted download is refused with the
+digests named and the existing installation left untouched; and an upgrade over an
+existing install works.
 
 **Step 7 — reproducible builds (30.1), off the critical path.**
 Nothing above depends on it.  It upgrades the *meaning* of step 1's sha256 from
