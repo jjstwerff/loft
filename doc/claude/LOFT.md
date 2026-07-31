@@ -265,14 +265,11 @@ Fields are declared as `name: type` with optional modifiers **after** the type:
 - `not null` — **deprecated no-op** (fields are non-null by default; it parses but
   warns). Delete it; write the type as `T?` if the field should allow `null`.
 - `= expr` — stored default value, applied when field is omitted in constructor.
-  The expression may build a value of its own — `= [1, 2]`, `= "a" + "b"`, `= mk()` —
-  and is evaluated once per construction. Two forms are refused, and say so: a
-  **non-empty keyed** collection (`= [K { … }]` for a `hash`/`sorted`/`index`/`spatial`
-  field), because loft builds a keyed collection only by writing THROUGH a keyed
-  destination — a plain local `h: hash<K[k]> = [K { … }]` is refused for the same
-  reason — so use `= []` and fill the field after construction; and an expression that
-  reads `$` **and** needs a temporary, since a `$`-reading default is built against the
-  record at each construction site and so cannot be built once and shared.
+  The expression may build a value of its own — `= [1, 2]`, `= "a" + "b"`, `= mk()`,
+  `= P { … }`, `= [K { … }]` for a keyed field — and is evaluated once per
+  construction. One form is refused, and says so: an expression that reads `$` **and**
+  needs a temporary, since a `$`-reading default is built against the record at each
+  construction site and so cannot be built once and shared.
 - `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
 - `computed(expr)` — calculated on every access, **not stored** in the record
 
@@ -375,6 +372,11 @@ fn function_name(param: type, other: type = default_value) -> return_type {
 ```
 
 - `pub` prefix makes a definition publicly visible (applies to functions, structs, and enums).
+- `param: type = expr` gives a parameter a **default**, used when the call omits it.
+  The expression may build a value of its own — `= []`, `= [1, 2]`, `= "a" + "b"`,
+  `= mk()`, `= S { … }` — and may reference EARLIER parameters (`b: text = "x" + a`).
+  It is evaluated per call, so each call gets its own value; adding a default is
+  additive, so existing callers keep working.
 - Parameters with a `&` prefix are a **live reference** to the caller's argument (in-out for any
   type): reads see the caller's current value, writes write the caller, field/element mutation
   mutates the caller. **Call WITHOUT `&` at the call site** — the reference comes from the
@@ -482,9 +484,16 @@ fn font() -> FontTable { … }   // parse on first call, keep the handle, return
 loft warns when a constant's initialiser calls a user function or a stdlib
 function marked `#impure`. Set `LOFT_NO_CONST_EFFECT` to silence it.
 
-One current limit on what an initialiser may be: a **struct-valued** constant is
-rejected, because the record cannot be materialised at each use site — wrap it in
-a zero-argument function.
+A **vector** constant is different: it is pre-built once into the constant store and
+referenced, not re-run. Its elements are built from their literal fields, so they must
+be **flat** — scalars and text, and structs of those (`ITEMS = [It { a: 3, b: 4 }]`).
+
+Two limits on what an initialiser may be, each rejected with the working idiom named:
+a **struct-valued** constant (`P = Point { … }`), because a record cannot be
+materialised at each use site; and a vector constant whose element holds a **nested
+record** — an inner collection, or a struct/enum field (`NEST = [[7], [8]]`,
+`WS = [W { v: [2, 3] }]`) — because that data lives in a store of its own that no
+field write describes. Wrap either in a zero-argument function.
 
 Text initialisers such as `A = "x" + "y";` and `A = "p{1 + 1}q";` are fine. An
 all-literal one is folded to a single literal, so it is not rebuilt per use.
@@ -2214,6 +2223,11 @@ fn main() {
 
 struct Table { data: hash<Entry[name]> }
 ```
+
+A `[…]` literal builds a keyed collection wherever the KEYED TYPE is known — a typed
+local (`h: hash<Entry[name]> = [Entry { … }]`), a return type, a parameter, a struct
+field, a field default. Standing alone with no such type in view it builds a
+`vector<T>`, because that is all its elements can say.
 
 The one unsupported form is a **generic-constructor expression**
 (`h = hash<Entry[name]>()`) or a bare untyped `h = []` — neither names the key.

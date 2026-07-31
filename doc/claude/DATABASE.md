@@ -112,6 +112,16 @@ recorded layout differs from the loading program's collection type is REFUSED
 sidecar (a legacy store) falls back to the `store_verify` backstop. Set
 `LOFT_LOADER_STATS=1` to observe `bytes_fetched` vs file size.
 
+The WHOLE-IMAGE loader `store_load` takes the same gate (loft#700). It keeps the
+target slot's type and reinterprets the file's bytes through it, and records are
+fixed-stride — so **changing a stored struct at all, including adding a field at the
+end, changes the layout and makes older stores unreadable**. That is the rule to plan
+around: a store is readable only by a program whose structs lay out identically to the
+one that wrote it. Before the gate the mismatch was silent, and `len()` on an added
+collection returned wild values (`510277628`) that a consumer then iterated. Now
+`store_load` returns `false` and names what differs. Rebuild the store with the new
+program, or read it with the version that wrote it.
+
 These loaders work **on every target, the browser included** (loft#678). Only the
 byte source differs, and it is the sole thing that does: a native build issues
 `Range` GETs over `ureq`, while `--html` issues them through the asyncify
