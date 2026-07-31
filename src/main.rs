@@ -8696,6 +8696,10 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             );
         }
 
+        // loft#706 — has the runtime rlib already been rebuilt in this run?  Both heal
+        // sites (the up-front version check and the post-compile retry) read it, so a
+        // tree the rebuild cannot fix fails once instead of rebuilding per attempt.
+        let mut runtime_rebuilt = false;
         // Use cached binary if it exists AND passes the safety check;
         // otherwise compile and cache.
         let binary = if cache_usable {
@@ -8720,6 +8724,9 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 // source to rebuild, so fall back (default) or error (`--native`).
                 let healed = native_utils::loft_source_tree()
                     .is_some_and(|tree| native_utils::rebuild_runtime(&tree, reason));
+                // Whether it healed or not, the rebuild has been attempted — the
+                // post-compile heal (loft#706) must not run it a second time.
+                runtime_rebuilt = true;
                 if !healed && !native_requested {
                     // T0.1 — SILENT on the default path.  The user did not ask for
                     // native, and a downloaded release ships no native runtime by
@@ -8883,6 +8890,38 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     break 'native;
                 }
             };
+            // loft#706 — heal on the COMPILE, not only on the up-front version check.
+            //
+            // That check (`rustc_mismatch`, above) compares the rustc that built the
+            // loft BINARY with the current one.  What this compile LINKS is the
+            // runtime RLIB, and one `cargo build` produces both — so the binary is a
+            // fine proxy for the rlib right up until it isn't: a partially-restored
+            // CI cache, an installed bundle beside a source checkout, a lib and a
+            // binary built either side of a `rustup update`.  Then the check sees
+            // nothing to do, and rustc is handed an rlib from another compiler:
+            // `E0514`, with no rebuild attempted and no recovery, in exactly the
+            // situation the auto-rebuild exists for.
+            //
+            // The compile is the reliable witness the version check is not, so heal
+            // on it: rebuild the runtime once and retry.  Gated on a failure whose
+            // error already names crate resolution, so a codegen bug never pays for a
+            // rebuild, and on `runtime_rebuilt` so a tree the up-front heal already
+            // rebuilt does not rebuild twice.  This path itself runs at most once —
+            // it is straight-line, not a loop — so it does not set the flag.
+            let mut output = output;
+            if !output.status.success()
+                && !runtime_rebuilt
+                && native_utils::crate_resolution_failure(&String::from_utf8_lossy(&output.stderr))
+                && let Some(tree) = native_utils::loft_source_tree()
+                && native_utils::rebuild_runtime(
+                    &tree,
+                    "the runtime rlib this program links was built by a different rustc",
+                )
+            {
+                if let Ok(retry) = cmd.output() {
+                    output = retry;
+                }
+            }
             let status = output.status;
             let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
             // Classify a compile failure caused by the native TOOLCHAIN/cache, not
@@ -8892,13 +8931,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             // rand_core/cargo-cache staleness, an unresolvable loft/library crate
             // (E0463 — e.g. a distributed bundle ships no rlib), or an rmeta-without-
             // rlib dep (@P229 G3, an unbuilt package).
-            let crate_resolution_failure = (stderr_utf8.contains("E0460")
-                || stderr_utf8.contains("E0463")
-                || stderr_utf8.contains("E0514"))
-                && (stderr_utf8.contains("rand_core")
-                    || stderr_utf8.contains("possibly newer version of crate")
-                    || stderr_utf8.contains("compiled by an incompatible version")
-                    || stderr_utf8.contains("can't find crate"));
+            let crate_resolution_failure = native_utils::crate_resolution_failure(&stderr_utf8);
             let rlib_format_failure =
                 stderr_utf8.contains("required to be available in rlib format");
             // Turnkey fallback: a DEFAULT-native run (not an explicit `--native`)
