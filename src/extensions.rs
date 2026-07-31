@@ -308,6 +308,12 @@ struct SharedSig {
 #[cfg(feature = "native-extensions")]
 static SHARED_SIGS: Mutex<Option<HashMap<u16, (FnPtr, SharedSig)>>> = Mutex::new(None);
 
+/// loft#715 — library slot → the bridge symbol it dispatches to.  Populated once
+/// at wiring; read only when a fault is raised while a bridge call is on the
+/// stack, so a bridge fault stops reading like a program fault.
+#[cfg(feature = "native-extensions")]
+static SHARED_LABELS: Mutex<Option<HashMap<u16, String>>> = Mutex::new(None);
+
 /// Compute the argument type list and return type from a definition's signature.
 /// Returns `None` if the signature contains types that can't be auto-marshalled
 /// (e.g. struct references, vectors).
@@ -721,6 +727,18 @@ pub fn wire_shared_native_fns(state: &mut crate::state::State, data: &crate::dat
             table.insert(*lib_idx, (FnPtr(*ptr), sig.clone()));
         }
     }
+    // loft#715 — remember which symbol each slot dispatches to, so a fault raised
+    // while the bridge is on the stack can NAME it.  Written once at wiring, read
+    // only on the panic path.
+    {
+        let mut guard = SHARED_LABELS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let table = guard.get_or_insert_with(HashMap::new);
+        for (sym, lib_idx, ..) in &wired {
+            table.insert(*lib_idx, sym.clone());
+        }
+    }
     for (sym, ..) in &wired {
         state.replace_static_fn(sym, shared_store_dispatch);
     }
@@ -743,6 +761,12 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
 
     crate::state::SHARED_DISPATCH_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let lib_idx = CURRENT_LIB_IDX.with(std::cell::Cell::get);
+    // loft#715 — mark that a bridge call is on the stack.  A fault raised from
+    // here is a BRIDGE fault, and it used to read exactly like a program fault:
+    // `Cannot add to none-structure '<type>'` names a type, never the library
+    // that supplied the index, and the abort takes the whole process with it.
+    // One `Cell` write per call, cleared on the way out.
+    IN_SHARED_BRIDGE.with(|c| c.set(lib_idx.wrapping_add(1)));
     let (bridge_ptr, sig) = {
         let guard = SHARED_SIGS
             .lock()
@@ -912,6 +936,7 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
             }
         }
     }
+    IN_SHARED_BRIDGE.with(|c| c.set(0));
 }
 
 /// Generic auto-marshal dispatcher. Called via `OpStaticCall` for all
@@ -1155,6 +1180,9 @@ fn bridge_push_ref(
 // Set by `State::static_call()` before invoking the Call function.
 std::thread_local! {
     static CURRENT_LIB_IDX: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
+    /// loft#715 — `lib_idx + 1` while a shared-bridge call is on this thread's
+    /// stack, 0 otherwise.  Read by [`current_shared_bridge`] on the fault path.
+    static IN_SHARED_BRIDGE: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
 }
 
 // ── Store callback infrastructure for FFI allocation ─────────────────────
@@ -1219,6 +1247,36 @@ unsafe extern "C" fn ffi_reload(ctx: LoftStoreCtx, out_ptr: *mut *mut u8, out_si
 /// Set the current library index for auto-dispatch. Called from `State::static_call()`.
 pub fn set_current_lib_idx(idx: u16) {
     CURRENT_LIB_IDX.with(|c| c.set(idx));
+}
+
+/// loft#715 — the bridge symbol currently being dispatched on this thread, if any.
+///
+/// A fault raised while a shared-library bridge is on the stack is a BRIDGE
+/// fault, but it surfaced with the same words as a program fault: `Cannot add to
+/// none-structure '<type>'` names the type the index resolved to and nothing
+/// about who supplied the index — and because it is a non-unwinding panic the
+/// process aborts, so the surrounding harness reports only that the program
+/// never started.  Appending this turns "a type is wrong somewhere" into "this
+/// library's bridge passed something this loft cannot use".
+#[must_use]
+pub fn current_shared_bridge() -> Option<String> {
+    #[cfg(feature = "native-extensions")]
+    {
+        let marked = IN_SHARED_BRIDGE.with(std::cell::Cell::get);
+        if marked == 0 {
+            return None;
+        }
+        let lib_idx = marked - 1;
+        let guard = SHARED_LABELS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(guard.as_ref().and_then(|t| t.get(&lib_idx)).map_or_else(
+            || format!("shared-library bridge (slot {lib_idx})"),
+            |sym| format!("shared-library bridge `{sym}`"),
+        ))
+    }
+    #[cfg(not(feature = "native-extensions"))]
+    None
 }
 
 /// Build a LoftStore handle from the store that a LoftRef points to.

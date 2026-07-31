@@ -12,15 +12,28 @@
 
 use std::process::Command;
 
-/// Platform cdylib filename for the auto-built `mathnative` library.
-fn cdylib_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "loft_auto_mathnative.dll"
+/// Is an auto-built cdylib for `mathnative` present in `dir`?
+///
+/// loft#715 — the artifact name carries the caller's type-layout fingerprint
+/// (`libloft_auto_mathnative_<fp>.so`), so two contexts can never name the same
+/// file and a process cannot open a library built for someone else's type
+/// indices. The test therefore matches the prefix + extension rather than a
+/// fixed name; the fingerprint is not knowable from here.
+fn cdylib_present(dir: &std::path::Path) -> bool {
+    let (prefix, ext) = if cfg!(target_os = "windows") {
+        ("loft_auto_mathnative", "dll")
     } else if cfg!(target_os = "macos") {
-        "libloft_auto_mathnative.dylib"
+        ("libloft_auto_mathnative", "dylib")
     } else {
-        "libloft_auto_mathnative.so"
-    }
+        ("libloft_auto_mathnative", "so")
+    };
+    std::fs::read_dir(dir).is_ok_and(|rd| {
+        rd.flatten().any(|e| {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            n.starts_with(prefix) && n.ends_with(ext)
+        })
+    })
 }
 
 #[test]
@@ -79,9 +92,9 @@ fn use_compile_native_library_dispatches_on_real_binary() {
 
     // The cdylib was actually built (the native path was taken, not interpreted).
     assert!(
-        native_auto.join(cdylib_name()).exists(),
-        "expected the auto-built cdylib at {}",
-        native_auto.join(cdylib_name()).display()
+        cdylib_present(native_auto),
+        "expected an auto-built cdylib in {}",
+        native_auto.display()
     );
 
     let _ = std::fs::remove_dir_all(&tmp);
@@ -142,8 +155,19 @@ fn mixed_library_dispatches_native_and_interprets_rest() {
 
     // The gate split the library: the cdylib exports the dispatchable `triple` but
     // NOT `apply_inc` (CallRef → interpreted), and NOT its synthetic lambda.
-    let lib_rs = std::fs::read_to_string(native_auto.join("loft_auto_mathmixed.rs"))
+    // loft#715 — the generated source is named for the caller's type-layout
+    // fingerprint, like the cdylib beside it, so find it by prefix.
+    let rs_path = std::fs::read_dir(native_auto)
+        .expect("native-auto dir should exist")
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("loft_auto_mathmixed") && n.ends_with(".rs"))
+        })
         .expect("generated cdylib source should exist");
+    let lib_rs = std::fs::read_to_string(&rs_path).expect("read generated cdylib source");
     assert!(
         lib_rs.contains("loft_shared_n_triple"),
         "triple should have a native bridge"

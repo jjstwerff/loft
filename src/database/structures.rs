@@ -100,10 +100,24 @@ impl Stores {
                 self.store_mut(&rec).set_u32_raw(rec.rec, 4, data.rec);
                 rec
             }
-            _ => panic!(
-                "Cannot add to none-structure '{}'",
-                self.types[tp as usize].name
-            ),
+            // loft#715 — say WHO handed us the type when a bridge call is on the
+            // stack.  A type index that resolves to a non-structure is a program
+            // error from loft code and an ABI/type-table mismatch from a shared
+            // library, and the two read identically without this.
+            _ => match crate::extensions::current_shared_bridge() {
+                Some(bridge) => panic!(
+                    "Cannot add to none-structure '{}' — raised inside {bridge}. \
+                     The library passed a type index this loft's table does not \
+                     map to a structure, which means it was built against a \
+                     different type layout; rebuild the package's native-auto/ \
+                     artifact.",
+                    self.types[tp as usize].name
+                ),
+                None => panic!(
+                    "Cannot add to none-structure '{}'",
+                    self.types[tp as usize].name
+                ),
+            },
         }
     }
 
