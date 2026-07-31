@@ -484,7 +484,14 @@ pub(crate) fn wasm_rustc(atomics_sysroot: Option<&std::path::Path>) -> std::proc
 /// `profile_dir` is what [`ensure_loft_runtime_rlib`] returned for that shape.
 /// Copies only what is missing or has changed size, so repeat builds are cheap.
 pub(crate) fn ensure_atomics_sysroot(profile_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let deps = profile_dir.join("deps");
+    // Every layout's dep dirs, not `<profile>/deps` alone.  Under the per-unit layout
+    // cargo adopted on 2026-07-29 that directory does not exist, `read_dir` returned
+    // ENOENT, and the sysroot silently did not get assembled — which does NOT fail the
+    // link outright as the doc comment above promises.  It drops `--html --threads` back
+    // to the default rustc, and the nightly-built rlib then fails to link against it
+    // with `E0514 ... compiled by an incompatible version of rustc`: an error naming the
+    // wrong subject entirely, two steps from its cause.
+    let deps = dep_search_dirs(profile_dir);
     // Candidate roots, in order.  #619: the derived one is the DEV layout
     // (`<target-dir>/<triple>/release` -> `<target-dir>/sysroot`) and stays
     // first so a repo build is unchanged.  In an INSTALLED layout the same
@@ -531,7 +538,7 @@ fn user_cache_sysroot_dir() -> std::path::PathBuf {
 ///
 /// Copies only what is missing or has changed size, so repeat builds are cheap.
 fn assemble_atomics_sysroot(
-    deps: &std::path::Path,
+    dep_dirs: &[std::path::PathBuf],
     sysroot: &std::path::Path,
 ) -> std::io::Result<()> {
     let lib_dir = sysroot
@@ -540,28 +547,49 @@ fn assemble_atomics_sysroot(
         .join("wasm32-unknown-unknown")
         .join("lib");
     std::fs::create_dir_all(&lib_dir)?;
-    for entry in std::fs::read_dir(deps)?.flatten() {
-        let src = entry.path();
-        if src.extension().is_none_or(|e| e != "rlib") {
-            continue;
-        }
-        let Some(name) = src.file_name() else {
+    let mut read_any = false;
+    for deps in dep_dirs {
+        let Ok(entries) = std::fs::read_dir(deps) else {
             continue;
         };
-        // loft's own rlibs stay out: the link names them with `--extern` and
-        // `-L dependency=`, and a third copy on the sysroot search path is how
-        // rustc ends up reporting multiple candidates for one crate.
-        if name.to_string_lossy().starts_with("libloft") {
-            continue;
+        read_any = true;
+        for entry in entries.flatten() {
+            let src = entry.path();
+            if src.extension().is_none_or(|e| e != "rlib") {
+                continue;
+            }
+            let Some(name) = src.file_name() else {
+                continue;
+            };
+            // loft's own rlibs stay out: the link names them with `--extern` and
+            // `-L dependency=`, and a third copy on the sysroot search path is how
+            // rustc ends up reporting multiple candidates for one crate.
+            if name.to_string_lossy().starts_with("libloft") {
+                continue;
+            }
+            let dst = lib_dir.join(name);
+            let same = std::fs::metadata(&dst)
+                .ok()
+                .zip(entry.metadata().ok())
+                .is_some_and(|(a, b)| a.len() == b.len());
+            if !same {
+                std::fs::copy(&src, &dst)?;
+            }
         }
-        let dst = lib_dir.join(name);
-        let same = std::fs::metadata(&dst)
-            .ok()
-            .zip(entry.metadata().ok())
-            .is_some_and(|(a, b)| a.len() == b.len());
-        if !same {
-            std::fs::copy(&src, &dst)?;
-        }
+    }
+    if !read_any {
+        // Loud, and naming the first place looked in: an unassembled sysroot degrades
+        // the link to the default rustc rather than failing there, so a silent Ok here
+        // surfaces later as someone else's error.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "no readable dependency directory for the atomics std (looked in {})",
+                dep_dirs
+                    .first()
+                    .map_or_else(|| "nowhere".to_string(), |d| d.display().to_string())
+            ),
+        ));
     }
     Ok(())
 }
@@ -2229,6 +2257,41 @@ mod dep_search_dirs_tests {
             !dirs.iter().any(|d| d.to_string_lossy().contains("somelib")),
             "a source-only out dir must not be searched: {dirs:?}"
         );
+    }
+
+    /// The atomics sysroot is assembled from the SAME dep dirs, and its failure mode is
+    /// what made the browser gate unreadable: an unassembled sysroot does not fail the
+    /// link, it drops `--html --threads` to the default rustc, which then cannot link
+    /// the nightly-built rlib and reports `E0514` — an error naming the wrong subject,
+    /// two steps from its cause.  So "no readable dep dir" must stay LOUD.
+    #[test]
+    fn the_sysroot_assembles_from_every_dep_dir_and_fails_loudly_with_none() {
+        let root = scratch("sysroot");
+        let out = root.join("out");
+
+        // Per-unit layout: two crates, two directories.
+        let a = root.join("build/core/h1/out");
+        let b = root.join("build/alloc/h2/out");
+        touch(&a.join("libcore-h1.rlib"));
+        touch(&b.join("liballoc-h2.rlib"));
+        // loft's own rlib is deliberately excluded — a third copy on the sysroot search
+        // path is how rustc ends up reporting multiple candidates for one crate.
+        touch(&b.join("libloft.rlib"));
+
+        super::assemble_atomics_sysroot(&[a, b], &out).expect("assembles from both dirs");
+        let lib = out.join("lib/rustlib/wasm32-unknown-unknown/lib");
+        assert!(lib.join("libcore-h1.rlib").is_file());
+        assert!(lib.join("liballoc-h2.rlib").is_file());
+        assert!(
+            !lib.join("libloft.rlib").exists(),
+            "loft's own rlib must not reach the sysroot"
+        );
+
+        // Nothing readable: an error, never a silent Ok.
+        let err =
+            super::assemble_atomics_sysroot(&[root.join("does-not-exist")], &root.join("out2"))
+                .expect_err("an unassembled sysroot must not report success");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
     }
 
     /// Neither layout present: name the classic path anyway, so the failure diagnostic

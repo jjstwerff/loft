@@ -8046,9 +8046,11 @@ fn main() {
         {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-            let deps = lib_dir.join("deps");
-            cmd.arg("-L").arg(format!("dependency={}", deps.display()));
-            Some(deps)
+            let search = native_utils::dep_search_dirs(&lib_dir);
+            for d in &search {
+                cmd.arg("-L").arg(format!("dependency={}", d.display()));
+            }
+            search.first().cloned()
         } else {
             None
         };
@@ -8213,8 +8215,9 @@ fn main() {
         if let Some(lib_dir) = html_runtime_dir.clone() {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-            let deps = lib_dir.join("deps");
-            cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+            for d in native_utils::dep_search_dirs(&lib_dir) {
+                cmd.arg("-L").arg(format!("dependency={}", d.display()));
+            }
             // W1.1 env fix: libloft.rlib depends on wasm-bindgen, which pulls
             // in the proc-macro crate wasm_bindgen_macro.  Proc-macros are
             // always built for the host (never for wasm32), so rustc needs
@@ -8224,10 +8227,10 @@ fn main() {
             // and subsequent errors cascade (every `use loft::...` fails,
             // so `cr_call_push` is reported unfound as a collateral).
             if let Some(host_lib_dir) = loft_lib_dir_for(None) {
-                let host_deps = deps_dir_of(&host_lib_dir);
-                if host_deps.exists() {
-                    cmd.arg("-L")
-                        .arg(format!("dependency={}", host_deps.display()));
+                for d in native_utils::dep_search_dirs(&host_lib_dir) {
+                    if d.is_dir() {
+                        cmd.arg("-L").arg(format!("dependency={}", d.display()));
+                    }
                 }
             }
         }
@@ -8366,18 +8369,16 @@ fn main() {
                 build
                     .arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-                let deps = lib_dir.join("deps");
-                if deps.is_dir() {
-                    build
-                        .arg("-L")
-                        .arg(format!("dependency={}", deps.display()));
+                for d in native_utils::dep_search_dirs(lib_dir) {
+                    if d.is_dir() {
+                        build.arg("-L").arg(format!("dependency={}", d.display()));
+                    }
                 }
                 if let Some(host_lib_dir) = loft_lib_dir_for(None) {
-                    let host_deps = deps_dir_of(&host_lib_dir);
-                    if host_deps.exists() {
-                        build
-                            .arg("-L")
-                            .arg(format!("dependency={}", host_deps.display()));
+                    for d in native_utils::dep_search_dirs(&host_lib_dir) {
+                        if d.is_dir() {
+                            build.arg("-L").arg(format!("dependency={}", d.display()));
+                        }
                     }
                 }
             }
