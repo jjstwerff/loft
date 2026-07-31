@@ -616,11 +616,34 @@ ordering — the owner never publishes an empty release and then waits for binar
    macos-x64, macos-arm64, windows-msvc) and creates the GitHub release as a
    **draft** with every bundle + `.sha256` attached and notes generated.  If any
    build leg fails, no draft appears — investigate, don't ship a partial release.
+   The draft job also attaches two derived assets: `loft-<v>-src.zip` (the source
+   archive the registry entry names for the version itself) and
+   `loft-<v>-registry-entry.json`.
 3. **Review, then publish.**  Open the draft: confirm the four bundles are present
    (smoke-test each per step 10), edit the title/body if wanted, then click
    **Publish**.  Only this click freezes the release — by which point the binaries
    are already attached.  Publishing an existing-tag draft does not re-trigger the
    build.
+4. **Submit the registry entry.**  Take `loft-<v>-registry-entry.json` from the
+   published release, splice it into `loft-lang/registry`'s `index.json` under
+   `packages.loft`, and re-sign (`scripts/registry-sign.sh`).  This is what makes
+   the release reachable by `loft self-update`, and it is the *only* step that puts
+   the binaries under a signature: the `.zip.sha256` sidecars travel over the same
+   transport as the zips, so they catch a corrupted download, not a substituted one.
+   The signed index is the root; everything below hangs off its hashes:
+
+   ```
+   index.json                     ← the ONE signature (Ed25519, src/registry_keys.rs)
+    └ version.sha256              → loft-<v>-src.zip
+    └ binaries[triple].sha256     → loft-<v>-<triple>.zip
+        └ SHA256SUMS  (in bundle) → every file in the bundle
+            └ stdlib.manifest     → each default/*.loft
+   ```
+
+   Do not hand-edit the hashes.  The entry is generated from the artifacts of the
+   run that built them, so it cannot drift; retyping it reintroduces exactly the
+   failure a signature cannot catch — an index that is correctly signed and names
+   the wrong bytes.
 
 **Never** create-and-publish a release in one step (the pre-2026.7 flow):
 publishing creates the tag and freezes the release before the binaries are built,

@@ -69,3 +69,97 @@ fn file_url_fetches_local_index() {
     let idx = registry_index::parse_index(text).expect("re-parse");
     assert!(idx.packages.contains_key("test_alpha"));
 }
+
+// ── The toolchain entry (@PLN78 1b) ───────────────────────────────
+//
+// `scripts/gen-toolchain-entry.py` produces the registry entry that makes the
+// toolchain installable and self-updatable.  That entry is written once by a script
+// and then SIGNED, so a shape mistake in it is discovered at the user, after the
+// signature has already attested to it.  These tests close that gap by running the
+// generator and putting its output through the real parser and the real planner —
+// the two things that will consume it in production.
+
+/// Build a directory of stand-in release artifacts and run the generator over it.
+/// The bytes are arbitrary; what is under test is the entry's shape, and a real
+/// 18 MB source zip would only make the test slow.
+#[cfg(unix)]
+fn generated_toolchain_entry(dir: &std::path::Path, version: &str) -> String {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(format!("loft-{version}-src.zip")), b"source").unwrap();
+    for triple in loft::self_update::PUBLISHED_TRIPLES {
+        let name = format!("loft-{version}-{triple}.zip");
+        std::fs::write(dir.join(&name), triple.as_bytes()).unwrap();
+    }
+    let out = std::process::Command::new("python3")
+        .arg(root.join("scripts/gen-toolchain-entry.py"))
+        .args(["--version", version])
+        .arg("--dir")
+        .arg(dir)
+        .args(["--published", "2026-07-31T00:00:00Z"])
+        .current_dir(&root)
+        .output()
+        .expect("run gen-toolchain-entry.py");
+    assert!(
+        out.status.success(),
+        "generator failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+#[cfg(unix)]
+fn generated_toolchain_entry_parses_and_drives_self_update() {
+    let dir = std::env::temp_dir().join("loft-toolchain-entry-parse");
+    let _ = std::fs::remove_dir_all(&dir);
+    let entry = generated_toolchain_entry(&dir, "2026.7.2");
+
+    // Splice it into an index exactly as the registry PR will.
+    let index = format!(
+        r#"{{"schema_version": 1, "updated": "2026-07-31T00:00:00Z", "packages": {}}}"#,
+        entry
+    );
+    let idx = registry_index::parse_index(&index).expect("the entry we publish must parse");
+    let pkg = idx
+        .packages
+        .get(loft::self_update::TOOLCHAIN_PKG)
+        .expect("the toolchain package must be keyed `loft`");
+    let ver = &pkg.versions["2026.7.2"];
+    assert!(
+        ver.url.ends_with("-src.zip"),
+        "version artifact is the source: {}",
+        ver.url
+    );
+    assert_eq!(ver.size, 6, "size must be the source zip's real size");
+    assert_eq!(
+        ver.binaries.len(),
+        loft::self_update::PUBLISHED_TRIPLES.len(),
+        "every published triple must reach the entry"
+    );
+    for bin in ver.binaries.values() {
+        // A cdylib ABI fingerprint on a toolchain bundle would be compared by
+        // `loft install` and mean nothing; its absence is load-bearing.
+        assert!(
+            bin.loft_ffi_fp.is_none(),
+            "toolchain binaries carry no loft_ffi_fp"
+        );
+    }
+
+    // The planner must act on it: a newer release, built for this host.
+    let host = loft::self_update::PUBLISHED_TRIPLES[0];
+    match loft::self_update::plan(&idx, "2026.7.1", host) {
+        loft::self_update::Plan::Available { to, url, .. } => {
+            assert_eq!(to, "2026.7.2");
+            assert!(url.contains(host), "must offer THIS host's bundle: {url}");
+        }
+        other => panic!("expected an available update, got {other:?}"),
+    }
+
+    // Non-vacuity: the same index must NOT claim a build for a triple we never publish.
+    match loft::self_update::plan(&idx, "2026.7.1", "riscv64-unknown-linux-gnu") {
+        loft::self_update::Plan::NoBuildForTarget { .. } => {}
+        other => panic!("an unpublished triple must be reported, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

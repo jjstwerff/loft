@@ -487,6 +487,27 @@ fn resolve_recursive(
         // check that the existing pin satisfies the new constraint.
         return Ok(());
     }
+    // @PLN78 — the toolchain is in the registry so it can be found and updated, not so
+    // it can be installed as a dependency.  Both differ from a library in the same way:
+    // `install` unpacks a source tree into the package cache for `use` to resolve
+    // against, while the toolchain is the program doing the resolving, and replacing it
+    // is `self-update`'s job (atomic rename, a running binary, `verify-self` afterwards).
+    //
+    // The guard sits here rather than in `install_one` because this is the one point
+    // every route passes: the direct ask, a `deps` entry, and the parser's auto-install
+    // fallback for `use loft;`.  Without it each arrives at the same confusing end —
+    // downloading a source zip and failing to untar it as a library.
+    if name == crate::self_update::TOOLCHAIN_PKG {
+        return Err(if graph.is_empty() {
+            "`loft` is the toolchain, not a library.  To update it: loft self-update".to_string()
+        } else {
+            format!(
+                "`{}` depends on `loft`, which is the toolchain rather than a library.  \
+                 A package states the loft it needs with `loft = \"...\"` under `[package]`.",
+                graph.last().map_or("a package", |r| r.name.as_str())
+            )
+        });
+    }
     let pkg = index
         .packages
         .get(name)
@@ -588,7 +609,12 @@ pub fn auto_install_if_in_catalog(
     // committing to a network fetch for the tarball.  load_index
     // honours `opts.offline` — if true, only uses cached index.
     let index = load_index(opts)?;
-    if !index.packages.contains_key(name) {
+    // The toolchain is in the index but is not a library, so it is not something a bare
+    // `use` should ever pull in.  Falling through (rather than erroring) is what keeps
+    // publishing the entry from changing the meaning of an existing program: before the
+    // entry existed `use loft;` was a miss here and went on to the parser's remaining
+    // resolution strategies, and it still does.
+    if name == crate::self_update::TOOLCHAIN_PKG || !index.packages.contains_key(name) {
         return Ok(None);
     }
     eprintln!("[registry] resolving {name} from registry");
@@ -922,5 +948,55 @@ mod tests {
         assert!(prebuilt_status(host, &other, false).contains("available: aarch64-apple-darwin"));
         let same = vec![host.to_string()];
         assert!(prebuilt_status(host, &same, false).contains("different loft-ffi"));
+    }
+
+    /// @PLN78 — the toolchain lives in the registry so it can be found and updated,
+    /// which makes `install` a route it must not travel.  Checked at the resolver
+    /// rather than the CLI because a `deps` entry and the parser's `use` fallback
+    /// reach it without going through the CLI at all.
+    #[test]
+    fn the_toolchain_is_not_installable_as_a_package() {
+        let index = crate::registry_index::parse_index(
+            r#"{"schema_version": 1, "updated": "2026-07-31T00:00:00Z", "packages": {
+                 "loft": {"description": "toolchain", "categories": [], "yanked": [],
+                   "versions": {"2026.7.2": {"url": "u", "sha256": "s", "size": 1,
+                     "loft": ">=0", "published": "2026-07-31T00:00:00Z"}}},
+                 "widget": {"description": "a library", "categories": [], "yanked": [],
+                   "versions": {"0.1.0": {"url": "u", "sha256": "s", "size": 1,
+                     "loft": ">=0", "published": "2026-07-31T00:00:00Z",
+                     "deps": {"loft": "*"}}}}}}"#,
+        )
+        .expect("fixture index parses");
+        let opts = InstallOptions::default();
+        let held = std::collections::BTreeMap::new();
+
+        // Asked for directly: name the command that DOES update loft.
+        let mut graph = Vec::new();
+        let err = resolve_recursive(&index, "loft", None, &opts, &held, &mut graph)
+            .expect_err("`loft install loft` must not resolve");
+        assert!(err.contains("self-update"), "must route the user: {err}");
+
+        // Reached as a dependency: name the package that declared it, since the user
+        // did not ask for `loft` and cannot otherwise tell where it came from.
+        let mut graph = Vec::new();
+        let err = resolve_recursive(&index, "widget", None, &opts, &held, &mut graph)
+            .expect_err("a dependency on the toolchain must not resolve");
+        assert!(
+            err.contains("widget"),
+            "must name the depending package: {err}"
+        );
+
+        // Non-vacuity: an ordinary library still resolves through the same call.
+        let mut graph = Vec::new();
+        let index_no_dep = crate::registry_index::parse_index(
+            r#"{"schema_version": 1, "updated": "2026-07-31T00:00:00Z", "packages": {
+                 "widget": {"description": "a library", "categories": [], "yanked": [],
+                   "versions": {"0.1.0": {"url": "u", "sha256": "s", "size": 1,
+                     "loft": ">=0", "published": "2026-07-31T00:00:00Z"}}}}}"#,
+        )
+        .unwrap();
+        resolve_recursive(&index_no_dep, "widget", None, &opts, &held, &mut graph)
+            .expect("an ordinary package must still resolve");
+        assert_eq!(graph.len(), 1);
     }
 }

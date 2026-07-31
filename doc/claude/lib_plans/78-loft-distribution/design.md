@@ -133,18 +133,39 @@ a clean index skips nothing (the control — a parser that skipped *everything*
 would also pass the first), and a structurally broken index is still refused.
 
 **Step 1b — publish the toolchain entry (owner action, cross-repo).**
-Now inert, because step 1 shipped first.  Add `loft` to `loft-lang/registry`'s
-`index.json` with one `BinaryEntry` per target triple, sha256s from the
-`.zip.sha256` sidecars `make-release.sh` already emits, then re-sign.  Two things
-the probe pinned that this must respect: `Version` requires `url` / `sha256` /
-`size` / `loft` / `published`, none of which a per-target toolchain has a natural
-single value for — so decide what artifact the version-level fields name (the
-release's source archive is the only candidate that keeps a toolchain entry
-semantically identical to a package: source, plus prebuilt binaries per target) —
-and `loft_ffi_fp` must be ABSENT, since it gates cdylib ABI compatibility and
-means nothing for the toolchain.
-*Verify:* an OLD loft still resolves packages from the new index (it will skip the
-toolchain entry if it cannot read it, which is what step 1 bought).
+Our-side work DONE 2026-07-31; what remains is the cross-repo submit + signature.
+
+The open question was what artifact the version-level `url` / `sha256` / `size`
+name, since a release is four per-target zips and none of them is "the release".
+Answered by adding a fifth: `make-release.sh --source` emits
+`loft-<v>-src.zip` via `git archive`, so a toolchain entry means exactly what a
+package entry means — source, plus prebuilt binaries per target.  `git archive`
+rather than a hand-rolled zip because it reads the object database, making the
+bytes reproducible from the commit on any runner; and rather than GitHub's
+auto-generated source tarballs, which are not guaranteed byte-stable and so cannot
+carry a sha256 we publish.
+
+The entry itself is **derived, not written**: `scripts/gen-toolchain-entry.py`
+hashes the artifacts of the run that produced them, and `release.yml` attaches the
+result to the draft.  A hand-copied entry is correct exactly once — the next
+release changes four hashes, four URLs, a size and a date, and the failure mode of
+getting it wrong is the worst kind available here: a *signed* index attesting to
+last release's hashes, which fails at the user, far from the mistake.  The script
+reads its target triples from `self_update::PUBLISHED_TRIPLES` rather than
+restating them, and exits non-zero on a missing artifact rather than emitting an
+entry that quietly omits a platform.  `loft_ffi_fp` is absent, as the probe
+required.
+
+*Verified:* `generated_toolchain_entry_parses_and_drives_self_update`
+(`tests/mock_registry.rs`) runs the generator and puts its output through the real
+`parse_index` and the real `self_update::plan` — the two things that consume it in
+production — asserting an `Available` update for a published triple and
+`NoBuildForTarget` for one we do not publish.  Shown non-vacuous by breaking the
+generator's `published` field: the entry is then skipped and the test fails.  That
+failure also confirms the step-1 property this depends on — a malformed toolchain
+entry costs the *package*, not the index.
+
+*Remaining (owner):* submit the generated entry to `loft-lang/registry` and re-sign.
 
 **Step 2 — `loft verify-self` (read-only).**  DONE 2026-07-31, local half.
 
@@ -367,7 +388,7 @@ Enumerated because writing them down is what surfaced the handoff design above.
 | Replacement interrupted | unusable installation | rename-based swap; a crash leaves old or new, never partial |
 | Downgrade attack (index pinned to an old version) | user silently kept on a vulnerable release | step 5: the advisory feed is consulted against the RUNNING version, not only the candidate |
 | `install.sh` served tampered | pinned hash is wrong too | irreducible for bootstrap; mitigated by the script being short, public-git-hosted, and readable, and by `verify-self` re-checking against the signed index immediately after |
-| Toolchain entry mistaken for a library | `loft install loft` does something odd | decide explicitly at step 1 whether the entry is installable as a package; the safe default is that `self-update` owns it and `install` refuses it |
+| Toolchain entry mistaken for a library | `loft install loft` does something odd | DECIDED 2026-07-31: `self-update` owns the toolchain, `install` refuses it.  The refusal sits in `resolve_recursive`, the one point the direct ask, a `deps` entry and the parser's `use` fallback all pass — each otherwise ends at the same confusing place, downloading a source zip and failing to untar it as a library.  A dependency naming `loft` is told which package declared it, since the user never asked for it.  Separately, `auto_install_if_in_catalog` treats the toolchain as *absent*: before the entry existed `use loft;` was a miss that fell through to the parser's remaining strategies, and publishing a registry entry must not change what an existing program means. |
 
 ## What was probed, and what was not
 

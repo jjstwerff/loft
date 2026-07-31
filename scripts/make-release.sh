@@ -33,10 +33,34 @@ command -v zip >/dev/null || { echo "make-release: 'zip' is required" >&2; exit 
 if command -v sha256sum >/dev/null; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
 
 VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-HOST=$(rustc -vV | sed -n 's/^host: //p')
-TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOST")
 DIST="dist"
 mkdir -p "$DIST"
+
+# `--source` — emit the source archive and nothing else.
+#
+# A registry entry needs one artifact for the version ITSELF: `Version` requires
+# `url`/`sha256`/`size`, and a release is four per-target zips, none of which is "the
+# release".  The per-target binaries are the entry's `binaries` map; this is what the
+# version-level fields name — so a toolchain entry means exactly what a package entry
+# means: source, plus prebuilt binaries per target.
+#
+# `git archive` rather than a hand-rolled zip: it is byte-reproducible from the commit
+# (it reads the object database, not the working tree, so a Windows checkout produces
+# the same bytes), it cannot pick up a build artefact or a local file, and it honours
+# `export-ignore`.  A sha256 we publish has to stay true, which also rules out GitHub's
+# auto-generated source tarballs — those are not guaranteed byte-stable.
+if [ "${1:-}" = "--source" ]; then
+  name="loft-$VERSION-src"
+  rm -f "$DIST/$name.zip"
+  git archive --format=zip --prefix="loft-$VERSION/" -o "$DIST/$name.zip" HEAD
+  ( cd "$DIST" && $SHA256 "$name.zip" > "$name.zip.sha256" )
+  echo ">> $DIST/$name.zip  ($(du -h "$DIST/$name.zip" | cut -f1))"
+  exit 0
+fi
+
+HOST=$(rustc -vV | sed -n 's/^host: //p')
+TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOST")
+
 
 # stdlib manifest: a sha256 per default/*.loft plus a combined digest over those
 # lines, so a runtime / install can verify the stdlib it loads matches the release.
@@ -103,3 +127,8 @@ QS
   ( cd "$DIST" && $SHA256 "$name.zip" > "$name.zip.sha256" )
   echo ">> $DIST/$name.zip  ($(du -h "$DIST/$name.zip" | cut -f1))"
 done
+
+# @PLN78 1b — the SOURCE archive.  Emitted by `--source` (handled above, before any
+# target is built), never as a side effect of a per-target build: in CI four legs run
+# this script concurrently and all four would write the same `-src.zip`, so whichever
+# uploaded last would silently win.  One producer, one artifact.
