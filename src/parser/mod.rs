@@ -7351,12 +7351,15 @@ impl Parser {
                     );
                     continue;
                 }
-                if let Type::Vector(content, _) = &tp {
-                    assert_eq!(
-                        default,
-                        Value::Null,
-                        "Expect a null default on database references"
-                    );
+                // The three heap arms below allocate a caller-side BUFFER for a slot that
+                // has no value of its own — a compiler-inserted return slot, or a
+                // parameter left to fill.  A slot with a user `= …` default has a value,
+                // so it takes the general path instead; before loft#699 these arms ran
+                // for it too and asserted the default away.
+                let no_default = default == Value::Null;
+                if let Type::Vector(content, _) = &tp
+                    && no_default
+                {
                     // #306: the attr's dep list is callee-internal (attr
                     // indices); inherited verbatim it reads as CALLER var
                     // numbers and mislabels the fresh buffer a borrow.
@@ -7371,19 +7374,18 @@ impl Parser {
                     self.data.vector_def(&mut self.lexer, content);
                     all_types[a_nr] = Type::Vector(content.clone(), Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
-                } else if let Type::Reference(content, _) = tp {
-                    assert_eq!(
-                        default,
-                        Value::Null,
-                        "Expect a null default on database references"
-                    );
+                } else if let Type::Reference(content, _) = tp
+                    && no_default
+                {
                     // #306: strip the callee-internal dep list (see Vector arm).
                     let buf_tp = Type::Reference(content, Deps::none());
                     let vr = self.vars.work_refs(&buf_tp, &mut self.lexer);
                     self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Reference(content, Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
-                } else if let Type::Enum(content, true, _) = tp {
+                } else if let Type::Enum(content, true, _) = tp
+                    && no_default
+                {
                     // @P301 — struct-enums are heap records like
                     // Reference/Vector, so a struct-enum return-slot
                     // promoted to a hidden caller arg by `ref_return`
@@ -7393,11 +7395,6 @@ impl Parser {
                     // (E0308: expected DbRef, found ()).  Mirrors the
                     // Reference arm above, keeping the struct-enum
                     // discriminator in the result type.
-                    assert_eq!(
-                        default,
-                        Value::Null,
-                        "Expect a null default on database references"
-                    );
                     // #306: strip the callee-internal dep list (see Vector arm).
                     let buf_tp = Type::Enum(content, true, Deps::none());
                     let vr = self.vars.work_refs(&buf_tp, &mut self.lexer);
@@ -7464,9 +7461,31 @@ impl Parser {
                     // the callee's (which wouldn't resolve at the call
                     // site).  Only parameters 0..a_nr are earlier; no
                     // recursion into the current or later default.
-                    let substituted = Self::substitute_param_refs(default, &actual[..a_nr]);
-                    actual[a_nr] = substituted;
+                    let mut substituted = Self::substitute_param_refs(default, &actual[..a_nr]);
                     all_types[a_nr] = tp.clone();
+                    // loft#699 — a default that CALLS something (the function a default
+                    // needing a temporary is lowered into, or a plain `= mk()`) is stored
+                    // with its user arguments only.  A call returning a heap value also
+                    // takes a caller-allocated return buffer, and "caller" is THIS frame,
+                    // not the signature the default was written in — so the hidden slots
+                    // are filled here, once per call site, exactly as `object_init` fills
+                    // them for a field default.  Left unfilled the call reached codegen a
+                    // parameter short and tripped its arity assert.  The buffer is what
+                    // gives the value a home, so its type is what this argument IS.
+                    if let Value::Call(d, args) = &substituted
+                        && args.len() < self.data.attributes(*d)
+                    {
+                        let (d, mut inner) = (*d, args.clone());
+                        let mut inner_types = vec![Type::Unknown(0); inner.len()];
+                        self.add_defaults(d, &mut inner, &mut inner_types);
+                        if let Some(buf) = inner_types.get(args.len())
+                            && !buf.is_unknown()
+                        {
+                            all_types[a_nr] = buf.clone();
+                        }
+                        substituted = Value::Call(d, inner);
+                    }
+                    actual[a_nr] = substituted;
                 }
             }
         }
@@ -7476,32 +7495,23 @@ impl Parser {
     /// a default-expression tree.  Used by `parse_arguments` to rewrite
     /// internally-allocated slot numbers into stable argument indices
     /// before the default is stored on the function definition.
-    pub(crate) fn remap_var_nr(val: Value, from: u16, to: u16) -> Value {
-        match val {
-            Value::Var(n) if n == from => Value::Var(to),
-            Value::Call(op, xs) => Value::Call(
-                op,
-                xs.into_iter()
-                    .map(|x| Self::remap_var_nr(x, from, to))
-                    .collect(),
-            ),
-            Value::CallRef(op, xs) => Value::CallRef(
-                op,
-                xs.into_iter()
-                    .map(|x| Self::remap_var_nr(x, from, to))
-                    .collect(),
-            ),
-            Value::Set(v, inner) => {
-                let v = if v == from { to } else { v };
-                Value::Set(v, Box::new(Self::remap_var_nr(*inner, from, to)))
+    ///
+    /// Walks with [`visit_constant_vars`], the exhaustive walker, rather than a `match`
+    /// of its own.  The hand-written one silently returned any shape it did not list
+    /// UNCHANGED, and `Span` was one of them — so on the second pass, where the parser
+    /// records positions, `b: integer = a + c` kept the CALLEE's raw slot numbers and
+    /// the two passes disagreed about what the default names (loft#699).  A walker that
+    /// reports refusal instead of guessing cannot develop that hole again: a shape it
+    /// cannot rewrite leaves foreign indices in place, which
+    /// `default_replayable_in_place` then reads as "not replayable" and lowers into a
+    /// function of its own.
+    pub(crate) fn remap_var_nr(mut val: Value, from: u16, to: u16) -> Value {
+        crate::parser::definitions::visit_constant_vars(&mut val, &mut |v| {
+            if *v == from {
+                *v = to;
             }
-            Value::Insert(ops) => Value::Insert(
-                ops.into_iter()
-                    .map(|x| Self::remap_var_nr(x, from, to))
-                    .collect(),
-            ),
-            other => other,
-        }
+        });
+        val
     }
 
     /// replace `Value::Var(i)` for `i < args.len()` with `args[i]`

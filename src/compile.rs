@@ -177,43 +177,39 @@ fn build_const_vectors(
             rec: 1,
             pos: 8,
         };
-        for val in &values {
+        for element in &values {
             let rec = state.database.record_new(&vec_ref, vec_tp, 0);
-            match val {
-                Value::Int(v) => {
-                    state
-                        .database
-                        .store_mut(&rec)
-                        .set_int(rec.rec, rec.pos, i64::from(*v));
+            for (offset, val) in element {
+                // Each field at ITS OWN offset within the element — a scalar element has
+                // one write at 0, a struct element one per field (loft#702).
+                let at = rec.pos + offset;
+                match val {
+                    Value::Int(v) => {
+                        state
+                            .database
+                            .store_mut(&rec)
+                            .set_int(rec.rec, at, i64::from(*v));
+                    }
+                    Value::Float(v) => {
+                        state.database.store_mut(&rec).set_float(rec.rec, at, *v);
+                    }
+                    Value::Single(v) => {
+                        state.database.store_mut(&rec).set_single(rec.rec, at, *v);
+                    }
+                    Value::Long(v) => {
+                        state.database.store_mut(&rec).set_long(rec.rec, at, *v);
+                    }
+                    Value::Text(v) => {
+                        // Mirror the runtime OpSetText path (src/fill.rs::set_text):
+                        // store the string in the same store as the vector record
+                        // via set_str(), then write the returned record number
+                        // into the text field as an int pointer.
+                        let store = state.database.store_mut(&rec);
+                        let s_pos = store.set_str(v);
+                        store.set_u32_raw(rec.rec, at, s_pos);
+                    }
+                    _ => {}
                 }
-                Value::Float(v) => {
-                    state
-                        .database
-                        .store_mut(&rec)
-                        .set_float(rec.rec, rec.pos, *v);
-                }
-                Value::Single(v) => {
-                    state
-                        .database
-                        .store_mut(&rec)
-                        .set_single(rec.rec, rec.pos, *v);
-                }
-                Value::Long(v) => {
-                    state
-                        .database
-                        .store_mut(&rec)
-                        .set_long(rec.rec, rec.pos, *v);
-                }
-                Value::Text(v) => {
-                    // Mirror the runtime OpSetText path (src/fill.rs::set_text):
-                    // store the string in the same store as the vector record
-                    // via set_str(), then write the returned record number
-                    // into the text field as an int pointer.
-                    let store = state.database.store_mut(&rec);
-                    let s_pos = store.set_str(v);
-                    store.set_u32_raw(rec.rec, rec.pos, s_pos);
-                }
-                _ => {}
             }
             state.database.record_finish(&vec_ref, &rec, vec_tp, 0);
         }
@@ -228,29 +224,57 @@ fn build_const_vectors(
     }
 }
 
-/// Walk the Block IR for a vector constant and extract the literal values.
-/// Returns an empty Vec if the IR contains non-literal expressions.
-/// Public wrapper for reuse by native codegen's init-emission.
-pub fn extract_literal_values_public(code: &Value, data: &Data) -> Vec<Value> {
+/// One ELEMENT of a vector constant: each literal field write it makes, as
+/// `(byte offset within the element, value)`.
+///
+/// loft#702 — a scalar element makes exactly one write at offset 0, which is why a flat
+/// list of values read as "one value per element" for as long as constants held only
+/// scalars.  A struct element makes one per FIELD, so `[It { a: 3, b: 4 }]` looked like
+/// TWO elements: the vector reported length 2, `b` reappeared as the next element's `a`,
+/// and every second field read 0.  Keeping the offset is what tells the two apart.
+pub type ConstElement = Vec<(u32, Value)>;
+
+/// Walk the Block IR for a vector constant and extract its elements, each with the
+/// literal field writes that fill it.
+///
+/// Returns an empty Vec when the initialiser holds anything the const store cannot
+/// pre-build — a non-literal field, or an element the writes do not describe at all
+/// (a nested vector row lives in a store of its own).  Both writers — the interpreter's
+/// `build_const_vectors` and native codegen's `emit_const_vectors` — read THIS, so the
+/// two agree on what a constant contains by construction rather than by review.
+pub fn extract_literal_values_public(code: &Value, data: &Data) -> Vec<ConstElement> {
     extract_literal_values(IrNode::Native(code), data)
 }
 
-fn extract_literal_values(code: IrNode, data: &Data) -> Vec<Value> {
+fn extract_literal_values(code: IrNode, data: &Data) -> Vec<ConstElement> {
     if code.kind() != ValueType::Block {
         return vec![];
     }
     let block = code.as_block();
-    let mut values = Vec::new();
-    // Look for patterns: Call(OpSetInt/Float/Single/Text, [_, Int(0), literal_value])
+    let mut elements: Vec<ConstElement> = Vec::new();
+    // `OpNewRecord` opens an element and `OpFinishRecord` closes it; the field writes
+    // between them belong to that element.  A vector literal emits this shape for a
+    // scalar element type as well, so there is one rule, not two.
+    let new_record_nr = data.def_nr("OpNewRecord");
     let set_int_nr = data.def_nr("OpSetInt");
     let set_float_nr = data.def_nr("OpSetFloat");
     let set_single_nr = data.def_nr("OpSetSingle");
     let set_text_nr = data.def_nr("OpSetText");
     for op in block.operators().iter() {
+        // A `Set(elm, OpNewRecord(…))` wraps the call, so look through the assignment.
+        let op = if op.kind() == ValueType::Set {
+            op.set_inner()
+        } else {
+            op
+        };
         if op.kind() != ValueType::Call {
             continue;
         }
         let fn_nr = op.call_to();
+        if fn_nr == new_record_nr {
+            elements.push(Vec::new());
+            continue;
+        }
         let args = op.call_args();
         if args.len() < 3 {
             continue;
@@ -260,6 +284,12 @@ fn extract_literal_values(code: IrNode, data: &Data) -> Vec<Value> {
             || fn_nr == set_single_nr
             || fn_nr == set_text_nr
         {
+            let ValueType::Int = args.get(1).kind() else {
+                return vec![]; // computed offset — can't pre-build
+            };
+            let Value::Int(offset) = args.get(1).to_owned_value() else {
+                return vec![];
+            };
             let v = args.get(2);
             match v.kind() {
                 ValueType::Int
@@ -267,13 +297,25 @@ fn extract_literal_values(code: IrNode, data: &Data) -> Vec<Value> {
                 | ValueType::Single
                 | ValueType::Long
                 | ValueType::Text => {
-                    values.push(v.to_owned_value());
+                    // A write with no element open belongs to no element — the shape is
+                    // not the one this builder understands, so pre-build nothing rather
+                    // than guess where the bytes go.
+                    let Some(current) = elements.last_mut() else {
+                        return vec![];
+                    };
+                    current.push((offset as u32, v.to_owned_value()));
                 }
                 _ => return vec![], // non-literal value — can't pre-build
             }
         }
     }
-    values
+    // An element none of the writes describe (a nested vector row, whose contents live in
+    // a store of its own) would be pre-built EMPTY and read back empty.  Refuse the whole
+    // constant instead, so it keeps whatever the non-const path gives it.
+    if elements.iter().any(Vec::is_empty) {
+        return vec![];
+    }
+    elements
 }
 
 /// PKG.1: For each `#native "symbol"` declaration, register a stub function

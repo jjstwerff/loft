@@ -247,6 +247,15 @@ pub struct Function {
     // use the shared `work_ref` counter: that would shift the counter relative to
     // the first pass and break `ref_return`'s name-based attr matching.
     work_vdb: u16,
+    /// loft#703 — separate counter for the work-ref a KEYED collection literal in value
+    /// position builds into.  Its own namespace for two reasons: `__ref_N` is reserved
+    /// for return buffers, whose name-based `ref_return` match a shared counter would
+    /// shift; and `__vdb_N` means "a WRAPPER record holding a vector field", which
+    /// `store_confinement` reads as "some other local backs this store, confine both to
+    /// that local's block".  A keyed collection has no wrapper — the accumulator IS the
+    /// value — so the only local depending on it is an ELEMENT inside it, and confining
+    /// the store to the element's block left the block's own result unfreed.
+    work_kvb: u16,
     // Work variables for texts
     work_texts: BTreeSet<u16>,
     // Work variables for stores
@@ -361,6 +370,7 @@ impl Function {
             work_text_p2: 0,
             work_ref: 0,
             work_vdb: 0,
+            work_kvb: 0,
             variables: Vec::new(),
             annotated: HashSet::new(),
             work_texts: BTreeSet::new(),
@@ -506,6 +516,7 @@ impl Function {
         self.work_text_p2 = 0;
         self.work_ref = 0;
         self.work_vdb = 0;
+        self.work_kvb = 0;
         self.work_texts.clear();
         self.work_refs.clear();
         self.arm_consumed.clear();
@@ -547,6 +558,7 @@ impl Function {
             work_text_p2: 0,
             work_ref: 0,
             work_vdb: 0,
+            work_kvb: 0,
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
             inline_ref_vars: other.inline_ref_vars.clone(),
@@ -1963,12 +1975,13 @@ impl Function {
         fn index(name: &str, prefix: &str) -> Option<u16> {
             name.strip_prefix(prefix)?.parse::<u16>().ok()
         }
-        let (mut text, mut ctext, mut p2, mut refs, mut vdb) = (
+        let (mut text, mut ctext, mut p2, mut refs, mut vdb, mut kvb) = (
             self.work_text,
             self.work_ctext,
             self.work_text_p2,
             self.work_ref,
             self.work_vdb,
+            self.work_kvb,
         );
         for name in self.names.keys() {
             if let Some(k) = index(name, "__work_") {
@@ -1986,12 +1999,16 @@ impl Function {
             if let Some(k) = index(name, "__vdb_") {
                 vdb = vdb.max(k);
             }
+            if let Some(k) = index(name, "__kvb_") {
+                kvb = kvb.max(k);
+            }
         }
         self.work_text = text;
         self.work_ctext = ctext;
         self.work_text_p2 = p2;
         self.work_ref = refs;
         self.work_vdb = vdb;
+        self.work_kvb = kvb;
     }
     #[track_caller]
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
@@ -2103,6 +2120,24 @@ impl Function {
     /// Using a distinct counter prevents the name-shift that would cause
     /// `ref_return` to fail its name-based attr match and add a spurious attr.
     /// These variables are inserted into `work_refs` so they receive null-inits.
+    /// loft#703 — a function-scoped work-ref that OWNS a keyed collection's store, for a
+    /// keyed literal standing in VALUE position (a return, a call argument).  See the
+    /// `work_kvb` field for why it is neither a `__ref_N` nor a `__vdb_N`.
+    #[track_caller]
+    pub fn work_keyed(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
+        let n = format!("__kvb_{}", self.work_kvb + 1);
+        self.work_kvb += 1;
+        let v = if let Some(nr) = self.names.get(&n) {
+            let nr = *nr;
+            self.set_type(nr, tp.clone());
+            nr
+        } else {
+            self.add_variable(&n, tp, lexer)
+        };
+        self.work_refs.insert(v);
+        v
+    }
+
     #[track_caller]
     pub fn work_vec_db(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
         let n = format!("__vdb_{}", self.work_vdb + 1);

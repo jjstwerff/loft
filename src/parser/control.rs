@@ -646,7 +646,10 @@ impl Parser {
             // the explicit-`return []` type-threading (@P365). The fresh-vector-in-arm double
             // `OpFreeRef` this exposes is PRE-EXISTING (a non-empty `{ [7,8,9] }` arm has it too)
             // and POISON-idempotent — not introduced here.
-            if self.enum_context(result) || matches!(result, Type::Vector(_, _)) {
+            // loft#703 — a KEYED result threads for the same reason: `[K { … }]` infers
+            // `vector<K>` wherever it stands, so a keyed tail has no other way to say
+            // which container to build.
+            if self.enum_context(result) || crate::parser::vectors::is_collection(result) {
                 self.expected = result.clone();
             }
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
@@ -2791,6 +2794,17 @@ impl Parser {
         // `o = []` (pass-gated: empty on pass 1, the OpDatabase alloc on pass 2 — exactly
         // as a user-written `o: vector = []` lowers), then `o += <binding>`, then yield o.
         let mut ops = self.vector_db(&v_type, o);
+        // `o = []` is a REPLACE, and `o` becomes the caller's return buffer once
+        // `ref_return` promotes it — at which point `vector_db` above no-ops (an argument
+        // keeps the caller's store) and the append below piles this call's elements onto
+        // the LAST call's.  A two-borrowed-arm match returned 3, then 6, then 9 elements
+        // from the same subject.  It went unnoticed while some OTHER arm cleared the
+        // buffer as a side effect of its own `= []` and the clear got hoisted to entry —
+        // so the bug appeared and vanished with the shape of an unrelated arm.  Clearing
+        // here says it once, where the replace is: a no-op on a fresh store, correct on a
+        // reused one.  Same reasoning as the `= <literal>` buffer clear in
+        // `create_vector` (@PLN85 #492).
+        ops.push(self.cl("OpClearVector", &[Value::Var(o)]));
         let elem_tp = self.append_elem_tp(&elm);
         ops.push(self.cl(
             "OpAppendVector",
@@ -10927,15 +10941,17 @@ impl Parser {
             // returned from a vector-typed fn so every other return keeps the
             // existing `expression` path verbatim (for a literal, `expression`
             // already reduces to `parse_operators(Unknown)` — only the hint differs).
-            let t = if let Type::Vector(elm, _) = &r_type
-                && self.lexer.peek_token("[")
+            // loft#703 — a KEYED return type threads the same way: `return [K { … }]`
+            // infers `vector<K>` on its own, so without the hint there is no way to
+            // return a keyed collection built in place.
+            let t = if crate::parser::vectors::is_collection(&r_type) && self.lexer.peek_token("[")
             {
                 // Thread the element type but NOT the return type's dep: a
                 // vector-returning fn carries `[__ref_1]` as its dep, and
                 // inheriting that on the literal would fool the `Type::Vector`
                 // arm below (`!dep.contains(ref1_var)`) into skipping the
                 // OpAppendVector copy into __ref_1.  Element type only.
-                let hint = Type::Vector(elm.clone(), Deps::none());
+                let hint = r_type.without_deps();
                 let mut parent_tp = Type::Null;
                 self.parse_operators(&hint, &mut v, &mut parent_tp, 0)
             } else {
@@ -11537,7 +11553,7 @@ impl Parser {
                     for a in 0..self.data.attributes(hint_d_nr) {
                         if self.data.attr_name(hint_d_nr, a) == arg_name {
                             let expected = self.data.attr_type(hint_d_nr, a);
-                            if Self::seeds_vector_hint(&expected) {
+                            if Self::seeds_collection_hint(&expected) {
                                 self.expected = expected;
                             }
                             break;
@@ -11581,7 +11597,7 @@ impl Parser {
                     let expected = self.data.attr_type(hint_d_nr, arg_idx);
                     if self.enum_context(&expected) {
                         self.expected = expected;
-                    } else if Self::seeds_vector_hint(&expected) {
+                    } else if Self::seeds_collection_hint(&expected) {
                         // #432 — seed a bare vector-literal argument's element width
                         // from the parameter type, so it builds at the callee's
                         // stride instead of `vector<integer>`.  Both passes (like the
@@ -12253,6 +12269,17 @@ impl Parser {
         }
     }
 
+    /// loft#703 — may a bare `[…]` argument take its CONTAINER from this parameter type?
+    ///
+    /// `seeds_vector_hint` above answers the narrower #432 question — may the parameter
+    /// override the element WIDTH the literal already inferred.  A keyed parameter is a
+    /// different question with no trade-off in it: `[K { … }]` infers `vector<K>`, which
+    /// is not a `hash<K[k]>` at any width, so the parameter type is the only thing that
+    /// can say what to build and passing one was simply impossible without it.
+    pub(crate) fn seeds_collection_hint(expected: &Type) -> bool {
+        Self::seeds_vector_hint(expected) || crate::parser::vectors::is_keyed(expected)
+    }
+
     // <call> ::= [ <expression> { ',' <expression> } ] ')'
     pub(crate) fn parse_method(&mut self, val: &mut Value, md_nr: u32, on: Type) -> Type {
         let mut list = vec![val.clone()];
@@ -12270,7 +12297,7 @@ impl Parser {
             // matching the free-function path in `parse_call`.
             if md_nr != u32::MAX && list.len() < self.data.attributes(md_nr) {
                 let expected = self.data.attr_type(md_nr, list.len());
-                if Self::seeds_vector_hint(&expected) {
+                if Self::seeds_collection_hint(&expected) {
                     self.expected = expected;
                 }
             }

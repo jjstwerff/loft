@@ -373,8 +373,17 @@ fn ownership_classifies_the_over_free_shapes() {
     // pick_cond's RETURN is the fresh materialized store, not the join slot.
     assert_own_return(&stderr, "pick_cond", "Owned");
 
-    // match_return: borrowed enum-field arm vs empty owned arm -> Join.
-    assert_own_return(&stderr, "deliver", "Join");
+    // match_return: a borrowed enum-field arm and an empty owned arm. The verdict is
+    // Borrowed, not the Join the shape suggests, because the empty arm APPENDS into the
+    // retbuf rather than assigning it — and the classifier reads a variable's
+    // definitions, so the owned fill is invisible to it. That under-report is not new
+    // and not about the element type: the identical program with `vector<integer>`
+    // items has always read Borrowed here. `vector<E>` read Join only because its `[]`
+    // arm collapsed to nothing (loft#699 made every element type materialise it alike),
+    // so the Join was the anomaly, not the reading. The precise over-free signal is the
+    // ParamDeliver free site below, which is unchanged — and which these tests already
+    // pin as the discriminator the fix acts on, in place of this verdict.
+    assert_own_return(&stderr, "deliver", "Borrowed");
 
     // field-view family (fixed/clean): a field view and a whole-arg view are plain
     // parameter Borrows — never freed at the return.
@@ -434,7 +443,10 @@ fn ownership_resolves_the_borrow_base() {
 
     // direct projection / `??` join roots its base to the borrowed PARAM.
     assert_return_own(&stderr, "pick", "Join(base=t)"); // t[i] ?? dflt()
-    assert_return_own(&stderr, "deliver", "Join(base=e)"); // match arm of e
+    // The base is what this test pins, and it is `e` either way; the class reads
+    // Borrowed because the owned arm appends into the retbuf instead of assigning it
+    // (see `ownership_classifies_the_over_free_shapes`).
+    assert_return_own(&stderr, "deliver", "Borrowed(base=e)"); // match arm of e
     assert_return_own(&stderr, "nested", "Borrowed(base=o)"); // o.inner.rows — chain → o
 
     // INTERPROCEDURAL: `out += [pick(t,i)]`'s source is the `pick` CALL; the oracle
@@ -504,9 +516,13 @@ fn ownership_pins_match_return_resisting_cases() {
 
     // V1/V2 — the GENUINE over-free arms: the retbuf is aliased to a borrowed
     // enum-field view of the EXTERNAL subject `e`. The ParamDeliver site (base=e) is
-    // the precise fix signal; the return verdict is Join(base=e).
+    // the precise fix signal, and it is what these two pin. V1's return verdict reads
+    // Borrowed rather than Join because its owned `[]` arm APPENDS into the retbuf
+    // instead of assigning it, so the classifier's definition scan never sees the owned
+    // fill (see `ownership_classifies_the_over_free_shapes`); V2 has no `[]` arm and
+    // still reads Join. Which is exactly why the fix keys on ParamDeliver.
     assert_free_site(&stderr, "deliver", "ParamDeliver", "Borrowed", "e");
-    assert_return_own(&stderr, "deliver", "Join(base=e)");
+    assert_return_own(&stderr, "deliver", "Borrowed(base=e)");
     assert_free_site(&stderr, "deliver2", "ParamDeliver", "Borrowed", "e");
     assert_return_own(&stderr, "deliver2", "Join(base=e)");
 
@@ -514,7 +530,9 @@ fn ownership_pins_match_return_resisting_cases() {
     // RETURN as Join(base=o) (the retbuf-param approximation — `o` is the owned retbuf
     // classified as borrowed-of-itself), but there is NO ParamDeliver site. So the fix,
     // keyed on ParamDeliver (NOT the return verdict), correctly LEAVES deliver3 ALONE.
-    assert_return_own(&stderr, "deliver3", "Join(base=o)"); // documented over-classification
+    // Still the retbuf-param approximation (`o`, the owned retbuf, classified as
+    // borrowed-of-itself), reading Borrowed for the same reason V1 does.
+    assert_return_own(&stderr, "deliver3", "Borrowed(base=o)"); // documented over-classification
     assert_no_free_site(&stderr, "deliver3"); // the precise discriminator excludes it
 }
 

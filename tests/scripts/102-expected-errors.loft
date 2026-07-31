@@ -399,21 +399,11 @@ fn pe_x_default_on_bare_enum_record() {
 }
 
 // loft#698 — a default needing a temporary is now LOWERED into a function of its own
-// (`tests/scripts/698-default-needing-a-temporary.loft` covers what works).  Two shapes
-// stay refused, each for its own reason.
+// (`tests/scripts/698-default-needing-a-temporary.loft` covers what works).  ONE shape
+// stays refused; the KEYED one it used to name no longer does, because loft#703 gave a
+// keyed collection a literal value form for the generated function to return
+// (`tests/scripts/703-keyed-collection-literal-value.loft`).
 //
-// A KEYED collection: loft has no non-empty keyed literal as a VALUE — `[K { … }]` is a
-// `vector<K>` wherever it stands alone, so a plain local `h: hash<K[k]> = [K { … }]` is
-// refused too.  It is only ever built by writing THROUGH a keyed destination, which is
-// what a default has none of.  So this is a language fact, not a defaults one.
-struct Pe697 { pe_k: integer, pe_v: integer }
-struct Pe697h { pe_x: integer, pe_h: hash<Pe697[pe_k]> = [Pe697 { pe_k: 1, pe_v: 2 }] }
-// @EXPECT_ERROR: no expression form
-fn pe_non_empty_keyed_default() {
-  p = Pe697h { pe_x: 1 };
-  assert(p.pe_x == 1, "unreached");
-}
-
 // A default that reads `$` AND needs a temporary cannot move into a function of its own:
 // `$` is the record being built, which that function does not have.  Either half alone is
 // fine — `= $.pe_x + 1` stays a plain replayed default, and `= "a" + "b"` is lowered.
