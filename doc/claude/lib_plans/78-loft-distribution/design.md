@@ -91,13 +91,21 @@ Each is independently landable, each is verified by the one before it, and
 nothing is trusted before it is checkable.  Steps 1–3 cannot damage an
 installation: they add data and read-only commands.
 
-**Step 0 — remove the false claim (docs, no code).**
-`LIBRARIES.md` and `RELEASE.md` both state that `loft install` / self-update
-verifies the release sha256s.  Self-update does not exist.  `LIBRARIES.md` is
-generated, so the sentence lives in `scripts/gen-library-catalogue.py`.  Correct
-both before building the thing they describe, so the docs never asserted it
-first.
-*Verify:* `grep -rn "self-update" doc/claude/` names only future work.
+**Step 0 — remove the false claim (docs, no code).**  DONE 2026-07-31.
+`LIBRARIES.md` stated that `loft install` / self-update verifies the release
+sha256s.  Neither does: `install.rs` has no toolchain path, there is no registry
+entry for the binary, and the sha256s are read from the release's `.zip.sha256`
+sidecars purely to be displayed.  It now says what is true — verify by hand with
+`sha256sum -c`, no automatic path yet — and points at this plan.  The sentence
+lives in `scripts/gen-library-catalogue.py`, since `LIBRARIES.md` is generated and
+not committed; the comment there says what to reword when steps 1–2 land.
+
+`RELEASE.md` was checked and left alone: its two mentions sit in a release
+checklist that the very next paragraph marks `[build]` (open work), so it
+describes a target state and says so.  Correcting it would have been the
+over-reach — it was already honest.
+*Verify:* every surviving `self-update` mention names future work (`RELEASE.md`'s
+open-work paragraph, `ROADMAP.md`'s @PLN78 row).
 
 **Step 1 — publish a toolchain entry in the index (data only).**
 Add `loft` as a package whose per-version `binaries` map holds one `BinaryEntry`

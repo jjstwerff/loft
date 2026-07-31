@@ -147,12 +147,22 @@ def loft_overview(loft_release: dict[str, Any]) -> list[str]:
             f"commit(s) ahead** of the release (`{unrel.get('sha', '')}`) — the basis of the next "
             f"release (🟢 unreleased core, the analogue of a library's origin/main tier)."
         )
+    # The sha256 per target is published on the GitHub release (a `.zip.sha256`
+    # sidecar per asset) and read from there by `refresh-loft-release.py`.  Say what
+    # it is FOR accurately: nothing in loft consumes it — `install.rs` has no
+    # toolchain path and there is no registry entry for the binary — so a reader
+    # verifies a download by hand.  This sentence used to claim "`loft install` /
+    # self-update verifies these sha256s", which described a system that does not
+    # exist; in a doc whose whole job is to say what loft IS right now, that is the
+    # kind of claim readers act on.  @PLN78 step 1 adds the registry entry and step 2
+    # `loft verify-self` — reword here when they land, not before.
     lines = [
         "## loft core (the language)",
         "",
         f"The core of the distribution — the loft compiler, interpreter, and bundled stdlib. "
-        f"Current release **{ver}** (`{tag}`{', ' + published if published else ''}); `loft install` / "
-        f"self-update verifies these sha256s.{dev} The per-function API is in "
+        f"Current release **{ver}** (`{tag}`{', ' + published if published else ''}); verify a "
+        f"download against the sha256 below (`sha256sum -c`) — no automatic verification yet "
+        f"(@PLN78).{dev} The per-function API is in "
         f"[LOFT.md](LOFT.md) / [STDLIB.md](STDLIB.md), not here.",
         "",
         "**Maturity:** loft uses calendar versions (`YYYY.M.N`) and is stabilising toward "
