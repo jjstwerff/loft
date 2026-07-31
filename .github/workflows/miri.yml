@@ -593,6 +593,20 @@ jobs:
       # (S4 owns that triage).  Validated locally + a raw-pointer-OOB positive control
       # confirms ASan fires here.  (S9's mixed-boundary cdylib ASan shares this
       # mechanism but is blocked on a proc-macro `-L` fix — NATIVE_ASAN_DESIGN.md.)
+      # TEMPORARY probe (2026-07-31).  The sweep fails with `E0463: can't find crate
+      # for sha2`, and loft's own diagnostic reports `target/release/deps` as ENOENT
+      # — after a cold `cargo build --release --bin loft --lib` that took 1m40s and
+      # must have created it.  Every explanation from the log alone is a guess, so
+      # ask the runner directly.  Remove once the cause is named.
+      - name: Probe — what does target/release actually contain?
+        run: |
+          echo "== target/release =="; ls -la target/release | head -20
+          echo "== target/release/deps (exists?) =="; ls -la target/release/deps 2>&1 | head -5
+          echo "== count of rlibs in deps =="; ls target/release/deps 2>/dev/null | grep -c '\.rlib$' || true
+          echo "== libsha2 =="; ls target/release/deps 2>/dev/null | grep sha2 || echo "NO sha2 rlib"
+          echo "== is target a symlink? =="; ls -ld target target/release
+          echo "== disk =="; df -h . | tail -1
+
       - name: Native ASan sweep (curated --native corpus)
         env:
           LOFT_NATIVE_ASAN: '1'
