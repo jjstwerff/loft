@@ -470,80 +470,88 @@ impl Stores {
         let _ = msg;
     }
 
+    /// Append `sub` to directory `base`, the one home for the optional subpath
+    /// that `directory` / `user_directory` / `program_directory` take.
+    ///
+    /// An empty `sub` gives `base` unchanged.  An empty `base` gives "" whatever
+    /// `sub` says: base is empty only when the OS could not answer, and a bare
+    /// relative "assets" handed back as though it were an absolute path is worse
+    /// than no answer — "" is what these already return in that case, and what
+    /// `source_dir()` means by "no anchor".
+    ///
+    /// `Path::join` picks the platform separator, matching `resolve_path`.
+    fn dir_with_sub(base: String, sub: &str) -> String {
+        if sub.is_empty() || base.is_empty() {
+            return base;
+        }
+        std::path::Path::new(&base)
+            .join(sub)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     /**
-    Get the current directory
+    Get the current directory, with `s`'s incoming text appended as a subpath.
+
+    `s` is both the argument and the scratch buffer the result is returned
+    through — read the subpath before overwriting.  It used to be cleared
+    first, so `directory("sub")` silently ignored "sub" and returned the bare
+    cwd, though the signature and docs have always offered the subpath.
+
     # Panics
     When the OS provided incorrect variable values (non utf8 tokens inside it)
     */
     #[must_use]
     pub fn os_directory(s: &mut String) -> crate::keys::Str {
-        s.clear();
-        #[cfg(not(feature = "wasm"))]
-        if let Ok(v) = std::env::current_dir() {
-            *s += v.to_str().unwrap();
-        }
-        #[cfg(feature = "wasm")]
-        {
-            *s = crate::wasm::host_fs_cwd();
-        }
+        *s = Self::os_directory_native(s);
         crate::keys::Str::new(s)
     }
 
     /**
-    Get home directory
+    Get the home directory, with `s`'s incoming text appended as a subpath.
+    See [`Stores::os_directory`] on why `s` is both argument and buffer.
+
     # Panics
     When the OS provided incorrect variable values (non utf8 tokens inside it)
     */
     #[must_use]
     pub fn os_home(s: &mut String) -> crate::keys::Str {
-        s.clear();
-        #[cfg(not(feature = "wasm"))]
-        if let Some(v) = dirs::home_dir() {
-            *s += v.to_str().unwrap();
-        }
-        #[cfg(feature = "wasm")]
-        {
-            *s = crate::wasm::host_fs_user_dir();
-        }
+        *s = Self::os_home_native(s);
         crate::keys::Str::new(s)
     }
 
     /**
-    Get the executable directory
+    Get the executable's directory, with `s`'s incoming text appended as a
+    subpath.  See [`Stores::os_directory`] on why `s` is both argument and
+    buffer.
+
     # Panics
     When the OS provided incorrect variable values (non utf8 tokens inside it)
     */
     #[must_use]
     pub fn os_executable(s: &mut String) -> crate::keys::Str {
-        s.clear();
-        #[cfg(not(feature = "wasm"))]
-        if let Ok(v) = std::env::current_exe() {
-            *s += v.to_str().unwrap();
-        }
-        #[cfg(feature = "wasm")]
-        {
-            *s = crate::wasm::host_fs_program_dir();
-        }
+        *s = Self::os_executable_native(s);
         crate::keys::Str::new(s)
     }
 
     /// Native-codegen variant of `os_directory` that returns an owned `String`.
-    /// Used by the `--native` backend where a scratch-buffer `&mut String` is not available.
+    /// `sub` is the optional subpath argument (empty for none).
     ///
     /// # Panics
     /// Panics if the current directory path contains non-UTF-8 characters.
     #[must_use]
-    pub fn os_directory_native() -> String {
+    pub fn os_directory_native(sub: &str) -> String {
         #[cfg(not(feature = "wasm"))]
-        {
+        let base = {
             let mut s = String::new();
             if let Ok(v) = std::env::current_dir() {
                 s += v.to_str().unwrap();
             }
             s
-        }
+        };
         #[cfg(feature = "wasm")]
-        crate::wasm::host_fs_cwd()
+        let base = crate::wasm::host_fs_cwd();
+        Self::dir_with_sub(base, sub)
     }
 
     /// Return the byte at position `idx` (0..len) as i64 0-255.
@@ -703,39 +711,52 @@ impl Stores {
     }
 
     /// Native-codegen variant of `os_home` that returns an owned `String`.
+    /// `sub` is the optional subpath argument (empty for none).
     ///
     /// # Panics
     /// Panics if the home directory path contains non-UTF-8 characters.
     #[must_use]
-    pub fn os_home_native() -> String {
+    pub fn os_home_native(sub: &str) -> String {
         #[cfg(not(feature = "wasm"))]
-        {
+        let base = {
             let mut s = String::new();
             if let Some(v) = dirs::home_dir() {
                 s += v.to_str().unwrap();
             }
             s
-        }
+        };
         #[cfg(feature = "wasm")]
-        crate::wasm::host_fs_user_dir()
+        let base = crate::wasm::host_fs_user_dir();
+        Self::dir_with_sub(base, sub)
     }
 
     /// Native-codegen variant of `os_executable` that returns an owned `String`.
+    /// `sub` is the optional subpath argument (empty for none).
+    ///
+    /// The DIRECTORY containing the executable, which is what the builtin is
+    /// named for and documented as.  On this side it used to be
+    /// `current_exe()` whole — the binary's own path — so
+    /// `program_directory("assets")` would have read
+    /// `/usr/local/bin/loft/assets`, a path that cannot exist.  The wasm host
+    /// already answered with a directory, so the two targets also disagreed.
     ///
     /// # Panics
     /// Panics if the executable path contains non-UTF-8 characters.
     #[must_use]
-    pub fn os_executable_native() -> String {
+    pub fn os_executable_native(sub: &str) -> String {
         #[cfg(not(feature = "wasm"))]
-        {
+        let base = {
             let mut s = String::new();
-            if let Ok(v) = std::env::current_exe() {
-                s += v.to_str().unwrap();
+            if let Ok(v) = std::env::current_exe()
+                && let Some(dir) = v.parent()
+            {
+                s += dir.to_str().unwrap();
             }
             s
-        }
+        };
         #[cfg(feature = "wasm")]
-        crate::wasm::host_fs_program_dir()
+        let base = crate::wasm::host_fs_program_dir();
+        Self::dir_with_sub(base, sub)
     }
 
     /// Native backend for `source_dir()` (`default/03_text.loft`'s
