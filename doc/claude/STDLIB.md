@@ -991,7 +991,21 @@ Functions for interacting with the host operating system.
 
 | Function | Description |
 |----------|-------------|
-| `store_memory() -> text` | Returns a multi-line snapshot of all LIVE heap stores' internal utilisation — total capacity vs actual claimed data vs free space, record + free-block counts, **mergeable adjacent-free pairs** (free neighbours that should have coalesced), and the largest stores by capacity with their type name and creation site (`bc:<pos>` — a bytecode position on the interpreter, mapping to source via `LOFT_LOG=static`; `0` on `--native`). Use to watch memory growth / fragmentation in a running program. See also `LOFT_STORES=log\|warn` (alloc/free trace). |
+| `store_memory() -> text` | Returns a multi-line snapshot of all LIVE heap stores' internal utilisation — total capacity vs actual claimed data vs free space, record + free-block counts, **mergeable adjacent-free pairs** (free neighbours that should have coalesced), **`tail%` / `inner%`** (see below), and the largest stores by capacity with their type name and creation site (`bc:<pos>` — a bytecode position on the interpreter, mapping to source via `LOFT_LOG=static`; `0` on `--native`). Use to watch memory growth / fragmentation in a running program. See also `LOFT_STORES=log\|warn` (alloc/free trace). |
+
+**`tail%` and `inner%` say WHERE a store's free space sits**, which is the
+difference between free space you get back and free space you do not.
+
+- **`tail`** — above the last record. A persisted store already ends at the last
+  record, so this never reaches the file.
+- **`inner`** — between records. It is reusable for future allocation, but it
+  *is* written to the file, because the image has to span up to the last record.
+
+A store built once reads `inner 0%`. One whose live set fell well below its peak
+reads a high `inner` — 71% in the case behind loft#713 — and that is the part
+only relocation could recover. Coalescing does not touch it: forcing a sweep took
+2,700 free blocks to 6 and left `inner` unchanged at 45%, because merging free
+blocks never moves a live one.
 
 ---
 
