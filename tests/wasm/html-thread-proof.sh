@@ -60,10 +60,26 @@ echo "== building pages =="
 # The threaded export rebuilds std with atomics on a cold tree; 15 minutes is
 # plenty on this box and not on a 4-vCPU runner, so it rides WAIT_SCALE too.
 BUILD_TIMEOUT=$(( 900 * ${WAIT_SCALE:-1} ))
-LOFT_TIMEOUT=$BUILD_TIMEOUT "$LOFT" --html "$WORK/threaded.html" "$WORK/par.loft" >/dev/null 2>&1 \
-  || { echo "FAIL: loft --html (threaded) failed"; exit 1; }
-LOFT_TIMEOUT=$BUILD_TIMEOUT "$LOFT" --html "$WORK/sequential.html" --no-threads "$WORK/par.loft" >/dev/null 2>&1 \
-  || { echo "FAIL: loft --html --no-threads failed"; exit 1; }
+# Keep the build output.  Discarding both streams cost a nightly diagnosis on
+# 2026-07-31: the gate reported only "loft --html (threaded) failed" and threw
+# away the `error[E0514]: found crate `loft` compiled by an incompatible version
+# of rustc` underneath it, so the CI log named the symptom and nothing else.  A
+# gate that hides the error it exists to detect is worse than no gate: it reports
+# a regression with no way to act on it.  Quiet on success, the whole thing on
+# failure — the last 40 lines, because a rustc failure's useful part is the end.
+build_page() {  # $1 = label, $2 = output html, and any further args
+  local label="$1" out="$2"; shift 2
+  local log="$WORK/build-$label.log"
+  if ! LOFT_TIMEOUT=$BUILD_TIMEOUT "$LOFT" --html "$out" "$@" > "$log" 2>&1; then
+    echo "FAIL: loft --html ($label) failed"
+    echo "---- last 40 lines of $log ----"
+    tail -40 "$log"
+    echo "---- end ----"
+    exit 1
+  fi
+}
+build_page threaded "$WORK/threaded.html" "$WORK/par.loft"
+build_page no-threads "$WORK/sequential.html" --no-threads "$WORK/par.loft"
 
 run() {  # $1 = server script, $2 = port, $3 = page, $4 = seconds to wait
   : > "$REPORT"
