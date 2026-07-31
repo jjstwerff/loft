@@ -1392,6 +1392,13 @@ pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<Elid
 // `doc/claude/plans/85-store-lifetime-retirement/over-free-class-study.md`
 // (§ Three chokepoints).
 //
+// A var comes to hold a value TWO ways, and both count (loft#704): a `Set` re-binds
+// it, and an append/clear FILLS it in place. The fill delivers the var's own buffer
+// whatever the source was — the append deep-copies — so it is an Owned alternative,
+// and a scan that saw only `Set` read `match e { Filled { items } => { items },
+// _ => { [] } }` as a plain Borrowed-of-`e`: the split it exists to name was invisible
+// because the `[]` arm defines nothing. See `Defs::filled`.
+//
 // APPROXIMATIONS (sound by conservatism — a value can only OVER-report Join/Borrowed):
 //   * Var resolution is flow-INSENSITIVE — a var classifies as the join of ALL
 //     its real (non-`= null`-init) defs across the body, not the def that reaches
@@ -1400,7 +1407,10 @@ pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<Elid
 //     can only over-report Join, never wrongly report Owned.
 //   * A bare PARAMETER used as a value classifies as `Borrowed` (the caller owns
 //     it) — including a retbuf param a callee fills in place, which is really
-//     owned. Conservative: it can lose an Owned, never invent one.
+//     owned. Conservative: it can lose an Owned, never invent one. This is why the
+//     fill above is an ALTERNATIVE joined with a var's other defs and never the whole
+//     answer: a buffer that is only ever filled keeps this reading, because claiming
+//     `Owned` for it would license a callee to free the CALLER's buffer.
 // ============================================================================
 
 /// The store-ownership of a value at an own-vs-borrow decision site — THE one fact
@@ -1527,32 +1537,68 @@ fn fn_body_tail(code: &Value) -> Option<&Value> {
 }
 
 /// A function's def facts: every real definition `v = rhs` (in source order,
-/// skipping `v = null` declaration sentinels) and the vars `OpDatabase` mints a
+/// skipping `v = null` declaration sentinels), the vars `OpDatabase` mints a
 /// fresh store into (which are Owned even with no `Set`-def — e.g. a retbuf param
-/// a `materialized_view_return` fills in place).
+/// a `materialized_view_return` fills in place), and the vars some branch FILLS
+/// IN PLACE (loft#704).
 #[derive(Default)]
 struct Defs {
     rhs: HashMap<u16, Vec<Value>>,
     db_vars: HashSet<u16>,
+    /// loft#704 — vars a branch fills IN PLACE (`OpClearVector(v)` /
+    /// `OpAppendVector(v, …)`) rather than re-binding with a `Set`.
+    ///
+    /// A var comes to hold a value two ways, and only one of them is a `Set`.  The
+    /// append DEEP-COPIES into `v`'s existing store, so a filled branch delivers `v`'s
+    /// OWN buffer whatever the source was — an Owned alternative that a `Set`-only scan
+    /// cannot see.  `match e { Filled { items } => { items }, _ => { [] } }` has exactly
+    /// one of each, and read as a plain Borrowed-of-`e`: the empty arm lowers to
+    /// `OpClearVector(retbuf); OpAppendVector(retbuf, …)`, which defines nothing.
+    filled: HashSet<u16>,
 }
 
-fn collect_defs(node: &Value, op_database: u32, out: &mut Defs) {
+/// The ops that establish a var's CONTENTS without re-binding it — see [`Defs::filled`].
+struct FillOps {
+    database: u32,
+    clear_vector: u32,
+    append_vector: u32,
+}
+
+impl FillOps {
+    fn of(data: &Data) -> Self {
+        Self {
+            database: data.def_nr("OpDatabase"),
+            clear_vector: data.def_nr("OpClearVector"),
+            append_vector: data.def_nr("OpAppendVector"),
+        }
+    }
+}
+
+fn collect_defs(node: &Value, ops: &FillOps, out: &mut Defs) {
     match node.unspan() {
         Value::Set(v, rhs) => {
             if !matches!(rhs.unspan(), Value::Null) {
                 out.rhs.entry(*v).or_default().push(rhs.unspan().clone());
             }
-            collect_defs(rhs, op_database, out);
+            collect_defs(rhs, ops, out);
         }
-        Value::Call(d, args) if *d == op_database => {
+        Value::Call(d, args) if *d == ops.database => {
             if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
                 out.db_vars.insert(*v);
             }
             for a in args {
-                collect_defs(a, op_database, out);
+                collect_defs(a, ops, out);
             }
         }
-        other => other.for_each_child(&mut |c| collect_defs(c, op_database, out)),
+        Value::Call(d, args) if *d == ops.clear_vector || *d == ops.append_vector => {
+            if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
+                out.filled.insert(*v);
+            }
+            for a in args {
+                collect_defs(a, ops, out);
+            }
+        }
+        other => other.for_each_child(&mut |c| collect_defs(c, ops, out)),
     }
 }
 
@@ -1644,7 +1690,7 @@ impl<'a> Ownership<'a> {
             return Own::Borrowed { base: u16::MAX };
         }
         let mut defs = Defs::default();
-        collect_defs(&def.code, self.op_database, &mut defs);
+        collect_defs(&def.code, &FillOps::of(self.data), &mut defs);
         let class = self.classify(tail.unwrap(), &def.variables, &defs);
         self.visiting.remove(&d_nr);
         self.ret_memo.insert(d_nr, class);
@@ -1670,11 +1716,30 @@ impl<'a> Ownership<'a> {
             }
             Value::Var(v) => {
                 let class = match defs.rhs.get(v) {
-                    Some(rhss) if !rhss.is_empty() => rhss
-                        .iter()
-                        .map(|r| self.classify(r, func, defs))
-                        .reduce(Own::join)
-                        .unwrap_or(Own::Owned),
+                    Some(rhss) if !rhss.is_empty() => {
+                        let bound = rhss
+                            .iter()
+                            .map(|r| self.classify(r, func, defs))
+                            .reduce(Own::join)
+                            .unwrap_or(Own::Owned);
+                        // loft#704 — a branch that FILLS `v` in place rather than
+                        // re-binding it delivers `v`'s own buffer (the append deep-
+                        // copies), so it is an Owned alternative to the bound ones.
+                        // Without it a `match` whose borrowed arm re-binds and whose
+                        // `[]` arm fills read as a plain Borrowed, losing the very
+                        // split `Join` exists to name.
+                        //
+                        // Only where there IS something to join with.  A var with no
+                        // `Set` at all is the retbuf-param shape the approximation
+                        // above deliberately calls `Borrowed`: it is really owned, but
+                        // saying so would tell a callee it may free the CALLER's
+                        // buffer.  This adds an alternative; it never replaces that.
+                        if defs.filled.contains(v) {
+                            bound.join(Own::Owned)
+                        } else {
+                            bound
+                        }
+                    }
                     // No local def: a parameter (the caller owns it ⇒ Borrowed of
                     // itself) or an uninitialised local (Owned — nothing to mis-free).
                     _ => {
@@ -1777,7 +1842,7 @@ impl<'a> Ownership<'a> {
     /// not yet written back into `data`).
     fn reassign_sites_of(&mut self, code: &Value, func: &Function) -> Vec<ReassignSite> {
         let mut defs = Defs::default();
-        collect_defs(code, self.op_database, &mut defs);
+        collect_defs(code, &FillOps::of(self.data), &mut defs);
         // Only HEAP-typed vars can carry the over-free leak: a reassigned scalar
         // loop counter has no store to displace (the class is record-specific —
         // "scalar never fires" per the boundary map). Filter them out.
@@ -1880,7 +1945,7 @@ impl<'a> Ownership<'a> {
         }
         let func = &def.variables;
         let mut defs = Defs::default();
-        collect_defs(&def.code, self.op_database, &mut defs);
+        collect_defs(&def.code, &FillOps::of(self.data), &mut defs);
         let mut appends = Vec::new();
         let mut delivers = Vec::new();
         collect_free_candidates(
@@ -2025,7 +2090,7 @@ pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
     let def = data.def(d_nr);
     let mut own = Ownership::new(data);
     let mut defs = Defs::default();
-    collect_defs(&def.code, own.op_database, &mut defs);
+    collect_defs(&def.code, &FillOps::of(own.data), &mut defs);
     own.classify(value, &def.variables, &defs)
 }
 
