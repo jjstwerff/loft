@@ -7,6 +7,14 @@
 // sibling script must be REFUSED: the gate reads the `.dschema` sidecar, sees a
 // different layout, and returns nothing rather than range-read foreign-layout
 // bytes at schema-derived offsets. Driven by `store_persist_loft.rs`.
+//
+// loft#700 — the `whole` mode is the same mismatch through `store_load`, the
+// WHOLE-IMAGE loader. It kept the target slot's type and reinterpreted the file's
+// bytes through it, and records are fixed-stride: this Tile is 8 bytes wider than
+// the stored one, so every record was read past its end. `len()` on an added
+// collection returned wild values (`510277628`, `2135492622`) and iterating one
+// read arbitrary memory — silently, on both backends. The paged loaders had this
+// gate; the whole-image path did not.
 
 struct Tile {
   id: integer not null,
@@ -16,10 +24,17 @@ struct Tile {
 
 fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
 
   h: hash<Tile[id]> = [];
-  ok = store_load_key(h, path, 42);
-  println("changed ok={ok}");
-  println("changed len={len(h)}");
-  println("changed verify={store_verify(h)}");
+  if mode == "whole" {
+    ok = store_load(h, path);
+    println("changed whole ok={ok}");
+    println("changed whole len={len(h)}");
+  } else {
+    ok = store_load_key(h, path, 42);
+    println("changed ok={ok}");
+    println("changed len={len(h)}");
+    println("changed verify={store_verify(h)}");
+  }
 }
