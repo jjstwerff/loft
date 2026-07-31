@@ -949,8 +949,8 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
     // function may come from `env`.
     let bad: std::collections::BTreeSet<String> = imports
         .iter()
-        .filter(|(m, _, kind)| !(m.starts_with("loft_") || (m == "env" && *kind == 2)))
-        .map(|(m, _, _)| m.clone())
+        .filter(|(m, _, kind, _)| !(m.starts_with("loft_") || (m == "env" && *kind == 2)))
+        .map(|(m, _, _, _)| m.clone())
         .collect();
     if bad.is_empty() {
         Ok(())
@@ -959,21 +959,28 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
     }
 }
 
-/// Every `(module, field, descriptor-kind)` a wasm imports, or `None` if it cannot be
-/// walked (bad magic, truncated section, unknown descriptor kind).
+/// Every `(module, field, descriptor-kind, result-valtype)` a wasm imports, or `None`
+/// if it cannot be walked (bad magic, truncated section, unknown descriptor kind).
 ///
-/// The ONE import-section walk.  Three callers read it — the `--html` bundle guard
+/// The result valtype is the wasm byte (`0x7F` i32, `0x7E` i64, `0x7D` f32, `0x7C`
+/// f64) of a function import's single return value, and `None` for a function that
+/// returns nothing or for a non-function import.  [`host_import_stub_js`] needs it:
+/// a JS stub standing in for a missing host function has to hand back a value of the
+/// declared type, and `undefined` where the module expects an i64 is a TypeError at
+/// the call rather than the zero the caller can check.
+///
+/// The ONE import-section walk.  Four callers read it — the `--html` bundle guard
 /// ([`html_wasm_import_modules_ok`]), the page-shell chooser
-/// ([`html_wasm_import_modules`]), and the host-surface check
-/// ([`missing_host_imports`]) — and they used to carry a copy each of the LEB/name/
-/// limits decoding.
+/// ([`html_wasm_import_modules`]), the host-surface check
+/// ([`missing_host_imports`]), and the stub emitter — and they used to carry a copy
+/// each of the LEB/name/limits decoding.
 ///
 /// Deliberately conservative: on any shape it does not understand it returns `None`
 /// rather than risk a false verdict on a valid bundle.  Callers treat `None` as "no
 /// opinion", never as "nothing imported".
 pub(crate) fn html_wasm_imports(
     wasm: &[u8],
-) -> Option<std::collections::BTreeSet<(String, String, u8)>> {
+) -> Option<std::collections::BTreeSet<(String, String, u8, Option<u8>)>> {
     fn read_uleb(b: &[u8], p: &mut usize) -> Option<u64> {
         let mut result: u64 = 0;
         let mut shift = 0u32;
@@ -1011,6 +1018,9 @@ pub(crate) fn html_wasm_imports(
     }
     let mut p = 8;
     let mut out = std::collections::BTreeSet::new();
+    // Result valtype per type index, filled from the type section.  Wasm orders
+    // the known sections, so type (1) is already read when import (2) arrives.
+    let mut results: Vec<Option<u8>> = Vec::new();
     while p < wasm.len() {
         let id = *wasm.get(p)?;
         p += 1;
@@ -1019,6 +1029,27 @@ pub(crate) fn html_wasm_imports(
         let section_end = section_start
             .checked_add(size)
             .filter(|e| *e <= wasm.len())?;
+        if id == 1 {
+            // Type section: u32 count, then `count` functypes
+            // (0x60, params vec, results vec).
+            let mut tp = section_start;
+            let count = read_uleb(wasm, &mut tp)?;
+            for _ in 0..count {
+                if *wasm.get(tp)? != 0x60 {
+                    return None; // not a functype — no opinion
+                }
+                tp += 1;
+                let params = usize::try_from(read_uleb(wasm, &mut tp)?).ok()?;
+                tp = tp.checked_add(params)?;
+                let n_res = usize::try_from(read_uleb(wasm, &mut tp)?).ok()?;
+                results.push(if n_res == 0 {
+                    None
+                } else {
+                    Some(*wasm.get(tp)?)
+                });
+                tp = tp.checked_add(n_res)?;
+            }
+        }
         if id == 2 {
             // Import section: u32 count, then `count` (module, field, desc).
             let mut ip = section_start;
@@ -1028,9 +1059,11 @@ pub(crate) fn html_wasm_imports(
                 let field = read_name(wasm, &mut ip)?;
                 let kind = *wasm.get(ip)?;
                 ip += 1;
+                let mut result = None;
                 match kind {
                     0 => {
-                        read_uleb(wasm, &mut ip)?; // func: typeidx
+                        let idx = usize::try_from(read_uleb(wasm, &mut ip)?).ok()?; // func: typeidx
+                        result = results.get(idx).copied().flatten();
                     }
                     1 => {
                         ip += 1; // table: reftype byte, then limits
@@ -1044,12 +1077,67 @@ pub(crate) fn html_wasm_imports(
                     String::from_utf8_lossy(module).into_owned(),
                     String::from_utf8_lossy(field).into_owned(),
                     kind,
+                    result,
                 ));
             }
         }
         p = section_end;
     }
     Some(out)
+}
+
+/// JS that gives every `loft_*` host function this wasm imports a stand-in, for
+/// the ones the page shim does not define.
+///
+/// A canvas cannot do everything a desktop window can, and some calls — a
+/// screenshot to a `path`, say — may have no browser meaning at all.  That is
+/// fine; what is not fine is finding out at BUILD time.  Whether a call can be
+/// served is a fact about this run on this target, not about whether the program
+/// is well-formed, and refusing the build forces one source to fork into two
+/// that differ only in which calls they may NAME — which destroys the property
+/// of running the same source on both renderers (loft#709).
+///
+/// So the page instantiates and the call answers at runtime: the declared zero
+/// (`false` / `0` / `""`-shaped null pointer), which every correct caller
+/// already handles, since a screenshot can fail for a dozen reasons besides the
+/// target.  It says so once per name in the console — once, because a call in a
+/// frame loop would otherwise bury the page in identical lines.
+///
+/// Emitted for EVERY `loft_*` function import and applied only where the name is
+/// still free, so the shim and every library bridge keep precedence and a name
+/// the build-time scan misjudged is covered anyway.
+pub(crate) fn host_import_stub_js(wasm: &[u8]) -> String {
+    let Some(imports) = html_wasm_imports(wasm) else {
+        return String::new();
+    };
+    let mut entries = String::new();
+    for (module, field, _, result) in imports
+        .iter()
+        .filter(|(m, _, k, _)| *k == 0 && m.starts_with("loft_"))
+    {
+        // The value the stub returns, as JS source: wasm coerces the JS result
+        // to the declared type, and an i64 result MUST be a BigInt.
+        let zero = match result {
+            Some(0x7E) => "0n",
+            Some(_) => "0",
+            None => "undefined",
+        };
+        entries.push_str(&format!("[{module:?},{field:?},{zero}],"));
+    }
+    if entries.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n// loft#709: a call this target cannot serve answers at runtime instead of\n\
+         // refusing the build.  Only fills names nothing else defined.\n\
+         (function(){{const seen=new Set();for(const[m,f,z]of[{entries}]){{\n\
+         \x20 const mod=(imports[m]||(imports[m]={{}}));\n\
+         \x20 if(f in mod)continue;\n\
+         \x20 mod[f]=function(){{ if(!seen.has(f)){{seen.add(f);\n\
+         \x20   console.warn('loft: '+f+' is not available in the browser — returning '+String(z));}}\n\
+         \x20   return z; }};\n\
+         }}}})();\n"
+    )
 }
 
 /// Host-import names the `--html` page will NOT provide, as `module.field` strings.
@@ -1119,9 +1207,9 @@ pub(crate) fn missing_host_imports(wasm: &[u8], provided_js: &str) -> Vec<String
     };
     imports
         .iter()
-        .filter(|(m, _, kind)| *kind == 0 && m.starts_with("loft_"))
-        .filter(|(_, field, _)| !defined(field))
-        .map(|(m, field, _)| format!("{m}.{field}"))
+        .filter(|(m, _, kind, _)| *kind == 0 && m.starts_with("loft_"))
+        .filter(|(_, field, _, _)| !defined(field))
+        .map(|(m, field, _, _)| format!("{m}.{field}"))
         .collect()
 }
 
@@ -1139,7 +1227,7 @@ pub(crate) fn html_wasm_import_modules(wasm: &[u8]) -> Option<std::collections::
     Some(
         html_wasm_imports(wasm)?
             .into_iter()
-            .map(|(m, _, _)| m)
+            .map(|(m, _, _, _)| m)
             .collect(),
     )
 }

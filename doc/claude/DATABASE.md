@@ -122,6 +122,30 @@ collection returned wild values (`510277628`) that a consumer then iterated. Now
 `store_load` returns `false` and names what differs. Rebuild the store with the new
 program, or read it with the version that wrote it.
 
+#### What the file's SIZE and BYTES mean (loft#710)
+
+A persisted store used to be the arena's whole **capacity**, so its size said how
+the store was BUILT, not what it holds: filling each record's vector whole before
+inserting gave 1.84× what growing them interleaved gave for byte-identical data,
+and 160,000 coordinates persisted to the same byte count as 290,000. The image is
+now sized from the **high-water mark** — the end of the last live record — plus an
+eighth. The eighth is not slack for its own sake: a bound store stays live and the
+arena grows by 7/3, so persisting with no room left costs a 2.33× file resize on
+the very next claim, which is worse than the tail it removed.
+
+**Interior free space is still there.** Reclaiming that means relocating records
+and rewriting every `DbRef` — compaction, which loft#710 remains open for. So the
+size now follows the content, but two construction orders can still differ by the
+fragmentation each genuinely leaves.
+
+**`LOFT_HASH_SEED=<n>` makes a build byte-reproducible.** A hash draws a random
+seed (the P253 hash-DoS defense, `keys.rs::fresh_seed`) and stores it in its
+bucket record, where it decides the bucket ORDER — so rebuilding identical data
+gave a different file every run, and a per-block checksum could not separate "the
+data changed" from "it was rebuilt". Setting this fixes the seed for every hash in
+the process. It is opt-in because a program taking attacker-supplied keys still
+wants the randomness; a publishing pipeline does not.
+
 These loaders work **on every target, the browser included** (loft#678). Only the
 byte source differs, and it is the sole thing that does: a native build issues
 `Range` GETs over `ureq`, while `--html` issues them through the asyncify

@@ -18,9 +18,14 @@
 # The gates: dispatch + fallback + nested par (par-thread-proof), the
 # shared-memory model (par-memory-proof), scaling (par-scaling-bench), UI
 # responsiveness (par-ui-responsive), and the `loft --html` bundle
-# (html-thread-proof).  The last two read thresholds from the environment
-# because runner hardware is smaller than this dev box; the workflow
-# .github/workflows/browser-threads.yml sets them.
+# (html-thread-proof).  par-scaling-bench and par-ui-responsive read thresholds
+# from the environment because runner hardware is smaller than this dev box; the
+# workflow .github/workflows/browser-threads.yml sets them.
+#
+# One gate here is not about threading at all: html-unavailable-builtin proves a
+# builtin the browser cannot serve still builds and answers at runtime
+# (loft#709).  It rides along because this is where a headless chromium exists
+# in CI, and a second workflow for one gate would cost more than it explains.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -31,7 +36,7 @@ case "${1:-}" in
   *) echo "usage: $0 [--ci]" >&2; exit 2 ;;
 esac
 
-GATES="par-thread-proof.sh par-memory-proof.sh par-scaling-bench.sh par-ui-responsive.sh html-thread-proof.sh"
+GATES="par-thread-proof.sh par-memory-proof.sh par-scaling-bench.sh par-ui-responsive.sh html-thread-proof.sh html-unavailable-builtin.sh"
 
 # Preflight: in CI a missing prerequisite must be named up front, not inferred
 # from five identical SKIP lines twenty minutes later.
@@ -81,7 +86,7 @@ emit() {
   return 0
 }
 echo
-emit "### @PLN117 browser-threading gates"
+emit "### headless browser gates (@PLN117 threading + loft#709 host surface)"
 emit ""
 # Note the trailing newline: `read` drops a final unterminated line, which
 # silently cost the LAST gate its row in the table.

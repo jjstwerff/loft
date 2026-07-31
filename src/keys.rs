@@ -42,14 +42,39 @@ fn seeded_hasher(seed: u64) -> DefaultHasher {
     hasher
 }
 
+/// `LOFT_HASH_SEED`, read once: the fixed seed every hash uses instead of an
+/// unpredictable one.  `None` (unset, empty, or not a number) keeps the random
+/// default.
+///
+/// loft#710 — a random seed is stored in the hash's bucket record and decides
+/// the bucket ORDER, so a persisted store built twice from identical data came
+/// out byte-different every run.  For a pipeline that publishes stores with a
+/// per-block checksum that is fatal: "the data changed" and "it was rebuilt"
+/// become indistinguishable, and so does a freshness gate built on either.
+///
+/// It stays OPT-IN because the randomness is the P253 hash-DoS defense and a
+/// program taking attacker-supplied keys still wants it.  A build that needs
+/// reproducible artifacts sets this; a server does not.
+fn fixed_seed() -> Option<u64> {
+    static FIXED: OnceLock<Option<u64>> = OnceLock::new();
+    *FIXED.get_or_init(|| {
+        std::env::var("LOFT_HASH_SEED")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+    })
+}
+
 /// Draw a fresh, unpredictable 64-bit seed for a newly-populated hash table.
 /// Each hash gets its own random seed (the P253 DoS defense); the seed is
 /// then stored IN the hash's bucket record so any reader re-derives the same
 /// buckets (see [`seeded_hasher`]).  Never returns 0 — a stored seed of 0
 /// marks an un-seeded (empty / legacy) bucket record.
+///
+/// `LOFT_HASH_SEED` replaces the draw with one fixed value for every hash, so a
+/// run is byte-reproducible — see [`fixed_seed`].
 #[must_use]
 pub fn fresh_seed() -> u64 {
-    let s = RandomState::new().build_hasher().finish();
+    let s = fixed_seed().unwrap_or_else(|| RandomState::new().build_hasher().finish());
     if s == 0 { 0x9E37_79B9_7F4A_7C15 } else { s }
 }
 

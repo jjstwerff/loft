@@ -2534,8 +2534,8 @@ impl Stores {
         };
 
         if !exists {
-            // FRESH PATH — snapshot current bytes, pad to a valid ≥ 1024-word
-            // image, write to disk, then re-open via mmap.
+            // FRESH PATH — snapshot current bytes, size the image to the data,
+            // write to disk, then re-open via mmap.
             let src_words = self.allocations[slot_idx].capacity_words();
             let snapshot = {
                 let s = &self.allocations[slot_idx];
@@ -2543,7 +2543,29 @@ impl Stores {
                     unsafe { std::slice::from_raw_parts(s.base_ptr(), (src_words as usize) * 8) };
                 raw.to_vec()
             };
-            let target_words = src_words.max(1024);
+            // loft#710: the arena's CAPACITY is not what the store holds — the
+            // tail past the last record is whatever the last 7/3 growth
+            // over-allocated, and persisting it made the file size a fact about
+            // how the store was BUILT rather than what is in it.  Size the image
+            // from the high-water mark instead.
+            //
+            // Not to the mark exactly: a bound store stays live, and growth
+            // multiplies by 7/3, so a store with no slack left pays a 2.33×
+            // file resize on its very next claim — measurably WORSE than the
+            // tail we removed.  An eighth keeps ordinary post-bind activity off
+            // that cliff while staying a function of the content, which is the
+            // property the issue is about: two builds of the same data now land
+            // within ~5% of each other instead of 1.84× apart.
+            //
+            // Never larger than the capacity we would have written before, never
+            // below the 1024-word floor `Store::open` expects, and a chain the
+            // walk cannot follow falls back to the whole capacity — the file is
+            // never shortened on a guess.
+            let live_end = store_image_live_end(&snapshot, src_words).unwrap_or(src_words);
+            let target_words = live_end
+                .saturating_add(live_end / 8)
+                .min(src_words)
+                .max(1024);
             let padded = match build_padded_store_image(&snapshot, src_words, target_words) {
                 Some(b) => b,
                 None => return false,
@@ -3418,36 +3440,29 @@ impl Stores {
     }
 }
 
-/// @PLAN38 — pad a Store byte image out to `target_words` while keeping
-/// the record chain valid.  Walks the source record headers (i32 at each
-/// word position, abs = block size in words), then either extends the
-/// trailing free block or appends a new one to cover the padding.  Returns
-/// `None` if the source bytes don't describe a walkable record chain
-/// (corrupt size word, zero-size block).
+/// The word where the store image's last ACTIVE record ends — its high-water
+/// mark.  Walks the record chain (an i32 size word at each block's word
+/// position; abs = block size in words, negative = free), so a trailing free
+/// block is not counted.  `None` when the bytes do not describe a walkable
+/// chain that terminates exactly at `src_words` (corrupt size word, zero-size
+/// block, wrong layout) — the caller then persists the image verbatim rather
+/// than trusting a walk it could not complete.
 ///
-/// Output buffer is always exactly `target_words * 8` bytes.  When
-/// `target_words <= src_words` the buffer is the source verbatim (no
-/// truncation; we treat that as the "no padding needed" path).
+/// loft#710: a persisted store used to be the arena's whole CAPACITY, and the
+/// tail of that capacity is whatever the last growth (7/3) over-allocated —
+/// 43% of the reported 7 MB file was one trailing free block of zeros.  Because
+/// that has nothing to do with the data, two builds of the SAME records
+/// differed 1.84× by construction order alone (where each happened to land
+/// relative to a growth step) and, worse, the size did not move when the
+/// content changed by 1.8×.  Ending the image at the high-water mark makes it
+/// track the data.  Interior free blocks still remain: reclaiming those means
+/// relocating records and rewriting every `DbRef`, which is compaction, not
+/// this.
 #[cfg(feature = "mmap")]
-fn build_padded_store_image(src: &[u8], src_words: u32, target_words: u32) -> Option<Vec<u8>> {
-    if (src.len() as u32) < src_words.saturating_mul(8) {
-        return None;
-    }
-    let out_bytes = (target_words as usize) * 8;
-    let mut out = vec![0u8; out_bytes.max(src.len())];
-    out[..src.len()].copy_from_slice(src);
-
-    if target_words <= src_words {
-        out.truncate((src_words as usize) * 8);
-        return Some(out);
-    }
-
-    // Walk the source record chain to find the last block.  PRIMARY = 1
-    // is the first record's word position; size word is the i32 at that
-    // word's byte offset 0.
+fn store_image_live_end(src: &[u8], src_words: u32) -> Option<u32> {
+    // PRIMARY = 1 is the first record's word position.
     let mut rec: u32 = 1;
-    let mut last_rec: u32 = 1;
-    let mut last_size: i32 = 0;
+    let mut live_end: u32 = 1;
     while rec < src_words {
         let off = (rec as usize) * 8;
         if off + 4 > src.len() {
@@ -3457,32 +3472,55 @@ fn build_padded_store_image(src: &[u8], src_words: u32, target_words: u32) -> Op
         if sz == 0 {
             return None;
         }
-        last_rec = rec;
-        last_size = sz;
         let step = sz.unsigned_abs();
         rec = rec.checked_add(step)?;
+        if sz > 0 {
+            live_end = rec; // an active block: the image must reach past it
+        }
     }
-    if rec != src_words {
-        // Chain didn't terminate exactly at the end of the source — the
-        // image is malformed or doesn't follow the loft Store layout.
+    // Chain must terminate exactly at the end of the source, else the image is
+    // malformed or does not follow the loft Store layout.
+    if rec == src_words {
+        Some(live_end)
+    } else {
+        None
+    }
+}
+
+/// @PLAN38 — build the Store byte image to persist, exactly `target_words`
+/// long, with the record chain still valid.
+///
+/// Longer than the live data (the `bind_path` floor, or an active record at the
+/// tail): the remainder becomes one trailing free block.  Exactly as long: the
+/// chain ends where the last record does, with no free tail at all — which is
+/// the loft#710 case, where the tail was 43% of the file.  Either way the
+/// result is walkable, and the free list is not in the image: `Store::open`
+/// rebuilds it from this chain, so dropping a trailing free block loses
+/// nothing.
+///
+/// Returns `None` if the source bytes don't describe a walkable record chain,
+/// or if `target_words` would cut into live data.
+#[cfg(feature = "mmap")]
+fn build_padded_store_image(src: &[u8], src_words: u32, target_words: u32) -> Option<Vec<u8>> {
+    if (src.len() as u32) < src_words.saturating_mul(8) {
         return None;
     }
+    let live_end = store_image_live_end(src, src_words)?;
+    if target_words < live_end {
+        return None; // would truncate a live record
+    }
+    let out_bytes = (target_words as usize) * 8;
+    let mut out = vec![0u8; out_bytes];
+    let copy = (live_end as usize) * 8;
+    out[..copy].copy_from_slice(&src[..copy]);
 
-    let pad_words = target_words - src_words;
-    if last_size < 0 {
-        // Extend the trailing free block in-place.
-        let new_size = last_size.checked_sub(pad_words as i32)?;
-        let off = (last_rec as usize) * 8;
-        out[off..off + 4].copy_from_slice(&new_size.to_le_bytes());
-    } else {
-        // Active record at the tail — append a new free block right after it.
-        let new_rec = (last_rec).checked_add(last_size as u32)?;
-        if new_rec != src_words {
-            return None;
-        }
-        let new_size = -(pad_words as i32);
-        let off = (new_rec as usize) * 8;
-        out[off..off + 4].copy_from_slice(&new_size.to_le_bytes());
+    if target_words > live_end {
+        // One free block covers everything past the last record, whether that
+        // space came from padding up to the floor or from the arena's own slack.
+        let free_words = target_words - live_end;
+        let size = -i32::try_from(free_words).ok()?;
+        let off = (live_end as usize) * 8;
+        out[off..off + 4].copy_from_slice(&size.to_le_bytes());
     }
     Some(out)
 }

@@ -395,6 +395,20 @@ filesystem).
 |----------|-------------|
 | `file(path: text) -> File` | Opens the file at `path` and returns a `File` handle. |
 
+**A relative path stays inside the project.** `../` that steps above the
+directory the path starts from is not reachable, and *every* file operation says
+so the same way: `file()` reports `NotExists`, `f.size` reports no size,
+`content()` / `read_bytes` / `list_dir` read as absent, and a write — `f.write`,
+`f += …`, `write_bytes`, `set_file_size` — fails rather than creating the file.
+An **absolute** path is a different question and is not restricted; build one
+with `directory()` or `user_directory()` when a program genuinely writes outside
+its own tree.
+
+The write half used to escape this rule, which lost data quietly: `file("../log")`
+reported the file absent, so `f#next = f.size` read 0, and the documented append
+idiom below then overwrote from byte 0 while `f += …` really did write there
+(loft#708). A refused write is now observable — check `f.write(s).ok()`.
+
 ### Reading Text Files
 
 | Function | Description |

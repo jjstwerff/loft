@@ -871,6 +871,7 @@ impl Parser {
             // an out-of-bounds type index).  Both are fixed-width base types;
             // route them to their own db type so interp and native agree.
             let db_tp = self.io_scalar_db_tp(&read_type).unwrap_or(db_tp);
+            let db_tp = self.checked_io_db_tp(db_tp, &read_type, "f#read");
             // Resolve the final size expression: explicit `(n)` wins;
             // otherwise inferred from the cast type.  Bare `f#read`
             // with no `as T` or with a variable-width cast (`as text`)
@@ -1035,6 +1036,36 @@ impl Parser {
         }
     }
 
+    /// The db type a file read/write is about to bake into its op, checked.
+    ///
+    /// `u16::MAX` is `get_type`'s "I have no arm for this type" answer, and the
+    /// I/O ops index `Stores::types` with what they are given: on the
+    /// interpreter that is `index out of bounds: the len is N but the index is
+    /// 65535`, and on `--native` an unsatisfied `FileVal` bound reported against
+    /// generated Rust the author never wrote (loft#708).  Both said the wrong
+    /// thing about a program whose only fault is naming a type binary I/O
+    /// cannot serialise — `f += (1, 2)`.
+    ///
+    /// Refusing here, where the constant is minted, covers every such type at
+    /// once: `boolean`, `character` and `vector<T>` each arrived as their own
+    /// crash and were fixed one at a time, and the next `Type` variant would
+    /// have arrived the same way.  The substituted type keeps the IR walkable
+    /// for the rest of the parse; the error has already failed the compile.
+    fn checked_io_db_tp(&mut self, db_tp: u16, tp: &Type, op: &str) -> u16 {
+        if self.first_pass || db_tp != u16::MAX {
+            return db_tp;
+        }
+        let name = tp.name(&self.data);
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "{op}: '{name}' has no byte layout, so it cannot be written to or read \
+             from a file; use a number, `character`, `boolean`, `text`, a vector \
+             of those, or a struct whose fields are all fixed-width",
+        );
+        self.database.name("integer")
+    }
+
     pub(crate) fn write_to_file(
         &mut self,
         file_var: u16,
@@ -1103,6 +1134,7 @@ impl Parser {
         // type (see `f#read`'s matching override) so the write width matches the
         // read and both backends agree.
         let db_tp = self.io_scalar_db_tp(val_type).unwrap_or(db_tp);
+        let db_tp = self.checked_io_db_tp(db_tp, val_type, "write_file");
         let temp_var = self.vars.unique("wf", val_type, &mut self.lexer);
         for d in val_type.depend() {
             self.vars.depend(temp_var, d);

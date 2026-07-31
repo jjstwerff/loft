@@ -8676,6 +8676,10 @@ fn main() {
         // the imported `env.memory` say nothing about graphics — so they are not
         // counted here.  Otherwise a compute-only program that uses `par` would
         // start shipping the full WebGL2 page.
+        // loft#709: what a call that this target cannot serve does at RUNTIME.
+        // Placed after the shim and every library bridge have had their say, so
+        // it fills only names still free.
+        let stub_js = crate::native_utils::host_import_stub_js(&wasm_bytes);
         let minimal_page =
             crate::native_utils::html_wasm_import_modules(&wasm_bytes).is_some_and(|mods| {
                 mods.iter()
@@ -8713,19 +8717,27 @@ fn main() {
                         verb, list,
                     );
                 } else {
+                    // loft#709 — REPORT, do not refuse.  Whether a call can be
+                    // served is a fact about this run on this target, not about
+                    // whether the program is well-formed, so it belongs at
+                    // runtime: the page carries a stub per unserviceable name
+                    // (`host_import_stub_js`) that returns the declared zero and
+                    // says so in the console.  Refusing made one source fork
+                    // into two entry points differing only in which calls they
+                    // may NAME, which is exactly what two renderers exist to
+                    // avoid.  The diagnosis stays — it is the disposition that
+                    // was wrong.
                     eprintln!(
                         "loft: --html: this program calls {verb} the browser host does not \
                          provide:\n    {list}\n  \
                          The browser shim implements a SUBSET of the native surface — a canvas \
                          cannot do everything a desktop window can.\n  \
-                         Drop the call on this target, or add a handler to \
-                         doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
-                         If you drive the emitted wasm from your OWN host instead of loft's \
-                         page, pass --host-provided and this becomes a warning.\n  \
-                         (No HTML was written — the page would fail to instantiate, showing \
-                         only a LinkError with an import index.)"
+                         The page still builds and runs: each of these returns its zero value \
+                         (false / 0) and reports itself once in the browser console, so check \
+                         the result as you would any other failure.\n  \
+                         To serve one for real, add a handler to doc/loft-gl-wasm.js (or your \
+                         library's [wasm.bridge] host_js)."
                     );
-                    std::process::exit(1);
                 }
             }
         }
@@ -8851,6 +8863,7 @@ const imports={{loft_io:{{
   }},
   loft_host_release:(tag)=>{{ if(globalThis.loftExposed)globalThis.loftExposed.delete(String(tag)); if(globalThis.loftRelease)globalThis.loftRelease(tag); }}
 }}}};
+{stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
 // exactly as before (par then runs sequentially, same results).
@@ -8899,6 +8912,7 @@ const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
 for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
   try{{reg(imports,ctrl,()=>mem);}}catch(e){{console.error('loft host_js extension failed',e);}}
 }}
+{stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
 // exactly as before (par then runs sequentially, same results).

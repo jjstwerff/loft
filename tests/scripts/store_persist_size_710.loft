@@ -1,0 +1,65 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#710 — a persisted store's file size must be a fact about its CONTENT.
+//
+// Driven by tests/store_persist_loft.rs, which compares the resulting file
+// sizes across construction orders and content volumes.  Env in:
+//   LOFT_PERSIST_TEST_PATH   where to persist
+//   LOFT_PERSIST_TEST_N      record count
+//   LOFT_PERSIST_TEST_PER    coordinates per record
+//   LOFT_PERSIST_TEST_MODE   "whole" = fill each vector then insert
+//                            "interleaved" = insert empty, then grow round-robin
+//
+// The two modes hold the SAME records and differ only in the order the arena
+// saw the growth.  Interleaved is not a contrived shape: it is what a streaming
+// generator does, appending each incoming feature to whichever record owns it.
+#cwd
+
+struct Pt  { const x: i32, const y: i32 }
+struct Rec { const id: integer, const a: i32, const pts: vector<Pt> }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  n = (env_variable("LOFT_PERSIST_TEST_N") ?? "") as integer ?? 200;
+  per = (env_variable("LOFT_PERSIST_TEST_PER") ?? "") as integer ?? 40;
+  mode = env_variable("LOFT_PERSIST_TEST_MODE") ?? "whole";
+  if path == "" { println("no path"); return }
+
+  idx: hash<Rec[id]> = [];
+  if mode == "whole" {
+    for i in 0..n {
+      pts: vector<Pt> = [];
+      for j in 0..per {
+        pts += [Pt { x: ((i * 37 + j * 11) % 100000) as i32? ?? (0 as i32),
+                     y: ((i * 53 + j * 17) % 100000) as i32? ?? (0 as i32) }];
+      }
+      idx += [Rec { id: i, a: (i % 251) as i32? ?? (0 as i32), pts: pts }];
+    }
+  } else {
+    empty: vector<Pt> = [];
+    for i in 0..n {
+      idx += [Rec { id: i, a: (i % 251) as i32? ?? (0 as i32), pts: empty }];
+    }
+    for j in 0..per {
+      for i in 0..n {
+        t = idx[i];
+        if t != null {
+          t.pts += [Pt { x: ((i * 37 + j * 11) % 100000) as i32? ?? (0 as i32),
+                         y: ((i * 53 + j * 17) % 100000) as i32? ?? (0 as i32) }];
+        }
+      }
+    }
+  }
+
+  ok = store_persist_bind(idx, path);
+  // A digest over every stored value, so a file that got SMALLER by losing data
+  // cannot pass the size assertions: the driver compares this across modes.
+  h = 0; recs = 0; coords = 0;
+  for r in idx {
+    recs += 1;
+    h = (h * 31 + r.id + (r.a as integer) * 7) % 1000000007;
+    for p in r.pts { coords += 1; h = (h * 31 + (p.x as integer) + (p.y as integer) * 3) % 1000000007; }
+  }
+  println("persist {ok} records {recs} coords {coords} digest {h}");
+}
