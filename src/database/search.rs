@@ -537,8 +537,71 @@ impl Stores {
         }
     }
 
+    /// Remove `rec` from the collection **and release what it owned** — the
+    /// form a user-level removal (`c[key] = null`, `e#remove`) needs.
+    ///
+    /// [`Stores::remove`] deliberately only UNLINKS, because a SECONDARY index
+    /// (a sibling field's `other_indexes`) shares its records with the primary
+    /// collection and must never free them — the same split
+    /// [`Stores::dedup_keyed`] makes when a new insert displaces an existing
+    /// key. Nothing paired the unlink with a free on the removal side, so every
+    /// removal leaked: with a constant population of 300 records, six
+    /// insert-then-remove-all cycles grew claimed bytes 0.10 → 0.56 MB, and
+    /// re-inserting after removing everything grew the store instead of reusing
+    /// it. A long-lived store therefore grew without bound, and no compaction
+    /// could have reclaimed it — the blocks were still marked LIVE.
+    ///
+    /// Order matters: the claims are read out of the record's own fields, so
+    /// they must be released before the record is unlinked (a vector element is
+    /// shifted over by its successor) and before its block is freed.
+    pub fn remove_owned(&mut self, data: &DbRef, rec: &DbRef, db: u16) {
+        let parts = self.types[db as usize].parts.clone();
+        let content = match &parts {
+            Parts::Vector(c)
+            | Parts::Array(c)
+            | Parts::Sorted(c, _)
+            | Parts::Ordered(c, _)
+            | Parts::Hash(c, _)
+            | Parts::Radix(c, _)
+            | Parts::Index(c, _, _) => *c,
+            // Not a collection: `remove` panics on these, and it stays the one
+            // place that decides so.
+            _ => {
+                self.remove(data, rec, db);
+                return;
+            }
+        };
+        // Whether the element has a store block of its OWN, or lives inline in
+        // the container. Only the kinds `dedup_keyed` frees are freed here —
+        // `Array` / `Ordered` also hold separate records, but their removal
+        // path reads `rec` as an inline index and is wrong before this change
+        // too, so this does not extend to them.
+        let own_block = matches!(parts, Parts::Hash(..) | Parts::Index(..) | Parts::Radix(..));
+        let rec_nr = rec.rec;
+        if own_block {
+            // Unlink BEFORE releasing the claims, which is the order
+            // `dedup_keyed` uses and it is load-bearing: an `index`'s red-black
+            // links live in a FIELD of the record, so to `remove_claims` they
+            // look like owned children. Free first and it follows them into the
+            // live siblings and takes the subtree with it — the whole
+            // collection then reads back as "Item not found".
+            self.remove(data, rec, db);
+            self.remove_claims(rec, content);
+            self.store_mut(data).delete(rec_nr);
+        } else {
+            // Inline element: its successor is about to be shifted on top of
+            // it, so the claims have to be read out while the fields are still
+            // its own.
+            self.remove_claims(rec, content);
+            self.remove(data, rec, db);
+        }
+    }
+
     /**
     Remove a specific record from a structure.
+
+    UNLINK only — see [`Stores::remove_owned`] for the user-level form that also
+    releases the record's heap.
     # Panics
     When not in a structure.
     */

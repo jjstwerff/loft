@@ -1977,7 +1977,7 @@ pub fn OpRemove<S: IterState>(
                     tree::next(store, &cur_ref)
                 }
             };
-            stores.remove(&data, &cur_ref, tp);
+            stores.remove_owned(&data, &cur_ref, tp);
             if n_after == 0 {
                 // Removed the last element: signal end-of-iteration.
                 state.set_finish(u32::MAX);
@@ -2017,7 +2017,7 @@ pub fn OpRemove<S: IterState>(
 pub fn OpHashRemove(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, rec: DbRef, tp: i32) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if rec.rec != 0 {
-        stores.remove(&data, &rec, tp as u16);
+        stores.remove_owned(&data, &rec, tp as u16);
     }
 }
 

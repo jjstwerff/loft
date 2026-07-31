@@ -118,6 +118,48 @@ leak guards above are the canonical regression record for this surface.
 
 ---
 
+## Removing from a collection — unlink is not the same as free
+
+Two operations, deliberately separate (`src/database/search.rs`):
+
+- **`Stores::remove`** — UNLINK only. It must stay that way, because a SECONDARY
+  index (a sibling field's `other_indexes`) shares its records with the primary
+  collection; freeing there corrupts the primary. `dedup_keyed` makes exactly
+  this split when a new insert displaces an existing key.
+- **`Stores::remove_owned`** — unlink AND release. This is what a user-level
+  removal (`c[key] = null`, `e#remove`) routes through, on both backends.
+
+Nothing paired the unlink with a free on the removal side, so **every removal
+leaked**: a constant population of 300 records grew claimed bytes 0.10 → 0.56 MB
+over six insert-then-remove-all cycles, and re-inserting after removing
+everything grew the store instead of reusing it. It applied to every collection
+kind and every element shape — flat records leaked least, which is why it looked
+like "only records that own a vector", and a long-lived store grew without
+bound. No compaction could have reclaimed any of it: the blocks were still
+marked LIVE.
+
+**The order is per-kind and it is load-bearing.**
+
+| element lives | order | why |
+|---|---|---|
+| **inline** (`vector`, `sorted`) | claims → unlink | the successor is shifted on top of it, so the fields must be read while they are still its own |
+| **own block** (`hash`, `index`, `radix`) | unlink → claims → free block | an `index`'s red-black links live in a FIELD, so before the unlink they look to `remove_claims` like owned children — free first and it follows them into the live siblings and takes the subtree with it |
+
+Getting that backwards is not subtle in its symptom: the whole collection reads
+back as `Item not found` from `tree::remove_iter`.
+
+`Array` / `Ordered` are excluded from the block free — they hold separate
+records too, but their removal path reads `rec` as an inline index and was wrong
+before this, so widening to them would compound a different bug. They are not
+reachable from loft syntax today.
+
+Guard: `tests/scripts/removal-frees-what-the-element-owned.loft` (five
+collection shapes, measured by record count so allocator rounding cannot mask
+it, plus a reuse check that the freed blocks are taken back rather than
+re-grown).
+
+---
+
 ## Assigned in an `if`/`else` branch — who establishes the slot
 
 `scan_if` (`src/scopes.rs`) has to decide where a variable that a branch assigns

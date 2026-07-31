@@ -1324,7 +1324,7 @@ impl State {
                         tree::next(store, &cur_ref)
                     }
                 };
-                self.database.remove(&data, &cur_ref, tp);
+                self.database.remove_owned(&data, &cur_ref, tp);
                 if n_after == 0 {
                     // Removed the last element in iteration order; signal end-of-iteration
                     // by overwriting the finish slot (same as step's put_var(state_var-12)).
@@ -1804,7 +1804,7 @@ impl State {
         let rec = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         if rec.rec != 0 {
-            self.database.remove(&data, &rec, tp);
+            self.database.remove_owned(&data, &rec, tp);
         }
     }
 

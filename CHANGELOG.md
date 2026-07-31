@@ -21,6 +21,28 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — removing from a collection now gives the memory back
+
+Removing an element unlinked it and stopped there. The element's storage — and
+anything it owned, a `text` or a nested `vector` — was never released, so a
+program that keeps a collection at a steady size still grew forever:
+
+```
+cycle 0: 300 records live, 0.10 MB claimed
+cycle 5: 300 records live, 0.56 MB claimed     // same 300 records
+```
+
+Emptying a collection and refilling it grew the store rather than reusing the
+space. Every collection kind was affected and every element shape; records
+holding only numbers leaked least, which is why this could sit unnoticed.
+
+Now `c[key] = null` and `e#remove` release what the element owned, the space
+returns to the free list, and refilling reuses it — a long-running program that
+adds and removes stays flat instead of climbing. Nothing to change in your code.
+
+If you were working around it by reusing element objects instead of removing
+them, you can stop.
+
 ### Unreleased — `reserve(v, n)`, for when many vectors grow at once
 
 Appending to a vector doubles it when it runs out, which is the right default and
