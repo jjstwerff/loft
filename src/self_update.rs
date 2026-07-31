@@ -117,6 +117,61 @@ pub fn host_triple() -> String {
     }
 }
 
+// ── @PLN78 step 5 — the advisory half ───────────────────────────────────────────
+//
+// The plan called 30 and @PLAN12 §6.7 "half a system" each: 6.7 produces the yank
+// and advisory signals, and this is what reacts to them.
+//
+// The load-bearing choice is WHICH version to check.  Checking only the candidate
+// would miss the case that matters most: a registry that is stalled, pinned, or
+// simply has nothing newer offers no update at all, and a user sitting on a release
+// with a known advisory would then be told "you are up to date" — technically true
+// and exactly wrong.  So the RUNNING version is checked whether or not an update
+// exists, and that is the loop closing.
+//
+// It reports; it does not restrict.  Whether to keep running a flagged release is
+// the user's call on the user's machine, and a tool that refuses to start is one
+// they will work around rather than heed.  What it owes them is the advisory id,
+// what it is, and where the fix landed.
+
+/// An advisory against a specific loft version, flattened for reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Flag {
+    pub version: String,
+    pub severity: String,
+    pub id: String,
+    pub summary: String,
+    /// The release the fix landed in, when one is published.
+    pub fixed_in: Option<String>,
+}
+
+/// Advisories against loft `version`, most severe first.
+///
+/// Pure, so the reporting rules are testable without a feed to fetch.
+#[must_use]
+pub fn flags_for(feed: &crate::registry_advisories::AdvisoryFeed, version: &str) -> Vec<Flag> {
+    let mut hits: Vec<Flag> = crate::registry_advisories::classify(TOOLCHAIN_PKG, version, feed)
+        .into_iter()
+        .map(|c| Flag {
+            version: c.version,
+            severity: c.severity.as_str().to_string(),
+            id: c.advisory_id,
+            summary: c.summary,
+            fixed_in: c.fixed_in,
+        })
+        .collect();
+    // Most severe first: a critical must not be buried under a note.
+    hits.sort_by_key(|f| {
+        std::cmp::Reverse(
+            crate::registry_advisories::classify(TOOLCHAIN_PKG, version, feed)
+                .iter()
+                .find(|c| c.advisory_id == f.id)
+                .map_or(0, |c| c.severity.rank()),
+        )
+    });
+    hits
+}
+
 // ── @PLN78 step 4 — applying a staged bundle ────────────────────────────────────
 //
 // The update unit is NOT a directory.  `verify_self::bundle_root` is
@@ -745,5 +800,62 @@ mod tests {
             std::fs::read_to_string(root.join("default/a.loft")).unwrap(),
             "tampered\n"
         );
+    }
+
+    // ── @PLN78 step 5 — advisories against the RUNNING version ───────────────────
+
+    fn feed(json: &str) -> crate::registry_advisories::AdvisoryFeed {
+        crate::registry_advisories::parse_advisories(json).expect("parse advisories")
+    }
+
+    const ADVISORIES: &str = r#"{
+      "schema_version": 1, "updated": "2026-07-31T00:00:00Z", "retention_days": 365,
+      "advisories": [
+        { "id": "GHSA-aaaa", "severity": "security_critical",
+          "summary": "store image adopted without verification",
+          "published": "2026-07-01T00:00:00Z", "references": [],
+          "packages": [{ "name": "loft", "affected": ">=2026.6.0, <2026.7.3",
+                         "fixed_in": "2026.7.3" }] },
+        { "id": "GHSA-bbbb", "severity": "bug",
+          "summary": "formatter drops a trailing comma",
+          "published": "2026-07-02T00:00:00Z", "references": [],
+          "packages": [{ "name": "loft", "affected": ">=2026.7.0, <2026.7.3",
+                         "fixed_in": "2026.7.3" }] }
+      ]
+    }"#;
+
+    /// The case the step exists for: the user is RUNNING a flagged release.  A stalled
+    /// registry offers no update, so checking only the candidate would say nothing.
+    #[test]
+    fn a_flagged_running_version_is_reported_with_its_fix() {
+        let flags = flags_for(&feed(ADVISORIES), "2026.7.2");
+        assert_eq!(flags.len(), 2, "{flags:?}");
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.id == "GHSA-aaaa" && f.fixed_in.as_deref() == Some("2026.7.3")),
+            "the fix version must reach the user: {flags:?}"
+        );
+    }
+
+    /// Most severe first — a critical must not be buried under a cosmetic note.
+    #[test]
+    fn the_most_severe_advisory_is_reported_first() {
+        let flags = flags_for(&feed(ADVISORIES), "2026.7.2");
+        assert_eq!(flags[0].id, "GHSA-aaaa", "critical must lead: {flags:?}");
+        assert_eq!(flags[0].severity, "security_critical");
+    }
+
+    /// A fixed release is silent — the whole point of publishing the fix.
+    #[test]
+    fn a_fixed_version_has_no_flags() {
+        assert!(flags_for(&feed(ADVISORIES), "2026.7.3").is_empty());
+    }
+
+    /// And a release predating the affected range is silent too, so the check cannot
+    /// simply be "warn on everything".
+    #[test]
+    fn a_version_outside_the_affected_range_has_no_flags() {
+        assert!(flags_for(&feed(ADVISORIES), "2026.5.0").is_empty());
     }
 }

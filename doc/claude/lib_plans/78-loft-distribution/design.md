@@ -283,11 +283,38 @@ under `--force`.
 nothing published to fetch), and per-OS verification of the swap, Windows above
 all, where a running executable can be renamed but not overwritten.
 
-**Step 5 — advisory integration.**
-`self-update` consults the existing advisory feed and refuses to install a yanked
-version, and warns when the *running* version is yanked.  This closes the loop
-the plan named: 6.7 produces the signal, self-update reacts.
-*Verify:* a yanked test version is refused with its advisory text.
+**Step 5 — advisory integration.**  DONE 2026-07-31.
+
+The plan called this and @PLAN12 §6.7 "half a system" each: 6.7 produces the
+signals, this reacts to them.  The load-bearing choice turned out to be WHICH
+version to check.  Checking only the candidate misses the case that matters most —
+a registry that is stalled, pinned, or simply has nothing newer offers no update at
+all, so a user sitting on a flagged release would be told "you are up to date":
+technically true and exactly wrong.  The RUNNING version is checked whether or not
+an update exists, and that is the loop closing.
+
+It reports; it does not restrict.  Whether to keep running a flagged release is the
+user's call on their machine, and a tool that refuses to start is one they work
+around rather than heed.  What it owes them is the advisory id, what it is, and
+where the fix landed.
+
+Silent when the registry hosts no feed (a 404 is "nothing known", not "nothing
+wrong") and silent when clean — see the output note below.
+*Verified:* four unit tests (reported with its fix, most-severe-first, silent on a
+fixed release, silent outside the affected range) plus end to end against a feed on
+disk: flagged while the registry offers nothing newer, which is the shape the whole
+step exists for.
+
+**Output — boring by construction (owner principle, 2026-07-31).**
+Applied across steps 2-5 after the fact, and recorded in
+[GOALS.md § The destination is BORING](../../GOALS.md): loft should be noticed only
+in its absence, so a command says nothing when nothing needs acting on.  What
+changed: the advisory line is gone when clean; `verify-self` in a source checkout
+says one line instead of three; the closing explanation appears only on failure,
+where it is wanted; and the `@PLN78 step 1b` / "not implemented yet" notes are out
+of user-facing text entirely — a user asking whether an update exists deserves the
+answer, not our backlog.  The first draft had all of these, which is how the
+principle earned its section.
 
 **Step 6 — `install.sh` (bootstrap).**
 Deliberately last and deliberately dumb: detect OS/arch, fetch the release

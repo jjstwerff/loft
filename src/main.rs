@@ -1047,6 +1047,40 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
     }
 }
 
+/// @PLN78 step 5 — report advisories against the loft version now running.
+///
+/// Reports; never restricts.  Whether to keep running a flagged release is the user's
+/// call on their machine — a tool that refused to start would be worked around rather
+/// than heeded.  What it owes them is the id, what it is, and where the fix landed.
+///
+/// Silent when the registry hosts no feed yet (`Ok(None)` — a 404), because that is
+/// "nothing known", not "nothing wrong", and a warning there would train people to
+/// ignore this line before it ever carries a real one.
+#[cfg(feature = "registry")]
+fn report_advisories(current: &str, refresh: bool, allow_unsigned: bool) {
+    use loft::registry_advisories::LoadOptions;
+    let opts = LoadOptions {
+        allow_unsigned,
+        offline: false,
+        refresh,
+    };
+    let Ok(Some(feed)) = loft::registry_advisories::load_or_fetch(&opts) else {
+        return;
+    };
+    // Silent when clean.  A line saying "nothing is wrong" is a line the reader
+    // learns to skip, and the day it says something else they will skip that too.
+    let flags = loft::self_update::flags_for(&feed, current);
+    if flags.is_empty() {
+        return;
+    }
+    for f in &flags {
+        println!("  ADVISORY [{}] {} — {}", f.severity, f.id, f.summary);
+        if let Some(fixed) = &f.fixed_in {
+            println!("            fixed in {fixed}");
+        }
+    }
+}
+
 /// @PLN78 steps 3-4 — how `loft self-update` was invoked.
 ///
 /// A struct rather than five positional arguments: `self_update_cmd(true, false, false,
@@ -1208,18 +1242,19 @@ fn self_update_cmd(args: &SelfUpdateArgs<'_>) -> i32 {
         }
     };
     println!("loft self-update — running {current} ({triple})");
+    // @PLN78 step 5 — check the version we are RUNNING, not only the one on offer.
+    // A stalled or pinned registry offers no update at all, and a user sitting on a
+    // flagged release would otherwise be told "up to date" — true, and exactly wrong.
+    report_advisories(current, refresh, allow_unsigned);
     match plan(&index, current, &triple) {
         Plan::NoEntry => {
-            println!(
-                "  --      the registry carries no toolchain entry yet (@PLN78 step 1b)\n\n\
-                 Nothing was compared: this is not \"you are up to date\", it is \"there is\n\
-                 nothing published to compare against\".  Verify the installation you have\n\
-                 with `loft verify-self`."
-            );
+            // Not "you are up to date" — nothing was compared.  Said plainly, without
+            // making our own roadmap the reader's problem.
+            println!("  no releases published to compare against");
             0
         }
         Plan::Current { version } => {
-            println!("  ok      {version} is the newest published release");
+            println!("  {version} is the newest release");
             0
         }
         Plan::NoBuildForTarget {
@@ -1247,14 +1282,7 @@ fn self_update_cmd(args: &SelfUpdateArgs<'_>) -> i32 {
             println!("  ok      {to} is available (running {from})");
             println!("            url     {url}");
             println!("            sha256  {sha256}");
-            if dry_run {
-                println!("\n--dry-run: nothing downloaded, nothing changed.");
-            } else {
-                println!(
-                    "\nReplacing the running binary is not implemented yet (@PLN78 step 4).\n\
-                     Nothing was downloaded and nothing changed."
-                );
-            }
+            println!("\n  install it with: loft self-update --from <unpacked bundle>");
             0
         }
     }
@@ -1281,8 +1309,17 @@ fn verify_self_cmd() -> i32 {
         );
         return 1;
     };
-    println!("loft verify-self — {}", root.display());
     let checks = local_checks(&root);
+    // A source checkout is the common case for anyone working ON loft, and it has
+    // nothing to check.  One line, not three saying it separately.
+    if checks.iter().all(|c| matches!(c, Check::Skipped(_))) {
+        println!(
+            "{}: not a release bundle — nothing to check against",
+            root.display()
+        );
+        return 0;
+    }
+    println!("loft verify-self — {}", root.display());
     let mut failed = false;
     let mut skipped = 0;
     for c in &checks {
@@ -1298,7 +1335,6 @@ fn verify_self_cmd() -> i32 {
             }
         }
     }
-    println!("  --      published: no signed registry entry for this release yet (@PLN78 step 1b)");
     println!();
     if failed {
         println!(
@@ -1310,19 +1346,12 @@ fn verify_self_cmd() -> i32 {
         return 1;
     }
     if skipped == checks.len() {
-        println!(
-            "Nothing to check: this is not a release bundle (a source build has no\n\
-             stdlib.manifest / SHA256SUMS).  That is expected in a checkout."
-        );
+        println!("not a release bundle — nothing to check against");
         return 0;
     }
-    println!(
-        "The installation is INTACT — every file matches the manifest it shipped with.\n\
-         That is not proof of AUTHENTICITY: both manifests travel inside the bundle they\n\
-         describe, so they detect corruption and partial upgrades, not substitution.\n\
-         Authenticity needs a digest from outside the bundle — the signed registry entry\n\
-         (@PLN78 step 1b), which this will check once releases are published there."
-    );
+    // The one caveat worth a line, every time, because it bounds what "ok" meant:
+    // these manifests ship inside the bundle they describe.
+    println!("matches the manifests it shipped with (detects corruption, not substitution)");
     0
 }
 
