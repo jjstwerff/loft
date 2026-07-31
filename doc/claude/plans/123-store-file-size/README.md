@@ -43,33 +43,17 @@ only ever grows.
 The waste splits in two, and the split is only visible with the `tail%` / `inner%`
 reading `store_memory()` now carries:
 
-| | recovers | needs | risk | when |
-|---|---|---|---|---|
-| **A** — coalesce + truncate a bound store | the free TAIL above the last record | no record movement | low — everything above the last record is free by definition | **opt-in**, `store_reclaim(collection)` |
-| **B** — compact when writing an image | the INTERIOR free space between records | relocation + pointer rewriting | contained — nothing holds a `DbRef` into a fresh copy | automatic, gated on the ratio |
-
-**A is opt-in on purpose.** Its benefit is near-zero in every workload measured
-here except one (churn and refill both hold capacity flat, so a reclaimer would
-walk and find nothing), its trigger cannot be made cheap enough to sit on the
-free path, and a store that shrinks then grows again would be truncated and
-re-grown at 7/3 — thrashing the very case it targets. Whether a drop is permanent
-is something the program knows and the runtime cannot infer. B stays automatic
-because persist already walks the chain, so its gate costs nothing new.
+| | recovers | needs | risk |
+|---|---|---|---|
+| **A** — coalesce + truncate a bound store | the free TAIL above the last record | no record movement | low — everything above the last record is free by definition |
+| **B** — compact when writing an image | the INTERIOR free space between records | relocation + pointer rewriting | contained — nothing holds a `DbRef` into a fresh copy |
 
 ## Sub-arcs
 
-Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
-
 | Item | Source | Status |
 |---|---|---|
-| **A0** — trust the high-water mark (assertion only) | [DESIGN.md](DESIGN.md) | Open — inert |
-| **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
-| **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
-| **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | Open — first behaviour change |
-| **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | Open |
-| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open |
-| **B1** — relocate vs re-insert, decided by measurement | [DESIGN.md](DESIGN.md) | Open |
-| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open |
+| **A** — a bound store's file shrinks to its high-water mark | this README | Open — designed |
+| **B** — compact the image when writing it, gated on `used%` | this README + [DATABASE.md](../../DATABASE.md) | Open — needs the relocation walk |
 
 ### A — truncate the tail
 
@@ -81,18 +65,16 @@ almost nothing.
 Safe by construction: everything above the last claimed block is free, so no live
 record and no `DbRef` is affected. Recovers ~59% of the case above on its own.
 
-Reached through `store_reclaim(collection)` — the program says when. "Bare
-minimum for actual changes" taken literally: do nothing at all unless asked.
-`Store::delete` keeps an O(1) tally of freed words so the call can return early
-without walking; nothing on the free path ever walks the chain.
+The trigger wants to be cheap and rare — `used%` is already computed by
+`Store::usage`, and this is the "bare minimum for actual changes" half: do nothing
+until a store has actually given a lot back.
 
 ### B — compact the image
 
 Compact while **writing** the image, not in the live arena. Nothing holds a
 `DbRef` into a fresh copy, so there are no inbound pointers to fix and no way to
 interfere with running code — which is what makes live-arena compaction dangerous
-and this version not. Gated on the live-vs-mark ratio, which persist already has
-from the chain walk it does anyway — so a dense store pays one comparison.
+and this version not. Gate on `used%`.
 
 Ceiling is the fresh-build number: 1,042,528 → ~179,072 bytes for the same 300
 records.
@@ -124,10 +106,8 @@ Probes graduate to `tests/scripts/`.
 
 ## Open design questions
 
-1. ~~When does A fire?~~ **Settled: the program calls it.** Automatic was
-   rejected — the benefit is near-zero in every measured workload but one, the
-   trigger cannot be cheap on the free path, and a shrink-then-grow store would
-   thrash. See DESIGN.md § A3.
+1. **When does A fire?** On free when the freed block is the last one, at an
+   explicit sync point, or on a `used%` threshold. Cheapest that still works.
 2. **Does `MmapStorage::resize` shrink cleanly** on every target, and what happens
    to a reader that has the file mapped concurrently?
 3. **Does B relocate, or re-insert?** Re-inserting into a fresh collection reuses
