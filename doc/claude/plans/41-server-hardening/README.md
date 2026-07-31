@@ -26,8 +26,8 @@ Two facts closed it, both checkable rather than argued:
 
 So the items are not refused, and none is blocked on design.  If a consumer wants
 binary broadcast, the place to ask is an issue on `loft-libs-net`, where the code
-and its CI are — see [LIBRARIES.md](../../LIBRARIES.md) for the current API before
-re-deriving any of this.
+and its CI are — build the catalogue with `make libcatalogue` and read `LIBRARIES.md` for the
+current API before re-deriving any of this.
 
 ---
 
