@@ -1250,3 +1250,21 @@ fn installer_and_self_update_agree_on_the_published_triples() {
         );
     }
 }
+
+/// @PLN78 step 7 — every triple we PUBLISH must also be rebuilt from source.
+///
+/// The two lists drift in one direction that is silent: adding a target to `release.yml`
+/// ships a binary, and forgetting the matching `repro-build.yml` row means nobody ever
+/// rebuilds it — the verification gap looks exactly like full coverage from the outside.
+#[test]
+fn repro_matrix_covers_every_published_triple() {
+    let wf =
+        std::fs::read_to_string(".github/workflows/repro-build.yml").expect("read repro-build.yml");
+    for triple in loft::self_update::PUBLISHED_TRIPLES {
+        assert!(
+            wf.contains(triple),
+            "`{triple}` is published but never rebuilt: add a matrix row to \
+             .github/workflows/repro-build.yml (on the runner release.yml builds it on)"
+        );
+    }
+}
