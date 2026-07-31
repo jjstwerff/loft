@@ -1288,19 +1288,34 @@ impl Stores {
     /// standalone native bundle), so "program + assets" is a portable bundle
     /// that runs from any cwd.  Empty `source_dir` (no anchor) falls back to
     /// cwd, never to a wrong file.
+    ///
+    /// `None` means the path leaves the project (loft#708) — the caller must
+    /// answer as it would for a file that is not there.  The verdict lives on
+    /// this side of the boundary, not at each call site, because a file op that
+    /// forgot to ask still ended up writing: `file("../x")` reported
+    /// `NotExists` while `f.write` / `f += …` / `write_bytes` happily created
+    /// the file, so the documented append idiom `f#next = f.size` seeked to 0
+    /// and overwrote what was already there.  Returning an `Option` is what
+    /// makes that unforgettable — a new file op cannot compile without saying
+    /// what it does when the answer is "not reachable".
     #[must_use]
-    pub fn resolve_path(&self, raw: &str) -> String {
+    pub fn resolve_path(&self, raw: &str) -> Option<String> {
+        if !crate::codegen_runtime::path_contained(raw) {
+            return None;
+        }
         if !self.program_relative || self.source_dir.is_empty() {
-            return raw.to_string();
+            return Some(raw.to_string());
         }
         let p = std::path::Path::new(raw);
         if p.is_absolute() {
-            return raw.to_string();
+            return Some(raw.to_string());
         }
-        std::path::Path::new(&self.source_dir)
-            .join(p)
-            .to_string_lossy()
-            .into_owned()
+        Some(
+            std::path::Path::new(&self.source_dir)
+                .join(p)
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 
     /// Plan-07 phase 4c — Stores-side counterpart of `State::raise`.

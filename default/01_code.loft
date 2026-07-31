@@ -1599,6 +1599,11 @@ fn OpParallelJoin();
 // O8.1a: Pre-allocate vector capacity so subsequent OpNewRecord calls never resize.
 fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
 #rust"vector::pre_alloc_vector(&@r, u32::from(@capacity), u32::from(@elem_size), &mut s.database.allocations);"
+// loft#710: the `reserve(v, n)` builtin.  Unlike OpPreAllocVector the count is a
+// RUNTIME value (a generator rarely knows its counts at compile time, and a const
+// u16 caps at 65535), and it grows a vector that already has a record.
+fn OpReserveVector(r: vector, count: integer, elem_size: const u16);
+#rust"vector::reserve_vector(&@r, @count, u32::from(@elem_size), &mut s.database.allocations);"
 // --- Vector aggregates ---
 // Smallest element in a vector, or null when the vector is empty (@PLN102 keystone
 // step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).

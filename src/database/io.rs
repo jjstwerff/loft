@@ -5,7 +5,6 @@
 
 use crate::database::{Parts, Stores};
 use crate::keys::DbRef;
-#[cfg(not(feature = "wasm"))]
 use crate::store::Store;
 use crate::vector;
 #[cfg(not(feature = "wasm"))]
@@ -13,13 +12,27 @@ use std::collections::BTreeMap;
 #[cfg(not(feature = "wasm"))]
 use std::io::Write as _;
 
-#[cfg(not(feature = "wasm"))]
 enum Format {
     TextFile = 1,
     _LittleEndian = 2,
     _BigEndian = 3,
     Directory = 4,
     NotExists = 5,
+}
+
+/// The state of a `File` handle for a path that is not there: no position, no
+/// size, `NotExists`.
+///
+/// Size stays 0 rather than the null every other "absent" answer uses, because
+/// `File.size` is declared `not null` — `format == NotExists` is where a handle
+/// says there is no file.  It matters that this is written down once: the
+/// containment refusal used to skip filling the struct at all, and a handle
+/// then carried whatever its fields happened to start as (loft#708).
+fn fill_absent(store: &mut Store, file: &DbRef) {
+    store.set_long(file.rec, file.pos, 0); // size
+    store.set_long(file.rec, file.pos + 8, i64::MIN); // current
+    store.set_long(file.rec, file.pos + 16, i64::MIN); // next
+    store.set_byte(file.rec, file.pos + 32, 0, Format::NotExists as i32);
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -39,7 +52,7 @@ fn fill_file(path: &std::path::Path, store: &mut Store, file: &DbRef) -> bool {
         store.set_byte(file.rec, file.pos + 32, 0, tp as i32);
         true
     } else {
-        store.set_byte(file.rec, file.pos + 32, 0, Format::NotExists as i32);
+        fill_absent(store, file);
         false
     }
 }
@@ -452,7 +465,16 @@ impl Stores {
                 .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned()
         };
-        let resolved = self.resolve_path(&raw);
+        let Some(resolved) = self.resolve_path(&raw) else {
+            // Outside the project: answer exactly as for a path that is not
+            // there, rather than leaving the struct's fields at their zero
+            // defaults — `.size` would read 0, which is a claim about an EMPTY
+            // file, and the append idiom `f#next = f.size` then seeks to 0
+            // (loft#708).
+            let store = self.store_mut(file);
+            fill_absent(store, file);
+            return false;
+        };
         let store = self.store_mut(file);
         let path = std::path::Path::new(&resolved);
         fill_file(path, store, file)
@@ -489,13 +511,16 @@ impl Stores {
         let store = self.store_mut(file);
         store.set_long(file.rec, file.pos + 8, i64::MIN);
         store.set_long(file.rec, file.pos + 16, i64::MIN);
-        if crate::wasm_assets::asset_exists(&path) {
+        // Same containment verdict as the native path — the browser has no
+        // project directory of its own, but a program must not read one answer
+        // here and another there (loft#708).
+        if crate::codegen_runtime::path_contained(&path) && crate::wasm_assets::asset_exists(&path)
+        {
             store.set_long(file.rec, file.pos, 0);
-            store.set_byte(file.rec, file.pos + 32, 0, 1); // TextFile
+            store.set_byte(file.rec, file.pos + 32, 0, Format::TextFile as i32);
             true
         } else {
-            store.set_long(file.rec, file.pos, i64::MIN);
-            store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
+            fill_absent(store, file);
             false
         }
     }
@@ -515,17 +540,22 @@ impl Stores {
         let store = self.store_mut(file);
         store.set_long(file.rec, file.pos + 8, i64::MIN);
         store.set_long(file.rec, file.pos + 16, i64::MIN);
+        // Same containment verdict as the native path (loft#708).
+        if !crate::codegen_runtime::path_contained(&file_path) {
+            fill_absent(store, file);
+            return false;
+        }
         if crate::wasm::host_fs_is_dir(&file_path) {
             store.set_long(file.rec, file.pos, i64::MIN);
-            store.set_byte(file.rec, file.pos + 32, 0, 4); // Directory
+            store.set_byte(file.rec, file.pos + 32, 0, Format::Directory as i32);
             true
         } else if crate::wasm::host_fs_is_file(&file_path) {
             let sz = crate::wasm::host_fs_file_size(&file_path);
             store.set_long(file.rec, file.pos, sz.max(0));
-            store.set_byte(file.rec, file.pos + 32, 0, 1); // TextFile
+            store.set_byte(file.rec, file.pos + 32, 0, Format::TextFile as i32);
             true
         } else {
-            store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
+            fill_absent(store, file);
             false
         }
     }
@@ -533,7 +563,9 @@ impl Stores {
     #[cfg(not(feature = "wasm"))]
     pub fn get_dir(&mut self, file_path: &str, result: &DbRef) -> bool {
         // #255 / @PLN9: re-home a relative dir path against the program anchor.
-        let resolved = self.resolve_path(file_path);
+        let Some(resolved) = self.resolve_path(file_path) else {
+            return false; // outside the project — nothing to list
+        };
         let path = std::path::Path::new(&resolved);
         if let Ok(iter) = std::fs::read_dir(path) {
             let vector = DbRef {
@@ -620,8 +652,11 @@ impl Stores {
     */
     #[cfg(feature = "png")]
     pub fn get_png(&mut self, file_path: &str, result: &DbRef) -> bool {
-        // #255 / @PLN9: re-home against the program anchor.
-        let resolved = self.resolve_path(file_path);
+        // #255 / @PLN9: re-home against the program anchor.  Outside the project
+        // reads as absent, like any other file (loft#708).
+        let Some(resolved) = self.resolve_path(file_path) else {
+            return false;
+        };
         let store = self.store_mut(result);
         if let Ok((img, width, height)) = crate::png_store::read(&resolved, store) {
             if let Some(name) = std::path::Path::new(&resolved).file_name() {
@@ -666,10 +701,17 @@ impl Stores {
             let f_nr = self.files.len() as i32;
             // #255 / @PLN9: resolve against the program anchor before borrowing
             // the store mutably.
-            let resolved_name = {
+            let resolved = {
                 let s = self.store(file);
                 let raw = s.get_str(s.get_u32_raw(file.rec, file.pos + 24)).to_owned();
                 self.resolve_path(&raw)
+            };
+            // Outside the project: `file()` already reported this path absent,
+            // so creating it here is the disagreement loft#708 is about.  A
+            // failed write is observable — `write` maps false to
+            // `FileResult.Other`.
+            let Some(resolved_name) = resolved else {
+                return false;
             };
             let s = self.store_mut(file);
             let mut file_ref = s.get_i32_raw(file.rec, file.pos + 28);
@@ -709,7 +751,11 @@ impl Stores {
     #[must_use]
     pub fn fs_list_dir(&mut self, path: &str) -> DbRef {
         // #255 / @PLN9: re-home a relative dir path against the program anchor.
-        let resolved = self.resolve_path(path);
+        // Outside the project reads as absent — the same NULL a missing
+        // directory gives (loft#708).
+        let Some(resolved) = self.resolve_path(path) else {
+            return DbRef::NULL;
+        };
         // @PLN102 H4 — a MISSING / non-directory path lists as NULL (the null
         // vector), distinct from an EMPTY-but-present directory (a length-0 vector).
         #[cfg(feature = "wasm")]
@@ -751,8 +797,12 @@ impl Stores {
     /// template.
     #[must_use]
     pub fn fs_read_bytes(&mut self, path: &str) -> DbRef {
-        // #255 / @PLN9: re-home against the program anchor.
-        let resolved = self.resolve_path(path);
+        // #255 / @PLN9: re-home against the program anchor.  Outside the
+        // project reads as absent — the same NULL a missing file gives
+        // (loft#708).
+        let Some(resolved) = self.resolve_path(path) else {
+            return DbRef::NULL;
+        };
         // @PLN102 H4 — a MISSING / unreadable file reads as NULL (the null vector),
         // distinct from an EMPTY-but-present file (a length-0 vector).  `None` is the
         // absent case; `Some(v)` (possibly empty) is a real read.
@@ -784,8 +834,12 @@ impl Stores {
     /// `write_bytes` builtin on both backends via its `#rust` template.
     #[must_use]
     pub fn fs_write_bytes(&mut self, path: &str, bytes: DbRef) -> bool {
-        // #255 / @PLN9: re-home against the program anchor.
-        let resolved = self.resolve_path(path);
+        // #255 / @PLN9: re-home against the program anchor.  A path `file()`
+        // reports absent must not be creatable here (loft#708); `false` is the
+        // documented failure answer.
+        let Some(resolved) = self.resolve_path(path) else {
+            return false;
+        };
         // Read the byte payload out of the `vector<u8>` (same layout
         // `text_from_bytes_native` reads): inner record at (bytes.rec,
         // bytes.pos), live length at offset 4, payload from offset 8.

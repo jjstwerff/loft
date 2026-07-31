@@ -1156,7 +1156,7 @@ fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
 /// then stats it.
 fn n_is_dir(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
-    let new_value = crate::codegen_runtime::fs_is_dir(&stores.resolve_path(v_path.str()));
+    let new_value = crate::codegen_runtime::fs_is_dir_at(stores.resolve_path(v_path.str()));
     stores.put(stack, new_value);
 }
 
@@ -1164,7 +1164,7 @@ fn n_is_dir(stores: &mut Stores, stack: &mut DbRef) {
 /// `default/02_files.loft`.
 fn n_is_file(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
-    let new_value = crate::codegen_runtime::fs_is_file(&stores.resolve_path(v_path.str()));
+    let new_value = crate::codegen_runtime::fs_is_file_at(stores.resolve_path(v_path.str()));
     stores.put(stack, new_value);
 }
 

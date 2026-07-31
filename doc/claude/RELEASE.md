@@ -900,22 +900,38 @@ tag and re-runs `loft package`); the toolchain is exempt because it is not a
 3. *`trim-paths` is NOT the answer.*  The `[profile.release] trim-paths` option is
    still unstable in Cargo 1.97.1 and refuses to parse the manifest.
 4. *`--remap-path-prefix` works — 192 → 2.*  Stable rustc, no nightly.
-5. *…and the last 2 are self-inflicted.*  `build.rs` exports
-   `LOFT_BUILD_RUSTFLAGS` **verbatim**, and `cache.rs` reads it back with
-   `env!("LOFT_BUILD_RUSTFLAGS")` to key native artifacts — so the remap FLAGS,
-   which contain the very paths being removed, get baked in as a string literal.
-   The fix is to hash in `build.rs` and embed the `u64`, never the string;
-   `rustflags_fp_of` already does exactly that hashing, just at runtime.
+5. *…and the last 2 are self-inflicted, in a way that has no cheap fix.*
+   `build.rs` exports `LOFT_BUILD_RUSTFLAGS` **verbatim**, so the remap flags —
+   whose text contains the very paths being removed — are baked in as a string
+   literal.  **Hashing it away does not work:** `cache.rs` only needs a
+   fingerprint, but `extensions.rs` passes the *string* to child cargo builds so
+   a shared transitive dep gets an SVH matching loft's own (#274); replace it
+   with a `u64` and `--native` breaks at link with a colliding `StableCrateId`.
+   (This was proposed here on 2026-07-31 after reading only the `cache.rs`
+   consumer, and disproved the same day by reading the other one.)
+
+   So the string must stay, which means the string must be **machine-independent**
+   — the remap prefixes have to be paths that are identical everywhere.  That is
+   a canonical **build environment**, not a compiler flag: a fixed source
+   directory, a fixed `CARGO_HOME`, and a fixed `RUSTUP_HOME` (the toolchain path
+   accounts for 31 of the 192).  In practice that means building the release in a
+   container, which is what reproducible-build systems do and what the plan's
+   "M, 3-5 days" was probably right to reserve.
+
+   Do NOT add `--remap-path-prefix` to `make-release.sh` on its own: it strips
+   190 of 192 paths but leaves the build machine-specific anyway, while
+   perturbing the RUSTFLAGS string that #274's SVH matching depends on — motion
+   with the risk and none of the payoff.
 6. *Comparing to a GitHub artifact needs the musl target.*  Releases ship
    `x86_64-unknown-linux-musl`; a local `cargo build --release` is `-gnu`.  Those
    are different binaries by construction — `rustup target add
    x86_64-unknown-linux-musl` plus `musl-tools` before any comparison means
    anything.
 
-So the remaining work is three bounded changes — remap flags in
-`make-release.sh`, a hashed `LOFT_BUILD_RUSTFLAGS`, and a CI leg that builds
-twice in different directories and diffs — not the "M, ~3-5 days" the plan
-guessed against a world where this needed nightly.
+So the remaining work is: a canonical (containerised) build environment, the
+remap flags derived from *its* fixed paths, and a CI leg that builds twice from
+different original locations and diffs.  The first of those is the real cost, and
+it is the piece a flag-level fix cannot substitute for.
 
 ---
 

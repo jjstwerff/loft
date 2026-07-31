@@ -118,6 +118,37 @@ leak guards above are the canonical regression record for this surface.
 
 ---
 
+## Assigned in an `if`/`else` branch — who establishes the slot
+
+`scan_if` (`src/scopes.rs`) has to decide where a variable that a branch assigns
+LIVES, because a branch scope exits while the value has to outlive it. It sorts
+them two ways, and the split is by **storage**, not by how the variable is used:
+
+- **Backed by a heap store** — `needs_pre_init` is true. The slot is established
+  at the PARENT scope with a `Set(v, Null)` emitted before the `If`, so the store
+  exists before either branch runs and the parent scope owns and frees it.
+- **A plain value** — registered at the parent scope directly (`small_both`) with
+  no pre-init, because there is nothing to allocate.
+
+Putting a store-backed variable through the second path hoists the OWNERSHIP
+without ever creating the store, and the scope-exit free then meets a
+stack-record ref where it expects an owned heap one — `BUG (#306)`, or a SIGSEGV
+once the branch has written through it.
+
+So `needs_pre_init` must list **every** store-backed type. It listed text,
+reference, vector and boxed enum but not the KEYED collections, so a `hash` /
+`sorted` / `index` / `spatial` declared under one name in two arms of a single
+`if`/`else` chain crashed the interpreter. `vector` was in the list and behaved,
+which made the fault read as type-specific rather than as the omission it was.
+`--native` derives this separately and was always correct — a divergence worth
+remembering when a fault appears on one backend only.
+
+Guard: `tests/scripts/keyed-collection-in-both-if-arms.loft` (every keyed kind,
+two- and three-arm chains, an arm that never appends, and a repeat loop so a
+per-pass store leak shows as growth).
+
+---
+
 ## View returns — dep merge and materialisation (#306)
 
 A function may return a *view*: a struct read out of a vector (`table[idx]`)

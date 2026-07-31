@@ -54,6 +54,27 @@ impl Drop for Guard {
     }
 }
 
+/// Block until something is accepting on `port`.
+///
+/// Replaces a fixed `sleep(800ms)` that guessed how long a loft interpreter needs to
+/// parse its program and reach `listen`.  Under a loaded parallel suite that guess is
+/// sometimes wrong, and the resulting failure lands nowhere near its cause: the client
+/// connects to a port nobody is listening on yet, gets nothing, and the test fails
+/// fifteen seconds later reporting a missing keyframe.  Polling turns "probably long
+/// enough" into "actually ready", and costs 25ms rather than 800ms when it is.
+fn wait_until_listening(port: u16) {
+    let deadline = vm_deadline(15);
+    loop {
+        if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            // Close cleanly: the probe must not sit in the server's accept queue.
+            let _ = s.shutdown(std::net::Shutdown::Both);
+            return;
+        }
+        assert!(Instant::now() < deadline, "server never listened on {port}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn spawn_loft(prog: &PathBuf, piped: bool) -> Child {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     Command::new(loft_bin())
@@ -168,7 +189,7 @@ fn main() {{
     .unwrap();
 
     let mut server = Guard(Some(spawn_loft(&server_prog, false)));
-    std::thread::sleep(Duration::from_millis(800)); // server reaches listen
+    wait_until_listening(port);
     let mut client = spawn_loft(&client_prog, true);
     let stdout = client.stdout.take().expect("client stdout piped");
     let _client_guard = Guard(Some(client));
@@ -280,7 +301,7 @@ fn main() {{
     .unwrap();
 
     let _server = Guard(Some(spawn_loft(&server_prog, false)));
-    std::thread::sleep(Duration::from_millis(800));
+    wait_until_listening(port);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut client = Command::new(loft_bin())
         .arg("--interpret")
@@ -310,12 +331,29 @@ fn main() {{
     // symmetry landed — surface through the same sync slots, possibly
     // drained after the bind; they are NOT leaks.)
     let deadline = vm_deadline(15);
+    // Keep what DID arrive.  "keyframe never arrived" on its own cannot distinguish a
+    // client that never connected from one that connected and got the wrong sync, and
+    // the two point at opposite halves of the system.
+    let mut seen: Vec<String> = Vec::new();
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
-        assert!(!left.is_zero(), "keyframe never arrived under blackout");
-        let Ok(line) = rx.recv_timeout(left) else {
-            panic!("keyframe never arrived under blackout");
+        let fail = |seen: &[String]| -> String {
+            if seen.is_empty() {
+                "keyframe never arrived under blackout; the client printed NOTHING \
+                 (it never connected)"
+                    .to_string()
+            } else {
+                format!(
+                    "keyframe never arrived under blackout; the client printed:\n  {}",
+                    seen.join("\n  ")
+                )
+            }
         };
+        assert!(!left.is_zero(), "{}", fail(&seen));
+        let Ok(line) = rx.recv_timeout(left) else {
+            panic!("{}", fail(&seen));
+        };
+        seen.push(line.clone());
         if line.contains("udp=true") && line.contains("sync 2:777,") {
             break; // the promoted sample arrived on the reliable carrier
         }
@@ -770,7 +808,7 @@ fn main() {{
     // ── Native leg ──
     {
         let _server = Guard(Some(spawn_loft(&server_prog, false)));
-        std::thread::sleep(Duration::from_millis(800));
+        wait_until_listening(port);
         let client = Command::new(loft_bin())
             .arg("--interpret")
             .arg("--no-warnings")
@@ -793,7 +831,7 @@ fn main() {{
 
     // ── Browser leg ──
     let _server = Guard(Some(spawn_loft(&server_prog, false)));
-    std::thread::sleep(Duration::from_millis(800));
+    wait_until_listening(port);
     // Serve doc/ (the page + bundle); kill the kernel server mid-run so the
     // browser client exits and the page compares its transcript.
     let http_port = common::test_port(18106);

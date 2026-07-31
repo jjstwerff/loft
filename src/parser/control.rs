@@ -11753,6 +11753,7 @@ impl Parser {
             "sort" => return self.parse_sort(val, list, types),
             "insert" => return self.parse_insert(val, list, types),
             "reverse" => return self.parse_reverse(val, list, types),
+            "reserve" => return self.parse_reserve(val, list, types),
             "any" => return self.parse_any(val, list, types),
             "all" => return self.parse_all(val, list, types),
             "count_if" => return self.parse_count_if(val, list, types),

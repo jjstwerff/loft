@@ -1145,3 +1145,124 @@ fn paged_refusal_on_sorted_field_is_audible() {
         "the warning must name the wrapper type and the fix; stderr was: {err:?}"
     );
 }
+
+// ── loft#710 — the persisted file's size is a fact about its CONTENT ─────────
+
+/// Build the size-probe store and return `(file bytes, digest line)`.
+///
+/// `seed` fixes `LOFT_HASH_SEED` when given, which is what makes a build
+/// byte-reproducible.
+fn persist_size(test: &str, n: u32, per: u32, mode: &str, seed: Option<&str>) -> (u64, String) {
+    let dir = scratch(test);
+    let path = dir.join("size.store");
+    let script = workspace_root().join("tests/scripts/store_persist_size_710.loft");
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg("--interpret")
+        .arg(&script)
+        .env("LOFT_PERSIST_TEST_PATH", &path)
+        .env("LOFT_PERSIST_TEST_N", n.to_string())
+        .env("LOFT_PERSIST_TEST_PER", per.to_string())
+        .env("LOFT_PERSIST_TEST_MODE", mode)
+        .current_dir(workspace_root());
+    if let Some(s) = seed {
+        cmd.env("LOFT_HASH_SEED", s);
+    } else {
+        cmd.env_remove("LOFT_HASH_SEED");
+    }
+    let out = cmd.output().expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{mode} failed: {stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("persist true"), "{mode}: {stdout:?}");
+    let bytes = fs::metadata(&path).expect("store file").len();
+    (bytes, stdout.trim().to_string())
+}
+
+/// loft#710 — a persisted store's size must follow what it HOLDS.
+///
+/// It did not: the image was the arena's whole capacity, so the file carried
+/// whatever the last 7/3 growth over-allocated.  Two consequences, both
+/// measured here at the shapes the report used.
+///
+/// 1. The size did not move with the content.  125 records x 1000 coordinates
+///    and 125 x 2312 — 2.3x the data — persisted to the SAME 3,816,152 bytes,
+///    so a consumer sizing its hosting from file bytes was reading the
+///    allocator, and a block that doubled because a category was added looked
+///    exactly like one that doubled by allocation.
+///
+/// 2. At the reported shape, construction order alone decided the size: filling
+///    each vector whole before inserting gave 1.84x what growing them
+///    interleaved gave, for byte-identical data.  Interleaved is the shape that
+///    matters — it is what a streaming generator does.
+///
+/// What this does NOT claim: that construction order stops mattering.  Once the
+/// capacity rounding is gone, the INTERIOR free space each order leaves is
+/// visible, and it genuinely differs.  Reclaiming that means relocating records
+/// and rewriting every DbRef — compaction, which loft#710 still asks for.
+#[test]
+fn persisted_size_tracks_content_not_construction() {
+    let (small, _) = persist_size("size710_small", 125, 1000, "interleaved", None);
+    let (large, _) = persist_size("size710_large", 125, 2312, "interleaved", None);
+    let growth = large as f64 / small as f64;
+    assert!(
+        growth > 1.4,
+        "2.3x the coordinates must show in the file (both were 3,816,152 bytes): \
+         small={small} large={large} ratio={growth:.2}"
+    );
+
+    let (whole, d_whole) = persist_size("size710_whole", 125, 2312, "whole", None);
+    let (inter, d_inter) = persist_size("size710_interleaved", 125, 2312, "interleaved", None);
+    let digest = |line: &str| line.split("digest").nth(1).unwrap_or("").trim().to_string();
+    assert_eq!(
+        digest(&d_whole),
+        digest(&d_inter),
+        "the two orders must hold identical data, or the sizes below compare nothing:\n  {d_whole}\n  {d_inter}"
+    );
+    let ratio = whole.max(inter) as f64 / whole.min(inter) as f64;
+    assert!(
+        ratio < 1.3,
+        "construction order decided the size 1.84x at this shape; it must not: \
+         whole={whole} interleaved={inter} ratio={ratio:.2}"
+    );
+}
+
+/// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.
+///
+/// A hash's seed is drawn at random (the P253 hash-DoS defense) and stored in
+/// the bucket record, where it decides the bucket ORDER — so rebuilding the
+/// same data gave a different file every time, and a per-block checksum could
+/// not tell "the data changed" from "it was rebuilt".  The unseeded pair is the
+/// control: without it, two identical files would prove nothing about the seed.
+#[test]
+fn fixed_hash_seed_makes_a_persisted_store_reproducible() {
+    let read = |dir: &str, seed: Option<&str>| {
+        persist_size(dir, 120, 30, "interleaved", seed);
+        fs::read(scratch_existing(dir).join("size.store")).expect("store file")
+    };
+    let a = read("seed710_a", Some("12345"));
+    let b = read("seed710_b", Some("12345"));
+    assert_eq!(a.len(), b.len(), "same seed, same data: same length");
+    assert!(
+        a == b,
+        "same seed, same data must give byte-identical bytes"
+    );
+
+    let c = read("seed710_c", None);
+    let d = read("seed710_d", None);
+    assert!(
+        c != d,
+        "without LOFT_HASH_SEED the bytes must still vary — otherwise this test proves nothing"
+    );
+}
+
+/// `scratch` wipes the directory; this returns the same path without wiping, so
+/// a caller can read back what a just-finished run wrote there.
+fn scratch_existing(test_name: &str) -> PathBuf {
+    let base = std::env::var_os("TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join("loft-store-persist-loft").join(test_name)
+}

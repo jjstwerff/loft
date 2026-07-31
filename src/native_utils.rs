@@ -484,7 +484,14 @@ pub(crate) fn wasm_rustc(atomics_sysroot: Option<&std::path::Path>) -> std::proc
 /// `profile_dir` is what [`ensure_loft_runtime_rlib`] returned for that shape.
 /// Copies only what is missing or has changed size, so repeat builds are cheap.
 pub(crate) fn ensure_atomics_sysroot(profile_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let deps = profile_dir.join("deps");
+    // Every layout's dep dirs, not `<profile>/deps` alone.  Under the per-unit layout
+    // cargo adopted on 2026-07-29 that directory does not exist, `read_dir` returned
+    // ENOENT, and the sysroot silently did not get assembled — which does NOT fail the
+    // link outright as the doc comment above promises.  It drops `--html --threads` back
+    // to the default rustc, and the nightly-built rlib then fails to link against it
+    // with `E0514 ... compiled by an incompatible version of rustc`: an error naming the
+    // wrong subject entirely, two steps from its cause.
+    let deps = dep_search_dirs(profile_dir);
     // Candidate roots, in order.  #619: the derived one is the DEV layout
     // (`<target-dir>/<triple>/release` -> `<target-dir>/sysroot`) and stays
     // first so a repo build is unchanged.  In an INSTALLED layout the same
@@ -531,7 +538,7 @@ fn user_cache_sysroot_dir() -> std::path::PathBuf {
 ///
 /// Copies only what is missing or has changed size, so repeat builds are cheap.
 fn assemble_atomics_sysroot(
-    deps: &std::path::Path,
+    dep_dirs: &[std::path::PathBuf],
     sysroot: &std::path::Path,
 ) -> std::io::Result<()> {
     let lib_dir = sysroot
@@ -540,28 +547,49 @@ fn assemble_atomics_sysroot(
         .join("wasm32-unknown-unknown")
         .join("lib");
     std::fs::create_dir_all(&lib_dir)?;
-    for entry in std::fs::read_dir(deps)?.flatten() {
-        let src = entry.path();
-        if src.extension().is_none_or(|e| e != "rlib") {
-            continue;
-        }
-        let Some(name) = src.file_name() else {
+    let mut read_any = false;
+    for deps in dep_dirs {
+        let Ok(entries) = std::fs::read_dir(deps) else {
             continue;
         };
-        // loft's own rlibs stay out: the link names them with `--extern` and
-        // `-L dependency=`, and a third copy on the sysroot search path is how
-        // rustc ends up reporting multiple candidates for one crate.
-        if name.to_string_lossy().starts_with("libloft") {
-            continue;
+        read_any = true;
+        for entry in entries.flatten() {
+            let src = entry.path();
+            if src.extension().is_none_or(|e| e != "rlib") {
+                continue;
+            }
+            let Some(name) = src.file_name() else {
+                continue;
+            };
+            // loft's own rlibs stay out: the link names them with `--extern` and
+            // `-L dependency=`, and a third copy on the sysroot search path is how
+            // rustc ends up reporting multiple candidates for one crate.
+            if name.to_string_lossy().starts_with("libloft") {
+                continue;
+            }
+            let dst = lib_dir.join(name);
+            let same = std::fs::metadata(&dst)
+                .ok()
+                .zip(entry.metadata().ok())
+                .is_some_and(|(a, b)| a.len() == b.len());
+            if !same {
+                std::fs::copy(&src, &dst)?;
+            }
         }
-        let dst = lib_dir.join(name);
-        let same = std::fs::metadata(&dst)
-            .ok()
-            .zip(entry.metadata().ok())
-            .is_some_and(|(a, b)| a.len() == b.len());
-        if !same {
-            std::fs::copy(&src, &dst)?;
-        }
+    }
+    if !read_any {
+        // Loud, and naming the first place looked in: an unassembled sysroot degrades
+        // the link to the default rustc rather than failing there, so a silent Ok here
+        // surfaces later as someone else's error.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "no readable dependency directory for the atomics std (looked in {})",
+                dep_dirs
+                    .first()
+                    .map_or_else(|| "nowhere".to_string(), |d| d.display().to_string())
+            ),
+        ));
     }
     Ok(())
 }
@@ -571,6 +599,69 @@ fn assemble_atomics_sysroot(
 /// else `lib_dir/deps`.  Appending "deps" unconditionally yields an invalid
 /// `…/deps/deps` path that rustc can't search — E0463 "can't find crate" for
 /// every transitive dep of libloft (sha2, rand_core, …).
+/// Every directory rustc must search to resolve loft's transitive rlibs.
+///
+/// Two cargo layouts, and a `--native` compile has to work under whichever the user's
+/// toolchain produces:
+///
+/// * **classic** — one `<profile>/deps/` holding every rlib.  One search dir.
+/// * **per-unit** (cargo 1.99.0-nightly 2026-07-29 and later) — each crate gets its own
+///   `<profile>/build/<crate>/<hash>/out/`, and `deps/` does not exist at all.  ~107
+///   search dirs for loft.
+///
+/// The per-unit layout broke `--native` outright: `-L dependency=<profile>/deps` named a
+/// directory that was not there, and rustc reported `E0463: can't find crate for sha2
+/// which loft depends on` — a message that points at a missing dependency rather than at
+/// a moved one, which is why the nightly ASan gate read as a loft bug for a week.
+///
+/// Ordered so the classic layout stays a single `-L` (the common case is unchanged) and
+/// the fallback engages only when `deps/` is genuinely absent.
+pub(crate) fn dep_search_dirs(lib_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let classic = deps_dir_of(lib_dir);
+    if classic.is_dir() {
+        return vec![classic];
+    }
+    // Per-unit: <profile>/build/<crate>/<hash>/out/.  Only directories that actually
+    // hold a linkable crate are worth passing — build-script `out` dirs sit in the same
+    // tree and carry generated sources, not libraries.
+    //
+    // Both rlibs AND dylibs count: a proc-macro compiles to `.so`/`.dylib`/`.dll`, never
+    // `.rlib`, so an rlib-only filter drops every derive crate.  Filtering on rlibs alone
+    // moved the failure from `sha2` to `curve25519_dalek_derive` and no further — the
+    // same error one crate later, which reads like the fix not working at all.
+    let build_root = lib_dir.join("build");
+    let mut dirs = Vec::new();
+    if let Ok(crates) = std::fs::read_dir(&build_root) {
+        for c in crates.flatten() {
+            let Ok(hashes) = std::fs::read_dir(c.path()) else {
+                continue;
+            };
+            for h in hashes.flatten() {
+                let out = h.path().join("out");
+                if std::fs::read_dir(&out).is_ok_and(|rd| {
+                    rd.flatten().any(|f| {
+                        std::path::Path::new(&f.file_name())
+                            .extension()
+                            .is_some_and(|e| {
+                                ["rlib", "so", "dylib", "dll"]
+                                    .iter()
+                                    .any(|k| e.eq_ignore_ascii_case(k))
+                            })
+                    })
+                }) {
+                    dirs.push(out);
+                }
+            }
+        }
+    }
+    if dirs.is_empty() {
+        // Name the place it was expected, so the diagnostic stays actionable.
+        return vec![classic];
+    }
+    dirs.sort();
+    dirs
+}
+
 pub(crate) fn deps_dir_of(lib_dir: &std::path::Path) -> std::path::PathBuf {
     if lib_dir.file_name().is_some_and(|n| n == "deps") {
         lib_dir.to_path_buf()
@@ -858,8 +949,8 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
     // function may come from `env`.
     let bad: std::collections::BTreeSet<String> = imports
         .iter()
-        .filter(|(m, _, kind)| !(m.starts_with("loft_") || (m == "env" && *kind == 2)))
-        .map(|(m, _, _)| m.clone())
+        .filter(|(m, _, kind, _)| !(m.starts_with("loft_") || (m == "env" && *kind == 2)))
+        .map(|(m, _, _, _)| m.clone())
         .collect();
     if bad.is_empty() {
         Ok(())
@@ -868,21 +959,28 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
     }
 }
 
-/// Every `(module, field, descriptor-kind)` a wasm imports, or `None` if it cannot be
-/// walked (bad magic, truncated section, unknown descriptor kind).
+/// Every `(module, field, descriptor-kind, result-valtype)` a wasm imports, or `None`
+/// if it cannot be walked (bad magic, truncated section, unknown descriptor kind).
 ///
-/// The ONE import-section walk.  Three callers read it — the `--html` bundle guard
+/// The result valtype is the wasm byte (`0x7F` i32, `0x7E` i64, `0x7D` f32, `0x7C`
+/// f64) of a function import's single return value, and `None` for a function that
+/// returns nothing or for a non-function import.  [`host_import_stub_js`] needs it:
+/// a JS stub standing in for a missing host function has to hand back a value of the
+/// declared type, and `undefined` where the module expects an i64 is a TypeError at
+/// the call rather than the zero the caller can check.
+///
+/// The ONE import-section walk.  Four callers read it — the `--html` bundle guard
 /// ([`html_wasm_import_modules_ok`]), the page-shell chooser
-/// ([`html_wasm_import_modules`]), and the host-surface check
-/// ([`missing_host_imports`]) — and they used to carry a copy each of the LEB/name/
-/// limits decoding.
+/// ([`html_wasm_import_modules`]), the host-surface check
+/// ([`missing_host_imports`]), and the stub emitter — and they used to carry a copy
+/// each of the LEB/name/limits decoding.
 ///
 /// Deliberately conservative: on any shape it does not understand it returns `None`
 /// rather than risk a false verdict on a valid bundle.  Callers treat `None` as "no
 /// opinion", never as "nothing imported".
 pub(crate) fn html_wasm_imports(
     wasm: &[u8],
-) -> Option<std::collections::BTreeSet<(String, String, u8)>> {
+) -> Option<std::collections::BTreeSet<(String, String, u8, Option<u8>)>> {
     fn read_uleb(b: &[u8], p: &mut usize) -> Option<u64> {
         let mut result: u64 = 0;
         let mut shift = 0u32;
@@ -920,6 +1018,9 @@ pub(crate) fn html_wasm_imports(
     }
     let mut p = 8;
     let mut out = std::collections::BTreeSet::new();
+    // Result valtype per type index, filled from the type section.  Wasm orders
+    // the known sections, so type (1) is already read when import (2) arrives.
+    let mut results: Vec<Option<u8>> = Vec::new();
     while p < wasm.len() {
         let id = *wasm.get(p)?;
         p += 1;
@@ -928,6 +1029,27 @@ pub(crate) fn html_wasm_imports(
         let section_end = section_start
             .checked_add(size)
             .filter(|e| *e <= wasm.len())?;
+        if id == 1 {
+            // Type section: u32 count, then `count` functypes
+            // (0x60, params vec, results vec).
+            let mut tp = section_start;
+            let count = read_uleb(wasm, &mut tp)?;
+            for _ in 0..count {
+                if *wasm.get(tp)? != 0x60 {
+                    return None; // not a functype — no opinion
+                }
+                tp += 1;
+                let params = usize::try_from(read_uleb(wasm, &mut tp)?).ok()?;
+                tp = tp.checked_add(params)?;
+                let n_res = usize::try_from(read_uleb(wasm, &mut tp)?).ok()?;
+                results.push(if n_res == 0 {
+                    None
+                } else {
+                    Some(*wasm.get(tp)?)
+                });
+                tp = tp.checked_add(n_res)?;
+            }
+        }
         if id == 2 {
             // Import section: u32 count, then `count` (module, field, desc).
             let mut ip = section_start;
@@ -937,9 +1059,11 @@ pub(crate) fn html_wasm_imports(
                 let field = read_name(wasm, &mut ip)?;
                 let kind = *wasm.get(ip)?;
                 ip += 1;
+                let mut result = None;
                 match kind {
                     0 => {
-                        read_uleb(wasm, &mut ip)?; // func: typeidx
+                        let idx = usize::try_from(read_uleb(wasm, &mut ip)?).ok()?; // func: typeidx
+                        result = results.get(idx).copied().flatten();
                     }
                     1 => {
                         ip += 1; // table: reftype byte, then limits
@@ -953,12 +1077,67 @@ pub(crate) fn html_wasm_imports(
                     String::from_utf8_lossy(module).into_owned(),
                     String::from_utf8_lossy(field).into_owned(),
                     kind,
+                    result,
                 ));
             }
         }
         p = section_end;
     }
     Some(out)
+}
+
+/// JS that gives every `loft_*` host function this wasm imports a stand-in, for
+/// the ones the page shim does not define.
+///
+/// A canvas cannot do everything a desktop window can, and some calls — a
+/// screenshot to a `path`, say — may have no browser meaning at all.  That is
+/// fine; what is not fine is finding out at BUILD time.  Whether a call can be
+/// served is a fact about this run on this target, not about whether the program
+/// is well-formed, and refusing the build forces one source to fork into two
+/// that differ only in which calls they may NAME — which destroys the property
+/// of running the same source on both renderers (loft#709).
+///
+/// So the page instantiates and the call answers at runtime: the declared zero
+/// (`false` / `0` / `""`-shaped null pointer), which every correct caller
+/// already handles, since a screenshot can fail for a dozen reasons besides the
+/// target.  It says so once per name in the console — once, because a call in a
+/// frame loop would otherwise bury the page in identical lines.
+///
+/// Emitted for EVERY `loft_*` function import and applied only where the name is
+/// still free, so the shim and every library bridge keep precedence and a name
+/// the build-time scan misjudged is covered anyway.
+pub(crate) fn host_import_stub_js(wasm: &[u8]) -> String {
+    let Some(imports) = html_wasm_imports(wasm) else {
+        return String::new();
+    };
+    let mut entries = String::new();
+    for (module, field, _, result) in imports
+        .iter()
+        .filter(|(m, _, k, _)| *k == 0 && m.starts_with("loft_"))
+    {
+        // The value the stub returns, as JS source: wasm coerces the JS result
+        // to the declared type, and an i64 result MUST be a BigInt.
+        let zero = match result {
+            Some(0x7E) => "0n",
+            Some(_) => "0",
+            None => "undefined",
+        };
+        entries.push_str(&format!("[{module:?},{field:?},{zero}],"));
+    }
+    if entries.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n// loft#709: a call this target cannot serve answers at runtime instead of\n\
+         // refusing the build.  Only fills names nothing else defined.\n\
+         (function(){{const seen=new Set();for(const[m,f,z]of[{entries}]){{\n\
+         \x20 const mod=(imports[m]||(imports[m]={{}}));\n\
+         \x20 if(f in mod)continue;\n\
+         \x20 mod[f]=function(){{ if(!seen.has(f)){{seen.add(f);\n\
+         \x20   console.warn('loft: '+f+' is not available in the browser — returning '+String(z));}}\n\
+         \x20   return z; }};\n\
+         }}}})();\n"
+    )
 }
 
 /// Host-import names the `--html` page will NOT provide, as `module.field` strings.
@@ -1028,9 +1207,9 @@ pub(crate) fn missing_host_imports(wasm: &[u8], provided_js: &str) -> Vec<String
     };
     imports
         .iter()
-        .filter(|(m, _, kind)| *kind == 0 && m.starts_with("loft_"))
-        .filter(|(_, field, _)| !defined(field))
-        .map(|(m, field, _)| format!("{m}.{field}"))
+        .filter(|(m, _, kind, _)| *kind == 0 && m.starts_with("loft_"))
+        .filter(|(_, field, _, _)| !defined(field))
+        .map(|(m, field, _, _)| format!("{m}.{field}"))
         .collect()
 }
 
@@ -1048,7 +1227,7 @@ pub(crate) fn html_wasm_import_modules(wasm: &[u8]) -> Option<std::collections::
     Some(
         html_wasm_imports(wasm)?
             .into_iter()
-            .map(|(m, _, _)| m)
+            .map(|(m, _, _, _)| m)
             .collect(),
     )
 }
@@ -2110,5 +2289,104 @@ mod crate_resolution_tests {
         assert!(!crate_resolution_failure(
             "compiled by an incompatible version"
         ));
+    }
+}
+
+#[cfg(test)]
+mod dep_search_dirs_tests {
+    use super::dep_search_dirs;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join("loft-dep-search").join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn touch(p: &std::path::Path) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"x").unwrap();
+    }
+
+    /// The classic layout must keep yielding exactly ONE search dir — the per-unit
+    /// fallback is a fallback, not a replacement, and a change here would multiply
+    /// every `--native` compile's `-L` count on the platform that works today.
+    #[test]
+    fn the_classic_single_deps_layout_yields_one_dir() {
+        let root = scratch("classic");
+        touch(&root.join("deps").join("libsha2-abc.rlib"));
+        assert_eq!(dep_search_dirs(&root), vec![root.join("deps")]);
+    }
+
+    /// cargo 1.99.0-nightly (2026-07-29) gives each crate its own
+    /// `build/<crate>/<hash>/out/`, and no `deps/` at all.
+    #[test]
+    fn the_per_unit_layout_yields_one_dir_per_crate() {
+        let root = scratch("per-unit");
+        touch(&root.join("build/sha2/h1/out/libsha2-h1.rlib"));
+        touch(&root.join("build/serde/h2/out/libserde-h2.rlib"));
+        // A proc-macro ships a dylib, never an rlib.  Excluding these is what made an
+        // rlib-only filter fail one crate later on `curve25519_dalek_derive` —
+        // indistinguishable, from the error alone, from the fix not working.
+        touch(&root.join("build/derive/h3/out/libderive-h3.so"));
+        // A build-script output dir carries generated sources, not libraries: passing
+        // it would be noise, and there are ~100 of them.
+        touch(&root.join("build/somelib/h4/out/generated.rs"));
+
+        let dirs = dep_search_dirs(&root);
+        assert_eq!(dirs.len(), 3, "{dirs:?}");
+        for c in ["sha2", "serde", "derive"] {
+            assert!(
+                dirs.iter().any(|d| d.to_string_lossy().contains(c)),
+                "{c} missing from {dirs:?}"
+            );
+        }
+        assert!(
+            !dirs.iter().any(|d| d.to_string_lossy().contains("somelib")),
+            "a source-only out dir must not be searched: {dirs:?}"
+        );
+    }
+
+    /// The atomics sysroot is assembled from the SAME dep dirs, and its failure mode is
+    /// what made the browser gate unreadable: an unassembled sysroot does not fail the
+    /// link, it drops `--html --threads` to the default rustc, which then cannot link
+    /// the nightly-built rlib and reports `E0514` — an error naming the wrong subject,
+    /// two steps from its cause.  So "no readable dep dir" must stay LOUD.
+    #[test]
+    fn the_sysroot_assembles_from_every_dep_dir_and_fails_loudly_with_none() {
+        let root = scratch("sysroot");
+        let out = root.join("out");
+
+        // Per-unit layout: two crates, two directories.
+        let a = root.join("build/core/h1/out");
+        let b = root.join("build/alloc/h2/out");
+        touch(&a.join("libcore-h1.rlib"));
+        touch(&b.join("liballoc-h2.rlib"));
+        // loft's own rlib is deliberately excluded — a third copy on the sysroot search
+        // path is how rustc ends up reporting multiple candidates for one crate.
+        touch(&b.join("libloft.rlib"));
+
+        super::assemble_atomics_sysroot(&[a, b], &out).expect("assembles from both dirs");
+        let lib = out.join("lib/rustlib/wasm32-unknown-unknown/lib");
+        assert!(lib.join("libcore-h1.rlib").is_file());
+        assert!(lib.join("liballoc-h2.rlib").is_file());
+        assert!(
+            !lib.join("libloft.rlib").exists(),
+            "loft's own rlib must not reach the sysroot"
+        );
+
+        // Nothing readable: an error, never a silent Ok.
+        let err =
+            super::assemble_atomics_sysroot(&[root.join("does-not-exist")], &root.join("out2"))
+                .expect_err("an unassembled sysroot must not report success");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
+    }
+
+    /// Neither layout present: name the classic path anyway, so the failure diagnostic
+    /// tells the user where loft looked instead of printing nothing.
+    #[test]
+    fn an_empty_tree_still_names_the_expected_place() {
+        let root = scratch("empty");
+        assert_eq!(dep_search_dirs(&root), vec![root.join("deps")]);
     }
 }

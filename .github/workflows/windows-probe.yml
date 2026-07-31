@@ -8,7 +8,19 @@ name: windows-probe
 on:
   push:
     branches: [windows-probe]
+  # Dispatch with a filter to run ANY test on Windows, from any branch, in one command:
+  #
+  #   gh workflow run windows-probe.yml --ref <branch> -f tests="--test self_update_swap"
+  #
+  # Without this the only ways to see a Windows result were push-to-main, the nightly,
+  # or adding a hardcoded step here and pushing — a 24-hour loop for a question you can
+  # usually answer in minutes.  Leave `tests` empty to run the standing probes below.
   workflow_dispatch:
+    inputs:
+      tests:
+        description: 'cargo test args (e.g. `--test self_update_swap`). Empty = standing probes.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -33,7 +45,19 @@ jobs:
             ~/.cargo/git
             target
           key: winprobe-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      # The requested tests, when dispatched with a filter.  Standing probes are skipped
+      # in that case: the point of asking is a fast answer about one thing.
+      - name: Run the requested tests
+        if: inputs.tests != ''
+        shell: bash
+        env:
+          TESTS: ${{ inputs.tests }}
+        run: |
+          echo "cargo test --release $TESTS"
+          cargo test --release $TESTS -- --nocapture
+
       - name: Run the probes
+        if: inputs.tests == ''
         run: cargo test --release --test windows_probe -- --nocapture
 
       # Verify the platform-agnostic file://-URI abstraction on Windows: the
@@ -41,8 +65,10 @@ jobs:
       # lsp_transport tests now reply instead of timing out. A short per-test
       # terminate turns a regression (a hang) into a ~45s failure, not 600s.
       - name: Install cargo-nextest
+        if: inputs.tests == ''
         uses: taiki-e/install-action@nextest
       - name: URI/path abstraction unit tests (Windows cfg)
+        if: inputs.tests == ''
         run: cargo test --release --lib uri_path_tests -- --nocapture
 
       # Path SEPARATORS in user-facing output, the same class as the URI work above
@@ -52,8 +78,10 @@ jobs:
       # says `src/pos.loft`, reddening main's Windows leg for a day with no PR able to
       # catch it (the real Windows leg runs on push-to-main and nightly only).
       - name: Report paths read the same on every platform
+        if: inputs.tests == ''
         run: cargo test --release --test function_coverage -- --nocapture
       - name: LSP transport (was hanging on Windows) — must reply, not time out
+        if: inputs.tests == ''
         shell: bash
         run: |
           mkdir -p .config

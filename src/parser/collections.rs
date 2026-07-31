@@ -4514,6 +4514,54 @@ use #count instead"
         Type::Void
     }
 
+    /// Compiler special-case for `reserve(v: vector<T>, n: integer)` (loft#710).
+    ///
+    /// A hint, never a promise about contents: it gives `v` room for `n`
+    /// elements so filling it does not run the doubling ladder, and changes
+    /// neither `len(v)` nor what is in it.  A compiler special-case for the same
+    /// reason `reverse` is one — the element's stored width is known here and
+    /// nowhere else, and the op needs it to size the claim.
+    pub(crate) fn parse_reserve(
+        &mut self,
+        val: &mut Value,
+        list: &[Value],
+        types: &[Type],
+    ) -> Type {
+        if self.first_pass {
+            return Type::Void;
+        }
+        if list.len() != 2 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reserve requires 2 arguments: reserve(vector, count)"
+            );
+            return Type::Void;
+        }
+        let Type::Vector(elm, _) = &types[0] else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reserve requires a vector as its first argument"
+            );
+            return Type::Void;
+        };
+        if !matches!(types[1].base(), Type::Integer(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reserve's count must be an integer — reserve(vector, count)"
+            );
+            return Type::Void;
+        }
+        let elm_size = self.element_store_size(elm);
+        *val = self.cl(
+            "OpReserveVector",
+            &[list[0].clone(), list[1].clone(), Value::Int(elm_size)],
+        );
+        Type::Void
+    }
+
     /// Compiler special-case for `reverse(v: vector<T>)`.
     /// Dispatches to `OpReverseVector` which works for any element type.
     pub(crate) fn parse_reverse(

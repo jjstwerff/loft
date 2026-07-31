@@ -209,6 +209,28 @@ Operations on `vector<T>` — the primary ordered collection type.
 | Function | Description |
 |----------|-------------|
 | `len(v: vector) -> integer` | Number of elements in the vector. Use in loop bounds: `for i in 0..v.len()`. |
+| `reserve(v: vector, n: integer)` | Give `v` room for `n` elements so filling it does not repeatedly reallocate. Changes capacity only — never `len(v)`, its contents, or anything holding it — and an `n` at or below the current capacity does nothing. |
+
+**When `reserve` is worth it.** Appending grows a vector by doubling, so filling
+one of N costs about log N reallocations, each claiming a fresh block and
+orphaning the old one, and leaves the last block up to twice the length. That is
+invisible for a handful of vectors. It stops being invisible when *many* grow at
+once — a streaming generator appending each incoming item to whichever collection
+owns it — because the block after any one vector is then another vector, so the
+grow can never extend in place and every step copies.
+
+That cost is also *persisted*: a store written with `store_persist_bind` carries
+the claimed capacity, not the length. Reserving the counts up front on a
+125-record × 2312-coordinate store took the file from 3,816,152 to 2,609,736
+bytes — from 1.65× its payload to 1.13× — for identical data (loft#710).
+
+```loft
+for tile in tiles { reserve(tile.points, expected_count(tile)); }
+for feature in stream { tiles[feature.tile].points += [feature.point]; }
+```
+
+An estimate is fine: reserving too little only means the ladder resumes from
+there, and too much costs the unused tail until the vector is copied.
 
 ### Aggregates
 
@@ -394,6 +416,20 @@ filesystem).
 | Function | Description |
 |----------|-------------|
 | `file(path: text) -> File` | Opens the file at `path` and returns a `File` handle. |
+
+**A relative path stays inside the project.** `../` that steps above the
+directory the path starts from is not reachable, and *every* file operation says
+so the same way: `file()` reports `NotExists`, `f.size` reports no size,
+`content()` / `read_bytes` / `list_dir` read as absent, and a write — `f.write`,
+`f += …`, `write_bytes`, `set_file_size` — fails rather than creating the file.
+An **absolute** path is a different question and is not restricted; build one
+with `directory()` or `user_directory()` when a program genuinely writes outside
+its own tree.
+
+The write half used to escape this rule, which lost data quietly: `file("../log")`
+reported the file absent, so `f#next = f.size` read 0, and the documented append
+idiom below then overwrote from byte 0 while `f += …` really did write there
+(loft#708). A refused write is now observable — check `f.write(s).ok()`.
 
 ### Reading Text Files
 

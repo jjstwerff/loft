@@ -100,6 +100,36 @@ linear memory.  The JS side reads via
 `new Uint8Array(instance.exports.memory.buffer)` and decodes with
 `TextDecoder('utf-8')`.
 
+### A call the browser cannot serve
+
+The shim implements a SUBSET of the native surface — a canvas cannot do
+everything a desktop window can, and some calls have no browser meaning at all
+(`gl_screenshot` writes to a `path`; a canvas capture is asynchronous and the
+wasm target has a virtual FS).
+
+**Naming such a call is not an error.**  Whether it can be served is a fact
+about this run on this target, not about whether the program is well-formed, so
+the build reports it and the page answers at RUNTIME: each unserviceable
+`loft_*` import gets a stub returning its declared zero (`false` / `0`), and the
+first call logs `loft: <name> is not available in the browser` to the console.
+Callers already have to check — a screenshot fails for a dozen reasons besides
+the target — so one source runs on both renderers, and the browser build simply
+reports "no picture here".
+
+This was a build refusal until loft#709.  Refusing forced the source to fork
+into two entry points differing only in which calls they may *name*, which
+destroys the property two renderers exist to provide: each is the other's
+control, so a difference between two pictures is the renderer and not the
+harness.  (The refusal was itself an improvement over loft#668, where the same
+shape reached the browser as a `LinkError` naming an import index.  The
+diagnosis was right; the disposition was not.)
+
+`host_import_stub_js` (`src/native_utils.rs`) emits the stubs, applied after the
+page shim and every `[wasm.bridge]` host_js, so a real handler always wins.
+Gate: `tests/wasm/html-unavailable-builtin.sh` builds a program naming an absent
+builtin, loads the page in headless chromium, and checks that the program's own
+`else` branch is what ran.
+
 ## GL bridge — WebGL2 imports
 
 Every GL function the loft program uses becomes an import.

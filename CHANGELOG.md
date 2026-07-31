@@ -21,6 +21,77 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — `reserve(v, n)`, for when many vectors grow at once
+
+Appending to a vector doubles it when it runs out, which is the right default and
+almost never something you think about. It becomes something you think about when
+*many* vectors grow together — a generator reading a stream and appending each
+item to whichever collection owns it. Every vector is then sitting immediately
+before another one, so no growth can extend in place, and each one copies itself
+to a new block roughly log N times on the way up.
+
+```loft
+for tile in tiles { reserve(tile.points, expected_count(tile)); }
+for feature in stream { tiles[feature.tile].points += [feature.point]; }
+```
+
+`reserve` only ever changes how much room a vector has. It cannot change its
+length, its contents, or anything holding a reference to it, and asking for less
+room than it already has does nothing.
+
+The saving shows up on disk too, because a persisted store carries each vector's
+claimed capacity rather than its length: on a 125-record × 2312-coordinate store,
+reserving took the file from 3,816,152 to 2,609,736 bytes for byte-identical
+data.
+
+### Unreleased — `directory("sub")` now appends the subpath it always advertised
+
+`directory`, `user_directory` and `program_directory` each take an optional
+subpath, and each quietly ignored it:
+
+```
+directory("sub")            // was: /home/you/project      now: /home/you/project/sub
+program_directory("assets") // was: /usr/local/bin/loft    now: /usr/local/bin/assets
+```
+
+The argument doubles as the buffer the answer comes back in, and it was cleared
+before being read. Nothing reported this — you got a valid directory, just not
+the one you asked for.
+
+`program_directory()` also returns what its name says now: the directory
+**containing** the executable, not the executable's own path. Appending to the
+old value produced `/usr/local/bin/loft/assets`, a path that can never exist,
+and the browser build already answered with a directory — so the two targets
+disagreed. If you were compensating for this by trimming the binary name
+yourself, drop that step.
+
+### Unreleased — a file outside your project is now equally out of reach for writing
+
+`file("../notes.txt")` reported the file absent, as paths outside the project
+always have — but `f.write(…)`, `f += …` and `write_bytes(…)` went ahead and
+created it. The documented way to append,
+
+```
+f#next = f.size;   // seek to the end
+f += "more";
+```
+
+then read `f.size` as 0 and overwrote the file from the start, silently. Reads
+and writes now agree: a path outside the project cannot be written either, and
+the attempt is visible — `f.write(s).ok()` is `false`, `write_bytes` returns
+`false`. Move the file inside your project, or use an absolute path (an
+absolute path is not restricted; build one with `directory()` or
+`user_directory()`).
+
+### Unreleased — a browser build no longer refuses calls it cannot serve
+
+Naming a builtin the browser has no handler for — `gl_screenshot`, say — failed
+the `--html` build outright, so one source had to become two entry points
+differing only in which calls they were allowed to mention. It builds now: the
+call returns its usual failure value (`false`) and reports itself once in the
+browser console, which is what a caller checking the result already handles. The
+build still tells you which calls those are.
+
 ### Unreleased — declaration order no longer changes what a closure sees
 
 Loft lets you use a struct before you declare it, and that is meant to be invisible.

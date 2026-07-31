@@ -32,6 +32,35 @@ fn main() {
   assert(!move("tests/example/show.loft", "tests/example/map.png").ok(), "move: dst already exists");
   assert(!move("tests/example/show.loft", "../outside.txt").ok(), "move: dst outside project");
   assert(!move("../Cargo.toml", "stolen.toml").ok(), "move: src outside project");
+  // --- loft#708: the WRITE side obeys the same verdict as the read side ---
+  // These reported NotExists above while `write` / `+=` / `write_bytes` created
+  // the file anyway, so `f#next = f.size` read 0 and the documented append
+  // idiom overwrote from byte 0.  Each refusal is observable, never silent.
+  // The absolute form of the same path is NOT refused (it never steps above its
+  // own root), so it can see whether anything actually landed — an assertion on
+  // the relative path would be vacuous, since that path cannot see either way.
+  // Clear the targets through their absolute form FIRST: a loft that still had
+  // the bug (an older binary, a bisect) really does create them, and a leftover
+  // would then fail this run for the previous run's reason.
+  here = directory();
+  delete("{here}/../loft_escape_708.txt");
+  delete("{here}/../loft_escape_708.bin");
+  {
+    esc = file("../loft_escape_708.txt");
+    assert(!esc.write("escaped").ok(), "write outside project refused");
+    esc += "escaped too";
+  }
+  assert(!write_bytes("../loft_escape_708.bin", [1 as u8]), "write_bytes outside project refused");
+  assert(!exists("{here}/../loft_escape_708.txt"), "refused write created nothing");
+  assert(!exists("{here}/../loft_escape_708.bin"), "refused write_bytes created nothing");
+  assert(read_bytes("../Cargo.toml") == null, "read_bytes outside project reads absent");
+  assert(list_dir("..") == null, "list_dir outside project reads absent");
+  assert(!is_file("../Cargo.toml"), "is_file outside project");
+  assert(!is_dir(".."), "is_dir outside project");
+  // A handle for a path outside the project answers as one for an absent file:
+  // it reports no size, not the leftovers of an unfilled struct.
+  assert(file("../Cargo.toml").size == 0, "outside project reports no size");
+  { gone = file("../Cargo.toml"); assert(gone#size == null, "outside project has no live size"); }
   // === Text file write and read ===
   {
     f = file("test_loft_t.txt");
@@ -132,4 +161,17 @@ fn main() {
   assert(len(home) > 0, "user_directory() is non-empty");
   prog = program_directory();
   assert(len(prog) > 0, "program_directory() is non-empty");
+  // The subpath argument each of these has always advertised was ignored: the
+  // parameter doubles as the buffer the result comes back in, and it was
+  // cleared before being read, so `directory("sub")` returned the bare cwd.
+  // Asserted by shape, not by separator — `Path::join` uses the platform's.
+  assert(directory("sub").ends_with("sub"), "directory(v) appends v");
+  assert(size(directory("sub")) > size(cwd), "directory(v) extends the cwd");
+  assert(user_directory("cfg").ends_with("cfg"), "user_directory(v) appends v");
+  assert(size(user_directory("cfg")) > size(home), "user_directory(v) extends home");
+  assert(program_directory("assets").ends_with("assets"), "program_directory(v) appends v");
+  assert(size(program_directory("assets")) > size(prog), "program_directory(v) extends it");
+  // And it must be a DIRECTORY, as the name says: it used to be `current_exe()`
+  // whole, so appending to it gave `…/loft/assets` — a path that cannot exist.
+  assert(is_dir(prog), "program_directory() names a directory, not the binary");
 }

@@ -4729,11 +4729,29 @@ impl Scopes {
     }
 }
 
+/// Does a variable of this type need its slot established at the PARENT scope
+/// when an `if`/`else` assigns it in a branch?
+///
+/// The question is really "is this variable backed by a heap store".  One that
+/// is cannot be treated like a scalar written in both arms: `scan_if` registers
+/// such a scalar at the parent scope directly (`small_both`), and for a
+/// store-backed variable that hoists the OWNERSHIP without ever creating the
+/// store, so the scope-exit free meets a stack-record ref where it expects an
+/// owned heap store.
+///
+/// The KEYED collections were missing, and every one of them crashed the
+/// interpreter for it: two arms of one `if`/`else` chain declaring the same
+/// `hash` / `sorted` / `index` name gave `BUG (#306): a stack-record ref was
+/// treated as an owned heap store`, then a SIGSEGV once the branch appended.
+/// `vector` was in the list and so was fine, which is why the fault looked
+/// type-specific rather than like the omission it was.  `--native` computes the
+/// answer separately and was always right, so nothing outside the interpreter
+/// changed.
 fn needs_pre_init(tp: &Type) -> bool {
     matches!(
         tp,
         Type::Text(_) | Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-    )
+    ) || crate::parser::vectors::is_keyed(tp)
 }
 
 /// @PLN85 text-tail-return-leak — after a B5-L3 `__ret_N` COPY hoist

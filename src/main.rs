@@ -8046,9 +8046,11 @@ fn main() {
         {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-            let deps = lib_dir.join("deps");
-            cmd.arg("-L").arg(format!("dependency={}", deps.display()));
-            Some(deps)
+            let search = native_utils::dep_search_dirs(&lib_dir);
+            for d in &search {
+                cmd.arg("-L").arg(format!("dependency={}", d.display()));
+            }
+            search.first().cloned()
         } else {
             None
         };
@@ -8213,8 +8215,9 @@ fn main() {
         if let Some(lib_dir) = html_runtime_dir.clone() {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-            let deps = lib_dir.join("deps");
-            cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+            for d in native_utils::dep_search_dirs(&lib_dir) {
+                cmd.arg("-L").arg(format!("dependency={}", d.display()));
+            }
             // W1.1 env fix: libloft.rlib depends on wasm-bindgen, which pulls
             // in the proc-macro crate wasm_bindgen_macro.  Proc-macros are
             // always built for the host (never for wasm32), so rustc needs
@@ -8224,10 +8227,10 @@ fn main() {
             // and subsequent errors cascade (every `use loft::...` fails,
             // so `cr_call_push` is reported unfound as a collateral).
             if let Some(host_lib_dir) = loft_lib_dir_for(None) {
-                let host_deps = deps_dir_of(&host_lib_dir);
-                if host_deps.exists() {
-                    cmd.arg("-L")
-                        .arg(format!("dependency={}", host_deps.display()));
+                for d in native_utils::dep_search_dirs(&host_lib_dir) {
+                    if d.is_dir() {
+                        cmd.arg("-L").arg(format!("dependency={}", d.display()));
+                    }
                 }
             }
         }
@@ -8366,18 +8369,16 @@ fn main() {
                 build
                     .arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-                let deps = lib_dir.join("deps");
-                if deps.is_dir() {
-                    build
-                        .arg("-L")
-                        .arg(format!("dependency={}", deps.display()));
+                for d in native_utils::dep_search_dirs(lib_dir) {
+                    if d.is_dir() {
+                        build.arg("-L").arg(format!("dependency={}", d.display()));
+                    }
                 }
                 if let Some(host_lib_dir) = loft_lib_dir_for(None) {
-                    let host_deps = deps_dir_of(&host_lib_dir);
-                    if host_deps.exists() {
-                        build
-                            .arg("-L")
-                            .arg(format!("dependency={}", host_deps.display()));
+                    for d in native_utils::dep_search_dirs(&host_lib_dir) {
+                        if d.is_dir() {
+                            build.arg("-L").arg(format!("dependency={}", d.display()));
+                        }
                     }
                 }
             }
@@ -8675,6 +8676,10 @@ fn main() {
         // the imported `env.memory` say nothing about graphics — so they are not
         // counted here.  Otherwise a compute-only program that uses `par` would
         // start shipping the full WebGL2 page.
+        // loft#709: what a call that this target cannot serve does at RUNTIME.
+        // Placed after the shim and every library bridge have had their say, so
+        // it fills only names still free.
+        let stub_js = crate::native_utils::host_import_stub_js(&wasm_bytes);
         let minimal_page =
             crate::native_utils::html_wasm_import_modules(&wasm_bytes).is_some_and(|mods| {
                 mods.iter()
@@ -8712,19 +8717,27 @@ fn main() {
                         verb, list,
                     );
                 } else {
+                    // loft#709 — REPORT, do not refuse.  Whether a call can be
+                    // served is a fact about this run on this target, not about
+                    // whether the program is well-formed, so it belongs at
+                    // runtime: the page carries a stub per unserviceable name
+                    // (`host_import_stub_js`) that returns the declared zero and
+                    // says so in the console.  Refusing made one source fork
+                    // into two entry points differing only in which calls they
+                    // may NAME, which is exactly what two renderers exist to
+                    // avoid.  The diagnosis stays — it is the disposition that
+                    // was wrong.
                     eprintln!(
                         "loft: --html: this program calls {verb} the browser host does not \
                          provide:\n    {list}\n  \
                          The browser shim implements a SUBSET of the native surface — a canvas \
                          cannot do everything a desktop window can.\n  \
-                         Drop the call on this target, or add a handler to \
-                         doc/loft-gl-wasm.js (or your library's [wasm.bridge] host_js).\n  \
-                         If you drive the emitted wasm from your OWN host instead of loft's \
-                         page, pass --host-provided and this becomes a warning.\n  \
-                         (No HTML was written — the page would fail to instantiate, showing \
-                         only a LinkError with an import index.)"
+                         The page still builds and runs: each of these returns its zero value \
+                         (false / 0) and reports itself once in the browser console, so check \
+                         the result as you would any other failure.\n  \
+                         To serve one for real, add a handler to doc/loft-gl-wasm.js (or your \
+                         library's [wasm.bridge] host_js)."
                     );
-                    std::process::exit(1);
                 }
             }
         }
@@ -8850,6 +8863,7 @@ const imports={{loft_io:{{
   }},
   loft_host_release:(tag)=>{{ if(globalThis.loftExposed)globalThis.loftExposed.delete(String(tag)); if(globalThis.loftRelease)globalThis.loftRelease(tag); }}
 }}}};
+{stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
 // exactly as before (par then runs sequentially, same results).
@@ -8898,6 +8912,7 @@ const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
 for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
   try{{reg(imports,ctrl,()=>mem);}}catch(e){{console.error('loft host_js extension failed',e);}}
 }}
+{stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
 // exactly as before (par then runs sequentially, same results).
@@ -9285,8 +9300,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-                let deps = deps_dir_of(&lib_dir);
-                cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+                // One `-L` per search dir: the classic layout yields exactly one
+                // (`<profile>/deps`), the per-unit layout cargo nightly adopted on
+                // 2026-07-29 yields one per crate.  See `dep_search_dirs`.
+                let search = native_utils::dep_search_dirs(&lib_dir);
+                for d in &search {
+                    cmd.arg("-L").arg(format!("dependency={}", d.display()));
+                }
+                let deps = search
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| deps_dir_of(&lib_dir));
                 // Pick the `loft_ffi` that `libloft` was built against, NOT the first
                 // in dir order: with two copies in `deps/`, naming the wrong one puts
                 // a second `loft_ffi` in the link → "colliding StableCrateId" (see

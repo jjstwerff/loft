@@ -1,0 +1,92 @@
+# @PLN78 step 7 — does the last release rebuild from its own source?
+#
+# The published sha256 attests that the maintainer uploaded these bytes.  Rebuilding
+# them here upgrades the claim to "the SOURCE produces these bytes", which is the one a
+# user actually wants and the only one that survives a compromised build machine.
+#
+# One job per PUBLISHED target, each rebuilding it on the runner that natively builds it in
+# release.yml — a cross-compiled binary is not expected to equal a natively built one,
+# so pairing them any other way would compare two different things and call the
+# difference a regression.
+#
+# Each job installs the exact rustc that release recorded in its bundle's BUILD-INFO,
+# into a throwaway RUSTUP_HOME, and discards it with the workspace.  Nothing here pins
+# the repo's toolchain: `rust-toolchain.toml` keeps floating on stable by design
+# (@PLAN53), and the verifier pins per release instead.
+#
+# NOT a required check, for the same reason `browser-threads` is not: a red here is a
+# real finding, but it depends on a published release and on network, and neither
+# belongs in a PR's critical path.  A release that predates BUILD-INFO exits 3
+# ("cannot verify") rather than green — an unverifiable release must never read as a
+# verified one.
+name: Reproducible build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release to verify (default: the latest).'
+        required: false
+        default: ''
+  # Weekly, not nightly: the answer only changes when a release does, and each job pays
+  # a full cold build of loft.
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  reproduce:
+    name: Rebuild ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          # Every triple release.yml PUBLISHES, verified — otherwise we ship a binary
+          # nobody ever rebuilds.  Pinned by `repro_matrix_covers_every_published_triple`.
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # rustup is preinstalled on every runner; the script installs the RELEASE's rustc
+      # itself, so no toolchain action here — one would only pin the wrong compiler.
+      - name: Install musl tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Rebuild the release and compare
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A fixed root, so the absolute paths a build embeds are the same ones the
+          # release build embedded.  Per-runner temp dirs would differ and guarantee a
+          # byte mismatch that says nothing about the source.
+          LOFT_REPRO_ROOT: ${{ runner.os == 'Windows' && 'C:\loft-repro' || '/tmp/loft-repro' }}
+        run: |
+          set +e
+          bash scripts/repro-verify.sh ${{ inputs.version && format('--version {0}', inputs.version) || '' }}
+          code=$?
+          set -e
+          case $code in
+            0) echo "::notice title=Reproducible::${{ matrix.target }} rebuilt identically" ;;
+            3) echo "::warning title=Cannot verify::${{ matrix.target }} — see the reason above (an unverifiable release is not a verified one)" ;;
+            *) echo "::error title=Not reproducible::${{ matrix.target }} rebuilt to different bytes" ;;
+          esac
+          # Exit 3 ("cannot verify") is not a failure of THIS workflow: it is the honest
+          # state until a release ships BUILD-INFO.  A mismatch still fails.
+          [ $code -eq 3 ] && exit 0
+          exit $code

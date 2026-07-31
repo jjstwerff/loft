@@ -10,6 +10,7 @@
 #   examples/*.loft       runnable sample programs
 #   loft-reference.pdf    the full reference (if built)
 #   README / LICENSE / CHANGELOG / QUICKSTART
+#   BUILD-INFO            version + target + the exact rustc that built it
 #   SHA256SUMS            sha256 of every file in the bundle
 # and emits dist/<name>.zip + <name>.zip.sha256 for the registry release entry.
 #
@@ -109,6 +110,17 @@ The standard library lives in \`default/\` next to \`bin/\` — keep them togeth
 Verify this download: \`sha256sum -c SHA256SUMS\` (macOS: \`shasum -a 256 -c
 SHA256SUMS\`), or all of it at once with \`loft verify-self\`.
 QS
+
+  # What it takes to rebuild this bundle, as a FILE rather than only a stamp inside
+  # the binary.  A verifier reproducing a macOS bundle from Linux cannot run its
+  # `bin/loft` to ask, and rustc's exact version is not optional here: an rlib and a
+  # binary are only byte-identical when the compiler is.  Written before SHA256SUMS, so
+  # the manifest covers it like every other file.
+  {
+    echo "version = $VERSION"
+    echo "target = $TRIPLE"
+    echo "rustc = $(RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-} rustc --version | sed 's/^rustc //')"
+  } > "$stage/BUILD-INFO"
 
   ( cd "$stage" && find . -type f ! -name SHA256SUMS | sort | sed 's|^\./||' | xargs $SHA256 > SHA256SUMS )
 

@@ -282,6 +282,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     parallel_arm,
     parallel_join,
     pre_alloc_vector,
+    reserve_vector,
+    path_contained,
     get_file,
     get_dir,
     get_file_text,
@@ -2375,6 +2377,24 @@ fn pre_alloc_vector(s: &mut State) {
     );
 }
 
+fn reserve_vector(s: &mut State) {
+    let v_elem_size = s.code::<u16>();
+    let v_count = *s.get_stack::<i64>();
+    let v_r = *s.get_stack::<DbRef>();
+    vector::reserve_vector(
+        &v_r,
+        v_count,
+        u32::from(v_elem_size),
+        &mut s.database.allocations,
+    );
+}
+
+fn path_contained(s: &mut State) {
+    let v_path = s.string();
+    let new_value = codegen_runtime::path_contained(v_path.str());
+    s.put_stack(new_value);
+}
+
 fn get_file(s: &mut State) {
     let v_file = *s.get_stack::<DbRef>();
     let new_value = s.database.get_file(&v_file);
@@ -2410,16 +2430,16 @@ fn size_file(s: &mut State) {
 
 fn delete(s: &mut State) {
     let v_path = s.string();
-    let new_value = codegen_runtime::fs_delete(&s.database.resolve_path(v_path.str()));
+    let new_value = codegen_runtime::fs_delete_at(s.database.resolve_path(v_path.str()));
     s.put_stack(new_value);
 }
 
 fn move_file(s: &mut State) {
     let v_to = s.string();
     let v_from = s.string();
-    let new_value = codegen_runtime::fs_move(
-        &s.database.resolve_path(v_from.str()),
-        &s.database.resolve_path(v_to.str()),
+    let new_value = codegen_runtime::fs_move_at(
+        s.database.resolve_path(v_from.str()),
+        s.database.resolve_path(v_to.str()),
     );
     s.put_stack(new_value);
 }
@@ -2461,13 +2481,13 @@ fn call_ref(s: &mut State) {
 
 fn mkdir(s: &mut State) {
     let v_path = s.string();
-    let new_value = codegen_runtime::fs_mkdir(&s.database.resolve_path(v_path.str()));
+    let new_value = codegen_runtime::fs_mkdir_at(s.database.resolve_path(v_path.str()));
     s.put_stack(new_value);
 }
 
 fn mkdir_all(s: &mut State) {
     let v_path = s.string();
-    let new_value = codegen_runtime::fs_mkdir_all(&s.database.resolve_path(v_path.str()));
+    let new_value = codegen_runtime::fs_mkdir_all_at(s.database.resolve_path(v_path.str()));
     s.put_stack(new_value);
 }
 
