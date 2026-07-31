@@ -512,7 +512,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/75-physics-2body/`](lib_plans/75-physics-2body) | M | — | `physics_2body` — shared rigid-body collision + integrator for moros / dryopea / bumper-airplanes (sphere/AABB pairwise; no N-body stacking) |
 | [`lib_plans/76-particles/`](lib_plans/76-particles) | S | — | `particles` — ribbon trails + point-burst particles (two-flavour scope) for dryopea + bumper-airplanes |
 | [`lib_plans/77-test-deps/`](lib_plans/77-test-deps) | S | F | `loft test --deps` — transitive dep-tree test walker driven by loft.toml + loft.lock; wired into chunk CI as a final regression-catch step (T2/T3 SHIPPED 2026-05-28; T4 lockfile driver still open) |
-| [`lib_plans/78-loft-distribution/`](lib_plans/78-loft-distribution) | MH | F | `loft` binary distribution + self-update + advisory integration — signed releases, `loft update --self`, verify-on-recompile hash, stdlib hash channel (companion to @PLN80 Phase 6.7/6.8) |
+| [`lib_plans/78-loft-distribution/`](lib_plans/78-loft-distribution) | MH | **DONE 2026-07-31** | `loft` binary distribution + self-update — `install.sh` bootstrap, `loft self-update` (resolve → verify against the signed index → replace), `loft verify-self`, and the toolchain's own registry entry.  Reference content moved to [RELEASE.md](RELEASE.md) + [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md) |
 
 ### Deferred plans
 

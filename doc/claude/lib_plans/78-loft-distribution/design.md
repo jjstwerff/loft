@@ -18,7 +18,7 @@ world is gone: building the *package* registry built almost every mechanism the
 
 | Phase | Plan's assumption | Today |
 |---|---|---|
-| 30.1 reproducible builds | to be built | **open** — `make-release.sh` emits `SHA256SUMS` + `stdlib.manifest`, which is integrity, not byte-identical rebuild |
+| 30.1 reproducible builds | to be built | **open, off the critical path** — `make-release.sh` emits `SHA256SUMS`, which is integrity, not byte-identical rebuild; homed at [RELEASE.md § 10 Open work](../../RELEASE.md) |
 | 30.2 signing + registry entries for binaries | to be built | **mechanism exists** — `registry_index::BinaryEntry { url, sha256, loft_ffi_fp }`, keyed per target triple, already downloaded and sha256-verified by `install.rs` for package cdylibs.  What is missing is an *entry*, not a mechanism |
 | 30.3 `install.sh` | to be built | **open** — genuinely new (see § the two asymmetries) |
 | 30.4 `loft self-update` | to be built | **half exists** — the verify half is `install.rs`'s existing path; the replace half is new |
@@ -199,9 +199,20 @@ says "not a release bundle" and exits 0 rather than failing vacuously.  Seven un
 tests cover the manifest dialects, the intact / edited / missing cases, a manifest
 path that tries to escape the bundle, and the dev-tree skip.
 
-*Remaining for after 1b:* the `--published` half — fetch the signed index, find
-this release's entry, compare.  That is the line the output prints today as
-"no signed registry entry for this release yet".
+*The `--published` half landed 2026-07-31* — and needed a schema change to be
+possible at all.  The published `sha256` covers the ZIP, which is verifiable
+exactly once, at download; what a user runs is an unpacked directory.  So the
+entry gained `binaries.<triple>.manifest_sha256`, the digest of that bundle's
+`SHA256SUMS`, and `verify-self` compares an INSTALLED tree against it.  Absent
+means "not anchored" and is reported, never counted as a pass.
+
+The same pass collapsed the bundle to ONE manifest: `stdlib.manifest` described a
+strict subset of what `SHA256SUMS` already covered, which is two ways to validate
+one installation.  And it closed a hole neither manifest could see — a digest
+check is silent about an ADDED file, while `collect_stdlib_sources` globs every
+`*.loft` under `default/`, so dropping one in had it loaded past a green
+`verify-self`.  The property is *the stdlib that loads is the stdlib that
+shipped*, which needs the file SET.
 
 **Step 3 — `loft self-update` (resolve + report).**  DONE 2026-07-31.
 
@@ -300,9 +311,18 @@ the same prefix survived**, the result verified, and the replaced binary ran.  A
 manifest-less bundle installs; a contradicting one is refused and then installs
 under `--force`.
 
-*Remaining:* download-and-unpack for the registry path (blocked on 1b — there is
-nothing published to fetch), and per-OS verification of the swap, Windows above
-all, where a running executable can be renamed but not overwritten.
+*Download-and-unpack landed 2026-07-31.*  `Plan::Available` fetches, checks the
+hash the signed index publishes BEFORE opening the archive, unpacks, and hands to
+the same staged-install path `--from` uses — so both routes share their checks,
+refusals and rollback and differ only in what is known about origin.
+
+*Remaining, and now homed outside this plan:* per-OS verification of the swap.
+The design already handles the Windows constraint — `apply_bundle` renames the
+target aside and copies in, because a running executable cannot be overwritten
+but can be renamed — and the unit tests exercise that on the daily Windows leg.
+What no test can cover is replacing the actually-running `loft.exe`, which needs
+a published release and a Windows box.  It is therefore a per-release check, not
+plan work: [RELEASE.md § 10](../../RELEASE.md).
 
 **Step 5 — advisory integration.**  DONE 2026-07-31.
 

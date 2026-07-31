@@ -866,6 +866,26 @@ can verify offline.
 - **Verify:** on a clean host, `loft self-update` resolves a bundle, checks its
   hash against the signed index, and installs it; `loft verify-self` then reports
   "matches the release published in the signed registry index".
+- **Verify on Windows specifically — the one case no test can cover.**  Run a real
+  `loft self-update` on Windows, from the previous release to this one.  Replacing
+  a *running* executable is the only genuinely platform-divergent step in the
+  chain: `apply_bundle` renames the target aside and copies in, because a running
+  binary cannot be overwritten there but can be renamed.  The unit tests exercise
+  rename-then-copy on the daily Windows leg, but never against the `loft.exe` that
+  is executing them, so this needs a published release and a Windows box.  Do it
+  once per release, before announcing.
+
+### Open work — reproducible builds (@PLN78 step 7)
+
+`make-release.sh` emits `SHA256SUMS`, which is integrity, not a byte-identical
+rebuild.  Everything above works without it; what it would upgrade is the
+*meaning* of the published hash — from "this is the artifact the maintainer
+uploaded" to "this is the artifact the source produces", which is the stronger
+claim.  Deliberately off the critical path: it was sequenced last so it could
+never block a user-visible installer, and closing @PLN78 does not make it urgent.
+The registry already re-checks reproducibility for *libraries* (gate 3 clones the
+tag and re-runs `loft package`); the toolchain is exempt because it is not a
+`loft package`, so this is the gap that exemption leaves.
 
 ---
 
