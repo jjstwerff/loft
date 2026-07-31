@@ -1053,10 +1053,7 @@ pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content:
     // #255 / @PLN9: re-home against the program anchor (native parity with
     // the interpreter's `State::get_file_text`).
     content.clear();
-    // Outside the project reads as empty — what an absent file gives (loft#708).
-    let Some(file_path) = stores.resolve_path(&file_path) else {
-        return;
-    };
+    let file_path = stores.resolve_path(&file_path);
     if let Ok(mut f) = File::open(&file_path)
         && f.read_to_string(content).is_err()
     {
@@ -1111,11 +1108,8 @@ pub fn OpSizeFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> i64 {
             .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
-    // #255 / @PLN9: re-home against the program anchor.  Outside the project
-    // has no size, the same as a file that is not there (loft#708).
-    let Some(file_path) = stores.resolve_path(&file_path) else {
-        return i64::MIN;
-    };
+    // #255 / @PLN9: re-home against the program anchor.
+    let file_path = stores.resolve_path(&file_path);
     if let Ok(meta) = std::fs::metadata(&file_path) {
         meta.len().cast_signed()
     } else {
@@ -1145,11 +1139,8 @@ pub fn OpTruncateFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, size: i
             .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
-    // #255 / @PLN9: re-home against the program anchor.  Outside the project
-    // there is nothing to resize (loft#708).
-    let Some(file_path) = stores.resolve_path(&file_path) else {
-        return false;
-    };
+    // #255 / @PLN9: re-home against the program anchor.
+    let file_path = stores.resolve_path(&file_path);
     // Close any open handle so resize starts from a clean state.
     let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
@@ -1229,11 +1220,8 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
             store.get_byte(file.rec, file.pos + 32, 0),
         )
     };
-    // #255 / @PLN9: re-home against the program anchor.  A path `file()` reports
-    // absent must not be creatable through a write handle (loft#708).
-    let Some(file_name) = stores.resolve_path(&file_name) else {
-        return i32::MIN;
-    };
+    // #255 / @PLN9: re-home against the program anchor.
+    let file_name = stores.resolve_path(&file_name);
     match OpenOptions::new()
         .read(true)
         .write(true)
@@ -1277,9 +1265,7 @@ fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 
             .to_owned()
     };
     // #255 / @PLN9: re-home against the program anchor.
-    let Some(file_name) = stores.resolve_path(&file_name) else {
-        return i32::MIN; // outside the project — nothing to read (loft#708)
-    };
+    let file_name = stores.resolve_path(&file_name);
     match OpenOptions::new().read(true).open(&file_name) {
         Ok(mut f) => {
             if initial_pos > 0 {
@@ -4163,85 +4149,6 @@ fn fs_classify(r: std::io::Result<()>, path: &str, dir_is_err: bool) -> i64 {
             }
         }
     }
-}
-
-/// Does `path` stay inside the project — that is, does it never step above the
-/// directory it starts from?  Counts path segments: `..` goes down one level,
-/// `.` and empty segments (a leading `/`, a doubled separator) count for
-/// nothing, any other name goes up one.  A path that would go below zero at any
-/// point is outside.  Both separators count, so a loft program can be written
-/// with either style.
-///
-/// An absolute path is a different question and is NOT refused here — a program
-/// that asks for `/var/tmp/x` or builds one from `user_directory()` means it.
-/// This is about a *relative* path silently escaping the bundle it travels in.
-///
-/// The one definition of the rule: `Stores::resolve_path` asks it on every file
-/// op, and the stdlib's `valid_path` is a call to it (`OpPathContained`), so
-/// there is no second copy to drift (loft#708).
-#[must_use]
-pub fn path_contained(path: &str) -> bool {
-    let mut depth: i32 = 0;
-    let mut start = 0;
-    for (i, c) in path.char_indices() {
-        if c == '/' || c == '\\' {
-            let part = &path[start..i];
-            start = i + c.len_utf8();
-            if part == ".." {
-                depth -= 1;
-                if depth < 0 {
-                    return false;
-                }
-            } else if part != "." && !part.is_empty() {
-                depth += 1;
-            }
-        }
-    }
-    if &path[start..] == ".." {
-        depth -= 1;
-    }
-    depth >= 0
-}
-
-/// The `*_at` wrappers below take what [`Stores::resolve_path`] returned, so a
-/// path that leaves the project answers the same as one that is not there —
-/// `NotFound` for the mutating ops, `false` for the two questions.  They exist
-/// so the `#rust` templates in `default/02_files.loft` stay one call wide and
-/// each op's refusal value is written down once.
-///
-/// [`Stores::resolve_path`]: crate::database::Stores::resolve_path
-pub fn fs_delete_at(path: Option<String>) -> i64 {
-    path.map_or(FS_NOT_FOUND, |p| fs_delete(&p))
-}
-
-/// See [`fs_delete_at`].  Refuses unless BOTH ends stay in the project.
-pub fn fs_move_at(from: Option<String>, to: Option<String>) -> i64 {
-    match (from, to) {
-        (Some(f), Some(t)) => fs_move(&f, &t),
-        _ => FS_NOT_FOUND,
-    }
-}
-
-/// See [`fs_delete_at`].
-pub fn fs_mkdir_at(path: Option<String>) -> i64 {
-    path.map_or(FS_NOT_FOUND, |p| fs_mkdir(&p))
-}
-
-/// See [`fs_delete_at`].
-pub fn fs_mkdir_all_at(path: Option<String>) -> i64 {
-    path.map_or(FS_NOT_FOUND, |p| fs_mkdir_all(&p))
-}
-
-/// See [`fs_delete_at`].
-#[must_use]
-pub fn fs_is_dir_at(path: Option<String>) -> bool {
-    path.is_some_and(|p| fs_is_dir(&p))
-}
-
-/// See [`fs_delete_at`].
-#[must_use]
-pub fn fs_is_file_at(path: Option<String>) -> bool {
-    path.is_some_and(|p| fs_is_file(&p))
 }
 
 /// Delete file `path`.  Returns an `FS_*` code (mapped to `FileResult` by the

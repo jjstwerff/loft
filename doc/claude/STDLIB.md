@@ -427,19 +427,23 @@ filesystem).
 |----------|-------------|
 | `file(path: text) -> File` | Opens the file at `path` and returns a `File` handle. |
 
-**A relative path stays inside the project.** `../` that steps above the
-directory the path starts from is not reachable, and *every* file operation says
-so the same way: `file()` reports `NotExists`, `f.size` reports no size,
-`content()` / `read_bytes` / `list_dir` read as absent, and a write — `f.write`,
-`f += …`, `write_bytes`, `set_file_size` — fails rather than creating the file.
-An **absolute** path is a different question and is not restricted; build one
-with `directory()` or `user_directory()` when a program genuinely writes outside
-its own tree.
+**A relative path resolves against the program's own directory** (#255 / @PLN9),
+so `../data.txt` names the file above the script — the same file its absolute
+form names, and it answers the same either way. There is no path-shape filter:
+`..` is resolved, not inspected.
 
-The write half used to escape this rule, which lost data quietly: `file("../log")`
-reported the file absent, so `f#next = f.size` read 0, and the documented append
-idiom below then overwrote from byte 0 while `f += …` really did write there
-(loft#708). A refused write is now observable — check `f.write(s).ok()`.
+That is a change (loft#712). A lexical filter used to refuse any relative path
+containing `..`, and reported the refusal as a **null size** — indistinguishable
+from a missing or empty file, so a reader doing `if f#size < HEADER` turned it
+into "the file is truncated" and reported a *data* error for what was a *path*
+decision. It was not containment either: the same bytes by absolute path were
+served, and a `..` that normalised back inside the root was refused too. loft has
+no filesystem sandbox — admission is decided at load time and carries no runtime
+checks ([SANDBOX.md](SANDBOX.md)) — so the resolved path is the whole answer and
+the filesystem gives it.
+
+If a program must not reach outside a directory, check that yourself before the
+call; the stdlib does not, and did not meaningfully do so before.
 
 ### Reading Text Files
 
@@ -550,7 +554,7 @@ Mutating filesystem operations return a `FileResult` enum:
 | Variant | Meaning |
 |---------|---------|
 | `FileResult.Ok` | Operation succeeded. |
-| `FileResult.NotFound` | Path does not exist or is outside the project directory. |
+| `FileResult.NotFound` | Path does not exist. |
 | `FileResult.PermissionDenied` | OS permission denied. |
 | `FileResult.IsDirectory` | A file operation targeted a directory (e.g. `delete()` on a directory). |
 | `FileResult.Other` | Any other OS error. |
@@ -562,10 +566,10 @@ loft-level existence check.
 | Function | Description |
 |----------|-------------|
 | `ok(self: FileResult) -> boolean` | Returns `true` if `Ok`. |
-| `exists(path: text) -> boolean` | Returns `true` if the path exists and is inside the project. |
+| `exists(path: text) -> boolean` | Returns `true` if the path exists. |
 | `exists(both: File) -> boolean` | Method form: `f.exists()` or `exists(f)`. Uses `both` parameter. |
 | `delete(path: text) -> FileResult` | Removes a file. |
-| `move(from: text, to: text) -> FileResult` | Renames or relocates a file within the project. |
+| `move(from: text, to: text) -> FileResult` | Renames or relocates a file. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
 | `is_dir(path: text) -> boolean` | Returns `true` if the path exists and is a directory. |

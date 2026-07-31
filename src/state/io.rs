@@ -74,11 +74,7 @@ impl State {
                 .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned();
             // #255 / @PLN9: re-home a relative path against the program anchor.
-            // Outside the project reads as empty — what an absent file gives
-            // (loft#708).
-            let Some(path_string) = self.database.resolve_path(&raw_path) else {
-                return;
-            };
+            let path_string = self.database.resolve_path(&raw_path);
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
             if let Ok(mut f) = File::open(&path_string) {
                 match f.read_to_string(buf) {
@@ -229,13 +225,9 @@ impl State {
                         .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
-                // #255 / @PLN9: re-home against the program anchor.  Outside the
-                // project has no end to append at; the open below refuses too
-                // (loft#708).
-                self.database
-                    .resolve_path(&path)
-                    .and_then(|p| std::fs::metadata(p).ok())
-                    .map_or(0, |m| m.len() as i64)
+                // #255 / @PLN9: re-home against the program anchor.
+                let path = self.database.resolve_path(&path);
+                std::fs::metadata(&path).map_or(0, |m| m.len() as i64)
             }
         } else {
             raw_next
@@ -271,12 +263,8 @@ impl State {
                         .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
-                // #255 / @PLN9: re-home against the program anchor.  A path
-                // `file()` reports absent must not be creatable here — that
-                // disagreement is loft#708.
-                let Some(file_name) = self.database.resolve_path(&file_name) else {
-                    return;
-                };
+                // #255 / @PLN9: re-home against the program anchor.
+                let file_name = self.database.resolve_path(&file_name);
                 // Open for read+write without truncating so that earlier
                 // bytes are preserved.  Create the file if it does not
                 // exist yet.  Explicit truncation happens via
@@ -469,10 +457,7 @@ impl State {
                 let raw = s.get_str(s.get_u32_raw(file.rec, file.pos + 24)).to_owned();
                 self.database.resolve_path(&raw)
             };
-            // Outside the project reads as absent (loft#708).
-            let Some(resolved_name) = resolved else {
-                return;
-            };
+            let resolved_name = resolved;
             let store = self.database.store_mut(&file);
             let mut file_ref = store.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
@@ -593,13 +578,9 @@ impl State {
             let file_path = store
                 .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned();
-            // #255 / @PLN9: re-home against the program anchor.  Outside the
-            // project has no size, the same as an absent file (loft#708).
-            let size = self
-                .database
-                .resolve_path(&file_path)
-                .and_then(|p| std::fs::metadata(p).ok())
-                .map_or(i64::MIN, |meta| meta.len() as i64);
+            // #255 / @PLN9: re-home against the program anchor.
+            let file_path = self.database.resolve_path(&file_path);
+            let size = std::fs::metadata(&file_path).map_or(i64::MIN, |meta| meta.len() as i64);
             self.put_stack(size);
         }
     }
@@ -667,12 +648,8 @@ impl State {
                     .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
-            // #255 / @PLN9: re-home against the program anchor.  Outside the
-            // project there is nothing to resize (loft#708).
-            let Some(path) = self.database.resolve_path(&path) else {
-                self.put_stack(false);
-                return;
-            };
+            // #255 / @PLN9: re-home against the program anchor.
+            let path = self.database.resolve_path(&path);
             // Close any open handle: the handle may be in read or write mode with a stale
             // position, and after resize the position might be beyond the new end of file.
             let file_ref = self
