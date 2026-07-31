@@ -571,6 +571,69 @@ fn assemble_atomics_sysroot(
 /// else `lib_dir/deps`.  Appending "deps" unconditionally yields an invalid
 /// `…/deps/deps` path that rustc can't search — E0463 "can't find crate" for
 /// every transitive dep of libloft (sha2, rand_core, …).
+/// Every directory rustc must search to resolve loft's transitive rlibs.
+///
+/// Two cargo layouts, and a `--native` compile has to work under whichever the user's
+/// toolchain produces:
+///
+/// * **classic** — one `<profile>/deps/` holding every rlib.  One search dir.
+/// * **per-unit** (cargo 1.99.0-nightly 2026-07-29 and later) — each crate gets its own
+///   `<profile>/build/<crate>/<hash>/out/`, and `deps/` does not exist at all.  ~107
+///   search dirs for loft.
+///
+/// The per-unit layout broke `--native` outright: `-L dependency=<profile>/deps` named a
+/// directory that was not there, and rustc reported `E0463: can't find crate for sha2
+/// which loft depends on` — a message that points at a missing dependency rather than at
+/// a moved one, which is why the nightly ASan gate read as a loft bug for a week.
+///
+/// Ordered so the classic layout stays a single `-L` (the common case is unchanged) and
+/// the fallback engages only when `deps/` is genuinely absent.
+pub(crate) fn dep_search_dirs(lib_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let classic = deps_dir_of(lib_dir);
+    if classic.is_dir() {
+        return vec![classic];
+    }
+    // Per-unit: <profile>/build/<crate>/<hash>/out/.  Only directories that actually
+    // hold a linkable crate are worth passing — build-script `out` dirs sit in the same
+    // tree and carry generated sources, not libraries.
+    //
+    // Both rlibs AND dylibs count: a proc-macro compiles to `.so`/`.dylib`/`.dll`, never
+    // `.rlib`, so an rlib-only filter drops every derive crate.  Filtering on rlibs alone
+    // moved the failure from `sha2` to `curve25519_dalek_derive` and no further — the
+    // same error one crate later, which reads like the fix not working at all.
+    let build_root = lib_dir.join("build");
+    let mut dirs = Vec::new();
+    if let Ok(crates) = std::fs::read_dir(&build_root) {
+        for c in crates.flatten() {
+            let Ok(hashes) = std::fs::read_dir(c.path()) else {
+                continue;
+            };
+            for h in hashes.flatten() {
+                let out = h.path().join("out");
+                if std::fs::read_dir(&out).is_ok_and(|rd| {
+                    rd.flatten().any(|f| {
+                        std::path::Path::new(&f.file_name())
+                            .extension()
+                            .is_some_and(|e| {
+                                ["rlib", "so", "dylib", "dll"]
+                                    .iter()
+                                    .any(|k| e.eq_ignore_ascii_case(k))
+                            })
+                    })
+                }) {
+                    dirs.push(out);
+                }
+            }
+        }
+    }
+    if dirs.is_empty() {
+        // Name the place it was expected, so the diagnostic stays actionable.
+        return vec![classic];
+    }
+    dirs.sort();
+    dirs
+}
+
 pub(crate) fn deps_dir_of(lib_dir: &std::path::Path) -> std::path::PathBuf {
     if lib_dir.file_name().is_some_and(|n| n == "deps") {
         lib_dir.to_path_buf()
@@ -2110,5 +2173,69 @@ mod crate_resolution_tests {
         assert!(!crate_resolution_failure(
             "compiled by an incompatible version"
         ));
+    }
+}
+
+#[cfg(test)]
+mod dep_search_dirs_tests {
+    use super::dep_search_dirs;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join("loft-dep-search").join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn touch(p: &std::path::Path) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"x").unwrap();
+    }
+
+    /// The classic layout must keep yielding exactly ONE search dir — the per-unit
+    /// fallback is a fallback, not a replacement, and a change here would multiply
+    /// every `--native` compile's `-L` count on the platform that works today.
+    #[test]
+    fn the_classic_single_deps_layout_yields_one_dir() {
+        let root = scratch("classic");
+        touch(&root.join("deps").join("libsha2-abc.rlib"));
+        assert_eq!(dep_search_dirs(&root), vec![root.join("deps")]);
+    }
+
+    /// cargo 1.99.0-nightly (2026-07-29) gives each crate its own
+    /// `build/<crate>/<hash>/out/`, and no `deps/` at all.
+    #[test]
+    fn the_per_unit_layout_yields_one_dir_per_crate() {
+        let root = scratch("per-unit");
+        touch(&root.join("build/sha2/h1/out/libsha2-h1.rlib"));
+        touch(&root.join("build/serde/h2/out/libserde-h2.rlib"));
+        // A proc-macro ships a dylib, never an rlib.  Excluding these is what made an
+        // rlib-only filter fail one crate later on `curve25519_dalek_derive` —
+        // indistinguishable, from the error alone, from the fix not working.
+        touch(&root.join("build/derive/h3/out/libderive-h3.so"));
+        // A build-script output dir carries generated sources, not libraries: passing
+        // it would be noise, and there are ~100 of them.
+        touch(&root.join("build/somelib/h4/out/generated.rs"));
+
+        let dirs = dep_search_dirs(&root);
+        assert_eq!(dirs.len(), 3, "{dirs:?}");
+        for c in ["sha2", "serde", "derive"] {
+            assert!(
+                dirs.iter().any(|d| d.to_string_lossy().contains(c)),
+                "{c} missing from {dirs:?}"
+            );
+        }
+        assert!(
+            !dirs.iter().any(|d| d.to_string_lossy().contains("somelib")),
+            "a source-only out dir must not be searched: {dirs:?}"
+        );
+    }
+
+    /// Neither layout present: name the classic path anyway, so the failure diagnostic
+    /// tells the user where loft looked instead of printing nothing.
+    #[test]
+    fn an_empty_tree_still_names_the_expected_place() {
+        let root = scratch("empty");
+        assert_eq!(dep_search_dirs(&root), vec![root.join("deps")]);
     }
 }

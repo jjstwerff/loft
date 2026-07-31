@@ -9285,8 +9285,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-                let deps = deps_dir_of(&lib_dir);
-                cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+                // One `-L` per search dir: the classic layout yields exactly one
+                // (`<profile>/deps`), the per-unit layout cargo nightly adopted on
+                // 2026-07-29 yields one per crate.  See `dep_search_dirs`.
+                let search = native_utils::dep_search_dirs(&lib_dir);
+                for d in &search {
+                    cmd.arg("-L").arg(format!("dependency={}", d.display()));
+                }
+                let deps = search
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| deps_dir_of(&lib_dir));
                 // Pick the `loft_ffi` that `libloft` was built against, NOT the first
                 // in dir order: with two copies in `deps/`, naming the wrong one puts
                 // a second `loft_ffi` in the link → "colliding StableCrateId" (see
