@@ -1,0 +1,12 @@
+// loft#714 — a `--lib` directory package's manifest dependencies must be pulled
+// in from the file that named the package, not from wherever the descent had
+// reached.  `pkg714_wrap` declares TWO deps whose graphs meet at `pkg714_c`; the
+// drain used to fire while the lexer sat inside `pkg714_c`, abandoning it after
+// it was already marked loaded, so the tuple destructure in a sibling failed as
+// `Unknown variable` — inside library code that is perfectly valid.
+use pkg714_wrap;
+
+fn main() {
+  assert(wrap_sum(3) == 7, "resolved through the directory package");
+  println("pkg714 ok");
+}

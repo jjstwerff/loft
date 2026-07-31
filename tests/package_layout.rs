@@ -274,3 +274,36 @@ fn i337_manifest_path_dep_resolves_non_sibling() {
         p.diagnostics.lines()
     );
 }
+
+/// loft#714 — a `--lib` directory package's manifest dependencies must be pulled
+/// in from the file that NAMED the package, not from wherever the descent had
+/// reached by the time the queue was drained.
+///
+/// `switch_to_dep` replaces the lexer's source and the abandoned file resumes
+/// later off `todo_files`. That is fine for a `use`, which always switches away
+/// from the very file it appears in. Draining the manifest-dep queue from an
+/// arbitrary descendant was not: a dep got pulled in while the lexer sat inside
+/// an unrelated library whose definitions had not been parsed yet — and that
+/// library was already `use_add`ed, so every later `use` of it was a no-op
+/// against an empty library.
+///
+/// `pkg714_wrap` declares two deps whose graphs meet at `pkg714_c`; one dep alone
+/// never reproduced it. The victim is a TUPLE destructure, because that is the
+/// construct that needs the callee's return type at parse time — which is why
+/// the reported failures read as `Unknown variable` and `Expect token ;` inside
+/// published, CI-gated libraries rather than as anything about resolution.
+#[test]
+fn pkg_deps_resolve_before_the_dependent_is_parsed() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}pkg714_main.loft"), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "a directory package's two manifest deps must both resolve before the \
+         libraries that use them are parsed; diagnostics: {:?}",
+        p.diagnostics.lines()
+    );
+}
