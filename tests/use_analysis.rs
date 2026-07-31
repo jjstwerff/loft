@@ -373,7 +373,11 @@ fn ownership_classifies_the_over_free_shapes() {
     // pick_cond's RETURN is the fresh materialized store, not the join slot.
     assert_own_return(&stderr, "pick_cond", "Owned");
 
-    // match_return: borrowed enum-field arm vs empty owned arm -> Join.
+    // match_return: borrowed enum-field arm vs empty owned arm -> Join. The empty arm
+    // reaches the verdict through `Defs::filled` (loft#704): it APPENDS into the retbuf
+    // rather than assigning it, and a `Set`-only scan saw no owned alternative at all,
+    // so the split read as a plain Borrowed-of-`e`. `vector<integer>` items had always
+    // read Borrowed here for that reason; both element types now read Join.
     assert_own_return(&stderr, "deliver", "Join");
 
     // field-view family (fixed/clean): a field view and a whole-arg view are plain
@@ -504,18 +508,77 @@ fn ownership_pins_match_return_resisting_cases() {
 
     // V1/V2 — the GENUINE over-free arms: the retbuf is aliased to a borrowed
     // enum-field view of the EXTERNAL subject `e`. The ParamDeliver site (base=e) is
-    // the precise fix signal; the return verdict is Join(base=e).
+    // the precise fix signal; the return verdict is Join(base=e). V1 reaches it through
+    // `Defs::filled` (loft#704) — its owned `[]` arm fills the retbuf instead of
+    // assigning it — while V2 has no `[]` arm and never needed it.
     assert_free_site(&stderr, "deliver", "ParamDeliver", "Borrowed", "e");
     assert_return_own(&stderr, "deliver", "Join(base=e)");
     assert_free_site(&stderr, "deliver2", "ParamDeliver", "Borrowed", "e");
     assert_return_own(&stderr, "deliver2", "Join(base=e)");
 
-    // V3 — the FRESH-BUILD arm: owned, runtime-clean. The oracle OVER-classifies its
-    // RETURN as Join(base=o) (the retbuf-param approximation — `o` is the owned retbuf
-    // classified as borrowed-of-itself), but there is NO ParamDeliver site. So the fix,
-    // keyed on ParamDeliver (NOT the return verdict), correctly LEAVES deliver3 ALONE.
-    assert_return_own(&stderr, "deliver3", "Join(base=o)"); // documented over-classification
+    // V3 — the FRESH-BUILD arm: owned, runtime-clean, and BOTH arms own their value, so
+    // there is no split to name. What it gets is the retbuf-param approximation (`o`,
+    // the owned retbuf, classified as borrowed-of-itself) — `o` is never re-bound, only
+    // filled, so loft#704's owned alternative has nothing to join with and deliberately
+    // does not fire: claiming Owned here would tell a callee it may free the CALLER's
+    // buffer. There is no ParamDeliver site either, so the fix keyed on that (NOT on the
+    // return verdict) correctly leaves deliver3 alone.
+    assert_return_own(&stderr, "deliver3", "Borrowed(base=o)"); // documented over-classification
     assert_no_free_site(&stderr, "deliver3"); // the precise discriminator excludes it
+}
+
+/// loft#704 — the in-place FILL as an owned alternative, pinned in BOTH directions.
+///
+/// A var comes to hold a value two ways: a `Set` re-binds it, and an append/clear fills
+/// it. The classifier scanned only the first, so a `match` whose borrowed arm re-binds
+/// and whose `[]` arm fills read as a plain Borrowed — the split `Join` exists to name
+/// was invisible. `filled_or_borrowed` is that shape.
+///
+/// The other direction is the one that has to hold for the fix to be SOUND, and it is
+/// what keeps the rule from being "fills are owned": `fill_only` never re-binds its
+/// buffer, so there is nothing to join with and it keeps the documented retbuf-param
+/// reading. Its value really is owned — but the buffer belongs to the CALLER, and a
+/// callee told `Owned` may free it. An `Owned` here would be the unsound direction.
+const FILL_SRC: &str = r#"
+struct Fe { hp: integer }
+enum FCell { FEmpty, FFilled { items: vector<Fe> } }
+enum ICell { IEmpty, IFilled { items: vector<integer> } }
+
+// A borrowed arm (re-binds the retbuf) and an owned `[]` arm (fills it) -> Join.
+fn filled_or_borrowed(e: FCell) -> vector<Fe> {
+  match e { FFilled { items } => { items }, _ => { [] } }
+}
+// The element type must not change the verdict: this read Borrowed even before
+// loft#699 made every element type materialise its `[]` arm alike.
+fn filled_or_borrowed_int(e: ICell) -> vector<integer> {
+  match e { IFilled { items } => { items }, _ => { [] } }
+}
+// FILL-ONLY: the buffer is never re-bound, so the owned alternative must NOT fire.
+fn fill_only(v: vector<integer>) -> vector<integer> { o: vector<integer> = []; o += v; o }
+// Both arms owned, both fills — likewise no re-bind, so likewise unchanged.
+fn both_owned(c: boolean) -> vector<integer> { if c { [1, 2] } else { [] } }
+
+fn main() {
+  c = FFilled { items: [Fe { hp: 1 }] };  a = filled_or_borrowed(c);
+  i = IFilled { items: [7] };             b = filled_or_borrowed_int(i);
+  d = fill_only([5, 6]);
+  e = both_owned(true);
+  print("{len(a)} {len(b)} {len(d)} {len(e)}\n");
+}
+"#;
+
+#[test]
+fn ownership_counts_an_in_place_fill_as_an_owned_alternative() {
+    let stderr = dump(FILL_SRC);
+
+    // The recovered Join — the borrowed arm's base survives as the witness.
+    assert_return_own(&stderr, "filled_or_borrowed", "Join(base=e)");
+    assert_return_own(&stderr, "filled_or_borrowed_int", "Join(base=e)");
+
+    // The soundness half: a buffer that is only ever FILLED keeps the retbuf-param
+    // reading. `Owned` here would license a callee to free the caller's buffer.
+    assert_return_own(&stderr, "fill_only", "Borrowed(base=o)");
+    assert_return_own(&stderr, "both_owned", "Borrowed(base=__retbuf)");
 }
 
 // ── @PLN85 Stage-3 site 1: the `local_source` compiler wiring (LOFT_JOIN_OWN) ───

@@ -2780,6 +2780,44 @@ impl Parser {
                 continue;
             }
             let mut default = self.data.attr_value(td_nr, aid);
+            // #697 — a COLLECTION field MENTIONED in the literal is primed first: the
+            // mentioned-field path emits `OpSetInt4(pos, 0)` to zero the 4-byte header
+            // before anything writes through it (see `sinks.vector_headers`).  A field
+            // left to its DEFAULT never reached that code, so its header kept whatever
+            // the record's bytes happened to hold and every later read followed a garbage
+            // rec number — `Bag { … }` omitting one `vector<integer> = []` panicked on the
+            // FIRST access to an unrelated field, with an index that changed run to run.
+            //
+            // Prime it here too, and note this covers keyed collections as well: a
+            // `hash<T[k]> = []` failed identically, and `text` never did because it is not
+            // header-shaped.
+            if matches!(
+                &tp,
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+            ) {
+                let prime = self.cl(
+                    "OpSetInt4",
+                    &[
+                        code.clone(),
+                        Value::Int(i32::from(pos + fld)),
+                        Value::Int(0),
+                    ],
+                );
+                list.push(prime);
+                // An EMPTY collection default (`= []`) parses to `Insert([Null])`, and the
+                // zeroed header above already IS the empty collection.  Letting it through
+                // to `set_field_no_check` emitted `OpAppendVector(field, null)` — appending
+                // the Null as an element, which is the garbage the reader then walked.
+                if matches!(&default, Value::Insert(items)
+                    if items.iter().all(|i| matches!(i, Value::Null)))
+                {
+                    continue;
+                }
+            }
             // #328/#332: a POINTER field (`reference<T>`, the u16::MAX share
             // marker) is a 12-byte DbRef — its omitted default is the null
             // sentinel.  The inline recursion below would write the INNER
@@ -2845,6 +2883,21 @@ impl Parser {
                 default = Self::replace_record_ref(default, &Value::Var(fresh));
             } else {
                 default = Self::replace_record_ref(default, code);
+            }
+            // loft#698 — a default that CALLS something (the function a default needing a
+            // temporary is lowered into, or a plain `= mk()`) is stored with its user
+            // arguments only.  A call returning a heap value also takes a caller-allocated
+            // return buffer, and "caller" is THIS frame, not the struct the default was
+            // written in — so the hidden slots are filled here, once per construction site,
+            // exactly as `patch_tret_call` fills them for a promoted return.  Left unfilled
+            // the call reached codegen a parameter short and tripped its arity assert.
+            if let Value::Call(d, args) = &default
+                && args.len() < self.data.attributes(*d)
+            {
+                let (d, mut actual) = (*d, args.clone());
+                let mut types = vec![Type::Unknown(0); actual.len()];
+                self.add_defaults(d, &mut actual, &mut types);
+                default = Value::Call(d, actual);
             }
             list.push(self.set_field_no_check(td_nr, aid, pos, code.clone(), default));
         }

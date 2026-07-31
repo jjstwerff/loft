@@ -238,8 +238,13 @@ fn show_ownership_renders_each_fact_kind() {
     // K4 — the empty `[]` arm is a REAL owned vector (the #562 fix), not a bare null;
     // and the return delivers via the return buffer.
     let k4 = section_fn(&out, "n_k4_emptyarm");
+    // The FACT is the owned fresh store, not the temp's name: loft#699 routes an empty
+    // `[]` through the same construction path a non-empty one takes, for every element
+    // type rather than only the narrow-integer ones, so the accumulator is the ordinary
+    // `_vec_N` instead of a shape-specific temp. Pinning the name would re-break here
+    // for a rename that changes nothing about what the arm owns.
     assert!(
-        k4.contains("_empty_arm_1") && k4.contains("Owned (backing="),
+        k4.contains("Owned (backing="),
         "K4: empty-arm should own a fresh store:\n{k4}"
     );
     assert!(

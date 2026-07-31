@@ -267,6 +267,34 @@ two-leg discriminator). Each site validated on BOTH backends:
   the typed `borrow_tail_copy` block). Fix = route through / replicate the proven path, not a bare
   `OpAppendVector`. (Not the tp, not interp execution — both ruled out by probe.)
 
+### A var holds a value two ways — `Set` and FILL (loft#704)
+
+`ownership_of` resolves a var by joining its DEFINITIONS, and for a long time a
+definition meant a `Set`. It is only one of the two ways a var comes to hold something:
+the other is an in-place **fill** — `OpClearVector(v)` / `OpAppendVector(v, …)` — which
+defines nothing a `Set`-scan can see. So
+
+```loft
+match e { Filled { items } => { items }, _ => { [] } }
+```
+
+read as a plain `Borrowed(base=e)`: the borrowed arm re-binds the return buffer and is
+visible, the owned `[]` arm FILLS it and is not — losing the exact split `Join` exists
+to name. The fill is an **Owned** alternative and unconditionally so, because
+`OpAppendVector` deep-copies: the filled branch delivers the buffer's own contents
+whatever the source was.
+
+**It is an alternative, never the whole answer**, and that restriction is the sound half.
+A buffer that is only ever filled and never re-bound is the retbuf-param shape the model
+deliberately calls `Borrowed` (§ the approximations in `use_analysis.rs`): its value
+really is owned, but the buffer belongs to the CALLER, and a callee told `Owned` may free
+it. So the fill joins with a var's other defs and does nothing when there are none.
+
+The general rule: **when an analysis reads "the definitions of X", enumerate every way X
+can be established before trusting the join.** A conservative approximation guarding one
+direction (here: a bare param reads `Borrowed`) must be EXTENDED with the missing
+alternative, not replaced by it — replacing flips the very direction it was protecting.
+
 ### The slot-level twin — `Function::owns_store` (loft#664)
 
 `ownership_of` answers "does this VALUE own its store"; the codegen and parser sites

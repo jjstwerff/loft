@@ -2515,43 +2515,48 @@ extern crate loft;"
                 w,
                 "        let cvr = loft::keys::DbRef {{ store_nr: cv.store_nr, rec: 1, pos: 8 }};"
             )?;
-            for val in &values {
+            for element in &values {
                 writeln!(w, "        {{ let rec = db.record_new(&cvr, {vec_tp}, 0);")?;
-                match val {
-                    crate::data::Value::Int(v) => {
-                        writeln!(
-                            w,
-                            "            db.store_mut(&rec).set_int(rec.rec, rec.pos, {v}_i64);"
-                        )?;
+                // Each field at ITS OWN offset within the element (loft#702) — the same
+                // grouping `build_const_vectors` writes, from the same extractor.
+                for (offset, val) in element {
+                    let at = format!("rec.pos + {offset}");
+                    match val {
+                        crate::data::Value::Int(v) => {
+                            writeln!(
+                                w,
+                                "            db.store_mut(&rec).set_int(rec.rec, {at}, {v}_i64);"
+                            )?;
+                        }
+                        crate::data::Value::Long(v) => {
+                            writeln!(
+                                w,
+                                "            db.store_mut(&rec).set_long(rec.rec, {at}, {v}_i64);"
+                            )?;
+                        }
+                        crate::data::Value::Float(v) => {
+                            writeln!(
+                                w,
+                                "            db.store_mut(&rec).set_float(rec.rec, {at}, {v}_f64);"
+                            )?;
+                        }
+                        crate::data::Value::Single(v) => {
+                            writeln!(
+                                w,
+                                "            db.store_mut(&rec).set_single(rec.rec, {at}, {v}_f32);"
+                            )?;
+                        }
+                        crate::data::Value::Text(v) => {
+                            let esc = v.replace('\\', "\\\\").replace('"', "\\\"");
+                            writeln!(
+                                w,
+                                "            {{ let store = db.store_mut(&rec); \
+                                 let s_pos = store.set_str(\"{esc}\"); \
+                                 store.set_u32_raw(rec.rec, {at}, s_pos); }}"
+                            )?;
+                        }
+                        _ => {}
                     }
-                    crate::data::Value::Long(v) => {
-                        writeln!(
-                            w,
-                            "            db.store_mut(&rec).set_long(rec.rec, rec.pos, {v}_i64);"
-                        )?;
-                    }
-                    crate::data::Value::Float(v) => {
-                        writeln!(
-                            w,
-                            "            db.store_mut(&rec).set_float(rec.rec, rec.pos, {v}_f64);"
-                        )?;
-                    }
-                    crate::data::Value::Single(v) => {
-                        writeln!(
-                            w,
-                            "            db.store_mut(&rec).set_single(rec.rec, rec.pos, {v}_f32);"
-                        )?;
-                    }
-                    crate::data::Value::Text(v) => {
-                        let esc = v.replace('\\', "\\\\").replace('"', "\\\"");
-                        writeln!(
-                            w,
-                            "            {{ let store = db.store_mut(&rec); \
-                             let s_pos = store.set_str(\"{esc}\"); \
-                             store.set_u32_raw(rec.rec, rec.pos, s_pos); }}"
-                        )?;
-                    }
-                    _ => {}
                 }
                 writeln!(w, "            db.record_finish(&cvr, &rec, {vec_tp}, 0);")?;
                 writeln!(w, "        }}")?;

@@ -397,3 +397,19 @@ fn pe_x_default_on_bare_enum_record() {
   s = segs[9]?;
   assert(s.start == 0, "unreached");
 }
+
+// loft#698 — a default needing a temporary is now LOWERED into a function of its own
+// (`tests/scripts/698-default-needing-a-temporary.loft` covers what works).  ONE shape
+// stays refused; the KEYED one it used to name no longer does, because loft#703 gave a
+// keyed collection a literal value form for the generated function to return
+// (`tests/scripts/703-keyed-collection-literal-value.loft`).
+//
+// A default that reads `$` AND needs a temporary cannot move into a function of its own:
+// `$` is the record being built, which that function does not have.  Either half alone is
+// fine — `= $.pe_x + 1` stays a plain replayed default, and `= "a" + "b"` is lowered.
+struct Pe698 { pe_x: integer, pe_s: text = "a" + $.pe_x }
+// @EXPECT_ERROR: both reads `$` and needs a temporary
+fn pe_default_reading_the_record_and_needing_a_temporary() {
+  p = Pe698 { pe_x: 1 };
+  assert(p.pe_x == 1, "unreached");
+}

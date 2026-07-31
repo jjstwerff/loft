@@ -30,5 +30,12 @@ fn main() {
     println("gate name={(h[42] ?? Tile { id: 0, name: \"?\" }).name}");
     println("gate len={len(h)}");
     println("gate verify={store_verify(h)}");
+  } else if mode == "whole" {
+    // loft#700 — the MATCHING half through the whole-image loader: an unchanged
+    // layout must still load, so the gate cannot be passing by refusing everything.
+    ok = store_load(h, path);
+    println("gate whole ok={ok}");
+    println("gate whole len={len(h)}");
+    println("gate whole name={(h[42] ?? Tile { id: 0, name: \"?\" }).name}");
   } else { println("FAIL unknown-mode") }
 }

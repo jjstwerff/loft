@@ -2614,6 +2614,9 @@ impl Stores {
         if slot_idx >= self.allocations.len() {
             return false;
         }
+        if !self.schema_gate_ok(slot, path) {
+            return false;
+        }
         let path_str = match path.to_str() {
             Some(s) if !s.is_empty() => s,
             _ => return false,
@@ -2752,11 +2755,73 @@ impl Stores {
     /// `load_path` (the trusted path) validates only in debug and is faster;
     /// use this for a file whose provenance you don't control.
     pub fn load_path_untrusted(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        if !self.schema_gate_ok(slot, path) {
+            return false;
+        }
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             Err(_) => return false,
         };
         self.load_bytes(slot, &bytes)
+    }
+
+    /// loft#700 — does the store at `path` have the layout this program will READ it
+    /// with?
+    ///
+    /// A whole-image load keeps the target slot's `known_type` and reinterprets the
+    /// file's bytes through it, and records are fixed-stride: add one field to a stored
+    /// struct and every older record is read at the new, larger stride.  Nothing
+    /// announced it — `len()` on the added collection returned wild values
+    /// (`510277628`, `2135492622`) and iterating one read arbitrary memory.  A consumer
+    /// shipped a field on the strength of a probe that happened to use a layout where
+    /// the overrun landed on zeroes.
+    ///
+    /// The `.dschema` sidecar already records the layout the file was written with, and
+    /// the paged loaders already gate on it — this is the same gate on the whole-image
+    /// path.  A store with no sidecar (legacy, or written by another tool) still loads:
+    /// the check can only report what it knows, and refusing every unlabelled store
+    /// would break programs that are reading their own correct data.
+    fn schema_gate_ok(&self, slot: u16, path: &std::path::Path) -> bool {
+        let known_type = self.allocations[slot as usize].known_type;
+        if known_type == u16::MAX {
+            return true; // untyped store — no identity to compare against
+        }
+        let current = crate::schema_sidecar::LayoutIdentity::of(self, &[known_type]);
+        // An unreadable sidecar (an I/O failure, not a layout answer) tells us nothing
+        // about the layout, so it neither passes nor fails the store: keep the previous
+        // behaviour rather than refuse a load on a filesystem hiccup.
+        let Ok(verdict) = crate::schema_sidecar::check_beside(path, &current) else {
+            return true;
+        };
+        if verdict.is_raw_safe() {
+            return true;
+        }
+        // Say what changed.  A refused load otherwise reads as "the file is missing",
+        // which sends the reader to the wrong half of their program.
+        let detail = match &verdict {
+            crate::schema_sidecar::SchemaVerdict::Changed(diff) => {
+                let mut parts = Vec::new();
+                if !diff.changed.is_empty() {
+                    parts.push(format!("reshaped: {}", diff.changed.join(", ")));
+                }
+                if !diff.added.is_empty() {
+                    parts.push(format!("only in this program: {}", diff.added.join(", ")));
+                }
+                if !diff.dropped.is_empty() {
+                    parts.push(format!("only in the store: {}", diff.dropped.join(", ")));
+                }
+                parts.join("; ")
+            }
+            _ => "its recorded layout could not be read".to_string(),
+        };
+        eprintln!(
+            "store_load: refusing {} — it was written with a different layout than this \
+             program reads it with, so its records would be read at the wrong stride \
+             ({detail}).  Rebuild the store with this program, or load it with the \
+             version that wrote it.",
+            path.display()
+        );
+        false
     }
 
     /// @PLN97 3b.5 — the layout-identity gate for a working-set load. Returns

@@ -457,7 +457,26 @@ impl Parser {
             // typed context already carries the type in `var_tp` and wins.  Take
             // (clear) the hint so it seeds only this outermost literal — nested
             // literals get their element type threaded through `var_tp`.
-            let hint = self.vector_hint();
+            // loft#699 — `vector_hint` answers "may the expected type OVERRIDE what the
+            // elements infer?", and #432 answers that narrowly on purpose (a `vector<u8>`
+            // parameter must win over the `vector<integer>` a bare `[10, 255]` infers,
+            // while a generic or `single` element must not).  An EMPTY literal has no
+            // elements to infer from, so there is nothing to override and nothing to get
+            // wrong: the expected type is the only thing that can say what to build.
+            // Without it `fn mk() -> vector<S> { [] }` typed as Unknown and folded to
+            // `void`, so every heap element type but a narrow integer had no empty value
+            // form at all — which is what a hoisted `= []` parameter default needs.
+            // A KEYED expected type seeds whether or not the literal is empty (loft#703):
+            // `[…]` infers `vector<K>`, which is not a narrower or wider version of
+            // `hash<K[k]>` but a different container — so there is no inference to
+            // override, only the one answer.
+            let hint = if is_collection(&self.expected)
+                && (self.lexer.peek_token("]") || is_keyed(&self.expected))
+            {
+                self.expected.without_deps()
+            } else {
+                self.vector_hint()
+            };
             self.expected = Type::Unknown(0);
             // #501 — a vector literal parsed as an assignment RHS reuses the LHS var
             // (`val`) as its build accumulator (the watermark optimisation for
@@ -471,7 +490,7 @@ impl Parser {
                 None
             };
             let seeded;
-            let elem_tp = if var_tp.is_unknown() && matches!(hint, Type::Vector(_, _)) {
+            let elem_tp = if var_tp.is_unknown() && is_collection(&hint) {
                 seeded = hint;
                 &seeded
             } else {
@@ -2137,6 +2156,19 @@ impl Parser {
             u16::MAX
         } else if let Value::Var(nr) = val {
             *nr
+        } else if is_keyed(var_tp) {
+            // loft#703 — a keyed literal in VALUE position (`fn mk() -> hash<K[k]> { […] }`,
+            // `f([K { … }])`) has no destination variable to build through, so give it one
+            // of its own AT THE KEYED TYPE.  A `vector<K>` temp here is what made every
+            // such position report "expected hash<K[k]>, got vector<K>".
+            //
+            // Minted as a FUNCTION-scoped work-ref in its own `__kvb_N` namespace: the
+            // store is this accumulator's own (a keyed collection has no wrapper record
+            // to hold it), so whoever owns the variable owns the store, and the
+            // function-exit sweep is what frees it — a block-local temp left an argument
+            // literal (`f([K { … }])`) leaking.  See `Function::work_kvb` for why
+            // neither of the existing namespaces will do.
+            self.vars.work_keyed(&var_tp.clone(), &mut self.lexer)
         } else {
             self.create_unique(
                 "vec",
@@ -2171,13 +2203,25 @@ impl Parser {
         if in_t == Type::Null {
             return in_t;
         }
+        // loft#703 — a KEYED destination keeps its own type.  The elements are added
+        // THROUGH it: `new_record` reads the local's type to pick `hash::add` /
+        // `sorted_new` / `tree::add`, which is how `h += [K { … }]` already builds one.
+        // Retyping it to `vector<K>` here is what made `h: hash<K[k]> = [K { … }]`
+        // report a type change, so loft had no way to write a non-empty keyed
+        // collection as a VALUE at all — only through a keyed destination that already
+        // existed (a struct-literal field, or a `+=` onto a built collection).
+        let keyed_dest = self.keyed_local(vec);
         let struct_tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
-        if !is_field {
+        if !is_field && !keyed_dest {
             self.vars
                 .change_var_type(vec, &struct_tp, &self.data, &mut self.lexer);
             self.data.vector_def(&mut self.lexer, &in_t);
         }
-        let tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
+        let tp = if keyed_dest {
+            self.vars.tp(vec).clone()
+        } else {
+            Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()))
+        };
         let (tp, ls) =
             self.build_vector_list(val, parent_tp, elm, vec, &res, &in_t, tp, is_var, is_field);
         self.lexer.token("]");
@@ -2231,6 +2275,21 @@ impl Parser {
         is_field: bool,
     ) -> (Type, Vec<Value>) {
         let mut ls = Vec::new();
+        // loft#703 — a keyed literal in VALUE position allocates its accumulator's store
+        // outright rather than as a side effect of the first `OpNewRecord`.  Two things
+        // need it said: an EMPTY one has no element to allocate it at all (the temp
+        // reached codegen with no definition — "Incorrect var _vec_1[65535] versus 8"),
+        // and a store that appears only as a side effect is a store the scope pass never
+        // sees the accumulator OWN, so an argument literal (`f([K { … }])`) leaked it.
+        // A keyed LOCAL is excluded: its store comes from its own declaration, and a
+        // second allocation here would orphan the first.
+        if !self.first_pass && !is_var && self.keyed_local(vec) {
+            let keyed_tp = self.vars.tp(vec).clone();
+            if let Some(kt) = self.keyed_known_type(&keyed_tp) {
+                ls.push(v_set(vec, Value::Null));
+                ls.push(self.cl("OpDatabase", &[Value::Var(vec), Value::Int(i32::from(kt))]));
+            }
+        }
         // Only create a fresh database record here when the variable has no existing
         // one (dep is empty).  For `v += [...]` the variable already has a dep from
         // the initial `=` assignment; calling vector_db again would reset v to an
@@ -2240,8 +2299,10 @@ impl Parser {
             ls.extend(self.vector_db(in_t, vec));
         }
         // O8.1a: pre-allocate vector capacity when the element count is known
-        // at compile time.  This eliminates resize calls in vector_append.
-        if !self.first_pass && !res.is_empty() && vec != u16::MAX {
+        // at compile time.  This eliminates resize calls in vector_append.  A keyed
+        // local (loft#703) has no vector to size — its adds go through `hash::add` and
+        // friends, which grow the keyed store themselves.
+        if !self.first_pass && !res.is_empty() && vec != u16::MAX && !self.keyed_local(vec) {
             let ed_nr = self.data.type_def_nr(in_t);
             if ed_nr != u32::MAX {
                 let known = self.data.def(ed_nr).known_type();
@@ -2324,9 +2385,48 @@ impl Parser {
         Some(values)
     }
 
+    /// loft#703 — is this literal being built straight into a KEYED accumulator?
+    ///
+    /// Such a variable owns a keyed store of its own (`hash::add` / `sorted_new` /
+    /// `tree::add` add through it), so none of the vector backing applies: no `__vdb_N`
+    /// store, no capacity pre-allocation, no `vector<T>` retype.  Asked in one place so
+    /// the build and the type agree — a literal built as a vector under a variable still
+    /// typed keyed reads its elements back through the wrong container.
+    pub(crate) fn keyed_local(&self, vec: u16) -> bool {
+        vec != u16::MAX && is_keyed(self.vars.tp(vec))
+    }
+
+    /// The registered database type for a KEYED collection type — the id that makes
+    /// `record_new` / `record_finish` dispatch to `hash::add` / `sorted_new` /
+    /// `tree::add` / the spatial index rather than to `vector_append`.
+    ///
+    /// Registration is idempotent (the same call the typedef walker makes), so asking
+    /// is also how the type comes to exist.  `None` for a non-keyed type, or one whose
+    /// content has no layout yet.
+    pub(crate) fn keyed_known_type(&mut self, tp: &Type) -> Option<u16> {
+        let content = match tp {
+            Type::Sorted(td, _, _)
+            | Type::Hash(td, _, _)
+            | Type::Index(td, _, _)
+            | Type::Radix(td, _, _) => self.data.def(*td).known_type(),
+            _ => return None,
+        };
+        if content == u16::MAX {
+            return None;
+        }
+        Some(match tp {
+            Type::Sorted(_, key, _) => self.database.sorted(content, key),
+            Type::Hash(_, key, _) => self.database.hash(content, key),
+            Type::Index(_, key, _) => self.database.index(content, key),
+            Type::Radix(_, key, _) => self.database.spatial(content, key),
+            _ => return None,
+        })
+    }
+
     pub(crate) fn vector_needs_db(&self, vec: u16, in_t: &Type, is_var: bool) -> bool {
         is_var
             && *in_t != Type::Void
+            && !self.keyed_local(vec)
             && self.vars.tp(vec).depend().is_empty()
             && !matches!(self.vars.tp(vec), Type::RefVar(_))
             // Argument vectors already have a caller-provided backing store; do not
@@ -2736,22 +2836,7 @@ impl Parser {
             None
         };
         let lhs_known = match keyed_src.as_ref() {
-            Some(Type::Sorted(td, key, _)) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.sorted(c, key))
-            }
-            Some(Type::Hash(td, key, _)) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.hash(c, key))
-            }
-            Some(Type::Index(td, key, _)) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.index(c, key))
-            }
-            Some(Type::Radix(td, key, _)) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.spatial(c, key))
-            }
+            Some(tp) => self.keyed_known_type(tp),
             _ => None,
         };
         // #246: `vv[i] += [...]` — `is_field` is true (the LHS is an indexed
@@ -3056,7 +3141,14 @@ impl Parser {
         // store.  Every other argument keeps the caller-provided backing (no
         // local `__vdb` that would be freed before the return).
         let rebind = self.vars.rebind_orig(vec).is_some();
-        if self.first_pass || vec == u16::MAX || (self.vars.is_argument(vec) && !rebind) {
+        // loft#703 — a keyed local already owns a keyed store; wrapping it in a
+        // `vector<T>` backing repointed `h` at `OpGetField(__vdb, …)`, so the elements
+        // went in through the keyed container and came back out through the vector one.
+        if self.first_pass
+            || vec == u16::MAX
+            || (self.vars.is_argument(vec) && !rebind)
+            || self.keyed_local(vec)
+        {
             Vec::new()
         } else {
             let mut ls = Vec::new();
@@ -3277,6 +3369,24 @@ impl Parser {
     }
 
     // <children> ::=
+}
+
+/// Does this type name a KEYED collection — one whose elements are reached by key
+/// rather than by position (`hash` / `sorted` / `index` / `spatial`)?
+///
+/// loft#703: a `[…]` literal infers `vector<T>`, and a keyed type is not a wider or
+/// narrower version of that but a DIFFERENT container, so the two are never
+/// interchangeable and every site that builds a literal has to ask which it is.
+pub(crate) fn is_keyed(tp: &Type) -> bool {
+    matches!(
+        tp,
+        Type::Hash(_, _, _) | Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Radix(_, _, _)
+    )
+}
+
+/// Does this type name any collection a `[…]` literal can build — keyed or vector?
+pub(crate) fn is_collection(tp: &Type) -> bool {
+    is_keyed(tp) || matches!(tp, Type::Vector(_, _))
 }
 
 /// P216: walk a captured variable's `Type` and call `tuple_def` for

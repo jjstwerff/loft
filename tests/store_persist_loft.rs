@@ -771,6 +771,53 @@ fn layout_gate_rejects_changed_struct_both_backends() {
     }
 }
 
+/// loft#700 — the layout gate on the WHOLE-IMAGE loader, `store_load`.
+///
+/// It kept the target slot's type and reinterpreted the file's bytes through it, so a
+/// struct that had GROWN a field read every older record at the new, larger stride:
+/// `len()` on the added collection returned wild values and iterating one read arbitrary
+/// memory, silently, on both backends. The `.dschema` sidecar already recorded the
+/// layout the file was written with and the paged loaders already gated on it — this
+/// pins the same gate on the whole-image path.
+///
+/// The matching half is what keeps the check honest: a gate that refused everything
+/// would pass the mismatch assertion on its own.
+#[test]
+fn store_load_refuses_a_changed_layout_both_backends() {
+    let dir = scratch("layout_gate_whole");
+    let path = dir.join("tiles.store");
+
+    let (out_w, code_w) = run_mode(&gate_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        // MATCHING layout — the whole-image load proceeds and yields the data.
+        let (out, code) = run_mode_backend(backend, &gate_script(), &path, "whole");
+        assert_eq!(code, 0, "{backend} match exit: {out:?}");
+        assert!(
+            out.contains("gate whole ok=true"),
+            "{backend}: an unchanged layout must still load whole: {out:?}"
+        );
+        assert!(out.contains("gate whole len=2"), "{backend}: {out:?}");
+        assert!(
+            out.contains("gate whole name=forty-two"),
+            "{backend}: {out:?}"
+        );
+
+        // CHANGED layout (extra field) — refused, rather than read at the wrong stride.
+        let (out, code) = run_mode_backend(backend, &gate_changed_script(), &path, "whole");
+        assert_eq!(code, 0, "{backend} mismatch exit: {out:?}");
+        assert!(
+            out.contains("changed whole ok=false"),
+            "{backend}: a changed layout MUST be refused, not read raw: {out:?}"
+        );
+        assert!(
+            out.contains("changed whole len=0"),
+            "{backend}: a refused load leaves the collection empty: {out:?}"
+        );
+    }
+}
+
 /// @PLN97 3b.5 — the layout-identity gate over HTTP: the remote loader fetches
 /// `<url>.dschema` and rejects a mismatched layout, never range-reading foreign
 /// bytes across the network (the safety gate for a REMOTE store read, #522).
