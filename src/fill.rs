@@ -282,6 +282,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     parallel_arm,
     parallel_join,
     pre_alloc_vector,
+    reserve_vector,
     path_contained,
     get_file,
     get_dir,
@@ -2371,6 +2372,18 @@ fn pre_alloc_vector(s: &mut State) {
     vector::pre_alloc_vector(
         &v_r,
         u32::from(v_capacity),
+        u32::from(v_elem_size),
+        &mut s.database.allocations,
+    );
+}
+
+fn reserve_vector(s: &mut State) {
+    let v_elem_size = s.code::<u16>();
+    let v_count = *s.get_stack::<i64>();
+    let v_r = *s.get_stack::<DbRef>();
+    vector::reserve_vector(
+        &v_r,
+        v_count,
         u32::from(v_elem_size),
         &mut s.database.allocations,
     );

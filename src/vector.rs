@@ -132,6 +132,54 @@ pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [St
     store.set_u32_raw(new_rec, 4, 0); // length = 0
 }
 
+/// Give `db`'s vector room for `count` elements, so appending that many performs
+/// no reallocation.  Backs the `reserve(v, n)` builtin (loft#710).
+///
+/// Changes CAPACITY only: length, contents, and the owner slot stay valid, and a
+/// `count` at or below what the vector already holds room for is a no-op — never
+/// a truncation.  The one visible effect is that the growth ladder does not run.
+///
+/// That ladder is why this exists.  `vector_append` doubles when it runs out, so
+/// filling a vector of N costs ~log N reallocations, each claiming a new block
+/// and orphaning the old one, and leaves the final block up to 2x the length.
+/// With N vectors growing round-robin — what a streaming generator does, one
+/// append per incoming item to whichever collection owns it — the block after
+/// any vector is another vector, so the in-place path in `Store::resize` almost
+/// never applies and every step copies.  A persisted store then carries all of
+/// it: 3.28 MB claimed for 2.31 MB of data in the reported case.
+///
+/// Distinct from [`pre_alloc_vector`], which only ever allocates a vector that
+/// has none yet (its callers rely on it leaving an existing one alone); this one
+/// also grows an existing vector, which is the case a caller reserving up front
+/// cares about.
+pub fn reserve_vector(db: &DbRef, count: i64, elem_size: u32, stores: &mut [Store]) {
+    // Null test first, before any store deref — see `pre_alloc_vector`.
+    if db.is_null() || db.rec == 0 || db.pos == 0 {
+        return;
+    }
+    let Ok(count) = u32::try_from(count) else {
+        return; // negative or > u32: nothing to promise
+    };
+    let store = keys::mut_store(db, stores);
+    // Same 11-element floor as `vector_append` / `pre_alloc_vector`, so a
+    // reserved vector can never be shorter-capacity than an unreserved one.
+    let words = checked_vec_cap(count.max(11), elem_size);
+    let vec_rec = store.get_u32_raw(db.rec, db.pos);
+    if vec_rec == 0 {
+        let new_rec = store.claim(words);
+        store.set_u32_raw(db.rec, db.pos, new_rec);
+        store.set_u32_raw(new_rec, 4, 0); // length = 0
+        return;
+    }
+    // `resize` returns early when the block is already big enough, so shrinking
+    // is impossible here; when it cannot grow in place it moves the record, and
+    // the owner slot has to follow — exactly as `vector_append` does.
+    let new_rec = store.resize(vec_rec, words);
+    if new_rec != vec_rec {
+        store.set_u32_raw(db.rec, db.pos, new_rec);
+    }
+}
+
 pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     // Appending to a null (absent) vector is a no-op for now — it must never
     // index stores[u16::MAX].  Plan-25 Q4: make this a loud error once null is

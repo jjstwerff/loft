@@ -21,6 +21,29 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — `reserve(v, n)`, for when many vectors grow at once
+
+Appending to a vector doubles it when it runs out, which is the right default and
+almost never something you think about. It becomes something you think about when
+*many* vectors grow together — a generator reading a stream and appending each
+item to whichever collection owns it. Every vector is then sitting immediately
+before another one, so no growth can extend in place, and each one copies itself
+to a new block roughly log N times on the way up.
+
+```loft
+for tile in tiles { reserve(tile.points, expected_count(tile)); }
+for feature in stream { tiles[feature.tile].points += [feature.point]; }
+```
+
+`reserve` only ever changes how much room a vector has. It cannot change its
+length, its contents, or anything holding a reference to it, and asking for less
+room than it already has does nothing.
+
+The saving shows up on disk too, because a persisted store carries each vector's
+claimed capacity rather than its length: on a 125-record × 2312-coordinate store,
+reserving took the file from 3,816,152 to 2,609,736 bytes for byte-identical
+data.
+
 ### Unreleased — `directory("sub")` now appends the subpath it always advertised
 
 `directory`, `user_directory` and `program_directory` each take an optional
