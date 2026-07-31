@@ -225,13 +225,63 @@ absent-signature fallback is unchanged — that is the offline / bundle-import p
 — but the verdict is reached before anything is written.
 *Verified:* a rejected fetch leaves the cached index byte-identical.
 
-**Step 4 — self-replacement.**
-The one new mechanism: download to a temp file beside the target, verify, then
-rename the running binary aside and rename the new one into place, restoring on
-failure.  Only now, with 1–3 proven, does anything mutate an installation.
-*Verify:* on each target OS, update to a version and back; kill the process
-mid-write and confirm the installation is still runnable (the rename is the
-atomicity, so a crash leaves either the old or the new binary, never a partial).
+**Step 4 — apply a bundle, and always allow a local one.**  DONE 2026-07-31.
+
+Two owner decisions reshaped this step, and both belong in the design rather than
+in a commit message.
+
+**Installing from a local artifact is a first-class route, not a fallback.**  Just
+as a library installs from a local path, loft must — the people who need it are
+exactly those who cannot or will not compile it, and a registry-only updater
+strands them the moment the network, the firewall, or the registry is not there.
+`loft self-update --from <dir>` installs an unpacked bundle with no registry and
+no network.
+
+**The strictness binds US, not the user.**  We never publish a release that cannot
+be fully verified; that is a rule about `make-release.sh` and the registry entry,
+enforced where we publish.  What someone installs on their own machine is theirs
+to decide, so nothing here refuses a bundle its owner wants: one with no manifests
+installs with a clear note that nothing could be checked, and one that actively
+contradicts its manifest needs `--force`, because that is nearly always a
+truncated copy rather than an intention.  Informed, not obstructed.
+
+*The unit of update is not a directory.*  `bundle_root` is `<binary-dir>/..`,
+which on a system install is a shared PREFIX — `/usr/local`, whose `bin/` holds
+every other binary on the machine.  Renaming it, or even `bin/`, would take
+unrelated software with it.  So the unit is exactly the files the bundle CLAIMS:
+`SHA256SUMS` lists everything a release ships, which makes a bundle
+self-describing about what it owns, and a bundle without one owns what it
+contains.  Anything else is untouched by construction, not by a rule someone has
+to remember.
+
+*And it is not atomic across that set* — pretending otherwise would be the
+dangerous design.  What makes it safe instead: nothing moves until the staged
+bundle has verified, every replaced file is backed up so a failure restores, and
+the residual window (a crash between two file replacements) is exactly what
+`verify-self` detects and names.  That is why step 2 came first.
+
+Three things measurement produced that the design did not:
+
+  * `SHA256SUMS` **cannot list itself** — a file cannot carry its own digest — so
+    the set it defines never includes it.  Left out, an update installs new files
+    under the OLD manifest and the result fails `verify-self` forever.
+  * A manifest-less install leaves the installation's old manifests describing
+    files that no longer exist, so `verify-self` would report a permanent,
+    meaningless failure.  They are retired: "not a release bundle" is the truthful
+    answer for what the user now has.
+  * The repo's own `portable_path` guard caught a blind backslash replace in the
+    directory walk — on Unix a backslash is a legal filename character, and
+    rewriting it would rename someone's file on the way into the set.
+
+*Verified:* 16 unit tests, and end to end — a running loft replaced its own
+installation from a local bundle, the new stdlib landed, **a neighbour's binary in
+the same prefix survived**, the result verified, and the replaced binary ran.  A
+manifest-less bundle installs; a contradicting one is refused and then installs
+under `--force`.
+
+*Remaining:* download-and-unpack for the registry path (blocked on 1b — there is
+nothing published to fetch), and per-OS verification of the swap, Windows above
+all, where a running executable can be renamed but not overwritten.
 
 **Step 5 — advisory integration.**
 `self-update` consults the existing advisory feed and refuses to install a yanked

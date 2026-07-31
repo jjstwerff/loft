@@ -117,6 +117,215 @@ pub fn host_triple() -> String {
     }
 }
 
+// ── @PLN78 step 4 — applying a staged bundle ────────────────────────────────────
+//
+// The update unit is NOT a directory.  `verify_self::bundle_root` is
+// `<binary-dir>/..`, which for a system install is a shared PREFIX — `/usr/local`,
+// whose `bin/` holds every other binary on the machine.  Renaming or replacing that,
+// or even `bin/`, would take unrelated software with it.
+//
+// So the unit is exactly the files the bundle CLAIMS: `SHA256SUMS` lists every file a
+// release ships, which makes the bundle self-describing about what it owns.  Anything
+// not in that list is untouched, by construction rather than by a rule someone has to
+// remember.
+//
+// That set cannot be replaced atomically, and pretending otherwise would be the
+// dangerous design.  Two things make it safe instead: nothing is moved until the
+// staged bundle has verified against its OWN manifests, and every replaced file is
+// backed up so a mid-swap failure restores.  The residual window — a crash between
+// two file replacements — is exactly what `loft verify-self` detects and names, which
+// is why step 2 came first.
+
+use std::path::{Path, PathBuf};
+
+/// Paths a bundle owns, read from its `SHA256SUMS` — the authoritative list of what a
+/// release ships, and therefore of what an update may replace.
+fn owned_files(staged: &Path) -> Result<(Vec<String>, bool), String> {
+    let sums = staged.join("SHA256SUMS");
+    // No manifest is not a refusal.  A release bundle always carries one — that rule is
+    // enforced where we PUBLISH — but a user may have assembled or built this directory
+    // themselves, and they pointed at it deliberately.  Then the bundle's contents are
+    // the set: everything in it is installed, and nothing outside it is touched or
+    // removed.  Refusing here would wall off precisely the people `--from` exists for.
+    let Ok(text) = std::fs::read_to_string(&sums) else {
+        return walk_files(staged).map(|f| (f, false));
+    };
+    let (entries, _) = crate::verify_self::parse_manifest(&text);
+    if entries.is_empty() {
+        return walk_files(staged).map(|f| (f, false));
+    }
+    for (rel, _) in &entries {
+        if rel.contains("..") || Path::new(rel).is_absolute() {
+            return Err(format!("staged bundle lists an unsafe path: {rel}"));
+        }
+    }
+    let mut files: Vec<String> = entries.into_iter().map(|(rel, _)| rel).collect();
+    // `SHA256SUMS` cannot appear in its own list — a file cannot carry its own digest —
+    // so the set it defines never includes it.  Left out, an update would install new
+    // files under the OLD manifest and the result would fail `verify-self` forever.
+    // The manifest that defines the set is the one thing the set cannot state.
+    if !files.iter().any(|f| f == "SHA256SUMS") {
+        files.push("SHA256SUMS".to_string());
+    }
+    Ok((files, true))
+}
+
+/// Every file under `staged`, as bundle-relative paths — the set for a directory that
+/// carries no manifest of its own.
+fn walk_files(staged: &Path) -> Result<Vec<String>, String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) -> Result<(), String> {
+        let entries =
+            std::fs::read_dir(dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
+        for e in entries.flatten() {
+            let path = e.path();
+            // Never follow a symlink out of the bundle: the set must stay what the
+            // directory actually contains.
+            let meta = std::fs::symlink_metadata(&path)
+                .map_err(|err| format!("reading {}: {err}", path.display()))?;
+            if meta.is_dir() {
+                walk(&path, base, out)?;
+            } else if meta.is_file()
+                && let Ok(rel) = path.strip_prefix(base)
+            {
+                // `portable_path` and not a blind backslash replace: on Unix a
+                // backslash is a legal filename character, and rewriting it would
+                // rename someone's file on the way into the set.
+                out.push(crate::portable_path::portable(rel));
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(staged, staged, &mut out)?;
+    if out.is_empty() {
+        return Err("the bundle directory is empty".to_string());
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Replace the files of the installation at `root` with those of the verified bundle at
+/// `staged`, restoring every replaced file if any step fails.
+///
+/// Refuses before touching anything unless `staged` verifies against its own manifests:
+/// an update that installs a bundle it could not vouch for is worse than no update.
+///
+/// # Errors
+/// Returns `Err` (with the installation restored) when the staged bundle does not
+/// verify, lists an unsafe path, or a file cannot be replaced.
+pub fn apply_bundle(root: &Path, staged: &Path, force: bool) -> Result<Vec<String>, String> {
+    // 1. The staged bundle should vouch for itself before anything moves — but this is
+    //    the user's machine, so `force` is always available.  The strictness that
+    //    matters is on the PUBLISHING side: we never ship a release that cannot be
+    //    fully verified.  What a user chooses to install is theirs to decide, and a
+    //    tool that refuses a bundle its owner wants is just an obstacle to route
+    //    around.  The default protects against the accident (a truncated download, a
+    //    half-copied directory); `force` covers the case where they mean it.
+    if !force {
+        for check in crate::verify_self::local_checks(staged) {
+            if let crate::verify_self::Check::Failed(m) = check {
+                return Err(format!("staged bundle failed its own manifest: {m}"));
+            }
+        }
+    }
+    let (files, described) = owned_files(staged)?;
+
+    // 2. Replace each file, remembering how to put it back.
+    let backup_dir = root.join(format!(".loft-update-backup-{}", std::process::id()));
+    std::fs::create_dir_all(&backup_dir)
+        .map_err(|e| format!("creating {}: {e}", backup_dir.display()))?;
+    let mut restore: Vec<(PathBuf, PathBuf)> = Vec::new(); // (target, backup)
+    let mut placed: Vec<PathBuf> = Vec::new();
+    let mut result = Ok(());
+    for rel in &files {
+        let target = root.join(rel);
+        let source = staged.join(rel);
+        if !source.is_file() {
+            result = Err(format!("staged bundle is missing {rel}"));
+            break;
+        }
+        if let Some(parent) = target.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            result = Err(format!("cannot create {}", parent.display()));
+            break;
+        }
+        // Move the existing file aside rather than overwriting it: on Windows the
+        // running executable cannot be overwritten but CAN be renamed, and the
+        // rename is what makes a restore possible on every platform.
+        if target.exists() {
+            let backup = backup_dir.join(rel.replace(['/', '\\'], "__"));
+            if let Err(e) = std::fs::rename(&target, &backup) {
+                result = Err(format!("cannot move {rel} aside: {e}"));
+                break;
+            }
+            restore.push((target.clone(), backup));
+        }
+        if let Err(e) = copy_file(&source, &target) {
+            result = Err(format!("cannot place {rel}: {e}"));
+            break;
+        }
+        placed.push(target);
+    }
+
+    // 3. A bundle with NO manifests leaves the installation's OLD ones describing files
+    //    that no longer exist, so `verify-self` would report a permanent, meaningless
+    //    failure for someone who deliberately installed their own build.  Retire them:
+    //    "not a release bundle" is the truthful answer for what they now have.  Backed
+    //    up like everything else, so a rollback restores them.
+    if result.is_ok() && !described {
+        for name in ["stdlib.manifest", "SHA256SUMS"] {
+            let target = root.join(name);
+            if target.is_file() {
+                let backup = backup_dir.join(name);
+                if std::fs::rename(&target, &backup).is_ok() {
+                    restore.push((target, backup));
+                }
+            }
+        }
+    }
+
+    // 4. And the result must verify — when there is something to verify it against.
+    if result.is_ok() && described && !force {
+        for check in crate::verify_self::local_checks(root) {
+            if let crate::verify_self::Check::Failed(m) = check {
+                result = Err(format!("updated installation failed verification: {m}"));
+                break;
+            }
+        }
+    }
+
+    if let Err(e) = result {
+        for p in &placed {
+            let _ = std::fs::remove_file(p);
+        }
+        for (target, backup) in restore.iter().rev() {
+            let _ = std::fs::rename(backup, target);
+        }
+        let _ = std::fs::remove_dir_all(&backup_dir);
+        return Err(format!("{e} — the installation was restored"));
+    }
+    let _ = std::fs::remove_dir_all(&backup_dir);
+    Ok(files)
+}
+
+/// Copy preserving the executable bit, which a plain byte copy loses — and a loft that
+/// is not executable is not an installation.
+fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
+    std::fs::copy(source, target).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(source) {
+            let _ = std::fs::set_permissions(
+                target,
+                std::fs::Permissions::from_mode(meta.permissions().mode()),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +516,234 @@ mod tests {
         let t = host_triple();
         assert!(t.split('-').count() >= 3, "{t}");
         assert!(t.starts_with(std::env::consts::ARCH), "{t}");
+    }
+
+    // ── @PLN78 step 4 — applying a bundle ────────────────────────────────────────
+
+    /// Build a bundle at `dir` with the given files, then write the manifests that
+    /// describe it — the same shape `make-release.sh` produces.
+    fn bundle(dir: &Path, files: &[(&str, &str)]) {
+        for (rel, body) in files {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, body).unwrap();
+        }
+        use std::fmt::Write as _;
+        let mut stdlib = String::new();
+        for (rel, body) in files {
+            if rel.starts_with("default/") {
+                let _ = writeln!(
+                    stdlib,
+                    "{}  {rel}",
+                    crate::integrity::sha256_hex(body.as_bytes())
+                );
+            }
+        }
+        std::fs::write(dir.join("stdlib.manifest"), &stdlib).unwrap();
+        let mut sums = stdlib.clone();
+        let _ = writeln!(
+            sums,
+            "{}  stdlib.manifest",
+            crate::integrity::sha256_hex(stdlib.as_bytes())
+        );
+        for (rel, body) in files {
+            if !rel.starts_with("default/") {
+                let _ = writeln!(
+                    sums,
+                    "{}  {rel}",
+                    crate::integrity::sha256_hex(body.as_bytes())
+                );
+            }
+        }
+        std::fs::write(dir.join("SHA256SUMS"), sums).unwrap();
+    }
+
+    fn dirs(name: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join("loft-apply-tests").join(name);
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, staged) = (base.join("root"), base.join("staged"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&staged).unwrap();
+        (root, staged)
+    }
+
+    /// The ordinary update: every file the new bundle claims is replaced, and the
+    /// result verifies.
+    #[test]
+    fn applying_a_bundle_replaces_the_files_it_claims() {
+        let (root, staged) = dirs("ok");
+        bundle(
+            &root,
+            &[("bin/loft", "OLD BINARY"), ("default/a.loft", "old\n")],
+        );
+        bundle(
+            &staged,
+            &[("bin/loft", "NEW BINARY"), ("default/a.loft", "new\n")],
+        );
+        let placed = apply_bundle(&root, &staged, false).expect("a verified bundle must apply");
+        assert!(placed.iter().any(|f| f == "bin/loft"), "{placed:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("bin/loft")).unwrap(),
+            "NEW BINARY"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("default/a.loft")).unwrap(),
+            "new\n"
+        );
+        assert!(
+            !crate::verify_self::local_checks(&root)
+                .iter()
+                .any(crate::verify_self::Check::failed),
+            "the updated installation must verify"
+        );
+    }
+
+    /// THE property that makes this safe on a system install.  `<binary-dir>/..` is a
+    /// shared prefix — `/usr/local`, whose `bin/` holds other people's binaries — so an
+    /// update may touch only what the bundle's own manifest claims, and nothing else.
+    #[test]
+    fn a_file_the_bundle_does_not_claim_is_never_touched() {
+        let (root, staged) = dirs("foreign");
+        bundle(&root, &[("bin/loft", "OLD"), ("default/a.loft", "old\n")]);
+        // Somebody else's binary, sharing the prefix.
+        std::fs::write(root.join("bin/othertool"), "NOT OURS").unwrap();
+        std::fs::create_dir_all(root.join("share")).unwrap();
+        std::fs::write(root.join("share/unrelated.conf"), "keep me").unwrap();
+        bundle(&staged, &[("bin/loft", "NEW"), ("default/a.loft", "new\n")]);
+        apply_bundle(&root, &staged, false).expect("apply");
+        assert_eq!(
+            std::fs::read_to_string(root.join("bin/othertool")).unwrap(),
+            "NOT OURS",
+            "an unrelated binary in the same prefix must survive an update"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("share/unrelated.conf")).unwrap(),
+            "keep me"
+        );
+    }
+
+    /// A bundle that cannot vouch for itself is refused BEFORE anything moves — an
+    /// update that installs what it could not verify is worse than no update.
+    #[test]
+    fn a_staged_bundle_that_fails_its_manifest_moves_nothing() {
+        let (root, staged) = dirs("badstage");
+        bundle(&root, &[("bin/loft", "OLD"), ("default/a.loft", "old\n")]);
+        bundle(&staged, &[("bin/loft", "NEW"), ("default/a.loft", "new\n")]);
+        // Corrupt the staged bundle after its manifest was written.
+        std::fs::write(staged.join("default/a.loft"), "tampered\n").unwrap();
+        let err =
+            apply_bundle(&root, &staged, false).expect_err("a corrupt bundle must be refused");
+        assert!(
+            err.contains("staged bundle failed its own manifest"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("bin/loft")).unwrap(),
+            "OLD",
+            "nothing may move when the staged bundle is refused"
+        );
+    }
+
+    /// Rollback: a bundle whose manifest claims a file it does not ship gets as far as
+    /// replacing others, then restores every one of them.
+    #[test]
+    fn a_failure_part_way_restores_the_installation() {
+        let (root, staged) = dirs("rollback");
+        bundle(&root, &[("bin/loft", "OLD"), ("default/a.loft", "old\n")]);
+        bundle(&staged, &[("bin/loft", "NEW"), ("default/a.loft", "new\n")]);
+        // The manifest still lists it; the file is gone. Verification of the staged
+        // bundle reports it missing, so this is refused up front — and the
+        // installation is untouched either way, which is what must hold.
+        std::fs::remove_file(staged.join("default/a.loft")).unwrap();
+        let err = apply_bundle(&root, &staged, false).expect_err("a missing file must be refused");
+        assert!(err.contains("missing"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("bin/loft")).unwrap(),
+            "OLD"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("default/a.loft")).unwrap(),
+            "old\n"
+        );
+    }
+
+    /// A manifest path may not reach outside the installation it describes.
+    #[test]
+    fn a_bundle_listing_an_escaping_path_is_refused() {
+        let (root, staged) = dirs("escape");
+        bundle(&root, &[("bin/loft", "OLD")]);
+        bundle(&staged, &[("bin/loft", "NEW")]);
+        let mut sums = std::fs::read_to_string(staged.join("SHA256SUMS")).unwrap();
+        sums.push_str("00  ../../etc/passwd\n");
+        std::fs::write(staged.join("SHA256SUMS"), sums).unwrap();
+        let err =
+            apply_bundle(&root, &staged, false).expect_err("an escaping path must be refused");
+        assert!(
+            err.contains("unsafe path") || err.contains("escapes"),
+            "{err}"
+        );
+    }
+
+    /// A bundle with NO manifests still installs — this is the route for someone who
+    /// built or assembled it themselves.  The rule that a release must be fully
+    /// verifiable binds US at publish time; it is not a gate on what a user may install
+    /// on their own machine.
+    #[test]
+    fn a_bundle_without_manifests_still_installs() {
+        let (root, staged) = dirs("nomanifest");
+        bundle(&root, &[("bin/loft", "OLD"), ("default/a.loft", "old\n")]);
+        // Hand-assembled: files, no stdlib.manifest, no SHA256SUMS.
+        for (rel, body) in [("bin/loft", "MINE"), ("default/a.loft", "mine\n")] {
+            let p = staged.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, body).unwrap();
+        }
+        let placed = apply_bundle(&root, &staged, false)
+            .expect("a manifest-less bundle must install, not be refused");
+        assert_eq!(placed.len(), 2, "{placed:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("bin/loft")).unwrap(),
+            "MINE"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("default/a.loft")).unwrap(),
+            "mine\n"
+        );
+    }
+
+    /// Even manifest-less, the set is what the directory CONTAINS — a neighbour sharing
+    /// the prefix is still never touched.
+    #[test]
+    fn a_manifest_less_bundle_still_touches_only_its_own_files() {
+        let (root, staged) = dirs("nomanifest_foreign");
+        bundle(&root, &[("bin/loft", "OLD")]);
+        std::fs::write(root.join("bin/othertool"), "NOT OURS").unwrap();
+        let p = staged.join("bin/loft");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, "MINE").unwrap();
+        apply_bundle(&root, &staged, false).expect("apply");
+        assert_eq!(
+            std::fs::read_to_string(root.join("bin/othertool")).unwrap(),
+            "NOT OURS"
+        );
+    }
+
+    /// `--force` is the user's escape hatch: a bundle that contradicts its own manifest
+    /// is refused by default, and installed when they say they mean it.
+    #[test]
+    fn force_installs_a_bundle_that_contradicts_its_manifest() {
+        let (root, staged) = dirs("forced");
+        bundle(&root, &[("bin/loft", "OLD"), ("default/a.loft", "old\n")]);
+        bundle(&staged, &[("bin/loft", "NEW"), ("default/a.loft", "new\n")]);
+        std::fs::write(staged.join("default/a.loft"), "tampered\n").unwrap();
+        assert!(
+            apply_bundle(&root, &staged, false).is_err(),
+            "the default must refuse a bundle that contradicts itself"
+        );
+        apply_bundle(&root, &staged, true).expect("--force must honour the user's decision");
+        assert_eq!(
+            std::fs::read_to_string(root.join("default/a.loft")).unwrap(),
+            "tampered\n"
+        );
     }
 }

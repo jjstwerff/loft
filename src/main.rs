@@ -296,10 +296,16 @@ fn print_help() {
     println!(
         "  self-update [--dry-run]       report whether a newer release is published for this"
     );
+    println!("                                platform (resolve + report only; downloading is not");
+    println!("                                implemented yet — nothing is fetched or changed)");
     println!(
-        "                                platform (resolve + report only; replacing the binary"
+        "    --from <dir> [--force]      install an unpacked release bundle you already have,"
     );
-    println!("                                is not implemented yet — nothing is downloaded)");
+    println!("                                with no registry and no network — for anyone who");
+    println!(
+        "                                cannot or will not compile loft.  Checked against the"
+    );
+    println!("                                bundle's own manifests; --force installs regardless");
     println!("  verify-self                   check this installation against the manifests its");
     println!(
         "                                release bundle shipped (stdlib.manifest, SHA256SUMS)"
@@ -1041,6 +1047,111 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
     }
 }
 
+/// @PLN78 steps 3-4 — how `loft self-update` was invoked.
+///
+/// A struct rather than five positional arguments: `self_update_cmd(true, false, false,
+/// None, true)` at the call site is unreadable, and a transposed pair of bools here
+/// would mean silently forcing an install the user asked to dry-run.
+// These really are five independent switches a user may combine freely, so a struct of
+// bools is the readable form; folding them into an enum would invent states that do not
+// exist.  The lint's usual cure — a builder or flag type — would be more machinery than
+// the thing it guards.
+#[allow(clippy::struct_excessive_bools)]
+#[cfg(feature = "registry")]
+struct SelfUpdateArgs<'a> {
+    dry_run: bool,
+    refresh: bool,
+    allow_unsigned: bool,
+    /// Install this unpacked bundle instead of resolving from the registry.
+    from: Option<&'a str>,
+    force: bool,
+}
+
+/// @PLN78 step 4 — install a bundle the user already has (`--from <dir>`).
+///
+/// This route must always exist, for the same reason a library can be installed from a
+/// local path: the people who need it are the ones who cannot or will not compile loft,
+/// and a registry-only updater strands them the moment the network, the firewall, or
+/// the registry is not there.  A hand-carried release is a first-class way to install.
+///
+/// **The strictness belongs on us, not on the user.**  We never publish a release that
+/// cannot be fully verified — that is a rule about `make-release.sh` and the registry
+/// entry, enforced where we publish.  What someone installs on their own machine is
+/// theirs to decide, so nothing here refuses a bundle its owner wants: an unverifiable
+/// bundle installs with a clear note, and one that actively contradicts its manifest
+/// needs `--force`, because that is nearly always a truncated copy rather than an
+/// intention.  Informed, not obstructed.
+#[cfg(feature = "registry")]
+fn self_update_from_local(dir: &str, dry_run: bool, force: bool) -> i32 {
+    use loft::verify_self::{Check, bundle_root, local_checks};
+    let staged = std::path::Path::new(dir);
+    if !staged.is_dir() {
+        eprintln!(
+            "loft self-update --from: {dir} is not a directory (unpack the release zip first)"
+        );
+        return 1;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("loft self-update: cannot locate the running binary");
+        return 1;
+    };
+    let Some(root) = bundle_root(&exe) else {
+        eprintln!(
+            "loft self-update: cannot resolve an installation root from {}",
+            exe.display()
+        );
+        return 1;
+    };
+    println!("loft self-update --from {dir}");
+    println!("  target  {}", root.display());
+    let checks = local_checks(staged);
+    for c in &checks {
+        match c {
+            Check::Ok(m) => println!("  ok      staged {m}"),
+            Check::Skipped(m) => println!("  --      staged {m}"),
+            Check::Failed(m) => println!("  FAILED  staged {m}"),
+        }
+    }
+    let contradicts = checks.iter().any(Check::failed);
+    let unverifiable = checks.iter().all(|c| matches!(c, Check::Skipped(_)));
+    if contradicts && !force {
+        eprintln!(
+            "\nThis bundle contradicts its own manifest — usually a truncated or partly\n\
+             copied directory.  Nothing changed.  Re-copy it, or pass --force if you\n\
+             meant to install it as it is."
+        );
+        return 1;
+    }
+    if dry_run {
+        println!("\n--dry-run: nothing was changed.");
+        return 0;
+    }
+    match loft::self_update::apply_bundle(&root, staged, force) {
+        Ok(files) => {
+            println!("\n  ok      replaced {} file(s)", files.len());
+            if unverifiable {
+                println!(
+                    "\nInstalled.  Nothing could be checked: {dir} carries no stdlib.manifest or\n\
+                     SHA256SUMS, so this was your artifact taken at your word."
+                );
+            } else if force {
+                println!("\nInstalled with --force, past a manifest this bundle does not match.");
+            } else {
+                println!(
+                    "\nInstalled.  The bundle is INTACT — every file matches the manifest it\n\
+                     shipped with.  Where it came from is your assertion, not something this\n\
+                     checked; `loft verify-self` re-checks the result at any time."
+                );
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("\nloft self-update --from: {e}");
+            1
+        }
+    }
+}
+
 /// @PLN78 step 3 — `loft self-update`: report what an update WOULD do.
 ///
 /// Read-only in this step: it resolves and reports, and the replacement itself is
@@ -1053,11 +1164,33 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
 /// `loft install` uses.  That is the point of site 3 in the design's table: a second
 /// fetch-and-check here would be a second place to forget the signature.
 #[cfg(feature = "registry")]
-fn self_update_cmd(dry_run: bool, refresh: bool, allow_unsigned: bool) -> i32 {
+fn self_update_cmd(args: &SelfUpdateArgs<'_>) -> i32 {
+    let SelfUpdateArgs {
+        dry_run,
+        refresh,
+        allow_unsigned,
+        from,
+        force,
+    } = *args;
     use loft::install::InstallOptions;
     use loft::self_update::{Plan, host_triple, plan};
     let current = env!("CARGO_PKG_VERSION");
     let triple = host_triple();
+    // `--from <dir>` — install a bundle the user already has, with no registry at all.
+    //
+    // This route must always exist, for exactly the reason libraries can be installed
+    // from a local path: the people who need it are the ones who cannot or will not
+    // compile loft themselves, and a registry-only updater strands them the moment the
+    // network, the firewall, or the registry is not available.  A hand-carried release
+    // is a first-class way to install, not a fallback.
+    //
+    // What it can promise is narrower, and it says so: the bundle verifies against its
+    // OWN manifests (intact — no corrupt or partial copy is installed), but nothing
+    // here establishes WHERE it came from.  That is the user's assertion, which is why
+    // it takes an explicit flag and prints what it did and did not check.
+    if let Some(dir) = from {
+        return self_update_from_local(dir, dry_run, force);
+    }
     // `--refresh` / `--allow-unsigned` mirror `loft install`, so an offline mirror or
     // a pre-bootstrap registry is reachable here too.  Step 4 must revisit
     // `allow_unsigned` before it REPLACES anything: waiving the signature to read a
@@ -6593,11 +6726,18 @@ fn main() {
             {
                 let rest = &argv[i..];
                 let has = |f: &str| rest.iter().any(|x| x == f);
-                std::process::exit(self_update_cmd(
-                    has("--dry-run"),
-                    has("--refresh"),
-                    has("--allow-unsigned"),
-                ));
+                let from = rest
+                    .iter()
+                    .position(|x| x == "--from")
+                    .and_then(|p| rest.get(p + 1))
+                    .map(String::as_str);
+                std::process::exit(self_update_cmd(&SelfUpdateArgs {
+                    dry_run: has("--dry-run"),
+                    refresh: has("--refresh"),
+                    allow_unsigned: has("--allow-unsigned"),
+                    from,
+                    force: has("--force"),
+                }));
             }
             #[cfg(not(feature = "registry"))]
             {
