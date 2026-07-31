@@ -677,6 +677,7 @@ mod tests {
             schema_version: 1,
             updated: "now".to_string(),
             packages: pmap,
+            skipped: Vec::new(),
         }
     }
 

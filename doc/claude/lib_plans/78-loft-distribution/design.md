@@ -107,12 +107,44 @@ over-reach — it was already honest.
 *Verify:* every surviving `self-update` mention names future work (`RELEASE.md`'s
 open-work paragraph, `ROADMAP.md`'s @PLN78 row).
 
-**Step 1 — publish a toolchain entry in the index (data only).**
-Add `loft` as a package whose per-version `binaries` map holds one `BinaryEntry`
-per target triple, sha256s taken from the release `make-release.sh` already
-produces.  No client reads it yet, so this cannot break anything.
-*Verify:* the index still passes signature verification; `loft api --registry`
-still parses it; an old loft ignores the new entry.
+**Step 1 — make the client tolerate the entry BEFORE it exists.**  DONE 2026-07-31.
+
+*This step was rewritten by its own probe.*  It read "publish a toolchain entry
+— no client reads it yet, so this cannot break anything."  That was false, and
+the cheapest check said so: `parse_index` propagated a package's parse error with
+`?`, so ONE unreadable entry rejected the WHOLE index.  A healthy `regex` beside
+one under-specified `loft` entry resolved *nothing*.  Publishing the entry first
+would not have been inert — it would have taken registry access away from every
+deployed loft until they upgraded.
+
+That is a fragility independent of this plan: one index serves every client, so a
+publishing mistake in any single package used to be an ecosystem-wide outage.
+`parse_index` now **skips** an unreadable package, reports it on stderr, and
+records it in `RegistryIndex::skipped` for a caller that must be strict (a publish
+check should refuse to sign a malformed index).  Sound because the signature is
+verified over the raw document *before* parsing, so skipping is a choice about
+already-authenticated data and admits nothing an attacker controls.  Structural
+damage — bad JSON, unsupported `schema_version` — stays fatal, since then nothing
+in the document can be trusted to mean what it says.
+
+*Verified:* the original probe now yields `PARSED — 1 packages: ["regex"]` with
+the skip reported.  Three guards pin it: the malformed entry is skipped and named,
+a clean index skips nothing (the control — a parser that skipped *everything*
+would also pass the first), and a structurally broken index is still refused.
+
+**Step 1b — publish the toolchain entry (owner action, cross-repo).**
+Now inert, because step 1 shipped first.  Add `loft` to `loft-lang/registry`'s
+`index.json` with one `BinaryEntry` per target triple, sha256s from the
+`.zip.sha256` sidecars `make-release.sh` already emits, then re-sign.  Two things
+the probe pinned that this must respect: `Version` requires `url` / `sha256` /
+`size` / `loft` / `published`, none of which a per-target toolchain has a natural
+single value for — so decide what artifact the version-level fields name (the
+release's source archive is the only candidate that keeps a toolchain entry
+semantically identical to a package: source, plus prebuilt binaries per target) —
+and `loft_ffi_fp` must be ABSENT, since it gates cdylib ABI compatibility and
+means nothing for the toolchain.
+*Verify:* an OLD loft still resolves packages from the new index (it will skip the
+toolchain entry if it cannot read it, which is what step 1 bought).
 
 **Step 2 — `loft verify-self` (read-only).**
 Fetch the signed index, find the entry for the running version + host triple,
