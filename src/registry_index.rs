@@ -121,6 +121,20 @@ pub struct BinaryEntry {
     /// download.  Stored as a string in the index to avoid u64 JSON precision
     /// loss.  `None` (absent) → skip the prebuilt, fall to source build.
     pub loft_ffi_fp: Option<u64>,
+    /// @PLN78 — sha256 of the bundle's `SHA256SUMS`, so an INSTALLED tree can be
+    /// checked against the signed index.
+    ///
+    /// `sha256` above covers the zip, which is verifiable exactly once: at download.
+    /// What a user then runs is an unpacked directory, and its manifest ships inside
+    /// the bundle it describes — so on its own it proves the installation is undamaged
+    /// and cannot prove it is ours.  Naming the manifest's digest here anchors the
+    /// whole installation (the binary, and the `default/*.loft` that actually get
+    /// loaded) to the one signature we publish, through the one manifest.
+    ///
+    /// `None` for entries published before this field existed, and that absence is
+    /// load-bearing: it means "not anchored", which `verify-self` reports rather than
+    /// treating as a pass.
+    pub manifest_sha256: Option<String>,
 }
 
 /// One function-level API entry: a `pub` item's signature plus a one-line doc
@@ -367,12 +381,16 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                         let mut burl: Option<String> = None;
                         let mut bsha: Option<String> = None;
                         let mut bfp: Option<u64> = None;
+                        let mut bmanifest: Option<String> = None;
                         for (bk, _, bv) in bfields {
                             match (bk.as_str(), bv) {
                                 ("url", Parsed::Str(s)) => burl = Some(s.clone()),
                                 ("sha256", Parsed::Str(s)) => bsha = Some(s.clone()),
                                 // @PLN21 — fp stored as a string (u64 precision).
                                 ("loft_ffi_fp", Parsed::Str(s)) => bfp = s.parse().ok(),
+                                ("manifest_sha256", Parsed::Str(s)) => {
+                                    bmanifest = Some(s.clone());
+                                }
                                 _ => {}
                             }
                         }
@@ -383,6 +401,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                                     url: u,
                                     sha256: s,
                                     loft_ffi_fp: bfp,
+                                    manifest_sha256: bmanifest,
                                 },
                             );
                         }

@@ -175,6 +175,7 @@ pub fn install_one(
         &held_versions(opts),
         &mut graph,
     )?;
+    check_against_lockfile(&graph, opts)?;
 
     let mut report = InstallReport {
         installed: Vec::new(),
@@ -465,6 +466,62 @@ fn held_versions(opts: &InstallOptions) -> std::collections::BTreeMap<String, St
             .packages
             .into_iter()
             .map(|p| (p.name, p.version))
+            .collect(),
+        _ => BTreeMap::new(),
+    }
+}
+
+/// Refuse to install when the index now serves DIFFERENT bytes for a version this
+/// project already locked.
+///
+/// A lockfile records `name`, `version` and `sha256`.  The version pin was always
+/// honoured; the sha256 was written and never read again, which made it a record of
+/// something nobody checked — so a version could be re-published under the same number
+/// and every locked consumer would silently take the new bytes.  A lockfile that pins a
+/// version but not its contents is not a lock.
+///
+/// Checked before downloading rather than at the hash-verify site: the two hashes are
+/// both already in hand, so there is no reason to fetch a tarball first, and refusing
+/// early keeps the failure about the disagreement instead of about a download.
+///
+/// Only the SAME version is compared.  A different version is an upgrade — the point of
+/// resolution — and its hash is expected to differ.
+fn check_against_lockfile(graph: &[ResolvedPackage], opts: &InstallOptions) -> Result<(), String> {
+    let locked = locked_hashes(opts);
+    for r in graph {
+        let Some((ver, sha)) = locked.get(&r.name) else {
+            continue;
+        };
+        if ver != &r.version.semver || sha.is_empty() {
+            continue;
+        }
+        if !sha.eq_ignore_ascii_case(&r.version.sha256) {
+            return Err(format!(
+                "`{}` {} does not match your lockfile: it records sha256 {}, the registry \
+                 now serves {}.  The same version must always be the same bytes, so this \
+                 is a re-publish or a tampered index — not an upgrade.  Delete the \
+                 lockfile entry to accept the new bytes deliberately.",
+                r.name, r.version.semver, sha, r.version.sha256
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every `name -> (version, sha256)` a lockfile pins, for [`check_against_lockfile`].
+fn locked_hashes(opts: &InstallOptions) -> std::collections::BTreeMap<String, (String, String)> {
+    use std::collections::BTreeMap;
+    let lock_path = match &opts.lock_path {
+        Some(p) => p.clone(),
+        None => std::env::current_dir()
+            .unwrap_or_default()
+            .join("loft.lock"),
+    };
+    match lockfile::read_lockfile(&lock_path) {
+        Ok(Some(l)) => l
+            .packages
+            .into_iter()
+            .map(|p| (p.name, (p.version, p.sha256)))
             .collect(),
         _ => BTreeMap::new(),
     }
@@ -998,5 +1055,82 @@ mod tests {
         resolve_recursive(&index_no_dep, "widget", None, &opts, &held, &mut graph)
             .expect("an ordinary package must still resolve");
         assert_eq!(graph.len(), 1);
+    }
+
+    /// @PLN78 — a lockfile pins bytes, not just a version number.
+    ///
+    /// The hash was recorded from the first release and never compared again, so a
+    /// re-published version reached every locked consumer silently.  These cases are
+    /// the whole contract: same version + same hash passes, same version + different
+    /// hash refuses, and a DIFFERENT version is an upgrade whose hash is meant to
+    /// differ -- get that last one wrong and the check blocks every upgrade instead.
+    #[test]
+    fn a_lockfile_pins_the_bytes_not_only_the_version() {
+        fn version_with(semver: &str, sha: &str) -> Version {
+            Version {
+                semver: semver.to_string(),
+                url: "u".to_string(),
+                sha256: sha.to_string(),
+                size: 1,
+                loft: ">=0".to_string(),
+                api_compatible_with: None,
+                data_compatible_with: None,
+                deps: std::collections::BTreeMap::new(),
+                conflicts: Vec::new(),
+                replaces: Vec::new(),
+                provides: Vec::new(),
+                triggers: Vec::new(),
+                binaries: std::collections::BTreeMap::new(),
+                api: Vec::new(),
+                prerelease: false,
+                published: "2026-07-31T00:00:00Z".to_string(),
+            }
+        }
+        let dir = std::env::temp_dir().join("loft-lockfile-pin-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("loft.lock");
+        let opts = InstallOptions {
+            lock_path: Some(lock_path.clone()),
+            ..InstallOptions::default()
+        };
+        lockfile::write_lockfile(
+            &lock_path,
+            &LockFile {
+                schema_version: SCHEMA_VERSION,
+                packages: vec![LockedPackage {
+                    name: "widget".to_string(),
+                    version: "0.1.0".to_string(),
+                    url: "u".to_string(),
+                    sha256: "aaaa".to_string(),
+                    source: "registry".to_string(),
+                    deps: Vec::new(),
+                }],
+            },
+        )
+        .unwrap();
+
+        let same = |sha: &str, semver: &str| {
+            vec![ResolvedPackage {
+                name: "widget".to_string(),
+                version: version_with(semver, sha),
+            }]
+        };
+        // Control first: unchanged bytes must pass, or the two rejections below prove
+        // nothing but that the check refuses everything.
+        assert!(check_against_lockfile(&same("aaaa", "0.1.0"), &opts).is_ok());
+        // Same version, different bytes -- a re-publish or a tampered index.
+        let err = check_against_lockfile(&same("bbbb", "0.1.0"), &opts)
+            .expect_err("a re-published version must be refused");
+        assert!(
+            err.contains("same version must always be the same bytes"),
+            "{err}"
+        );
+        // A genuine upgrade is expected to hash differently.
+        assert!(
+            check_against_lockfile(&same("bbbb", "0.2.0"), &opts).is_ok(),
+            "an upgrade must not be mistaken for tampering"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

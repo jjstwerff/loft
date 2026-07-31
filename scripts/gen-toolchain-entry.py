@@ -28,6 +28,7 @@ import json
 import pathlib
 import re
 import sys
+import zipfile
 
 REPO = "loft-lang/loft"
 SELF_UPDATE_RS = pathlib.Path(__file__).resolve().parent.parent / "src" / "self_update.rs"
@@ -50,6 +51,22 @@ def published_triples() -> list[str]:
     if not triples:
         sys.exit(f"{SELF_UPDATE_RS}: PUBLISHED_TRIPLES is empty")
     return triples
+
+
+def manifest_digest(zip_path: pathlib.Path) -> str:
+    """sha256 of the `SHA256SUMS` carried inside a release bundle.
+
+    Read out of the zip rather than recomputed from the staged tree: the value has to
+    describe what shipped, and the zip is the only thing that definitely did.
+    """
+    with zipfile.ZipFile(zip_path) as z:
+        names = [n for n in z.namelist() if n.rsplit("/", 1)[-1] == "SHA256SUMS"]
+        if len(names) != 1:
+            sys.exit(
+                f"{zip_path}: expected exactly one SHA256SUMS in the bundle, found "
+                f"{len(names)} -- cannot say which one an installation should match"
+            )
+        return hashlib.sha256(z.read(names[0])).hexdigest()
 
 
 def sha256_of(path: pathlib.Path) -> str:
@@ -98,6 +115,12 @@ def main() -> None:
         binaries[triple] = {
             "url": f"{base}/loft-{ver}-{triple}.zip",
             "sha256": sha256_of(zp),
+            # The digest of the bundle's one manifest.  `sha256` above is verifiable
+            # exactly once, at download; what the user then runs is an unpacked
+            # directory whose manifest ships inside it.  Naming the manifest here is
+            # what lets `loft verify-self` trace an INSTALLED tree back to the
+            # signature -- one hash over one file, covering every file it lists.
+            "manifest_sha256": manifest_digest(zp),
         }
 
     entry = {

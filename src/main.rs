@@ -308,7 +308,8 @@ fn print_help() {
     println!("                                bundle's own manifests; --force installs regardless");
     println!("  verify-self                   check this installation against the manifests its");
     println!(
-        "                                release bundle shipped (stdlib.manifest, SHA256SUMS)"
+        "                                release bundle shipped (SHA256SUMS), and the\n\
+         signed registry index"
     );
     println!(
         "                                — detects corruption and partial upgrades; read-only"
@@ -1117,7 +1118,6 @@ struct SelfUpdateArgs<'a> {
 /// intention.  Informed, not obstructed.
 #[cfg(feature = "registry")]
 fn self_update_from_local(dir: &str, dry_run: bool, force: bool) -> i32 {
-    use loft::verify_self::{Check, bundle_root, local_checks};
     let staged = std::path::Path::new(dir);
     if !staged.is_dir() {
         eprintln!(
@@ -1125,6 +1125,40 @@ fn self_update_from_local(dir: &str, dry_run: bool, force: bool) -> i32 {
         );
         return 1;
     }
+    install_staged_bundle(&StagedInstall {
+        staged,
+        label: format!("--from {dir}"),
+        // A directory the user supplied: intactness is checkable, origin is theirs.
+        verified_release: None,
+        dry_run,
+        force,
+    })
+}
+
+/// A bundle staged on disk, ready to replace the installation.
+#[cfg(feature = "registry")]
+struct StagedInstall<'a> {
+    staged: &'a std::path::Path,
+    /// What to echo after `loft self-update`.
+    label: String,
+    /// `Some(version)` when the bundle was downloaded and its hash matched the signed
+    /// index — the difference between "this is intact" and "this is the release we
+    /// published", which the closing message must not blur.
+    verified_release: Option<String>,
+    dry_run: bool,
+    force: bool,
+}
+
+/// Check a staged bundle and, unless this is a dry run, install it.
+///
+/// Shared by both routes so the checks, the refusals and the rollback cannot drift
+/// apart: a downloaded bundle and a hand-supplied one differ in what is known about
+/// their ORIGIN, and in nothing else.
+#[cfg(feature = "registry")]
+fn install_staged_bundle(a: &StagedInstall) -> i32 {
+    use loft::verify_self::{Check, bundle_root, local_checks};
+    let (staged, dir) = (a.staged, a.staged.display().to_string());
+    let (dry_run, force) = (a.dry_run, a.force);
     let Ok(exe) = std::env::current_exe() else {
         eprintln!("loft self-update: cannot locate the running binary");
         return 1;
@@ -1136,8 +1170,11 @@ fn self_update_from_local(dir: &str, dry_run: bool, force: bool) -> i32 {
         );
         return 1;
     };
-    println!("loft self-update --from {dir}");
+    println!("loft self-update {}", a.label);
     println!("  target  {}", root.display());
+    if let Some(v) = &a.verified_release {
+        println!("  ok      {v} downloaded and matches the signed registry index");
+    }
     let checks = local_checks(staged);
     for c in &checks {
         match c {
@@ -1163,13 +1200,19 @@ fn self_update_from_local(dir: &str, dry_run: bool, force: bool) -> i32 {
     match loft::self_update::apply_bundle(&root, staged, force) {
         Ok(files) => {
             println!("\n  ok      replaced {} file(s)", files.len());
-            if unverifiable {
+            if force {
+                println!("\nInstalled with --force, past a manifest this bundle does not match.");
+            } else if a.verified_release.is_some() {
                 println!(
-                    "\nInstalled.  Nothing could be checked: {dir} carries no stdlib.manifest or\n\
+                    "\nInstalled.  The chain held end to end: the signed index named this \n\
+                     bundle's hash, the download matched it, and every file matches the \n\
+                     manifest inside it."
+                );
+            } else if unverifiable {
+                println!(
+                    "\nInstalled.  Nothing could be checked: {dir} carries no\n\
                      SHA256SUMS, so this was your artifact taken at your word."
                 );
-            } else if force {
-                println!("\nInstalled with --force, past a manifest this bundle does not match.");
             } else {
                 println!(
                     "\nInstalled.  The bundle is INTACT — every file matches the manifest it\n\
@@ -1180,7 +1223,7 @@ fn self_update_from_local(dir: &str, dry_run: bool, force: bool) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("\nloft self-update --from: {e}");
+            eprintln!("\nloft self-update: {e}");
             1
         }
     }
@@ -1280,24 +1323,76 @@ fn self_update_cmd(args: &SelfUpdateArgs<'_>) -> i32 {
             sha256,
         } => {
             println!("  ok      {to} is available (running {from})");
-            println!("            url     {url}");
-            println!("            sha256  {sha256}");
-            println!("\n  install it with: loft self-update --from <unpacked bundle>");
-            0
+            if dry_run {
+                // Print what WOULD be fetched, so a dry run is auditable rather than a
+                // promise: the hash below is the one the install would enforce.
+                println!("            url     {url}");
+                println!("            sha256  {sha256}");
+                println!("\n--dry-run: nothing was changed.");
+                return 0;
+            }
+            // Staged beside nothing else of ours, and removed on every exit path: a
+            // half-unpacked bundle left in a temp directory is the kind of debris a
+            // later run would happily pick up.
+            let tmp =
+                std::env::temp_dir().join(format!("loft-self-update-{to}-{}", std::process::id()));
+            let staged = match loft::self_update::fetch_bundle(&url, &sha256, &tmp) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    eprintln!("loft self-update: {e}");
+                    return 1;
+                }
+            };
+            let code = install_staged_bundle(&StagedInstall {
+                staged: &staged,
+                label: to.clone(),
+                verified_release: Some(to.clone()),
+                dry_run: false,
+                force,
+            });
+            let _ = std::fs::remove_dir_all(&tmp);
+            code
         }
     }
 }
 
-/// @PLN78 step 2 — `loft verify-self`: check this installation against the manifests
-/// its release bundle ships.  Read-only.  Exit 0 when nothing failed, 1 otherwise.
+/// The manifest digest the signed registry index publishes for THIS build, if it can
+/// be read.  `Ok(None)` = the index carries no digest for this version + triple;
+/// `Err` = the index could not be consulted at all.  The two are different answers and
+/// the caller reports them differently — "we could not check" must never read as "we
+/// checked and it was fine".
+#[cfg(feature = "registry")]
+fn published_manifest_digest() -> Result<Option<String>, String> {
+    use loft::install::InstallOptions;
+    let index = loft::install::load_index(&InstallOptions::default())?;
+    let pkg = index
+        .packages
+        .get(loft::self_update::TOOLCHAIN_PKG)
+        .ok_or_else(|| "the registry carries no toolchain entry".to_string())?;
+    Ok(pkg
+        .versions
+        .get(env!("CARGO_PKG_VERSION"))
+        .and_then(|v| v.binaries.get(&loft::self_update::host_triple()))
+        .and_then(|b| b.manifest_sha256.clone()))
+}
+
+#[cfg(not(feature = "registry"))]
+fn published_manifest_digest() -> Result<Option<String>, String> {
+    Err("built without registry support".to_string())
+}
+
+/// @PLN78 step 2 — `loft verify-self`: is this installation the one that was released?
+/// Read-only.  Exit 0 when nothing failed, 1 otherwise.
 ///
-/// The output labels what each line establishes, because the honest answer here is
-/// narrower than the command's name suggests: both manifests travel INSIDE the bundle
-/// they describe, so they prove the installation is INTACT, not that it is AUTHENTIC.
-/// Saying only "verified" would be the same kind of claim @PLN78 step 0 removed from
-/// the catalogue — a check that sounds like more than it did.
+/// Three questions, in `verify_self`'s terms: every listed file still matches, no
+/// unlisted `*.loft` sits in `default/`, and the manifest itself matches the signed
+/// registry index.  The first two ship inside the bundle they describe, so they can
+/// only establish INTACT; the third is what makes the answer AUTHENTIC.  The output
+/// keeps them apart, because a check that sounds like more than it did is exactly what
+/// @PLN78 step 0 removed from the catalogue.
 fn verify_self_cmd() -> i32 {
-    use loft::verify_self::{Check, bundle_root, local_checks};
+    use loft::verify_self::{Check, bundle_root, check_anchor, local_checks};
     let Ok(exe) = std::env::current_exe() else {
         eprintln!("loft verify-self: cannot locate the running binary");
         return 1;
@@ -1309,7 +1404,18 @@ fn verify_self_cmd() -> i32 {
         );
         return 1;
     };
-    let checks = local_checks(&root);
+    let mut checks = local_checks(&root);
+    // Only consult the registry for something that IS a bundle; a source checkout has
+    // no manifest to anchor, and a network round-trip to say so would be noise.
+    if !checks.iter().all(|c| matches!(c, Check::Skipped(_))) {
+        checks.push(match published_manifest_digest() {
+            Ok(published) => check_anchor(&root, published.as_deref()),
+            Err(e) => Check::Skipped(format!(
+                "origin: could not consult the registry ({e}) — intact, but not traced \
+                 to a signature"
+            )),
+        });
+    }
     // A source checkout is the common case for anyone working ON loft, and it has
     // nothing to check.  One line, not three saying it separately.
     if checks.iter().all(|c| matches!(c, Check::Skipped(_))) {
@@ -1349,9 +1455,16 @@ fn verify_self_cmd() -> i32 {
         println!("not a release bundle — nothing to check against");
         return 0;
     }
-    // The one caveat worth a line, every time, because it bounds what "ok" meant:
-    // these manifests ship inside the bundle they describe.
-    println!("matches the manifests it shipped with (detects corruption, not substitution)");
+    // Bound what "ok" meant.  Anchored, the chain runs signature -> manifest -> files
+    // and the answer is about origin; unanchored, it is a bundle vouching for itself.
+    if checks
+        .iter()
+        .any(|c| matches!(c, Check::Ok(m) if m.starts_with("origin:")))
+    {
+        println!("matches the release published in the signed registry index");
+    } else {
+        println!("matches the manifest it shipped with (detects corruption, not substitution)");
+    }
     0
 }
 

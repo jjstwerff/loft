@@ -633,11 +633,11 @@ ordering — the owner never publishes an empty release and then waits for binar
    The signed index is the root; everything below hangs off its hashes:
 
    ```
-   index.json                     ← the ONE signature (Ed25519, src/registry_keys.rs)
-    └ version.sha256              → loft-<v>-src.zip
-    └ binaries[triple].sha256     → loft-<v>-<triple>.zip
-        └ SHA256SUMS  (in bundle) → every file in the bundle
-            └ stdlib.manifest     → each default/*.loft
+   index.json                        ← the ONE signature (Ed25519, 4 trust roots)
+    ├ binaries[triple].sha256          → loft-<v>-<triple>.zip   checked once, at download
+    │  └ manifest_sha256              → SHA256SUMS             checked any time, on what is INSTALLED
+    │     └ bin/loft, default/*.loft, and every other file the bundle shipped
+    └ version.sha256                   → loft-<v>-src.zip        the source the release was built from
    ```
 
    Do not hand-edit the hashes.  The entry is generated from the artifacts of the
@@ -838,25 +838,23 @@ can verify offline.
   - `x86_64-pc-windows-msvc`
   - (no `aarch64-unknown-linux-*` yet — add a matrix row when it is needed.)
 - **Each bundle is a self-contained zip** — `bin/loft` + `default/` stdlib +
-  examples + `loft-reference.pdf` + `stdlib.manifest` + `SHA256SUMS` — attached to
-  the **draft** release as `loft-<version>-<triple>.zip` (+ its `.zip.sha256`).
-- **Checksums:**
-  - sha256 of every binary.
-  - sha256 of the bundled stdlib — a manifest over `default/*.loft` (each file +
-    a combined digest), so a runtime / `loft install` can verify the stdlib it
-    loads matches the release.
-- **Publish to the registry:** add a release entry to the signed `index.json`
-  (`loft-lang/registry`) carrying, per target, the binary URL + sha256 + size, and
-  the stdlib-manifest digest; re-sign (`index.json.sig`, Ed25519) per
+  examples + `loft-reference.pdf` + `SHA256SUMS` — attached to the **draft**
+  release as `loft-<version>-<triple>.zip` (+ its `.zip.sha256`).
+- **One manifest per bundle.**  `SHA256SUMS` covers every file it ships,
+  `bin/loft` and each `default/*.loft` included, and is the authoritative list of
+  what a bundle owns (`self_update::owned_files` reads the same file).  There is
+  deliberately no second stdlib-only manifest: it described a subset of this one,
+  which made two ways to validate a single installation.
+- **Publish to the registry:** splice the generated entry into the signed
+  `index.json` (`loft-lang/registry`) and re-sign per
   [REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md) / [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md).
-  Verify a clean-host `loft install` (or self-update) resolves a binary, checks its
-  signature + sha256, and the stdlib digest matches.
-
-The **build + attach + per-bundle checksum + stdlib manifest** half is
-implemented in `release.yml` (draft-first — see § "Tag & publish").  Still
-`[build]` (open work): the registry release-entry schema (the signed `index.json`
-entry above) and the automated `loft install` / self-update path — cross-link
-from PKG_REGISTRY.md § Open work.
+  Per target it carries the bundle URL + sha256 **and `manifest_sha256`** — the
+  digest of that bundle's `SHA256SUMS`.  The zip's own hash is checkable exactly
+  once, at download; the manifest digest is what lets `loft verify-self` re-check
+  an INSTALLED tree against the signature at any time.
+- **Verify:** on a clean host, `loft self-update` resolves a bundle, checks its
+  hash against the signed index, and installs it; `loft verify-self` then reports
+  "matches the release published in the signed registry index".
 
 ---
 

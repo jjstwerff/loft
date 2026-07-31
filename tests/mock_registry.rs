@@ -87,9 +87,27 @@ fn generated_toolchain_entry(dir: &std::path::Path, version: &str) -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join(format!("loft-{version}-src.zip")), b"source").unwrap();
+    // Real zips, each carrying a `SHA256SUMS`: the generator reads the manifest out of
+    // the bundle to derive `manifest_sha256`, so a stand-in byte string would exercise a
+    // different code path than the one that runs at release time.
     for triple in loft::self_update::PUBLISHED_TRIPLES {
-        let name = format!("loft-{version}-{triple}.zip");
-        std::fs::write(dir.join(&name), triple.as_bytes()).unwrap();
+        let zip = dir.join(format!("loft-{version}-{triple}.zip"));
+        let script = format!(
+            "import zipfile,sys\n\
+             z=zipfile.ZipFile(sys.argv[1],'w')\n\
+             z.writestr('loft-{version}-{triple}/SHA256SUMS','{triple}  default/a.loft\\n')\n\
+             z.close()\n"
+        );
+        let out = std::process::Command::new("python3")
+            .args(["-c", &script])
+            .arg(&zip)
+            .output()
+            .expect("build a fixture zip");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     let out = std::process::Command::new("python3")
         .arg(root.join("scripts/gen-toolchain-entry.py"))
@@ -144,7 +162,30 @@ fn generated_toolchain_entry_parses_and_drives_self_update() {
             bin.loft_ffi_fp.is_none(),
             "toolchain binaries carry no loft_ffi_fp"
         );
+        // The anchor `verify-self` needs: without it an installed tree can only be
+        // checked against a manifest that shipped inside it.
+        let anchor = bin
+            .manifest_sha256
+            .as_deref()
+            .expect("every binary must name its manifest digest");
+        assert_eq!(
+            anchor.len(),
+            64,
+            "manifest_sha256 must be a sha256: {anchor}"
+        );
     }
+    // Each target ships a different binary, so each bundle's manifest differs -- one
+    // shared digest would mean the generator hashed something other than the bundle.
+    let anchors: std::collections::HashSet<_> = ver
+        .binaries
+        .values()
+        .filter_map(|b| b.manifest_sha256.clone())
+        .collect();
+    assert_eq!(
+        anchors.len(),
+        ver.binaries.len(),
+        "each bundle must be anchored to its OWN manifest"
+    );
 
     // The planner must act on it: a newer release, built for this host.
     let host = loft::self_update::PUBLISHED_TRIPLES[0];

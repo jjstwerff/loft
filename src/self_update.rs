@@ -28,9 +28,66 @@
 //!   so the direction is enforced in the planner rather than at the call site.
 
 use crate::registry_index::{Package, RegistryIndex, compare_semver, find_best_version};
+use std::path::{Path, PathBuf};
 
 /// The registry package name that carries the loft toolchain itself.
 pub const TOOLCHAIN_PKG: &str = "loft";
+
+/// Download the release bundle a [`Plan::Available`] names, verify it, and unpack it.
+///
+/// Returns the staged bundle root — the directory holding `bin/` and `default/` — ready
+/// for [`apply_bundle`].  Nothing on the installation is touched.
+///
+/// The hash comes from the plan, which came from the SIGNED index, so this is the step
+/// where the signature stops being a claim about a JSON file and becomes a claim about
+/// the bytes that are about to replace the running loft.  It is checked before the zip
+/// is opened: a mismatched archive is not something to unpack and inspect, it is
+/// something to refuse.
+///
+/// # Errors
+/// Download failure, hash mismatch, a malformed archive, or an archive whose layout is
+/// not a release bundle.
+#[cfg(feature = "registry")]
+pub fn fetch_bundle(url: &str, sha256: &str, tmp: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(tmp).map_err(|e| format!("cannot create {}: {e}", tmp.display()))?;
+    let zip_path = tmp.join("bundle.zip");
+    let bytes = crate::registry_index::download_tarball(url, &zip_path)?;
+    crate::integrity::verify_sha256(&bytes, sha256).map_err(|e| {
+        // Leave nothing unpacked behind that failed its hash.
+        let _ = std::fs::remove_file(&zip_path);
+        format!(
+            "the downloaded bundle does not match the hash the signed index publishes \
+             ({e}).  Nothing was installed."
+        )
+    })?;
+    let extract = tmp.join("x");
+    let file = std::fs::File::open(&zip_path).map_err(|e| format!("cannot open bundle: {e}"))?;
+    zip::ZipArchive::new(file)
+        .map_err(|e| format!("the bundle is not a readable zip: {e}"))?
+        .extract(&extract)
+        .map_err(|e| format!("cannot unpack the bundle: {e}"))?;
+    staged_root(&extract).ok_or_else(|| {
+        "the archive does not look like a release bundle (no bin/loft inside)".to_string()
+    })
+}
+
+/// The bundle root inside an unpacked archive: the release zips wrap everything in one
+/// `loft-<version>-<triple>/` directory, but an archive repacked without it is still a
+/// bundle, so both layouts are accepted.
+#[cfg(feature = "registry")]
+fn staged_root(extract: &Path) -> Option<PathBuf> {
+    if extract.join("bin").join("loft").is_file() || extract.join("bin").join("loft.exe").is_file()
+    {
+        return Some(extract.to_path_buf());
+    }
+    for entry in std::fs::read_dir(extract).ok()?.flatten() {
+        let p = entry.path();
+        if p.join("bin").join("loft").is_file() || p.join("bin").join("loft.exe").is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
 
 /// What a self-update would do, decided but not done.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,8 +260,6 @@ pub fn flags_for(feed: &crate::registry_advisories::AdvisoryFeed, version: &str)
 // two file replacements — is exactly what `loft verify-self` detects and names, which
 // is why step 2 came first.
 
-use std::path::{Path, PathBuf};
-
 /// Paths a bundle owns, read from its `SHA256SUMS` — the authoritative list of what a
 /// release ships, and therefore of what an update may replace.
 fn owned_files(staged: &Path) -> Result<(Vec<String>, bool), String> {
@@ -341,13 +396,11 @@ pub fn apply_bundle(root: &Path, staged: &Path, force: bool) -> Result<Vec<Strin
     //    "not a release bundle" is the truthful answer for what they now have.  Backed
     //    up like everything else, so a rollback restores them.
     if result.is_ok() && !described {
-        for name in ["stdlib.manifest", "SHA256SUMS"] {
-            let target = root.join(name);
-            if target.is_file() {
-                let backup = backup_dir.join(name);
-                if std::fs::rename(&target, &backup).is_ok() {
-                    restore.push((target, backup));
-                }
+        let target = root.join(crate::verify_self::MANIFEST);
+        if target.is_file() {
+            let backup = backup_dir.join(crate::verify_self::MANIFEST);
+            if std::fs::rename(&target, &backup).is_ok() {
+                restore.push((target, backup));
             }
         }
     }
@@ -405,6 +458,7 @@ mod tests {
             binaries.insert(
                 (*t).to_string(),
                 BinaryEntry {
+                    manifest_sha256: None,
                     url: format!("https://example/loft-{semver}-{t}.zip"),
                     sha256: format!("hash-{semver}-{t}"),
                     loft_ffi_fp: None,
@@ -611,13 +665,7 @@ mod tests {
                 );
             }
         }
-        std::fs::write(dir.join("stdlib.manifest"), &stdlib).unwrap();
         let mut sums = stdlib.clone();
-        let _ = writeln!(
-            sums,
-            "{}  stdlib.manifest",
-            crate::integrity::sha256_hex(stdlib.as_bytes())
-        );
         for (rel, body) in files {
             if !rel.starts_with("default/") {
                 let _ = writeln!(
@@ -761,10 +809,10 @@ mod tests {
     /// verifiable binds US at publish time; it is not a gate on what a user may install
     /// on their own machine.
     #[test]
-    fn a_bundle_without_manifests_still_installs() {
+    fn a_bundle_without_a_manifest_still_installs() {
         let (root, staged) = dirs("nomanifest");
         bundle(&root, &[("bin/loft", "OLD"), ("default/a.loft", "old\n")]);
-        // Hand-assembled: files, no stdlib.manifest, no SHA256SUMS.
+        // Hand-assembled: files, no SHA256SUMS.
         for (rel, body) in [("bin/loft", "MINE"), ("default/a.loft", "mine\n")] {
             let p = staged.join(rel);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -874,5 +922,54 @@ mod tests {
     #[test]
     fn a_version_outside_the_affected_range_has_no_flags() {
         assert!(flags_for(&feed(ADVISORIES), "2026.5.0").is_empty());
+    }
+
+    /// @PLN78 step 4 — the download half, where the signature stops being a claim about
+    /// a JSON file and becomes a claim about the bytes replacing the running loft.
+    ///
+    /// The refusal is the point: a bundle whose hash does not match the signed index is
+    /// not unpacked and inspected, it is declined with nothing written.  The pass case
+    /// is carried alongside because a check that refuses everything would satisfy the
+    /// refusal assertion on its own.
+    #[test]
+    #[cfg(feature = "registry")]
+    fn a_bundle_whose_hash_the_index_does_not_name_is_never_unpacked() {
+        use std::io::Write;
+        let base = std::env::temp_dir().join("loft-fetch-bundle-test");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // A real release-shaped zip: bin/loft inside a `loft-<v>-<triple>/` wrapper.
+        let zip_path = base.join("release.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+        let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+        w.start_file("loft-9.9.9-test/bin/loft", opts).unwrap();
+        w.write_all(b"#!/bin/sh\n").unwrap();
+        w.finish().unwrap();
+
+        let bytes = std::fs::read(&zip_path).unwrap();
+        let good = crate::integrity::sha256_hex(&bytes);
+        let url = format!("file://{}", zip_path.display());
+
+        // Pass: the hash matches, and the staged root is where `bin/loft` actually is.
+        let ok_dir = base.join("ok");
+        let staged = fetch_bundle(&url, &good, &ok_dir).expect("a matching bundle unpacks");
+        assert!(
+            staged.join("bin").join("loft").is_file(),
+            "{}",
+            staged.display()
+        );
+
+        // Refusal: one wrong hash, nothing unpacked.
+        let bad_dir = base.join("bad");
+        let err = fetch_bundle(&url, &"0".repeat(64), &bad_dir)
+            .expect_err("a bundle the index does not vouch for must be refused");
+        assert!(err.contains("signed index"), "{err}");
+        assert!(
+            !bad_dir.join("x").exists(),
+            "a refused bundle must leave nothing unpacked"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -10,7 +10,6 @@
 #   examples/*.loft       runnable sample programs
 #   loft-reference.pdf    the full reference (if built)
 #   README / LICENSE / CHANGELOG / QUICKSTART
-#   stdlib.manifest       sha256 per stdlib file + a combined digest
 #   SHA256SUMS            sha256 of every file in the bundle
 # and emits dist/<name>.zip + <name>.zip.sha256 for the registry release entry.
 #
@@ -27,7 +26,7 @@ command -v zip >/dev/null || { echo "make-release: 'zip' is required" >&2; exit 
 # Hashing command — the per-OS runners that call this each ship a different one:
 # Linux + Git-Bash (Windows) have GNU `sha256sum`; macOS ships `shasum`.  Both
 # print the same `<hash>  <file>` line and accept `-c` to verify, so the bundle's
-# SHA256SUMS / stdlib.manifest come out identical whichever runner built it.
+# SHA256SUMS comes out identical whichever runner built it.
 # Left unquoted at the call sites on purpose so `shasum -a 256` splits into
 # command + args.
 if command -v sha256sum >/dev/null; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
@@ -62,15 +61,6 @@ HOST=$(rustc -vV | sed -n 's/^host: //p')
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOST")
 
 
-# stdlib manifest: a sha256 per default/*.loft plus a combined digest over those
-# lines, so a runtime / install can verify the stdlib it loads matches the release.
-write_stdlib_manifest() {  # $1 = bundle root
-  local out="$1/stdlib.manifest"
-  ( cd "$1" && $SHA256 default/*.loft ) > "$out"
-  local combined
-  combined=$($SHA256 "$out" | cut -d' ' -f1)
-  echo "combined  $combined" >> "$out"
-}
 
 for TRIPLE in "${TARGETS[@]}"; do
   echo ">> building loft for $TRIPLE"
@@ -117,10 +107,9 @@ The standard library lives in \`default/\` next to \`bin/\` — keep them togeth
 - Examples:    \`examples/\` (run each with \`--interpret\`)
 
 Verify this download: \`sha256sum -c SHA256SUMS\` (macOS: \`shasum -a 256 -c
-SHA256SUMS\`), and the stdlib via \`stdlib.manifest\`.
+SHA256SUMS\`), or all of it at once with \`loft verify-self\`.
 QS
 
-  write_stdlib_manifest "$stage"
   ( cd "$stage" && find . -type f ! -name SHA256SUMS | sort | sed 's|^\./||' | xargs $SHA256 > SHA256SUMS )
 
   ( cd "$DIST" && rm -f "$name.zip" && zip -qr "$name.zip" "$name" )

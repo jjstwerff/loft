@@ -360,11 +360,11 @@ signed thing we publish, so naming the binaries from the index is what puts them
 under a signature.  One key ceremony per release rather than five:
 
 ```
-index.json                     ← the ONE signature (Ed25519, src/registry_keys.rs)
- └ version.sha256              → loft-<v>-src.zip
- └ binaries[triple].sha256     → loft-<v>-<triple>.zip
-     └ SHA256SUMS  (in bundle) → every file in the bundle
-         └ stdlib.manifest     → each default/*.loft
+index.json                        ← the ONE signature (Ed25519, 4 trust roots)
+ ├ binaries[triple].sha256          → loft-<v>-<triple>.zip   checked once, at download
+ │  └ manifest_sha256              → SHA256SUMS             checked any time, on what is INSTALLED
+ │     └ bin/loft, default/*.loft, and every other file the bundle shipped
+ └ version.sha256                   → loft-<v>-src.zip        the source the release was built from
 ```
 
 **The submit.**  The release workflow attaches `loft-<v>-registry-entry.json`,

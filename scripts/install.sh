@@ -114,9 +114,8 @@ mkdir -p "$PREFIX/bin" "$PREFIX/default"
 # <binary-dir>/../default, so bin/ and default/ must land together or the install runs
 # with a stdlib that does not match its binary.
 cp -R "$src/default/." "$PREFIX/default/"
-for f in stdlib.manifest SHA256SUMS; do
-  [ -f "$src/$f" ] && cp "$src/$f" "$PREFIX/$f"
-done
+# The bundle's one manifest, and the file `loft verify-self` needs to check anything.
+[ -f "$src/SHA256SUMS" ] && cp "$src/SHA256SUMS" "$PREFIX/SHA256SUMS"
 cp "$src/bin/loft" "$PREFIX/bin/loft.new"
 chmod +x "$PREFIX/bin/loft.new"
 # Rename into place: a running loft can be replaced this way, and an interrupted copy
