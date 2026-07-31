@@ -293,6 +293,27 @@ fn print_help() {
     println!("  pin <script.loft>             pin every registry library the script uses");
     println!("                                writes <script>.loft.lock next to the script;");
     println!("                                subsequent runs use the pinned versions");
+    println!(
+        "  self-update [--dry-run]       report whether a newer release is published for this"
+    );
+    println!("                                platform (resolve + report only; downloading is not");
+    println!("                                implemented yet — nothing is fetched or changed)");
+    println!(
+        "    --from <dir> [--force]      install an unpacked release bundle you already have,"
+    );
+    println!("                                with no registry and no network — for anyone who");
+    println!(
+        "                                cannot or will not compile loft.  Checked against the"
+    );
+    println!("                                bundle's own manifests; --force installs regardless");
+    println!("  verify-self                   check this installation against the manifests its");
+    println!(
+        "                                release bundle shipped (SHA256SUMS), and the\n\
+         signed registry index"
+    );
+    println!(
+        "                                — detects corruption and partial upgrades; read-only"
+    );
     println!("  list-installed                list every registry package installed locally");
     println!("                                (from ~/.loft/registry/), annotated with sha256");
     println!("                                + size + index status (active / yanked / orphan)");
@@ -1025,6 +1046,426 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
             loft::registry_index::render_catalog(&index),
         );
     }
+}
+
+/// @PLN78 step 5 — report advisories against the loft version now running.
+///
+/// Reports; never restricts.  Whether to keep running a flagged release is the user's
+/// call on their machine — a tool that refused to start would be worked around rather
+/// than heeded.  What it owes them is the id, what it is, and where the fix landed.
+///
+/// Silent when the registry hosts no feed yet (`Ok(None)` — a 404), because that is
+/// "nothing known", not "nothing wrong", and a warning there would train people to
+/// ignore this line before it ever carries a real one.
+#[cfg(feature = "registry")]
+fn report_advisories(current: &str, refresh: bool, allow_unsigned: bool) {
+    use loft::registry_advisories::LoadOptions;
+    let opts = LoadOptions {
+        allow_unsigned,
+        offline: false,
+        refresh,
+    };
+    let Ok(Some(feed)) = loft::registry_advisories::load_or_fetch(&opts) else {
+        return;
+    };
+    // Silent when clean.  A line saying "nothing is wrong" is a line the reader
+    // learns to skip, and the day it says something else they will skip that too.
+    let flags = loft::self_update::flags_for(&feed, current);
+    if flags.is_empty() {
+        return;
+    }
+    for f in &flags {
+        println!("  ADVISORY [{}] {} — {}", f.severity, f.id, f.summary);
+        if let Some(fixed) = &f.fixed_in {
+            println!("            fixed in {fixed}");
+        }
+    }
+}
+
+/// @PLN78 steps 3-4 — how `loft self-update` was invoked.
+///
+/// A struct rather than five positional arguments: `self_update_cmd(true, false, false,
+/// None, true)` at the call site is unreadable, and a transposed pair of bools here
+/// would mean silently forcing an install the user asked to dry-run.
+// These really are five independent switches a user may combine freely, so a struct of
+// bools is the readable form; folding them into an enum would invent states that do not
+// exist.  The lint's usual cure — a builder or flag type — would be more machinery than
+// the thing it guards.
+#[allow(clippy::struct_excessive_bools)]
+#[cfg(feature = "registry")]
+struct SelfUpdateArgs<'a> {
+    dry_run: bool,
+    refresh: bool,
+    allow_unsigned: bool,
+    /// Install this unpacked bundle instead of resolving from the registry.
+    from: Option<&'a str>,
+    force: bool,
+}
+
+/// @PLN78 step 4 — install a bundle the user already has (`--from <dir>`).
+///
+/// This route must always exist, for the same reason a library can be installed from a
+/// local path: the people who need it are the ones who cannot or will not compile loft,
+/// and a registry-only updater strands them the moment the network, the firewall, or
+/// the registry is not there.  A hand-carried release is a first-class way to install.
+///
+/// **The strictness belongs on us, not on the user.**  We never publish a release that
+/// cannot be fully verified — that is a rule about `make-release.sh` and the registry
+/// entry, enforced where we publish.  What someone installs on their own machine is
+/// theirs to decide, so nothing here refuses a bundle its owner wants: an unverifiable
+/// bundle installs with a clear note, and one that actively contradicts its manifest
+/// needs `--force`, because that is nearly always a truncated copy rather than an
+/// intention.  Informed, not obstructed.
+#[cfg(feature = "registry")]
+fn self_update_from_local(dir: &str, dry_run: bool, force: bool) -> i32 {
+    let staged = std::path::Path::new(dir);
+    if !staged.is_dir() {
+        eprintln!(
+            "loft self-update --from: {dir} is not a directory (unpack the release zip first)"
+        );
+        return 1;
+    }
+    install_staged_bundle(&StagedInstall {
+        staged,
+        label: format!("--from {dir}"),
+        // A directory the user supplied: intactness is checkable, origin is theirs.
+        verified_release: None,
+        dry_run,
+        force,
+    })
+}
+
+/// A bundle staged on disk, ready to replace the installation.
+#[cfg(feature = "registry")]
+struct StagedInstall<'a> {
+    staged: &'a std::path::Path,
+    /// What to echo after `loft self-update`.
+    label: String,
+    /// `Some(version)` when the bundle was downloaded and its hash matched the signed
+    /// index — the difference between "this is intact" and "this is the release we
+    /// published", which the closing message must not blur.
+    verified_release: Option<String>,
+    dry_run: bool,
+    force: bool,
+}
+
+/// Check a staged bundle and, unless this is a dry run, install it.
+///
+/// Shared by both routes so the checks, the refusals and the rollback cannot drift
+/// apart: a downloaded bundle and a hand-supplied one differ in what is known about
+/// their ORIGIN, and in nothing else.
+#[cfg(feature = "registry")]
+fn install_staged_bundle(a: &StagedInstall) -> i32 {
+    use loft::verify_self::{Check, bundle_root, local_checks};
+    let (staged, dir) = (a.staged, a.staged.display().to_string());
+    let (dry_run, force) = (a.dry_run, a.force);
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("loft self-update: cannot locate the running binary");
+        return 1;
+    };
+    let Some(root) = bundle_root(&exe) else {
+        eprintln!(
+            "loft self-update: cannot resolve an installation root from {}",
+            exe.display()
+        );
+        return 1;
+    };
+    println!("loft self-update {}", a.label);
+    println!("  target  {}", root.display());
+    if let Some(v) = &a.verified_release {
+        println!("  ok      {v} downloaded and matches the signed registry index");
+    }
+    let checks = local_checks(staged);
+    for c in &checks {
+        match c {
+            Check::Ok(m) => println!("  ok      staged {m}"),
+            Check::Skipped(m) => println!("  --      staged {m}"),
+            Check::Failed(m) => println!("  FAILED  staged {m}"),
+        }
+    }
+    let contradicts = checks.iter().any(Check::failed);
+    let unverifiable = checks.iter().all(|c| matches!(c, Check::Skipped(_)));
+    if contradicts && !force {
+        eprintln!(
+            "\nThis bundle contradicts its own manifest — usually a truncated or partly\n\
+             copied directory.  Nothing changed.  Re-copy it, or pass --force if you\n\
+             meant to install it as it is."
+        );
+        return 1;
+    }
+    if dry_run {
+        println!("\n--dry-run: nothing was changed.");
+        return 0;
+    }
+    match loft::self_update::apply_bundle(&root, staged, force) {
+        Ok(files) => {
+            println!("\n  ok      replaced {} file(s)", files.len());
+            if force {
+                println!("\nInstalled with --force, past a manifest this bundle does not match.");
+            } else if a.verified_release.is_some() {
+                println!(
+                    "\nInstalled.  The chain held end to end: the signed index named this \n\
+                     bundle's hash, the download matched it, and every file matches the \n\
+                     manifest inside it."
+                );
+            } else if unverifiable {
+                println!(
+                    "\nInstalled.  Nothing could be checked: {dir} carries no\n\
+                     SHA256SUMS, so this was your artifact taken at your word."
+                );
+            } else {
+                println!(
+                    "\nInstalled.  The bundle is INTACT — every file matches the manifest it\n\
+                     shipped with.  Where it came from is your assertion, not something this\n\
+                     checked; `loft verify-self` re-checks the result at any time."
+                );
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("\nloft self-update: {e}");
+            1
+        }
+    }
+}
+
+/// @PLN78 step 3 — `loft self-update`: report what an update WOULD do.
+///
+/// Read-only in this step: it resolves and reports, and the replacement itself is
+/// step 4.  Plain `self-update` and `--dry-run` behave identically for now, so a
+/// script written today keeps meaning what it meant once step 4 lands — the flag is
+/// accepted rather than required, and mutation will be the thing that has to be
+/// asked for, never the default that arrived by surprise.
+///
+/// The index comes from `install::load_index`, the same signature-verified loader
+/// `loft install` uses.  That is the point of site 3 in the design's table: a second
+/// fetch-and-check here would be a second place to forget the signature.
+#[cfg(feature = "registry")]
+fn self_update_cmd(args: &SelfUpdateArgs<'_>) -> i32 {
+    let SelfUpdateArgs {
+        dry_run,
+        refresh,
+        allow_unsigned,
+        from,
+        force,
+    } = *args;
+    use loft::install::InstallOptions;
+    use loft::self_update::{Plan, host_triple, plan};
+    let current = env!("CARGO_PKG_VERSION");
+    let triple = host_triple();
+    // `--from <dir>` — install a bundle the user already has, with no registry at all.
+    //
+    // This route must always exist, for exactly the reason libraries can be installed
+    // from a local path: the people who need it are the ones who cannot or will not
+    // compile loft themselves, and a registry-only updater strands them the moment the
+    // network, the firewall, or the registry is not available.  A hand-carried release
+    // is a first-class way to install, not a fallback.
+    //
+    // What it can promise is narrower, and it says so: the bundle verifies against its
+    // OWN manifests (intact — no corrupt or partial copy is installed), but nothing
+    // here establishes WHERE it came from.  That is the user's assertion, which is why
+    // it takes an explicit flag and prints what it did and did not check.
+    if let Some(dir) = from {
+        return self_update_from_local(dir, dry_run, force);
+    }
+    // `--refresh` / `--allow-unsigned` mirror `loft install`, so an offline mirror or
+    // a pre-bootstrap registry is reachable here too.  Step 4 must revisit
+    // `allow_unsigned` before it REPLACES anything: waiving the signature to read a
+    // report is a different risk from waiving it to overwrite the running binary.
+    let opts = InstallOptions {
+        refresh,
+        allow_unsigned,
+        ..InstallOptions::default()
+    };
+    let index = match loft::install::load_index(&opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft self-update: {e}");
+            return 1;
+        }
+    };
+    println!("loft self-update — running {current} ({triple})");
+    // @PLN78 step 5 — check the version we are RUNNING, not only the one on offer.
+    // A stalled or pinned registry offers no update at all, and a user sitting on a
+    // flagged release would otherwise be told "up to date" — true, and exactly wrong.
+    report_advisories(current, refresh, allow_unsigned);
+    match plan(&index, current, &triple) {
+        Plan::NoEntry => {
+            // Not "you are up to date" — nothing was compared.  Said plainly, without
+            // making our own roadmap the reader's problem.
+            println!("  no releases published to compare against");
+            0
+        }
+        Plan::Current { version } => {
+            println!("  {version} is the newest release");
+            0
+        }
+        Plan::NoBuildForTarget {
+            to,
+            triple,
+            built_for,
+        } => {
+            println!(
+                "  --      {to} is published, but not built for {triple}\n\
+                 \x20         built for: {}",
+                if built_for.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    built_for.join(", ")
+                }
+            );
+            0
+        }
+        Plan::Available {
+            from,
+            to,
+            url,
+            sha256,
+        } => {
+            println!("  ok      {to} is available (running {from})");
+            if dry_run {
+                // Print what WOULD be fetched, so a dry run is auditable rather than a
+                // promise: the hash below is the one the install would enforce.
+                println!("            url     {url}");
+                println!("            sha256  {sha256}");
+                println!("\n--dry-run: nothing was changed.");
+                return 0;
+            }
+            // Staged beside nothing else of ours, and removed on every exit path: a
+            // half-unpacked bundle left in a temp directory is the kind of debris a
+            // later run would happily pick up.
+            let tmp =
+                std::env::temp_dir().join(format!("loft-self-update-{to}-{}", std::process::id()));
+            let staged = match loft::self_update::fetch_bundle(&url, &sha256, &tmp) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    eprintln!("loft self-update: {e}");
+                    return 1;
+                }
+            };
+            let code = install_staged_bundle(&StagedInstall {
+                staged: &staged,
+                label: to.clone(),
+                verified_release: Some(to.clone()),
+                dry_run: false,
+                force,
+            });
+            let _ = std::fs::remove_dir_all(&tmp);
+            code
+        }
+    }
+}
+
+/// The manifest digest the signed registry index publishes for THIS build, if it can
+/// be read.  `Ok(None)` = the index carries no digest for this version + triple;
+/// `Err` = the index could not be consulted at all.  The two are different answers and
+/// the caller reports them differently — "we could not check" must never read as "we
+/// checked and it was fine".
+#[cfg(feature = "registry")]
+fn published_manifest_digest() -> Result<Option<String>, String> {
+    use loft::install::InstallOptions;
+    let index = loft::install::load_index(&InstallOptions::default())?;
+    let pkg = index
+        .packages
+        .get(loft::self_update::TOOLCHAIN_PKG)
+        .ok_or_else(|| "the registry carries no toolchain entry".to_string())?;
+    Ok(pkg
+        .versions
+        .get(env!("CARGO_PKG_VERSION"))
+        .and_then(|v| v.binaries.get(&loft::self_update::host_triple()))
+        .and_then(|b| b.manifest_sha256.clone()))
+}
+
+#[cfg(not(feature = "registry"))]
+fn published_manifest_digest() -> Result<Option<String>, String> {
+    Err("built without registry support".to_string())
+}
+
+/// @PLN78 step 2 — `loft verify-self`: is this installation the one that was released?
+/// Read-only.  Exit 0 when nothing failed, 1 otherwise.
+///
+/// Three questions, in `verify_self`'s terms: every listed file still matches, no
+/// unlisted `*.loft` sits in `default/`, and the manifest itself matches the signed
+/// registry index.  The first two ship inside the bundle they describe, so they can
+/// only establish INTACT; the third is what makes the answer AUTHENTIC.  The output
+/// keeps them apart, because a check that sounds like more than it did is exactly what
+/// @PLN78 step 0 removed from the catalogue.
+fn verify_self_cmd() -> i32 {
+    use loft::verify_self::{Check, bundle_root, check_anchor, local_checks};
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("loft verify-self: cannot locate the running binary");
+        return 1;
+    };
+    let Some(root) = bundle_root(&exe) else {
+        eprintln!(
+            "loft verify-self: cannot resolve a bundle root from {}",
+            exe.display()
+        );
+        return 1;
+    };
+    let mut checks = local_checks(&root);
+    // Only consult the registry for something that IS a bundle; a source checkout has
+    // no manifest to anchor, and a network round-trip to say so would be noise.
+    if !checks.iter().all(|c| matches!(c, Check::Skipped(_))) {
+        checks.push(match published_manifest_digest() {
+            Ok(published) => check_anchor(&root, published.as_deref()),
+            Err(e) => Check::Skipped(format!(
+                "origin: could not consult the registry ({e}) — intact, but not traced \
+                 to a signature"
+            )),
+        });
+    }
+    // A source checkout is the common case for anyone working ON loft, and it has
+    // nothing to check.  One line, not three saying it separately.
+    if checks.iter().all(|c| matches!(c, Check::Skipped(_))) {
+        println!(
+            "{}: not a release bundle — nothing to check against",
+            root.display()
+        );
+        return 0;
+    }
+    println!("loft verify-self — {}", root.display());
+    let mut failed = false;
+    let mut skipped = 0;
+    for c in &checks {
+        match c {
+            Check::Ok(m) => println!("  ok      {m}"),
+            Check::Skipped(m) => {
+                skipped += 1;
+                println!("  --      {m}");
+            }
+            Check::Failed(m) => {
+                failed = true;
+                println!("  FAILED  {m}");
+            }
+        }
+    }
+    println!();
+    if failed {
+        println!(
+            "This installation does not match the manifests it shipped with.  A changed\n\
+             stdlib file with an unchanged binary is the usual cause — a partial upgrade —\n\
+             and loft loads its stdlib from <binary-dir>/../default, so it would run with\n\
+             the mismatch.  Reinstall the release rather than replacing single files."
+        );
+        return 1;
+    }
+    if skipped == checks.len() {
+        println!("not a release bundle — nothing to check against");
+        return 0;
+    }
+    // Bound what "ok" meant.  Anchored, the chain runs signature -> manifest -> files
+    // and the answer is about origin; unanchored, it is a bundle vouching for itself.
+    if checks
+        .iter()
+        .any(|c| matches!(c, Check::Ok(m) if m.starts_with("origin:")))
+    {
+        println!("matches the release published in the signed registry index");
+    } else {
+        println!("matches the manifest it shipped with (detects corruption, not substitution)");
+    }
+    0
 }
 
 /// @PLAN12 Phase 6.6 — `loft list-installed` enumerates packages
@@ -6421,6 +6862,36 @@ fn main() {
                 eprintln!("loft audit: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
+        } else if a == "self-update" {
+            // @PLN78 step 3 — resolve + report only; step 4 adds the replacement.
+            #[cfg(feature = "registry")]
+            {
+                let rest = &argv[i..];
+                let has = |f: &str| rest.iter().any(|x| x == f);
+                let from = rest
+                    .iter()
+                    .position(|x| x == "--from")
+                    .and_then(|p| rest.get(p + 1))
+                    .map(String::as_str);
+                std::process::exit(self_update_cmd(&SelfUpdateArgs {
+                    dry_run: has("--dry-run"),
+                    refresh: has("--refresh"),
+                    allow_unsigned: has("--allow-unsigned"),
+                    from,
+                    force: has("--force"),
+                }));
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft self-update: this binary was built without the `registry` feature."
+                );
+                std::process::exit(1);
+            }
+        } else if a == "verify-self" {
+            // @PLN78 step 2 — read-only: hash the installation against the manifests
+            // the release bundle ships, and say what that does and does not prove.
+            std::process::exit(verify_self_cmd());
         } else if a == "list-installed" {
             // @PLAN12 Phase 6.6 — enumerate ~/.loft/registry/<pkg>-<ver>/
             // dirs, annotate with sha256 + size from the cached index.
@@ -8696,6 +9167,10 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             );
         }
 
+        // loft#706 — has the runtime rlib already been rebuilt in this run?  Both heal
+        // sites (the up-front version check and the post-compile retry) read it, so a
+        // tree the rebuild cannot fix fails once instead of rebuilding per attempt.
+        let mut runtime_rebuilt = false;
         // Use cached binary if it exists AND passes the safety check;
         // otherwise compile and cache.
         let binary = if cache_usable {
@@ -8720,6 +9195,9 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 // source to rebuild, so fall back (default) or error (`--native`).
                 let healed = native_utils::loft_source_tree()
                     .is_some_and(|tree| native_utils::rebuild_runtime(&tree, reason));
+                // Whether it healed or not, the rebuild has been attempted — the
+                // post-compile heal (loft#706) must not run it a second time.
+                runtime_rebuilt = true;
                 if !healed && !native_requested {
                     // T0.1 — SILENT on the default path.  The user did not ask for
                     // native, and a downloaded release ships no native runtime by
@@ -8883,6 +9361,38 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     break 'native;
                 }
             };
+            // loft#706 — heal on the COMPILE, not only on the up-front version check.
+            //
+            // That check (`rustc_mismatch`, above) compares the rustc that built the
+            // loft BINARY with the current one.  What this compile LINKS is the
+            // runtime RLIB, and one `cargo build` produces both — so the binary is a
+            // fine proxy for the rlib right up until it isn't: a partially-restored
+            // CI cache, an installed bundle beside a source checkout, a lib and a
+            // binary built either side of a `rustup update`.  Then the check sees
+            // nothing to do, and rustc is handed an rlib from another compiler:
+            // `E0514`, with no rebuild attempted and no recovery, in exactly the
+            // situation the auto-rebuild exists for.
+            //
+            // The compile is the reliable witness the version check is not, so heal
+            // on it: rebuild the runtime once and retry.  Gated on a failure whose
+            // error already names crate resolution, so a codegen bug never pays for a
+            // rebuild, and on `runtime_rebuilt` so a tree the up-front heal already
+            // rebuilt does not rebuild twice.  This path itself runs at most once —
+            // it is straight-line, not a loop — so it does not set the flag.
+            let mut output = output;
+            if !output.status.success()
+                && !runtime_rebuilt
+                && native_utils::crate_resolution_failure(&String::from_utf8_lossy(&output.stderr))
+                && let Some(tree) = native_utils::loft_source_tree()
+                && native_utils::rebuild_runtime(
+                    &tree,
+                    "the runtime rlib this program links was built by a different rustc",
+                )
+            {
+                if let Ok(retry) = cmd.output() {
+                    output = retry;
+                }
+            }
             let status = output.status;
             let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
             // Classify a compile failure caused by the native TOOLCHAIN/cache, not
@@ -8892,13 +9402,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             // rand_core/cargo-cache staleness, an unresolvable loft/library crate
             // (E0463 — e.g. a distributed bundle ships no rlib), or an rmeta-without-
             // rlib dep (@P229 G3, an unbuilt package).
-            let crate_resolution_failure = (stderr_utf8.contains("E0460")
-                || stderr_utf8.contains("E0463")
-                || stderr_utf8.contains("E0514"))
-                && (stderr_utf8.contains("rand_core")
-                    || stderr_utf8.contains("possibly newer version of crate")
-                    || stderr_utf8.contains("compiled by an incompatible version")
-                    || stderr_utf8.contains("can't find crate"));
+            let crate_resolution_failure = native_utils::crate_resolution_failure(&stderr_utf8);
             let rlib_format_failure =
                 stderr_utf8.contains("required to be available in rlib format");
             // Turnkey fallback: a DEFAULT-native run (not an explicit `--native`)

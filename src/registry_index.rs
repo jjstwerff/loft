@@ -45,6 +45,11 @@ pub struct RegistryIndex {
     pub schema_version: u32,
     pub updated: String,
     pub packages: BTreeMap<String, Package>,
+    /// @PLN78 step 1 — packages this index carries that could not be parsed, one
+    /// message each.  They are SKIPPED rather than fatal (see [`parse_index`]); a
+    /// caller that must be strict — a publishing check, which should refuse to sign
+    /// a malformed index — reads this and fails on a non-empty list.
+    pub skipped: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +121,20 @@ pub struct BinaryEntry {
     /// download.  Stored as a string in the index to avoid u64 JSON precision
     /// loss.  `None` (absent) → skip the prebuilt, fall to source build.
     pub loft_ffi_fp: Option<u64>,
+    /// @PLN78 — sha256 of the bundle's `SHA256SUMS`, so an INSTALLED tree can be
+    /// checked against the signed index.
+    ///
+    /// `sha256` above covers the zip, which is verifiable exactly once: at download.
+    /// What a user then runs is an unpacked directory, and its manifest ships inside
+    /// the bundle it describes — so on its own it proves the installation is undamaged
+    /// and cannot prove it is ours.  Naming the manifest's digest here anchors the
+    /// whole installation (the binary, and the `default/*.loft` that actually get
+    /// loaded) to the one signature we publish, through the one manifest.
+    ///
+    /// `None` for entries published before this field existed, and that absence is
+    /// load-bearing: it means "not anchored", which `verify-self` reports rather than
+    /// treating as a pass.
+    pub manifest_sha256: Option<String>,
 }
 
 /// One function-level API entry: a `pub` item's signature plus a one-line doc
@@ -146,6 +165,7 @@ pub fn parse_index(content: &str) -> Result<RegistryIndex, String> {
     let mut schema_version: Option<u32> = None;
     let mut updated: Option<String> = None;
     let mut packages: BTreeMap<String, Package> = BTreeMap::new();
+    let mut skipped: Vec<String> = Vec::new();
     for (k, _, v) in &root {
         match k.as_str() {
             "schema_version" => {
@@ -164,8 +184,23 @@ pub fn parse_index(content: &str) -> Result<RegistryIndex, String> {
             "packages" => {
                 if let Parsed::Object(pkgs) = v {
                     for (pname, _, pval) in pkgs {
-                        let pkg = parse_package(pname, pval)?;
-                        packages.insert(pname.clone(), pkg);
+                        // @PLN78 step 1 — SKIP a package that does not parse; do not
+                        // reject the index.  One index serves every client, so a single
+                        // malformed entry used to take `loft install` down for everyone:
+                        // a healthy `regex` beside one under-specified entry failed with
+                        // "missing `url`" and NO package resolved.  A publish mistake in
+                        // one entry must cost that entry, not the registry.
+                        //
+                        // Sound because the signature is verified over the raw document
+                        // BEFORE this runs (`install::verify_or_explain`): skipping is a
+                        // choice about already-authenticated data, so it admits nothing
+                        // an attacker controls.
+                        match parse_package(pname, pval) {
+                            Ok(pkg) => {
+                                packages.insert(pname.clone(), pkg);
+                            }
+                            Err(e) => skipped.push(e),
+                        }
                     }
                 }
             }
@@ -181,10 +216,21 @@ pub fn parse_index(content: &str) -> Result<RegistryIndex, String> {
             "registry.json: schema_version {schema_version} unsupported — upgrade loft"
         ));
     }
+    // Loud, not silent: a skipped package is a publishing bug, and the reader who
+    // can act on it is whoever notices their package missing.  Summarised in one
+    // line so a broken index cannot spam every command.
+    if !skipped.is_empty() {
+        eprintln!(
+            "loft: registry index — {} package(s) skipped as unreadable: {}",
+            skipped.len(),
+            skipped.join("; ")
+        );
+    }
     Ok(RegistryIndex {
         schema_version,
         updated: updated.unwrap_or_default(),
         packages,
+        skipped,
     })
 }
 
@@ -335,12 +381,16 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                         let mut burl: Option<String> = None;
                         let mut bsha: Option<String> = None;
                         let mut bfp: Option<u64> = None;
+                        let mut bmanifest: Option<String> = None;
                         for (bk, _, bv) in bfields {
                             match (bk.as_str(), bv) {
                                 ("url", Parsed::Str(s)) => burl = Some(s.clone()),
                                 ("sha256", Parsed::Str(s)) => bsha = Some(s.clone()),
                                 // @PLN21 — fp stored as a string (u64 precision).
                                 ("loft_ffi_fp", Parsed::Str(s)) => bfp = s.parse().ok(),
+                                ("manifest_sha256", Parsed::Str(s)) => {
+                                    bmanifest = Some(s.clone());
+                                }
                                 _ => {}
                             }
                         }
@@ -351,6 +401,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                                     url: u,
                                     sha256: s,
                                     loft_ffi_fp: bfp,
+                                    manifest_sha256: bmanifest,
                                 },
                             );
                         }
@@ -1145,6 +1196,80 @@ pub fn search_results(index: &RegistryIndex, stdlib: &[ApiItem], query: &str) ->
 mod tests {
     use super::*;
 
+    // ── @PLN78 step 1 — one bad entry must not take the registry down ────────────
+    //
+    // The index is ONE document serving every client, so the blast radius of a
+    // publishing mistake is the whole ecosystem unless parsing is per-package.
+    // These pin both halves: the healthy packages survive, and the damage is
+    // reported rather than swallowed.
+
+    /// The shape that motivated it: a well-formed package beside one whose version
+    /// omits a mandatory field.  Before, `parse_index` returned `Err` and NOTHING
+    /// resolved — `loft install regex` failed because an unrelated entry was broken.
+    #[test]
+    fn a_malformed_package_is_skipped_not_fatal() {
+        let doc = r#"{
+          "schema_version": 1, "updated": "2026-07-31T00:00:00Z",
+          "packages": {
+            "regex": { "versions": { "0.1.0": {
+                "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                "published": "2026-05-31T00:00:00Z" } } },
+            "broken": { "versions": { "2026.7.2": {
+                "published": "2026-07-21T00:00:00Z" } } }
+          }
+        }"#;
+        let idx = parse_index(doc).expect("a malformed entry must not reject the index");
+        assert!(
+            idx.packages.contains_key("regex"),
+            "the healthy package must still resolve"
+        );
+        assert!(
+            !idx.packages.contains_key("broken"),
+            "the malformed package must not be offered"
+        );
+        assert_eq!(
+            idx.skipped.len(),
+            1,
+            "the damage must be reported, not swallowed"
+        );
+        assert!(
+            idx.skipped[0].contains("broken") && idx.skipped[0].contains("url"),
+            "the report must name the package and the missing field: {:?}",
+            idx.skipped[0]
+        );
+    }
+
+    /// The control: a clean index reports nothing skipped.  Without it, a parser
+    /// that skipped EVERYTHING would also satisfy the test above.
+    #[test]
+    fn a_clean_index_skips_nothing() {
+        let doc = r#"{
+          "schema_version": 1, "updated": "2026-07-31T00:00:00Z",
+          "packages": { "regex": { "versions": { "0.1.0": {
+              "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+              "published": "2026-05-31T00:00:00Z" } } } }
+        }"#;
+        let idx = parse_index(doc).expect("parse");
+        assert!(idx.skipped.is_empty(), "clean index: {:?}", idx.skipped);
+        assert_eq!(idx.packages.len(), 1);
+    }
+
+    /// Tolerance is per-PACKAGE, not per-document: a structurally broken index
+    /// (bad JSON, wrong schema_version) is still fatal, because then nothing in it
+    /// can be trusted to mean what it says.
+    #[test]
+    fn a_structurally_broken_index_is_still_fatal() {
+        assert!(parse_index("not json at all").is_err());
+        assert!(
+            parse_index(r#"{"schema_version": 99, "packages": {}}"#).is_err(),
+            "an unsupported schema_version must not be parsed leniently"
+        );
+        assert!(
+            parse_index(r#"{"packages": {}}"#).is_err(),
+            "a missing schema_version must stay fatal"
+        );
+    }
+
     #[test]
     fn rank_hits_orders_exact_prefix_then_description() {
         use std::collections::BTreeMap;
@@ -1164,6 +1289,7 @@ mod tests {
             schema_version: 1,
             updated: String::new(),
             packages,
+            skipped: Vec::new(),
         };
         let ranked: Vec<&str> = rank_hits(&index, "text")
             .iter()
@@ -1628,6 +1754,7 @@ mod tests {
             schema_version: 1,
             updated: String::new(),
             packages,
+            skipped: Vec::new(),
         };
         let stdlib = vec![item(
             "pub fn starts_with(self: text, p: text) -> boolean",
@@ -1692,6 +1819,7 @@ mod tests {
             schema_version: 1,
             updated: String::new(),
             packages: BTreeMap::new(),
+            skipped: Vec::new(),
         };
         // Both terms present (one per doc line) → hit.
         assert_eq!(search_results(&index, &stdlib, "hash hex").len(), 1);

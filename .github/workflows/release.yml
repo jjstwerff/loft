@@ -98,6 +98,29 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # The artifact the registry entry names for the version ITSELF.  Built here
+      # rather than in the build matrix because all four legs would otherwise emit the
+      # same `-src.zip` and whichever uploaded last would silently win.
+      - name: Build the source archive
+        shell: bash
+        run: |
+          scripts/make-release.sh --source
+          cp dist/*-src.zip dist/*-src.zip.sha256 artifacts/
+
+      # @PLN78 1b — derive the registry entry from the artifacts this run produced.
+      # Attached to the release so the entry submitted to loft-lang/registry is a file
+      # taken from the release rather than a paragraph retyped per release: the hashes
+      # cannot drift from the binaries they describe, because nobody copies them.
+      # Verify before submitting:  sha256sum -c loft-<v>-src.zip.sha256
+      - name: Generate the registry toolchain entry
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/gen-toolchain-entry.py \
+            --version "$version" --dir artifacts \
+            --published "$(git log -1 --format=%cI HEAD)" \
+            --out "artifacts/loft-$version-registry-entry.json"
+
       - name: Create draft release with binaries
         uses: softprops/action-gh-release@v2
         with:

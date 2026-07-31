@@ -105,6 +105,10 @@ src/main.rs            CLI; loads default/ then user file
   the overlay: `scripts/lib-overlay.py <name>` (local checkout + this project's pin),
   `scripts/proposal-review.py <name> <ref>` (a proposed candidate). We never auto-delete a
   copy — each is a legitimate source.
+- **User-facing output** (anything a command PRINTS): silence when nothing needs acting
+  on; no plan tags / phase names / "not yet implemented" in it; the full explanation only
+  on failure. loft is meant to be BORING — noticed only in its absence
+  ([GOALS.md](doc/claude/GOALS.md), [DOC_QUALITY.md § D](doc/claude/DOC_QUALITY.md)).
 - **Response shape:** lead with the ONE highest-leverage item in full (decision + minimum to act),
   then a one-line summary of the rest; no long dumps.
 - **Advice vs action:** asked for advice/evaluation → give the recommendation (best option + why),

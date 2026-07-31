@@ -174,9 +174,9 @@ warning sign is **past tense about the code's own structure** — *removed*,
 `// increment i` above `i += 1`. It adds nothing. See
 [CODE.md § Doc Comments](CODE.md#doc-comments).
 
-### D. Prose in generated output, and narration in build recipes
+### D. Prose in generated output, narration in build recipes, and chatter on the CLI
 
-Two places where a comment reaches the wrong audience and rots:
+Three places where a comment reaches the wrong audience and rots:
 
 - **Generated files** (`LIBRARIES.md`, features shadows, …): emit only the terse data the
   *reader* needs — a tag legend, a pointer. A generator that writes multi-paragraph
@@ -188,6 +188,14 @@ Two places where a comment reaches the wrong audience and rots:
   should do the work correctly and quietly (`@`-silence the plumbing; surface only real
   errors + a final status). The rationale for a step lives in git history, not on the
   installer's terminal.
+- **What a command PRINTS.** Same failure, most visible surface. Say nothing when
+  nothing needs acting on — a line reporting that all is well is one the reader learns
+  to skip, and the day it says otherwise they skip that too. Keep plan numbers, phase
+  names and "not implemented yet" apologies out of it: a user asking a question wants
+  the answer, not our backlog. Reserve the full explanation for the moment something
+  IS wrong, where it is wanted rather than endured. The test:
+  *would a user who does not care about loft notice this line?* If yes, and nothing is
+  wrong, remove it. ([GOALS.md § The destination is BORING](GOALS.md))
 
 ---
 

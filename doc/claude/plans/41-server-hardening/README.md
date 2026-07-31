@@ -5,25 +5,31 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN41 — `lib/server` hardening (post-v5 polish + @PLN6 prereqs)
 
-Consolidates the gaps surfaced during TTT v5 ([@PLN39](../39-tic-tac-toe/README.md))
-that the audience-server demo ([@PLN6](../6-audience-generative-art/README.md))
-will hit on day one.  All items are **single-file**, **no language
-changes**, and **focused on `lib/server` + `lib/web` runtime quality**
-— this is library-quality work, not a feature arc.
+**Status — CLOSED 2026-07-31, nothing delivered.**  The six items below are kept
+because they are concrete and correct; what was wrong was tracking them here.
 
-## Status
+Two facts closed it, both checkable rather than argued:
 
-**Not started.**  Sequenced + sized; no phasing — pick items
-independently in any order.  Total effort: M (one focused
-session for items a-d, +S for f).
+* **The work is not in this repository.**  Every item edits `lib/server` or
+  `lib/web`, which live in
+  [loft-libs-net](https://github.com/loft-lang/loft-libs-net) — this repo's `lib/`
+  holds none of them.  A plan in the language repo cannot carry library work: it
+  is invisible from the repo that would do it, and nothing there fails when it
+  rots.
+* **The "prereq" framing did not survive contact.**  @PLN41 existed so
+  [@PLN6](../6-audience-generative-art/README.md) would not hit these gaps "on day
+  one".  @PLN6 and [@PLN39](../39-tic-tac-toe/README.md) have both since SHIPPED
+  and closed — without it.  Item (a) is still absent from the published API
+  (`server` v0.5.0 on `origin/main` has `broadcast`, `send_to` and `send_binary`,
+  but no `broadcast_binary` / `send_binary_to`), so this is not a plan whose work
+  quietly landed elsewhere: it is a prerequisite that turned out not to be one.
 
-## Goal
+So the items are not refused, and none is blocked on design.  If a consumer wants
+binary broadcast, the place to ask is an issue on `loft-libs-net`, where the code
+and its CI are — see [LIBRARIES.md](../../LIBRARIES.md) for the current API before
+re-deriving any of this.
 
-After this plan lands, @PLN6 can build its audience-server
-without inlining native-fn workarounds (t4 already did this for
-`broadcast_binary`), without losing arbitrary bytes on the
-server-side recv path, and with enough observability to actually
-see whether 30 clients × hours of uptime stays healthy.
+---
 
 ## Items
 

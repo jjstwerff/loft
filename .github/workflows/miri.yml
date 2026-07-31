@@ -542,9 +542,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Stable builds the loft HOST binary; nightly is only needed for the
-      # `-Zsanitizer=address` on the GENERATED native binary (loft picks it up via
-      # RUSTUP_TOOLCHAIN=nightly in the sweep step).
+      # Nightly is needed for `-Zsanitizer=address` on the GENERATED native binary,
+      # and it must build the runtime rlib TOO — see the build step below for why.
       - name: Install Rust stable + nightly
         uses: dtolnay/rust-toolchain@stable
       - uses: dtolnay/rust-toolchain@nightly
@@ -562,7 +561,23 @@ jobs:
           key: ubuntu-native-asan-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ubuntu-native-asan-cargo-
 
+      # Built with NIGHTLY, the same toolchain the sweep compiles the generated crate
+      # with.  An rlib is SVH-locked to one rustc, so the generated crate can only
+      # `extern crate loft` against an rlib built by the SAME compiler: the job used to
+      # build the rlib on stable and compile against it on nightly, which worked only
+      # while the two rustcs happened to agree on crate metadata.  They stopped —
+      # stable 1.97.1 vs nightly 1.99.0 — and every run failed `E0514: found crate
+      # `loft` compiled by an incompatible version of rustc`, on any diff.  A toolchain
+      # roll must not be able to redden a gate that exists to catch codegen bugs.
+      #
+      # (loft's own auto-rebuild does not save this, and the reason is loft#706: its
+      # staleness check compares the rustc that built the loft BINARY with the current
+      # one, not the rustc that built the RLIB it is about to link.  Those are the same
+      # build normally, so when they diverge loft sees nothing to do and hands rustc an
+      # incompatible rlib.  Build them together and the question never arises.)
       - name: Build loft host binary + runtime rlib
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         run: cargo build --release --bin loft --lib
 
       # @PLN54 S6 — loft's `--native` codegen emits Rust that accesses the store by

@@ -141,6 +141,47 @@ familiar surface over an alien-but-dependable substrate, because the alternative
 rushing to *look* like Rust — *is* Rust underneath, and loses the goal. The years
 were not overhead; they were the goal taken seriously.
 
+### The destination is BORING — a tool you notice only when it is missing
+
+"Trust and forget about" has an end state, and it is worth naming because it does not
+look like success from the outside: **loft should be boring.** Not impressive, not
+clever, not the interesting part of anyone's stack — just a thing that works, reached
+for without thought, and noticed only in its **absence**: the moment you go to use it
+and it is not there, and you miss it. Until then it should say nothing and get out of
+the way.
+
+That is a claim about **maturity, not modesty.** A young tool is exciting because it
+is still surprising you, and every surprise is a thing you had to learn, work around,
+or repair. Arriving at boring means the surprises are gone. So "nothing interesting
+happened" is the report we want, and a release whose headline is *fewer things you
+have to think about* is the release that moved furthest.
+
+It follows from the deeper aim rather than being a separate idea. Software you can
+forget about is, by definition, software that does not ask for attention — and every
+mechanism above is already this principle in another form: a fault degrades to null and
+the program keeps running ([C80](DESIGN_DECISIONS.md)) instead of demanding a handler;
+ownership is internal ([C79](DESIGN_DECISIONS.md)) instead of asking you to prove
+lifetimes; the correctness load sits in the compiler instead of in your head. Each one
+removes an occasion for loft to be interesting at you.
+
+It binds the **tools**, not only the language, and that is where it is easiest to
+violate:
+
+- **Say nothing when nothing needs acting on.** A line that reports everything is fine
+  is a line the reader learns to skip — and the day it says something else, they skip
+  that too. Silence on success is what makes the exceptional case visible.
+- **Never make our roadmap the user's problem.** Plan numbers, phase names and
+  not-yet-implemented apologies belong in the code and the plans, never in output. A
+  user asking a question deserves the answer, not our backlog.
+- **Explain at the moment of failure, not before it.** The full account of what went
+  wrong and what to do earns its space when something IS wrong; the same text on a
+  healthy run is a lecture.
+- **No ceremony.** Banners, progress theatre and self-congratulation are the tool
+  making itself the subject.
+
+The test to apply to any surface: *would a user who does not care about loft notice
+this?* If yes, and nothing is wrong, remove it.
+
 ### Legible cost — you keep the performance-critical decisions
 
 There is a second failure that "does not fail for software reasons" has to cover, and it
@@ -289,6 +330,12 @@ work moving up.
 | **D** | Parity | identical on every OS × backend |
 | **E** | Predictable memory | the source is the truth — *surpass Rust here* |
 | **F** | Friction-free | the language serves the programmer, never the compiler |
+
+All six point at one destination: **boring** — a tool noticed only in its absence
+(§ [The destination is BORING](#the-destination-is-boring--a-tool-you-notice-only-when-it-is-missing)).
+Soundness, parity and predictable memory remove the surprises; friction-free removes
+the ceremony. A release whose headline is *fewer things you have to think about* is
+the one that moved furthest.
 
 The bar covers loft (the foundation, nearly there) *and* the libraries on top
 (the real end, which fall short today). Each goal carries a **Check** — something
@@ -670,6 +717,14 @@ compiler can Y." When it does, the *feature* is wrong, not the user — infer X,
 default it, or cut it. The store-confinement analysis is the worked model: zero
 user-facing surface, and a **silent fallback** to a higher watermark when it cannot
 prove confinement — the programmer never learns the analysis exists.
+
+**F extends to the OUTPUT, not just the syntax (user-stated, 2026-07-31).** Friction
+is also every line a tool prints that the reader did not need. So the same test governs
+what a command SAYS: silence when nothing needs acting on, no plan numbers or
+not-yet-implemented apologies aimed at users, the full explanation reserved for the
+moment something is actually wrong, and no ceremony. A tool that reports its own good
+health teaches people to skip the line where it eventually reports the opposite.  See
+§ [The destination is BORING](#the-destination-is-boring--a-tool-you-notice-only-when-it-is-missing).
 
 **F beyond the compiler — the engine takes the fastest path (user-stated core
 value, 2026-06-10).** The same test governs the whole lavition surface, not just

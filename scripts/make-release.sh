@@ -10,7 +10,6 @@
 #   examples/*.loft       runnable sample programs
 #   loft-reference.pdf    the full reference (if built)
 #   README / LICENSE / CHANGELOG / QUICKSTART
-#   stdlib.manifest       sha256 per stdlib file + a combined digest
 #   SHA256SUMS            sha256 of every file in the bundle
 # and emits dist/<name>.zip + <name>.zip.sha256 for the registry release entry.
 #
@@ -27,26 +26,41 @@ command -v zip >/dev/null || { echo "make-release: 'zip' is required" >&2; exit 
 # Hashing command — the per-OS runners that call this each ship a different one:
 # Linux + Git-Bash (Windows) have GNU `sha256sum`; macOS ships `shasum`.  Both
 # print the same `<hash>  <file>` line and accept `-c` to verify, so the bundle's
-# SHA256SUMS / stdlib.manifest come out identical whichever runner built it.
+# SHA256SUMS comes out identical whichever runner built it.
 # Left unquoted at the call sites on purpose so `shasum -a 256` splits into
 # command + args.
 if command -v sha256sum >/dev/null; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
 
 VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-HOST=$(rustc -vV | sed -n 's/^host: //p')
-TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOST")
 DIST="dist"
 mkdir -p "$DIST"
 
-# stdlib manifest: a sha256 per default/*.loft plus a combined digest over those
-# lines, so a runtime / install can verify the stdlib it loads matches the release.
-write_stdlib_manifest() {  # $1 = bundle root
-  local out="$1/stdlib.manifest"
-  ( cd "$1" && $SHA256 default/*.loft ) > "$out"
-  local combined
-  combined=$($SHA256 "$out" | cut -d' ' -f1)
-  echo "combined  $combined" >> "$out"
-}
+# `--source` — emit the source archive and nothing else.
+#
+# A registry entry needs one artifact for the version ITSELF: `Version` requires
+# `url`/`sha256`/`size`, and a release is four per-target zips, none of which is "the
+# release".  The per-target binaries are the entry's `binaries` map; this is what the
+# version-level fields name — so a toolchain entry means exactly what a package entry
+# means: source, plus prebuilt binaries per target.
+#
+# `git archive` rather than a hand-rolled zip: it is byte-reproducible from the commit
+# (it reads the object database, not the working tree, so a Windows checkout produces
+# the same bytes), it cannot pick up a build artefact or a local file, and it honours
+# `export-ignore`.  A sha256 we publish has to stay true, which also rules out GitHub's
+# auto-generated source tarballs — those are not guaranteed byte-stable.
+if [ "${1:-}" = "--source" ]; then
+  name="loft-$VERSION-src"
+  rm -f "$DIST/$name.zip"
+  git archive --format=zip --prefix="loft-$VERSION/" -o "$DIST/$name.zip" HEAD
+  ( cd "$DIST" && $SHA256 "$name.zip" > "$name.zip.sha256" )
+  echo ">> $DIST/$name.zip  ($(du -h "$DIST/$name.zip" | cut -f1))"
+  exit 0
+fi
+
+HOST=$(rustc -vV | sed -n 's/^host: //p')
+TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOST")
+
+
 
 for TRIPLE in "${TARGETS[@]}"; do
   echo ">> building loft for $TRIPLE"
@@ -93,13 +107,17 @@ The standard library lives in \`default/\` next to \`bin/\` — keep them togeth
 - Examples:    \`examples/\` (run each with \`--interpret\`)
 
 Verify this download: \`sha256sum -c SHA256SUMS\` (macOS: \`shasum -a 256 -c
-SHA256SUMS\`), and the stdlib via \`stdlib.manifest\`.
+SHA256SUMS\`), or all of it at once with \`loft verify-self\`.
 QS
 
-  write_stdlib_manifest "$stage"
   ( cd "$stage" && find . -type f ! -name SHA256SUMS | sort | sed 's|^\./||' | xargs $SHA256 > SHA256SUMS )
 
   ( cd "$DIST" && rm -f "$name.zip" && zip -qr "$name.zip" "$name" )
   ( cd "$DIST" && $SHA256 "$name.zip" > "$name.zip.sha256" )
   echo ">> $DIST/$name.zip  ($(du -h "$DIST/$name.zip" | cut -f1))"
 done
+
+# @PLN78 1b — the SOURCE archive.  Emitted by `--source` (handled above, before any
+# target is built), never as a side effect of a per-target build: in CI four legs run
+# this script concurrently and all four would write the same `-src.zip`, so whichever
+# uploaded last would silently win.  One producer, one artifact.

@@ -616,11 +616,45 @@ ordering — the owner never publishes an empty release and then waits for binar
    macos-x64, macos-arm64, windows-msvc) and creates the GitHub release as a
    **draft** with every bundle + `.sha256` attached and notes generated.  If any
    build leg fails, no draft appears — investigate, don't ship a partial release.
+   The draft job also attaches two derived assets: `loft-<v>-src.zip` (the source
+   archive the registry entry names for the version itself) and
+   `loft-<v>-registry-entry.json`.
 3. **Review, then publish.**  Open the draft: confirm the four bundles are present
    (smoke-test each per step 10), edit the title/body if wanted, then click
    **Publish**.  Only this click freezes the release — by which point the binaries
    are already attached.  Publishing an existing-tag draft does not re-trigger the
    build.
+4. **Submit the registry entry.**  Take `loft-<v>-registry-entry.json` from the
+   published release, splice it into `loft-lang/registry`'s `index.json` under
+   `packages.loft`, and re-sign (`scripts/registry-sign.sh`).  This is what makes
+   the release reachable by `loft self-update`, and it is the *only* step that puts
+   the binaries under a signature: the `.zip.sha256` sidecars travel over the same
+   transport as the zips, so they catch a corrupted download, not a substituted one.
+   The signed index is the root; everything below hangs off its hashes:
+
+   ```
+   index.json                        ← the ONE signature (Ed25519, 4 trust roots)
+    ├ binaries[triple].sha256          → loft-<v>-<triple>.zip   checked once, at download
+    │  └ manifest_sha256              → SHA256SUMS             checked any time, on what is INSTALLED
+    │     └ bin/loft, default/*.loft, and every other file the bundle shipped
+    └ version.sha256                   → loft-<v>-src.zip        the source the release was built from
+   ```
+
+   Do not hand-edit the hashes.  The entry is generated from the artifacts of the
+   run that built them, so it cannot drift; retyping it reintroduces exactly the
+   failure a signature cannot catch — an index that is correctly signed and names
+   the wrong bytes.
+
+**Forgetting step 4 is caught on the NEXT release, not by anyone noticing.**  Only
+step 2 fails loudly; a missing registry entry just leaves `loft self-update`
+reporting "no releases published to compare against" forever, which nobody is paged
+by.  So the `previous release reached the registry` CI job goes red on the PR that
+bumps `Cargo.toml`, unless the last release's entry is in the signed index with a
+binary per published triple and a `manifest_sha256` on each
+(`scripts/check-release-published.py`).  It gates that PR only — red on every PR
+during the publish→merge window would just teach everyone to merge past it.  A
+release with no `loft-<v>-src.zip` is exempt as predating the mechanism, derived
+from the assets rather than a version constant someone has to maintain.
 
 **Never** create-and-publish a release in one step (the pre-2026.7 flow):
 publishing creates the tag and freezes the release before the binaries are built,
@@ -815,25 +849,73 @@ can verify offline.
   - `x86_64-pc-windows-msvc`
   - (no `aarch64-unknown-linux-*` yet — add a matrix row when it is needed.)
 - **Each bundle is a self-contained zip** — `bin/loft` + `default/` stdlib +
-  examples + `loft-reference.pdf` + `stdlib.manifest` + `SHA256SUMS` — attached to
-  the **draft** release as `loft-<version>-<triple>.zip` (+ its `.zip.sha256`).
-- **Checksums:**
-  - sha256 of every binary.
-  - sha256 of the bundled stdlib — a manifest over `default/*.loft` (each file +
-    a combined digest), so a runtime / `loft install` can verify the stdlib it
-    loads matches the release.
-- **Publish to the registry:** add a release entry to the signed `index.json`
-  (`loft-lang/registry`) carrying, per target, the binary URL + sha256 + size, and
-  the stdlib-manifest digest; re-sign (`index.json.sig`, Ed25519) per
+  examples + `loft-reference.pdf` + `SHA256SUMS` — attached to the **draft**
+  release as `loft-<version>-<triple>.zip` (+ its `.zip.sha256`).
+- **One manifest per bundle.**  `SHA256SUMS` covers every file it ships,
+  `bin/loft` and each `default/*.loft` included, and is the authoritative list of
+  what a bundle owns (`self_update::owned_files` reads the same file).  There is
+  deliberately no second stdlib-only manifest: it described a subset of this one,
+  which made two ways to validate a single installation.
+- **Publish to the registry:** splice the generated entry into the signed
+  `index.json` (`loft-lang/registry`) and re-sign per
   [REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md) / [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md).
-  Verify a clean-host `loft install` (or self-update) resolves a binary, checks its
-  signature + sha256, and the stdlib digest matches.
+  Per target it carries the bundle URL + sha256 **and `manifest_sha256`** — the
+  digest of that bundle's `SHA256SUMS`.  The zip's own hash is checkable exactly
+  once, at download; the manifest digest is what lets `loft verify-self` re-check
+  an INSTALLED tree against the signature at any time.
+- **Verify:** on a clean host, `loft self-update` resolves a bundle, checks its
+  hash against the signed index, and installs it; `loft verify-self` then reports
+  "matches the release published in the signed registry index".
+- **Verify on Windows specifically — the one case no test can cover.**  Run a real
+  `loft self-update` on Windows, from the previous release to this one.  Replacing
+  a *running* executable is the only genuinely platform-divergent step in the
+  chain: `apply_bundle` renames the target aside and copies in, because a running
+  binary cannot be overwritten there but can be renamed.  The unit tests exercise
+  rename-then-copy on the daily Windows leg, but never against the `loft.exe` that
+  is executing them, so this needs a published release and a Windows box.  Do it
+  once per release, before announcing.
 
-The **build + attach + per-bundle checksum + stdlib manifest** half is
-implemented in `release.yml` (draft-first — see § "Tag & publish").  Still
-`[build]` (open work): the registry release-entry schema (the signed `index.json`
-entry above) and the automated `loft install` / self-update path — cross-link
-from PKG_REGISTRY.md § Open work.
+### Open work — reproducible builds (@PLN78 step 7)
+
+`make-release.sh` emits `SHA256SUMS`, which is integrity, not a byte-identical
+rebuild.  Everything above works without it; what it would upgrade is the
+*meaning* of the published hash — from "this is the artifact the maintainer
+uploaded" to "this is the artifact the source produces", which is the stronger
+claim.  Deliberately off the critical path: it was sequenced last so it could
+never block a user-visible installer, and closing @PLN78 does not make it urgent.
+The registry already re-checks reproducibility for *libraries* (gate 3 clones the
+tag and re-runs `loft package`); the toolchain is exempt because it is not a
+`loft package`, so this is the gap that exemption leaves.
+
+**Measured 2026-07-31 — what actually blocks it, so this is not re-derived.**
+
+1. *The compiler already matches.*  The published v2026.7.2 binary embeds
+   `/rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452`, which is byte-for-byte the
+   local stable 1.97.1.  The usual hardest variable is already pinned by
+   `dtolnay/rust-toolchain@stable` plus `Cargo.lock`.
+2. *Absolute build paths are the blocker.*  The release binary carries
+   `/home/runner/.cargo/registry/...`; a local build carries `/home/jurjens/...`
+   — **192 occurrences**.  v2026.7.2 is therefore unreproducible by anyone,
+   including us: the runner's paths cannot be recreated.
+3. *`trim-paths` is NOT the answer.*  The `[profile.release] trim-paths` option is
+   still unstable in Cargo 1.97.1 and refuses to parse the manifest.
+4. *`--remap-path-prefix` works — 192 → 2.*  Stable rustc, no nightly.
+5. *…and the last 2 are self-inflicted.*  `build.rs` exports
+   `LOFT_BUILD_RUSTFLAGS` **verbatim**, and `cache.rs` reads it back with
+   `env!("LOFT_BUILD_RUSTFLAGS")` to key native artifacts — so the remap FLAGS,
+   which contain the very paths being removed, get baked in as a string literal.
+   The fix is to hash in `build.rs` and embed the `u64`, never the string;
+   `rustflags_fp_of` already does exactly that hashing, just at runtime.
+6. *Comparing to a GitHub artifact needs the musl target.*  Releases ship
+   `x86_64-unknown-linux-musl`; a local `cargo build --release` is `-gnu`.  Those
+   are different binaries by construction — `rustup target add
+   x86_64-unknown-linux-musl` plus `musl-tools` before any comparison means
+   anything.
+
+So the remaining work is three bounded changes — remap flags in
+`make-release.sh`, a hashed `LOFT_BUILD_RUSTFLAGS`, and a CI leg that builds
+twice in different directories and diffs — not the "M, ~3-5 days" the plan
+guessed against a world where this needed nightly.
 
 ---
 

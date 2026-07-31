@@ -175,6 +175,7 @@ pub fn install_one(
         &held_versions(opts),
         &mut graph,
     )?;
+    check_against_lockfile(&graph, opts)?;
 
     let mut report = InstallReport {
         installed: Vec::new(),
@@ -336,7 +337,26 @@ fn load_index_inner(
     } else if opts.refresh || index_stale(&idx_path) {
         match registry_index::fetch_index(&url) {
             Ok(fetched) => {
-                // Atomic-ish cache update.
+                // Verify BEFORE caching.  Writing first and checking after left a
+                // rejected index in the cache, where it outlived the run that fetched
+                // it: the next command read those bytes against the previous, still
+                // valid `.sig`, failed the same way, and kept failing — a fetch that
+                // was correctly refused turned into a persistent outage that no
+                // retry could clear.  Found by pointing `LOFT_REGISTRY_URL` at a
+                // local mirror: one rejected fetch, and every registry-touching test
+                // failed until the cache was deleted by hand.
+                //
+                // A signature that is ABSENT falls back to the cached one — that is
+                // the offline / bundle-import path (`fetch_index` leaves it empty
+                // when there is no `.sig` beside the index) — but the verdict is
+                // still reached before anything is written.
+                let sig_bytes = if fetched.signature.is_empty() {
+                    std::fs::read(&sig_path).unwrap_or_default()
+                } else {
+                    fetched.signature.clone()
+                };
+                verify_or_explain(&fetched.content, &sig_bytes, opts)?;
+                // Verified: now it is safe to keep.
                 if let Some(parent) = idx_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -345,13 +365,6 @@ fn load_index_inner(
                 if !fetched.signature.is_empty() {
                     let _ = std::fs::write(&sig_path, &fetched.signature);
                 }
-                // Verify signature unless explicitly waived.
-                let sig_bytes = if fetched.signature.is_empty() {
-                    std::fs::read(&sig_path).unwrap_or_default()
-                } else {
-                    fetched.signature.clone()
-                };
-                verify_or_explain(&fetched.content, &sig_bytes, opts)?;
                 (fetched.content, false)
             }
             Err(fetch_err) => {
@@ -458,6 +471,62 @@ fn held_versions(opts: &InstallOptions) -> std::collections::BTreeMap<String, St
     }
 }
 
+/// Refuse to install when the index now serves DIFFERENT bytes for a version this
+/// project already locked.
+///
+/// A lockfile records `name`, `version` and `sha256`.  The version pin was always
+/// honoured; the sha256 was written and never read again, which made it a record of
+/// something nobody checked — so a version could be re-published under the same number
+/// and every locked consumer would silently take the new bytes.  A lockfile that pins a
+/// version but not its contents is not a lock.
+///
+/// Checked before downloading rather than at the hash-verify site: the two hashes are
+/// both already in hand, so there is no reason to fetch a tarball first, and refusing
+/// early keeps the failure about the disagreement instead of about a download.
+///
+/// Only the SAME version is compared.  A different version is an upgrade — the point of
+/// resolution — and its hash is expected to differ.
+fn check_against_lockfile(graph: &[ResolvedPackage], opts: &InstallOptions) -> Result<(), String> {
+    let locked = locked_hashes(opts);
+    for r in graph {
+        let Some((ver, sha)) = locked.get(&r.name) else {
+            continue;
+        };
+        if ver != &r.version.semver || sha.is_empty() {
+            continue;
+        }
+        if !sha.eq_ignore_ascii_case(&r.version.sha256) {
+            return Err(format!(
+                "`{}` {} does not match your lockfile: it records sha256 {}, the registry \
+                 now serves {}.  The same version must always be the same bytes, so this \
+                 is a re-publish or a tampered index — not an upgrade.  Delete the \
+                 lockfile entry to accept the new bytes deliberately.",
+                r.name, r.version.semver, sha, r.version.sha256
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every `name -> (version, sha256)` a lockfile pins, for [`check_against_lockfile`].
+fn locked_hashes(opts: &InstallOptions) -> std::collections::BTreeMap<String, (String, String)> {
+    use std::collections::BTreeMap;
+    let lock_path = match &opts.lock_path {
+        Some(p) => p.clone(),
+        None => std::env::current_dir()
+            .unwrap_or_default()
+            .join("loft.lock"),
+    };
+    match lockfile::read_lockfile(&lock_path) {
+        Ok(Some(l)) => l
+            .packages
+            .into_iter()
+            .map(|p| (p.name, (p.version, p.sha256)))
+            .collect(),
+        _ => BTreeMap::new(),
+    }
+}
+
 /// Recursive resolver: pull `name` (and its transitive deps) into
 /// `graph`.  Diamond resolution: when a package appears twice via
 /// different dep paths, pick the **highest** version satisfying both
@@ -474,6 +543,27 @@ fn resolve_recursive(
         // Already resolved — TODO when conflict detection grows, re-
         // check that the existing pin satisfies the new constraint.
         return Ok(());
+    }
+    // @PLN78 — the toolchain is in the registry so it can be found and updated, not so
+    // it can be installed as a dependency.  Both differ from a library in the same way:
+    // `install` unpacks a source tree into the package cache for `use` to resolve
+    // against, while the toolchain is the program doing the resolving, and replacing it
+    // is `self-update`'s job (atomic rename, a running binary, `verify-self` afterwards).
+    //
+    // The guard sits here rather than in `install_one` because this is the one point
+    // every route passes: the direct ask, a `deps` entry, and the parser's auto-install
+    // fallback for `use loft;`.  Without it each arrives at the same confusing end —
+    // downloading a source zip and failing to untar it as a library.
+    if name == crate::self_update::TOOLCHAIN_PKG {
+        return Err(if graph.is_empty() {
+            "`loft` is the toolchain, not a library.  To update it: loft self-update".to_string()
+        } else {
+            format!(
+                "`{}` depends on `loft`, which is the toolchain rather than a library.  \
+                 A package states the loft it needs with `loft = \"...\"` under `[package]`.",
+                graph.last().map_or("a package", |r| r.name.as_str())
+            )
+        });
     }
     let pkg = index
         .packages
@@ -576,7 +666,12 @@ pub fn auto_install_if_in_catalog(
     // committing to a network fetch for the tarball.  load_index
     // honours `opts.offline` — if true, only uses cached index.
     let index = load_index(opts)?;
-    if !index.packages.contains_key(name) {
+    // The toolchain is in the index but is not a library, so it is not something a bare
+    // `use` should ever pull in.  Falling through (rather than erroring) is what keeps
+    // publishing the entry from changing the meaning of an existing program: before the
+    // entry existed `use loft;` was a miss here and went on to the parser's remaining
+    // resolution strategies, and it still does.
+    if name == crate::self_update::TOOLCHAIN_PKG || !index.packages.contains_key(name) {
         return Ok(None);
     }
     eprintln!("[registry] resolving {name} from registry");
@@ -677,6 +772,7 @@ mod tests {
             schema_version: 1,
             updated: "now".to_string(),
             packages: pmap,
+            skipped: Vec::new(),
         }
     }
 
@@ -909,5 +1005,132 @@ mod tests {
         assert!(prebuilt_status(host, &other, false).contains("available: aarch64-apple-darwin"));
         let same = vec![host.to_string()];
         assert!(prebuilt_status(host, &same, false).contains("different loft-ffi"));
+    }
+
+    /// @PLN78 — the toolchain lives in the registry so it can be found and updated,
+    /// which makes `install` a route it must not travel.  Checked at the resolver
+    /// rather than the CLI because a `deps` entry and the parser's `use` fallback
+    /// reach it without going through the CLI at all.
+    #[test]
+    fn the_toolchain_is_not_installable_as_a_package() {
+        let index = crate::registry_index::parse_index(
+            r#"{"schema_version": 1, "updated": "2026-07-31T00:00:00Z", "packages": {
+                 "loft": {"description": "toolchain", "categories": [], "yanked": [],
+                   "versions": {"2026.7.2": {"url": "u", "sha256": "s", "size": 1,
+                     "loft": ">=0", "published": "2026-07-31T00:00:00Z"}}},
+                 "widget": {"description": "a library", "categories": [], "yanked": [],
+                   "versions": {"0.1.0": {"url": "u", "sha256": "s", "size": 1,
+                     "loft": ">=0", "published": "2026-07-31T00:00:00Z",
+                     "deps": {"loft": "*"}}}}}}"#,
+        )
+        .expect("fixture index parses");
+        let opts = InstallOptions::default();
+        let held = std::collections::BTreeMap::new();
+
+        // Asked for directly: name the command that DOES update loft.
+        let mut graph = Vec::new();
+        let err = resolve_recursive(&index, "loft", None, &opts, &held, &mut graph)
+            .expect_err("`loft install loft` must not resolve");
+        assert!(err.contains("self-update"), "must route the user: {err}");
+
+        // Reached as a dependency: name the package that declared it, since the user
+        // did not ask for `loft` and cannot otherwise tell where it came from.
+        let mut graph = Vec::new();
+        let err = resolve_recursive(&index, "widget", None, &opts, &held, &mut graph)
+            .expect_err("a dependency on the toolchain must not resolve");
+        assert!(
+            err.contains("widget"),
+            "must name the depending package: {err}"
+        );
+
+        // Non-vacuity: an ordinary library still resolves through the same call.
+        let mut graph = Vec::new();
+        let index_no_dep = crate::registry_index::parse_index(
+            r#"{"schema_version": 1, "updated": "2026-07-31T00:00:00Z", "packages": {
+                 "widget": {"description": "a library", "categories": [], "yanked": [],
+                   "versions": {"0.1.0": {"url": "u", "sha256": "s", "size": 1,
+                     "loft": ">=0", "published": "2026-07-31T00:00:00Z"}}}}}"#,
+        )
+        .unwrap();
+        resolve_recursive(&index_no_dep, "widget", None, &opts, &held, &mut graph)
+            .expect("an ordinary package must still resolve");
+        assert_eq!(graph.len(), 1);
+    }
+
+    /// @PLN78 — a lockfile pins bytes, not just a version number.
+    ///
+    /// The hash was recorded from the first release and never compared again, so a
+    /// re-published version reached every locked consumer silently.  These cases are
+    /// the whole contract: same version + same hash passes, same version + different
+    /// hash refuses, and a DIFFERENT version is an upgrade whose hash is meant to
+    /// differ -- get that last one wrong and the check blocks every upgrade instead.
+    #[test]
+    fn a_lockfile_pins_the_bytes_not_only_the_version() {
+        fn version_with(semver: &str, sha: &str) -> Version {
+            Version {
+                semver: semver.to_string(),
+                url: "u".to_string(),
+                sha256: sha.to_string(),
+                size: 1,
+                loft: ">=0".to_string(),
+                api_compatible_with: None,
+                data_compatible_with: None,
+                deps: std::collections::BTreeMap::new(),
+                conflicts: Vec::new(),
+                replaces: Vec::new(),
+                provides: Vec::new(),
+                triggers: Vec::new(),
+                binaries: std::collections::BTreeMap::new(),
+                api: Vec::new(),
+                prerelease: false,
+                published: "2026-07-31T00:00:00Z".to_string(),
+            }
+        }
+        let dir = std::env::temp_dir().join("loft-lockfile-pin-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("loft.lock");
+        let opts = InstallOptions {
+            lock_path: Some(lock_path.clone()),
+            ..InstallOptions::default()
+        };
+        lockfile::write_lockfile(
+            &lock_path,
+            &LockFile {
+                schema_version: SCHEMA_VERSION,
+                packages: vec![LockedPackage {
+                    name: "widget".to_string(),
+                    version: "0.1.0".to_string(),
+                    url: "u".to_string(),
+                    sha256: "aaaa".to_string(),
+                    source: "registry".to_string(),
+                    deps: Vec::new(),
+                }],
+            },
+        )
+        .unwrap();
+
+        let same = |sha: &str, semver: &str| {
+            vec![ResolvedPackage {
+                name: "widget".to_string(),
+                version: version_with(semver, sha),
+            }]
+        };
+        // Control first: unchanged bytes must pass, or the two rejections below prove
+        // nothing but that the check refuses everything.
+        assert!(check_against_lockfile(&same("aaaa", "0.1.0"), &opts).is_ok());
+        // Same version, different bytes -- a re-publish or a tampered index.
+        let err = check_against_lockfile(&same("bbbb", "0.1.0"), &opts)
+            .expect_err("a re-published version must be refused");
+        assert!(
+            err.contains("same version must always be the same bytes"),
+            "{err}"
+        );
+        // A genuine upgrade is expected to hash differently.
+        assert!(
+            check_against_lockfile(&same("bbbb", "0.2.0"), &opts).is_ok(),
+            "an upgrade must not be mistaken for tampering"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

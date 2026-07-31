@@ -61,7 +61,7 @@ language set is `future`/`parked`. The syntax-touching plans, classified:
 
 | Plan | Syntax | Class for the flip |
 |---|---|---|
-| **@PLN37** [libs] Language features | `@get`/`@post`/`@ws` route decorators (C57), `type` aliases (C55), `?? return` (C56), `parallel { }` (A15), iterator protocol (I13) | **Additive** — all new forms; safe post-flip |
+| **@PLN37** [libs] Language features (CLOSED) | shipped: `type` aliases (C55), `?? return` (C56), `parallel { }` (A15).  Unshipped: `@get`/`@post`/`@ws` route decorators (C57), iterator protocol (I13) | **Additive** — all new forms, shipped or not; safe post-flip either way |
 | **@PLN24** `#c` C-ABI binding | a new `#c "<sym>"` definition annotation | **Additive** |
 | **@PLN15** cross-branch references | `ref struct T` + serialisable `&T` field refs | **⚠ owner decision** — see below; additive IFF inferred, breaking IFF declared |
 | **@PLN91** self-hosting epic | parser operator/precedence → bundles (internal); configurable default int width | Bundle restructure semantics-preserving; int-width is an **opt-in** SBC profile, not a default change |

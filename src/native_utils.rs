@@ -120,6 +120,32 @@ pub(crate) fn loft_source_tree() -> Option<std::path::PathBuf> {
     }
 }
 
+/// loft#706 — does this rustc stderr say the compile failed because a crate it had to
+/// LINK could not be resolved or was built by a different rustc, rather than because
+/// loft's generated code is wrong?
+///
+/// The distinction is what makes healing safe: only a toolchain/cache failure may
+/// trigger a runtime rebuild + retry, so a genuine codegen bug still surfaces loudly
+/// instead of costing the user a minute of rebuild first.
+///
+/// * `E0514` — "compiled by an incompatible version of rustc" (rlibs are SVH-locked to
+///   one rustc, so this is the post-`rustup update` case, and the case where the rlib
+///   and the loft binary simply came from different builds);
+/// * `E0460` — "possibly newer version of crate" (the same staleness, seen through a
+///   transitive dep);
+/// * `E0463` — "can't find crate" (a distributed bundle ships no rlib).
+///
+/// Both halves must match: the bare code is not enough, because `E0463` also fires for
+/// a user's own missing `--lib` package, which no rebuild of loft's runtime can fix.
+#[must_use]
+pub(crate) fn crate_resolution_failure(stderr: &str) -> bool {
+    (stderr.contains("E0460") || stderr.contains("E0463") || stderr.contains("E0514"))
+        && (stderr.contains("rand_core")
+            || stderr.contains("possibly newer version of crate")
+            || stderr.contains("compiled by an incompatible version")
+            || stderr.contains("can't find crate"))
+}
+
 /// Rebuild loft's native runtime rlib (and binary) from `tree` with the user's
 /// current rustc, so `--native` keeps working after a `rustc` change instead of
 /// falling back to the interpreter.  rlibs are SVH-locked to one rustc, so a
@@ -2020,5 +2046,69 @@ mod host_import_tests {
             vec!["loft_web.ws_yield".to_string()],
             "`do_ws_yield` does not define `ws_yield`"
         );
+    }
+}
+
+#[cfg(test)]
+mod crate_resolution_tests {
+    use super::crate_resolution_failure;
+
+    // ── loft#706 — what may trigger a runtime rebuild + retry ────────────────────
+    //
+    // The classifier is the safety half of the heal: only a toolchain/cache failure
+    // may cost the user a rebuild.  A codegen bug must fall straight through, or every
+    // broken program pays a minute before seeing its error.
+
+    /// The shape that motivated the issue: the rlib was built by a different rustc
+    /// than the one compiling against it.  A rebuild is exactly the cure.
+    #[test]
+    fn an_incompatible_rlib_is_a_crate_resolution_failure() {
+        let stderr = "error[E0514]: found crate `loft` compiled by an incompatible \
+                      version of rustc\n = help: please recompile that crate";
+        assert!(crate_resolution_failure(stderr));
+    }
+
+    /// The same staleness seen through a transitive dep.
+    #[test]
+    fn a_newer_transitive_crate_is_a_crate_resolution_failure() {
+        let stderr = "error[E0460]: found possibly newer version of crate `rand_core`";
+        assert!(crate_resolution_failure(stderr));
+    }
+
+    /// A bundle that ships no rlib.
+    #[test]
+    fn a_missing_crate_is_a_crate_resolution_failure() {
+        let stderr = "error[E0463]: can't find crate for `loft`";
+        assert!(crate_resolution_failure(stderr));
+    }
+
+    /// A genuine codegen bug must NOT heal — this is the guard that keeps a rebuild
+    /// off the path of every broken program.
+    #[test]
+    fn a_codegen_error_is_not_a_crate_resolution_failure() {
+        for stderr in [
+            "error[E0308]: mismatched types\n expected `DbRef`, found `()`",
+            "error[E0425]: cannot find value `var_x` in this scope",
+            "error[E0506]: cannot assign to `var___work_c1` because it is borrowed",
+            "error: aborting due to 1 previous error",
+        ] {
+            assert!(
+                !crate_resolution_failure(stderr),
+                "must not rebuild for: {stderr:?}"
+            );
+        }
+    }
+
+    /// BOTH halves are required.  A bare code with no matching explanation is not
+    /// enough: `E0463` also fires for a user's own missing `--lib` package, which no
+    /// rebuild of loft's runtime can fix.
+    #[test]
+    fn a_bare_error_code_without_its_explanation_does_not_heal() {
+        assert!(!crate_resolution_failure(
+            "error[E0463]: something else entirely"
+        ));
+        assert!(!crate_resolution_failure(
+            "compiled by an incompatible version"
+        ));
     }
 }

@@ -348,6 +348,58 @@ version turns out to be broken or vulnerable, yank it
 
 ---
 
+## The toolchain entry (`loft` itself) — @PLN78
+
+`loft` is in the registry so `self-update` can find a release, and it is the only
+package that is **not** submitted by the flow above.  Nothing here is typed by hand.
+
+**Why it is in the index at all.**  A release ships `loft-<v>-<triple>.zip` plus a
+`.zip.sha256` sidecar, and that sidecar rides the same transport as the artifact —
+it catches a corrupted download, not a substituted one.  `index.json` is the only
+signed thing we publish, so naming the binaries from the index is what puts them
+under a signature.  One key ceremony per release rather than five:
+
+```
+index.json                        ← the ONE signature (Ed25519, 4 trust roots)
+ ├ binaries[triple].sha256          → loft-<v>-<triple>.zip   checked once, at download
+ │  └ manifest_sha256              → SHA256SUMS             checked any time, on what is INSTALLED
+ │     └ bin/loft, default/*.loft, and every other file the bundle shipped
+ └ version.sha256                   → loft-<v>-src.zip        the source the release was built from
+```
+
+**The submit.**  The release workflow attaches `loft-<v>-registry-entry.json`,
+generated from the artifacts of the run that built them.  Splice it in and open a PR:
+
+```bash
+gh release download v<version> -R loft-lang/loft -p 'loft-<version>-registry-entry.json'
+# or regenerate from the release assets:
+scripts/gen-toolchain-entry.py --version <version> --dir <assets> \
+    --splice-into <registry-checkout>/index.json
+```
+
+Never paste the entry over the existing one: the `versions` map **adds**.  Replacing
+it drops every earlier release, and it does so silently — resolution still succeeds,
+those versions simply cease to exist for the users still on them.  `--splice-into`
+merges, refuses to overwrite a version already present, and leaves `yanked` alone.
+
+**Two things the entry must keep.**  `loft_ffi_fp` is **absent** on every binary (it
+gates cdylib ABI compatibility and means nothing for an executable that links nothing
+of the host's), and the triples are the published ones — `x86_64-unknown-linux-musl`,
+never `-gnu`.  Both are pinned by tests rather than by this paragraph:
+`generated_toolchain_entry_parses_and_drives_self_update` (`tests/mock_registry.rs`)
+and `installer_and_self_update_agree_on_the_published_triples`.
+
+**Registry-side gates.**  `tools/validate.py` exempts the toolchain from gate 3
+(reproducible build): there is no `loft.toml` at loft's repo root to re-package, and
+the version artifact is a `git archive` zip, not a `loft package` tarball.  Gate 2b
+verifies every `binaries` hash by download, so the exemption does not leave the
+binaries — the things users actually run — unchecked.
+
+**Which release.**  The first entry names a release carrying `loft-<v>-src.zip`.
+Published releases are immutable, so v2026.7.2 and earlier can never gain one.
+
+---
+
 ## Yanking a broken release
 
 A yanked version stays listed in the index (lockfile pins

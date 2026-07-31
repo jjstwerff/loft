@@ -219,7 +219,6 @@ Directly enables loft's core use case: browser games anyone can play via shared 
 | (cross) | Event-loop abstraction (client + server protocol) | MH | ✓ | plans/32-event-loop/README.md |
 | (cross) | Protocol-validation vehicle (TIC_TAC_TOE — v1/v2/v3/v5 shipped, v3.5/v4/v6 gated on @PLN32 YIELD.2) | M | ✓ | plans/39-tic-tac-toe/README.md |
 | (cross) | First real-game milestone — multi-client hex editor | M | ✓ | plans/33-multiplayer-editor/README.md |
-| (cross) | `lib/server` hardening (binary broadcast / send_to, recv-bytes, observability) — prereq for @PLN6 | M | ✓ | plans/41-server-hardening/README.md |
 | SRV.1 | Plain HTTP routing + middleware | M | ✓ | lib_plans/future/08-server/README.md |
 | SRV.2 | HTTPS with static PEM certificates | S | ✓ | lib_plans/future/08-server/README.md |
 | SRV.3 | WebSocket support | S | ✓ | lib_plans/future/08-server/README.md |
@@ -448,8 +447,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/08-server/`](lib_plans/future/08-server) | M-MH per SRV | — | HTTP / WS / static-file server library |
 | [`lib_plans/64-game-client/`](lib_plans/64-game-client) | M | **plans/future/23 EVENT_LOOP** + cooperates with 08-server / 32-tic-tac-toe | `game_client` library design |
 | [`lib_plans/65-scriptable-scenes/`](lib_plans/65-scriptable-scenes) | M-S per SC | **lib_plans/62-web-ide W2** + moros editor MO.* + script-target build mode | User-authored scene scripts (SC.1-SC.6 + SC.P) |
-| [`plans/41-server-hardening/`](plans/41-server-hardening) | M | — | `lib/server` polish: binary broadcast / send_to, recv-bytes, observability — prereq for @PLN6 |
-| [`plans/6-audience-generative-art/`](plans/6-audience-generative-art) | M | **plans/41-server-hardening** | Audience-driven plant/crystal growth demo via shared URL |
+| [`plans/6-audience-generative-art/`](plans/6-audience-generative-art) | M | — | Audience-driven plant/crystal growth demo via shared URL (SHIPPED) |
 | [`plans/51-bumper-airplanes/`](plans/51-bumper-airplanes) | M | reuses **plans/6-audience-generative-art** substrate + dryopea editor output | Successor audience demo — twin-strip-controlled airplane/bumper-car hybrids fly a static extruded-hex world; bounce physics, smoke-pot trails, off-axis-only player scoring (anti-coordination) |
 
 ### F — Foundation
@@ -514,7 +512,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/75-physics-2body/`](lib_plans/75-physics-2body) | M | — | `physics_2body` — shared rigid-body collision + integrator for moros / dryopea / bumper-airplanes (sphere/AABB pairwise; no N-body stacking) |
 | [`lib_plans/76-particles/`](lib_plans/76-particles) | S | — | `particles` — ribbon trails + point-burst particles (two-flavour scope) for dryopea + bumper-airplanes |
 | [`lib_plans/77-test-deps/`](lib_plans/77-test-deps) | S | F | `loft test --deps` — transitive dep-tree test walker driven by loft.toml + loft.lock; wired into chunk CI as a final regression-catch step (T2/T3 SHIPPED 2026-05-28; T4 lockfile driver still open) |
-| [`lib_plans/78-loft-distribution/`](lib_plans/78-loft-distribution) | MH | F | `loft` binary distribution + self-update + advisory integration — signed releases, `loft update --self`, verify-on-recompile hash, stdlib hash channel (companion to @PLN80 Phase 6.7/6.8) |
+| [`lib_plans/78-loft-distribution/`](lib_plans/78-loft-distribution) | MH | **DONE 2026-07-31** | `loft` binary distribution + self-update — `install.sh` bootstrap, `loft self-update` (resolve → verify against the signed index → replace), `loft verify-self`, and the toolchain's own registry entry.  Reference content moved to [RELEASE.md](RELEASE.md) + [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md) |
 
 ### Deferred plans
 
