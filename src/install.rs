@@ -336,7 +336,26 @@ fn load_index_inner(
     } else if opts.refresh || index_stale(&idx_path) {
         match registry_index::fetch_index(&url) {
             Ok(fetched) => {
-                // Atomic-ish cache update.
+                // Verify BEFORE caching.  Writing first and checking after left a
+                // rejected index in the cache, where it outlived the run that fetched
+                // it: the next command read those bytes against the previous, still
+                // valid `.sig`, failed the same way, and kept failing — a fetch that
+                // was correctly refused turned into a persistent outage that no
+                // retry could clear.  Found by pointing `LOFT_REGISTRY_URL` at a
+                // local mirror: one rejected fetch, and every registry-touching test
+                // failed until the cache was deleted by hand.
+                //
+                // A signature that is ABSENT falls back to the cached one — that is
+                // the offline / bundle-import path (`fetch_index` leaves it empty
+                // when there is no `.sig` beside the index) — but the verdict is
+                // still reached before anything is written.
+                let sig_bytes = if fetched.signature.is_empty() {
+                    std::fs::read(&sig_path).unwrap_or_default()
+                } else {
+                    fetched.signature.clone()
+                };
+                verify_or_explain(&fetched.content, &sig_bytes, opts)?;
+                // Verified: now it is safe to keep.
                 if let Some(parent) = idx_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -345,13 +364,6 @@ fn load_index_inner(
                 if !fetched.signature.is_empty() {
                     let _ = std::fs::write(&sig_path, &fetched.signature);
                 }
-                // Verify signature unless explicitly waived.
-                let sig_bytes = if fetched.signature.is_empty() {
-                    std::fs::read(&sig_path).unwrap_or_default()
-                } else {
-                    fetched.signature.clone()
-                };
-                verify_or_explain(&fetched.content, &sig_bytes, opts)?;
                 (fetched.content, false)
             }
             Err(fetch_err) => {

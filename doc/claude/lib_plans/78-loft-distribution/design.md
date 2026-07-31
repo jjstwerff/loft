@@ -182,13 +182,48 @@ path that tries to escape the bundle, and the dev-tree skip.
 this release's entry, compare.  That is the line the output prints today as
 "no signed registry entry for this release yet".
 
-**Step 3 — `loft self-update --dry-run`.**
-Resolve the newest non-yanked version for the host triple, download it to a temp
-path, verify sha256, then report what it *would* replace and stop.  Still no
-mutation.  Reuses `install.rs`'s verify path — site 3 of the table above, wired
-to the chokepoint rather than copied.
-*Verify:* dry-run against a stale local version resolves and verifies; against
-the newest, reports "already current".
+**Step 3 — `loft self-update` (resolve + report).**  DONE 2026-07-31.
+
+Blocked on 1b for DATA, not for code — so the decision is a pure function of
+(index, running version, host triple), unit-tested against a constructed index.
+That is the only way to know the resolver is right BEFORE the entry is published
+rather than after, and writing it is what forced the entry's shape to be decided.
+Four outcomes, each its own answer: no entry published, already current, an update
+available, and *published but not built for this target* — because "no update" and
+"no build for your platform" send a user to different places.
+
+Two rules live in the planner rather than at the call site.  Yanked and prerelease
+exclusion REUSES `find_best_version` instead of restating it, so the two cannot
+drift.  And an update is only ever offered UPWARDS: everything here is a report,
+but a downgrade is the one outcome that could hand a user back a release an
+advisory already covers, so a registry offering only older versions reports
+"current" rather than walking anyone backwards.
+
+`--dry-run` is accepted but not required: plain `self-update` reports and stops,
+so a script written now keeps its meaning when step 4 lands, and mutation will be
+the thing that has to be asked for rather than the default that arrived by
+surprise.  The index comes from `install::load_index` — site 3 of the table
+above, wired to the existing signature-verified loader, not a second copy.
+
+*Verified:* eight unit tests (including the downgrade guard and calendar ordering
+— `2026.10.0` is newer than `2026.9.0`, which string order gets wrong), plus all
+four outcomes end to end against a `file://` mock index.
+
+**Step 3a — a rejected index no longer poisons the cache.**  DONE 2026-07-31.
+
+Found by accident while driving step 3 against a mock registry, and worth its own
+line because it is a live-system fault, not a plan item: `load_index_inner` wrote
+the fetched index to the shared cache BEFORE verifying its signature.  A fetch
+that was correctly REFUSED therefore outlived the run that made it — the next
+command read those bytes against the previous, still-valid `.sig`, failed
+identically, and kept failing.  A correct refusal became a persistent outage that
+no retry could clear; it took deleting `~/.loft/registry/index.json` by hand.  (It
+cost exactly that here: every registry-touching test failed until I cleared it.)
+
+Verification now precedes the write, so nothing unverified is ever kept.  The
+absent-signature fallback is unchanged — that is the offline / bundle-import path
+— but the verdict is reached before anything is written.
+*Verified:* a rejected fetch leaves the cached index byte-identical.
 
 **Step 4 — self-replacement.**
 The one new mechanism: download to a temp file beside the target, verify, then

@@ -258,6 +258,8 @@ pub mod runtime_error;
 pub mod sandbox;
 /// @PLN97 Phase D — the schema-description sidecar (a store's self-describing layout identity).
 pub mod schema_sidecar;
+#[cfg(feature = "registry")]
+pub mod self_update;
 mod stack;
 pub mod timeout;
 pub mod triggers;

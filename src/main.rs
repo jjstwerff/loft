@@ -293,6 +293,13 @@ fn print_help() {
     println!("  pin <script.loft>             pin every registry library the script uses");
     println!("                                writes <script>.loft.lock next to the script;");
     println!("                                subsequent runs use the pinned versions");
+    println!(
+        "  self-update [--dry-run]       report whether a newer release is published for this"
+    );
+    println!(
+        "                                platform (resolve + report only; replacing the binary"
+    );
+    println!("                                is not implemented yet — nothing is downloaded)");
     println!("  verify-self                   check this installation against the manifests its");
     println!(
         "                                release bundle shipped (stdlib.manifest, SHA256SUMS)"
@@ -1031,6 +1038,92 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
             api_dir.join("_available.api"),
             loft::registry_index::render_catalog(&index),
         );
+    }
+}
+
+/// @PLN78 step 3 — `loft self-update`: report what an update WOULD do.
+///
+/// Read-only in this step: it resolves and reports, and the replacement itself is
+/// step 4.  Plain `self-update` and `--dry-run` behave identically for now, so a
+/// script written today keeps meaning what it meant once step 4 lands — the flag is
+/// accepted rather than required, and mutation will be the thing that has to be
+/// asked for, never the default that arrived by surprise.
+///
+/// The index comes from `install::load_index`, the same signature-verified loader
+/// `loft install` uses.  That is the point of site 3 in the design's table: a second
+/// fetch-and-check here would be a second place to forget the signature.
+#[cfg(feature = "registry")]
+fn self_update_cmd(dry_run: bool, refresh: bool, allow_unsigned: bool) -> i32 {
+    use loft::install::InstallOptions;
+    use loft::self_update::{Plan, host_triple, plan};
+    let current = env!("CARGO_PKG_VERSION");
+    let triple = host_triple();
+    // `--refresh` / `--allow-unsigned` mirror `loft install`, so an offline mirror or
+    // a pre-bootstrap registry is reachable here too.  Step 4 must revisit
+    // `allow_unsigned` before it REPLACES anything: waiving the signature to read a
+    // report is a different risk from waiving it to overwrite the running binary.
+    let opts = InstallOptions {
+        refresh,
+        allow_unsigned,
+        ..InstallOptions::default()
+    };
+    let index = match loft::install::load_index(&opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft self-update: {e}");
+            return 1;
+        }
+    };
+    println!("loft self-update — running {current} ({triple})");
+    match plan(&index, current, &triple) {
+        Plan::NoEntry => {
+            println!(
+                "  --      the registry carries no toolchain entry yet (@PLN78 step 1b)\n\n\
+                 Nothing was compared: this is not \"you are up to date\", it is \"there is\n\
+                 nothing published to compare against\".  Verify the installation you have\n\
+                 with `loft verify-self`."
+            );
+            0
+        }
+        Plan::Current { version } => {
+            println!("  ok      {version} is the newest published release");
+            0
+        }
+        Plan::NoBuildForTarget {
+            to,
+            triple,
+            built_for,
+        } => {
+            println!(
+                "  --      {to} is published, but not built for {triple}\n\
+                 \x20         built for: {}",
+                if built_for.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    built_for.join(", ")
+                }
+            );
+            0
+        }
+        Plan::Available {
+            from,
+            to,
+            url,
+            sha256,
+        } => {
+            println!("  ok      {to} is available (running {from})");
+            println!("            url     {url}");
+            println!("            sha256  {sha256}");
+            if dry_run {
+                println!("\n--dry-run: nothing downloaded, nothing changed.");
+            } else {
+                println!(
+                    "\nReplacing the running binary is not implemented yet (@PLN78 step 4).\n\
+                     Nothing was downloaded and nothing changed."
+                );
+            }
+            0
+        }
     }
 }
 
@@ -6492,6 +6585,25 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft audit: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "self-update" {
+            // @PLN78 step 3 — resolve + report only; step 4 adds the replacement.
+            #[cfg(feature = "registry")]
+            {
+                let rest = &argv[i..];
+                let has = |f: &str| rest.iter().any(|x| x == f);
+                std::process::exit(self_update_cmd(
+                    has("--dry-run"),
+                    has("--refresh"),
+                    has("--allow-unsigned"),
+                ));
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft self-update: this binary was built without the `registry` feature."
+                );
                 std::process::exit(1);
             }
         } else if a == "verify-self" {
