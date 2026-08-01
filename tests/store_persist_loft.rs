@@ -2162,6 +2162,102 @@ fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
     }
 }
 
+/// @PLN123 — compaction across COLLECTION KINDS.
+///
+/// Compaction at load is default-on and rebuilds through `copy_claims`, which
+/// `type_is_compactable` waves through for `Sorted`, `Array`/`Ordered`, `Index`
+/// and `ChildRec` as well as `Hash` — only `Radix` (spatial) and a cross-store
+/// `DbRef` are refused. Every other compaction test builds a `hash<Rec[id]>`, so
+/// the rest of that surface shipped by default with no coverage, and the
+/// array/ordered destination builder carries a documented history of exactly the
+/// failure a digest catches (@P309: copied collections "read back as length 0").
+///
+/// Per kind: build, fragment, persist, `store_load` back. The count, the
+/// order-independent digest and `store_verify` must all survive, and the loader
+/// must reach the verdict this kind should reach.
+///
+/// **Two shapes could not be built at all, both pre-existing** (they reproduce
+/// on the released 2026.7.2 binary, so neither is compaction's doing):
+/// - fragmenting an index with `#remove` in a filtered loop SIGSEGVs the
+///   interpreter and overflows the native stack when the record owns a `text`
+///   (loft#718) — worked around here with key assignment, which is a different
+///   path;
+/// - the `ordered<T>` secondary shape needs a struct declaring BOTH a
+///   `sorted<T[..]>` and an `index<T[..]>` field, and merely DECLARING that
+///   hangs the interpreter and miscompiles on `--native` (loft#719). That cell
+///   is not skipped for convenience — the shape itself does not work.
+#[test]
+fn compaction_is_correct_for_every_collection_kind_it_accepts() {
+    let script = workspace_root().join("tests/scripts/store_compact_kinds.loft");
+    // kind, and the verdict the loader must reach for it.
+    let kinds: [(&str, &str); 5] = [
+        ("hash", "compacted"),
+        ("sorted", "compacted"),
+        ("index", "compacted"),
+        ("nested", "compacted"),
+        // The one refusal in the accept-list: a spatial collection is a `Radix`,
+        // which `copy_claims` panics on and the keystone walks as empty.
+        ("spatial", "cannot carry"),
+    ];
+    let run = |backend: &str, dir: &Path, kind: &str, reload: bool| -> String {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("k.store"))
+            .env("KIND", kind)
+            .env("MODE", if reload { "reload" } else { "" })
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} kind={kind} reload={reload}: {stdout}\n{stderr}"
+        );
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, key: &str| -> String {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with("kind "))
+            .unwrap_or_else(|| panic!("no report in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].to_string()
+    };
+
+    for backend in ["--interpret", "--native"] {
+        for (kind, verdict) in kinds {
+            let tag = backend.trim_start_matches('-');
+            let dir = scratch(&format!("kinds_{kind}_{tag}"));
+            let wrote = run(backend, &dir, kind, false);
+            let read = run(backend, &dir, kind, true);
+
+            for key in ["count", "sum"] {
+                assert_eq!(
+                    field(&wrote, key),
+                    field(&read, key),
+                    "{backend}/{kind}: `{key}` changed across the load — a \
+                     rebuild that lost data would satisfy every size assertion \
+                     anyone would write:\n{wrote}{read}"
+                );
+            }
+            assert_ne!(field(&wrote, "sum"), "0", "{backend}/{kind}: empty digest");
+            assert!(
+                field(&wrote, "sound") == "true" && field(&read, "sound") == "true",
+                "{backend}/{kind}: the heap graph must verify on both sides:\n{wrote}{read}"
+            );
+            assert!(
+                read.contains(verdict),
+                "{backend}/{kind}: expected the loader to report `{verdict}`, \
+                 which is what makes this cell test anything:\n{read}"
+            );
+        }
+    }
+}
+
 /// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.
 ///
 /// A hash's seed is drawn at random (the P253 hash-DoS defense) and stored in

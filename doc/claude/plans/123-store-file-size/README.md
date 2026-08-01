@@ -92,6 +92,7 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **B2** — implement behind a flag, off | [DESIGN.md](DESIGN.md) | **Done** — `LOFT_COMPACT_ON_LOAD=1`, 4.8-7.0x, at LOAD not at write |
 | **B3** — on by default, documented, probes graduated | [DESIGN.md](DESIGN.md) | **Done** — default ON, gated, `bind_path` wired |
 | **F4/F6 refusals** — the last two done-bar cells | [DESIGN.md](DESIGN.md) | **Done** — F4's guard was on the wrong subject and did not fire |
+| **Collection-kind matrix** for arc B | [DESIGN.md](DESIGN.md) | **Done** — hash/sorted/index/nested rebuild, spatial refuses; `ordered` blocked by loft#719 |
 | **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | Open — from MariaDB 11.2.0 prior art |
 
 ### A — truncate the tail

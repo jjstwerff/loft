@@ -695,6 +695,45 @@ A no-output cell is vacuous: assert the digest AND the file size AND
 `fl_validate()`, and prove the harness can fail by running it against a build with
 the gate off.
 
+**The collection-KIND axis was the largest gap, and it is now covered.**
+Compaction accepts `Sorted`, `Array`/`Ordered`, `Index` and `ChildRec` as well
+as `Hash`; every earlier test built a `hash<Rec[id]>`. Per kind — build,
+fragment, persist, `store_load` back, and require the count, the digest and
+`store_verify` to survive:
+
+| kind | verdict | rebuilt |
+|---|---|---|
+| `hash<Rec[id]>` | compacted | 4,902 words |
+| `sorted<Rec[id]>` | compacted | 6,700 words |
+| `index<Rec[n,-id]>` | compacted | 19,086 words |
+| nested (records owning a `vector<Sub>`) | compacted | 17,013 words |
+| `spatial<Pt[x,y]>` | **declined** — `Radix` | — |
+
+Two facts the cells taught, both about how to fragment a collection rather than
+about compaction:
+
+- **An index removed from the TOP leaves `inner 0%`** — the freed nodes coalesce
+  into the tail and `store_reclaim` takes them, so compaction rightly declines
+  and the cell proves nothing. Keeping every fifth instead leaves `inner 80%`.
+  The removal PATTERN decides whether there is anything to compact, the same
+  lesson arc A's shrink-shape axis taught.
+- **A small collection lands at the image floor**, where compaction declines by
+  design, so a kind's cell has to be sized above it to test anything.
+
+**Two shapes could not be built at all** — both pre-existing, both reproducing
+on the released 2026.7.2 binary, so neither is compaction's doing:
+
+- `#remove` in a filtered loop on an `index` whose records own a `text`
+  SIGSEGVs the interpreter and overflows the native stack
+  ([loft#718](https://github.com/loft-lang/loft/issues/718)). Worked around with
+  key assignment, which is a different path.
+- The `ordered<T>` secondary shape needs a struct declaring BOTH a
+  `sorted<T[..]>` and an `index<T[..]>` field — and merely DECLARING it hangs the
+  interpreter and miscompiles on `--native`
+  ([loft#719](https://github.com/loft-lang/loft/issues/719)). That cell is not
+  skipped for convenience; the shape itself does not work, so `Array`/`Ordered`
+  remains the one accepted kind with no coverage.
+
 **The `durability` and `size` cells were the last two open, and they were open in
 the worst way: the refusals were implemented, documented as shipped behaviour,
 and untested.** One of them did not work at all (F4, above). Both are now covered
