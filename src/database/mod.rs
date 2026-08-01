@@ -1026,6 +1026,48 @@ impl Stores {
 }
 
 #[cfg(test)]
+mod slot_recycling_tests {
+    use super::Stores;
+    use crate::store::Store;
+
+    /// @PLN123 B2 — `adopt_store` + `take_store` do NOT recycle the slot on
+    /// their own, and a caller that borrows a scratch slot per operation has to
+    /// know it.  `adopt_store` CLEARS the slot's free bit; `take_store` leaves a
+    /// sentinel and leaves the bit clear, because it is written for a store
+    /// handed out to outlive the table (the REPL session store), not for
+    /// scratch.  `find_free_slot` only returns a slot whose bit is SET, so the
+    /// number is burned until someone sets it back.
+    ///
+    /// `Stores::compact_slot` borrows a scratch slot on every load, so this is
+    /// the difference between bounded and unbounded growth there — and it is
+    /// invisible from loft, where the store report counts only LIVE stores and a
+    /// sentinel is not one.
+    #[test]
+    fn a_taken_slot_is_reused_only_after_its_free_bit_is_restored() {
+        let mut s = Stores::new();
+        let first = s.adopt_store(Store::new_in_use(64));
+        let _ = s.take_store(first);
+        // Not recycled: the bit is still clear, so the next adopt lands elsewhere.
+        let second = s.adopt_store(Store::new_in_use(64));
+        assert_ne!(
+            first, second,
+            "take_store alone must not recycle the slot — if it starts to, \
+             compact_slot's explicit release becomes a double-free of the slot \
+             number and should be removed with it"
+        );
+        // Released explicitly, the number comes back.
+        let _ = s.take_store(second);
+        s.release_slot(second);
+        let third = s.adopt_store(Store::new_in_use(64));
+        assert_eq!(
+            second, third,
+            "a released scratch slot must be handed out again, or every \
+             compaction burns one"
+        );
+    }
+}
+
+#[cfg(test)]
 mod worker_output_slot_tests {
     use super::{Stores, WorkerStores};
 

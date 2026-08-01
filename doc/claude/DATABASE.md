@@ -294,6 +294,24 @@ pub struct Field {
 | `lock_store(r: &DbRef)` | Lock the store that owns `r` (no-op for null refs) |
 | `unlock_store(r: &DbRef)` | Unlock the store that owns `r` |
 | `is_store_locked(r: &DbRef) -> bool` | Return whether the store that owns `r` is locked |
+| `adopt_store(store) -> u16` | Install an externally-built `Store`; clears the slot's free bit |
+| `take_store(slot) -> Store` | Move a `Store` out, leaving a freed sentinel — **does NOT release the slot** |
+| `release_slot(slot)` | Give a slot borrowed by `adopt_store` back to the pool |
+
+**`adopt_store` / `take_store` are not symmetric about the slot, on purpose.**
+`take_store` is written for a store handed out to OUTLIVE the table — the REPL's
+session store, adopted for a run and taken back afterwards — where the slot
+should stay reserved. So it leaves the free bit CLEAR, and `find_free_slot` only
+ever returns a slot whose bit is SET. A caller borrowing a slot as **scratch**
+must therefore call `release_slot`, or the slot number is burned for the life of
+the process.
+
+That leak is invisible from two places you would look: `store_memory()` counts
+only LIVE stores and a freed sentinel is not one, and `LOFT_STORES=log` does not
+trace this allocation path. It was found by reading the pair rather than by any
+probe (@PLN123 B2, where compaction borrows a scratch slot on every load), and
+`slot_recycling_tests` in `src/database/mod.rs` pins both halves so the
+asymmetry stays recorded.
 
 ### Constant store (`CONST_STORE`)
 

@@ -528,6 +528,56 @@ So B2 is a composition, not an algorithm: claim a root record in a fresh store,
 215,824), consistent with the ruled-out note about `Store::load` replacing bytes
 wholesale.
 
+#### Built — `LOFT_COMPACT_ON_LOAD=1`, off by default
+
+`Stores::compact_slot`, called from `load_path` behind the flag. It claims the
+root in a fresh store (a fresh store hands out `PRIMARY` first, so the root
+cannot move), raw-copies the root block, then `copy_claims` rebuilds every heap
+child into the new arena and rewrites the pointers. Measured on the plan's own
+shape — 2,000 records grown, dropped to 200, tail already reclaimed by arc A:
+
+```
+source (post-arc-A)   128,744 bytes
+loaded + compacted     26,992 bytes      4.8x smaller, digest unchanged, store_verify sound
+```
+
+and 215,824 → 30,648 (7.0×) on the simpler shape. Both backends identical. The
+whole suite passes with the flag forced ON as well as off (3,640/3,640 each) —
+though the paths that actually exercise it are the `store_load*` family, so read
+that as "nothing it touches broke", not as full coverage.
+
+**Refusals are exhaustive and say why.** `type_is_compactable` matches `Parts`
+with **no catch-all**, so a variant added later is a compile error rather than a
+silently-skipped shape. It declines `Radix` (`copy_claims` panics on it and the
+keystone returns an empty walk) and `DbRef` (a pointer into ANOTHER store, which
+a within-store rebuild cannot carry), plus a store with no recorded type, a
+read-only or borrowed store, and a store already dense. Each refusal names
+itself under `LOFT_LOADER_STATS`, because a refusal that reads the same as a
+dense store is one nobody can test or diagnose.
+
+**A slot leak, found and fixed.** `compact_slot` borrows a scratch slot via
+`adopt_store` and returns it with `take_store` — but `take_store` leaves a freed
+sentinel WITHOUT setting the slot's free bit (it is written for a store handed
+out to outlive the table, the REPL session store, where the slot should stay
+reserved). `find_free_slot` only returns a slot whose bit is SET, so every load
+would have burned a slot number for the life of the process. Invisible from
+loft — the store report counts only LIVE stores and a sentinel is not one — and
+invisible in `LOFT_STORES=log`, which does not trace this allocation path. Fixed
+with a named `Stores::release_slot`, and pinned by `slot_recycling_tests` so the
+asymmetry is recorded rather than re-discovered.
+
+**Verified by** `store_compact_b2_rebuilds_at_load_without_losing_anything`:
+flag off ⇒ byte-identical to the source; flag on ⇒ at least halved, with B0's
+digest unchanged and `store_verify` sound; the root reference read through after
+the rebuild; the store still taking writes; and the refusal path declining with
+its reason while still loading correctly. Both probes falsify it — skipping
+`copy_claims` and accepting `DbRef` each fail the test.
+
+**Still open for B3:** the flag defaults off, so nothing reaches a user yet;
+`bind_path`'s existing-file branch is the other load moment and is not wired up
+(it needs the compacted heap store written back and re-mapped); and the gate is
+"did it get smaller", not the live-vs-mark ratio the step asked for.
+
 ### B3 — on by default, documented, probes graduated
 
 ---

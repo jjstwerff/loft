@@ -1704,6 +1704,132 @@ fn store_rebuild_b1_recovers_the_interior_and_is_idempotent() {
     );
 }
 
+/// @PLN123 B2 — compaction at LOAD, behind `LOFT_COMPACT_ON_LOAD` (off).
+///
+/// Arc A returns the free tail; the interior between surviving records needs the
+/// collection rebuilt somewhere dense. That moves records, and a `DbRef` is a
+/// POSITION — so it is sound only where an interior reference cannot be live.
+/// The step originally specified the WRITE path; that is exactly where they CAN
+/// be live (a program keeps `e = h[7]` across `store_persist_bind`, and
+/// `bind_path` adopts the image it writes as the live store). The load path is
+/// safe for a stronger reason than absence: `Store::load` already replaces the
+/// slot's bytes wholesale, so a reference held across it is already meaningless.
+///
+/// What this pins:
+///
+/// - **Off is off.** With the flag unset the reloaded file is byte-identical to
+///   the source, so nothing here changes what shipped.
+/// - **On is correct, not merely smaller.** B0's oracle rides along — the digest
+///   over every field must be unchanged, and `store_verify` must call the
+///   rebuilt heap graph sound. A compaction that lost data would satisfy every
+///   size assertion in this test.
+/// - **The root survives.** The collection variable is a `DbRef` at the root, so
+///   the root is the one position compaction may not move; the script reads an
+///   element through it immediately after the load, and keeps using the
+///   collection after.
+/// - **Refusal is attributable and safe.** A record holding a `reference<T>`
+///   points into ANOTHER store, which this rebuild does not carry — compaction
+///   must decline, say so, and leave a correct load behind. A refusal that reads
+///   the same as a dense store is one nobody can test.
+#[test]
+fn store_compact_b2_rebuilds_at_load_without_losing_anything() {
+    let script = workspace_root().join("tests/scripts/store_compact_b2.loft");
+    let run = |backend: &str, dir: &Path, shape: &str, compact: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("c"))
+            .env("B2_SHAPE", shape)
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root());
+        if compact {
+            cmd.env("LOFT_COMPACT_ON_LOAD", "1");
+        } else {
+            cmd.env_remove("LOFT_COMPACT_ON_LOAD");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} {shape} compact={compact} failed: {stdout}\n{stderr}"
+        );
+        assert!(!stdout.contains("FAIL"), "{backend} {shape}: {stdout}");
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, line: &str, key: &str| -> i64 {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].parse().expect("number")
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+
+        // OFF — the load is a wholesale byte replacement, as it has always been.
+        let off = run(backend, &scratch(&format!("b2off_{tag}")), "rich", false);
+        assert_eq!(
+            field(&off, "loaded", "bytes"),
+            field(&off, "source", "bytes"),
+            "{backend}: with the flag off the reloaded store must be the source, \
+             byte for byte:\n{off}"
+        );
+
+        // ON — smaller, and the same data.
+        let on = run(backend, &scratch(&format!("b2on_{tag}")), "rich", true);
+        let src = field(&on, "source", "bytes");
+        let out = field(&on, "loaded", "bytes");
+        assert!(
+            out * 2 < src,
+            "{backend}: compaction must at least halve a store whose live set \
+             fell to a tenth (got {out} from {src}):\n{on}"
+        );
+        for key in ["count", "sum", "xor"] {
+            assert_eq!(
+                field(&on, "source", key),
+                field(&on, "loaded", key),
+                "{backend}: `{key}` changed across the rebuild — the file got \
+                 smaller by LOSING data, which every size assertion above would \
+                 have accepted:\n{on}"
+            );
+        }
+        assert!(
+            on.lines()
+                .filter(|l| l.starts_with("loaded"))
+                .all(|l| l.ends_with("sound true")),
+            "{backend}: the rebuilt heap graph must verify:\n{on}"
+        );
+        assert!(
+            on.contains("store_load: compacted"),
+            "{backend}: compaction must actually have run, or every assertion \
+             above passed on an untouched store:\n{on}"
+        );
+        // The root reference survived, and the store still works afterwards.
+        assert!(
+            on.contains("root_ref label label-7") && on.contains("old label-13"),
+            "{backend}: an element read through the root after the rebuild, and \
+             the store still takes writes:\n{on}"
+        );
+
+        // REFUSAL — a cross-store `reference<T>` is a shape the rebuild declines.
+        let refused = run(backend, &scratch(&format!("b2ref_{tag}")), "refuse", true);
+        assert!(
+            refused.contains("store_load: not compacted") && refused.contains("cannot carry"),
+            "{backend}: a collection holding a reference into another store must \
+             be declined, with the reason said out loud:\n{refused}"
+        );
+        assert!(
+            refused.contains("refuse count 30") && refused.contains("sound true"),
+            "{backend}: and a declined compaction must leave a correct load \
+             behind:\n{refused}"
+        );
+    }
+}
+
 /// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.
 ///
 /// A hash's seed is drawn at random (the P253 hash-DoS defense) and stored in

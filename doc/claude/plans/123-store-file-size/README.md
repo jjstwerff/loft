@@ -8,9 +8,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 Open — **arc A is COMPLETE and shipped** (`store_reclaim(collection)`, opt-in,
-both backends), and **B0 + B1 are done**. Rebuild-and-swap is measured: it gives
-back **77-86% of the post-A file at ~0.6 µs/record**, linear to 6,000 records, and
-is idempotent — so B2 can implement it as an automatic step. **B2 is next.**
+both backends), and **B0 + B1 + B2 are done**. Compaction now exists behind
+`LOFT_COMPACT_ON_LOAD=1` (off): it rebuilds a collection into a dense store **at
+LOAD**, 4.8-7.0x smaller with the digest unchanged. The step's specified code
+point — compacting when WRITING the image — was falsified: `bind_path` adopts
+the image it writes as the live store, and a program holds interior `DbRef`s
+across it. **B3 is next** (default on, the ratio gate, and `bind_path`'s load
+branch).
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
@@ -71,7 +75,8 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | **Done** |
 | **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | **Done** — sees 5 loss modes, blind to 3 layout levers |
 | **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | **Done** — 77-86% back at ~0.6 µs/record, idempotent |
-| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | In progress — code point CORRECTED: compaction belongs at LOAD, not at write |
+| **B2** — implement behind a flag, off | [DESIGN.md](DESIGN.md) | **Done** — `LOFT_COMPACT_ON_LOAD=1`, 4.8-7.0x, at LOAD not at write |
+| **B3** — on by default, documented, probes graduated | [DESIGN.md](DESIGN.md) | Open — next |
 | **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | Open — from MariaDB 11.2.0 prior art |
 
 ### A — truncate the tail

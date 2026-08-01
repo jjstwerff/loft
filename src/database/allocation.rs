@@ -764,6 +764,15 @@ impl Stores {
         self.free_bits[wi] |= 1u64 << bi;
     }
 
+    /// Give a slot borrowed via [`adopt_store`](Stores::adopt_store) back to
+    /// the pool.  [`take_store`](Stores::take_store) deliberately does NOT — it
+    /// is written for a store handed out to OUTLIVE the table (the REPL session
+    /// store), where the slot should stay reserved — so a caller using a slot
+    /// as scratch has to say so.  Pinned by `slot_recycling_tests`.
+    pub(crate) fn release_slot(&mut self, slot: u16) {
+        self.set_free_bit(slot);
+    }
+
     /// S29: Clear bit `slot` in `free_bits` (slot is now active).
     fn clear_free_bit(&mut self, slot: u16) {
         let wi = slot as usize / 64;
@@ -2671,7 +2680,182 @@ impl Stores {
         new_store.pinned = preserved.4;
 
         self.allocations[slot_idx] = new_store;
+        // @PLN123 B2 — the load moment is the one place records may move (see
+        // `compact_slot`).  Off by default; the loaded store is untouched then.
+        if Self::compact_on_load_enabled() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            // Say WHY when it does not run: a refusal that reads the same as a
+            // dense store is a refusal nobody can test or diagnose.
+            match self.compact_slot(slot) {
+                Ok(words) => eprintln!("store_load: compacted #{slot} — {words} words returned"),
+                Err(why) => eprintln!("store_load: not compacted #{slot} — {why}"),
+            }
+        } else if Self::compact_on_load_enabled() {
+            let _ = self.compact_slot(slot);
+        }
         true
+    }
+
+    /// Is compaction-on-load switched on?  @PLN123 B2 lands OFF: the step's own
+    /// requirement, and the right default while the load path is the only place
+    /// it is sound.  Read once.
+    fn compact_on_load_enabled() -> bool {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| std::env::var_os("LOFT_COMPACT_ON_LOAD").is_some())
+    }
+
+    /// Can a collection of type `tp` be rebuilt by [`Stores::copy_claims`]?
+    ///
+    /// Exhaustive over `Parts` with **no catch-all**, so a variant added later
+    /// is a compile error here rather than a silently-skipped shape — the whole
+    /// point of the check is that an unhandled kind must REFUSE, and a
+    /// `_ => true` would refuse nothing.  `Radix` is the one live refusal:
+    /// `copy_claims` panics on it and the `for_each_owned_child` keystone
+    /// returns an empty walk, so a spatial index would come back empty.
+    fn type_is_compactable(&self, tp: u16, seen: &mut Vec<u16>) -> bool {
+        if tp as usize >= self.types.len() {
+            return false;
+        }
+        if seen.contains(&tp) {
+            return true; // already accepted on this path — a cycle, not a new shape
+        }
+        seen.push(tp);
+        let ok = match &self.types[tp as usize].parts {
+            Parts::Base
+            | Parts::Byte(..)
+            | Parts::Short(..)
+            | Parts::Int(..)
+            | Parts::ShortRaw(..)
+            | Parts::Enum(_) => true,
+            // A stored DbRef names another store, and this rebuild only moves
+            // records WITHIN one.  Nothing would rewrite a foreign pointer at
+            // the far end, so refuse rather than guess.
+            Parts::DbRef => false,
+            Parts::Radix(..) => false,
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .clone()
+                .iter()
+                .all(|f| self.type_is_compactable(f.content, seen)),
+            Parts::Vector(v)
+            | Parts::Sorted(v, _)
+            | Parts::Array(v)
+            | Parts::Ordered(v, _)
+            | Parts::Hash(v, _)
+            | Parts::Index(v, _, _)
+            | Parts::ChildRec(v) => self.type_is_compactable(*v, seen),
+        };
+        seen.pop();
+        ok
+    }
+
+    /// @PLN123 B2 — rebuild the collection rooted in `slot` into a densely
+    /// packed store and swap it in.  Returns the words the arena shrank by; 0
+    /// when compaction did not run or bought nothing.
+    ///
+    /// **Sound only where an interior `DbRef` cannot be live**, which is the
+    /// LOAD path and nowhere else.  Compaction moves records, and a `DbRef` is
+    /// a POSITION — `(store_nr, rec, pos)` — so anything holding one into this
+    /// store's interior is left naming the wrong record.  Those references live
+    /// in interpreter stack slots and native locals; nothing can enumerate or
+    /// rewrite them.
+    ///
+    /// `bind_path`'s WRITE branch is emphatically not such a place: a program
+    /// keeps element references across `store_persist_bind`, and the reason
+    /// that works today is exactly what compaction removes — the image is a
+    /// byte-for-byte copy, so every record keeps its position.  The load path
+    /// is safe for a stronger reason than "probably nobody holds one": it
+    /// already replaces the slot's bytes wholesale, so an interior reference
+    /// held across it is already meaningless.
+    ///
+    /// The collection ROOT does survive — the collection variable is a `DbRef`
+    /// at `(slot, PRIMARY, 8)` — so it must not move.  It does not: the root
+    /// record is the destination's first claim, and a fresh store hands out
+    /// `PRIMARY` first.
+    fn compact_slot(&mut self, slot: u16) -> Result<u32, &'static str> {
+        use crate::store::PRIMARY;
+        let idx = slot as usize;
+        if idx >= self.allocations.len() {
+            return Err("slot out of range");
+        }
+        let (tp, before_words, root_words) = {
+            let s = &self.allocations[idx];
+            if s.free {
+                return Err("store is free");
+            }
+            if s.read_only || s.is_borrowed() {
+                return Err("store is read-only or borrowed");
+            }
+            if s.known_type == u16::MAX {
+                return Err("store records no type, so there is no schema to walk");
+            }
+            let header = *s.addr::<i32>(PRIMARY, 0);
+            if header <= 0 {
+                return Err("the root block is free or malformed");
+            }
+            (s.known_type, s.capacity_words(), header as u32)
+        };
+        if !self.type_is_compactable(tp, &mut Vec::new()) {
+            return Err("the collection holds a shape the rebuild cannot carry");
+        }
+
+        // The destination's FIRST claim is the root, so it lands at PRIMARY —
+        // where the source has it, and where the caller's reference points.
+        let mut dst = crate::store::Store::new_in_use(root_words + PRIMARY + 1);
+        let dst_root = dst.claim(root_words);
+        if dst_root != PRIMARY {
+            return Err("a fresh store did not hand out PRIMARY first");
+        }
+        // Carry the root block's raw bytes first: `copy_claims` rebuilds the
+        // heap children and rewrites the pointers into them, but says nothing
+        // about any inline bytes sharing the record.
+        let dst_slot = self.adopt_store(dst);
+        let src = DbRef {
+            store_nr: slot,
+            rec: PRIMARY,
+            pos: 8,
+        };
+        let to = DbRef {
+            store_nr: dst_slot,
+            rec: PRIMARY,
+            pos: 8,
+        };
+        self.copy_block_cross_store(
+            slot,
+            PRIMARY,
+            0,
+            dst_slot,
+            PRIMARY,
+            0,
+            (root_words as isize) * 8,
+        );
+        // Re-assert the destination's own block header: the raw copy above
+        // brought the SOURCE's size word with it, and the two blocks are the
+        // same size only because we claimed it that way.
+        *self.allocations[dst_slot as usize].addr_mut::<i32>(PRIMARY, 0) = root_words as i32;
+        self.copy_claims(&src, &to, tp);
+
+        let mut rebuilt = self.take_store(dst_slot);
+        // `take_store` leaves a freed sentinel but does NOT set the slot's free
+        // BIT — it is written for a store that is handed out to outlive the
+        // table, not for a scratch slot.  Compaction runs once per load, so
+        // without this the slot number is burned every time: `find_free_slot`
+        // only ever returns a slot whose bit is SET, so the sentinel would sit
+        // there forever and `allocations` would grow per load.  The scratch
+        // slot is ours, so releasing it is ours too.
+        self.release_slot(dst_slot);
+        let after_words = rebuilt.capacity_words();
+        if after_words >= before_words {
+            // Nothing gained — leave the loaded store exactly as it is.
+            return Err("already dense");
+        }
+        // The slot's bookkeeping is the slot's, not the buffer's.
+        let s = &self.allocations[idx];
+        rebuilt.known_type = tp;
+        rebuilt.free = s.free;
+        rebuilt.created_at = s.created_at;
+        rebuilt.last_op_at = s.last_op_at;
+        rebuilt.pinned = s.pinned;
+        self.allocations[idx] = rebuilt;
+        Ok(before_words - after_words)
     }
 
     /// Adopt an in-memory, already-authenticity-verified byte buffer as the store
