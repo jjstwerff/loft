@@ -434,9 +434,25 @@ has no C ABI / `dlopen`).  It is the foundation for binding system C libraries
 (databases, codecs, …) without the rustc toolchain, keeping loft-core minimal —
 the linking tool lives in core, all complexity in the library + shim.
 
-**Status: planned** — design in [@PLN24](https://github.com/loft-lang/plans/issues/24)
-(first consumer: the MariaDB/PostgreSQL clients, @PLN23).  Not yet implemented;
-`#native` is today's path.
+**Two things the architecture probe settled**, before anyone writes a binding.
+The per-arity caller works for **arguments** — int, long, pointer, `char *`,
+bool all cross correctly at every arity, including across the register/stack
+boundary — but **not for returns**: a 32-bit C return read back as 64 bits turns
+−1 into 4294967295, quietly.  So the declaration carries the C signature
+(`#c "PQstatus" "int(void*)"`), and it is the **sole** authority: pointed at a
+wrong arity or a variadic function, the caller returned the *right answer* by
+luck, so there is no runtime signal to catch a mismatch — the check is at
+compile time or nowhere.  Second: `#c` is the declared edge of loft's
+no-runtime-errors rule.  Arguments cost nothing (non-null is already the default
+and null-flow rejects a `τ?` at compile time), a NULL pointer return maps to
+loft null, and a fault *inside* C is undefined — the same failure mode `#native`
+already has, through the same crash handler.
+
+**Status: planned** — design in
+[plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
+[@PLN24](https://github.com/loft-lang/plans/issues/24) (first consumer: the
+MariaDB/PostgreSQL clients, @PLN23), matrix + probe in
+`tests/fixtures/c_abi/`.  Not yet implemented; `#native` is today's path.
 
 ### Registration — zero boilerplate
 
