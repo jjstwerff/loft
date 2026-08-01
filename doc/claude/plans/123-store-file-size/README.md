@@ -95,6 +95,7 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **F4/F6 refusals** — the last two done-bar cells | [DESIGN.md](DESIGN.md) | **Done** — F4's guard was on the wrong subject and did not fire |
 | **Collection-kind matrix** for arc B | [DESIGN.md](DESIGN.md) | **Done** — hash/sorted/index/nested rebuild, spatial refuses; `ordered` now covered too (loft#719 fixed, `Both` declared in the kinds test) |
 | **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | **Rejected** — built and measured; the premise is false and it makes the file grow (loft#727) |
+| **loft#727** — the growth A5 surfaced | [README.md](README.md#a5) | **Fixed** — an iteration-snapshot leak, not a slack policy; `reclaim_tail` keeps the eighth too |
 
 ### A — truncate the tail
 
@@ -153,9 +154,28 @@ high-water mark and leaves nothing for the next claim. One call costs 1.31×
 (566,472 → 740,936 after a single read); calling it each run grows the file
 ~37 KB per run without bound. Giving `reclaim_tail` the mark's eighth — the same
 slack `bind_path` writes into an image — fixes the single-call case outright
-(357,232, stable) and halves the ratchet, but does not close it, so it is filed
-rather than half-fixed: what remains is a design question about what to reserve
-against a claim whose size is a function of the collection, not of the slack.
+(357,232, stable) and halves the ratchet, but does not close it, so it was filed
+rather than half-fixed: what remained looked like a design question about what to
+reserve against a claim whose size is a function of the collection, not of the
+slack.
+
+**It was not a design question — it was a leak, and the issue's control said so
+without being read.** "Rock stable at 566,472 for ten runs" was true of the FILE
+and false of the store: the census grew every one of those runs, and on run 17
+the file jumped 2.33× with `store_reclaim` nowhere in the program. Iterating a
+keyed collection claims its key-sorted snapshot inside the store — this plan
+measured that four separate times, each time as an instrument trap — and the loop
+epilogue never released it, because the release only ever handled a scratch with
+a store of its own. So each read left 4 bytes per element behind, permanently for
+a bound store, and no reserve of any size can absorb an unbounded leak. Fixed at
+the release (`Stores::free_iteration_scratch`); the eighth stays, and with the
+leak gone it does close the single-call case. The reason the ratchet only
+"halved" under the eighth is now plain: the eighth was absorbing half the leak.
+
+The lesson for this plan is not about slack. It is that the same measurement got
+attributed to `store_reclaim` five times — four as a trap to work around, once as
+a bug to file against it — and never once to the claim that was actually doing it.
+A trap you have learned to route around is an unattributed effect.
 
 Arc A stays opt-in, and the stated cost of that stays stated.
 

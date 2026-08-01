@@ -89,10 +89,24 @@ captures a fresh sidecar and retries once.
 materialises a key-sorted snapshot, and for a collection bound with
 `store_persist_bind` that snapshot is claimed INSIDE the store — so the file's
 bytes change and the sidecar's CRC no longer matches, with the file LENGTH
-unchanged. Measured: a bare re-bind keeps `store_durable_check` true; one
-traversal makes it false. Seal AFTER the reads you intend to do, not before.
-(`store_reclaim` and compaction both refuse outright on a store with a live
-sidecar, so those cannot surprise you the same way.)
+unchanged. The snapshot is released at loop exit, but a claim-then-free still
+leaves different bytes than it found. Measured: a bare re-bind keeps
+`store_durable_check` true; one traversal makes it false. Seal AFTER the reads
+you intend to do, not before. (`store_reclaim` and compaction both refuse
+outright on a store with a live sidecar, so those cannot surprise you the same
+way.)
+
+**What it does NOT do any more is grow the file.** The snapshot used to be left
+behind — the loop epilogue released it only when it had a store of its own, and
+a writable collection's is co-located, on the reasoning that its records go back
+when the store dies. A collection outlives the loops that read it, and a bound
+collection's store is a file that outlives the process, so every read leaked 4
+bytes per element into it permanently: sixteen runs of a program that only READ
+a 4,000-record hash took its file from 566,472 to 1,321,768 bytes, with no
+writes anywhere (loft#727). Reading is free now, in memory and on disk — a
+40-pass traversal loop leaves a store's census byte-identical. The old note
+"stat the file the instant `store_persist_bind` returns, before anything walks
+the collection" no longer applies.
 
 **Drop-on-panic is by design.**  A panic between open and clean drop
 skips the sidecar write → next open detects corruption → callback fires.
@@ -152,8 +166,17 @@ happens when the image is WRITTEN; after that `resize_store` returns early on an
 request at or below the current size, so a bound store that grew ten-fold and
 dropped back to its original live set kept the ten-fold file for the rest of the
 run (12.7× measured). `store_reclaim(collection)` (@PLN123 arc A) truncates the
-file to the store's high-water mark and answers with the bytes it gave back —
-half the file on that shape, with every surviving record bit-for-bit unchanged.
+file to the store's high-water mark **plus an eighth** and answers with the bytes
+it gave back — half the file on that shape, with every surviving record
+bit-for-bit unchanged.
+
+The eighth is not a rounding: it is the same slack the image format gives a
+freshly-bound store, and for the same reason. The store stays live, growth
+multiplies by 7/3, so one trimmed to the byte pays a 2.33× resize on its very
+next claim — on the FILE. Trimming to the bare mark made `store_reclaim` hand
+back 40% of a file and take 133% back on the next read (loft#727). A store that
+came straight from `bind_path` is therefore already the right size and answers
+`0`; a tail only appears once the store has GROWN while bound.
 
 Safe without any reference tracking, and the reason is worth knowing: everything
 above the high-water mark is free by construction, and a `DbRef` is a POSITION

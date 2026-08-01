@@ -10,9 +10,12 @@ bridge). Surfaced by the `routing` consumer (`docs/loft-feedback.md`, 2026-07-22
 "`expose` UN-RETRACTED"). **Status: Steps 0-4 DONE — an exposed hash/radix now iterates
 (new `on=4` mode), correct and leak-clean on both backends for every loop exit —
 complete / break / repeated / nested / return (loop-epilogue free + a coordinated
-scope-exit free). Only remaining gap: bounded-range over an exposed non-hash source still
-errors (Step 5). Step 3's header approach was falsified for `on=3` en route but is sound
-under the compile-time `on=4` split.** This doc is the single source of truth; it leads
+scope-exit free). "Leak-clean" covered only the DEDICATED scratch until loft#727: the
+co-located one was exempted by assumption, and leaked a snapshot per pass in every
+ordinary loop. Both homes are released now, in `Stores::free_iteration_scratch`. Only
+remaining gap: bounded-range over an exposed non-hash source still errors (Step 5).
+Step 3's header approach was falsified for `on=3` en route but is sound under the
+compile-time `on=4` split.** This doc is the single source of truth; it leads
 with the probes/tooling/oracles because the risk is entirely in the store-lifetime
 subsystem (loft weakness #1) and the build must be gated behind instruments that can
 *falsify* each step — which is exactly what caught Step 3.
@@ -93,10 +96,19 @@ decoupling machinery merely dormant.
    *(Guarded by: yield reads the header's source `store_nr`.)*
 2. **Scratch leak.** The scratch var is typed `Reference(content, hash_deps)`
    (`src/parser/collections.rs:1690`) — it carries the hash's dep list, so free-cleanup
-   treats it as a **borrow** and never frees it independently. Correct while co-located
-   (freed with the hash store); **wrong** once the scratch lives elsewhere — its records
-   are never reclaimed → the dedicated store grows every iteration. **This is the hard
-   part.** *(Guarded by: the leak oracle; see Open question A.)*
+   treats it as a **borrow** and never frees it independently. Wrong wherever the scratch
+   lives: its records are never reclaimed. **This is the hard part.** *(Guarded by: the
+   leak oracle; see Open question A.)*
+
+   > **"Correct while co-located (freed with the hash store)" — this doc said that, and
+   > it was false.** The records do go back when the store dies; the store does not die.
+   > A collection outlives the loops that read it, so a co-located scratch leaked one
+   > snapshot per pass for the store's whole life, and for a BOUND collection the store
+   > is a file that outlives the process. Fixed in `Stores::free_iteration_scratch`
+   > (loft#727), which releases both homes. The premise is worth keeping visible: the
+   > leak oracle below could not see it, because it was built to watch the DEDICATED
+   > store — the case the fix was for — and the co-located case was exempted by
+   > assumption before any instrument looked at it.
 3. **Bounded range over an exposed source.** `iterate()` `on=3` for a *range*
    (`xs[(x,y)..]`, sorted/index/radix slices) calls `vector::ordered_find`, which reads
    **record keys** via `data.store_nr`. Decoupling makes that the scratch store → key
@@ -252,20 +264,30 @@ break/return leak (A) and bounded-range-over-exposed (Step 5).
 
 ## Open questions (probe before choosing — do not assume)
 
-- **A. Scratch free (RESOLVED — all exit paths).** The scratch var carries `hash_deps`
-  (borrow → the scope machinery never frees it), so the dedicated read-only store had no
-  owner. Two coordinated frees cover every exit: **(1)** a **loop-epilogue** conditional
-  free — `parse_for` emits `OpFreeScratch(hash_scratch)` right after the `on=4` loop, which
-  frees the scratch's whole store **only when it differs from the source** recorded in the
-  header (offset 8) — a no-op for a co-located (writable) scratch. It runs on completion AND
+- **A. Scratch free (RESOLVED — all exit paths, and BOTH homes).** The scratch var carries
+  `hash_deps` (borrow → the scope machinery never frees it), so neither home had an owner.
+  Two coordinated frees cover every exit: **(1)** a **loop-epilogue** free — `parse_for`
+  emits `OpFreeScratch(hash_scratch)` right after the `on=4` loop, which releases the
+  scratch's whole store when it differs from the source recorded in the header (offset 8),
+  and otherwise deletes the two records the scratch claimed inside the source store
+  (loft#727 — that second case was a no-op, and leaked a snapshot per pass). It runs on
+  completion AND
   `break`, once per (re-)entry, covering complete / break / repeated / nested. **(2)** a
   **scope-exit** free — `get_free_vars` emits the same `OpFreeScratch` for a `hash_scratch`
   var at its scope exit, which is what a `return`-out-of-loop hits (it bypasses the
-  epilogue). The two never double-free: the epilogue **nulls** the scratch var after
-  freeing (`v_set … Null`), and `OpFreeScratch`'s `rec==0` guard skips a nulled ref — so on
-  complete/break the scope-exit free is a no-op, and only the `return` path (epilogue
-  skipped, var still live) actually frees there. All of complete / break / repeated /
-  nested / **return** are leak-clean on both backends.
+  epilogue). All of complete / break / repeated / nested / **return** are leak-clean on
+  both backends.
+
+  **What stops the two from double-freeing is NOT what this said.** It said the epilogue
+  nulls the scratch var (`v_set … Null`) so the scope-exit free hits `OpFreeScratch`'s
+  `rec==0` guard. `parse_for` does emit that assignment and **the IR does not contain it**
+  — `--introspect` on the simplest hash loop shows two adjacent `OpFreeScratch` calls and
+  no store between them, on both backends. So the release is called twice on the same live
+  `DbRef` every time, and it has to be idempotent: the dedicated case through `free`'s
+  already-freed no-op, the co-located case through `is_claimed_record`, which reads the
+  block header the first `delete` just made negative. Idempotence is stated in
+  `free_iteration_scratch`'s own doc, because it is a property the emission depends on
+  rather than a defensive extra.
 - **B. Dedicated store lifecycle.** Persistent-and-reused vs fresh-per-iteration. A
   persistent empty store may trip the "N stores not freed at exit" census — check what
   the census counts (live records vs allocated slots) before choosing. Prefer reuse via

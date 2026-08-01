@@ -995,15 +995,15 @@ Functions for interacting with the host operating system.
 | Function | Description |
 |----------|-------------|
 | `store_memory() -> text` | Returns a multi-line snapshot of all LIVE heap stores' internal utilisation — total capacity vs actual claimed data vs free space, record + free-block counts, **mergeable adjacent-free pairs** (free neighbours that should have coalesced), **`tail%` / `inner%`** (see below), and the largest stores by capacity with their type name and creation site (`bc:<pos>` — a bytecode position on the interpreter, mapping to source via `LOFT_LOG=static`; `0` on `--native`). Use to watch memory growth / fragmentation in a running program. See also `LOFT_STORES=log\|warn` (alloc/free trace). |
-| `store_reclaim(collection) -> integer` | Give back the free space at the END of a store-rooted collection's store, and answer with the BYTES handed back (`0` when there was nothing). For a collection bound with `store_persist_bind` that is the **file** shrinking; otherwise it is memory returned to the allocator. Records never move, so every reference stays valid. Returns `0` and changes nothing for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar. |
+| `store_reclaim(collection) -> integer` | Give back the free space at the END of a store-rooted collection's store, and answer with the BYTES handed back (`0` when there was nothing). For a collection bound with `store_persist_bind` that is the **file** shrinking; otherwise it is memory returned to the allocator. Records never move, so every reference stays valid. It keeps an eighth of the live content as slack — the store stays in use, and one trimmed to the byte would pay a 2.33× re-grow on its next claim — so a store already at that size answers `0`, and asking twice is free. Returns `0` and changes nothing for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar. |
 
 **`tail%` and `inner%` say WHERE a store's free space sits**, which is the
 difference between free space you get back and free space you do not.
 
-- **`tail`** — above the last record. This is exactly what `store_reclaim`
-  returns. A persisted store's image already ends at the last record, so the
-  tail is arena capacity, not file bytes — until the store is BOUND, where it is
-  both.
+- **`tail`** — above the last record. This is what `store_reclaim` returns, less
+  the eighth it leaves behind. A persisted store's image already ends at the last
+  record, so the tail is arena capacity, not file bytes — until the store is
+  BOUND, where it is both.
 - **`inner`** — between records. It is reusable for future allocation, but it
   *is* written to the file, because the image has to span up to the last record.
   `store_reclaim` does not touch it — **loading the store does**, automatically:

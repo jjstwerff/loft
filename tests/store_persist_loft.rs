@@ -2351,17 +2351,21 @@ fn reading_a_collection_leaks_nothing_into_its_store() {
     // The `store_memory()` row for the collection, from the census printed
     // after `marker`. Carries the record count and the largest free block, both
     // exact — the MB column is rounded and would hide two records.
-    let row = |stdout: &str, marker: &str| -> String {
-        stdout
+    let rows = |stdout: &str, marker: &str| -> Vec<String> {
+        let found: Vec<String> = stdout
             .lines()
             .skip_while(|l| !l.starts_with(marker))
-            .find(|l| l.contains("type hash<Rec[id]>"))
-            .unwrap_or_else(|| panic!("no census row after '{marker}' in:\n{stdout}"))
-            // Drop the leading slot number: an in-memory run and a bound run
-            // need not land in the same slot, and the slot is not the subject.
-            .split_once("MB")
-            .map(|(_, rest)| rest.trim().to_string())
-            .expect("census row shape")
+            .take_while(|l| !l.starts_with("census") || l.starts_with(marker))
+            .filter(|l| l.contains("type hash<") || l.contains("type spatial<"))
+            // Drop the leading slot number: two runs need not land in the same
+            // slot, and the slot is not the subject.
+            .filter_map(|l| l.split_once("MB").map(|(_, rest)| rest.trim().to_string()))
+            .collect();
+        assert!(
+            !found.is_empty(),
+            "no census row after '{marker}' in:\n{stdout}"
+        );
+        found
     };
 
     for backend in ["--interpret", "--native"] {
@@ -2375,9 +2379,29 @@ fn reading_a_collection_leaks_nothing_into_its_store() {
             false,
         );
         assert_eq!(
-            row(&mem, "census one"),
-            row(&mem, "census many"),
+            rows(&mem, "census one"),
+            rows(&mem, "census many"),
             "{backend}: 40 more reads of the same collection changed its store\n{mem}"
+        );
+
+        // Every way OUT of such a loop, and both builders.  `break` leaves
+        // through the epilogue, `return` skips it for the scope exit, a nested
+        // loop holds two scratches at once, and a spatial collection builds
+        // its scratch through a different pair of builders.  The release must
+        // also survive being called twice on the same value, which is what the
+        // emitted IR does — the epilogue's free and the scope exit's free are
+        // adjacent, and the null-assignment meant to separate them is dropped.
+        let exits = run(
+            backend,
+            &scratch(&format!("iter_exits_{tag}")),
+            "exits",
+            false,
+        );
+        assert_eq!(
+            rows(&exits, "census one"),
+            rows(&exits, "census many"),
+            "{backend}: 40 rounds of break / return / nested / spatial / range \
+             changed a store\n{exits}"
         );
 
         // Bound: the same read, in a fresh process each time, against a file
