@@ -56,6 +56,13 @@ pub const MAX_STORE_WORDS: u32 = i32::MAX as u32;
 /// A node needs 4 (left) + 4 (right) + 1 (color) bytes after the 4-byte header = 13 bytes.
 /// Two 8-byte words (16 bytes) comfortably hold these fields.
 const MIN_FREE_TREE: i32 = 2;
+
+/// Smallest size a FILE-BACKED arena is kept at, in words.  [`Store::open`]
+/// lifts anything under it back up to 8192 bytes, so an image written below the
+/// floor — or a shrink past it ([`Store::shrink_to`]) — only buys an immediate
+/// re-grow.  One home for the floor, since three places depend on it.  A heap
+/// store has no floor beyond [`Store::new`]'s two words.
+pub const MIN_BOUND_WORDS: u32 = 1024;
 /// Byte offset of LLRB left-child field within a free block.
 const FL_LEFT: u32 = 4;
 /// Byte offset of LLRB right-child field within a free block.
@@ -419,7 +426,7 @@ impl Store {
     #[cfg(feature = "mmap")]
     pub fn open(path: &str) -> Store {
         let mut file = MmapStorage::open(path).expect("Opening file");
-        let init = if (file.capacity() / 8) < 1024 {
+        let init = if (file.capacity() / 8) < MIN_BOUND_WORDS as usize {
             file.resize(8192).unwrap();
             true
         } else {
@@ -1204,6 +1211,100 @@ impl Store {
             unsafe { self.ptr.add(old_bytes).write_bytes(0, bytes - old_bytes) };
         }
         self.size = size;
+    }
+
+    /// Give the store's tail back: lower the capacity to `words`, keeping every
+    /// claimed record and every position that names one.  Returns whether the
+    /// store actually shrank.  @PLN123 A1.
+    ///
+    /// A sibling of [`Self::resize_store`] rather than a mode of it: that one
+    /// refuses to shrink and must keep refusing — it is the growth path, and
+    /// every caller relies on grow-only.
+    ///
+    /// Safe by construction rather than by reference tracking. Everything above
+    /// the high-water mark is free, and a `DbRef` is a POSITION — `(store_nr,
+    /// rec, pos)`, not a pointer — so no reference can name a word above the
+    /// mark. That argument holds only while the mark is read off the block chain
+    /// itself ([`Self::usage`]), never a cached count, and only when the walk
+    /// reached the store's end (A0: otherwise the mark is a lower bound and a
+    /// live record can sit above it).
+    ///
+    /// Refuses, leaving the store exactly as it was, when:
+    /// - the chain walk did not complete, so the mark cannot be trusted;
+    /// - `words` is below the mark, or at/above the current size (never a
+    ///   growth path — that is `resize_store`'s job);
+    /// - the store is read-only, or borrows another store's buffer (freeing
+    ///   that buffer's tail is not this store's to do);
+    /// - a durable `.dmeta` sidecar is live (F4). The sidecar records the
+    ///   file's byte length and CRC, so truncating behind its back turns a
+    ///   healthy store into a corrupt one at the next `store_durable_check`.
+    ///   Re-sealing instead is possible; refusing is the safe default.
+    #[allow(dead_code)] // @PLN123 A1 lands inert: A3 is what calls it.
+    pub fn shrink_to(&mut self, words: u32) -> bool {
+        if self.read_only || self.borrowed || self.durable_meta_path.is_some() {
+            return false;
+        }
+        let mark = {
+            let u = self.usage();
+            if !u.walk_complete {
+                return false;
+            }
+            u.live_end_words
+        };
+        if words < mark {
+            return false;
+        }
+        // F6 — a file-backed store that lands under the floor is lifted right
+        // back up by `Store::open`, so shrinking past it buys an immediate
+        // re-grow.  A heap store has no such floor: `Store::new` only insists
+        // on two words.
+        let floor = if self.is_file_backed() {
+            MIN_BOUND_WORDS
+        } else {
+            PRIMARY + 1
+        };
+        let words = words.max(floor);
+        if words >= self.size {
+            return false;
+        }
+        let bytes = words as usize * 8;
+        #[cfg(feature = "mmap")]
+        if let Some(f) = &mut self.file {
+            if f.resize(bytes).is_err() {
+                // F3 — a failed truncation leaves the file and the mapping as
+                // they were, so the store simply did not shrink.  Re-derive the
+                // pointer regardless: if the REMAP is what failed there is no
+                // mapping at all, and this is where that has to surface, rather
+                // than in a caller reading through a dangling pointer.
+                self.ptr = std::ptr::addr_of!(f.as_slice()[0]).cast_mut();
+                return false;
+            }
+            self.ptr = std::ptr::addr_of!(f.as_slice()[0]).cast_mut();
+            self.size = words;
+            self.retile_tail(mark);
+            return true;
+        }
+        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+        self.ptr = unsafe { A.realloc(self.ptr, l, bytes) };
+        self.size = words;
+        self.retile_tail(mark);
+        true
+    }
+
+    /// Re-tile the arena after a truncation: whatever free space is left above
+    /// `mark` becomes ONE free block ending exactly at the new size, so the
+    /// chain still partitions the store, and the free tree is rebuilt from that
+    /// chain — F2, because a stale `free_root` still indexes the words that were
+    /// just cut and would hand one of them out.
+    fn retile_tail(&mut self, mark: u32) {
+        let tail = mark.max(PRIMARY);
+        if tail < self.size {
+            *self.addr_mut(tail, 0) = -((self.size - tail) as i32);
+        }
+        self.fl_rebuild();
+        // The same reason `resize` bumps it: a suspended coroutine holding a
+        // DbRef has to be able to notice that the arena moved.
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Lock this store against writes. Any subsequent call to `addr_mut` panics.
@@ -3204,6 +3305,139 @@ mod tests {
             "record C is above the mark, so shrinking to it would cut C — \
              which is why acting on the mark requires walk_complete"
         );
+    }
+
+    /// @PLN123 A1 — `shrink_to` gives the tail back and keeps everything below
+    /// the mark: the records still read their values, the chain still tiles the
+    /// (smaller) store, and the free tree no longer indexes the words that were
+    /// cut.  Shrinking to the mark EXACTLY is the boundary case — no free block
+    /// is left at all.
+    #[test]
+    fn shrink_to_the_mark_keeps_every_record() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let a = store.claim(5);
+        let b = store.claim(5);
+        let c = store.claim(5);
+        *store.addr_mut::<i64>(a, 8) = 0x1111;
+        *store.addr_mut::<i64>(b, 8) = 0x2222;
+        *store.addr_mut::<i64>(c, 8) = 0x3333;
+        store.delete(c);
+
+        let mark = store.usage().live_end_words;
+        assert_eq!(mark, c, "the mark falls back to where C began");
+        let before = store.len();
+        assert!(
+            store.shrink_to(mark),
+            "the tail above the mark is free by construction"
+        );
+        assert_eq!(store.len(), mark, "capacity is now the mark");
+        assert!(before > mark, "the store really was bigger");
+
+        assert_eq!(
+            *store.addr::<i64>(a, 8),
+            0x1111,
+            "A survives the truncation"
+        );
+        assert_eq!(
+            *store.addr::<i64>(b, 8),
+            0x2222,
+            "B survives the truncation"
+        );
+        let after = store.usage();
+        assert!(
+            after.walk_complete,
+            "the chain still tiles the smaller store"
+        );
+        assert_eq!(after.claimed_words, 10, "A and B, nothing else");
+        assert_eq!(
+            after.free_words, 0,
+            "shrinking to the mark leaves no free space"
+        );
+        store.validate(0);
+        #[cfg(debug_assertions)]
+        store.fl_validate();
+
+        // The store is still usable: with no free space left, the next claim
+        // grows it again rather than handing out a word that was just cut.
+        let grown = store.claim(4);
+        assert!(
+            grown >= mark,
+            "the new record starts at or above the old mark"
+        );
+        assert_eq!(*store.addr::<i64>(b, 8), 0x2222, "and B is still B");
+    }
+
+    /// @PLN123 A1 — shrinking to somewhere ABOVE the mark leaves a free tail,
+    /// which has to become one block ending exactly at the new size and be
+    /// re-indexed (F2).  A stale `free_root` would still name the cut words; a
+    /// missing one would strand the leftover, so the proof is that the next
+    /// claim REUSES it instead of growing the store.
+    #[test]
+    fn shrink_to_above_the_mark_leaves_a_usable_free_tail() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let _a = store.claim(5);
+        let b = store.claim(5);
+        store.delete(b);
+
+        let mark = store.usage().live_end_words;
+        assert!(
+            store.shrink_to(mark + 4),
+            "4 words of tail is a shrink from 64"
+        );
+        assert_eq!(store.len(), mark + 4);
+        let u = store.usage();
+        assert!(
+            u.walk_complete,
+            "the rewritten tail block ends at the new size"
+        );
+        assert_eq!(
+            u.free_count, 1,
+            "the tail is ONE block, however many it was"
+        );
+        assert_eq!(u.free_words, 4);
+        #[cfg(debug_assertions)]
+        store.fl_validate();
+
+        let cap = store.len();
+        let reused = store.claim(3);
+        assert_eq!(store.len(), cap, "the leftover tail is in the free tree");
+        assert_eq!(reused, mark, "and the claim came out of it");
+    }
+
+    /// @PLN123 A1 — the refusals, each leaving the store byte-identical.  A
+    /// shrink below the mark would cut a live record; a "shrink" to more than
+    /// the current size is a growth request, which is `resize_store`'s job and
+    /// not something this path may quietly perform.
+    #[test]
+    fn shrink_to_refuses_anything_that_would_cut_or_grow() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let _a = store.claim(5);
+        let b = store.claim(5);
+        *store.addr_mut::<i64>(b, 8) = 0x2222;
+        let before = store.len();
+        let mark = store.usage().live_end_words;
+
+        assert!(
+            !store.shrink_to(mark - 1),
+            "one word below the mark cuts into B"
+        );
+        assert!(!store.shrink_to(0), "and so does zero");
+        assert!(!store.shrink_to(before), "the current size is not a shrink");
+        assert!(!store.shrink_to(before + 10), "nor is a bigger one");
+        assert_eq!(store.len(), before, "every refusal left the capacity alone");
+        assert_eq!(*store.addr::<i64>(b, 8), 0x2222, "and B untouched");
+
+        // A0's gate: a chain the walk cannot follow makes the mark a lower
+        // bound, and shrinking to a lower bound is what cuts live data.
+        *store.addr_mut::<i32>(b, 0) = 0;
+        assert!(
+            !store.shrink_to(before - 1),
+            "an incomplete walk must refuse, whatever the mark says"
+        );
+        assert_eq!(store.len(), before);
     }
 
     /// @PLN123 A0 — non-vacuity for the mark-vs-capacity assertion.  It is a
