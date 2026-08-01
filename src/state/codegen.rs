@@ -1843,10 +1843,31 @@ impl State {
             // `for … { ns = list_dir(d) ?? [] }` leaked exactly (iterations - 1)
             // stores.  Empty deps is loft's owned-vs-borrowed convention, so a view
             // (`vv[i]`, a `??` result naming its owner) still takes no free here.
+            // loft#723 — empty deps is only a PROXY for ownership, and it reads
+            // "owned" for a borrow whose dep list was never populated.  A `??`
+            // subject of Reference type is exactly that: the parser materialises
+            // it into `__ncc_N` and marks it `skip_free` — the carried fact that
+            // says its store belongs to someone else — while its type keeps empty
+            // deps.  `skip_free`'s whole contract is "never emit `OpFreeRef` for
+            // this var", so it must veto the proxy here rather than only at the
+            // scope-exit sweep that `get_free_vars` runs.
+            //
+            // Consulting it only there left the unconditional pre-Set free below
+            // reachable, and in a LOOP that free lands on the NEXT iteration's
+            // store: `for … { e = f().items[0] ?? P {} }` freed the subject at the
+            // body exit, `f()` reallocated the same slot, and the pre-Set free then
+            // released that live store before the element read — silent stale bytes
+            // without `LOFT_POISON`, SIGSEGV with it.  The @PLN118 sentinel reset
+            // cannot cover it: that reset hangs off a block-exit free, which a
+            // `skip_free` var by definition does not have.
+            //
+            // An OWNED Vector `??` subject is unaffected — the parser marks that one
+            // `inline_ref`, not `skip_free`, precisely so it keeps the loft#615 free.
             let owned_ref = matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
             ) && stack.function.tp(v).depend().is_empty()
+                && !stack.function.is_skip_free(v)
                 && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing
             // container's backing store (a vector element / nested field), so
