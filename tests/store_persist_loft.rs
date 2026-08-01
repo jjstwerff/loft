@@ -2048,6 +2048,120 @@ fn persisted_image_keeps_its_slack_after_store_reclaim() {
     }
 }
 
+/// @PLN123 F4/F6 — the two refusals that shipped without a test.
+///
+/// A durable `.dmeta` sidecar records the main file's byte LENGTH and CRC, so
+/// shortening it (`store_reclaim`) or rewriting it (compaction at load) turns a
+/// healthy store into a corrupt one at the next `store_durable_check`. The plan
+/// wrote that down as F4 and STDLIB.md already promised the refusal — but the
+/// guard asked `durable_meta_path.is_some()`, which only `Store::open_durable`
+/// sets, and **no loft program can reach that entry point**. The loft surface is
+/// path-based (`store_durable_seal(path)`), so the reachable hazard was entirely
+/// unguarded: seal, reclaim, and a healthy store reported CORRUPT (measured,
+/// 156,344 → 138,976 bytes, check true → false). A guard on *how you got here*
+/// cannot see a fact about *what is on disk*.
+///
+/// So the assertions are about the contract, not the mechanism: a sealed store
+/// must come through `store_reclaim` and a re-bind unchanged and still check
+/// clean, an unsealed one must still be reclaimable (or the "fix" is just a
+/// disable), and each refusal must name itself.
+#[test]
+fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
+    let script = workspace_root().join("tests/scripts/store_reclaim_refusals.loft");
+    let run = |backend: &str, dir: &Path, mode: &str, seal: bool, n: &str| -> String {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("r.store"))
+            .env("MODE", mode)
+            .env("SEAL", if seal { "1" } else { "0" })
+            .env("N", n)
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} mode={mode} seal={seal}: {stdout}\n{stderr}"
+        );
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, line: &str, key: &str| -> String {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].to_string()
+    };
+    let num = |out: &str, line: &str, key: &str| -> i64 {
+        field(out, line, key).parse().expect("number")
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+
+        // F4 — `store_reclaim` on a SEALED store.
+        let dir = scratch(&format!("f4_{tag}"));
+        let sealed = run(backend, &dir, "", true, "3000");
+        assert_eq!(field(&sealed, "seal", "check_before"), "true", "{sealed}");
+        assert_eq!(
+            num(&sealed, "seal", "freed"),
+            0,
+            "{backend}: a sealed store must not be truncated:\n{sealed}"
+        );
+        assert_eq!(
+            num(&sealed, "seal", "after"),
+            num(&sealed, "seal", "before"),
+            "{backend}: and its file must be byte-length identical:\n{sealed}"
+        );
+        assert_eq!(
+            field(&sealed, "seal", "check_after"),
+            "true",
+            "{backend}: the seal must still validate — the whole point of F4 is \
+             that a healthy store never reports corrupt:\n{sealed}"
+        );
+
+        // CONTROL — without the sidecar, reclaim must still do its job.  A
+        // refusal that fires everywhere is just the feature turned off.
+        let dir = scratch(&format!("f4ctl_{tag}"));
+        let plain = run(backend, &dir, "", false, "3000");
+        assert!(
+            num(&plain, "seal", "freed") > 0
+                && num(&plain, "seal", "after") < num(&plain, "seal", "before"),
+            "{backend}: an unsealed store must still be reclaimable:\n{plain}"
+        );
+
+        // F4 at LOAD — compaction rewrites the whole image, same hazard.
+        let dir = scratch(&format!("f4load_{tag}"));
+        let wrote = run(backend, &dir, "", true, "3000");
+        let reload = run(backend, &dir, "reload", true, "3000");
+        assert!(
+            reload.contains("not compacted") && reload.contains("durable sidecar"),
+            "{backend}: compaction must decline a store with a live sidecar, \
+             and say so:\n{reload}"
+        );
+        assert_eq!(
+            num(&reload, "rebound", "bytes"),
+            num(&wrote, "seal", "after"),
+            "{backend}: and leave the file alone:\n{reload}"
+        );
+
+        // F6 — a store at the image floor has nothing to give.
+        let dir = scratch(&format!("f6_{tag}"));
+        run(backend, &dir, "", false, "40");
+        let tiny = run(backend, &dir, "reload", false, "40");
+        assert!(
+            tiny.contains("not compacted") && tiny.contains("image floor"),
+            "{backend}: a floor-sized store must be declined before any rebuild \
+             — a bound image is padded up to the floor regardless:\n{tiny}"
+        );
+    }
+}
+
 /// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.
 ///
 /// A hash's seed is drawn at random (the P253 hash-DoS defense) and stored in

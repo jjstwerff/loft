@@ -44,7 +44,7 @@ data satisfies every size assertion anyone would write.
 | F1 | A `DbRef` names a word above the new capacity | Impossible under invariant A — but ASSERT it (step A0), because "impossible" is the claim being made |
 | F2 | The free tree still holds the truncated tail block | `fl_rebuild` **after** every shrink. A stale `free_root` hands out a block past the end |
 | F3 | `set_len` down succeeds, the remap fails | `MmapStorage::resize` already restores the old mapping on error and returns `Err`; the caller must treat `Err` as "did not shrink" and leave `self.size` alone |
-| F4 | The `.dmeta` durable sidecar records byte length + CRC | Truncation invalidates it. Refuse to shrink a store with a live sidecar, or re-seal — decide in A3, do not silently break `store_durable_check` |
+| F4 | The `.dmeta` durable sidecar records byte length + CRC | **Refuse** — decided in A3, and the guard had to be rewritten: it first asked `durable_meta_path.is_some()`, set only by `Store::open_durable`, which NO loft program reaches. The loft surface is path-based (`store_durable_seal(path)`), so the reachable hazard was unguarded — seal, `store_reclaim`, and a healthy store read CORRUPT (156,344 → 138,976, check true → false). It now asks whether a sidecar sits beside the store's FILE. Covered by `reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one` |
 | F5 | Another process has the file mapped | Out of scope: shrink only a store this process owns and has bound. Write it down rather than discovering it |
 | F6 | Shrinking below `bind_path`'s 1024-word floor | Clamp; `Store::open` resizes anything smaller to 8192 bytes anyway |
 | F7 | The store keeps growing after a shrink | It re-grows at 7/3. Acceptable, but measure the churn: a threshold that fires every free would thrash |
@@ -694,6 +694,22 @@ the digest unchanged in every one.
 A no-output cell is vacuous: assert the digest AND the file size AND
 `fl_validate()`, and prove the harness can fail by running it against a build with
 the gate off.
+
+**The `durability` and `size` cells were the last two open, and they were open in
+the worst way: the refusals were implemented, documented as shipped behaviour,
+and untested.** One of them did not work at all (F4, above). Both are now covered
+by `reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one`, which
+falsifies — restoring the old F4 subject, or removing the F6 floor, each fails
+it. Carrying a refusal without a positive control is how a guard gets to look
+like a feature.
+
+**Found while testing it, pre-existing and not fixed:** *reading* a bound
+collection invalidates its durable seal. A bare re-bind keeps `store_durable_check`
+true; ONE traversal makes it false with the file LENGTH unchanged, because the
+key-sorted snapshot is claimed inside the store and changes its bytes. So a
+program that seals, then reads, then checks, sees corruption in a store nothing
+wrote to. Worth its own look — it is the same snapshot-in-a-bound-store behaviour
+that inflated two measurements in this plan.
 
 ## See also
 

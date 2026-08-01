@@ -85,6 +85,15 @@ let store = Store::open_durable(
 existing file."  After the callback returns successfully, `open_durable`
 captures a fresh sidecar and retries once.
 
+**Reading a bound collection invalidates its seal.** Iterating a keyed collection
+materialises a key-sorted snapshot, and for a collection bound with
+`store_persist_bind` that snapshot is claimed INSIDE the store — so the file's
+bytes change and the sidecar's CRC no longer matches, with the file LENGTH
+unchanged. Measured: a bare re-bind keeps `store_durable_check` true; one
+traversal makes it false. Seal AFTER the reads you intend to do, not before.
+(`store_reclaim` and compaction both refuse outright on a store with a live
+sidecar, so those cannot surprise you the same way.)
+
 **Drop-on-panic is by design.**  A panic between open and clean drop
 skips the sidecar write → next open detects corruption → callback fires.
 This is what makes Tier 1 cheap.  Do not use Tier 1 for data that cannot

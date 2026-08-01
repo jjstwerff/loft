@@ -249,6 +249,18 @@ pub struct Store {
     /// `doc/claude/plans/43-loft-store-durable/`.
     #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
     durable_meta_path: Option<std::path::PathBuf>,
+    /// Where this store's FILE lives, for a store mapped by [`Store::open`].
+    ///
+    /// Distinct from `durable_meta_path`, which records that the store was
+    /// opened through the durable API — a Rust entry point no loft program
+    /// reaches.  The loft-level durability surface is path-based
+    /// (`store_durable_seal(path)` / `store_durable_check(path)`), so a store
+    /// can have a live `.dmeta` sidecar beside it while `durable_meta_path` is
+    /// `None`.  Anything that must ask "is a sidecar recording MY bytes" has to
+    /// ask about the file, not about how the store was opened
+    /// ([`Self::has_durable_sidecar`]).
+    #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
+    file_path: Option<std::path::PathBuf>,
     /// @PLAN38 phase 01 — durability-mode tier on this store.  Tracks
     /// which durability variant the consumer opted into so the Drop
     /// path can apply tier-specific shutdown logic.  `0` for non-durable
@@ -375,6 +387,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
@@ -444,6 +457,8 @@ impl Store {
         let ptr = std::ptr::addr_of!(file.as_slice()[0]).cast_mut();
         let mut store = Store {
             file: Some(file),
+            // Recorded so the store can answer "is a `.dmeta` sidecar recording
+            // MY bytes" — see `has_durable_sidecar`.
             ptr,
             claims: HashSet::new(),
             size,
@@ -467,6 +482,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: Some(std::path::PathBuf::from(path)),
             durable_tier: 0,
         };
         if init {
@@ -537,6 +553,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         };
         #[cfg(debug_assertions)]
@@ -627,6 +644,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         };
         // @PLN97 arc G Phase 2 — fail-closed structural validation of an
@@ -1395,11 +1413,26 @@ impl Store {
     /// operation that rewrites or shortens the file behind its back turns a
     /// healthy store into a corrupt one at the next `store_durable_check`.
     /// Both [`Self::shrink_to`] and @PLN123's compaction refuse on it.
+    ///
+    /// It asks about the FILE, not about how the store was opened, and the
+    /// difference is the whole point.  The first version tested
+    /// `durable_meta_path.is_some()` — set only by `Store::open_durable`, a Rust
+    /// entry point **no loft program can reach**.  Meanwhile the loft-level
+    /// surface is path-based (`store_durable_seal(path)`), so the reachable
+    /// hazard was entirely unguarded: seal, then `store_reclaim`, and
+    /// `store_durable_check` reported a perfectly healthy store as CORRUPT
+    /// (measured: 156,344 -> 138,976 bytes, check true -> false).  A guard on
+    /// how you got here cannot see a fact about what is on disk.
     #[must_use]
     pub fn has_durable_sidecar(&self) -> bool {
         #[cfg(feature = "mmap")]
         {
-            self.durable_meta_path.is_some()
+            if self.durable_meta_path.is_some() {
+                return true;
+            }
+            self.file_path
+                .as_deref()
+                .is_some_and(|p| dmeta_path(p).exists())
         }
         #[cfg(not(feature = "mmap"))]
         {
@@ -1440,6 +1473,7 @@ impl Store {
             lock_origin: "clone_locked".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         }
     }
@@ -1477,6 +1511,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: self.known_type,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         }
     }
@@ -1510,6 +1545,7 @@ impl Store {
             lock_origin: "borrow_locked_for_light_worker".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         }
     }
