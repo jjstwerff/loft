@@ -26,11 +26,13 @@ struct Rec { const id: integer, const n: integer, const label: text }
 struct Pt { const id: integer, const x: integer, const y: integer }
 struct Sub { const k: integer, const tag: text }
 struct Holder { const id: integer, const name: text, const parts: vector<Sub> }
-// NOT covered: the `ordered<T>` secondary shape (@P309), which needs a struct
-// declaring BOTH a `sorted<Rec[..]>` and an `index<Rec[..]>` field.  Merely
-// DECLARING that struct hangs the interpreter and miscompiles on --native
-// (loft#719, pre-existing on the released binary), so the cell cannot be built
-// at all — it is not that compaction fails there, it is that the shape does.
+// The `ordered<T>` secondary shape (@P309) needs a struct declaring BOTH a
+// `sorted<Rec[..]>` and an `index<Rec[..]>` field.  That cell could not be built
+// at all while merely DECLARING such a struct hung the interpreter and
+// miscompiled on --native — it was not that compaction failed there, it was that
+// the shape did.  loft#719 fixed it, so `Both` below is declared and the `sorted`
+// cell now carries the secondary alongside it.
+struct Both { const by_key: sorted<Rec[id]>, const by_n: index<Rec[n, -id]> }
 
 fn h_rec(id: integer, n: integer, label: text) -> integer {
   h = (7 * 131 + id) % 1000000007;

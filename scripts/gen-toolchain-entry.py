@@ -185,7 +185,15 @@ def splice(index_path: pathlib.Path, entry: dict, ver: str) -> None:
         entry["yanked"] = existing.get("yanked", [])
     packages["loft"] = entry
     index["updated"] = entry["versions"][ver]["published"]
-    index_path.write_text(json.dumps(index, indent=2) + "\n")
+    # `ensure_ascii=False`, because this file gets SIGNED after a human reads the
+    # diff.  Python's default escapes every non-ASCII character, and the registry
+    # index is full of them -- em dashes in package descriptions and API docs.  The
+    # default rewrote all 33 other packages into `\uXXXX` and turned a one-package
+    # addition into a 533-line diff: semantically identical, and unreviewable, which
+    # for the one artifact whose trust root IS the maintainer's look at what changed
+    # is the property that matters.  Round-trips byte-identically now, so the diff
+    # is the entry and nothing else.
+    index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n")
     kept = len(entry["versions"]) - 1
     print(f"spliced loft {ver} into {index_path} ({kept} earlier version(s) kept)")
 

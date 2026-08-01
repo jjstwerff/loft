@@ -532,7 +532,17 @@ fn a_foreign_context_artifact_is_rejected_not_adopted() {
             .map(|rd| {
                 rd.flatten()
                     .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|e| e == "so" || e == "dylib"))
+                    // `.dll` too — Windows names an auto-built cdylib `<stem>.dll`
+                    // (`native_lib.rs::cdylib_file_name`), so a filter of just
+                    // `so`/`dylib` counts ZERO there and the artifact assertions below
+                    // read as "nothing was built".  `cdylib_present` above already
+                    // spells all three out, and `n3_parity.rs` filters on all three;
+                    // only this closure was short.  The import-library sidecar
+                    // (`<stem>.dll.lib`) has extension `lib`, so it is not counted twice.
+                    .filter(|p| {
+                        p.extension()
+                            .is_some_and(|e| e == "so" || e == "dylib" || e == "dll")
+                    })
                     .collect()
             })
             .unwrap_or_default();

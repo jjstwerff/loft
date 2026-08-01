@@ -395,6 +395,16 @@ the version artifact is a `git archive` zip, not a `loft package` tarball.  Gate
 verifies every `binaries` hash by download, so the exemption does not leave the
 binaries — the things users actually run — unchecked.
 
+> **Both landed in [loft-lang/registry#22](https://github.com/loft-lang/registry/pull/22),
+> and until it merges neither exists.**  This paragraph described them as current
+> from the day it was written; the live validator had no toolchain case at all —
+> gate 3 skipped only a package with no `homepage`, and the toolchain has one — so
+> the first real submission (2026.8.0) failed on `` `loft package` failed: exit
+> status 1 ``.  Gate 2b was missing too, which is the half that matters: exempting
+> gate 3 on its own would have let four unverified platform zips into the signed
+> index.  Written down because a doc that describes a gate as existing is the one
+> thing that stops anyone checking whether it does.
+
 **Which release.**  The first entry names a release carrying `loft-<v>-src.zip`.
 Published releases are immutable, so v2026.7.2 and earlier can never gain one.
 
