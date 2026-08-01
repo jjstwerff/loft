@@ -1389,9 +1389,7 @@ pub fn cached_or_build_shared_cdylib(
     export_set: &HashSet<u32>,
     pkg_dir: &str,
 ) -> Result<Option<std::path::PathBuf>, String> {
-    let stem = auto_cdylib_stem(pkg_dir);
     let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
-    let so = out_dir.join(platform_cdylib_name(&stem));
     // #461 — the generated cdylib hardcodes type-table INDICES (e.g. `OpWriteFile`'s
     // `db_tp`), but those indices SHIFT with which libraries are loaded (an `i32`
     // write is `db_tp=64` standalone, `67` once `hex_grid` is parsed).  At runtime
@@ -1405,12 +1403,28 @@ pub fn cached_or_build_shared_cdylib(
         crate::cache::loft_build_fingerprint(),
         type_layout_fingerprint(stores),
     );
+    // loft#715 — and put that key in the artifact's NAME, so two contexts can
+    // never name the same file.  The fingerprint alone was not enough: the fast
+    // path below reads `so.exists()` and the sidecar WITHOUT the build lock, so a
+    // process whose context still matched the stamped fp could take the path
+    // while another process, mid-build for a DIFFERENT table, renamed its own
+    // artifact over it.  The publish is atomic, so the reader never saw a torn
+    // file — it saw a COMPLETE library built for someone else's type indices, and
+    // a garbage index reaching `Stores::add` aborts the process with "Cannot add
+    // to none-structure" (a non-unwinding panic: the whole run dies).  It needed
+    // two overlapping processes to show, which is why it read as 1 start in 12.
+    //
+    // Content-addressing removes the class rather than narrowing the window: a
+    // context only ever opens its own file, lock or no lock.
+    let stem = format!("{}_{fp:016x}", auto_cdylib_stem(pkg_dir));
+    let so = out_dir.join(platform_cdylib_name(&stem));
 
-    // 1. Fresh artifact → native, no hashing.
-    if so.exists()
-        && crate::cache::native_artifact_fingerprint_matches(&out_dir, fp)
-        && !source_newer_than(pkg_dir, &so)
-    {
+    // 1. Fresh artifact → native, no hashing.  The FILENAME carries `fp`, so its
+    // existence is the fingerprint match — the shared `.loft-build-fp` sidecar is
+    // per-DIRECTORY and two contexts would otherwise invalidate each other's
+    // stamp on every run, rebuilding forever (loft#715).  The sidecar is still
+    // written below for the readers that report it.
+    if so.exists() && !source_newer_than(pkg_dir, &so) {
         return Ok(Some(so));
     }
 
@@ -1427,10 +1441,7 @@ pub fn cached_or_build_shared_cdylib(
         .map_err(|e| format!("create {}: {e}", lock_path.display()))?;
     lock.lock()
         .map_err(|e| format!("lock {}: {e}", lock_path.display()))?;
-    if so.exists()
-        && crate::cache::native_artifact_fingerprint_matches(&out_dir, fp)
-        && !source_newer_than(pkg_dir, &so)
-    {
+    if so.exists() && !source_newer_than(pkg_dir, &so) {
         return Ok(Some(so));
     }
 
@@ -1441,7 +1452,7 @@ pub fn cached_or_build_shared_cdylib(
     };
 
     // 2. No artifact yet, or `loft` changed → build eagerly (native from the start).
-    if !so.exists() || !crate::cache::native_artifact_fingerprint_matches(&out_dir, fp) {
+    if !so.exists() {
         crate::cache::write_run_source_hash(&out_dir, source_content_hash(pkg_dir));
         return build(&out_dir);
     }

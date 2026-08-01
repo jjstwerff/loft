@@ -211,18 +211,28 @@ Operations on `vector<T>` — the primary ordered collection type.
 | `len(v: vector) -> integer` | Number of elements in the vector. Use in loop bounds: `for i in 0..v.len()`. |
 | `reserve(v: vector, n: integer)` | Give `v` room for `n` elements so filling it does not repeatedly reallocate. Changes capacity only — never `len(v)`, its contents, or anything holding it — and an `n` at or below the current capacity does nothing. |
 
-**When `reserve` is worth it.** Appending grows a vector by doubling, so filling
-one of N costs about log N reallocations, each claiming a fresh block and
-orphaning the old one, and leaves the last block up to twice the length. That is
-invisible for a handful of vectors. It stops being invisible when *many* grow at
-once — a streaming generator appending each incoming item to whichever collection
-owns it — because the block after any one vector is then another vector, so the
-grow can never extend in place and every step copies.
+**When `reserve` is worth it — it is the INTERLEAVING that decides, not the
+number of vectors.** Appending grows a vector by doubling, so filling one of N
+costs about log N reallocations, each claiming a fresh block and orphaning the
+old one, and leaves the last block up to twice the length. A grow can extend in
+place when the block after it is free, so what costs is how often growth
+*alternates* between vectors: alternate on every element and no grow ever extends
+in place, so every step copies.
 
-That cost is also *persisted*: a store written with `store_persist_bind` carries
-the claimed capacity, not the length. Reserving the counts up front on a
-125-record × 2312-coordinate store took the file from 3,816,152 to 2,609,736
-bytes — from 1.65× its payload to 1.13× — for identical data (loft#710).
+Many vectors growing at once is not enough on its own. Fed by sorted or
+spatially-coherent input, each vector grows in long runs and rarely reallocates
+against a neighbour, and there is little overshoot to reclaim — `reserve` then
+costs a counting pass and buys nothing. Measured by the consumer that asked for
+it (loft#710): a synthetic generator switching collection on *every* element went
+3,816,152 → 2,609,808 bytes (−31.6%), while their real OSM generator — which
+switches tile only **3.8%** of the time, because the input arrives in roughly
+spatial order — moved +0.7%, inside its own run-to-run noise.
+
+So reach for it when growth genuinely interleaves; measure before keeping it when
+your input is ordered. The cost it removes is also *persisted*: a store written
+with `store_persist_bind` carries the claimed capacity, not the length, so on the
+interleaved shape the file went from 1.65× its payload to 1.13× for identical
+data.
 
 ```loft
 for tile in tiles { reserve(tile.points, expected_count(tile)); }
@@ -417,19 +427,23 @@ filesystem).
 |----------|-------------|
 | `file(path: text) -> File` | Opens the file at `path` and returns a `File` handle. |
 
-**A relative path stays inside the project.** `../` that steps above the
-directory the path starts from is not reachable, and *every* file operation says
-so the same way: `file()` reports `NotExists`, `f.size` reports no size,
-`content()` / `read_bytes` / `list_dir` read as absent, and a write — `f.write`,
-`f += …`, `write_bytes`, `set_file_size` — fails rather than creating the file.
-An **absolute** path is a different question and is not restricted; build one
-with `directory()` or `user_directory()` when a program genuinely writes outside
-its own tree.
+**A relative path resolves against the program's own directory** (#255 / @PLN9),
+so `../data.txt` names the file above the script — the same file its absolute
+form names, and it answers the same either way. There is no path-shape filter:
+`..` is resolved, not inspected.
 
-The write half used to escape this rule, which lost data quietly: `file("../log")`
-reported the file absent, so `f#next = f.size` read 0, and the documented append
-idiom below then overwrote from byte 0 while `f += …` really did write there
-(loft#708). A refused write is now observable — check `f.write(s).ok()`.
+That is a change (loft#712). A lexical filter used to refuse any relative path
+containing `..`, and reported the refusal as a **null size** — indistinguishable
+from a missing or empty file, so a reader doing `if f#size < HEADER` turned it
+into "the file is truncated" and reported a *data* error for what was a *path*
+decision. It was not containment either: the same bytes by absolute path were
+served, and a `..` that normalised back inside the root was refused too. loft has
+no filesystem sandbox — admission is decided at load time and carries no runtime
+checks ([SANDBOX.md](SANDBOX.md)) — so the resolved path is the whole answer and
+the filesystem gives it.
+
+If a program must not reach outside a directory, check that yourself before the
+call; the stdlib does not, and did not meaningfully do so before.
 
 ### Reading Text Files
 
@@ -540,7 +554,7 @@ Mutating filesystem operations return a `FileResult` enum:
 | Variant | Meaning |
 |---------|---------|
 | `FileResult.Ok` | Operation succeeded. |
-| `FileResult.NotFound` | Path does not exist or is outside the project directory. |
+| `FileResult.NotFound` | Path does not exist. |
 | `FileResult.PermissionDenied` | OS permission denied. |
 | `FileResult.IsDirectory` | A file operation targeted a directory (e.g. `delete()` on a directory). |
 | `FileResult.Other` | Any other OS error. |
@@ -552,10 +566,10 @@ loft-level existence check.
 | Function | Description |
 |----------|-------------|
 | `ok(self: FileResult) -> boolean` | Returns `true` if `Ok`. |
-| `exists(path: text) -> boolean` | Returns `true` if the path exists and is inside the project. |
+| `exists(path: text) -> boolean` | Returns `true` if the path exists. |
 | `exists(both: File) -> boolean` | Method form: `f.exists()` or `exists(f)`. Uses `both` parameter. |
 | `delete(path: text) -> FileResult` | Removes a file. |
-| `move(from: text, to: text) -> FileResult` | Renames or relocates a file within the project. |
+| `move(from: text, to: text) -> FileResult` | Renames or relocates a file. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
 | `is_dir(path: text) -> boolean` | Returns `true` if the path exists and is a directory. |
@@ -977,7 +991,21 @@ Functions for interacting with the host operating system.
 
 | Function | Description |
 |----------|-------------|
-| `store_memory() -> text` | Returns a multi-line snapshot of all LIVE heap stores' internal utilisation — total capacity vs actual claimed data vs free space, record + free-block counts, **mergeable adjacent-free pairs** (free neighbours that should have coalesced), and the largest stores by capacity with their type name and creation site (`bc:<pos>` — a bytecode position on the interpreter, mapping to source via `LOFT_LOG=static`; `0` on `--native`). Use to watch memory growth / fragmentation in a running program. See also `LOFT_STORES=log\|warn` (alloc/free trace). |
+| `store_memory() -> text` | Returns a multi-line snapshot of all LIVE heap stores' internal utilisation — total capacity vs actual claimed data vs free space, record + free-block counts, **mergeable adjacent-free pairs** (free neighbours that should have coalesced), **`tail%` / `inner%`** (see below), and the largest stores by capacity with their type name and creation site (`bc:<pos>` — a bytecode position on the interpreter, mapping to source via `LOFT_LOG=static`; `0` on `--native`). Use to watch memory growth / fragmentation in a running program. See also `LOFT_STORES=log\|warn` (alloc/free trace). |
+
+**`tail%` and `inner%` say WHERE a store's free space sits**, which is the
+difference between free space you get back and free space you do not.
+
+- **`tail`** — above the last record. A persisted store already ends at the last
+  record, so this never reaches the file.
+- **`inner`** — between records. It is reusable for future allocation, but it
+  *is* written to the file, because the image has to span up to the last record.
+
+A store built once reads `inner 0%`. One whose live set fell well below its peak
+reads a high `inner` — 71% in the case behind loft#713 — and that is the part
+only relocation could recover. Coalescing does not touch it: forcing a sweep took
+2,700 free blocks to 6 and left `inner` unchanged at 45%, because merging free
+blocks never moves a live one.
 
 ---
 

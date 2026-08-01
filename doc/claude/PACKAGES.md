@@ -234,6 +234,27 @@ Resolution:
 5. Parse `utils/src/utils.loft`
 6. All types and functions from `utils` and `math` are now available
 
+**A manifest dependency is pulled in from the file that named the package.**
+Loading a library REPLACES the lexer's source; the file it switched away from
+resumes later off `todo_files`. That is safe for a `use`, which always switches
+away from the very file it appears in — but a `[dependencies]` entry is queued
+when the manifest is read and drained by the same use-region loop, so it has to
+wait until the lexer is back on that same file.
+
+Draining it anywhere else is what loft#714 was: a dep got pulled in while the
+lexer sat inside an unrelated library whose definitions had not been parsed yet.
+That library was already marked loaded, so every later `use` of it was a no-op
+against an empty library, and the failure landed **inside valid library code** —
+`Unknown variable` on a tuple destructure, or `Expect token ;` on a tuple field,
+because a tuple is the construct that needs the callee's return type at parse
+time. Nothing in either message named resolution. It took two manifest
+dependencies whose graphs meet; one alone never showed it.
+
+`LOFT_LIB_ORDER=1` prints every library switch as it happens
+(`[liborder] switch <from> -> <to>`) — the fastest way to see an order like
+`hex_field.loft -> hex_draw.loft`, where the target is not a dependency of the
+source at all. Guard: `tests/package_layout.rs::pkg_deps_resolve_before_the_dependent_is_parsed`.
+
 ### Diamond dependencies
 
 When two packages depend on the same package:

@@ -1,0 +1,5 @@
+// loft#714 — the shared leaf.  Its function returns a TUPLE, so a consumer
+// parsed while this library is only half-loaded cannot destructure the result:
+// that is the shape that turned a resolution-order bug into `Unknown variable`
+// inside a published library.
+pub fn c_pair(n: integer) -> (integer, integer) { (n, n + 1) }

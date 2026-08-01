@@ -303,8 +303,10 @@ pub struct Parser {
     /// functions are identified by `def.position().file.starts_with(pkg_dir)`.
     pub pending_native_compile: Vec<String>,
     /// PKG.3: package dependencies discovered during manifest reading.
-    /// Each entry is (name, dir) — sibling packages are searched in `dir`.
-    pending_pkg_deps: Vec<(String, String)>,
+    /// Each entry is (name, dir, queued-from file) — sibling packages are
+    /// searched in `dir`, and the dep is only pulled in while the lexer is back
+    /// on the file that named the package (loft#714).
+    pending_pkg_deps: Vec<(String, String, String)>,
     /// Auto-`use` per-file scan cache: a file's `(lib:: refs, .method() calls)`
     /// are deterministic, so it is read + scanned at most once (keyed by path)
     /// and reused across the second pass and any `todo_files` re-parse.
@@ -5620,6 +5622,13 @@ impl Parser {
     /// them and an edited library keeps executing from the stale
     /// cached program.
     fn switch_to_dep(&mut self, f: &str) {
+        if std::env::var("LOFT_LIB_ORDER").is_ok() {
+            eprintln!(
+                "[liborder] switch {} -> {}",
+                self.lexer.pos().file,
+                f.rsplit('/').next().unwrap_or(f)
+            );
+        }
         if self.track_sources && !self.parsed_sources.iter().any(|s| s == f) {
             self.parsed_sources.push(f.to_string());
         }
@@ -7721,31 +7730,55 @@ impl Parser {
             }
             // PKG.3: load transitive dependencies discovered during manifest reading.
             // Dependencies are queued by lib_path_manifest when it reads [dependencies].
-            while !self.pending_pkg_deps.is_empty() {
-                let deps = std::mem::take(&mut self.pending_pkg_deps);
-                for (dep_id, parent_dir) in deps {
-                    if self.data.use_exists(&dep_id) {
-                        continue;
-                    }
-                    // First try the sibling package directory (same parent as the
-                    // depending package), then fall back to the normal lib_path search.
-                    let f = if let Some(entry) = self.lib_path_manifest(&parent_dir, &dep_id) {
-                        entry
-                    } else {
-                        self.lib_path(&dep_id)
-                    };
-                    if std::path::Path::new(&f).exists() {
-                        let cur = &self.lexer.pos().file;
-                        self.todo_files.push((cur.clone(), self.data.source));
-                        self.data.use_add(&dep_id);
-                        self.switch_to_dep(&f);
-                    }
+            //
+            // loft#714 — pull a manifest dep in ONLY while the lexer is back on
+            // the file that named the package, and one per fixpoint iteration.
+            //
+            // `switch_to_dep` REPLACES the lexer's source and the abandoned file
+            // resumes later off `todo_files`.  That is fine for a `use`, which
+            // always switches away from the very file it appears in.  Draining
+            // this queue from wherever the descent happened to reach broke it: a
+            // dep was pulled in while the lexer sat inside an unrelated library
+            // whose definitions had not been parsed yet, and that library had
+            // already been `use_add`ed — so every later `use` of it was a no-op
+            // against an empty library.  With two manifest deps whose graphs
+            // meet, it surfaced deep inside a third, published, CI-gated library
+            // as `Unknown variable` on a tuple destructure or `Expect token ;` on
+            // a tuple field, with nothing naming resolution.
+            let here = self.lexer.pos().file.clone();
+            if let Some(pos) = self
+                .pending_pkg_deps
+                .iter()
+                .position(|(dep_id, _, from)| *from == here && !self.data.use_exists(dep_id))
+            {
+                let (dep_id, parent_dir, _) = self.pending_pkg_deps.remove(pos);
+                // First try the sibling package directory (same parent as the
+                // depending package), then fall back to the normal lib_path search.
+                let f = if let Some(entry) = self.lib_path_manifest(&parent_dir, &dep_id) {
+                    entry
+                } else {
+                    self.lib_path(&dep_id)
+                };
+                if std::path::Path::new(&f).exists() {
+                    let cur = &self.lexer.pos().file;
+                    self.todo_files.push((cur.clone(), self.data.source));
+                    self.data.use_add(&dep_id);
+                    self.switch_to_dep(&f);
                 }
+            } else {
+                // Nothing left for THIS file — drop its entries (already loaded,
+                // or unresolvable) so the fixpoint can exit.  Entries queued from
+                // other files stay: their own file drains them when it resumes.
+                self.pending_pkg_deps.retain(|(_, _, from)| *from != here);
             }
-            // Fixpoint exit: the cursor rests on a use-free file and no manifest
-            // dependency is still queued.  `peek_token` (not `has_token`) so the
-            // check never consumes a leading `use` that the next iteration must see.
-            if !self.lexer.peek_token("use") && self.pending_pkg_deps.is_empty() {
+            // Fixpoint exit: the cursor rests on a use-free file and this file has
+            // no manifest dependency still queued.  `peek_token` (not `has_token`)
+            // so the check never consumes a leading `use` the next iteration needs.
+            let mine_pending = self
+                .pending_pkg_deps
+                .iter()
+                .any(|(_, _, from)| *from == self.lexer.pos().file);
+            if !self.lexer.peek_token("use") && !mine_pending {
                 break;
             }
         }
@@ -9415,8 +9448,9 @@ impl Parser {
                 self.lib_dirs.push(resolved_parent.clone());
             }
             if !self.data.use_exists(dep_name) {
+                let from = self.lexer.pos().file.clone();
                 self.pending_pkg_deps
-                    .push((dep_name.clone(), resolved_parent));
+                    .push((dep_name.clone(), resolved_parent, from));
             }
         }
     }

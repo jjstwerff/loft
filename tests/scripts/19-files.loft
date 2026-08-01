@@ -15,52 +15,43 @@ fn main() {
   assert(file("tests/example").format == Directory, "directory format");
   assert(file("tests/example/show.loft").format == TextFile, "text file format");
   assert(file("nonexistent_xyz.txt").format == NotExists, "nonexistent format");
-  // --- Path safety: traversal outside project is rejected ---
-  assert(file("../Cargo.toml").format == NotExists, ".. at start rejected");
-  assert(file("tests/example/../../../etc").format == NotExists, "net upward rejected");
+  // --- loft#712: a `..` path names the same file its absolute form names ---
+  // There used to be a lexical filter here: any relative path containing `..`
+  // was refused, and the refusal arrived as a NULL SIZE — indistinguishable
+  // from a missing or empty file, so a reader doing `if f#size < HEADER` turned
+  // it into "truncated" and reported a DATA error for a PATH decision.  It was
+  // not containment either: the same bytes by absolute path were served, and a
+  // `..` that normalised back INSIDE was refused too.  loft has no filesystem
+  // sandbox, so the resolved path is the whole answer.
+  //
+  // The file is created here, through its absolute form, so the assertions do
+  // not depend on anything existing above the checkout.
+  here = directory();
+  up_abs = "{here}/../loft_712_probe.txt";
+  delete(up_abs);
+  { probe = file(up_abs); probe.write("twelve bytes"); }
+  assert(file(up_abs).size == 12, "a file above the root, named absolutely");
+  assert(file("../loft_712_probe.txt").size == 12, "the SAME file named with .. agrees");
+  assert(exists("../loft_712_probe.txt"), "exists() agrees with the absolute form");
+  assert(is_file("../loft_712_probe.txt"), "is_file() agrees too");
+  assert(size(read_bytes("../loft_712_probe.txt") ?? []) == 12, "read_bytes agrees");
+  { rd = file("../loft_712_probe.txt"); assert(rd#size == 12, "#size is the size, not null"); }
+  assert(delete("../loft_712_probe.txt").ok(), "and it can be removed by the .. path");
+  assert(!exists(up_abs), "removal through .. really removed it");
+  // A `..` that returns inside the root was refused as well — it is textual
+  // filtering that did that, not a boundary check.
+  assert(file("tests/example/../example/show.loft").format == TextFile, ".. back inside resolves");
   assert(file("tests/example/config/../show.loft").format == TextFile, "net-zero traversal ok");
+  assert(list_dir("tests/example/../example") != null, "list_dir through .. resolves");
   // --- exists() ---
   assert(exists("tests/example"), "exists: directory");
   assert(exists("tests/example/show.loft"), "exists: file");
   assert(!exists("nonexistent_xyz.txt"), "exists: missing");
-  assert(!exists("../Cargo.toml"), "exists: outside project");
   // --- delete() returns FileResult ---
   assert(!delete("nonexistent_xyz.txt").ok(), "delete non-existent not ok");
-  assert(!delete("../Cargo.toml").ok(), "delete outside project not ok");
   // --- move() edge cases ---
   assert(!move("nonexistent_src_xyz.txt", "dst_xyz.txt").ok(), "move: missing source");
   assert(!move("tests/example/show.loft", "tests/example/map.png").ok(), "move: dst already exists");
-  assert(!move("tests/example/show.loft", "../outside.txt").ok(), "move: dst outside project");
-  assert(!move("../Cargo.toml", "stolen.toml").ok(), "move: src outside project");
-  // --- loft#708: the WRITE side obeys the same verdict as the read side ---
-  // These reported NotExists above while `write` / `+=` / `write_bytes` created
-  // the file anyway, so `f#next = f.size` read 0 and the documented append
-  // idiom overwrote from byte 0.  Each refusal is observable, never silent.
-  // The absolute form of the same path is NOT refused (it never steps above its
-  // own root), so it can see whether anything actually landed — an assertion on
-  // the relative path would be vacuous, since that path cannot see either way.
-  // Clear the targets through their absolute form FIRST: a loft that still had
-  // the bug (an older binary, a bisect) really does create them, and a leftover
-  // would then fail this run for the previous run's reason.
-  here = directory();
-  delete("{here}/../loft_escape_708.txt");
-  delete("{here}/../loft_escape_708.bin");
-  {
-    esc = file("../loft_escape_708.txt");
-    assert(!esc.write("escaped").ok(), "write outside project refused");
-    esc += "escaped too";
-  }
-  assert(!write_bytes("../loft_escape_708.bin", [1 as u8]), "write_bytes outside project refused");
-  assert(!exists("{here}/../loft_escape_708.txt"), "refused write created nothing");
-  assert(!exists("{here}/../loft_escape_708.bin"), "refused write_bytes created nothing");
-  assert(read_bytes("../Cargo.toml") == null, "read_bytes outside project reads absent");
-  assert(list_dir("..") == null, "list_dir outside project reads absent");
-  assert(!is_file("../Cargo.toml"), "is_file outside project");
-  assert(!is_dir(".."), "is_dir outside project");
-  // A handle for a path outside the project answers as one for an absent file:
-  // it reports no size, not the leftovers of an unfilled struct.
-  assert(file("../Cargo.toml").size == 0, "outside project reports no size");
-  { gone = file("../Cargo.toml"); assert(gone#size == null, "outside project has no live size"); }
   // === Text file write and read ===
   {
     f = file("test_loft_t.txt");
@@ -152,8 +143,11 @@ fn main() {
   // mkdir_all creates nested directories
   assert(mkdir_all("test_loft_dir_xyz/a/b").ok(), "mkdir_all creates nested dirs");
   assert(exists("test_loft_dir_xyz/a/b"), "nested leaf exists");
-  // mkdir outside project is rejected
-  assert(!mkdir("../loft_outside_test").ok(), "mkdir outside project rejected");
+  // loft#712: `mkdir` resolves `..` too rather than refusing it by shape.
+  // Kept inside the checkout on purpose — the point is that the path RESOLVES,
+  // and a test has no business leaving a directory above its own root.
+  assert(mkdir_all("test_loft_dir_xyz/../test_loft_dir_xyz/c").ok(), "mkdir_all through .. works");
+  assert(is_dir("test_loft_dir_xyz/c"), "the plain name sees the same directory");
   // === directory(), user_directory(), program_directory() ===
   cwd = directory();
   assert(len(cwd) > 0, "directory() is non-empty");

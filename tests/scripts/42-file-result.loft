@@ -14,8 +14,9 @@ fn main() {
   assert(delete("nonexistent_fr_xyz.txt") == FileResult.NotFound, "delete non-existent");
   assert(!delete("nonexistent_fr_xyz.txt").ok(), "delete non-existent not ok");
 
-  // Delete outside project returns NotFound
-  assert(delete("../Cargo.toml") == FileResult.NotFound, "delete outside project");
+  // loft#712: a `..` path is resolved, not filtered — deleting through one
+  // reports on the FILE, so an absent target is NotFound like any other.
+  assert(delete("../nonexistent_fr_712.txt") == FileResult.NotFound, "delete .. absent is NotFound");
 
   // Create a file, then delete it successfully
   {
@@ -26,7 +27,6 @@ fn main() {
   assert(!delete("test_loft_fr.txt").ok(), "delete already deleted");
 
   // --- mkdir_all() returns FileResult ---
-  assert(!mkdir_all("../loft_outside_fr").ok(), "mkdir_all outside project");
   // mkdir_all is idempotent — safe even if dir exists from a prior run
   assert(mkdir_all("test_loft_fr_dir/a/b").ok(), "mkdir_all nested");
 

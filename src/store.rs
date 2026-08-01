@@ -95,6 +95,16 @@ pub struct StoreUsage {
     /// here; the metric and its plumbing are deliberately kept simple so
     /// they can be extended.
     pub mergeable_free_pairs: u32,
+    /// The word just past the LAST CLAIMED block — the store's high-water
+    /// mark.  Everything above it is free tail.
+    ///
+    /// This is what decides what a persisted image costs, because the image
+    /// ends here (`store_image_live_end`): `capacity - live_end` is the tail a
+    /// trim already removes, and `live_end - claimed` is the interior free
+    /// space only RELOCATION could recover (loft#713).  Reading the two apart
+    /// is the difference between "my store has room to give back" and "my
+    /// records are spread out", which look identical in `free_words` alone.
+    pub live_end_words: u32,
 }
 
 impl StoreUsage {
@@ -1119,6 +1129,9 @@ impl Store {
                 prev_was_free = false;
             }
             pos += sz;
+            if claim > 0 {
+                u.live_end_words = pos; // a claimed block ends here
+            }
         }
         u
     }

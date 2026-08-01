@@ -66,9 +66,8 @@ fn main() {
   assert(f#size == 32, "Size should be 32 bytes (20 + 12).");
  }  // The file closes when the handle goes out of scope.
   // `move(src, dst)` renames a file. It refuses if the destination already
-  // exists or if either path would leave the project directory.
+  // exists.
   assert(exists("test.bin"), "File should exist after writing.");
-  assert(!move("test.bin", "../test.bin").ok(), "Should refuse to move outside the project.");
   assert(move("test.bin", "test2.bin").ok(), "Could not move the file.");
   // ## Reading Back What You Wrote
   // When you open an existing file the default format is TextFile. Set
@@ -150,8 +149,9 @@ fn main() {
   ghost = file("no_such_file.txt");
   assert(ghost#format == NotExists, "non-existent file has NotExists format");
 
-  // `move` refuses paths outside the project directory.
-  assert(!move("any.txt", "../escape.txt").ok(), "move outside project fails");
+  // `move` reports on the FILES, not on the shape of the path: a missing source
+  // is NotFound whether or not the path contains `..` (loft#712).
+  assert(!move("any.txt", "../escape.txt").ok(), "move with a missing source fails");
 
   // Writing to a read-only or invalid path also returns a FileResult.
   // Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir_all`.

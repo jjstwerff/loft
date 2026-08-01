@@ -698,13 +698,25 @@ impl Stores {
             };
             let _ = write!(
                 out,
-                "\n  #{i:<5} {:>8.3} MB  used {:>3.0}%  recs {:<5} free-blk {:<4} mergeable {:<4} largest-free {:<7}w  type {tname} bc:{created_at}",
+                "\n  #{i:<5} {:>8.3} MB  used {:>3.0}%  recs {:<5} free-blk {:<4} mergeable {:<4} largest-free {:<7}w  tail {:>3.0}% inner {:>3.0}%  type {tname} bc:{created_at}",
                 mb(u64::from(u.capacity_words)),
                 u.used_pct(),
                 u.claimed_count,
                 u.free_count,
                 u.mergeable_free_pairs,
                 u.largest_free_words,
+                // Where this store's free space actually sits.  `tail` is above
+                // the last record — a persisted image already drops it.  `inner`
+                // is between records, and only relocation recovers that, so a
+                // high `inner` is what makes a shrunk store persist large.
+                pct(
+                    u64::from(u.capacity_words.saturating_sub(u.live_end_words)),
+                    u64::from(u.capacity_words)
+                ),
+                pct(
+                    u64::from(u.live_end_words.saturating_sub(u.claimed_words)),
+                    u64::from(u.capacity_words)
+                ),
             );
         }
         out

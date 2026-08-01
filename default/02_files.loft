@@ -84,8 +84,6 @@ pub struct File {
   next: integer, // 16
 }
 
-fn OpPathContained(path: text) -> boolean;
-#rust"codegen_runtime::path_contained(@path)"
 fn OpGetFile(file: File) -> boolean fs#read;
 #rust"stores.get_file(&@file)"
 fn OpGetDir(path: text, result: vector<File>) -> boolean fs#read;
@@ -96,9 +94,9 @@ fn OpReadFile(file: File, val: reference, bytes: integer, db_tp: const u16) fs#r
 fn OpSeekFile(file: File, pos: integer) fs#read;
 fn OpSizeFile(file: File) -> integer fs#read;
 fn OpDelete(path: text) -> integer fs#update;
-#rust"codegen_runtime::fs_delete_at(s.database.resolve_path(@path))"
+#rust"codegen_runtime::fs_delete(&s.database.resolve_path(@path))"
 fn OpMoveFile(from: text, to: text) -> integer fs#update;
-#rust"codegen_runtime::fs_move_at(s.database.resolve_path(@from), s.database.resolve_path(@to))"
+#rust"codegen_runtime::fs_move(&s.database.resolve_path(@from), &s.database.resolve_path(@to))"
 fn OpTruncateFile(self: File, size: integer) -> boolean fs#update;
 fn OpSyncFile(self: File) -> boolean fs#update;
 // @PLN105 Phase 1 — deliver a live value's descriptor handle to the host.
@@ -128,9 +126,9 @@ fn OpRelease(tag: integer, val: reference, db_tp: const u16) fs#update;
 fn OpCallRef(fn_var: const u16, arg_size: const u16);
 #rust"s.fn_call_ref(@fn_var, @arg_size);"
 fn OpMkdir(path: text) -> integer fs#update;
-#rust"codegen_runtime::fs_mkdir_at(s.database.resolve_path(@path))"
+#rust"codegen_runtime::fs_mkdir(&s.database.resolve_path(@path))"
 fn OpMkdirAll(path: text) -> integer fs#update;
-#rust"codegen_runtime::fs_mkdir_all_at(s.database.resolve_path(@path))"
+#rust"codegen_runtime::fs_mkdir_all(&s.database.resolve_path(@path))"
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 
@@ -231,17 +229,10 @@ pub fn path_sep() -> character;
 // the lifetime of a process), but the runtime caches it inside
 // Stores so the access is observable.
 #impure(host_io)
-// Returns true if path stays within the project directory (no net upward traversal).
-// Accepts both '/' and '\' as separators so loft programs can use either style.
-// The rule itself lives in Rust, where every file op consults it through
-// `resolve_path` — one definition, so a path can no longer read as absent here
-// while a write to it quietly succeeds (loft#708).
-fn valid_path(path: text) -> boolean {
-  OpPathContained(path)
-}
-#pure
 // Use as the entry point for all file I/O.
-// Paths outside the project directory are treated as NotExists without touching the filesystem.
+// A relative path resolves against the program's own directory (#255 / @PLN9), so
+// `../data.txt` names the file above the script — the same file an absolute path
+// would name, and it answers the same either way (loft#712).
 
 pub fn file(path: text) -> File fs#read {
   result = File { path: path, ref: null };
@@ -279,7 +270,6 @@ pub fn delete(path: text) -> FileResult fs#update {
 // not already exist.
 
 pub fn move(from: text, to: text) -> FileResult fs#update {
-  if !valid_path(to) || !valid_path(from) { return FileResult.NotFound }
   if !exists(from) { return FileResult.NotFound }
   if exists(to) { return FileResult.Other }
   fs_result(OpMoveFile(from, to))
@@ -289,7 +279,6 @@ pub fn move(from: text, to: text) -> FileResult fs#update {
 // is outside the project directory.
 
 pub fn mkdir(path: text) -> FileResult fs#update {
-  if !valid_path(path) { return FileResult.NotFound }
   fs_result(OpMkdir(path))
 }
 #impure(io)
@@ -297,19 +286,18 @@ pub fn mkdir(path: text) -> FileResult fs#update {
 // Returns FileResult.NotFound if the path is outside the project directory.
 
 pub fn mkdir_all(path: text) -> FileResult fs#update {
-  if !valid_path(path) { return FileResult.NotFound }
   fs_result(OpMkdirAll(path))
 }
 #impure(io)
 // Returns true if `path` exists and is a directory.
 // Use to branch on a path's kind before descending into / reading it.
 pub fn is_dir(path: text) -> boolean fs#read;
-#rust"codegen_runtime::fs_is_dir_at(s.database.resolve_path(@path))"
+#rust"codegen_runtime::fs_is_dir(&s.database.resolve_path(@path))"
 #impure(io)
 // Returns true if `path` exists and is a regular file.
 // Use to confirm a directory entry is a readable file before opening it.
 pub fn is_file(path: text) -> boolean fs#read;
-#rust"codegen_runtime::fs_is_file_at(s.database.resolve_path(@path))"
+#rust"codegen_runtime::fs_is_file(&s.database.resolve_path(@path))"
 #impure(io)
 // Lists the entry NAMES of directory `path` (base names, not full paths),
 // sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct

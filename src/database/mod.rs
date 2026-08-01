@@ -1289,33 +1289,30 @@ impl Stores {
     /// that runs from any cwd.  Empty `source_dir` (no anchor) falls back to
     /// cwd, never to a wrong file.
     ///
-    /// `None` means the path leaves the project (loft#708) — the caller must
-    /// answer as it would for a file that is not there.  The verdict lives on
-    /// this side of the boundary, not at each call site, because a file op that
-    /// forgot to ask still ended up writing: `file("../x")` reported
-    /// `NotExists` while `f.write` / `f += …` / `write_bytes` happily created
-    /// the file, so the documented append idiom `f#next = f.size` seeked to 0
-    /// and overwrote what was already there.  Returning an `Option` is what
-    /// makes that unforgettable — a new file op cannot compile without saying
-    /// what it does when the answer is "not reachable".
+    /// There is no path-shape filter here, and that is the point (loft#712).
+    /// A lexical `..` refusal used to live on this path: it rejected
+    /// `file("../a.txt")` and reported the refusal as a null size — which a
+    /// reader doing `if f#size < HEADER` turns into "the file is truncated", a
+    /// DATA error for what was a PATH decision.  It was never containment
+    /// either: the same bytes by absolute path were served, and a `..` that
+    /// normalised back INSIDE the root (`../sub/s.loft`) was refused too, so it
+    /// filtered text rather than checking a boundary.  loft has no filesystem
+    /// sandbox — admission is decided at load time and carries no runtime
+    /// checks (`SANDBOX.md`) — so the resolved path is the whole answer and the
+    /// filesystem gives it.
     #[must_use]
-    pub fn resolve_path(&self, raw: &str) -> Option<String> {
-        if !crate::codegen_runtime::path_contained(raw) {
-            return None;
-        }
+    pub fn resolve_path(&self, raw: &str) -> String {
         if !self.program_relative || self.source_dir.is_empty() {
-            return Some(raw.to_string());
+            return raw.to_string();
         }
         let p = std::path::Path::new(raw);
         if p.is_absolute() {
-            return Some(raw.to_string());
+            return raw.to_string();
         }
-        Some(
-            std::path::Path::new(&self.source_dir)
-                .join(p)
-                .to_string_lossy()
-                .into_owned(),
-        )
+        std::path::Path::new(&self.source_dir)
+            .join(p)
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Plan-07 phase 4c — Stores-side counterpart of `State::raise`.
