@@ -356,6 +356,45 @@ releases alike.  It applies whether the target is 0.8.4 or 1.0.0.
 A "quick fix" tag that closes one bug but leaves another open is
 still a broken build and still gets blocked.
 
+### The nightlies: prove them green, don't read last night's badge
+
+**Every nightly test must be green for a release — which is a different claim
+from "last night's nightly run was green."**  The two come apart in both
+directions, so neither substitutes for the other:
+
+- **A red nightly run does NOT block the tag.**  A nightly goes red for reasons
+  that have nothing to do with the code being released — a runner without ALSA
+  or a GL device, an expired token, a network blip reaching the registry, an
+  upstream toolchain bump.  What blocks a release is a test that is *actually
+  failing*, not a workflow that reported failure.
+- **A green nightly run does NOT discharge the bar either.**  It proves the
+  tests that RAN passed on the tree they ran against, which is neither this
+  tag's tree nor necessarily the whole suite.
+
+So the release evidence is a **current, deliberate run**, not a historical
+result: re-run each nightly suite against the tag candidate and record the
+outcome.  Where a nightly cannot run here (a hosted-runner dependency, a
+platform we do not have), say so explicitly and name what was substituted —
+an unrunnable suite is an unproven one, not a passing one.
+
+The three cases that clear the bar, all of which end in evidence rather than a
+badge:
+
+| the nightly | what clears it |
+|---|---|
+| **red for an environment reason** (missing ALSA/GL, expired token, registry unreachable, toolchain bump) | run the suite here and show it green; record the reason for the red — that is a real CI finding, and the release proceeds |
+| **red for a REAL failure that we then FIXED** (e.g. Windows was genuinely broken) | the proof of the fix IS the evidence.  Do **not** wait a cycle for the next nightly to agree — a release is not gated on the CI cadence catching up.  Record the failure, the fix, and the run that shows it green |
+| **green** | still name what it covered, since a green run also covers whatever skipped itself |
+
+The second row is the one worth stating out loud, because the instinct is to
+wait for a green nightly before tagging.  That instinct trades a day for no new
+information: if the failure is understood and the fix is proven on a current
+run, the next nightly can only repeat what you already have.  Waiting is
+warranted when the fix is NOT proven — when "we think that fixed it" is doing
+the work — and then the thing to get is proof, not another night.
+
+A nightly run reports one bit; the release needs the state behind it.
+
 ### 0.8.4 progress
 
 **2026-04-14:** tag deferred — safety gate caught P54

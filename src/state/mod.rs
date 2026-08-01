@@ -774,8 +774,19 @@ impl State {
                     }
                     _ => continue,
                 };
+                // loft#717 — accumulate the stack movement the push ACTUALLY made
+                // rather than the 12 bytes a `DbRef` measures.  `put_stack` steps a
+                // slot to its alignment, so a `DbRef` occupies 16, and the closure
+                // read below — which re-expresses `fn_var` against the shifted TOS —
+                // landed 4 bytes short for every buffer pushed here.
+                //
+                // Neither half shows it alone: with no closure there is nothing to
+                // misread, and with no hidden buffer the shift is zero.  It takes a
+                // capturing closure that ALSO returns a struct, and then the callee
+                // receives a garbage closure `DbRef` and faults.
+                let before = self.stack_pos;
                 self.put_stack(buf);
-                hidden_bufs_size += 12;
+                hidden_bufs_size += u16::try_from(self.stack_pos - before).unwrap_or(0);
             }
         }
         // Read closure DbRef from bytes 8..20 of the fn-ref slot.
@@ -789,10 +800,14 @@ impl State {
         // against the shifted TOS.  Adjust fn_var by hidden_bufs_size.
         let closure = *self.get_var::<DbRef>(fn_var + hidden_bufs_size - 8);
         let has_closure = closure.rec != 0;
+        // Measured, not assumed, for the same reason as the hidden buffers above:
+        // the callee's frame must be told the span these pushes really occupy.
+        let before_closure = self.stack_pos;
         if has_closure {
             self.put_stack(closure);
         }
-        let total = arg_size + hidden_bufs_size + if has_closure { 12 } else { 0 };
+        let closure_span = u16::try_from(self.stack_pos - before_closure).unwrap_or(0);
+        let total = arg_size + hidden_bufs_size + closure_span;
         let code_pos = i64::from(self.fn_positions[d_nr]);
         self.fn_call(d_nr as u32, total, code_pos);
     }
