@@ -6,11 +6,13 @@
 #
 #   make          build the shared library
 #   make check    build + run the self-test (validate the oracle)
+#   make probe    build + run the @PLN24 trampoline probe against it
 #   make strict   build under -std=c89 -pedantic, proving it is ANSI C
 #   make clean
 
 CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -fPIC
+RUSTC ?= rustc
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
@@ -21,7 +23,7 @@ else
   SOFLAGS := -shared
 endif
 
-.PHONY: all check strict clean
+.PHONY: all check probe strict clean
 
 all: $(LIB)
 
@@ -34,6 +36,16 @@ check: lc_selftest
 lc_selftest: lc_selftest.c lc_types.c lc_types.h
 	$(CC) $(CFLAGS) -o $@ lc_selftest.c lc_types.c
 
+# The @PLN24 design probe.  A single rustc invocation — no cargo, no crates —
+# because the question is whether loft-core (Rust) can express the per-arity
+# trampolines soundly, and a probe that needed a dependency to answer it would
+# be answering a different question.
+probe: probe_trampoline $(LIB)
+	./probe_trampoline
+
+probe_trampoline: probe_trampoline.rs
+	$(RUSTC) --edition 2024 -O -o $@ probe_trampoline.rs
+
 # The claim in the header is that this is ANSI C, so it is checked rather than
 # asserted.  `lc_var_sum` reads its variadic arguments as int64_t, which C89
 # spells `long` on LP64 — the strict build is what keeps that honest.
@@ -42,4 +54,4 @@ strict:
 	@echo "lc_types: builds as ANSI C"
 
 clean:
-	rm -f $(LIB) lc_selftest
+	rm -f $(LIB) lc_selftest probe_trampoline
