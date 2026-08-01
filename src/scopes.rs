@@ -2632,7 +2632,7 @@ impl Scopes {
                     // `Insert([Set(__lift_i, …)…, call])` — the owned result is
                     // the final op.
                     if let Some(last) = ops.last()
-                        && let Some(tp) = Self::inline_struct_return(last, data, u32::MAX)
+                        && let Some(tp) = Self::inline_struct_return(last, data, u32::MAX, function)
                     {
                         let tmp = self.new_lift_var(function, &tp);
                         let last = ops.pop().unwrap();
@@ -2641,7 +2641,9 @@ impl Scopes {
                     } else {
                         Value::Drop(Box::new(Value::Insert(ops)))
                     }
-                } else if let Some(tp) = Self::inline_struct_return(&scanned, data, u32::MAX) {
+                } else if let Some(tp) =
+                    Self::inline_struct_return(&scanned, data, u32::MAX, function)
+                {
                     let tmp = self.new_lift_var(function, &tp);
                     v_set(tmp, scanned)
                 } else {
@@ -4351,7 +4353,7 @@ impl Scopes {
             // exact shape that triggers the bug.
             if has_create_stack_receiver
                 && arg_idx > 0
-                && Self::inline_struct_return(&scanned, data, outer_call).is_none()
+                && Self::inline_struct_return(&scanned, data, outer_call, function).is_none()
                 && let Some(tp) = Self::heap_call_return(&scanned, data)
             {
                 let tmp = self.new_lift_var(function, &tp);
@@ -4409,7 +4411,9 @@ impl Scopes {
                     let final_val = it.next().unwrap();
                     // the remaining Call may also be struct-returning
                     // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
-                    if let Some(tp) = Self::inline_struct_return(&final_val, data, outer_call) {
+                    if let Some(tp) =
+                        Self::inline_struct_return(&final_val, data, outer_call, function)
+                    {
                         let tmp = self.new_lift_var(function, &tp);
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
@@ -4419,7 +4423,9 @@ impl Scopes {
                 } else {
                     ls.push(Value::Insert(ops));
                 }
-            } else if let Some(tp) = Self::inline_struct_return(&scanned, data, outer_call) {
+            } else if let Some(tp) =
+                Self::inline_struct_return(&scanned, data, outer_call, function)
+            {
                 // inline struct-returning or vector-returning call as argument
                 // — lift to a temporary variable so get_free_vars emits
                 // OpFreeRef at scope exit.  Without this, the callee's store
@@ -4581,7 +4587,41 @@ impl Scopes {
     /// Skips lifting when the outer call's return type depends on this argument
     /// (i.e. the result borrows from the argument's store).  Freeing the lifted
     /// temp at scope exit would be use-after-free in that case.
-    fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<Type> {
+    fn inline_struct_return(
+        val: &Value,
+        data: &Data,
+        _outer_call: u32,
+        function: &Function,
+    ) -> Option<Type> {
+        // loft#721 — a CLOSURE call (`CallRef`) returning an aggregate needs the
+        // same lift as the direct call below, and not having it leaked one store
+        // per call.  The direct call's result is owned by a `__ref_N` the parser
+        // minted, so `get_free_vars` frees it even when the result is used inline;
+        // a `CallRef`'s buffer is allocated at RUNTIME (`fn_call_ref` pushes one
+        // per hidden attribute, because the bytecode call site carries only the
+        // visible args), so there is no variable to hang the free on unless the
+        // result is bound.  `r = pt(0)` was therefore clean while `pt(0).a` leaked.
+        //
+        // The aggregate always arrives OWNED: the callee delivers through the
+        // caller-allocated buffer, so even a closure that looks like it returns a
+        // borrowed element (`fn(i) -> Row { t.rows[i] }`) hands back a fresh copy —
+        // measured, the table is intact afterwards and the copy is what leaked.
+        // So the lift is safe here without the owned-vs-borrowed dance the direct
+        // call needs below, where the callee may hand back a view of its argument.
+        //
+        // The target is dynamic, so the return type comes from the fn-ref
+        // VARIABLE's `Type::Function`, not from a definition.
+        if let Value::CallRef(v_nr, _) = val.unspan()
+            && let Type::Function(_, ret, _) = function.tp(*v_nr).base()
+        {
+            match ret.base() {
+                Type::Reference(d_nr, _) => return Some(Type::Reference(*d_nr, Deps::none())),
+                Type::Enum(d_nr, true, _) => {
+                    return Some(Type::Enum(*d_nr, true, Deps::none()));
+                }
+                _ => {}
+            }
+        }
         // @P297 — a USER struct-returning call (`n_*` with a body) passed
         // directly as a call argument is wrapped in `Value::Span` by
         // `parse_call` (and re-wrapped by `scan`), so the argument reaching
