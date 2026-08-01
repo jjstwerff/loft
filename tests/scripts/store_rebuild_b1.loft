@@ -1,0 +1,166 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN123 B1 — what does rebuild-and-swap cost?
+//
+// Arc A gives back the free TAIL.  What it cannot touch is the INTERIOR — the
+// space between surviving records — which measured 65% of the file that was
+// left.  Arc B's answer is to rebuild the collection into a fresh store and
+// swap, the shape `OPTIMIZE TABLE` uses.  Before writing that in Rust, this
+// measures it where it is cheap to measure: at loft level, record by record.
+//
+// Three collections, same surviving data, printed with a digest each so a
+// smaller file that LOST something cannot read as a win (B0's rule):
+//
+//   fragmented  built to 10x and dropped back, then `store_reclaim` — the
+//               honest baseline, because arc A has already taken the tail
+//   rebuilt     every surviving record re-inserted into a fresh collection
+//   fresh       the same records, built once, never grown or dropped — the
+//               ceiling a rebuild can reach but not beat
+//
+// `rebuilt` and `fresh` hold identical data by construction, so any size gap
+// between them is the rebuild path leaving something behind.
+//
+// Env in:
+//   LOFT_PERSIST_TEST_PATH   directory-ish prefix; three files are written
+//   B1_KEEP                  surviving records (default 300)
+//   B1_GROW                  peak records (default 3000)
+//   B1_RESERVE               1 = reserve each vector at its final length first
+
+struct Rec {
+  const id: integer,
+  const label: text,
+  const xs: vector<i32>,
+}
+
+fn i32_of(v: integer) -> i32 { v as i32? ?? (0 as i32) }
+
+fn rec_hash(r: Rec) -> integer {
+  h = 7;
+  h = (h * 131 + r.id) % 1000000007;
+  h = (h * 131 + len(r.label)) % 1000000007;
+  for rh_c in r.label { h = (h * 131 + (rh_c as integer)) % 1000000007 }
+  h = (h * 131 + len(r.xs)) % 1000000007;
+  for rh_x in r.xs { h = (h * 131 + (rh_x as integer)) % 1000000007 }
+  h
+}
+
+// Order-independent across records, as B0 established it must be.
+//
+// `bytes` is passed IN, never read here.  Iterating a keyed collection
+// materialises a key-sorted snapshot, and for a BOUND collection that snapshot
+// is claimed inside the store — so reading the file size after a digest loop
+// measures the loop as much as the data (observed: 40,200 -> 86,240 across two
+// extra traversals).  Every caller below stats the file the instant the bind
+// returns, before anything walks the collection.
+fn report(h: hash<Rec[id]>, tag: text, bytes: integer, us: integer) {
+  sum = 0;
+  xor = 0;
+  count = 0;
+  for rp_r in h {
+    rh = rec_hash(rp_r);
+    sum = (sum + rh) % 1000000007;
+    xor = xor ^ rh;
+    count += 1;
+  }
+  println("{tag} count {count} sum {sum} xor {xor} bytes {bytes} us {us}");
+}
+
+// `shape` isolates which field carries a size difference: a variable-length
+// text, a variable-length vector, both, or neither.
+fn label_of(i: integer, shape: text) -> text {
+  s = "record-{i}";
+  if shape == "vec" || shape == "scalar" { return s }
+  for lb_j in 0..(i % 11) { s += "-{lb_j}" }
+  s
+}
+
+fn xs_len(i: integer, shape: text) -> integer {
+  if shape == "text" || shape == "scalar" { return 0 }
+  fixed = (env_variable("B1_FIXED") ?? "") as integer ?? 0;
+  if fixed > 0 { return fixed }
+  i % 17 + 1
+}
+
+fn xs_of(i: integer, reserved: boolean, shape: text) -> vector<i32> {
+  v: vector<i32> = [];
+  n = xs_len(i, shape);
+  // The warning B1 exists to settle: a record-by-record rebuild writes each
+  // vector through the normal append path, which is the shape that grew the
+  // arena in loft#710.  `reserve` claims the final length up front instead.
+  if reserved { reserve(v, n) }
+  for xs_j in 0..n { v += [i32_of(i * 31 + xs_j)] }
+  v
+}
+
+fn make(i: integer, reserved: boolean, shape: text) -> Rec {
+  Rec { id: i, label: label_of(i, shape), xs: xs_of(i, reserved, shape) }
+}
+
+fn main() {
+  prefix = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  if prefix == "" { println("no path"); return }
+  keep = (env_variable("B1_KEEP") ?? "") as integer ?? 300;
+  grow = (env_variable("B1_GROW") ?? "") as integer ?? 3000;
+  reserved = (env_variable("B1_RESERVE") ?? "") == "1";
+  shape = env_variable("B1_SHAPE") ?? "full";
+
+  // --- fragmented: grown to `grow`, dropped back to `keep`, tail reclaimed.
+  frag: hash<Rec[id]> = [];
+  for g in 0..grow { frag += [make(g, reserved, shape)] }
+  for d in keep..grow { frag[d] = null }
+  store_reclaim(frag);
+  if !store_persist_bind(frag, "{prefix}-fragmented.store") { println("FAIL bind-frag"); return }
+  frag_bytes = file("{prefix}-fragmented.store").size;
+  report(frag, "fragmented", frag_bytes, 0);
+
+  // --- rebuilt: every surviving record re-inserted into a fresh collection.
+  // This is the loft-level stand-in for what B2 would do in Rust while
+  // composing the image, so its TIME is an upper bound: the Rust form skips
+  // the interpreter and the per-record dispatch entirely.
+  t0 = ticks();
+  dst: hash<Rec[id]> = [];
+  for rb_r in frag { dst += [Rec { id: rb_r.id, label: rb_r.label, xs: rb_r.xs }] }
+  t1 = ticks();
+  if !store_persist_bind(dst, "{prefix}-rebuilt.store") { println("FAIL bind-dst"); return }
+  dst_bytes = file("{prefix}-rebuilt.store").size;
+  report(dst, "rebuilt", dst_bytes, t1 - t0);
+
+  // A rebuilt store reads `inner 0%` — the interior IS gone — and whatever tail
+  // is left is the arena's own 7/3 growth slack, which is arc A's business.
+  // The two arcs compose, and this is where that gets measured.
+  store_reclaim(dst);
+  dst_trimmed = file("{prefix}-rebuilt.store").size;
+  report(dst, "rebuilt+reclaim", dst_trimmed, 0);
+
+  // --- rebuilt twice, then a third time.  The question this answers decides
+  // whether B2 can run automatically at all: if a rebuild copies each vector at
+  // its SOURCE's claimed size, repeating it would grow the file every time —
+  // a compaction that inflates on a schedule is worse than none.
+  t4 = ticks();
+  dst2: hash<Rec[id]> = [];
+  for r2 in dst { dst2 += [Rec { id: r2.id, label: r2.label, xs: r2.xs }] }
+  t5 = ticks();
+  if !store_persist_bind(dst2, "{prefix}-rebuilt2.store") { println("FAIL bind-dst2"); return }
+  dst2_bytes = file("{prefix}-rebuilt2.store").size;
+  report(dst2, "rebuilt2", dst2_bytes, t5 - t4);
+
+  dst3: hash<Rec[id]> = [];
+  for r3 in dst2 { dst3 += [Rec { id: r3.id, label: r3.label, xs: r3.xs }] }
+  if !store_persist_bind(dst3, "{prefix}-rebuilt3.store") { println("FAIL bind-dst3"); return }
+  dst3_bytes = file("{prefix}-rebuilt3.store").size;
+  report(dst3, "rebuilt3", dst3_bytes, 0);
+
+  // --- fresh: the same records built once, never grown, never dropped.
+  t2 = ticks();
+  ceiling: hash<Rec[id]> = [];
+  for c in 0..keep { ceiling += [make(c, reserved, shape)] }
+  t3 = ticks();
+  if !store_persist_bind(ceiling, "{prefix}-fresh.store") { println("FAIL bind-fresh"); return }
+  ceiling_bytes = file("{prefix}-fresh.store").size;
+  report(ceiling, "fresh", ceiling_bytes, t3 - t2);
+  store_reclaim(ceiling);
+  report(ceiling, "fresh+reclaim", file("{prefix}-fresh.store").size, 0);
+
+  println("{store_memory()}");
+}

@@ -1570,6 +1570,140 @@ fn store_digest_b0_oracle_sees_loss_not_layout() {
     }
 }
 
+/// @PLN123 B1 — rebuild-and-swap, measured against B0's oracle.
+///
+/// Arc A gives back the free tail; the interior is what is left, and arc B's
+/// answer is to rebuild the collection into a fresh store and swap — the shape
+/// `OPTIMIZE TABLE` uses. This runs that rebuild at loft level, record by
+/// record, so the cost is known before it is written in Rust.
+///
+/// Measured (300 → 6,000 surviving records, grown 10× and dropped back):
+/// **77–86% of the post-`store_reclaim` file comes back**, at ~0.6 µs/record on
+/// `--native` and ~1.0 µs interpreted, linear across a 20× scale range. The
+/// step's standing warning — that a record-by-record re-insert produced a
+/// LARGER file — does not reproduce for a direct rebuild; it produced one 4–7×
+/// smaller.
+///
+/// What this test pins is the part B2 depends on, not the numbers:
+///
+/// - **The digest survives every stage.** A smaller file that lost data would
+///   satisfy every size assertion here, so B0's oracle rides along.
+/// - **The rebuild is IDEMPOTENT.** A second and third rebuild land on the same
+///   byte count. This is what makes B2 safe to run automatically at persist: a
+///   compaction that grew the file a little every time would be worse than
+///   none, and that is the failure this rules out.
+/// - **Both backends agree byte for byte**, so the loft-level measurement is a
+///   property of the store, not of one execution path.
+///
+/// A rebuild does NOT reach the from-scratch ceiling — 1.24× at 300 records,
+/// 1.38× at 6,000 — and the whole gap is the VECTOR field: shapes with only
+/// scalars or only text rebuild to exactly the fresh size, and the rebuilt size
+/// is flat across vector lengths 1–9 where a from-scratch build scales with
+/// them. So the copy path claims a quantised block per vector where a fresh
+/// build claims by length. **B2 should claim each destination vector at its
+/// LENGTH**; `reserve` on the source side does not do it (measured: identical
+/// bytes with and without).
+#[test]
+fn store_rebuild_b1_recovers_the_interior_and_is_idempotent() {
+    let script = workspace_root().join("tests/scripts/store_rebuild_b1.loft");
+    // tag, count, sum, xor, bytes — one row per stage the script reports.
+    type Row = (String, i64, i64, i64, i64);
+    let mut per_backend: Vec<Vec<Row>> = Vec::new();
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("b1_{}", backend.trim_start_matches('-')));
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("m"))
+            .env("B1_SHAPE", "full")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} failed: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // tag count sum xor bytes us
+        let rows: Vec<Row> = stdout
+            .lines()
+            .filter(|l| l.contains(" count ") && l.contains(" bytes "))
+            .map(|l| {
+                let t: Vec<&str> = l.split_whitespace().collect();
+                let num = |key: &str| -> i64 {
+                    let i = t.iter().position(|x| *x == key).expect(key);
+                    t[i + 1].parse().expect("number")
+                };
+                (
+                    t[0].to_string(),
+                    num("count"),
+                    num("sum"),
+                    num("xor"),
+                    num("bytes"),
+                )
+            })
+            .collect();
+        let get = |tag: &str| {
+            rows.iter()
+                .find(|r| r.0 == tag)
+                .unwrap_or_else(|| panic!("no `{tag}` row in:\n{stdout}"))
+                .clone()
+        };
+        let frag = get("fragmented");
+        let rebuilt = get("rebuilt");
+        let again = get("rebuilt2");
+        let third = get("rebuilt3");
+        let fresh = get("fresh");
+
+        // B0's oracle rides along: every stage holds the same records.
+        for row in &rows {
+            assert_eq!(
+                (row.1, row.2, row.3),
+                (frag.1, frag.2, frag.3),
+                "{backend}: `{}` lost or changed data, so its size proves nothing:\n{stdout}",
+                row.0
+            );
+        }
+
+        // The interior really does come back.  The bound is generous — the
+        // measurement is 77-86% — because this guards the mechanism, not the
+        // number; the numbers live in the plan.
+        assert!(
+            (rebuilt.4 as f64) < 0.5 * frag.4 as f64,
+            "{backend}: a rebuild must at least halve the post-reclaim file \
+             (got {} from {}):\n{stdout}",
+            rebuilt.4,
+            frag.4
+        );
+
+        // The property B2's automatic mode rests on.
+        assert_eq!(
+            (rebuilt.4, rebuilt.4),
+            (again.4, third.4),
+            "{backend}: rebuilding must reach a FIXED POINT — a compaction that \
+             grows the file a little each time is worse than none:\n{stdout}"
+        );
+
+        // Honest about the ceiling: a rebuild does not reach a from-scratch
+        // build, and if it ever does, this is the assertion that says so.
+        assert!(
+            rebuilt.4 > fresh.4,
+            "{backend}: a rebuild now MATCHES the from-scratch ceiling ({} vs \
+             {}) — the vector-claim gap B2 was told to close is gone, so update \
+             @PLN123 B1 rather than this test:\n{stdout}",
+            rebuilt.4,
+            fresh.4
+        );
+        per_backend.push(rows);
+    }
+    assert_eq!(
+        per_backend[0], per_backend[1],
+        "the interpreter and --native must agree on every size and digest, or \
+         this measures an execution path rather than the store"
+    );
+}
+
 /// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.
 ///
 /// A hash's seed is drawn at random (the P253 hash-DoS defense) and stored in

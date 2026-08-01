@@ -8,10 +8,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 Open — **arc A is COMPLETE and shipped** (`store_reclaim(collection)`, opt-in,
-both backends). Arc **B** is next and now has the number it was waiting for: after
-A takes the tail, **65% of the remaining file is interior free space**, so B is
-justified rather than speculative. What B still lacks is a cost measurement, not a
-decision.
+both backends), and **B0 + B1 are done**. Rebuild-and-swap is measured: it gives
+back **77-86% of the post-A file at ~0.6 µs/record**, linear to 6,000 records, and
+is idempotent — so B2 can implement it as an automatic step. **B2 is next.**
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
@@ -71,8 +70,9 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | **Done** — the behaviour change |
 | **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | **Done** |
 | **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | **Done** — sees 5 loss modes, blind to 3 layout levers |
-| **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | Open — approach settled |
-| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open |
+| **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | **Done** — 77-86% back at ~0.6 µs/record, idempotent |
+| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open — next; claim each vector at its LENGTH (B1) |
+| **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | Open — from MariaDB 11.2.0 prior art |
 
 ### A — truncate the tail
 
@@ -93,6 +93,25 @@ nothing on the free path ever walks the chain. The planned freed-words tally in
 `Store::delete` turned out to be unnecessary AND unsound as an early-out (a store
 that only ever grew has a tail with no delete behind it) — dropped, see
 DESIGN.md § A3.
+
+### A5 — reclaim at BIND time (proposed, from prior art)
+
+Not built, and not part of what shipped. B1's prior-art check turned up
+**MariaDB 11.2.0 reclaiming unused space at startup**, which is a trigger this
+plan's analysis never considered: it rejected "automatic on the free path" (a
+walk per delete) and chose "the program says when", but a third moment exists
+where neither objection applies.
+
+For loft that moment is `store_persist_bind` on an EXISTING file — the store is
+being opened, the program has not started allocating into it, so there is no
+thrash risk and no live mapping to invalidate, and the walk is amortised against
+an operation that already reads the whole image. It would give back exactly what
+the previous run left behind, for programs that never learn `store_reclaim`
+exists — which is the stated cost of A being opt-in ("a knob nobody knows about
+is a knob nobody uses").
+
+Worth weighing before A is considered finished; it is additive to `store_reclaim`,
+not a replacement.
 
 ### B — compact the image
 
@@ -119,7 +138,7 @@ records.
 
    A takes the whole tail; the sweep collapses 2,701 free blocks to 4. **65%
    interior remains** — that is what B is worth, now measured.
-3. **B** — justified. **B0 (the oracle) is done**; next is B1 (cost of rebuild-and-swap).
+3. **B** — justified. **B0 (oracle) and B1 (cost) are done**; next is B2.
 
 ## Composition matrix — Stage A
 
@@ -170,8 +189,16 @@ gap is arc B's, not a defect in A.
    pointers to rewrite), and it is what InnoDB does — `OPTIMIZE TABLE` is a
    rebuild-and-swap, not an in-place relocation. What remains is measuring its
    cost. See DESIGN.md § B1.
-4. **Is any of A's stance contradicted by recent MariaDB?** Not verified. A is the
-   arc with no prior art behind it, so it is worth a read before finalising.
+4. ~~**Is any of A's stance contradicted by recent MariaDB?**~~ **Checked (B1).
+   Not contradicted — but incomplete.** `OPTIMIZE TABLE` under
+   `innodb_file_per_table` is literally rebuild-and-swap, and in-place
+   defragmentation ships only as an opt-in switch (`innodb_defragment`,
+   MariaDB 10.1.1) — both consistent with what this plan chose. The finding is
+   **MariaDB 11.2.0, which shrinks the InnoDB system tablespace at STARTUP**.
+   That is arc A's operation made automatic at a third moment this plan never
+   weighed: not on the free path (rejected — too expensive) and not "the program
+   says when" (shipped), but **at a quiescent point where nothing is running
+   yet**. See the A5 note below.
 
 ## Ruled out — measured, do not re-chase
 

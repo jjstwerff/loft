@@ -354,17 +354,91 @@ explicit operation reclaims it, and a free-space number (`DATA_FREE`, our
 `inner%`) tells you whether it is worth running. Prior art at that scale is worth
 more than a local preference.
 
-So B1 is no longer "which approach" but **"what does it cost"**: build it against
-B0's oracle and measure size, time and digest. The one number already in hand is
-a warning, not a verdict — a *loft-level* re-insert produced a LARGER file
-(634,264 vs 437,416) because writing records one at a time through the normal
-path becomes the fill-then-insert shape. A rebuild that claims each vector at its
-final size (what `reserve` exists for) should not; if it does, that measurement
-is the finding.
+So B1 is no longer "which approach" but **"what does it cost"**. Measured with
+`tests/scripts/store_rebuild_b1.loft`, guarded by
+`store_rebuild_b1_recovers_the_interior_and_is_idempotent`, digest-checked at
+every stage by B0's oracle. **DONE.**
 
-**Not verified here:** whether recent MariaDB versions added any automatic
-reclamation. If they did, it is worth reading before A's opt-in stance is final —
-A is the arc with no prior art behind it.
+### What it costs — the verdict is cheap and effective
+
+300 → 6,000 surviving records, each grown 10× and dropped back, `store_reclaim`
+already applied so the baseline is what arc A leaves:
+
+| keep | post-A file | rebuilt | recovered | rebuild time (`--native`) |
+|---|---|---|---|---|
+| 300 | 213,016 | 48,760 | **77%** | 175 µs (583 ns/rec) |
+| 1,500 | 1,715,136 | 240,896 | **86%** | 908 µs (605 ns/rec) |
+| 6,000 | 6,865,056 | 969,120 | **86%** | 3,757 µs (626 ns/rec) |
+
+Linear across a 20× range, ~0.6 µs/record native and ~1.0 µs interpreted, and
+the loft-level figure is an **upper bound** — the Rust form at image-composition
+time skips the interpreter and the per-record dispatch entirely. Both backends
+produce byte-identical sizes.
+
+**The standing warning does not reproduce.** A record-by-record rebuild did not
+produce a larger file; it produced one 4–7× smaller. The old
+634,264-vs-437,416 number came from a different path and should not be carried
+forward as a caution against this one.
+
+**It is IDEMPOTENT** — a second and third rebuild land on the same byte count, at
+every vector length tested. That is the property B2's automatic mode rests on: a
+compaction that grew the file a little each time would be worse than none.
+
+### The gap B2 has to close, and where it is
+
+A rebuild does not reach the from-scratch ceiling — 1.24× at 300 records, 1.38×
+at 6,000 — and the whole gap is the **vector field**:
+
+- shapes with only scalars, or only variable-length text, rebuild to **exactly**
+  the fresh size (ratio 1.000);
+- with vectors, the rebuilt size is **flat across vector lengths 1–9** (40,200
+  bytes at every one) while a from-scratch build scales with them smoothly.
+
+So the copy path claims a quantised block per vector where a fresh build claims
+by length. **B2 should claim each destination vector at its LENGTH.** `reserve`
+on the source side does not do it — measured, identical bytes with and without,
+because it sizes the local being copied FROM, not the block copied INTO.
+
+Arc A composes on top: `store_reclaim` after a rebuild takes a further ~9%
+(48,760 → 44,568), because a fresh arena still carries its own 7/3 growth slack.
+
+### The instrument trap, worth keeping
+
+**Iterating a bound collection grows its file.** A keyed collection iterates
+through a key-sorted snapshot, and for a bound collection that snapshot is
+claimed inside the store — so a digest loop inflates the very file it is
+measuring (observed: 40,200 → 86,240 across two extra traversals, which read as
+`store_reclaim` making the file BIGGER). Every measurement here stats the file
+the instant `store_persist_bind` returns, before anything walks the collection.
+It is also a fourth producer of tail, and an argument for `store_reclaim`: a
+read-only traversal of a persisted collection permanently grew its file before
+arc A existed.
+
+### Prior art — checked, and it changes something
+
+Three findings, and the third is the one the plan did not have:
+
+1. **`OPTIMIZE TABLE` under `innodb_file_per_table` is rebuild-and-swap**, in the
+   literal sense assumed here: create a new empty table, copy row by row, land it
+   in a fresh `.ibd`. B's approach is the established one.
+2. **In-place defragmentation exists as an option** — MariaDB 10.1.1 merged the
+   Facebook/Kakao patch (`innodb_defragment`), which moves records to fill pages
+   and frees the ones that end up empty. It is opt-in via a system variable and
+   works at PAGE granularity. That is the relocate branch this plan ruled out,
+   shipped as a switch rather than a default — consistent with ruling it out for
+   the default path.
+3. **MariaDB 11.2.0 shrinks the InnoDB system tablespace by reclaiming unused
+   space AT STARTUP.** This is automatic reclamation, and it is arc A's
+   operation — but triggered at neither of the two moments this plan considered.
+   See [README.md § Open design questions](README.md) 4.
+
+Also confirming the shared model: InnoDB deletes only mark rows, and the freed
+space is never returned to the OS on its own. Same shape as loft.
+
+Sources: [MariaDB OPTIMIZE TABLE](https://mariadb.com/docs/server/ha-and-performance/optimization-and-tuning/optimizing-tables/optimize-table) ·
+[Defragmenting InnoDB Tablespaces](https://mariadb.com/docs/server/ha-and-performance/optimization-and-tuning/optimizing-tables/defragmenting-innodb-tablespaces) ·
+[MariaDB 10.1.1 defragmentation](https://mariadb.org/defragmenting-unused-space-on-innodb-tablespace/) ·
+[Percona: reclaiming space with file-per-table](https://www.percona.com/blog/how-to-reclaim-space-in-innodb-when-innodb_file_per_table-is-on/)
 
 ### B2 — implement the winner behind a flag, off
 
