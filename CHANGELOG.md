@@ -21,6 +21,47 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — an element taken out of a returned value stays valid
+
+Binding an element out of a struct a function just returned gave you a reference
+into storage that had already been handed back:
+
+```loft
+plan = roof_plans().items[0] ?? RoofPlan {};
+```
+
+It read correctly at first and turned to zeroes once other allocations reused
+that memory. In the program that reported it, the same binding answered three
+questions correctly and the fourth wrongly, in one function with nothing between
+them but ordinary library calls — a test asserted a roof's ridge height and got
+its eave's. A value that is right the first time and wrong the fourth cannot be
+found by reading the code, which is the worst shape this kind of bug takes.
+
+The same expression **inside a loop** was a second, separate fault with the same
+cause and a different trigger. There the damage depended on what else the loop
+did: with an allocation between the bind and the read, the element was read out
+of memory that had already been reused, so
+
+```loft
+for i in 0..50 {
+  e = make().items[0] ?? P {};
+  o = other(i);              // claims the memory `e` points into
+  sum += e.a;                // read 0, 1, 2 … instead of e's real value
+}
+```
+
+summed the loop counter instead of the element. Without such an allocation it
+returned the right answer while still reading freed memory, so it was invisible
+until the arena poison detector was pointed at it.
+
+Both are fixed. The workaround the issues documented — binding the returned value
+to a local first, then indexing it — is no longer needed:
+
+```loft
+held = roof_plans();                          // no longer necessary
+plan = held.items[0] ?? RoofPlan {};
+```
+
 ### Unreleased — a closure that builds a struct no longer crashes
 
 A closure that captured something and called a function returning a struct
@@ -40,16 +81,14 @@ program doing something perfectly ordinary.
 
 It is fixed, and the two backends agree again.
 
-One related thing is **not** fixed yet: using such a result *inline* still leaks
-a small amount of memory per call.
+Using such a result *inline* also leaked one record per call — the buffer holding
+the returned struct had no variable to hang its free on, so nothing released it.
+That is fixed as well, and neither form leaks now:
 
 ```loft
-total += pt(r).a;            // leaks one record per call
-p = pt(r); total += p.a;     // no leak — bind it first
+total += pt(r).a;            // no longer leaks
+p = pt(r); total += p.a;     // and neither does binding it first
 ```
-
-Binding the result to a variable avoids it entirely, which is the workaround
-until it is fixed properly.
 
 ### Unreleased — removing from a keyed collection, without the crashes
 

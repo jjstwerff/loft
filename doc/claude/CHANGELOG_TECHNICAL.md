@@ -9,6 +9,72 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `LOFT_UAF_GEN`: a stamp keyed by offset cannot say which store it is about (2026-08-01)
+
+Detector (c) reported a use-after-free on 25 of the 548 corpus scripts, all of them
+clean. Any loop calling a struct-returning function drew one — an ordinary shape, so
+the noise landed on exactly the programs the detector exists to clear.
+
+The shadow stamped each pushed DbRef's slot generation, keyed by eval-stack byte
+offset. `put_stack` is the only writer that keeps that shadow in step, and it is not
+the only writer OF the eval stack: `copy_result` slides a return value down with a raw
+`copy_block`. The destination offset kept whatever stamp its previous occupant left,
+and the next pop compared a returned DbRef against a generation belonging to some
+earlier value. A trace showed a push of store 2 at offset 648 answered by a pop of
+store 3 at the same offset, checked against store 2's stamp.
+
+Two changes, because either alone leaves the class open. `copy_result` moves the stamp
+with the bytes — the source stamp is the real one, written by the callee's `put_stack`
+— which covers the SAME-store case no identity check can reach (the slot is recycled
+between iterations, so the stale stamp and the fresh ref name the same store at the
+same rec and pos). And the shadow now carries the STORE alongside the gen, so a
+leftover from any bypassing writer, found or not, is inert rather than evidence.
+
+Ground truth for calling the reports false: `LOFT_NO_SLOT_REUSE=1` with
+`LOFT_POISON=1`. With no slot reuse a genuine stale read must land on poisoned bytes,
+and every reporting script stayed clean and correct.
+
+`LOFT_UAF_GEN_INJECT=1` is the other half. Silencing a detector and fixing one are
+indistinguishable from a test that asserts only "no reports", so the injection ages
+every ref just after its push stamps it: 471 of 548 scripts report under it against 0
+without. `tests/uaf_gen_detector.rs` pins both directions. Recorded because it changes
+what the tool's silence means — and note the detector never actually caught #723: its
+report on the broken binary was this same false positive. Detector (c) sees only the
+window between a push and its pop, and #723's genuine stale read is a ref going stale
+in a FRAME slot.
+
+### #722 / #723: an ownership proxy and the carried fact disagreed at the pre-Set free (2026-08-01)
+
+`x = f().items[0] ?? Fallback {}` bound a dangling reference into the temporary `f()`
+returned — correct on the first read, zeroes once the store was reused. The `??` is the
+whole difference: it lowers to a value-producing BLOCK, and the temp holding `f()`'s
+result was registered at that block's scope and freed on the way out while `x`, bound
+in the enclosing scope, still pointed into it. A lift temp minted inside a value block
+is now re-registered at the ENCLOSING scope with its block-exit free dropped, and only
+the temps the RESULT points into move — hoisting every lift in a value block instead
+made frees go missing (27 leaked `File` stores), so `borrow_root` walks the getter
+chain to decide.
+
+The loop form was a second fault with a different mechanism. `generate_set`'s
+`owned_ref` decides whether a re-assignment must free the store it drops, and asks the
+TYPE: empty deps means owned, by loft's convention. That is a PROXY, and it reads
+"owned" for a borrow whose dep list was never populated — exactly what a `??` subject
+of Reference type is, since the parser materialises it into `__ncc_N` and marks it
+`skip_free` while leaving deps empty. Outside a loop the variable is assigned once, so
+the free ran on a null slot; inside one it ran on the previous iteration's borrow, by
+then dangling into a store freed at the body exit whose slot the next call had already
+recycled — so it released a store that had just been allocated and was about to be
+read. The @PLN118 sentinel reset cannot cover it: that hangs off a block-exit free,
+which a `skip_free` var by definition does not have.
+
+The fix is a subtraction — `skip_free` vetoes the proxy — and not a new rule:
+`generate_call` already suppresses any IR-level `OpFreeRef` naming a `skip_free` var
+(the S34 guard). `generate_set` emits its pre-Set free as raw ops and bypassed that
+chokepoint. A sentinel over the remaining raw emission sites found 0 further `skip_free`
+frees corpus-wide against a proven-live control of 1831 hits, so the class is closed.
+Interpreter-only: the generated Rust is byte-identical, and `--native` derives the
+borrow correctly in `generation/dispatch.rs`.
+
 ### #687: a mutated text capture's STORAGE is decided per binding, not per function (2026-07-30)
 
 #685 fixed mutated scalar PARAMETER captures for every type but one and refused the
