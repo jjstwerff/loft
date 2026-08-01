@@ -1353,6 +1353,24 @@ fn store_reclaim_shrinks_a_bound_file_both_backends() {
             "{backend}: a truncated store still takes records and still reads the \
              ones that survived: {out}"
         );
+
+        // A shortened file is only a store if it still OPENS as one.  A fresh
+        // process binds to what the first left behind: same count, same digest.
+        // Nothing in the writing process could have caught a truncation that
+        // left the block chain unable to tile the file.
+        let (re, re_code) = run_mode_backend(backend, &script, &path, "reload");
+        assert_eq!(re_code, 0, "{backend} reload exit: {re:?}");
+        assert_eq!(
+            field(&re, "reload", "live"),
+            301,
+            "{backend}: the re-opened file holds every record: {re}"
+        );
+        assert_eq!(
+            field(&re, "reload", "digest"),
+            field(&out, "after_write", "digest"),
+            "{backend}: and holds them unchanged — a truncated file re-read in a \
+             fresh process:\n  wrote:  {out}\n  reread: {re}"
+        );
     }
 }
 

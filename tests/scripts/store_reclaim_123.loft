@@ -34,6 +34,15 @@ fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
   if path == "" { println("no path"); return }
 
+  // Second pass, a FRESH process against the file the first pass truncated:
+  // a shortened file is only a store if it still opens as one.
+  if (env_variable("LOFT_PERSIST_TEST_MODE") ?? "") == "reload" {
+    back: hash<Hex[id]> = [];
+    if !store_persist_bind(back, path) { println("FAIL reload-bind"); return }
+    println("reload live {live(back)} digest {digest(back)}");
+    return
+  }
+
   world: hash<Hex[id]> = [];
   for i in 0..300 { world += [Hex { id: i, a: (i % 251) as i32? ?? (0 as i32), label: "hex {i}" }]; }
   ok = store_persist_bind(world, path);
@@ -63,5 +72,5 @@ fn main() {
   old = world[7];
   if fresh == null { println("FAIL lost-new-record"); return }
   if old == null { println("FAIL lost-old-record"); return }
-  println("after_write live {live(world)} new {fresh.label} old {old.label}");
+  println("after_write live {live(world)} digest {digest(world)} new {fresh.label} old {old.label}");
 }

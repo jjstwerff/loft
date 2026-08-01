@@ -138,6 +138,25 @@ The done-bar: every cell green on both backends, with the digest unchanged acros
 truncate/compact — a smaller file that lost data would pass every size assertion.
 Probes graduate to `tests/scripts/`.
 
+**Stage A result — every cell green.** Unbound/heap and the coalescing axis are
+`src/store.rs`'s unit tests; bound-then-grown-then-shrunk, both backends, and
+**reload** (a fresh process binding to the truncated file: 301 records, identical
+digest) are `tests/scripts/store_reclaim_123.loft` + its driver.
+
+The **shrink-shape** axis is the one that changes the ANSWER rather than just
+passing, so it is worth having in writing. Same store, 3000 records, 300 kept:
+
+| survivors | given back |
+|---|---|
+| oldest 300 (contiguous, low in the arena) | **50%** |
+| newest 300 (high in the arena) | 34% |
+| every 10th (spread) | 34% |
+
+A gives back something in all three, because a bound store's 7/3 growth leaves
+tail regardless of where the survivors sit. But the mark is where the LAST
+survivor ends, so a workload whose survivors sit high keeps a third less. That
+gap is arc B's, not a defect in A.
+
 ## Open design questions
 
 1. ~~When does A fire?~~ **Settled: the program calls it.** Automatic was
