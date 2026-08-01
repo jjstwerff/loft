@@ -1374,6 +1374,202 @@ fn store_reclaim_shrinks_a_bound_file_both_backends() {
     }
 }
 
+/// One `count/sum/xor/sound` line from `store_digest_b0.loft`.
+#[derive(PartialEq, Eq, Debug, Clone)]
+struct B0 {
+    count: i64,
+    sum: i64,
+    xor: i64,
+    sound: bool,
+}
+
+/// Run the B0 oracle script and read back one tagged report line.
+fn b0_run(
+    backend: &str,
+    path: &Path,
+    order: &str,
+    damage: &str,
+    mode: &str,
+    tag: &str,
+    seed: Option<&str>,
+) -> B0 {
+    let script = workspace_root().join("tests/scripts/store_digest_b0.loft");
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg(backend)
+        .arg(&script)
+        .env("LOFT_PERSIST_TEST_PATH", path)
+        .env("LOFT_PERSIST_TEST_MODE", mode)
+        .env("B0_ORDER", order)
+        .env("B0_DAMAGE", damage)
+        .env("B0_N", "200")
+        .current_dir(workspace_root());
+    match seed {
+        Some(s) => cmd.env("LOFT_HASH_SEED", s),
+        None => cmd.env_remove("LOFT_HASH_SEED"),
+    };
+    let out = cmd.output().expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{backend} {order}/{damage}/{mode} failed: {stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with(tag))
+        .unwrap_or_else(|| panic!("no `{tag}` line for {backend} {order}/{damage}:\n{stdout}"));
+    let num = |key: &str| -> i64 {
+        let mut it = line.split_whitespace();
+        while let Some(t) = it.next() {
+            if t == key {
+                return it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+                    panic!("`{key}` is not a number in `{line}`");
+                });
+            }
+        }
+        panic!("no `{key}` in `{line}`");
+    };
+    B0 {
+        count: num("count"),
+        sum: num("sum"),
+        xor: num("xor"),
+        sound: line.ends_with("sound true"),
+    }
+}
+
+/// @PLN123 B0 — the oracle arc B will be built against, calibrated BEFORE any
+/// compaction code exists.
+///
+/// Invariant B is that a compacted image holds exactly the records reachable
+/// from the root and reloads value-identical. No size assertion can check that:
+/// a file that got smaller by losing data satisfies every one of them. So the
+/// question here is not "is compaction correct" — there is no compaction yet —
+/// but "would this digest KNOW". Two halves:
+///
+/// **It must see every loss.** Five injuries, one per way a rebuild could drop
+/// something: a missing record, a changed scalar, a shortened text, a truncated
+/// vector, a changed nested-struct field. Each must move the numbers. An oracle
+/// that cannot fail is worse than none, because it reports success.
+///
+/// **It must be a function of the DATA, not the representation.** A rebuild
+/// changes where everything sits, so anything the digest picks up from layout
+/// would read as data loss — wrong in the direction that gets a fix applied to
+/// working code. The five runs below hold identical records in five different
+/// representations (three build orders × two bucket seeds), and the assertion
+/// that the resulting FILES differ is what stops "same digest" from meaning
+/// "nothing was perturbed".
+///
+/// **F9 is not a live hazard, and that took establishing.** The step assumed a
+/// rebuild reorders iteration, so the digest was written order-independent
+/// (sum/xor/count). Probing it with a deliberately order-DEPENDENT fold showed
+/// no build order and no seed changes the order records come out in — loft
+/// iterates a keyed collection through a key-sorted snapshot, so a rebuild
+/// cannot reorder it. The order-independent form stays because it costs
+/// nothing and keeps the oracle off that implementation detail; what could
+/// not stay was the *assertion*, which no available lever can make fail.
+///
+/// The loss half earned its place immediately: the first draft truncated the
+/// vector of a record whose vector was ALREADY one element, and the digest came
+/// back identical. That reads exactly like a blind oracle and was a blind
+/// injury — the failure mode this whole test exists to make visible.
+#[test]
+fn store_digest_b0_oracle_sees_loss_not_layout() {
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let dir = scratch(&format!("b0_{tag}"));
+        let run = |file: &str, order: &str, damage: &str, mode: &str, want: &str, seed| {
+            b0_run(backend, &dir.join(file), order, damage, mode, want, seed)
+        };
+
+        // Same 200 records, five representations.  Every run pins the bucket
+        // seed, because an unseeded hash draws a RANDOM one per process (the
+        // P253 hash-DoS defense) — leave it unpinned and the images differ no
+        // matter what else you vary, so the control below would pass while
+        // attributing nothing.  Pinned, each row differs from the first by
+        // exactly one named lever.
+        let reps: [(&str, &str, &str, &str); 5] = [
+            ("base.store", "forward", "7", "the reference representation"),
+            ("again.store", "forward", "7", "a repeat of it"),
+            (
+                "reverse.store",
+                "reverse",
+                "7",
+                "records inserted back to front",
+            ),
+            ("inter.store", "interleaved", "7", "evens then odds"),
+            ("seed1.store", "forward", "1", "a different bucket seed"),
+        ];
+        let mut images: Vec<Vec<u8>> = Vec::new();
+        let mut base: Option<B0> = None;
+        for (file, order, seed, what) in reps {
+            let got = run(file, order, "none", "", "persisted", Some(seed));
+            assert!(got.sound, "{backend}: {what} must verify");
+            assert!(
+                got.count == 200 && got.sum != 0 && got.xor != 0,
+                "{backend}: {what} produced an empty digest: {got:?}"
+            );
+            match &base {
+                None => base = Some(got),
+                Some(b) => assert_eq!(
+                    &got, b,
+                    "{backend}: {what} holds the same records — a digest that \
+                     moved with the layout would report arc B's rebuild as data loss"
+                ),
+            }
+            images.push(fs::read(dir.join(file)).expect("store file"));
+        }
+        let base = base.expect("five representations");
+
+        // The controls for the claim above.  Negative: same order, same seed,
+        // byte-identical — so the harness is deterministic and the differences
+        // below are attributable rather than noise.
+        assert_eq!(
+            images[0], images[1],
+            "{backend}: two identical runs must produce identical bytes, or \
+             nothing measured here can be attributed to anything"
+        );
+        // Positive: each lever really does reach the stored bytes, so the
+        // invariance above is a statement about data surviving a CHANGED
+        // representation — not about nothing having changed.
+        for (i, lever) in [
+            (2, "insertion order"),
+            (3, "insertion order"),
+            (4, "the bucket seed"),
+        ] {
+            assert_ne!(
+                images[0], images[i],
+                "{backend}: {lever} did not reach the stored bytes, so the \
+                 digest's invariance across it proves nothing"
+            );
+        }
+
+        // Each injury must move the numbers — the proof the digest can fail.
+        for damage in ["drop", "scalar", "text", "vector", "inner"] {
+            let hurt = run("damaged.store", "forward", damage, "", "built", None);
+            assert_ne!(
+                hurt, base,
+                "{backend}: a `{damage}` loss is invisible to the digest — an \
+                 oracle that cannot fail reports success"
+            );
+            if damage == "drop" {
+                assert_eq!(hurt.count, base.count - 1, "{backend}: a record vanished");
+            }
+        }
+
+        // Round trip: bind wrote the image above; a FRESH process reads it
+        // back, and deliberately UNSEEDED — it draws its own random bucket
+        // seed and must still find every record, because the seed the writer
+        // used travels in the image.  This is the comparison arc B's compacted
+        // image has to pass.
+        let reloaded = run("base.store", "forward", "none", "reload", "reload", None);
+        assert_eq!(
+            reloaded, base,
+            "{backend}: the image must reload value-identical"
+        );
+        assert!(reloaded.sound, "{backend}: and with a sound heap graph");
+    }
+}
+
 /// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.
 ///
 /// A hash's seed is drawn at random (the P253 hash-DoS defense) and stored in

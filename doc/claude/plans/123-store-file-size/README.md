@@ -70,7 +70,7 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | **Done** — inert |
 | **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | **Done** — the behaviour change |
 | **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | **Done** |
-| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open — arc A's driver already digests |
+| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | **Done** — sees 5 loss modes, blind to 3 layout levers |
 | **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | Open — approach settled |
 | **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open |
 
@@ -119,7 +119,7 @@ records.
 
    A takes the whole tail; the sweep collapses 2,701 free blocks to 4. **65%
    interior remains** — that is what B is worth, now measured.
-3. **B** — justified. Start at B1 (cost of rebuild-and-swap).
+3. **B** — justified. **B0 (the oracle) is done**; next is B1 (cost of rebuild-and-swap).
 
 ## Composition matrix — Stage A
 

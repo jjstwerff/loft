@@ -49,7 +49,7 @@ data satisfies every size assertion anyone would write.
 | F6 | Shrinking below `bind_path`'s 1024-word floor | Clamp; `Store::open` resizes anything smaller to 8192 bytes anyway |
 | F7 | The store keeps growing after a shrink | It re-grows at 7/3. Acceptable, but measure the churn: a threshold that fires every free would thrash |
 | F8 | Coalescing merges blocks the free tree indexes | `coalesce_free` already rebuilds the tree; keep that ordering |
-| F9 | Arc B rebuilds indexes and the key order changes | Digest must be order-independent, or compare per key |
+| F9 | Arc B rebuilds indexes and the key order changes | **Not a live hazard** (B0): loft iterates a keyed collection through a KEY-SORTED SNAPSHOT, so no rebuild can reorder it — established by probing with an order-dependent fold across 3 insertion orders and 2 bucket seeds. The digest is order-independent anyway, for free |
 
 ---
 
@@ -286,14 +286,48 @@ to `tests/scripts/`. No default to flip — there is no automatic mode for A.
 tail; what B is worth is whatever `inner%` still reads afterwards, and that number
 does not exist yet.
 
-### B0 — the oracle first
+### B0 — the oracle first — **DONE**
 
-- **Add:** a fixture that builds a store, records a per-field digest, persists,
-  reloads and re-digests. This is the only thing that can tell a correct
-  compaction from a lossy one (invariant B), and it must exist before any
-  compaction code does.
-- **Code point:** `tests/store_persist_loft.rs` beside the existing
-  `persisted_size_tracks_content_not_construction`.
+`tests/scripts/store_digest_b0.loft` + `store_digest_b0_oracle_sees_loss_not_layout`.
+A per-field digest over records carrying every field kind a rebuild must
+relocate (integer, `i32`, variable-length `text`, variable-length `vector<i32>`,
+nested struct), combined across records by sum / xor / count, plus
+`store_verify` for invariant B's other half — the digest says the values are
+right, `store_verify` says every internal pointer still targets a live record.
+
+The oracle is worth exactly what its calibration is worth, so the test pins two
+things and proves each can fail:
+
+**It sees every loss.** Five injuries — a dropped record, a changed scalar, a
+shortened text, a truncated vector, a changed nested field — each must move the
+numbers. *This caught its own first draft*: the vector injury truncated a record
+whose vector was ALREADY one element, so the digest came back identical. That
+reads exactly like a blind oracle and was a blind injury. Damage that does not
+damage proves nothing and looks like proof.
+
+**It is a function of the data, not the representation.** Five stored
+representations of identical records (three insertion orders × two bucket
+seeds) must digest the same, since a rebuild changes where everything sits and
+anything the digest picks up from layout would read as data loss.
+
+*The controls are the load-bearing part here.* **Pin the seed** — an unseeded
+hash draws a random one per process (P253), so unpinned, the five images differ
+no matter what else you vary and the control passes while attributing nothing
+(observed: all five reps forced identical still gave 5 distinct files). Pinned,
+each row differs from the reference by one named lever, a byte-identical repeat
+run proves the harness is deterministic, and each lever is asserted to actually
+reach the stored bytes. Reverse insertion even changes the file SIZE
+(22,944 vs 22,936).
+
+**F9 is NOT a live hazard, and that took establishing.** The step assumed a
+rebuild reorders iteration, so the digest was written order-independent. Probing
+with a deliberately order-DEPENDENT fold showed that neither insertion order nor
+the bucket seed changes the order records come out in: loft iterates a keyed
+collection through a **key-sorted snapshot**, not a bucket walk, so a rebuild
+cannot reorder it. The order-independent form stays — it costs nothing and keeps
+the oracle off that implementation detail — but the *assertion* had to go, since
+no available lever can make it fail. An assertion that cannot fail teaches a
+later reader that something is checked when it is not.
 
 ### B1 — measure what rebuild-and-swap costs
 
