@@ -7,9 +7,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — problem space fully characterised, both arcs' approaches settled. What
-arc **B** still lacks is a cost measurement, not a decision. **A0 is done** (the
-mark now reports whether it can be trusted); A1 is next.
+Open — **arc A is COMPLETE and shipped** (`store_reclaim(collection)`, opt-in,
+both backends). Arc **B** is next and now has the number it was waiting for: after
+A takes the tail, **65% of the remaining file is interior free space**, so B is
+justified rather than speculative. What B still lacks is a cost measurement, not a
+decision.
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
@@ -66,9 +68,9 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **A0** — trust the high-water mark (`walk_complete`) | [DESIGN.md](DESIGN.md) | **Done** — inert |
 | **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | **Done** — inert |
 | **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | **Done** — inert |
-| **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | Open — first behaviour change |
-| **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | Open |
-| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open |
+| **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | **Done** — the behaviour change |
+| **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | **Done** |
+| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open — arc A's driver already digests |
 | **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | Open — approach settled |
 | **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open |
 
@@ -82,12 +84,15 @@ that reads the same swept or unswept, so coalescing is about the interior, not
 about how much tail comes back (DESIGN.md § A2).
 
 Safe by construction: everything above the last claimed block is free, so no live
-record and no `DbRef` is affected. Recovers ~59% of the case above on its own.
+record and no `DbRef` is affected. Measured on the graduated probe, it halves the
+file — 247,944 → 124,872 bytes for the same 300 records, digest unchanged.
 
 Reached through `store_reclaim(collection)` — the program says when. "Bare
-minimum for actual changes" taken literally: do nothing at all unless asked.
-`Store::delete` keeps an O(1) tally of freed words so the call can return early
-without walking; nothing on the free path ever walks the chain.
+minimum for actual changes" taken literally: do nothing at all unless asked, and
+nothing on the free path ever walks the chain. The planned freed-words tally in
+`Store::delete` turned out to be unnecessary AND unsound as an early-out (a store
+that only ever grew has a tail with no delete behind it) — dropped, see
+DESIGN.md § A3.
 
 ### B — compact the image
 
@@ -102,11 +107,19 @@ records.
 
 ## Phase ordering
 
-1. **A first**, and stand-alone. It is the light half, it needs no design work,
-   and it changes what B is worth: after A the interior is all that is left.
-2. **Re-measure** with `store_memory()`'s `tail%` / `inner%` on a real consumer
-   before starting B. B is speculative until a consumer's `inner%` says otherwise.
-3. **B**, if the re-measurement justifies it.
+1. ~~**A first**, and stand-alone.~~ **Done.**
+2. ~~**Re-measure** with `store_memory()`'s `tail%` / `inner%`.~~ **Done**, on
+   this plan's own bound-store shape (a consumer measurement would still be worth
+   having, and would only sharpen the number):
+
+   ```
+   before store_reclaim   cap 0.262 MB  used 25%  tail 28%  inner 47%   2701 free blocks
+   after                  cap 0.188 MB  used 35%  tail  0%  inner 65%      4 free blocks
+   ```
+
+   A takes the whole tail; the sweep collapses 2,701 free blocks to 4. **65%
+   interior remains** — that is what B is worth, now measured.
+3. **B** — justified. Start at B1 (cost of rebuild-and-swap).
 
 ## Composition matrix — Stage A
 

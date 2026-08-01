@@ -262,7 +262,10 @@ fn a_bound_store_image_reports_a_trustworthy_mark() {
          shrink one: claimed={} free={} mark={} capacity={}",
         u.claimed_words, u.free_words, u.live_end_words, u.capacity_words
     );
-    assert!(u.claimed_words > 0, "the image holds the smoke script's records");
+    assert!(
+        u.claimed_words > 0,
+        "the image holds the smoke script's records"
+    );
     assert!(
         u.live_end_words <= u.capacity_words,
         "mark {} past capacity {}",
@@ -1263,6 +1266,94 @@ fn persisted_size_tracks_content_not_construction() {
         "construction order decided the size 1.84x at this shape; it must not: \
          whole={whole} interleaved={inter} ratio={ratio:.2}"
     );
+}
+
+/// @PLN123 A3 — `store_reclaim(collection)` hands a BOUND store's file back.
+///
+/// The shape the plan exists for: bind small, grow ten-fold, drop back to the
+/// original live set.  A bound store only ever grew — `resize_store` returns
+/// early on any request at or below its size — so the file stayed at its peak
+/// for the rest of the program's life.
+///
+/// Every size assertion here is paired with the digest the script prints, and
+/// that pairing is the point: a file that got smaller by LOSING data satisfies
+/// every size assertion anyone would write.  Both backends, because the call
+/// runs through the interpreter's registry entry on one and the `#rust`
+/// template on the other — two implementations of one answer.
+#[test]
+fn store_reclaim_shrinks_a_bound_file_both_backends() {
+    let script = workspace_root().join("tests/scripts/store_reclaim_123.loft");
+    let field = |out: &str, line: &str, key: &str| -> i64 {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let mut it = l.split_whitespace();
+        while let Some(t) = it.next() {
+            if t == key {
+                return it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| panic!("`{key}` is not a number in `{l}`"));
+            }
+        }
+        panic!("no `{key}` in `{l}`");
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("reclaim123_{}", backend.trim_start_matches('-')));
+        let path = dir.join("world.store");
+        let (out, code) = run_script(&script, backend, &path);
+        assert_eq!(code, 0, "{backend} exit: {out:?}");
+
+        let before = field(&out, "grown_then_dropped", "before");
+        let freed = field(&out, "grown_then_dropped", "freed");
+        let after = field(&out, "grown_then_dropped", "after");
+        assert!(
+            freed > 0,
+            "{backend}: a store grown 10x and dropped back has a tail to give: {out}"
+        );
+        assert_eq!(
+            after,
+            before - freed,
+            "{backend}: the bytes it REPORTS must be the bytes the file lost — \
+             a reclaim that misreports is worse than one that does nothing: {out}"
+        );
+        assert_eq!(
+            fs::metadata(&path).expect("store file").len() as i64,
+            field(&out, "second", "size"),
+            "{backend}: the file on disk is the size the program saw"
+        );
+
+        // The data is untouched: same live count, same digest as at bind time.
+        assert_eq!(
+            field(&out, "kept", "digest"),
+            field(&out, "kept", "was"),
+            "{backend}: the surviving records must be bit-for-bit what they were \
+             before the truncation, or the size numbers above compare nothing: {out}"
+        );
+        assert_eq!(field(&out, "kept", "live"), 300, "{backend}: {out}");
+
+        // Nothing left to give, and saying so costs the file nothing.
+        assert_eq!(
+            field(&out, "second", "freed"),
+            0,
+            "{backend}: a second reclaim has no tail left: {out}"
+        );
+        assert_eq!(
+            field(&out, "second", "size"),
+            after,
+            "{backend}: and it must not touch the file to find that out: {out}"
+        );
+
+        // Still a working store afterwards.
+        assert_eq!(field(&out, "after_write", "live"), 301, "{backend}: {out}");
+        assert!(
+            out.contains("new written after the truncation") && out.contains("old hex 7"),
+            "{backend}: a truncated store still takes records and still reads the \
+             ones that survived: {out}"
+        );
+    }
 }
 
 /// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.

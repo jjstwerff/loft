@@ -134,9 +134,28 @@ arena grows by 7/3, so persisting with no room left costs a 2.33× file resize o
 the very next claim, which is worse than the tail it removed.
 
 **Interior free space is still there.** Reclaiming that means relocating records
-and rewriting every `DbRef` — compaction, which loft#710 remains open for. So the
-size now follows the content, but two construction orders can still differ by the
-fragmentation each genuinely leaves.
+and rewriting every `DbRef` — compaction, which @PLN123 arc B remains open for. So
+the size now follows the content, but two construction orders can still differ by
+the fragmentation each genuinely leaves.
+
+**A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
+happens when the image is WRITTEN; after that `resize_store` returns early on any
+request at or below the current size, so a bound store that grew ten-fold and
+dropped back to its original live set kept the ten-fold file for the rest of the
+run (12.7× measured). `store_reclaim(collection)` (@PLN123 arc A) truncates the
+file to the store's high-water mark and answers with the bytes it gave back —
+half the file on that shape, with every surviving record bit-for-bit unchanged.
+
+Safe without any reference tracking, and the reason is worth knowing: everything
+above the high-water mark is free by construction, and a `DbRef` is a POSITION
+(`store_nr, rec, pos`), not a pointer — so nothing can name a word above the
+mark, and no record moves. What it will NOT do is touch the interior; read
+`store_memory()`'s `tail%` / `inner%` to see which of the two you have. It is
+opt-in for a reason ([STDLIB.md § Memory diagnostics](STDLIB.md)): on a churning
+store, calling it per cycle buys density with 55× the store's size in resize
+traffic. And it refuses outright on a store carrying a `store_durable_seal`
+sidecar — that sidecar records the file's byte length and CRC, so truncating
+behind its back would report a healthy store as corrupt.
 
 **`LOFT_HASH_SEED=<n>` makes a build byte-reproducible.** A hash draws a random
 seed (the P253 hash-DoS defense, `keys.rs::fresh_seed`) and stores it in its

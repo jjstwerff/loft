@@ -3008,6 +3008,28 @@ impl Stores {
         problems == 0
     }
 
+    /// Give back the free tail of the store holding `slot` — the runtime half
+    /// of `store_reclaim(collection)`.  Returns the BYTES handed back to the
+    /// filesystem (or to the allocator, for a heap store); 0 when there was
+    /// nothing to give, which is also what an out-of-range slot answers.
+    ///
+    /// The program says when, and that is the whole design (@PLN123 A3): only a
+    /// live set that drops far below its peak AND STAYS THERE has anything to
+    /// give back, and whether a drop is permanent is something the program
+    /// knows and the runtime cannot infer.  Measured here, steady-state churn
+    /// held capacity flat across 36,000 insert+remove pairs and a refill reused
+    /// every byte — an always-on reclaimer would walk, coalesce and find
+    /// nothing, for everyone.
+    ///
+    /// Nothing on the free path is touched, so `delete` stays O(1): the walk
+    /// happens here, on a call the program asked for.
+    pub fn reclaim_store(&mut self, slot: u16) -> i64 {
+        match self.allocations.get_mut(slot as usize) {
+            Some(store) => i64::from(store.reclaim_tail()) * 8,
+            None => 0,
+        }
+    }
+
     /// True when a field's type stores its value INLINE (a fixed-width scalar),
     /// so a working-set copy can move it as raw bytes with no pointer to
     /// relocate. Text (type 5) and Reference (type 6) are POINTERS; vectors /

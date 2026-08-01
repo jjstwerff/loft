@@ -176,7 +176,56 @@ blocks that are not adjacent, so `mergeable_free_pairs` is already 0 and the
 free in FORWARD runs of two — `delete` merges only with the block after it, and
 that one is still claimed both times, which is what leaves a pair unmerged.
 
-### A3 — expose it as an explicit call: `store_reclaim(collection)`
+### A3 — expose it as an explicit call: `store_reclaim(collection)` — **DONE**
+
+**It needed no compiler special-case, and no counter.** Two subtractions from the
+sketch below, both worth keeping:
+
+*Not a parser special-case.* `reserve` is one because it needs the element's
+stored width — a static type fact available nowhere else. `store_reclaim` needs
+only the reference's `store_nr`, which every call already carries, so it is a
+plain stdlib declaration with a `#rust` body beside `store_verify`
+(`default/02_files.loft`) plus the interpreter's registry handler
+(`native.rs::n_store_reclaim`). Both backends print byte-identical numbers.
+
+*No `freed_words_since_reclaim` counter.* The counter existed to keep `delete`
+from walking — and `delete` does not walk, because A is opt-in and nothing on the
+free path calls any of this. As an early-out for the explicit call it would also
+be **unsound on its own**: a store that only ever grew has a tail (the 7/3
+over-allocation) with no delete behind it, so "nothing freed since" does not mean
+"nothing to give". Making it sound needs a second producer (growth), and a missed
+producer silently under-reclaims. Dropped; the explicit call pays its one walk.
+
+*F4 is decided and enforced at the truncation itself* (`Store::shrink_to`): a
+store with a live `.dmeta` sidecar refuses, because the sidecar records byte
+length + CRC and truncating behind its back reports a healthy store as corrupt.
+
+**F7, measured.** 40 cycles of +300/−300 records over a 2,000-record hash:
+
+| | end capacity | used | tail | resize traffic |
+|---|---|---|---|---|
+| left alone | 0.286 MB | 56% | 40% | — |
+| `store_reclaim` every cycle | 0.173 MB | 93% | 0% | **9,537,312 bytes** |
+
+So the thrash is real but not free-standing: per-cycle calling *does* hold the
+store 1.65× denser, and pays 55× the store's own size in grow-and-shrink traffic
+to save 0.11 MB. That number is the argument for opt-in, better than the
+qualitative one: called once after a permanent drop it costs a single walk;
+called on a cycle it buys a re-grow every time.
+
+**The A-vs-B re-measurement** (phase ordering step 2), same bound store, before
+and after one `store_reclaim`:
+
+```
+before   cap 0.262 MB  used 25%  tail 28%  inner 47%   free-blocks 2701 (2696 mergeable)
+after    cap 0.188 MB  used 35%  tail  0%  inner 65%   free-blocks    4 (0 mergeable)
+```
+
+A takes the whole tail and the sweep collapses 2,701 free blocks to 4. What is
+left is **65% interior** — B's target, now measured rather than assumed, on the
+plan's own workload. B is justified.
+
+#### The original step, for the record
 
 **A is OPT-IN, and stays opt-in.** The earlier draft of this step gated it on
 `used_pct()` inside `Store::delete`; that is wrong twice over, and both are worth
@@ -203,18 +252,17 @@ Whether a drop is permanent is something the program knows and the runtime
 cannot infer, so the program says when.
 
 - **Surface:** `store_reclaim(collection) -> integer` — bytes returned to the
-  filesystem, 0 when there was nothing to give. A compiler special-case beside
-  `reserve` (`src/parser/collections.rs`), lowering to an op that calls
-  `Store::reclaim_tail` on the collection's store.
-- **Code point for the counter:** `src/store.rs::Store::delete` (846), which
-  already sets `needs_coalesce` — add the freed-words tally there, nothing else.
-- **Decide here:** F4 — a store with a live `.dmeta` sidecar either re-seals
-  (`store_durable_seal`) or refuses to shrink. Refusing is the safe default.
-- **Verify:** the loft-level probe (bind 300 → grow 3000 → shrink 300) on both
-  backends: the file falls when `store_reclaim` is called, is byte-identical when
-  it is not, and the digest is unchanged either way.
-- **Measure:** F7 — call it in a loop against the steady-state churn probe and
-  confirm capacity does not thrash.
+  filesystem, 0 when there was nothing to give. ~~A compiler special-case beside
+  `reserve`~~ → a stdlib declaration with a `#rust` body (see above).
+- ~~**Code point for the counter:** `src/store.rs::Store::delete`~~ → dropped
+  (see above).
+- **Decided:** F4 — a store with a live `.dmeta` sidecar refuses to shrink.
+- **Verified:** `tests/scripts/store_reclaim_123.loft` + the driver
+  `store_reclaim_shrinks_a_bound_file_both_backends` — bind 300 → grow 3000 →
+  drop back to 300: the file falls by exactly the bytes the call reports
+  (247,944 → 124,872), the digest over every surviving record is unchanged, a
+  second call returns 0 without touching the file, and the truncated store still
+  takes new records and reads old ones. Both backends, byte-identical.
 
 **The cost of opt-in, stated plainly:** a knob nobody knows about is a knob
 nobody uses, so a shrunk store stays 5.8× in the wild. What makes that

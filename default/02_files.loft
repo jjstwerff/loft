@@ -462,6 +462,27 @@ pub fn store_load_untrusted(r: reference, path: text) -> boolean fs#read;
 pub fn store_verify(r: reference) -> boolean;
 #rust"stores.verify_graph_ok(&(@r))"
 
+// Give back the free space at the END of a store-rooted collection's store, and
+// return the BYTES handed back (0 when there was nothing to give). For a store
+// bound with `store_persist_bind` that is the FILE shrinking; otherwise it is
+// memory returned to the allocator. Records are never moved, so every reference
+// into the collection stays valid.
+//
+// You say when, because only the program knows whether a drop is permanent: a
+// collection that shrinks and grows again would just pay to re-grow. Read
+// `store_memory()` first — its `tail%` is exactly what this call returns, and
+// its `inner%` is the space BETWEEN records, which this does not touch.
+//   world: hash<Hex[q, r]> = []
+//   store_persist_bind(world, "world.store")
+//   // …a region is unloaded for good…
+//   store_reclaim(world)          // the file follows what the world holds
+// Returns 0, changing nothing, for a store that is read-only, shares another
+// store's memory, or carries a `store_durable_seal` sidecar — truncating behind
+// that sidecar's back would report a healthy store as corrupt.
+pub fn store_reclaim(r: reference) -> integer fs#update;
+#rust"stores.reclaim_store((@r).store_nr)"
+#impure(io)
+
 // Working-set load: fetch ONE integer-keyed entry from a persisted HASH image
 // into the empty local hash `local`, reading only the pages the lookup touches
 // — not the whole file. The bounded-fetch counterpart of `store_load`, for when

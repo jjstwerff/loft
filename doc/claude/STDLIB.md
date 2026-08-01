@@ -992,20 +992,37 @@ Functions for interacting with the host operating system.
 | Function | Description |
 |----------|-------------|
 | `store_memory() -> text` | Returns a multi-line snapshot of all LIVE heap stores' internal utilisation — total capacity vs actual claimed data vs free space, record + free-block counts, **mergeable adjacent-free pairs** (free neighbours that should have coalesced), **`tail%` / `inner%`** (see below), and the largest stores by capacity with their type name and creation site (`bc:<pos>` — a bytecode position on the interpreter, mapping to source via `LOFT_LOG=static`; `0` on `--native`). Use to watch memory growth / fragmentation in a running program. See also `LOFT_STORES=log\|warn` (alloc/free trace). |
+| `store_reclaim(collection) -> integer` | Give back the free space at the END of a store-rooted collection's store, and answer with the BYTES handed back (`0` when there was nothing). For a collection bound with `store_persist_bind` that is the **file** shrinking; otherwise it is memory returned to the allocator. Records never move, so every reference stays valid. Returns `0` and changes nothing for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar. |
 
 **`tail%` and `inner%` say WHERE a store's free space sits**, which is the
 difference between free space you get back and free space you do not.
 
-- **`tail`** — above the last record. A persisted store already ends at the last
-  record, so this never reaches the file.
+- **`tail`** — above the last record. This is exactly what `store_reclaim`
+  returns. A persisted store's image already ends at the last record, so the
+  tail is arena capacity, not file bytes — until the store is BOUND, where it is
+  both.
 - **`inner`** — between records. It is reusable for future allocation, but it
   *is* written to the file, because the image has to span up to the last record.
+  `store_reclaim` does not touch it.
 
 A store built once reads `inner 0%`. One whose live set fell well below its peak
 reads a high `inner` — 71% in the case behind loft#713 — and that is the part
 only relocation could recover. Coalescing does not touch it: forcing a sweep took
 2,700 free blocks to 6 and left `inner` unchanged at 45%, because merging free
 blocks never moves a live one.
+
+**Reading the two before calling `store_reclaim`** is the whole workflow: `tail%`
+is what you would get, `inner%` is what you would not.
+
+**You say when, and that is deliberate.** Only a live set that drops far below
+its peak *and stays there* has anything to give back — whether a drop is
+permanent is something the program knows and the runtime cannot infer. A
+measured steady-state churn (40 cycles of +300/−300 records over a 2,000-record
+hash) ends at 0.29 MB / 56% used if left alone; calling `store_reclaim` every
+cycle ends denser, at 0.17 MB / 93% used, but moves **9.5 MB** of grow-and-shrink
+traffic to get there — 55× the store's own size, to save 0.11 MB. Called once
+after a permanent drop it costs one walk; called on a cycle it pays for a re-grow
+every time.
 
 ---
 
