@@ -300,7 +300,22 @@ impl Stores {
                 .iter()
                 .filter_map(|k| self.key_field(*c, *k).map(|(content, _)| content))
                 .collect(),
-            _ => Vec::new(),
+            // Not a keyed collection — nothing to pop.  Listed out rather than
+            // caught by `_`, the way `Stores::remove` lists them: this answer
+            // decides an ARITY, so a collection kind missing from it does not
+            // lose a feature, it desynchronises the operand stack (loft#720).
+            // A `_` let `Radix` go missing silently; spelled out, the next kind
+            // added to `Parts` cannot compile until someone decides here.
+            Parts::Base
+            | Parts::Struct(_)
+            | Parts::Enum(_)
+            | Parts::EnumValue(_, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::ShortRaw(_, _)
+            | Parts::Int(_, _)
+            | Parts::DbRef
+            | Parts::ChildRec(_) => Vec::new(),
         }
     }
 

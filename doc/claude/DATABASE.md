@@ -816,9 +816,42 @@ Supported operations, all working on both backends:
   (Z-order threads through codes outside it), so the caller filters or breaks
   as needed, same as any other keyed range slice. Slices carry up to 3 axes.
 
+- **Point subscript** — `xs[x, y]` reads the record at exactly that point
+  (`null` when empty), `xs[x, y] = mob` inserts-or-replaces, `xs[x, y] = null`
+  removes. The coordinates are separate subscripts here, where the range forms
+  above parenthesise them. All three were broken until loft#720; see the
+  warning below for why that went unnoticed.
+
 See [INTERNALS.md](INTERNALS.md) for the full radix-tree API and record
 layout, and [plans/48-spacial-index/README.md](plans/48-spacial-index/README.md)
 for the design history.
+
+### Adding or changing a collection kind — the per-kind lists
+
+A `Parts` collection variant is not implemented in one place. It has to be
+named in each per-kind dispatch below, and **an omission does not read as a
+missing feature** — the surrounding kinds keep working, so the gap surfaces
+later as a crash or as silent corruption. loft#720 was three such omissions of
+`Radix` at once, each failing differently:
+
+| Site | Omitting the kind gives you |
+|---|---|
+| `Stores::get_keys` (`database/search.rs`) | **Stack desync.** The answer decides how many values `read_key` pops, so an empty list pops NOTHING and the next `get_stack::<DbRef>()` reads a leftover key value as the collection — `sp[3, 3]` looked itself up in store #3. |
+| `Stores::find` / `remove` / `remove_owned` | Lookup or unlink silently does nothing, or reads the element at the wrong frame. |
+| `Stores::set_keyed` | `coll[k] = v` falls through to the update-only `OpCopyRecord`, which no-ops on an insert-miss — and copying into a null lookup **clobbers the collection root**. |
+| `towards_set_hash_remove` / the `OpSetKeyed` route (`parser/collections.rs`) | The removal or the insert never lowers to the runtime that handles it: the interpreter corrupts the store, `--native` fails to compile a void argument. |
+
+Two habits that make the class visible instead of latent:
+
+- **Spell the non-collection variants out; never close one of these matches
+  with `_`.** `get_keys` had a catch-all, so adding `Radix` to `Parts` compiled
+  cleanly with the kind missing. `Stores::remove` lists them, and would not
+  have. The verbosity is the point — it turns "someone must remember" into a
+  compile error.
+- **Check the interpreter, not just `--native`.** The two derive key lists
+  separately: native builds its `&[Content]` inline in generated code and never
+  calls `read_key`, so a `get_keys` gap passes every native test while the
+  interpreter faults on the same line.
 
 ---
 
