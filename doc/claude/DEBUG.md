@@ -664,6 +664,61 @@ upward in the generated file from the error line to the nearest
 4. If the opcode itself is wrong (wrong opcode for the operation), check
    `src/state/codegen.rs` and the `Stack::operator` delta table in `src/stack.rs`.
 
+### When the crash will not repeat — the crash report file
+
+On SIGSEGV / SIGABRT / SIGBUS, `src/crash_report.rs` prints the last opcode, its
+bytecode position, the function, and the loft source line. It writes that to
+stderr **and to a file**, because a build that pipes stderr through a filter
+otherwise discards the one diagnostic that cannot be regenerated: the run that
+produced it is by definition the run that will not repeat (loft#717 lost exactly
+this, and all that survived the pipe was the header line).
+
+| | |
+|---|---|
+| Default location | `.loft/loft-crash-<pid>.txt` when a `.loft/` directory already exists (the `loft test` case), else `<tmp>/loft-crash-<pid>.txt` |
+| Override | `LOFT_CRASH_FILE=<path>` |
+| Turn it off | `LOFT_CRASH_FILE=` (empty) — stderr only |
+
+Nothing is written unless a crash actually fires, and the directory is never
+created (a run that does not crash leaves no trace). The stderr report names the
+file it wrote, on a line after the diagnostic — so if you see the report but no
+such line, the write failed and stderr is all there is.
+
+Reading it back: the `pc:` value is a bytecode position, which
+`LOFT_LOG=static` maps to source; `fn:` and `at:` are usually enough on their
+own. If the report says `(none — crash outside interpreter)`, the fault was not
+in an opcode — look at `--native` code or a library call instead.
+
+### An unexplained SIGSEGV in a package: suspect the auto-built cdylib
+
+`--interpret` does **not** mean no native code ran. A library package with
+`[library] compile = "native"` is auto-compiled to `<pkg>/native-auto/*.so` and
+dispatched into even when the script interprets, so `gdb bt` on the core belongs
+before any interpreter theory.
+
+The generated cdylib hardcodes type-table **indices** and field **offsets**, so
+it is valid only against the exact type table it was generated from. Two
+defences keep it honest, and they fail differently:
+
+- The artifact's FILENAME carries the caller's type-layout fingerprint (#715), so
+  two contexts never name the same file.
+- The artifact also DECLARES the layout it was built for
+  (`loft_type_layout_fp_v1`), and the adopter verifies it before use (loft#717).
+  A mismatch rebuilds rather than dispatching.
+
+The second exists because the first is an argument, not a check: it holds only
+while the fingerprint keeps covering every layout difference and while nothing
+else can put a file at that name. When an argument like that fails, the artifact
+is not slightly wrong — it resolves indices against a foreign table, so reads
+land at wrong offsets and the crash surfaces arbitrarily far from the cause.
+That is why the verification is worth a `dlopen`: the failure it prevents is
+unattributable by construction.
+
+Suspect this whenever a crash is intermittent, appears under a parallel sweep,
+and does not repeat afterwards — the artifact is rebuilt on the next run, so the
+evidence deletes itself. `rm -rf <pkg>/native-auto` and re-running is not a
+diagnosis; it is destroying the only copy of the thing that crashed.
+
 ---
 
 ## Before you believe a fault is RANDOM
@@ -757,6 +812,9 @@ where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
 | `LOFT_STORE_GUARD=1` | Reports each block-confined vector store that is scoped (and freed) later than the block it is confined to — the lifetime model under-freeing (Goal E).  Read-only, off by default.  Confinement is the least-common-ancestor of every reference's scope-path, with escape exclusions (return/yield/break, block-result, tuple-element, dep-aliasing) and loop-internal reuse excluded — adversarially hardened by `plans/2-vector-store-watermark/probes/cluster-I/`. | "Does a program hold more heap than the source implies?"  Drive the store-lifetime fix until it is silent corpus-wide, then promote to a `debug_assertions` assert.  See [GOALS.md Goal E](GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth). |
 | `LOFT_LOG=zero_claim` (or `LOFT_ZERO_CLAIM=1`) | Zeroes every freshly-claimed record's payload, so a read-before-write / stale read returns a deterministic `0` instead of arena garbage. | A result is **non-deterministic** run-to-run.  If `zero_claim` makes it deterministic-and-correct → a read-before-write (fix: zero that record at its claim site).  If it stays non-deterministic → NOT a claimed-slack read (rule it out; suspect a deep-copy logic bug or addresses-as-data). |
 | `LOFT_LOG=poison_free` | Overwrites a store's buffer with `0xDEADBEEF` on free. | Suspected use-after-free of a *whole store*.  No effect ⇒ not a freed-store UAF. |
+| `LOFT_UAF_GEN=1` (+ `LOFT_UAF_SRC=1`) | Detector (c): stamps every DbRef pushed on the operand stack with its store's generation and reports at the matching pop when the slot was freed since.  `_SRC` adds the freeing pc + op. | The freed-then-**reused** read `LOFT_POISON` is blind to (the new occupant is live, so the bytes look fine).  **Scope: only the window between a push and its pop** — a ref that goes stale sitting in a FRAME slot is invisible to it, which is why it never saw loft#723. |
+| `LOFT_UAF_GEN_INJECT=1` | Ages every ref just after its push stamps it, so each is stale while live.  The positive control for the row above. | Before believing a silent `LOFT_UAF_GEN` run.  A detector that cannot fire and a clean corpus look identical; under injection ~471/548 corpus scripts report, against 0 without it. |
+| `LOFT_NO_SLOT_REUSE=1` **+** `LOFT_POISON=1` | No freed slot is ever reclaimed, so a freed store stays freed *and* poisoned. | **Ground truth for "is this reported stale read real?"** — with reuse off, a genuine stale read must land on `0xDEADBEEF`.  Clean + correct here ⇒ the report is a false positive.  This is what convicted the `LOFT_UAF_GEN` offset-keyed-stamp bug. |
 | `LOFT_STORES=log` | Per-alloc/free trace (`+ alloc #N`, `- free #N`). | Find a `free` then `alloc` of the same store while a `DbRef` is still live.  Note: a store is logged under the var name at *free* time, which may differ from its *alloc* name. |
 | `LOFT_STORES=warn` | Warns when >30 stores are active. | Catch a runaway leak early.  **Note (@PLN103):** this OVER-warns — a large *working set* (many concurrently-live stores, all freed) trips it though it is not a leak.  Prefer `=timeline` to disambiguate. |
 | `LOFT_STORES=timeline` (@PLN103) | Per-store lifeline with a STABLE id `#<store_nr>.<seq>` (the `seq` disambiguates the reused `store_nr` slot, so a `free` prints the same id as its `alloc`), plus an exit SUMMARY: `<allocs>, <frees>, peak <N> concurrently-live (working set)` reconciled with the authoritative leak count. Both backends. | The working-set-vs-leak question `=warn` can't answer: a high `peak` with `NO leak` is a big-but-clean working set; a real leak reports `N user store(s) LEAKED`.  Also: match a freed-then-reused slot by its `.seq`. |

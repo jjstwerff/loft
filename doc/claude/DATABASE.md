@@ -85,6 +85,15 @@ let store = Store::open_durable(
 existing file."  After the callback returns successfully, `open_durable`
 captures a fresh sidecar and retries once.
 
+**Reading a bound collection invalidates its seal.** Iterating a keyed collection
+materialises a key-sorted snapshot, and for a collection bound with
+`store_persist_bind` that snapshot is claimed INSIDE the store — so the file's
+bytes change and the sidecar's CRC no longer matches, with the file LENGTH
+unchanged. Measured: a bare re-bind keeps `store_durable_check` true; one
+traversal makes it false. Seal AFTER the reads you intend to do, not before.
+(`store_reclaim` and compaction both refuse outright on a store with a live
+sidecar, so those cannot surprise you the same way.)
+
 **Drop-on-panic is by design.**  A panic between open and clean drop
 skips the sidecar write → next open detects corruption → callback fires.
 This is what makes Tier 1 cheap.  Do not use Tier 1 for data that cannot
@@ -134,9 +143,66 @@ arena grows by 7/3, so persisting with no room left costs a 2.33× file resize o
 the very next claim, which is worse than the tail it removed.
 
 **Interior free space is still there.** Reclaiming that means relocating records
-and rewriting every `DbRef` — compaction, which loft#710 remains open for. So the
-size now follows the content, but two construction orders can still differ by the
-fragmentation each genuinely leaves.
+and rewriting every `DbRef` — compaction, which @PLN123 arc B remains open for. So
+the size now follows the content, but two construction orders can still differ by
+the fragmentation each genuinely leaves.
+
+**A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
+happens when the image is WRITTEN; after that `resize_store` returns early on any
+request at or below the current size, so a bound store that grew ten-fold and
+dropped back to its original live set kept the ten-fold file for the rest of the
+run (12.7× measured). `store_reclaim(collection)` (@PLN123 arc A) truncates the
+file to the store's high-water mark and answers with the bytes it gave back —
+half the file on that shape, with every surviving record bit-for-bit unchanged.
+
+Safe without any reference tracking, and the reason is worth knowing: everything
+above the high-water mark is free by construction, and a `DbRef` is a POSITION
+(`store_nr, rec, pos`), not a pointer — so nothing can name a word above the
+mark, and no record moves. What it will NOT do is touch the interior; read
+`store_memory()`'s `tail%` / `inner%` to see which of the two you have. It is
+opt-in for a reason ([STDLIB.md § Memory diagnostics](STDLIB.md)): on a churning
+store, calling it per cycle buys density with 55× the store's size in resize
+traffic. And it refuses outright on a store carrying a `store_durable_seal`
+sidecar — that sidecar records the file's byte length and CRC, so truncating
+behind its back would report a healthy store as corrupt.
+
+**The INTERIOR is taken automatically, when a store is LOADED** (@PLN123 arc B).
+The space *between* surviving records needs the collection rebuilt somewhere
+dense, which moves records — so it happens only where an interior `DbRef` cannot
+be live: `store_load`, and `store_persist_bind` on an **existing** file. Both are
+loads, and both already replace the slot's bytes wholesale, so a reference held
+across them was already meaningless. Binding to a NEW file is a *write* and is
+deliberately untouched: a program keeps element references across it, and the
+byte-for-byte image is what makes that work.
+
+A bound store that peaked at 2,000 records and settled at 200 came back at
+180,104 bytes every run; it now loads at 26,992 — the same records, the same
+digest, and still bound. The one position that never moves is the collection
+root, because the collection variable itself is a `DbRef` at it.
+
+It is **gated**, which is what lets it be a default: a store whose interior free
+space is under an eighth of its high-water mark is measured and left alone. An
+eighth is the slack the image format already carries on purpose (the mark plus
+an eighth, above), and the estimate is a *lower bound* on what a rebuild returns
+— a rebuild also right-sizes live structures the metric counts as data, such as
+a hash's bucket array still sized for its peak.
+
+It declines, and says why under `LOFT_LOADER_STATS`: a spatial (`Radix`)
+collection, a record holding a `reference<T>` into another store, an untyped,
+read-only or borrowed store, a store at or below the image floor, and one
+carrying a durable sidecar. `LOFT_NO_COMPACT_ON_LOAD` turns the whole thing off.
+
+**The eighth of slack survives `store_reclaim`** — and for a while it did not.
+The image size used to be clamped to the arena's current capacity ("never larger
+than we would have written before"), which was safe while capacity sat well above
+the mark. `store_reclaim` trims capacity TO the mark, so the clamp collapsed the
+eighth to zero for exactly the stores someone had just tidied, and the next claim
+paid the 7/3 ladder the eighth exists to prevent. The claim that tripped it was
+the most ordinary one there is: READING the collection, because iterating a keyed
+collection claims its key-sorted snapshot inside the store. A 2,000-record hash
+wrote 187,784 bytes and one read took it to 438,160 — **2.07× larger than never
+reclaiming at all**. The clamp is gone; both paths now land on 211,256 and stay
+there. Guarded by `persisted_image_keeps_its_slack_after_store_reclaim`.
 
 **`LOFT_HASH_SEED=<n>` makes a build byte-reproducible.** A hash draws a random
 seed (the P253 hash-DoS defense, `keys.rs::fresh_seed`) and stores it in its
@@ -275,6 +341,24 @@ pub struct Field {
 | `lock_store(r: &DbRef)` | Lock the store that owns `r` (no-op for null refs) |
 | `unlock_store(r: &DbRef)` | Unlock the store that owns `r` |
 | `is_store_locked(r: &DbRef) -> bool` | Return whether the store that owns `r` is locked |
+| `adopt_store(store) -> u16` | Install an externally-built `Store`; clears the slot's free bit |
+| `take_store(slot) -> Store` | Move a `Store` out, leaving a freed sentinel — **does NOT release the slot** |
+| `release_slot(slot)` | Give a slot borrowed by `adopt_store` back to the pool |
+
+**`adopt_store` / `take_store` are not symmetric about the slot, on purpose.**
+`take_store` is written for a store handed out to OUTLIVE the table — the REPL's
+session store, adopted for a run and taken back afterwards — where the slot
+should stay reserved. So it leaves the free bit CLEAR, and `find_free_slot` only
+ever returns a slot whose bit is SET. A caller borrowing a slot as **scratch**
+must therefore call `release_slot`, or the slot number is burned for the life of
+the process.
+
+That leak is invisible from two places you would look: `store_memory()` counts
+only LIVE stores and a freed sentinel is not one, and `LOFT_STORES=log` does not
+trace this allocation path. It was found by reading the pair rather than by any
+probe (@PLN123 B2, where compaction borrows a scratch slot on every load), and
+`slot_recycling_tests` in `src/database/mod.rs` pins both halves so the
+asymmetry stays recorded.
 
 ### Constant store (`CONST_STORE`)
 
@@ -732,9 +816,42 @@ Supported operations, all working on both backends:
   (Z-order threads through codes outside it), so the caller filters or breaks
   as needed, same as any other keyed range slice. Slices carry up to 3 axes.
 
+- **Point subscript** — `xs[x, y]` reads the record at exactly that point
+  (`null` when empty), `xs[x, y] = mob` inserts-or-replaces, `xs[x, y] = null`
+  removes. The coordinates are separate subscripts here, where the range forms
+  above parenthesise them. All three were broken until loft#720; see the
+  warning below for why that went unnoticed.
+
 See [INTERNALS.md](INTERNALS.md) for the full radix-tree API and record
 layout, and [plans/48-spacial-index/README.md](plans/48-spacial-index/README.md)
 for the design history.
+
+### Adding or changing a collection kind — the per-kind lists
+
+A `Parts` collection variant is not implemented in one place. It has to be
+named in each per-kind dispatch below, and **an omission does not read as a
+missing feature** — the surrounding kinds keep working, so the gap surfaces
+later as a crash or as silent corruption. loft#720 was three such omissions of
+`Radix` at once, each failing differently:
+
+| Site | Omitting the kind gives you |
+|---|---|
+| `Stores::get_keys` (`database/search.rs`) | **Stack desync.** The answer decides how many values `read_key` pops, so an empty list pops NOTHING and the next `get_stack::<DbRef>()` reads a leftover key value as the collection — `sp[3, 3]` looked itself up in store #3. |
+| `Stores::find` / `remove` / `remove_owned` | Lookup or unlink silently does nothing, or reads the element at the wrong frame. |
+| `Stores::set_keyed` | `coll[k] = v` falls through to the update-only `OpCopyRecord`, which no-ops on an insert-miss — and copying into a null lookup **clobbers the collection root**. |
+| `towards_set_hash_remove` / the `OpSetKeyed` route (`parser/collections.rs`) | The removal or the insert never lowers to the runtime that handles it: the interpreter corrupts the store, `--native` fails to compile a void argument. |
+
+Two habits that make the class visible instead of latent:
+
+- **Spell the non-collection variants out; never close one of these matches
+  with `_`.** `get_keys` had a catch-all, so adding `Radix` to `Parts` compiled
+  cleanly with the kind missing. `Stores::remove` lists them, and would not
+  have. The verbosity is the point — it turns "someone must remember" into a
+  compile error.
+- **Check the interpreter, not just `--native`.** The two derive key lists
+  separately: native builds its `&[Content]` inline in generated code and never
+  calls `read_key`, so a `get_keys` gap passes every native test while the
+  interpreter faults on the same line.
 
 ---
 

@@ -5,6 +5,7 @@
 
 use crate::database::{Parts, Stores};
 use crate::keys::{Content, DbRef};
+use crate::store::RECORD_PAYLOAD;
 use crate::vector;
 use crate::{hash, keys, tree};
 use std::cmp::Ordering;
@@ -289,11 +290,32 @@ impl Stores {
                     .filter_map(|(k, _)| self.key_field(*c, *k).map(|(content, _)| content))
                     .collect()
             }
-            Parts::Hash(c, key) => key
+            // `Radix` (a `spatial<T[x,y]>`) carries the same `(element, key fields)` shape as
+            // `Hash`, and its coordinate axes are as much a key as any other: `read_key` pops
+            // one stack value per entry here, so an empty answer pops NOTHING and the very
+            // next `get_stack::<DbRef>()` reads a leftover key value as the collection —
+            // `sp[3, 3]` then looked up in store #3 (loft#720).  The bytecode was always
+            // right (`GetRecord(… no_keys=2)`); only this list disagreed.
+            Parts::Hash(c, key) | Parts::Radix(c, key) => key
                 .iter()
                 .filter_map(|k| self.key_field(*c, *k).map(|(content, _)| content))
                 .collect(),
-            _ => Vec::new(),
+            // Not a keyed collection — nothing to pop.  Listed out rather than
+            // caught by `_`, the way `Stores::remove` lists them: this answer
+            // decides an ARITY, so a collection kind missing from it does not
+            // lose a feature, it desynchronises the operand stack (loft#720).
+            // A `_` let `Radix` go missing silently; spelled out, the next kind
+            // added to `Parts` cannot compile until someone decides here.
+            Parts::Base
+            | Parts::Struct(_)
+            | Parts::Enum(_)
+            | Parts::EnumValue(_, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::ShortRaw(_, _)
+            | Parts::Int(_, _)
+            | Parts::DbRef
+            | Parts::ChildRec(_) => Vec::new(),
         }
     }
 
@@ -454,7 +476,8 @@ impl Stores {
             Parts::Hash(c, _)
             | Parts::Sorted(c, _)
             | Parts::Index(c, _, _)
-            | Parts::Ordered(c, _) => c,
+            | Parts::Ordered(c, _)
+            | Parts::Radix(c, _) => c,
             _ => return,
         };
         let keys = self.types[db as usize].keys.clone();
@@ -468,8 +491,13 @@ impl Stores {
             // leaves it orphaned — reclaim it (otherwise repeated
             // `coll[k] = v` replaces grow the store unboundedly).  Sorted /
             // index records are inline in the vector / freed by their own
-            // `remove`, so no extra delete there.
-            if matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
+            // `remove`, so no extra delete there.  A `Radix` element holds its
+            // own block exactly as a hash element does (the same pair
+            // `remove_owned` calls `own_block`), so it needs the same reclaim.
+            if matches!(
+                self.types[db as usize].parts,
+                Parts::Hash(_, _) | Parts::Radix(_, _)
+            ) {
                 self.store_mut(coll).delete(existing.rec);
             }
         }
@@ -576,7 +604,16 @@ impl Stores {
         // `Array` / `Ordered` also hold separate records, but their removal
         // path reads `rec` as an inline index and is wrong before this change
         // too, so this does not extend to them.
-        let own_block = matches!(parts, Parts::Hash(..) | Parts::Index(..) | Parts::Radix(..));
+        // `Ordered` joins them (loft#719): its elements have their own store
+        // records too, so the element must be DELETED after its claims are
+        // released — the inline branch below only shifts the container and would
+        // leak the record.  `Array` is left out deliberately: it is removed by
+        // INDEX rather than by key, so `rec` reaches this function differently
+        // and it has no test to move it on.
+        let own_block = matches!(
+            parts,
+            Parts::Hash(..) | Parts::Index(..) | Parts::Radix(..) | Parts::Ordered(..)
+        );
         let rec_nr = rec.rec;
         if own_block {
             // Unlink BEFORE releasing the claims, which is the order
@@ -586,7 +623,31 @@ impl Stores {
             // live siblings and takes the subtree with it — the whole
             // collection then reads back as "Item not found".
             self.remove(data, rec, db);
-            self.remove_claims(rec, content);
+            // Walk the element's owned children from the RECORD's payload
+            // start, not from the position the caller navigated with (loft#718).
+            //
+            // A field position in `content` is an offset within the element
+            // record, so it is only meaningful against that record's payload —
+            // byte 8, past the size header.  Most callers already hold such a
+            // `DbRef` (a key lookup does), but an `index`'s LOOP cursor does
+            // not: its red-black links live in a field of the record, so
+            // `tree::next` navigates with `pos` set to that link's offset
+            // (`Stores::fields`).  Handing that cursor to `remove_claims` walked
+            // every field from there — for `Rec { id, n, label: text }` the
+            // `text` landed at 8+20+16 = 44 in a 40-byte record, so `#remove`
+            // in a filtered loop read past the record and corrupted the free
+            // tree, which then recursed forever in `fl_insert_node` (SIGSEGV on
+            // the interpreter, stack overflow on `--native`).
+            //
+            // `own_block` is exactly the set whose elements HAVE their own
+            // record, so the payload start is the right answer for all of them
+            // rather than a per-kind adjustment.
+            let elem = DbRef {
+                store_nr: rec.store_nr,
+                rec: rec_nr,
+                pos: RECORD_PAYLOAD,
+            };
+            self.remove_claims(&elem, content);
             self.store_mut(data).delete(rec_nr);
         } else {
             // Inline element: its successor is about to be shifted on top of
@@ -607,7 +668,9 @@ impl Stores {
     */
     pub fn remove(&mut self, data: &DbRef, rec: &DbRef, db: u16) {
         match self.types[db as usize].parts.clone() {
-            Parts::Sorted(c, _) | Parts::Vector(c) | Parts::Array(c) | Parts::Ordered(c, _) => {
+            // BY-VALUE: elements sit inline in the container, so the element's
+            // byte position IS its index.
+            Parts::Sorted(c, _) | Parts::Vector(c) | Parts::Array(c) => {
                 let size = u32::from(self.types[c as usize].size);
                 vector::remove_vector(
                     data,
@@ -615,6 +678,25 @@ impl Stores {
                     i64::from((rec.pos - 8) / size),
                     &mut self.allocations,
                 );
+            }
+            // BY-REFERENCE: the container holds 4-byte rec-ids and the element
+            // lives in its own record, so `rec` is that record at its payload
+            // start — `(rec.pos - 8) / size` is 0 for EVERY element, and `size`
+            // is the element's width where the container's slots are 4 bytes.
+            // Removing anything therefore shifted the wrong span from the wrong
+            // place (loft#719).  The slot has to be looked up by the record it
+            // names.
+            Parts::Ordered(_, _) => {
+                let vec_rec = self.store(data).get_u32_raw(data.rec, data.pos);
+                if vec_rec == 0 {
+                    return;
+                }
+                let len = self.store(data).get_u32_raw(vec_rec, 4);
+                let slot =
+                    (0..len).find(|i| self.store(data).get_u32_raw(vec_rec, 8 + i * 4) == rec.rec);
+                if let Some(i) = slot {
+                    vector::remove_vector(data, 4, i64::from(i), &mut self.allocations);
+                }
             }
             Parts::Hash(_, _) => {
                 let keys = self.keys(db).to_vec();

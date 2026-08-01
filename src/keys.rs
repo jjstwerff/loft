@@ -798,9 +798,19 @@ thread_local! {
     /// re-claimed NEW one — so it does NOT false-positive on free-then-reclaim (the
     /// flaw that sank the store_nr-only scan).
     static SLOT_GEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
-    /// Shadow of the operand stack: the slot-gen stamped on each DbRef at PUSH, keyed by
-    /// its eval-stack byte offset. At POP, a shadow-vs-current mismatch = reused-since-push.
-    static STACK_SHADOW: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+    /// Shadow of the operand stack: keyed by eval-stack byte offset, holding the STORE a
+    /// DbRef named at PUSH together with that slot's gen. At POP, a mismatch against the
+    /// slot's current gen = reused-since-push.
+    ///
+    /// The store number is carried, not just the gen, because an offset alone cannot say
+    /// WHICH store a stamp is about. `put_stack` is the only writer that keeps the shadow
+    /// in step, and it is not the only writer of the eval stack — a raw `copy_block` slide
+    /// can replace the value under a stamp. A gen-only stamp was then read as a claim about
+    /// whatever DbRef happened to land there, and reported a store freed since some
+    /// UNRELATED value occupied the offset. Matching the store makes such a leftover stamp
+    /// inert instead of a false positive, for every bypassing writer rather than the ones
+    /// that had been found.
+    static STACK_SHADOW: std::cell::RefCell<std::collections::HashMap<u32, (u16, u32)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -847,17 +857,57 @@ pub fn uaf_slot_gen(slot: u16) -> u32 {
     SLOT_GEN.with(|g| g.borrow().get(slot as usize).copied().unwrap_or(0))
 }
 
-/// Stamp the generation of the DbRef pushed at eval-stack offset `off`.
-pub fn uaf_stamp_shadow(off: u32, generation: u32) {
+/// Stamp eval-stack offset `off` with the store a pushed DbRef names and that slot's
+/// generation.
+pub fn uaf_stamp_shadow(off: u32, store_nr: u16, generation: u32) {
     STACK_SHADOW.with(|s| {
-        s.borrow_mut().insert(off, generation);
+        s.borrow_mut().insert(off, (store_nr, generation));
     });
 }
 
-/// The gen stamped at eval-stack offset `off`, if any.
+/// The gen stamped at `off` — but only when the stamp is ABOUT `store_nr`. A stamp naming
+/// a different store is a leftover from a value that has since been overwritten by a
+/// writer that bypasses `put_stack`; it says nothing about the ref being popped now, so it
+/// reads as absent rather than as evidence.
 #[must_use]
-pub fn uaf_shadow_gen(off: u32) -> Option<u32> {
-    STACK_SHADOW.with(|s| s.borrow().get(&off).copied())
+pub fn uaf_shadow_gen(off: u32, store_nr: u16) -> Option<u32> {
+    STACK_SHADOW.with(|s| {
+        s.borrow()
+            .get(&off)
+            .and_then(|&(st, stamped)| (st == store_nr).then_some(stamped))
+    })
+}
+
+/// Move a stamp from one eval-stack offset to another, for a writer that relocates a DbRef
+/// without going through `put_stack` (the `copy_result` return slide). Clears `to` when
+/// `from` holds no stamp, so the destination never keeps its previous occupant's.
+pub fn uaf_move_shadow(from: u32, to: u32) {
+    STACK_SHADOW.with(|s| {
+        let mut m = s.borrow_mut();
+        match m.remove(&from) {
+            Some(v) => {
+                m.insert(to, v);
+            }
+            None => {
+                m.remove(&to);
+            }
+        }
+    });
+}
+
+/// `LOFT_UAF_GEN_INJECT=1` — the positive control for detector (c). Bumps a store's
+/// generation immediately after each DbRef push stamps it, so every ref on the eval stack
+/// is stale while live exactly as a premature free would leave it, and any checked pop
+/// must report.
+///
+/// Without this, a silent `LOFT_UAF_GEN` run is not evidence: a detector that can no
+/// longer fire at all is indistinguishable from a clean corpus. Aging a single ref would
+/// not do — whether that one is ever popped through the checked path depends on the
+/// program, so a silent run would stay ambiguous. Never set in production.
+#[must_use]
+pub fn uaf_gen_inject_enabled() -> bool {
+    static INJ: OnceLock<bool> = OnceLock::new();
+    *INJ.get_or_init(|| std::env::var_os("LOFT_UAF_GEN_INJECT").is_some())
 }
 
 /// Consume the shadow stamp at `off` (called on a DbRef POP). The stack is LIFO, so a

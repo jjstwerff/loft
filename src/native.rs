@@ -167,6 +167,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_persist_bind", n_store_persist_bind),
     ("n_store_load", n_store_load),
     ("n_store_verify", n_store_verify),
+    ("n_store_reclaim", n_store_reclaim),
     #[cfg(paged_store)]
     ("n_store_load_key", n_store_load_key),
     #[cfg(paged_store)]
@@ -1236,6 +1237,15 @@ fn n_store_verify(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.verify_graph_ok(&v_ref);
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_reclaim` — hand the store's free tail back
+/// and answer with the bytes it gave.  @PLN123 A3; mirrors the `#rust` template
+/// in `default/02_files.loft`.
+fn n_store_reclaim(stores: &mut Stores, stack: &mut DbRef) {
+    let v_ref = *stores.get::<DbRef>(stack);
+    let bytes = stores.reclaim_store(v_ref.store_nr);
+    stores.put(stack, bytes);
 }
 
 /// Interpreter handler for `store_load` — HEAP-load a persisted store image

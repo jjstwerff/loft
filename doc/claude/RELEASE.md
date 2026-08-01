@@ -317,6 +317,50 @@ meta-deviations (differential-vs-definitional conformance, not bugs); the
 the two-stage `Struct.parse(json_parse(t))` form reports correctly); and the
 other demo apps (server / game-client / scene) which ship on their own cadence.
 
+### `2026-08` — release state (prep done 2026-08-01)
+
+The gate is the same: stability, not features. The `2026-08` **theme** work
+(@PLN24 `#c`, @PLN23 database clients, @PLN4 HTTP server) is **not** in this
+release — what ships is the heap-correctness body of work that accumulated over
+the cycle, and the release is gated on that being clean rather than on the theme
+landing. The theme carries to the next cycle.
+
+**Tracker state.** `loft-lang/loft` has 7 open issues (#717–#723) and every one
+is `fixed-pending-merge` — fixed on the cycle branch, closing automatically on
+merge via their `Fixes #N` trailers. So the tag is taken against a **zero open
+bug** tracker, but only *after* the merge: `main` on its own still carries four
+`sev:high` SIGSEGV / miscompile faults, and is not releasable.
+
+**Validation — each issue against its own reproducer**, on the interpreter, the
+interpreter under `LOFT_POISON=1`, and `--native`:
+
+| issue | shape | result |
+|---|---|---|
+| #717 | unreproduced SIGSEGV + crash report lost to a pipe | both guards green (`tests/scripts/717-closure-struct-return.loft`, `tests/crash_report_file.rs`) |
+| #718 | `#remove` on an `index<T[..]>` owning a `text` | survived 2 |
+| #719 | struct declaring both `sorted` and `index` over one type | survived 19 |
+| #720 | `spatial<T[x,y]>` point subscript, all three roles | survived 9 |
+| #721 | closure struct result used inline leaks its buffer | no leak |
+| #722 | element bound out of a returned temporary | fields intact after churn |
+| #723 | the same bind inside a loop | 1500 |
+
+`fixed-pending-merge` is applied by automation off a commit trailer, so it is a
+claim, not evidence — hence the table. #721 was additionally checked against a
+control built at the revert commit (`02b50662`), which warns `1 stores not freed
+at program exit` on the issue's own reproducer where this tree is silent.
+
+**Gate evidence** (deliberate runs, per § The nightlies): `make ci` ALL GATES
+PASSED — 3649/3649, one flaky (`keyframes_survive_total_datagram_loss`, a UDP
+timing test that failed under the fully-parallel run and passed on retry; 12/12
+in isolation, unrelated to this work). `LOFT_POISON=1` gate 1753/1753. `fmt` +
+`clippy` clean. Found and fixed en route: a stale `index/target_surface.json`
+(a builtin added without regenerating it — the branch-gates workflow does not
+run that check, so only the full local gate catches it).
+
+**Still owner-only and manual** (§ No Automated Releases): the merge, the tag
+push, the draft build, validation and publish. Prep here is the version bump to
+`2026.8.0` and the CHANGELOG roll-up, nothing further.
+
 ## What each milestone means
 
 **0.9.0 — Fully working loft language.**
@@ -355,6 +399,45 @@ This bar applies to patch releases, minor releases, and major
 releases alike.  It applies whether the target is 0.8.4 or 1.0.0.
 A "quick fix" tag that closes one bug but leaves another open is
 still a broken build and still gets blocked.
+
+### The nightlies: prove them green, don't read last night's badge
+
+**Every nightly test must be green for a release — which is a different claim
+from "last night's nightly run was green."**  The two come apart in both
+directions, so neither substitutes for the other:
+
+- **A red nightly run does NOT block the tag.**  A nightly goes red for reasons
+  that have nothing to do with the code being released — a runner without ALSA
+  or a GL device, an expired token, a network blip reaching the registry, an
+  upstream toolchain bump.  What blocks a release is a test that is *actually
+  failing*, not a workflow that reported failure.
+- **A green nightly run does NOT discharge the bar either.**  It proves the
+  tests that RAN passed on the tree they ran against, which is neither this
+  tag's tree nor necessarily the whole suite.
+
+So the release evidence is a **current, deliberate run**, not a historical
+result: re-run each nightly suite against the tag candidate and record the
+outcome.  Where a nightly cannot run here (a hosted-runner dependency, a
+platform we do not have), say so explicitly and name what was substituted —
+an unrunnable suite is an unproven one, not a passing one.
+
+The three cases that clear the bar, all of which end in evidence rather than a
+badge:
+
+| the nightly | what clears it |
+|---|---|
+| **red for an environment reason** (missing ALSA/GL, expired token, registry unreachable, toolchain bump) | run the suite here and show it green; record the reason for the red — that is a real CI finding, and the release proceeds |
+| **red for a REAL failure that we then FIXED** (e.g. Windows was genuinely broken) | the proof of the fix IS the evidence.  Do **not** wait a cycle for the next nightly to agree — a release is not gated on the CI cadence catching up.  Record the failure, the fix, and the run that shows it green |
+| **green** | still name what it covered, since a green run also covers whatever skipped itself |
+
+The second row is the one worth stating out loud, because the instinct is to
+wait for a green nightly before tagging.  That instinct trades a day for no new
+information: if the failure is understood and the fix is proven on a current
+run, the next nightly can only repeat what you already have.  Waiting is
+warranted when the fix is NOT proven — when "we think that fixed it" is doing
+the work — and then the thing to get is proof, not another night.
+
+A nightly run reports one bit; the release needs the state behind it.
 
 ### 0.8.4 progress
 

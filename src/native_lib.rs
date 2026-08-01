@@ -371,7 +371,38 @@ pub fn generate_shared_cdylib_lib_rs(
         src.push('\n');
         src.push_str(&shared_bridge_wrapper(data, &dups, d));
     }
+    src.push('\n');
+    src.push_str(&layout_fp_export(type_layout_fingerprint(stores)));
     src
+}
+
+/// The name of the symbol a generated cdylib exports to declare the type layout
+/// it was built against.  Read by [`artifact_layout_fp`] before the artifact is
+/// adopted.
+pub(crate) const LAYOUT_FP_SYMBOL: &str = "loft_type_layout_fp_v1";
+
+/// The `#[no_mangle] pub extern "C"` export that makes an artifact **name its own
+/// type layout** (loft#717).
+///
+/// The generated cdylib hardcodes type-table INDICES and field OFFSETS, so it is
+/// valid only against the exact table it was generated from.  Until now the only
+/// thing tying an artifact to that table was its FILENAME — a naming convention,
+/// not a check.  Anything that puts the wrong file at the right name (a stale
+/// artifact copied in, a package shipping a prebuilt one, a filename collision, a
+/// fingerprint that stops covering some layout difference) is therefore not
+/// caught at all: the bridges register, the indices resolve against someone
+/// else's table, and reads land at the wrong offsets.  That is silent memory
+/// corruption whose crash surfaces arbitrarily far from the cause — a SIGSEGV
+/// with nothing to attribute it to.
+///
+/// Carrying the fingerprint INSIDE the artifact makes the tie inseparable: a
+/// rename cannot change it and a copy takes it along, so the loader can verify
+/// rather than trust.
+fn layout_fp_export(fp: u64) -> String {
+    format!(
+        "#[unsafe(no_mangle)]\n\
+         pub extern \"C\" fn {LAYOUT_FP_SYMBOL}() -> u64 {{ {fp}u64 }}\n"
+    )
 }
 
 /// The `#[no_mangle] pub extern "C"` **scalar** export wrapper for
@@ -1342,6 +1373,50 @@ fn mix_fp(a: u64, b: u64) -> u64 {
 /// same digest assign every type the same index, so a cdylib's hardcoded
 /// `db_tp` indices stay valid when reused across them; a different digest means
 /// the indices would resolve to the wrong type and the cdylib must be rebuilt.
+/// The type layout an already-built artifact declares, or `None` when it does not
+/// say (a hand-written `#native` cdylib, or one generated before loft#717).
+///
+/// Opening the library to ask is safe in a way that USING it is not: the symbol is
+/// a constant-returning `extern "C" fn() -> u64`, so nothing resolves a type index
+/// or touches a store. An artifact that cannot be opened answers `None` and is
+/// treated as unusable by the caller, which rebuilds — the same outcome dlopen
+/// failure would have produced later, minus the corruption in between.
+///
+/// `None` for an artifact with no symbol deliberately does NOT reject it: a
+/// hand-written cdylib is not generated against a type table and has nothing to
+/// declare. Only a generated artifact is held to the check, and every generated
+/// artifact now carries the symbol.
+#[cfg(feature = "native-extensions")]
+fn artifact_layout_fp(so: &std::path::Path) -> Option<u64> {
+    unsafe {
+        let lib = libloading::Library::new(so).ok()?;
+        let sym = format!("{LAYOUT_FP_SYMBOL}\0");
+        let f = lib
+            .get::<unsafe extern "C" fn() -> u64>(sym.as_bytes())
+            .ok()?;
+        Some(f())
+    }
+}
+
+#[cfg(not(feature = "native-extensions"))]
+fn artifact_layout_fp(_so: &std::path::Path) -> Option<u64> {
+    None
+}
+
+/// May the artifact at `so` be adopted by a context whose type layout is
+/// `layout_fp`?
+///
+/// True when it declares `layout_fp`, or declares nothing at all (a hand-written
+/// cdylib — see [`artifact_layout_fp`]).  False only when it declares a DIFFERENT
+/// layout, which is the case that used to corrupt.
+///
+/// Note this compares the RAW `type_layout_fingerprint`, not the mixed key the
+/// filename carries: an artifact built by a different loft BUILD cannot link
+/// against this one's rlib at all, so the layout is the part worth asserting here.
+fn artifact_matches_layout(so: &std::path::Path, layout_fp: u64) -> bool {
+    artifact_layout_fp(so).is_none_or(|found| found == layout_fp)
+}
+
 fn type_layout_fingerprint(stores: &Stores) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -1399,10 +1474,8 @@ pub fn cached_or_build_shared_cdylib(
     // (the moros GLB header wrote 8-byte fields for `as i32` → version 0).  Fold the
     // caller's type-table layout into the freshness key so a context mismatch
     // rebuilds instead of silently linking an index-incompatible cdylib.
-    let fp = mix_fp(
-        crate::cache::loft_build_fingerprint(),
-        type_layout_fingerprint(stores),
-    );
+    let layout_fp = type_layout_fingerprint(stores);
+    let fp = mix_fp(crate::cache::loft_build_fingerprint(), layout_fp);
     // loft#715 — and put that key in the artifact's NAME, so two contexts can
     // never name the same file.  The fingerprint alone was not enough: the fast
     // path below reads `so.exists()` and the sidecar WITHOUT the build lock, so a
@@ -1424,7 +1497,15 @@ pub fn cached_or_build_shared_cdylib(
     // per-DIRECTORY and two contexts would otherwise invalidate each other's
     // stamp on every run, rebuilding forever (loft#715).  The sidecar is still
     // written below for the readers that report it.
-    if so.exists() && !source_newer_than(pkg_dir, &so) {
+    // loft#717 — and ASK the artifact what layout it was built for, rather than
+    // inferring it from the name.  Content-addressing (#715) makes a collision
+    // unreachable by construction, but "by construction" is an argument, not a
+    // check: it holds only while the fingerprint keeps covering every layout
+    // difference and while nothing else can put a file at this path.  When it
+    // does not hold the failure is silent corruption, so the cheap verification
+    // is worth more than the argument.  A mismatch falls through to REBUILD,
+    // which is the same thing a name miss already does.
+    if so.exists() && !source_newer_than(pkg_dir, &so) && artifact_matches_layout(&so, layout_fp) {
         return Ok(Some(so));
     }
 
@@ -1441,7 +1522,7 @@ pub fn cached_or_build_shared_cdylib(
         .map_err(|e| format!("create {}: {e}", lock_path.display()))?;
     lock.lock()
         .map_err(|e| format!("lock {}: {e}", lock_path.display()))?;
-    if so.exists() && !source_newer_than(pkg_dir, &so) {
+    if so.exists() && !source_newer_than(pkg_dir, &so) && artifact_matches_layout(&so, layout_fp) {
         return Ok(Some(so));
     }
 
@@ -1452,7 +1533,10 @@ pub fn cached_or_build_shared_cdylib(
     };
 
     // 2. No artifact yet, or `loft` changed → build eagerly (native from the start).
-    if !so.exists() {
+    // An artifact built for a DIFFERENT type layout counts as "no artifact"
+    // (loft#717): it can never be adopted, and letting it reach the edit-loop
+    // branch below would leave a foreign artifact sitting at this name.
+    if !so.exists() || !artifact_matches_layout(&so, layout_fp) {
         crate::cache::write_run_source_hash(&out_dir, source_content_hash(pkg_dir));
         return build(&out_dir);
     }

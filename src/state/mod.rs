@@ -774,8 +774,19 @@ impl State {
                     }
                     _ => continue,
                 };
+                // loft#717 — accumulate the stack movement the push ACTUALLY made
+                // rather than the 12 bytes a `DbRef` measures.  `put_stack` steps a
+                // slot to its alignment, so a `DbRef` occupies 16, and the closure
+                // read below — which re-expresses `fn_var` against the shifted TOS —
+                // landed 4 bytes short for every buffer pushed here.
+                //
+                // Neither half shows it alone: with no closure there is nothing to
+                // misread, and with no hidden buffer the shift is zero.  It takes a
+                // capturing closure that ALSO returns a struct, and then the callee
+                // receives a garbage closure `DbRef` and faults.
+                let before = self.stack_pos;
                 self.put_stack(buf);
-                hidden_bufs_size += 12;
+                hidden_bufs_size += u16::try_from(self.stack_pos - before).unwrap_or(0);
             }
         }
         // Read closure DbRef from bytes 8..20 of the fn-ref slot.
@@ -789,10 +800,14 @@ impl State {
         // against the shifted TOS.  Adjust fn_var by hidden_bufs_size.
         let closure = *self.get_var::<DbRef>(fn_var + hidden_bufs_size - 8);
         let has_closure = closure.rec != 0;
+        // Measured, not assumed, for the same reason as the hidden buffers above:
+        // the callee's frame must be told the span these pushes really occupy.
+        let before_closure = self.stack_pos;
         if has_closure {
             self.put_stack(closure);
         }
-        let total = arg_size + hidden_bufs_size + if has_closure { 12 } else { 0 };
+        let closure_span = u16::try_from(self.stack_pos - before_closure).unwrap_or(0);
+        let total = arg_size + hidden_bufs_size + closure_span;
         let code_pos = i64::from(self.fn_positions[d_nr]);
         self.fn_call(d_nr as u32, total, code_pos);
     }
@@ -1820,6 +1835,30 @@ impl State {
             let to_pos = self.stack_cur.plus(fn_stack);
             self.database.copy_block(&from_pos, &to_pos, size);
         }
+        // LOFT_UAF_GEN (c): the shadow must FOLLOW the value.  This slide is a raw
+        // `copy_block`, so it never passes through `put_stack` — the one writer that
+        // keeps the shadow in step with the eval stack.  Left alone, the destination
+        // offset keeps whatever stamp its previous occupant left, and the very next
+        // pop compares a returned DbRef against a gen belonging to some earlier value
+        // — a different store, or the same slot an allocation ago.  That mismatch was
+        // the detector's residual false positive: a loop calling a struct-returning
+        // function reported `gen 0 at push` on every backend, on programs with no
+        // stale read at all (`LOFT_NO_SLOT_REUSE=1` + `LOFT_POISON=1` stay clean).
+        //
+        // Move the stamp with the bytes instead: the SOURCE stamp is the real one
+        // (the callee's `put_stack` wrote it when it pushed the return value), so it
+        // transfers to the destination and the source is cleared.  Anything else
+        // clears the destination — a stamp is only ever kept for a DbRef that is live
+        // on the stack right now.  Detection is unaffected: a returned ref whose store
+        // was freed since the callee pushed it still carries the older gen, and still
+        // reports at the consuming pop.
+        if crate::keys::uaf_gen_enabled() {
+            if size == size_of::<DbRef>() as u32 {
+                crate::keys::uaf_move_shadow(pos - self.stack_step(size), fn_stack);
+            } else {
+                crate::keys::uaf_clear_shadow(fn_stack);
+            }
+        }
         // @PLAN53 cluster 2 / S4: the returned value occupies a stepped slot
         // on the caller's TOS (matching codegen's `position += step(ret)`);
         // the copy itself moves the real `size` bytes.  Identity when off.
@@ -1974,7 +2013,7 @@ impl State {
             // stamp belongs to exactly the pop that matches its push. Clearing on pop stops
             // a stale stamp from surviving to a later unrelated read once a non-DbRef push
             // reuses the offset — the main residual-false-positive source.
-            let stamped = crate::keys::uaf_shadow_gen(self.stack_pos);
+            let stamped = crate::keys::uaf_shadow_gen(self.stack_pos, db.store_nr);
             crate::keys::uaf_clear_shadow(self.stack_pos);
             // Only stamped < current is a genuine reuse-SINCE-push (gen increases
             // monotonically per slot). A stamped >= current is not a reuse-since-push; the
@@ -2256,8 +2295,19 @@ impl State {
                 } else {
                     crate::keys::uaf_stamp_shadow(
                         self.stack_pos,
+                        db.store_nr,
                         crate::keys::uaf_slot_gen(db.store_nr),
                     );
+                    // Positive control (LOFT_UAF_GEN_INJECT): age EVERY ref just AFTER
+                    // stamping it, so the stamp keeps the older gen and the ref is stale
+                    // while live — exactly what a premature free does. Any checked pop must
+                    // then report. Aging one ref is not enough: whether that particular ref
+                    // is ever popped through this path depends on the program, so a silent
+                    // run would still be ambiguous — which is the very thing the control
+                    // exists to rule out.
+                    if crate::keys::uaf_gen_inject_enabled() {
+                        crate::keys::uaf_bump_gen(db.store_nr);
+                    }
                 }
             } else {
                 crate::keys::uaf_clear_shadow(self.stack_pos);

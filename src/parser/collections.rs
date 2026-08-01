@@ -539,9 +539,31 @@ impl Parser {
                 && self.data.def(*get_nr).name() == "OpGetRecord"
                 && let Some(Value::Int(db_tp_val)) = get_args.get(1)
                 && (*db_tp_val as usize) < self.database.types.len()
+                // `Ordered` belongs here as much as `Sorted` does, and leaving it
+                // out was loft#719.  A `sorted<T[k]>` becomes an `ORDERED<T[k]>`
+                // — the by-reference twin — as soon as anything else in the
+                // program declares an `index<T[..]>` over the same element type,
+                // so the same source line lowers differently depending on a
+                // declaration somewhere else entirely.  With `Ordered` missing,
+                // `coll[key] = null` fell through to a plain assignment and
+                // generated `OpCopyRecord(cell, (), …)`: the interpreter dropped
+                // the removal silently (the element was still there afterwards)
+                // and `--native` failed to compile the void argument.
+                //
+                // `Radix` (a `spatial<T[x,y]>`) belongs here too, and its absence was
+                // loft#720: `sp[x, y] = null` fell through to the same plain
+                // `OpCopyRecord(cell, (), …)` that #719 produced — the interpreter
+                // corrupted the store (it freed a record derived from a leftover key
+                // value) and `--native` failed to compile the void argument.
+                // `Stores::remove_owned` already unlinks a `Radix` element, so the
+                // removal only ever needed routing to it.
                 && matches!(
                     self.database.types[*db_tp_val as usize].parts,
-                    Parts::Hash(_, _) | Parts::Index(_, _, _) | Parts::Sorted(_, _)
+                    Parts::Hash(_, _)
+                        | Parts::Index(_, _, _)
+                        | Parts::Sorted(_, _)
+                        | Parts::Ordered(_, _)
+                        | Parts::Radix(_, _)
                 )
             {
                 let db_tp = *db_tp_val;
@@ -600,7 +622,10 @@ impl Parser {
             && (*db_tp as usize) < self.database.types.len()
             && matches!(
                 self.database.types[*db_tp as usize].parts,
-                Parts::Hash(_, _) | Parts::Sorted(_, _) | Parts::Index(_, _, _)
+                Parts::Hash(_, _)
+                    | Parts::Sorted(_, _)
+                    | Parts::Index(_, _, _)
+                    | Parts::Radix(_, _)
             )
         {
             let db_tp = *db_tp;

@@ -7,8 +7,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — problem space fully characterised, arc **A** designed, arc **B** needs its
-relocation walk written down. No implementation yet.
+**Both arcs are complete.** Arc **A** ships `store_reclaim(collection)` — opt-in,
+the free TAIL, at any moment the program chooses. Arc **B** compacts the
+INTERIOR automatically **at LOAD** (`store_load`, and `store_persist_bind` on an
+existing file), gated on the interior exceeding an eighth of the high-water mark;
+`LOFT_NO_COMPACT_ON_LOAD` opts out. A bound store that peaked at 2,000 records
+and settled at 200 came back at 180,104 bytes every run and now loads at 26,992.
+
+The step that had to change: B2 specified compaction when WRITING the image, on
+the grounds that nothing holds a `DbRef` into a fresh copy — but `bind_path`
+ADOPTS the image it writes as the live store, and a program demonstrably holds
+interior references across it. Compaction belongs at LOAD, where the bytes are
+already replaced wholesale.
+
+Remaining: the A5 proposal below.
+
+One defect this work introduced and has now fixed: **`store_reclaim` before a
+bind used to remove the image's eighth of slack**, because the image size was
+clamped to the arena's capacity and arc A trims capacity to the mark. The next
+claim then paid loft#710's 7/3 cliff — and the claim that tripped it was simply
+READING the collection. Measured: 187,784 bytes at bind, 438,160 after one read,
+against 211,256 for never reclaiming at all. Both paths now hold at 211,256.
+See DESIGN.md § The re-bind measurement that was not one.
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
@@ -23,7 +43,7 @@ including a **bound (mmap) store**, which is what a long-lived store normally is
 ## Effort + design
 
 - **Effort:** M (A is S, B is M)
-- **Design:** ~ — A settled, B's relocation walk not yet written
+- **Design:** ✓ — A opt-in via `store_reclaim`, B a rebuild-and-swap at persist
 - **Last touched:** 2026-08-01
 
 ## The measurement this plan exists for
@@ -46,7 +66,7 @@ reading `store_memory()` now carries:
 | | recovers | needs | risk | when |
 |---|---|---|---|---|
 | **A** — coalesce + truncate a bound store | the free TAIL above the last record | no record movement | low — everything above the last record is free by definition | **opt-in**, `store_reclaim(collection)` |
-| **B** — compact when writing an image | the INTERIOR free space between records | relocation + pointer rewriting | contained — nothing holds a `DbRef` into a fresh copy | automatic, gated on the ratio |
+| **B** — compact when LOADING an image | the INTERIOR free space between records | a rebuild into a fresh store, then swap | low — the load path already invalidates interior refs | automatic, gated on the ratio |
 
 **A is opt-in on purpose.** Its benefit is near-zero in every workload measured
 here except one (churn and refill both hold capacity flat, so a reclaimer would
@@ -62,48 +82,90 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 
 | Item | Source | Status |
 |---|---|---|
-| **A0** — trust the high-water mark (assertion only) | [DESIGN.md](DESIGN.md) | Open — inert |
-| **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
-| **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
-| **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | Open — first behaviour change |
-| **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | Open |
-| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open |
-| **B1** — relocate vs re-insert, decided by measurement | [DESIGN.md](DESIGN.md) | Open |
-| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open |
+| **A0** — trust the high-water mark (`walk_complete`) | [DESIGN.md](DESIGN.md) | **Done** — inert |
+| **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | **Done** — inert |
+| **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | **Done** — inert |
+| **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | **Done** — the behaviour change |
+| **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | **Done** |
+| **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | **Done** — sees 5 loss modes, blind to 3 layout levers |
+| **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | **Done** — 77-86% back at ~0.6 µs/record, idempotent |
+| **B2** — implement behind a flag, off | [DESIGN.md](DESIGN.md) | **Done** — `LOFT_COMPACT_ON_LOAD=1`, 4.8-7.0x, at LOAD not at write |
+| **B3** — on by default, documented, probes graduated | [DESIGN.md](DESIGN.md) | **Done** — default ON, gated, `bind_path` wired |
+| **F4/F6 refusals** — the last two done-bar cells | [DESIGN.md](DESIGN.md) | **Done** — F4's guard was on the wrong subject and did not fire |
+| **Collection-kind matrix** for arc B | [DESIGN.md](DESIGN.md) | **Done** — hash/sorted/index/nested rebuild, spatial refuses; `ordered` blocked by loft#719 |
+| **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | Open — from MariaDB 11.2.0 prior art |
 
 ### A — truncate the tail
 
-`resize_store` must stop refusing to shrink, and the tail has to be coalesced
-first: after a mass removal it is thousands of unmerged free blocks (2,696
-mergeable pairs measured), so a naive "is the top block free" check reclaims
-almost nothing.
+`resize_store` keeps refusing to shrink — it is the growth path — so the shrink
+is a sibling, `Store::shrink_to`. A naive "is the top block free" check would
+reclaim almost nothing after a mass removal (2,696 unmerged mergeable pairs
+measured), which is why the cut is made at the **high-water mark** instead;
+that reads the same swept or unswept, so coalescing is about the interior, not
+about how much tail comes back (DESIGN.md § A2).
 
 Safe by construction: everything above the last claimed block is free, so no live
-record and no `DbRef` is affected. Recovers ~59% of the case above on its own.
+record and no `DbRef` is affected. Measured on the graduated probe, it halves the
+file — 247,944 → 124,872 bytes for the same 300 records, digest unchanged.
 
 Reached through `store_reclaim(collection)` — the program says when. "Bare
-minimum for actual changes" taken literally: do nothing at all unless asked.
-`Store::delete` keeps an O(1) tally of freed words so the call can return early
-without walking; nothing on the free path ever walks the chain.
+minimum for actual changes" taken literally: do nothing at all unless asked, and
+nothing on the free path ever walks the chain. The planned freed-words tally in
+`Store::delete` turned out to be unnecessary AND unsound as an early-out (a store
+that only ever grew has a tail with no delete behind it) — dropped, see
+DESIGN.md § A3.
+
+### A5 — reclaim at BIND time (proposed, from prior art)
+
+Not built, and not part of what shipped. B1's prior-art check turned up
+**MariaDB 11.2.0 reclaiming unused space at startup**, which is a trigger this
+plan's analysis never considered: it rejected "automatic on the free path" (a
+walk per delete) and chose "the program says when", but a third moment exists
+where neither objection applies.
+
+For loft that moment is `store_persist_bind` on an EXISTING file — the store is
+being opened, the program has not started allocating into it, so there is no
+thrash risk and no live mapping to invalidate, and the walk is amortised against
+an operation that already reads the whole image. It would give back exactly what
+the previous run left behind, for programs that never learn `store_reclaim`
+exists — which is the stated cost of A being opt-in ("a knob nobody knows about
+is a knob nobody uses").
+
+Worth weighing before A is considered finished; it is additive to `store_reclaim`,
+not a replacement.
 
 ### B — compact the image
 
-Compact while **writing** the image, not in the live arena. Nothing holds a
-`DbRef` into a fresh copy, so there are no inbound pointers to fix and no way to
-interfere with running code — which is what makes live-arena compaction dangerous
-and this version not. Gated on the live-vs-mark ratio, which persist already has
-from the chain walk it does anyway — so a dense store pays one comparison.
+**Compact while LOADING the image.** The earlier plan said "while writing", on
+the grounds that nothing holds a `DbRef` into a fresh copy — but `bind_path`
+ADOPTS the image it writes as the live store, and a program demonstrably holds
+interior references across that call, so compacting at write would dangle them
+(DESIGN.md § B2). The load path is safe for a stronger reason than absence of
+references: it already replaces the slot's bytes wholesale, so it already
+invalidates them. The root stays at `PRIMARY`, which is the one reference that
+does survive.
+
+Gated on the live-vs-mark ratio, from the walk the load does anyway — so a dense
+store pays one comparison.
 
 Ceiling is the fresh-build number: 1,042,528 → ~179,072 bytes for the same 300
 records.
 
 ## Phase ordering
 
-1. **A first**, and stand-alone. It is the light half, it needs no design work,
-   and it changes what B is worth: after A the interior is all that is left.
-2. **Re-measure** with `store_memory()`'s `tail%` / `inner%` on a real consumer
-   before starting B. B is speculative until a consumer's `inner%` says otherwise.
-3. **B**, if the re-measurement justifies it.
+1. ~~**A first**, and stand-alone.~~ **Done.**
+2. ~~**Re-measure** with `store_memory()`'s `tail%` / `inner%`.~~ **Done**, on
+   this plan's own bound-store shape (a consumer measurement would still be worth
+   having, and would only sharpen the number):
+
+   ```
+   before store_reclaim   cap 0.262 MB  used 25%  tail 28%  inner 47%   2701 free blocks
+   after                  cap 0.188 MB  used 35%  tail  0%  inner 65%      4 free blocks
+   ```
+
+   A takes the whole tail; the sweep collapses 2,701 free blocks to 4. **65%
+   interior remains** — that is what B is worth, now measured.
+3. **B** — justified. **B0 (oracle) and B1 (cost) are done**; next is B2.
 
 ## Composition matrix — Stage A
 
@@ -122,6 +184,25 @@ The done-bar: every cell green on both backends, with the digest unchanged acros
 truncate/compact — a smaller file that lost data would pass every size assertion.
 Probes graduate to `tests/scripts/`.
 
+**Stage A result — every cell green.** Unbound/heap and the coalescing axis are
+`src/store.rs`'s unit tests; bound-then-grown-then-shrunk, both backends, and
+**reload** (a fresh process binding to the truncated file: 301 records, identical
+digest) are `tests/scripts/store_reclaim_123.loft` + its driver.
+
+The **shrink-shape** axis is the one that changes the ANSWER rather than just
+passing, so it is worth having in writing. Same store, 3000 records, 300 kept:
+
+| survivors | given back |
+|---|---|
+| oldest 300 (contiguous, low in the arena) | **50%** |
+| newest 300 (high in the arena) | 34% |
+| every 10th (spread) | 34% |
+
+A gives back something in all three, because a bound store's 7/3 growth leaves
+tail regardless of where the survivors sit. But the mark is where the LAST
+survivor ends, so a workload whose survivors sit high keeps a third less. That
+gap is arc B's, not a defect in A.
+
 ## Open design questions
 
 1. ~~When does A fire?~~ **Settled: the program calls it.** Automatic was
@@ -130,10 +211,21 @@ Probes graduate to `tests/scripts/`.
    thrash. See DESIGN.md § A3.
 2. **Does `MmapStorage::resize` shrink cleanly** on every target, and what happens
    to a reader that has the file mapped concurrently?
-3. **Does B relocate, or re-insert?** Re-inserting into a fresh collection reuses
-   the existing relocating-copy machinery (the paged loader already does this per
-   entry) and needs no pointer rewriting at all — but it rebuilds indexes. Measure
-   both before choosing.
+3. ~~Does B relocate, or re-insert?~~ **Settled: rebuild into a fresh store and
+   swap.** It removes compaction's whole risk (a fresh store has no inbound
+   pointers to rewrite), and it is what InnoDB does — `OPTIMIZE TABLE` is a
+   rebuild-and-swap, not an in-place relocation. What remains is measuring its
+   cost. See DESIGN.md § B1.
+4. ~~**Is any of A's stance contradicted by recent MariaDB?**~~ **Checked (B1).
+   Not contradicted — but incomplete.** `OPTIMIZE TABLE` under
+   `innodb_file_per_table` is literally rebuild-and-swap, and in-place
+   defragmentation ships only as an opt-in switch (`innodb_defragment`,
+   MariaDB 10.1.1) — both consistent with what this plan chose. The finding is
+   **MariaDB 11.2.0, which shrinks the InnoDB system tablespace at STARTUP**.
+   That is arc A's operation made automatic at a third moment this plan never
+   weighed: not on the free path (rejected — too expensive) and not "the program
+   says when" (shipped), but **at a quiescent point where nothing is running
+   yet**. See the A5 note below.
 
 ## Ruled out — measured, do not re-chase
 

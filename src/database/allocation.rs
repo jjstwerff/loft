@@ -764,6 +764,15 @@ impl Stores {
         self.free_bits[wi] |= 1u64 << bi;
     }
 
+    /// Give a slot borrowed via [`adopt_store`](Stores::adopt_store) back to
+    /// the pool.  [`take_store`](Stores::take_store) deliberately does NOT — it
+    /// is written for a store handed out to OUTLIVE the table (the REPL session
+    /// store), where the slot should stay reserved — so a caller using a slot
+    /// as scratch has to say so.  Pinned by `slot_recycling_tests`.
+    pub(crate) fn release_slot(&mut self, slot: u16) {
+        self.set_free_bit(slot);
+    }
+
     /// S29: Clear bit `slot` in `free_bits` (slot is now active).
     fn clear_free_bit(&mut self, slot: u16) {
         let wi = slot as usize / 64;
@@ -2557,15 +2566,28 @@ impl Stores {
             // property the issue is about: two builds of the same data now land
             // within ~5% of each other instead of 1.84× apart.
             //
-            // Never larger than the capacity we would have written before, never
-            // below the 1024-word floor `Store::open` expects, and a chain the
-            // walk cannot follow falls back to the whole capacity — the file is
-            // never shortened on a guess.
+            // Never below the floor `Store::open` expects, and a chain the walk
+            // cannot follow falls back to the whole capacity — the file is never
+            // shortened on a guess.
+            //
+            // The eighth is NOT clamped to the arena's current capacity, and
+            // that is a fix, not an omission (@PLN123).  This read
+            // `.min(src_words)` — "never larger than the capacity we would have
+            // written before" — which was a safe conservatism while capacity was
+            // always comfortably above the mark.  `store_reclaim` (arc A) trims
+            // capacity TO the mark, so the clamp collapsed the eighth to zero
+            // for exactly the stores that had just been tidied, and the first
+            // claim after binding then paid the 7/3 ladder the paragraph above
+            // exists to avoid.  Measured on a 2,000-record hash: reclaim-then-
+            // bind wrote 187,784 bytes and the first READ of the collection took
+            // it to 438,160 — 2.07x LARGER than never reclaiming at all
+            // (211,256), because iterating a keyed collection claims its
+            // key-sorted snapshot inside the store.  The slack is deliberate;
+            // it has to survive a caller who tidied up first.
             let live_end = store_image_live_end(&snapshot, src_words).unwrap_or(src_words);
             let target_words = live_end
                 .saturating_add(live_end / 8)
-                .min(src_words)
-                .max(1024);
+                .max(crate::store::MIN_BOUND_WORDS);
             let padded = match build_padded_store_image(&snapshot, src_words, target_words) {
                 Some(b) => b,
                 None => return false,
@@ -2596,6 +2618,14 @@ impl Stores {
         new_store.pinned = preserved.4;
 
         self.allocations[slot_idx] = new_store;
+        // @PLN123 B3 — the OTHER load moment, and the one the plan is really
+        // about: a bound store is what a long-lived store normally is.  Only on
+        // the EXISTING-file branch — the fresh branch is a WRITE, where a
+        // program's interior references are still live and moving records would
+        // dangle them (§ B2).
+        if exists && Self::compact_on_load_enabled() {
+            self.compact_bound_store(slot, path);
+        }
         // @PLN97 3b.5 — record the layout identity beside the store
         // (`<path>.dschema`) so a later (possibly remote) working-set load can
         // reject a mismatched layout BEFORE range-reading foreign bytes at
@@ -2671,7 +2701,313 @@ impl Stores {
         new_store.pinned = preserved.4;
 
         self.allocations[slot_idx] = new_store;
+        // @PLN123 B2 — the load moment is the one place records may move (see
+        // `compact_slot`).  Off by default; the loaded store is untouched then.
+        if Self::compact_on_load_enabled() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            // Say WHY when it does not run: a refusal that reads the same as a
+            // dense store is a refusal nobody can test or diagnose.
+            match self.compact_slot(slot) {
+                Ok(words) => eprintln!("store_load: compacted #{slot} — {words} words returned"),
+                Err(why) => eprintln!("store_load: not compacted #{slot} — {why}"),
+            }
+        } else if Self::compact_on_load_enabled() {
+            let _ = self.compact_slot(slot);
+        }
         true
+    }
+
+    /// @PLN123 B3 — compact a store that was just BOUND to an existing file,
+    /// and put the smaller image back on disk.
+    ///
+    /// The mmap case of compaction-at-load.  `compact_slot` leaves the slot
+    /// holding a dense HEAP store, so the file still carries the old bytes and
+    /// has to be rewritten and re-mapped — "the hash IS the file" has to keep
+    /// being true.
+    ///
+    /// Every failure path leaves the caller with a correct store:
+    /// - compaction declines → nothing happened, the mapped store stands;
+    /// - the write fails → the ORIGINAL file is untouched (the image goes to a
+    ///   temp file and is renamed over, so the file is never half-written), and
+    ///   the store is re-bound from it;
+    /// - the re-open fails → the same re-bind, from the file that is now the
+    ///   compacted one.
+    ///
+    /// The re-bind on failure is what keeps the contract: a bound collection
+    /// must come back file-backed or not at all, never as a heap store that
+    /// silently stops persisting.
+    #[cfg(feature = "mmap")]
+    fn compact_bound_store(&mut self, slot: u16, path: &std::path::Path) {
+        let stats = std::env::var_os("LOFT_LOADER_STATS").is_some();
+        let saved = match self.compact_slot(slot) {
+            Ok(words) => words,
+            Err(why) => {
+                if stats {
+                    eprintln!("store_persist_bind: not compacted #{slot} — {why}");
+                }
+                return;
+            }
+        };
+        // The slot now holds a dense heap store; put it on disk and map it back.
+        let words = self.allocations[slot as usize].capacity_words();
+        let image = {
+            let s = &self.allocations[slot as usize];
+            let raw = unsafe { std::slice::from_raw_parts(s.base_ptr(), (words as usize) * 8) };
+            raw.to_vec()
+        };
+        let rebound = write_image_atomic(path, &image).is_ok() && self.rebind(slot, path);
+        if !rebound {
+            // Could not land the compacted image.  Re-bind from whatever the
+            // file holds — the original bytes if the write never happened, the
+            // compacted ones if it did — so the collection is file-backed
+            // either way.
+            if !self.rebind(slot, path) && stats {
+                eprintln!("store_persist_bind: #{slot} could not be re-bound after compaction");
+            }
+            return;
+        }
+        if stats {
+            eprintln!("store_persist_bind: compacted #{slot} — {saved} words returned");
+        }
+    }
+
+    /// Re-open `path` and adopt it into `slot`, keeping the slot's bookkeeping.
+    /// The tail both branches of [`bind_path`] end in, and the recovery step
+    /// [`compact_bound_store`](Self::compact_bound_store) leans on.
+    #[cfg(feature = "mmap")]
+    fn rebind(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        let Some(path_str) = path.to_str() else {
+            return false;
+        };
+        let preserved = {
+            let s = &self.allocations[slot as usize];
+            (s.known_type, s.free, s.created_at, s.last_op_at, s.pinned)
+        };
+        let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::store::Store::open(path_str)
+        }));
+        let Ok(mut store) = opened else {
+            return false;
+        };
+        store.known_type = preserved.0;
+        store.free = preserved.1;
+        store.created_at = preserved.2;
+        store.last_op_at = preserved.3;
+        store.pinned = preserved.4;
+        self.allocations[slot as usize] = store;
+        true
+    }
+
+    /// Is compaction-on-load switched on?  @PLN123 B3 turns it ON by default —
+    /// `LOFT_NO_COMPACT_ON_LOAD` opts out, the same shape as loft's other
+    /// default-on behaviours.  Read once.
+    ///
+    /// It can be a default because it is gated: a dense store is measured and
+    /// left alone (`compact_slot`), so the common case pays one chain walk on a
+    /// path that already walks the chain to rebuild the free tree.
+    fn compact_on_load_enabled() -> bool {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| std::env::var_os("LOFT_NO_COMPACT_ON_LOAD").is_none())
+    }
+
+    /// Can a collection of type `tp` be rebuilt by [`Stores::copy_claims`]?
+    ///
+    /// Exhaustive over `Parts` with **no catch-all**, so a variant added later
+    /// is a compile error here rather than a silently-skipped shape — the whole
+    /// point of the check is that an unhandled kind must REFUSE, and a
+    /// `_ => true` would refuse nothing.  `Radix` is the one live refusal:
+    /// `copy_claims` panics on it and the `for_each_owned_child` keystone
+    /// returns an empty walk, so a spatial index would come back empty.
+    fn type_is_compactable(&self, tp: u16, seen: &mut Vec<u16>) -> bool {
+        if tp as usize >= self.types.len() {
+            return false;
+        }
+        if seen.contains(&tp) {
+            return true; // already accepted on this path — a cycle, not a new shape
+        }
+        seen.push(tp);
+        let ok = match &self.types[tp as usize].parts {
+            Parts::Base
+            | Parts::Byte(..)
+            | Parts::Short(..)
+            | Parts::Int(..)
+            | Parts::ShortRaw(..)
+            | Parts::Enum(_) => true,
+            // A stored DbRef names another store, and this rebuild only moves
+            // records WITHIN one.  Nothing would rewrite a foreign pointer at
+            // the far end, so refuse rather than guess.
+            Parts::DbRef => false,
+            Parts::Radix(..) => false,
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .clone()
+                .iter()
+                .all(|f| self.type_is_compactable(f.content, seen)),
+            Parts::Vector(v)
+            | Parts::Sorted(v, _)
+            | Parts::Array(v)
+            | Parts::Ordered(v, _)
+            | Parts::Hash(v, _)
+            | Parts::Index(v, _, _)
+            | Parts::ChildRec(v) => self.type_is_compactable(*v, seen),
+        };
+        seen.pop();
+        ok
+    }
+
+    /// @PLN123 B2 — rebuild the collection rooted in `slot` into a densely
+    /// packed store and swap it in.  Returns the words the arena shrank by; 0
+    /// when compaction did not run or bought nothing.
+    ///
+    /// **Sound only where an interior `DbRef` cannot be live**, which is the
+    /// LOAD path and nowhere else.  Compaction moves records, and a `DbRef` is
+    /// a POSITION — `(store_nr, rec, pos)` — so anything holding one into this
+    /// store's interior is left naming the wrong record.  Those references live
+    /// in interpreter stack slots and native locals; nothing can enumerate or
+    /// rewrite them.
+    ///
+    /// `bind_path`'s WRITE branch is emphatically not such a place: a program
+    /// keeps element references across `store_persist_bind`, and the reason
+    /// that works today is exactly what compaction removes — the image is a
+    /// byte-for-byte copy, so every record keeps its position.  The load path
+    /// is safe for a stronger reason than "probably nobody holds one": it
+    /// already replaces the slot's bytes wholesale, so an interior reference
+    /// held across it is already meaningless.
+    ///
+    /// The collection ROOT does survive — the collection variable is a `DbRef`
+    /// at `(slot, PRIMARY, 8)` — so it must not move.  It does not: the root
+    /// record is the destination's first claim, and a fresh store hands out
+    /// `PRIMARY` first.
+    fn compact_slot(&mut self, slot: u16) -> Result<u32, &'static str> {
+        use crate::store::PRIMARY;
+        let idx = slot as usize;
+        if idx >= self.allocations.len() {
+            return Err("slot out of range");
+        }
+        let (tp, before_words, root_words) = {
+            let s = &self.allocations[idx];
+            if s.free {
+                return Err("store is free");
+            }
+            if s.read_only || s.is_borrowed() {
+                return Err("store is read-only or borrowed");
+            }
+            if s.has_durable_sidecar() {
+                // Same reason `shrink_to` refuses (F4): the sidecar records the
+                // file's byte length and CRC, so rewriting the image behind its
+                // back reports a healthy store as corrupt.
+                return Err("a durable sidecar records this file's length and CRC");
+            }
+            if s.known_type == u16::MAX {
+                return Err("store records no type, so there is no schema to walk");
+            }
+            let header = *s.addr::<i32>(PRIMARY, 0);
+            if header <= 0 {
+                return Err("the root block is free or malformed");
+            }
+            (s.known_type, s.capacity_words(), header as u32)
+        };
+        if !self.type_is_compactable(tp, &mut Vec::new()) {
+            return Err("the collection holds a shape the rebuild cannot carry");
+        }
+        // The gate, read BEFORE anything is built: a rebuild that recovers
+        // nothing still costs a full copy of every record.
+        //
+        // The estimate is the INTERIOR — the free space between surviving
+        // records — and it is a LOWER BOUND on what a rebuild returns, not a
+        // prediction of it.  Measured, recovery runs consistently ABOVE it:
+        //
+        //     inner  2%  ->  refused          inner 17%  ->  24% recovered
+        //     inner  9%  ->  refused          inner 26%  ->  33% recovered
+        //     inner  0%  ->   0% recovered    inner 43%  ->  57% recovered
+        //
+        // because a rebuild ALSO right-sizes live structures that `inner` counts
+        // as data — a hash keeps the bucket array it grew to at its peak, and a
+        // fresh one is sized for what survived.  So the gate is conservative by
+        // construction: it never fires where nothing is to be had, and declines
+        // some cases that would have paid moderately.
+        //
+        // An eighth is the threshold because that is the slack the image format
+        // already carries deliberately (`bind_path` sizes an image at the
+        // high-water mark PLUS an eighth, loft#710) — a chosen bias for a
+        // DEFAULT-ON behaviour, where declining a marginal win costs a little
+        // space and taking a marginal loss costs every load.
+        {
+            let u = self.allocations[idx].usage();
+            if !u.walk_complete {
+                return Err("the block chain does not tile the store");
+            }
+            if u.live_end_words <= crate::store::MIN_BOUND_WORDS {
+                // A bound store's image is padded up to this floor regardless,
+                // so there is no file to give back; a heap store this small is
+                // under 8 KB.  Either way the rebuild would buy nothing.
+                return Err("the store is at or below the image floor");
+            }
+            let interior = u.live_end_words.saturating_sub(u.claimed_words);
+            if interior.saturating_mul(8) <= u.live_end_words {
+                return Err(
+                    "interior free space is under the eighth the image format already allows",
+                );
+            }
+        }
+
+        // The destination's FIRST claim is the root, so it lands at PRIMARY —
+        // where the source has it, and where the caller's reference points.
+        let mut dst = crate::store::Store::new_in_use(root_words + PRIMARY + 1);
+        let dst_root = dst.claim(root_words);
+        if dst_root != PRIMARY {
+            return Err("a fresh store did not hand out PRIMARY first");
+        }
+        // Carry the root block's raw bytes first: `copy_claims` rebuilds the
+        // heap children and rewrites the pointers into them, but says nothing
+        // about any inline bytes sharing the record.
+        let dst_slot = self.adopt_store(dst);
+        let src = DbRef {
+            store_nr: slot,
+            rec: PRIMARY,
+            pos: 8,
+        };
+        let to = DbRef {
+            store_nr: dst_slot,
+            rec: PRIMARY,
+            pos: 8,
+        };
+        self.copy_block_cross_store(
+            slot,
+            PRIMARY,
+            0,
+            dst_slot,
+            PRIMARY,
+            0,
+            (root_words as isize) * 8,
+        );
+        // Re-assert the destination's own block header: the raw copy above
+        // brought the SOURCE's size word with it, and the two blocks are the
+        // same size only because we claimed it that way.
+        *self.allocations[dst_slot as usize].addr_mut::<i32>(PRIMARY, 0) = root_words as i32;
+        self.copy_claims(&src, &to, tp);
+
+        let mut rebuilt = self.take_store(dst_slot);
+        // `take_store` leaves a freed sentinel but does NOT set the slot's free
+        // BIT — it is written for a store that is handed out to outlive the
+        // table, not for a scratch slot.  Compaction runs once per load, so
+        // without this the slot number is burned every time: `find_free_slot`
+        // only ever returns a slot whose bit is SET, so the sentinel would sit
+        // there forever and `allocations` would grow per load.  The scratch
+        // slot is ours, so releasing it is ours too.
+        self.release_slot(dst_slot);
+        let after_words = rebuilt.capacity_words();
+        if after_words >= before_words {
+            // Nothing gained — leave the loaded store exactly as it is.
+            return Err("already dense");
+        }
+        // The slot's bookkeeping is the slot's, not the buffer's.
+        let s = &self.allocations[idx];
+        rebuilt.known_type = tp;
+        rebuilt.free = s.free;
+        rebuilt.created_at = s.created_at;
+        rebuilt.last_op_at = s.last_op_at;
+        rebuilt.pinned = s.pinned;
+        self.allocations[idx] = rebuilt;
+        Ok(before_words - after_words)
     }
 
     /// Adopt an in-memory, already-authenticity-verified byte buffer as the store
@@ -3006,6 +3342,28 @@ impl Stores {
         let mut problems = 0u32;
         self.validate_claims(r, tp, "store_verify", &mut problems);
         problems == 0
+    }
+
+    /// Give back the free tail of the store holding `slot` — the runtime half
+    /// of `store_reclaim(collection)`.  Returns the BYTES handed back to the
+    /// filesystem (or to the allocator, for a heap store); 0 when there was
+    /// nothing to give, which is also what an out-of-range slot answers.
+    ///
+    /// The program says when, and that is the whole design (@PLN123 A3): only a
+    /// live set that drops far below its peak AND STAYS THERE has anything to
+    /// give back, and whether a drop is permanent is something the program
+    /// knows and the runtime cannot infer.  Measured here, steady-state churn
+    /// held capacity flat across 36,000 insert+remove pairs and a refill reused
+    /// every byte — an always-on reclaimer would walk, coalesce and find
+    /// nothing, for everyone.
+    ///
+    /// Nothing on the free path is touched, so `delete` stays O(1): the walk
+    /// happens here, on a call the program asked for.
+    pub fn reclaim_store(&mut self, slot: u16) -> i64 {
+        match self.allocations.get_mut(slot as usize) {
+            Some(store) => i64::from(store.reclaim_tail()) * 8,
+            None => 0,
+        }
     }
 
     /// True when a field's type stores its value INLINE (a fixed-width scalar),
@@ -3523,6 +3881,27 @@ fn build_padded_store_image(src: &[u8], src_words: u32, target_words: u32) -> Op
         out[off..off + 4].copy_from_slice(&size.to_le_bytes());
     }
     Some(out)
+}
+
+/// Write `bytes` to `path` without ever leaving a half-written file: build it
+/// beside the target and rename over.  Rename is atomic, so a reader either
+/// sees the old image or the new one — never a truncated store.  @PLN123 B3.
+#[cfg(feature = "mmap")]
+fn write_image_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut tmp = path.to_path_buf();
+    let mut name = tmp
+        .file_name()
+        .map(std::ffi::OsString::from)
+        .unwrap_or_default();
+    name.push(".compact.tmp");
+    tmp.set_file_name(name);
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]

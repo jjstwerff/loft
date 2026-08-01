@@ -49,6 +49,14 @@ use std::fmt::{Debug, Formatter};
 static A: System = System;
 const SIGNATURE: u32 = 0x53_74_6f_31;
 pub const PRIMARY: u32 = 1;
+/// Byte offset of a record's PAYLOAD — past the 8-byte size header at word 0.
+///
+/// A field's `position` in a struct type is an offset from HERE, so any `DbRef`
+/// used to walk a record's fields must sit at this position.  Naming it makes
+/// the difference visible between such a `DbRef` and one a caller navigated
+/// with: an `index`'s tree cursor carries the red-black link's offset instead,
+/// and walking fields from that is loft#718.
+pub const RECORD_PAYLOAD: u32 = 8;
 /// Maximum store size in words; offsets are stored as `i32` so this is the limit.
 pub const MAX_STORE_WORDS: u32 = i32::MAX as u32;
 
@@ -56,6 +64,13 @@ pub const MAX_STORE_WORDS: u32 = i32::MAX as u32;
 /// A node needs 4 (left) + 4 (right) + 1 (color) bytes after the 4-byte header = 13 bytes.
 /// Two 8-byte words (16 bytes) comfortably hold these fields.
 const MIN_FREE_TREE: i32 = 2;
+
+/// Smallest size a FILE-BACKED arena is kept at, in words.  [`Store::open`]
+/// lifts anything under it back up to 8192 bytes, so an image written below the
+/// floor — or a shrink past it ([`Store::shrink_to`]) — only buys an immediate
+/// re-grow.  One home for the floor, since three places depend on it.  A heap
+/// store has no floor beyond [`Store::new`]'s two words.
+pub const MIN_BOUND_WORDS: u32 = 1024;
 /// Byte offset of LLRB left-child field within a free block.
 const FL_LEFT: u32 = 4;
 /// Byte offset of LLRB right-child field within a free block.
@@ -104,7 +119,23 @@ pub struct StoreUsage {
     /// space only RELOCATION could recover (loft#713).  Reading the two apart
     /// is the difference between "my store has room to give back" and "my
     /// records are spread out", which look identical in `free_words` alone.
+    ///
+    /// **Only meaningful when [`walk_complete`](Self::walk_complete).**
     pub live_end_words: u32,
+    /// Did the block walk reach the end of the store?
+    ///
+    /// @PLN123 A0 — the walk stops early on a zero-size header ("malformed /
+    /// uninitialised tail"), and a store that is `free` or smaller than one
+    /// block is never walked at all.  In both cases `live_end_words` is a LOWER
+    /// bound, not the mark: it can sit below a live record the walk never
+    /// reached.  Anything that would act on the mark — above all truncating to
+    /// it — must refuse unless this is true, because shrinking to a too-low
+    /// mark cuts live data rather than free tail.
+    ///
+    /// The reporting side (`store_memory`) is happy with a lower bound; the
+    /// deciding side is not, and that difference is the whole reason this field
+    /// exists rather than being assumed.
+    pub walk_complete: bool,
 }
 
 impl StoreUsage {
@@ -226,6 +257,18 @@ pub struct Store {
     /// `doc/claude/plans/43-loft-store-durable/`.
     #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
     durable_meta_path: Option<std::path::PathBuf>,
+    /// Where this store's FILE lives, for a store mapped by [`Store::open`].
+    ///
+    /// Distinct from `durable_meta_path`, which records that the store was
+    /// opened through the durable API — a Rust entry point no loft program
+    /// reaches.  The loft-level durability surface is path-based
+    /// (`store_durable_seal(path)` / `store_durable_check(path)`), so a store
+    /// can have a live `.dmeta` sidecar beside it while `durable_meta_path` is
+    /// `None`.  Anything that must ask "is a sidecar recording MY bytes" has to
+    /// ask about the file, not about how the store was opened
+    /// ([`Self::has_durable_sidecar`]).
+    #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
+    file_path: Option<std::path::PathBuf>,
     /// @PLAN38 phase 01 — durability-mode tier on this store.  Tracks
     /// which durability variant the consumer opted into so the Drop
     /// path can apply tier-specific shutdown logic.  `0` for non-durable
@@ -352,6 +395,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
@@ -403,7 +447,7 @@ impl Store {
     #[cfg(feature = "mmap")]
     pub fn open(path: &str) -> Store {
         let mut file = MmapStorage::open(path).expect("Opening file");
-        let init = if (file.capacity() / 8) < 1024 {
+        let init = if (file.capacity() / 8) < MIN_BOUND_WORDS as usize {
             file.resize(8192).unwrap();
             true
         } else {
@@ -421,6 +465,8 @@ impl Store {
         let ptr = std::ptr::addr_of!(file.as_slice()[0]).cast_mut();
         let mut store = Store {
             file: Some(file),
+            // Recorded so the store can answer "is a `.dmeta` sidecar recording
+            // MY bytes" — see `has_durable_sidecar`.
             ptr,
             claims: HashSet::new(),
             size,
@@ -444,6 +490,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: Some(std::path::PathBuf::from(path)),
             durable_tier: 0,
         };
         if init {
@@ -514,6 +561,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         };
         #[cfg(debug_assertions)]
@@ -604,6 +652,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         };
         // @PLN97 arc G Phase 2 — fail-closed structural validation of an
@@ -1133,6 +1182,28 @@ impl Store {
                 u.live_end_words = pos; // a claimed block ends here
             }
         }
+        // @PLN123 A0 — calibrate the mark rather than trust it.  The dangerous
+        // direction is a mark that is too LOW: it reads as "nothing to
+        // reclaim", which is indistinguishable from a healthy store, and arc A
+        // truncates to it.
+        //
+        // Within a COMPLETE walk the mark cannot be too low, and that is worth
+        // stating because it rules out a whole family of assertions: the loop
+        // above raises the mark at every claimed block it passes, so any check
+        // phrased against what this walk saw can only agree with itself.  The
+        // mark's trustworthiness is not a property of the arithmetic — it is
+        // exactly the question of whether the chain tiled the store, which is
+        // what this bit answers and nothing else here can.
+        u.walk_complete = pos == self.size;
+        // Falsifiable, unlike the above: a final block whose header claims more
+        // words than remain drives `pos` past the end, and if that block reads
+        // as claimed the mark lands outside the arena.
+        debug_assert!(
+            u.live_end_words <= u.capacity_words,
+            "high-water mark {} past capacity {}",
+            u.live_end_words,
+            u.capacity_words
+        );
         u
     }
 
@@ -1166,6 +1237,100 @@ impl Store {
             unsafe { self.ptr.add(old_bytes).write_bytes(0, bytes - old_bytes) };
         }
         self.size = size;
+    }
+
+    /// Give the store's tail back: lower the capacity to `words`, keeping every
+    /// claimed record and every position that names one.  Returns whether the
+    /// store actually shrank.  @PLN123 A1.
+    ///
+    /// A sibling of [`Self::resize_store`] rather than a mode of it: that one
+    /// refuses to shrink and must keep refusing — it is the growth path, and
+    /// every caller relies on grow-only.
+    ///
+    /// Safe by construction rather than by reference tracking. Everything above
+    /// the high-water mark is free, and a `DbRef` is a POSITION — `(store_nr,
+    /// rec, pos)`, not a pointer — so no reference can name a word above the
+    /// mark. That argument holds only while the mark is read off the block chain
+    /// itself ([`Self::usage`]), never a cached count, and only when the walk
+    /// reached the store's end (A0: otherwise the mark is a lower bound and a
+    /// live record can sit above it).
+    ///
+    /// Refuses, leaving the store exactly as it was, when:
+    /// - the chain walk did not complete, so the mark cannot be trusted;
+    /// - `words` is below the mark, or at/above the current size (never a
+    ///   growth path — that is `resize_store`'s job);
+    /// - the store is read-only, or borrows another store's buffer (freeing
+    ///   that buffer's tail is not this store's to do);
+    /// - a durable `.dmeta` sidecar is live (F4). The sidecar records the
+    ///   file's byte length and CRC, so truncating behind its back turns a
+    ///   healthy store into a corrupt one at the next `store_durable_check`.
+    ///   Re-sealing instead is possible; refusing is the safe default.
+    #[allow(dead_code)] // @PLN123 A1 lands inert: A3 is what calls it.
+    pub fn shrink_to(&mut self, words: u32) -> bool {
+        if self.read_only || self.borrowed || self.has_durable_sidecar() {
+            return false;
+        }
+        let mark = {
+            let u = self.usage();
+            if !u.walk_complete {
+                return false;
+            }
+            u.live_end_words
+        };
+        if words < mark {
+            return false;
+        }
+        // F6 — a file-backed store that lands under the floor is lifted right
+        // back up by `Store::open`, so shrinking past it buys an immediate
+        // re-grow.  A heap store has no such floor: `Store::new` only insists
+        // on two words.
+        let floor = if self.is_file_backed() {
+            MIN_BOUND_WORDS
+        } else {
+            PRIMARY + 1
+        };
+        let words = words.max(floor);
+        if words >= self.size {
+            return false;
+        }
+        let bytes = words as usize * 8;
+        #[cfg(feature = "mmap")]
+        if let Some(f) = &mut self.file {
+            if f.resize(bytes).is_err() {
+                // F3 — a failed truncation leaves the file and the mapping as
+                // they were, so the store simply did not shrink.  Re-derive the
+                // pointer regardless: if the REMAP is what failed there is no
+                // mapping at all, and this is where that has to surface, rather
+                // than in a caller reading through a dangling pointer.
+                self.ptr = std::ptr::addr_of!(f.as_slice()[0]).cast_mut();
+                return false;
+            }
+            self.ptr = std::ptr::addr_of!(f.as_slice()[0]).cast_mut();
+            self.size = words;
+            self.retile_tail(mark);
+            return true;
+        }
+        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+        self.ptr = unsafe { A.realloc(self.ptr, l, bytes) };
+        self.size = words;
+        self.retile_tail(mark);
+        true
+    }
+
+    /// Re-tile the arena after a truncation: whatever free space is left above
+    /// `mark` becomes ONE free block ending exactly at the new size, so the
+    /// chain still partitions the store, and the free tree is rebuilt from that
+    /// chain — F2, because a stale `free_root` still indexes the words that were
+    /// just cut and would hand one of them out.
+    fn retile_tail(&mut self, mark: u32) {
+        let tail = mark.max(PRIMARY);
+        if tail < self.size {
+            *self.addr_mut(tail, 0) = -((self.size - tail) as i32);
+        }
+        self.fl_rebuild();
+        // The same reason `resize` bumps it: a suspended coroutine holding a
+        // DbRef has to be able to notice that the arena moved.
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Lock this store against writes. Any subsequent call to `addr_mut` panics.
@@ -1250,6 +1415,39 @@ impl Store {
         self.borrowed
     }
 
+    /// Does a durable `.dmeta` sidecar record this store's file?
+    ///
+    /// The sidecar carries the file's byte length and a payload CRC, so any
+    /// operation that rewrites or shortens the file behind its back turns a
+    /// healthy store into a corrupt one at the next `store_durable_check`.
+    /// Both [`Self::shrink_to`] and @PLN123's compaction refuse on it.
+    ///
+    /// It asks about the FILE, not about how the store was opened, and the
+    /// difference is the whole point.  The first version tested
+    /// `durable_meta_path.is_some()` — set only by `Store::open_durable`, a Rust
+    /// entry point **no loft program can reach**.  Meanwhile the loft-level
+    /// surface is path-based (`store_durable_seal(path)`), so the reachable
+    /// hazard was entirely unguarded: seal, then `store_reclaim`, and
+    /// `store_durable_check` reported a perfectly healthy store as CORRUPT
+    /// (measured: 156,344 -> 138,976 bytes, check true -> false).  A guard on
+    /// how you got here cannot see a fact about what is on disk.
+    #[must_use]
+    pub fn has_durable_sidecar(&self) -> bool {
+        #[cfg(feature = "mmap")]
+        {
+            if self.durable_meta_path.is_some() {
+                return true;
+            }
+            self.file_path
+                .as_deref()
+                .is_some_and(|p| dmeta_path(p).exists())
+        }
+        #[cfg(not(feature = "mmap"))]
+        {
+            false
+        }
+    }
+
     /// Return whether this store has an empty claims set (worker clones).
     #[must_use]
     pub fn claims_empty(&self) -> bool {
@@ -1283,6 +1481,7 @@ impl Store {
             lock_origin: "clone_locked".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         }
     }
@@ -1320,6 +1519,7 @@ impl Store {
             lock_origin: String::new(),
             known_type: self.known_type,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         }
     }
@@ -1353,6 +1553,7 @@ impl Store {
             lock_origin: "borrow_locked_for_light_worker".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
+            file_path: None,
             durable_tier: 0,
         }
     }
@@ -1705,6 +1906,42 @@ impl Store {
         }
         self.fl_rebuild();
         self.needs_coalesce = false;
+    }
+
+    /// Sweep, then give the tail back: returns the number of WORDS the store
+    /// shrank by, 0 when there was nothing to give.  The whole of arc A behind
+    /// one call.  @PLN123 A2.
+    ///
+    /// **The sweep does not move the mark**, and the plan's own step said
+    /// otherwise, so it is worth being exact.  `live_end_words` is the end of
+    /// the last CLAIMED block; merging free blocks never moves a claimed one,
+    /// so the tail that comes back is the same with or without the sweep.  (The
+    /// claim it inherited — "a naive check reclaims almost nothing without
+    /// coalescing" — is true of a *is the top block free* test, which is not how
+    /// the mark is computed.)
+    ///
+    /// It is here anyway, and pays for a different thing: a caller reaching for
+    /// this has just dropped a lot, `coalesce_free` is lazy (only `claim` runs
+    /// it, and only when it would otherwise grow the store), so the INTERIOR is
+    /// where those thousands of unmerged free blocks sit — 2,696 mergeable pairs
+    /// in this plan's measurement.  Merging them is what decides whether the
+    /// next large claim reuses space or grows the store, and this explicit, rare
+    /// call is the one moment an O(blocks) sweep is welcome.  Nothing on the
+    /// free path ever walks the chain.
+    #[allow(dead_code)] // @PLN123 A2 lands inert: A3 is what calls it.
+    pub fn reclaim_tail(&mut self) -> u32 {
+        if self.needs_coalesce {
+            self.coalesce_free();
+        }
+        let before = self.size;
+        let mark = self.usage().live_end_words;
+        // `shrink_to` clamps to its floor, so the size it settles on is the
+        // only honest source for what came back — never `before - mark`.
+        if self.shrink_to(mark) {
+            before - self.size
+        } else {
+            0
+        }
     }
 
     /// Debug-only: walk the LLRB tree and verify its invariants.
@@ -3110,6 +3347,301 @@ mod tests {
             reclaimed >= b && reclaimed < d,
             "reclaimed from the old B/C region (got {reclaimed}, B={b}, D={d})"
         );
+    }
+
+    /// @PLN123 A0 — the high-water mark is the word past the LAST claimed
+    /// block, and everything above it is free.  That is the entire safety
+    /// argument for shrinking a store's file to the mark, so its value is
+    /// pinned here rather than left for arc A's first caller to discover.
+    #[test]
+    fn high_water_mark_ends_at_the_last_claimed_block() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let a = store.claim(5);
+        let b = store.claim(5);
+        let c = store.claim(5);
+        assert!(a < b && b < c, "A, B, C are contiguous and ascending");
+        // Free the two TOP records: the mark falls back to the end of A,
+        // which is where B began.
+        store.delete(c);
+        store.delete(b);
+        let u = store.usage();
+        assert!(u.walk_complete, "a healthy store's chain tiles it exactly");
+        assert_eq!(u.live_end_words, b, "the mark is the word past A");
+        assert_eq!(u.claimed_words, 5, "only A is still claimed");
+        assert_eq!(
+            u.free_words,
+            store.len() - u.live_end_words,
+            "with no interior gap, the free space IS the tail above the mark"
+        );
+    }
+
+    /// @PLN123 A0 — when the block chain does not tile the store the walk
+    /// stops early, so the mark is a LOWER BOUND and a record can live above
+    /// it.  `walk_complete` is what tells that apart from a healthy store, and
+    /// it has to: truncating to a lower bound cuts live data instead of free
+    /// tail.  The two shapes below differ in nothing else a caller can see.
+    #[test]
+    fn an_incomplete_walk_leaves_a_live_record_above_the_mark() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let _a = store.claim(5);
+        let b = store.claim(5);
+        let c = store.claim(5);
+        let healthy = store.usage();
+        assert!(healthy.walk_complete);
+        assert_eq!(healthy.live_end_words, c + 5, "the mark is past C");
+
+        // Corrupt B's header to zero — the "malformed / uninitialised tail"
+        // shape the walk breaks on.  C stays claimed above the break.
+        *store.addr_mut::<i32>(b, 0) = 0;
+        let u = store.usage();
+        assert!(!u.walk_complete, "the chain no longer tiles the store");
+        assert_eq!(u.live_end_words, b, "the walk got no further than A");
+        assert!(
+            u.live_end_words < c,
+            "record C is above the mark, so shrinking to it would cut C — \
+             which is why acting on the mark requires walk_complete"
+        );
+    }
+
+    /// @PLN123 A1 — `shrink_to` gives the tail back and keeps everything below
+    /// the mark: the records still read their values, the chain still tiles the
+    /// (smaller) store, and the free tree no longer indexes the words that were
+    /// cut.  Shrinking to the mark EXACTLY is the boundary case — no free block
+    /// is left at all.
+    #[test]
+    fn shrink_to_the_mark_keeps_every_record() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let a = store.claim(5);
+        let b = store.claim(5);
+        let c = store.claim(5);
+        *store.addr_mut::<i64>(a, 8) = 0x1111;
+        *store.addr_mut::<i64>(b, 8) = 0x2222;
+        *store.addr_mut::<i64>(c, 8) = 0x3333;
+        store.delete(c);
+
+        let mark = store.usage().live_end_words;
+        assert_eq!(mark, c, "the mark falls back to where C began");
+        let before = store.len();
+        assert!(
+            store.shrink_to(mark),
+            "the tail above the mark is free by construction"
+        );
+        assert_eq!(store.len(), mark, "capacity is now the mark");
+        assert!(before > mark, "the store really was bigger");
+
+        assert_eq!(
+            *store.addr::<i64>(a, 8),
+            0x1111,
+            "A survives the truncation"
+        );
+        assert_eq!(
+            *store.addr::<i64>(b, 8),
+            0x2222,
+            "B survives the truncation"
+        );
+        let after = store.usage();
+        assert!(
+            after.walk_complete,
+            "the chain still tiles the smaller store"
+        );
+        assert_eq!(after.claimed_words, 10, "A and B, nothing else");
+        assert_eq!(
+            after.free_words, 0,
+            "shrinking to the mark leaves no free space"
+        );
+        store.validate(0);
+        #[cfg(debug_assertions)]
+        store.fl_validate();
+
+        // The store is still usable: with no free space left, the next claim
+        // grows it again rather than handing out a word that was just cut.
+        let grown = store.claim(4);
+        assert!(
+            grown >= mark,
+            "the new record starts at or above the old mark"
+        );
+        assert_eq!(*store.addr::<i64>(b, 8), 0x2222, "and B is still B");
+    }
+
+    /// @PLN123 A1 — shrinking to somewhere ABOVE the mark leaves a free tail,
+    /// which has to become one block ending exactly at the new size and be
+    /// re-indexed (F2).  A stale `free_root` would still name the cut words; a
+    /// missing one would strand the leftover, so the proof is that the next
+    /// claim REUSES it instead of growing the store.
+    #[test]
+    fn shrink_to_above_the_mark_leaves_a_usable_free_tail() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let _a = store.claim(5);
+        let b = store.claim(5);
+        store.delete(b);
+
+        let mark = store.usage().live_end_words;
+        assert!(
+            store.shrink_to(mark + 4),
+            "4 words of tail is a shrink from 64"
+        );
+        assert_eq!(store.len(), mark + 4);
+        let u = store.usage();
+        assert!(
+            u.walk_complete,
+            "the rewritten tail block ends at the new size"
+        );
+        assert_eq!(
+            u.free_count, 1,
+            "the tail is ONE block, however many it was"
+        );
+        assert_eq!(u.free_words, 4);
+        #[cfg(debug_assertions)]
+        store.fl_validate();
+
+        let cap = store.len();
+        let reused = store.claim(3);
+        assert_eq!(store.len(), cap, "the leftover tail is in the free tree");
+        assert_eq!(reused, mark, "and the claim came out of it");
+    }
+
+    /// @PLN123 A1 — the refusals, each leaving the store byte-identical.  A
+    /// shrink below the mark would cut a live record; a "shrink" to more than
+    /// the current size is a growth request, which is `resize_store`'s job and
+    /// not something this path may quietly perform.
+    #[test]
+    fn shrink_to_refuses_anything_that_would_cut_or_grow() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let _a = store.claim(5);
+        let b = store.claim(5);
+        *store.addr_mut::<i64>(b, 8) = 0x2222;
+        let before = store.len();
+        let mark = store.usage().live_end_words;
+
+        assert!(
+            !store.shrink_to(mark - 1),
+            "one word below the mark cuts into B"
+        );
+        assert!(!store.shrink_to(0), "and so does zero");
+        assert!(!store.shrink_to(before), "the current size is not a shrink");
+        assert!(!store.shrink_to(before + 10), "nor is a bigger one");
+        assert_eq!(store.len(), before, "every refusal left the capacity alone");
+        assert_eq!(*store.addr::<i64>(b, 8), 0x2222, "and B untouched");
+
+        // A0's gate: a chain the walk cannot follow makes the mark a lower
+        // bound, and shrinking to a lower bound is what cuts live data.
+        *store.addr_mut::<i32>(b, 0) = 0;
+        assert!(
+            !store.shrink_to(before - 1),
+            "an incomplete walk must refuse, whatever the mark says"
+        );
+        assert_eq!(store.len(), before);
+    }
+
+    /// @PLN123 A2 — `reclaim_tail` on the shape it exists for: a store whose
+    /// free space is thousands of unmerged blocks because `coalesce_free` is
+    /// lazy.  The tail comes back, the interior is merged, and the store is
+    /// immediately usable again.
+    ///
+    /// It also pins the correction in `reclaim_tail`'s own doc: the sweep does
+    /// NOT decide how much comes back.  The same store reclaims the same tail
+    /// with the sweep already done, because merging free blocks never moves a
+    /// claimed one.
+    #[test]
+    fn reclaim_tail_returns_the_tail_and_merges_the_interior() {
+        // Freed in runs of two, FORWARD order: `delete` merges only with the
+        // block after it, and that one is still claimed both times, so each run
+        // leaves an adjacent-but-unmerged pair — the shape a lazy sweep leaves
+        // behind.  (Freeing every OTHER record would leave nothing mergeable
+        // and make the sweep assertion below say nothing.)
+        fn fragmented() -> (Store, Vec<u32>) {
+            let mut store = Store::new(256);
+            store.free = false;
+            let recs: Vec<u32> = (0..21).map(|_| store.claim(5)).collect();
+            for i in (0..18).step_by(3) {
+                store.delete(recs[i]);
+                store.delete(recs[i + 1]);
+            }
+            (store, recs)
+        }
+
+        let (mut store, recs) = fragmented();
+        let last_live = *recs.last().expect("21 records");
+        assert_eq!(
+            store.usage().mergeable_free_pairs,
+            6,
+            "six unmerged pairs to sweep — the precondition this test needs"
+        );
+        let before = store.len();
+        let freed = store.reclaim_tail();
+        assert_eq!(
+            freed,
+            before - store.len(),
+            "the words it says it gave back"
+        );
+        assert!(
+            freed > 0,
+            "a 256-word store holding 20 five-word records has a tail"
+        );
+        assert_eq!(
+            store.len(),
+            last_live + 5,
+            "capacity is now the end of the last surviving record"
+        );
+        let after = store.usage();
+        assert!(after.walk_complete);
+        assert_eq!(after.mergeable_free_pairs, 0, "the interior was swept");
+        #[cfg(debug_assertions)]
+        store.fl_validate();
+        // Still usable, and the swept interior is what serves the next claim.
+        let cap = store.len();
+        let reused = store.claim(4);
+        assert_eq!(store.len(), cap, "reused interior space instead of growing");
+        assert!(reused < last_live, "and it came from below the last record");
+
+        // The sweep is not what decides the tail: pre-swept, same answer.
+        let (mut swept, _) = fragmented();
+        swept.coalesce_free();
+        let before_swept = swept.len();
+        assert_eq!(
+            swept.reclaim_tail(),
+            before_swept - (last_live + 5),
+            "coalescing first changes nothing about how much comes back"
+        );
+    }
+
+    /// @PLN123 A2 — a dense store has nothing to give, and says so without
+    /// touching anything.  The report is what a caller acts on, so a `0` that
+    /// actually shrank the store would be worse than no call at all.
+    #[test]
+    fn reclaim_tail_reports_zero_when_there_is_no_tail() {
+        let mut store = Store::new(64);
+        store.free = false;
+        while store.len() == 64 {
+            store.claim(5); // fill until the next claim would grow it
+        }
+        let mark = store.usage().live_end_words;
+        assert!(store.shrink_to(mark), "trim to the mark first");
+        let before = store.len();
+        assert_eq!(store.reclaim_tail(), 0, "nothing above the mark to give");
+        assert_eq!(store.len(), before, "and the store is untouched");
+    }
+
+    /// @PLN123 A0 — non-vacuity for the mark-vs-capacity assertion.  It is a
+    /// `debug_assert`, and `[profile.dev.package.loft]` strips those from
+    /// `cargo test`, so this test compiles away with it: it runs only in the
+    /// build that installs the instrument, and proves that build can fail.
+    /// A final block claiming more words than remain drives the walk — and
+    /// with it the mark — past the end of the arena.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "high-water mark")]
+    fn a_mark_past_capacity_is_caught() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let a = store.claim(5);
+        *store.addr_mut::<i32>(a + 5, 0) = 100; // claimed, and 100 > 64 - 6
+        let _ = store.usage();
     }
 
     /// `resize_store` must panic when the requested size exceeds `MAX_STORE_WORDS`.

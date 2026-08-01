@@ -1,0 +1,148 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN123 B0 — the oracle arc B is built against, and its calibration.
+//
+// Invariant B: a compacted image contains exactly the records reachable from
+// the collection root, and loading it back yields a VALUE-IDENTICAL collection.
+// A size assertion cannot check that — a file that got smaller by losing data
+// satisfies every size assertion anyone would write — so compaction needs a
+// digest, and the digest needs to be right before any compaction code exists.
+//
+// Two properties, pulling opposite ways, and F9 is why both matter:
+//
+//   BLIND to record order.  Arc B rebuilds into a fresh store, so a hash's
+//   bucket order changes.  Arc A's digest folds records in iteration order
+//   (`d = d*31 + …`), which would flag a CORRECT compaction as lossy — wrong in
+//   the direction that makes an oracle useless.  Records are combined here by
+//   sum / xor / count, all order-independent.
+//
+//   SENSITIVE to every field.  Order-dependent WITHIN a record, because vector
+//   and text order is data, not layout.
+//
+// Env in:
+//   LOFT_PERSIST_TEST_PATH   where to bind ("" = digest only, no file)
+//   LOFT_PERSIST_TEST_MODE   "" | reload  — reload re-digests an existing file
+//   B0_ORDER                 forward | reverse | interleaved  (must not matter)
+//   B0_DAMAGE                none | drop | scalar | text | vector | inner
+//   B0_N                     record count (default 400)
+//
+// B0_DAMAGE is the calibration: each value injures the data in ONE way a lossy
+// compaction could, and the driver requires the digest to notice.  An oracle
+// that cannot fail is worse than no oracle, because it reports success.
+
+struct Inner { const a: i32, const b: i32 }
+
+struct Rec {
+  const id: integer,
+  const n: i32,
+  const label: text,
+  const xs: vector<i32>,
+  const inner: Inner,
+}
+
+fn i32_of(v: integer) -> i32 { v as i32? ?? (0 as i32) }
+
+// Order-DEPENDENT over one record's fields: text and vector order is data.
+fn rec_hash(r: Rec) -> integer {
+  h = 7;
+  h = (h * 131 + r.id) % 1000000007;
+  h = (h * 131 + (r.n as integer)) % 1000000007;
+  h = (h * 131 + len(r.label)) % 1000000007;
+  for rh_c in r.label { h = (h * 131 + (rh_c as integer)) % 1000000007 }
+  h = (h * 131 + len(r.xs)) % 1000000007;
+  for rh_x in r.xs { h = (h * 131 + (rh_x as integer)) % 1000000007 }
+  h = (h * 131 + (r.inner.a as integer)) % 1000000007;
+  h = (h * 131 + (r.inner.b as integer)) % 1000000007;
+  h
+}
+
+// Order-INDEPENDENT across records (F9): sum, xor and count are the same
+// whatever order the collection hands its records out in.  Three combinators,
+// not one, so two different record sets colliding on all three is not a thing
+// that happens by accident.
+fn report(h: hash<Rec[id]>, tag: text) {
+  sum = 0;
+  xor = 0;
+  count = 0;
+  for rp_r in h {
+    rh = rec_hash(rp_r);
+    sum = (sum + rh) % 1000000007;
+    xor = xor ^ rh;
+    count += 1;
+  }
+  // `store_verify` is the second half of invariant B, and it is free: the
+  // digest says the records hold the right VALUES, this says every internal
+  // pointer still targets a live record.  A rebuild that produced plausible
+  // values through a dangling edge would pass one and fail the other.
+  println("{tag} count {count} sum {sum} xor {xor} sound {store_verify(h)}");
+}
+
+fn label_of(i: integer, damage: text) -> text {
+  // Length varies with the id: fixed-width payloads would let a compaction
+  // that truncated every text by the same amount still look plausible.
+  s = "rec-{i}";
+  for lb_j in 0..(i % 7) { s += "-{lb_j}" }
+  if damage == "text" && i == 3 { s = "rec-" }
+  s
+}
+
+fn xs_of(i: integer, damage: text) -> vector<i32> {
+  v: vector<i32> = [];
+  for xs_j in 0..(i % 5 + 1) { v += [i32_of(i * 31 + xs_j)] }
+  // Record 4 is chosen because `4 % 5 + 1` is the LONGEST vector this shape
+  // builds: truncating it to one element is unmistakable.  The first draft
+  // damaged record 5, whose vector is one element ALREADY — the digest was
+  // identical and the calibration read as a blind spot in the oracle when it
+  // was a blind spot in the injury.  Damage that does not damage proves
+  // nothing, and looks exactly like an oracle that cannot see.
+  if damage == "vector" && i == 4 { v = [i32_of(i * 31)] }
+  v
+}
+
+fn make(i: integer, damage: text) -> Rec {
+  n = if damage == "scalar" && i == 7 { i + 1 } else { i };
+  b = if damage == "inner" && i == 9 { i * 3 + 1 } else { i * 3 };
+  Rec {
+    id: i,
+    n: i32_of(n),
+    label: label_of(i, damage),
+    xs: xs_of(i, damage),
+    inner: Inner { a: i32_of(i * 2), b: i32_of(b) },
+  }
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  mode = env_variable("LOFT_PERSIST_TEST_MODE") ?? "";
+  order = env_variable("B0_ORDER") ?? "forward";
+  damage = env_variable("B0_DAMAGE") ?? "none";
+  n = (env_variable("B0_N") ?? "") as integer ?? 400;
+
+  // Re-digest a file a previous run left behind: the round trip's second half.
+  if mode == "reload" {
+    if path == "" { println("FAIL reload-needs-a-path"); return }
+    back: hash<Rec[id]> = [];
+    if !store_persist_bind(back, path) { println("FAIL reload-bind"); return }
+    report(back, "reload");
+    return
+  }
+
+  idx: hash<Rec[id]> = [];
+  if order == "reverse" {
+    for rv in rev(0..n) { if !(damage == "drop" && rv == 11) { idx += [make(rv, damage)] } }
+  } else if order == "interleaved" {
+    // Evens then odds: the arena sees a different growth pattern for the same
+    // records, which is the shape that made construction order visible in the
+    // file size (loft#710).
+    for ev in 0..n { if ev % 2 == 0 && !(damage == "drop" && ev == 11) { idx += [make(ev, damage)] } }
+    for od in 0..n { if od % 2 == 1 && !(damage == "drop" && od == 11) { idx += [make(od, damage)] } }
+  } else {
+    for fw in 0..n { if !(damage == "drop" && fw == 11) { idx += [make(fw, damage)] } }
+  }
+
+  report(idx, "built");
+  if path == "" { return }
+  if !store_persist_bind(idx, path) { println("FAIL bind"); return }
+  report(idx, "persisted");
+}

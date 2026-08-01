@@ -240,6 +240,45 @@ fn fresh_then_reload_round_trip() {
     );
 }
 
+/// @PLN123 A0 — the high-water mark on the shape arc A actually targets: a
+/// BOUND store, re-opened from its file.  Gating a shrink on `walk_complete`
+/// is only worth anything if a healthy bound store reports it TRUE; were the
+/// image to leave a zero-header tail, the gate would refuse forever and arc A
+/// would be dead on arrival while every test still passed.  A padded image
+/// tiles its arena exactly — `build_padded_store_image` lays one free block
+/// over the slack above the last record — and this pins that.
+#[test]
+fn a_bound_store_image_reports_a_trustworthy_mark() {
+    let dir = scratch("bound_store_mark");
+    let path = dir.join("world.store");
+    let (out, code) = run_smoke(&path, "fresh");
+    assert_eq!(code, 0, "fresh exit: stdout={out:?}");
+
+    let store = loft::store::Store::open(path.to_str().expect("utf-8 path"));
+    let u = store.usage();
+    assert!(
+        u.walk_complete,
+        "a bound store's block chain must tile its file, or arc A can never \
+         shrink one: claimed={} free={} mark={} capacity={}",
+        u.claimed_words, u.free_words, u.live_end_words, u.capacity_words
+    );
+    assert!(
+        u.claimed_words > 0,
+        "the image holds the smoke script's records"
+    );
+    assert!(
+        u.live_end_words <= u.capacity_words,
+        "mark {} past capacity {}",
+        u.live_end_words,
+        u.capacity_words
+    );
+    assert!(
+        u.capacity_words - u.live_end_words > 0,
+        "the image keeps an eighth of slack above the mark (loft#710), which is \
+         exactly the tail arc A gives back"
+    );
+}
+
 /// @PLN97 arc G Phase 0.5b — `store_persist_bind` on a `sorted<T[k]>` must
 /// round-trip across processes: a `sorted` is comparison-based (no per-process
 /// hash seed), so the reload process must iterate in key order AND key-look-up
@@ -1227,6 +1266,996 @@ fn persisted_size_tracks_content_not_construction() {
         "construction order decided the size 1.84x at this shape; it must not: \
          whole={whole} interleaved={inter} ratio={ratio:.2}"
     );
+}
+
+/// @PLN123 A3 — `store_reclaim(collection)` hands a BOUND store's file back.
+///
+/// The shape the plan exists for: bind small, grow ten-fold, drop back to the
+/// original live set.  A bound store only ever grew — `resize_store` returns
+/// early on any request at or below its size — so the file stayed at its peak
+/// for the rest of the program's life.
+///
+/// Every size assertion here is paired with the digest the script prints, and
+/// that pairing is the point: a file that got smaller by LOSING data satisfies
+/// every size assertion anyone would write.  Both backends, because the call
+/// runs through the interpreter's registry entry on one and the `#rust`
+/// template on the other — two implementations of one answer.
+#[test]
+fn store_reclaim_shrinks_a_bound_file_both_backends() {
+    let script = workspace_root().join("tests/scripts/store_reclaim_123.loft");
+    let field = |out: &str, line: &str, key: &str| -> i64 {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let mut it = l.split_whitespace();
+        while let Some(t) = it.next() {
+            if t == key {
+                return it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| panic!("`{key}` is not a number in `{l}`"));
+            }
+        }
+        panic!("no `{key}` in `{l}`");
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("reclaim123_{}", backend.trim_start_matches('-')));
+        let path = dir.join("world.store");
+        let (out, code) = run_script(&script, backend, &path);
+        assert_eq!(code, 0, "{backend} exit: {out:?}");
+
+        let before = field(&out, "grown_then_dropped", "before");
+        let freed = field(&out, "grown_then_dropped", "freed");
+        let after = field(&out, "grown_then_dropped", "after");
+        assert!(
+            freed > 0,
+            "{backend}: a store grown 10x and dropped back has a tail to give: {out}"
+        );
+        assert_eq!(
+            after,
+            before - freed,
+            "{backend}: the bytes it REPORTS must be the bytes the file lost — \
+             a reclaim that misreports is worse than one that does nothing: {out}"
+        );
+        assert_eq!(
+            fs::metadata(&path).expect("store file").len() as i64,
+            field(&out, "second", "size"),
+            "{backend}: the file on disk is the size the program saw"
+        );
+
+        // The data is untouched: same live count, same digest as at bind time.
+        assert_eq!(
+            field(&out, "kept", "digest"),
+            field(&out, "kept", "was"),
+            "{backend}: the surviving records must be bit-for-bit what they were \
+             before the truncation, or the size numbers above compare nothing: {out}"
+        );
+        assert_eq!(field(&out, "kept", "live"), 300, "{backend}: {out}");
+
+        // Nothing left to give, and saying so costs the file nothing.
+        assert_eq!(
+            field(&out, "second", "freed"),
+            0,
+            "{backend}: a second reclaim has no tail left: {out}"
+        );
+        assert_eq!(
+            field(&out, "second", "size"),
+            after,
+            "{backend}: and it must not touch the file to find that out: {out}"
+        );
+
+        // Still a working store afterwards.
+        assert_eq!(field(&out, "after_write", "live"), 301, "{backend}: {out}");
+        assert!(
+            out.contains("new written after the truncation") && out.contains("old hex 7"),
+            "{backend}: a truncated store still takes records and still reads the \
+             ones that survived: {out}"
+        );
+
+        // A shortened file is only a store if it still OPENS as one.  A fresh
+        // process binds to what the first left behind: same count, same digest.
+        // Nothing in the writing process could have caught a truncation that
+        // left the block chain unable to tile the file.
+        let (re, re_code) = run_mode_backend(backend, &script, &path, "reload");
+        assert_eq!(re_code, 0, "{backend} reload exit: {re:?}");
+        assert_eq!(
+            field(&re, "reload", "live"),
+            301,
+            "{backend}: the re-opened file holds every record: {re}"
+        );
+        assert_eq!(
+            field(&re, "reload", "digest"),
+            field(&out, "after_write", "digest"),
+            "{backend}: and holds them unchanged — a truncated file re-read in a \
+             fresh process:\n  wrote:  {out}\n  reread: {re}"
+        );
+    }
+}
+
+/// One `count/sum/xor/sound` line from `store_digest_b0.loft`.
+#[derive(PartialEq, Eq, Debug, Clone)]
+struct B0 {
+    count: i64,
+    sum: i64,
+    xor: i64,
+    sound: bool,
+}
+
+/// Run the B0 oracle script and read back one tagged report line.
+fn b0_run(
+    backend: &str,
+    path: &Path,
+    order: &str,
+    damage: &str,
+    mode: &str,
+    tag: &str,
+    seed: Option<&str>,
+) -> B0 {
+    let script = workspace_root().join("tests/scripts/store_digest_b0.loft");
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg(backend)
+        .arg(&script)
+        .env("LOFT_PERSIST_TEST_PATH", path)
+        .env("LOFT_PERSIST_TEST_MODE", mode)
+        .env("B0_ORDER", order)
+        .env("B0_DAMAGE", damage)
+        .env("B0_N", "200")
+        .current_dir(workspace_root());
+    match seed {
+        Some(s) => cmd.env("LOFT_HASH_SEED", s),
+        None => cmd.env_remove("LOFT_HASH_SEED"),
+    };
+    let out = cmd.output().expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{backend} {order}/{damage}/{mode} failed: {stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with(tag))
+        .unwrap_or_else(|| panic!("no `{tag}` line for {backend} {order}/{damage}:\n{stdout}"));
+    let num = |key: &str| -> i64 {
+        let mut it = line.split_whitespace();
+        while let Some(t) = it.next() {
+            if t == key {
+                return it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+                    panic!("`{key}` is not a number in `{line}`");
+                });
+            }
+        }
+        panic!("no `{key}` in `{line}`");
+    };
+    B0 {
+        count: num("count"),
+        sum: num("sum"),
+        xor: num("xor"),
+        sound: line.ends_with("sound true"),
+    }
+}
+
+/// @PLN123 B0 — the oracle arc B will be built against, calibrated BEFORE any
+/// compaction code exists.
+///
+/// Invariant B is that a compacted image holds exactly the records reachable
+/// from the root and reloads value-identical. No size assertion can check that:
+/// a file that got smaller by losing data satisfies every one of them. So the
+/// question here is not "is compaction correct" — there is no compaction yet —
+/// but "would this digest KNOW". Two halves:
+///
+/// **It must see every loss.** Five injuries, one per way a rebuild could drop
+/// something: a missing record, a changed scalar, a shortened text, a truncated
+/// vector, a changed nested-struct field. Each must move the numbers. An oracle
+/// that cannot fail is worse than none, because it reports success.
+///
+/// **It must be a function of the DATA, not the representation.** A rebuild
+/// changes where everything sits, so anything the digest picks up from layout
+/// would read as data loss — wrong in the direction that gets a fix applied to
+/// working code. The five runs below hold identical records in five different
+/// representations (three build orders × two bucket seeds), and the assertion
+/// that the resulting FILES differ is what stops "same digest" from meaning
+/// "nothing was perturbed".
+///
+/// **F9 is not a live hazard, and that took establishing.** The step assumed a
+/// rebuild reorders iteration, so the digest was written order-independent
+/// (sum/xor/count). Probing it with a deliberately order-DEPENDENT fold showed
+/// no build order and no seed changes the order records come out in — loft
+/// iterates a keyed collection through a key-sorted snapshot, so a rebuild
+/// cannot reorder it. The order-independent form stays because it costs
+/// nothing and keeps the oracle off that implementation detail; what could
+/// not stay was the *assertion*, which no available lever can make fail.
+///
+/// The loss half earned its place immediately: the first draft truncated the
+/// vector of a record whose vector was ALREADY one element, and the digest came
+/// back identical. That reads exactly like a blind oracle and was a blind
+/// injury — the failure mode this whole test exists to make visible.
+#[test]
+fn store_digest_b0_oracle_sees_loss_not_layout() {
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let dir = scratch(&format!("b0_{tag}"));
+        let run = |file: &str, order: &str, damage: &str, mode: &str, want: &str, seed| {
+            b0_run(backend, &dir.join(file), order, damage, mode, want, seed)
+        };
+
+        // Same 200 records, five representations.  Every run pins the bucket
+        // seed, because an unseeded hash draws a RANDOM one per process (the
+        // P253 hash-DoS defense) — leave it unpinned and the images differ no
+        // matter what else you vary, so the control below would pass while
+        // attributing nothing.  Pinned, each row differs from the first by
+        // exactly one named lever.
+        let reps: [(&str, &str, &str, &str); 5] = [
+            ("base.store", "forward", "7", "the reference representation"),
+            ("again.store", "forward", "7", "a repeat of it"),
+            (
+                "reverse.store",
+                "reverse",
+                "7",
+                "records inserted back to front",
+            ),
+            ("inter.store", "interleaved", "7", "evens then odds"),
+            ("seed1.store", "forward", "1", "a different bucket seed"),
+        ];
+        let mut images: Vec<Vec<u8>> = Vec::new();
+        let mut base: Option<B0> = None;
+        for (file, order, seed, what) in reps {
+            let got = run(file, order, "none", "", "persisted", Some(seed));
+            assert!(got.sound, "{backend}: {what} must verify");
+            assert!(
+                got.count == 200 && got.sum != 0 && got.xor != 0,
+                "{backend}: {what} produced an empty digest: {got:?}"
+            );
+            match &base {
+                None => base = Some(got),
+                Some(b) => assert_eq!(
+                    &got, b,
+                    "{backend}: {what} holds the same records — a digest that \
+                     moved with the layout would report arc B's rebuild as data loss"
+                ),
+            }
+            images.push(fs::read(dir.join(file)).expect("store file"));
+        }
+        let base = base.expect("five representations");
+
+        // The controls for the claim above.  Negative: same order, same seed,
+        // byte-identical — so the harness is deterministic and the differences
+        // below are attributable rather than noise.
+        assert_eq!(
+            images[0], images[1],
+            "{backend}: two identical runs must produce identical bytes, or \
+             nothing measured here can be attributed to anything"
+        );
+        // Positive: each lever really does reach the stored bytes, so the
+        // invariance above is a statement about data surviving a CHANGED
+        // representation — not about nothing having changed.
+        for (i, lever) in [
+            (2, "insertion order"),
+            (3, "insertion order"),
+            (4, "the bucket seed"),
+        ] {
+            assert_ne!(
+                images[0], images[i],
+                "{backend}: {lever} did not reach the stored bytes, so the \
+                 digest's invariance across it proves nothing"
+            );
+        }
+
+        // Each injury must move the numbers — the proof the digest can fail.
+        for damage in ["drop", "scalar", "text", "vector", "inner"] {
+            let hurt = run("damaged.store", "forward", damage, "", "built", None);
+            assert_ne!(
+                hurt, base,
+                "{backend}: a `{damage}` loss is invisible to the digest — an \
+                 oracle that cannot fail reports success"
+            );
+            if damage == "drop" {
+                assert_eq!(hurt.count, base.count - 1, "{backend}: a record vanished");
+            }
+        }
+
+        // Round trip: bind wrote the image above; a FRESH process reads it
+        // back, and deliberately UNSEEDED — it draws its own random bucket
+        // seed and must still find every record, because the seed the writer
+        // used travels in the image.  This is the comparison arc B's compacted
+        // image has to pass.
+        let reloaded = run("base.store", "forward", "none", "reload", "reload", None);
+        assert_eq!(
+            reloaded, base,
+            "{backend}: the image must reload value-identical"
+        );
+        assert!(reloaded.sound, "{backend}: and with a sound heap graph");
+    }
+}
+
+/// @PLN123 B1 — rebuild-and-swap, measured against B0's oracle.
+///
+/// Arc A gives back the free tail; the interior is what is left, and arc B's
+/// answer is to rebuild the collection into a fresh store and swap — the shape
+/// `OPTIMIZE TABLE` uses. This runs that rebuild at loft level, record by
+/// record, so the cost is known before it is written in Rust.
+///
+/// Measured (300 → 6,000 surviving records, grown 10× and dropped back):
+/// **77–86% of the post-`store_reclaim` file comes back**, at ~0.6 µs/record on
+/// `--native` and ~1.0 µs interpreted, linear across a 20× scale range. The
+/// step's standing warning — that a record-by-record re-insert produced a
+/// LARGER file — does not reproduce for a direct rebuild; it produced one 4–7×
+/// smaller.
+///
+/// What this test pins is the part B2 depends on, not the numbers:
+///
+/// - **The digest survives every stage.** A smaller file that lost data would
+///   satisfy every size assertion here, so B0's oracle rides along.
+/// - **The rebuild is IDEMPOTENT.** A second and third rebuild land on the same
+///   byte count. This is what makes B2 safe to run automatically at persist: a
+///   compaction that grew the file a little every time would be worse than
+///   none, and that is the failure this rules out.
+/// - **Both backends agree byte for byte**, so the loft-level measurement is a
+///   property of the store, not of one execution path.
+///
+/// A rebuild does NOT reach the from-scratch ceiling — 1.24× at 300 records,
+/// 1.38× at 6,000 — and the whole gap is the VECTOR field: shapes with only
+/// scalars or only text rebuild to exactly the fresh size, and the rebuilt size
+/// is flat across vector lengths 1–9 where a from-scratch build scales with
+/// them. So the copy path claims a quantised block per vector where a fresh
+/// build claims by length. **B2 should claim each destination vector at its
+/// LENGTH**; `reserve` on the source side does not do it (measured: identical
+/// bytes with and without).
+#[test]
+fn store_rebuild_b1_recovers_the_interior_and_is_idempotent() {
+    let script = workspace_root().join("tests/scripts/store_rebuild_b1.loft");
+    // tag, count, sum, xor, bytes — one row per stage the script reports.
+    type Row = (String, i64, i64, i64, i64);
+    let mut per_backend: Vec<Vec<Row>> = Vec::new();
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("b1_{}", backend.trim_start_matches('-')));
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("m"))
+            .env("B1_SHAPE", "full")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} failed: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // tag count sum xor bytes us
+        let rows: Vec<Row> = stdout
+            .lines()
+            .filter(|l| l.contains(" count ") && l.contains(" bytes "))
+            .map(|l| {
+                let t: Vec<&str> = l.split_whitespace().collect();
+                let num = |key: &str| -> i64 {
+                    let i = t.iter().position(|x| *x == key).expect(key);
+                    t[i + 1].parse().expect("number")
+                };
+                (
+                    t[0].to_string(),
+                    num("count"),
+                    num("sum"),
+                    num("xor"),
+                    num("bytes"),
+                )
+            })
+            .collect();
+        let get = |tag: &str| {
+            rows.iter()
+                .find(|r| r.0 == tag)
+                .unwrap_or_else(|| panic!("no `{tag}` row in:\n{stdout}"))
+                .clone()
+        };
+        let frag = get("fragmented");
+        let rebuilt = get("rebuilt");
+        let again = get("rebuilt2");
+        let third = get("rebuilt3");
+        let fresh = get("fresh");
+
+        // B0's oracle rides along: every stage holds the same records.
+        for row in &rows {
+            assert_eq!(
+                (row.1, row.2, row.3),
+                (frag.1, frag.2, frag.3),
+                "{backend}: `{}` lost or changed data, so its size proves nothing:\n{stdout}",
+                row.0
+            );
+        }
+
+        // The interior really does come back.  The bound is generous — the
+        // measurement is 77-86% — because this guards the mechanism, not the
+        // number; the numbers live in the plan.
+        assert!(
+            (rebuilt.4 as f64) < 0.5 * frag.4 as f64,
+            "{backend}: a rebuild must at least halve the post-reclaim file \
+             (got {} from {}):\n{stdout}",
+            rebuilt.4,
+            frag.4
+        );
+
+        // The property B2's automatic mode rests on.
+        assert_eq!(
+            (rebuilt.4, rebuilt.4),
+            (again.4, third.4),
+            "{backend}: rebuilding must reach a FIXED POINT — a compaction that \
+             grows the file a little each time is worse than none:\n{stdout}"
+        );
+
+        // Honest about the ceiling: a rebuild does not reach a from-scratch
+        // build, and if it ever does, this is the assertion that says so.
+        assert!(
+            rebuilt.4 > fresh.4,
+            "{backend}: a rebuild now MATCHES the from-scratch ceiling ({} vs \
+             {}) — the vector-claim gap B2 was told to close is gone, so update \
+             @PLN123 B1 rather than this test:\n{stdout}",
+            rebuilt.4,
+            fresh.4
+        );
+        per_backend.push(rows);
+    }
+    assert_eq!(
+        per_backend[0], per_backend[1],
+        "the interpreter and --native must agree on every size and digest, or \
+         this measures an execution path rather than the store"
+    );
+}
+
+/// @PLN123 B2/B3 — compaction at LOAD, ON by default
+/// (`LOFT_NO_COMPACT_ON_LOAD` opts out).
+///
+/// Arc A returns the free tail; the interior between surviving records needs the
+/// collection rebuilt somewhere dense. That moves records, and a `DbRef` is a
+/// POSITION — so it is sound only where an interior reference cannot be live.
+/// The step originally specified the WRITE path; that is exactly where they CAN
+/// be live (a program keeps `e = h[7]` across `store_persist_bind`, and
+/// `bind_path` adopts the image it writes as the live store). The load path is
+/// safe for a stronger reason than absence: `Store::load` already replaces the
+/// slot's bytes wholesale, so a reference held across it is already meaningless.
+///
+/// What this pins:
+///
+/// - **Opting out is exact.** With `LOFT_NO_COMPACT_ON_LOAD` the reloaded file
+///   is byte-identical to the source — the pre-B2 behaviour, still reachable.
+/// - **On is correct, not merely smaller.** B0's oracle rides along — the digest
+///   over every field must be unchanged, and `store_verify` must call the
+///   rebuilt heap graph sound. A compaction that lost data would satisfy every
+///   size assertion in this test.
+/// - **The root survives.** The collection variable is a `DbRef` at the root, so
+///   the root is the one position compaction may not move; the script reads an
+///   element through it immediately after the load, and keeps using the
+///   collection after.
+/// - **Refusal is attributable and safe.** A record holding a `reference<T>`
+///   points into ANOTHER store, which this rebuild does not carry — compaction
+///   must decline, say so, and leave a correct load behind. A refusal that reads
+///   the same as a dense store is one nobody can test.
+#[test]
+fn store_compact_b2_rebuilds_at_load_without_losing_anything() {
+    let script = workspace_root().join("tests/scripts/store_compact_b2.loft");
+    let run = |backend: &str, dir: &Path, shape: &str, compact: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("c"))
+            .env("B2_SHAPE", shape)
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root());
+        if compact {
+            cmd.env_remove("LOFT_NO_COMPACT_ON_LOAD"); // @PLN123 B3 — on by default
+        } else {
+            cmd.env("LOFT_NO_COMPACT_ON_LOAD", "1");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} {shape} compact={compact} failed: {stdout}\n{stderr}"
+        );
+        assert!(!stdout.contains("FAIL"), "{backend} {shape}: {stdout}");
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, line: &str, key: &str| -> i64 {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].parse().expect("number")
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+
+        // OPTED OUT — the load is a wholesale byte replacement, as it always was.
+        let off = run(backend, &scratch(&format!("b2off_{tag}")), "rich", false);
+        assert_eq!(
+            field(&off, "loaded", "bytes"),
+            field(&off, "source", "bytes"),
+            "{backend}: with the flag off the reloaded store must be the source, \
+             byte for byte:\n{off}"
+        );
+
+        // ON — smaller, and the same data.
+        let on = run(backend, &scratch(&format!("b2on_{tag}")), "rich", true);
+        let src = field(&on, "source", "bytes");
+        let out = field(&on, "loaded", "bytes");
+        assert!(
+            out * 2 < src,
+            "{backend}: compaction must at least halve a store whose live set \
+             fell to a tenth (got {out} from {src}):\n{on}"
+        );
+        for key in ["count", "sum", "xor"] {
+            assert_eq!(
+                field(&on, "source", key),
+                field(&on, "loaded", key),
+                "{backend}: `{key}` changed across the rebuild — the file got \
+                 smaller by LOSING data, which every size assertion above would \
+                 have accepted:\n{on}"
+            );
+        }
+        assert!(
+            on.lines()
+                .filter(|l| l.starts_with("loaded"))
+                .all(|l| l.ends_with("sound true")),
+            "{backend}: the rebuilt heap graph must verify:\n{on}"
+        );
+        assert!(
+            on.contains("store_load: compacted"),
+            "{backend}: compaction must actually have run, or every assertion \
+             above passed on an untouched store:\n{on}"
+        );
+        // The root reference survived, and the store still works afterwards.
+        assert!(
+            on.contains("root_ref label label-7") && on.contains("old label-13"),
+            "{backend}: an element read through the root after the rebuild, and \
+             the store still takes writes:\n{on}"
+        );
+
+        // REFUSAL — a cross-store `reference<T>` is a shape the rebuild declines.
+        let refused = run(backend, &scratch(&format!("b2ref_{tag}")), "refuse", true);
+        assert!(
+            refused.contains("store_load: not compacted") && refused.contains("cannot carry"),
+            "{backend}: a collection holding a reference into another store must \
+             be declined, with the reason said out loud:\n{refused}"
+        );
+        assert!(
+            refused.contains("refuse count 30") && refused.contains("sound true"),
+            "{backend}: and a declined compaction must leave a correct load \
+             behind:\n{refused}"
+        );
+    }
+}
+
+/// @PLN123 B3 — a BOUND store's file follows what it holds, across runs.
+///
+/// The case the plan opened with: `resize_store` refuses to shrink, so a bound
+/// store only ever grew — a collection that peaked at 2,000 records and settled
+/// at 200 kept the peak-sized file for the rest of its life, and for every life
+/// after, because the next run mapped the same file. Arc A takes the tail when
+/// the program asks; this is the interior, taken automatically at the one moment
+/// records may move.
+///
+/// Compaction here runs on `bind_path`'s EXISTING-file branch, which is a LOAD —
+/// the collection was declared empty, so no interior `DbRef` can be live. The
+/// fresh-file branch is a WRITE and is deliberately untouched (§ B2).
+///
+/// The assertions that matter beyond size: the digest over every field is
+/// unchanged, `store_verify` calls the rebuilt graph sound, the root reference
+/// reads after the rebuild, and the collection is **still bound** — writing to it
+/// must still reach the file, or compaction would have quietly turned a
+/// persisted collection into a heap copy that stops persisting.
+#[test]
+fn store_compact_b3_shrinks_a_bound_file_across_runs() {
+    let script = workspace_root().join("tests/scripts/store_compact_bound_b3.loft");
+    let run = |backend: &str, path: &Path, mode: &str, compact: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", path)
+            .env("MODE", mode)
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root());
+        if compact {
+            cmd.env_remove("LOFT_NO_COMPACT_ON_LOAD");
+        } else {
+            cmd.env("LOFT_NO_COMPACT_ON_LOAD", "1");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} mode={mode} compact={compact}: {stdout}\n{stderr}"
+        );
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, line: &str, key: &str| -> i64 {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].parse().expect("number")
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+
+        // Opted out: re-binding leaves the file exactly as the last run left it.
+        let dir = scratch(&format!("b3off_{tag}"));
+        let path = dir.join("world.store");
+        let wrote = run(backend, &path, "", false);
+        let off = run(backend, &path, "reload", false);
+        assert_eq!(
+            field(&off, "rebound", "bytes"),
+            field(&wrote, "wrote", "bytes"),
+            "{backend}: opted out, a bound store's file must not change on \
+             re-bind:\n{off}"
+        );
+
+        // Default: the file follows the content.
+        let dir = scratch(&format!("b3on_{tag}"));
+        let path = dir.join("world.store");
+        let wrote = run(backend, &path, "", true);
+        let on = run(backend, &path, "reload", true);
+        let before = field(&wrote, "wrote", "bytes");
+        let after = field(&on, "rebound", "bytes");
+        assert!(
+            after * 2 < before,
+            "{backend}: a store that peaked at 2000 records and settled at 200 \
+             must give its file back on the next run (got {after} from \
+             {before}):\n{on}"
+        );
+        for key in ["count", "digest"] {
+            assert_eq!(
+                field(&on, "rebound", key),
+                field(&wrote, "wrote", key),
+                "{backend}: `{key}` changed across the rebuild — the file got \
+                 smaller by LOSING data:\n{wrote}{on}"
+            );
+        }
+        assert!(
+            on.contains("sound true") && on.contains("label label-7"),
+            "{backend}: the rebuilt graph must verify, and the root reference \
+             must still read:\n{on}"
+        );
+        // STILL BOUND — and only a THIRD process can show it.  The `reload` run
+        // added a record after compacting; if compaction had left a heap store
+        // in the slot, that write would have gone to memory and died with the
+        // process, while every size, digest and count assertion above still
+        // passed.  So the question is not "did the file change" but "does the
+        // next run see what the last one wrote".
+        assert_eq!(
+            field(&on, "after_write", "count"),
+            field(&on, "rebound", "count") + 1,
+            "{backend}: the compacted collection must accept a write:\n{on}"
+        );
+        let seen = run(backend, &path, "verify", true);
+        assert_eq!(
+            field(&seen, "verify", "count"),
+            field(&on, "after_write", "count"),
+            "{backend}: a write made AFTER compaction must be on disk for the \
+             next run — otherwise the collection quietly stopped persisting:\n{on}{seen}"
+        );
+
+        // THE GATE — a dense store must be measured and left alone.  Without
+        // this, removing the gate entirely still passes every assertion above,
+        // because compacting a dense store is merely wasteful, not wrong.
+        let dir = scratch(&format!("b3dense_{tag}"));
+        let path = dir.join("dense.store");
+        let _dense_wrote = run(backend, &path, "dense", true);
+        let dense_reload = run(backend, &path, "reload", true);
+        // The REASON is the assertion, not the resulting size.  A dense store
+        // rebuilds to about the size it already was, so "did the file change"
+        // cannot tell a gate that declined from a rebuild that ran and gained
+        // nothing — only the refusal it names can.
+        assert!(
+            dense_reload.contains("not compacted") && dense_reload.contains("under the eighth"),
+            "{backend}: a store with no interior free space must be declined by \
+             the GATE (before any rebuild), not discovered to be pointless \
+             afterwards:\n{dense_reload}"
+        );
+        // Its file size is deliberately NOT asserted here.  It is stable now
+        // (`persisted_image_keeps_its_slack_after_store_reclaim` owns that
+        // property), but it is not what this test is about, and an earlier
+        // draft that DID assert it read a 2.33x jump as re-bind growth when the
+        // growth was really this script's own digest traversal claiming its
+        // snapshot inside the bound store.
+    }
+}
+
+/// @PLN123 — a persisted image keeps its eighth of slack even when the caller
+/// called `store_reclaim` first.
+///
+/// loft#710 sizes an image at the high-water mark PLUS an eighth, and says why:
+/// a bound store stays live and growth multiplies by 7/3, so a store with no
+/// room left pays a **2.33× file resize on its very next claim** — worse than
+/// the tail that was removed. The clamp keeping the image "never larger than the
+/// arena" was safe while capacity always sat well above the mark. `store_reclaim`
+/// (arc A) trims capacity TO the mark, so the clamp collapsed the eighth to zero
+/// for exactly the stores someone had just tidied, and arc A quietly disabled the
+/// protection loft#710 added.
+///
+/// The claim that trips it is the most ordinary one there is — READING the
+/// collection. Iterating a keyed collection materialises a key-sorted snapshot,
+/// claimed inside the store when the store is bound. Measured before the fix, a
+/// 2,000-record hash: reclaim-then-bind wrote 187,784 bytes and one read took it
+/// to 438,160 — **2.07× larger than never reclaiming at all** (211,256).
+///
+/// So the guard is not "the file is small" but **"tidying up first must not make
+/// it worse"**: both paths must land on the same size, and neither may grow when
+/// the collection is read.
+#[test]
+fn persisted_image_keeps_its_slack_after_store_reclaim() {
+    let script = workspace_root().join("tests/scripts/store_bind_slack.loft");
+    let run = |backend: &str, dir: &Path, reclaim: bool| -> (i64, i64) {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("s.store"))
+            .env("N", "2000")
+            .env("RECLAIM", if reclaim { "1" } else { "0" })
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} reclaim={reclaim}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let t: Vec<&str> = stdout
+            .lines()
+            .find(|l| l.starts_with("reclaim"))
+            .unwrap_or_else(|| panic!("no report in:\n{stdout}"))
+            .split_whitespace()
+            .collect();
+        let num = |k: &str| -> i64 {
+            let i = t.iter().position(|x| *x == k).expect(k);
+            t[i + 1].parse().expect("number")
+        };
+        (num("after_bind"), num("after_read"))
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let (tidy_bind, tidy_read) = run(backend, &scratch(&format!("slack_y_{tag}")), true);
+        let (plain_bind, plain_read) = run(backend, &scratch(&format!("slack_n_{tag}")), false);
+
+        assert_eq!(
+            tidy_read, tidy_bind,
+            "{backend}: reading a bound collection must not resize its file — \
+             the image's eighth of slack has to absorb the iteration snapshot, \
+             or the first read pays the 7/3 ladder ({tidy_bind} -> {tidy_read})"
+        );
+        assert_eq!(
+            plain_read, plain_bind,
+            "{backend}: and the same without `store_reclaim` ({plain_bind} -> \
+             {plain_read})"
+        );
+        assert_eq!(
+            tidy_bind, plain_bind,
+            "{backend}: `store_reclaim` before a bind must not change the image \
+             size — the image is already sized from the mark, so tidying first \
+             can only remove the slack the format wants"
+        );
+    }
+}
+
+/// @PLN123 F4/F6 — the two refusals that shipped without a test.
+///
+/// A durable `.dmeta` sidecar records the main file's byte LENGTH and CRC, so
+/// shortening it (`store_reclaim`) or rewriting it (compaction at load) turns a
+/// healthy store into a corrupt one at the next `store_durable_check`. The plan
+/// wrote that down as F4 and STDLIB.md already promised the refusal — but the
+/// guard asked `durable_meta_path.is_some()`, which only `Store::open_durable`
+/// sets, and **no loft program can reach that entry point**. The loft surface is
+/// path-based (`store_durable_seal(path)`), so the reachable hazard was entirely
+/// unguarded: seal, reclaim, and a healthy store reported CORRUPT (measured,
+/// 156,344 → 138,976 bytes, check true → false). A guard on *how you got here*
+/// cannot see a fact about *what is on disk*.
+///
+/// So the assertions are about the contract, not the mechanism: a sealed store
+/// must come through `store_reclaim` and a re-bind unchanged and still check
+/// clean, an unsealed one must still be reclaimable (or the "fix" is just a
+/// disable), and each refusal must name itself.
+#[test]
+fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
+    let script = workspace_root().join("tests/scripts/store_reclaim_refusals.loft");
+    let run = |backend: &str, dir: &Path, mode: &str, seal: bool, n: &str| -> String {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("r.store"))
+            .env("MODE", mode)
+            .env("SEAL", if seal { "1" } else { "0" })
+            .env("N", n)
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} mode={mode} seal={seal}: {stdout}\n{stderr}"
+        );
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, line: &str, key: &str| -> String {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].to_string()
+    };
+    let num = |out: &str, line: &str, key: &str| -> i64 {
+        field(out, line, key).parse().expect("number")
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+
+        // F4 — `store_reclaim` on a SEALED store.
+        let dir = scratch(&format!("f4_{tag}"));
+        let sealed = run(backend, &dir, "", true, "3000");
+        assert_eq!(field(&sealed, "seal", "check_before"), "true", "{sealed}");
+        assert_eq!(
+            num(&sealed, "seal", "freed"),
+            0,
+            "{backend}: a sealed store must not be truncated:\n{sealed}"
+        );
+        assert_eq!(
+            num(&sealed, "seal", "after"),
+            num(&sealed, "seal", "before"),
+            "{backend}: and its file must be byte-length identical:\n{sealed}"
+        );
+        assert_eq!(
+            field(&sealed, "seal", "check_after"),
+            "true",
+            "{backend}: the seal must still validate — the whole point of F4 is \
+             that a healthy store never reports corrupt:\n{sealed}"
+        );
+
+        // CONTROL — without the sidecar, reclaim must still do its job.  A
+        // refusal that fires everywhere is just the feature turned off.
+        let dir = scratch(&format!("f4ctl_{tag}"));
+        let plain = run(backend, &dir, "", false, "3000");
+        assert!(
+            num(&plain, "seal", "freed") > 0
+                && num(&plain, "seal", "after") < num(&plain, "seal", "before"),
+            "{backend}: an unsealed store must still be reclaimable:\n{plain}"
+        );
+
+        // F4 at LOAD — compaction rewrites the whole image, same hazard.
+        let dir = scratch(&format!("f4load_{tag}"));
+        let wrote = run(backend, &dir, "", true, "3000");
+        let reload = run(backend, &dir, "reload", true, "3000");
+        assert!(
+            reload.contains("not compacted") && reload.contains("durable sidecar"),
+            "{backend}: compaction must decline a store with a live sidecar, \
+             and say so:\n{reload}"
+        );
+        assert_eq!(
+            num(&reload, "rebound", "bytes"),
+            num(&wrote, "seal", "after"),
+            "{backend}: and leave the file alone:\n{reload}"
+        );
+
+        // F6 — a store at the image floor has nothing to give.
+        let dir = scratch(&format!("f6_{tag}"));
+        run(backend, &dir, "", false, "40");
+        let tiny = run(backend, &dir, "reload", false, "40");
+        assert!(
+            tiny.contains("not compacted") && tiny.contains("image floor"),
+            "{backend}: a floor-sized store must be declined before any rebuild \
+             — a bound image is padded up to the floor regardless:\n{tiny}"
+        );
+    }
+}
+
+/// @PLN123 — compaction across COLLECTION KINDS.
+///
+/// Compaction at load is default-on and rebuilds through `copy_claims`, which
+/// `type_is_compactable` waves through for `Sorted`, `Array`/`Ordered`, `Index`
+/// and `ChildRec` as well as `Hash` — only `Radix` (spatial) and a cross-store
+/// `DbRef` are refused. Every other compaction test builds a `hash<Rec[id]>`, so
+/// the rest of that surface shipped by default with no coverage, and the
+/// array/ordered destination builder carries a documented history of exactly the
+/// failure a digest catches (@P309: copied collections "read back as length 0").
+///
+/// Per kind: build, fragment, persist, `store_load` back. The count, the
+/// order-independent digest and `store_verify` must all survive, and the loader
+/// must reach the verdict this kind should reach.
+///
+/// **Two shapes could not be built at all, both pre-existing** (they reproduce
+/// on the released 2026.7.2 binary, so neither is compaction's doing):
+/// - fragmenting an index with `#remove` in a filtered loop SIGSEGVs the
+///   interpreter and overflows the native stack when the record owns a `text`
+///   (loft#718) — worked around here with key assignment, which is a different
+///   path;
+/// - the `ordered<T>` secondary shape needs a struct declaring BOTH a
+///   `sorted<T[..]>` and an `index<T[..]>` field, and merely DECLARING that
+///   hangs the interpreter and miscompiles on `--native` (loft#719). That cell
+///   is not skipped for convenience — the shape itself does not work.
+#[test]
+fn compaction_is_correct_for_every_collection_kind_it_accepts() {
+    let script = workspace_root().join("tests/scripts/store_compact_kinds.loft");
+    // kind, and the verdict the loader must reach for it.
+    let kinds: [(&str, &str); 5] = [
+        ("hash", "compacted"),
+        ("sorted", "compacted"),
+        ("index", "compacted"),
+        ("nested", "compacted"),
+        // The one refusal in the accept-list: a spatial collection is a `Radix`,
+        // which `copy_claims` panics on and the keystone walks as empty.
+        ("spatial", "cannot carry"),
+    ];
+    let run = |backend: &str, dir: &Path, kind: &str, reload: bool| -> String {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("k.store"))
+            .env("KIND", kind)
+            .env("MODE", if reload { "reload" } else { "" })
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} kind={kind} reload={reload}: {stdout}\n{stderr}"
+        );
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, key: &str| -> String {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with("kind "))
+            .unwrap_or_else(|| panic!("no report in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].to_string()
+    };
+
+    for backend in ["--interpret", "--native"] {
+        for (kind, verdict) in kinds {
+            let tag = backend.trim_start_matches('-');
+            let dir = scratch(&format!("kinds_{kind}_{tag}"));
+            let wrote = run(backend, &dir, kind, false);
+            let read = run(backend, &dir, kind, true);
+
+            for key in ["count", "sum"] {
+                assert_eq!(
+                    field(&wrote, key),
+                    field(&read, key),
+                    "{backend}/{kind}: `{key}` changed across the load — a \
+                     rebuild that lost data would satisfy every size assertion \
+                     anyone would write:\n{wrote}{read}"
+                );
+            }
+            assert_ne!(field(&wrote, "sum"), "0", "{backend}/{kind}: empty digest");
+            assert!(
+                field(&wrote, "sound") == "true" && field(&read, "sound") == "true",
+                "{backend}/{kind}: the heap graph must verify on both sides:\n{wrote}{read}"
+            );
+            assert!(
+                read.contains(verdict),
+                "{backend}/{kind}: expected the loader to report `{verdict}`, \
+                 which is what makes this cell test anything:\n{read}"
+            );
+        }
+    }
 }
 
 /// loft#710 — `LOFT_HASH_SEED` makes a persisted store byte-reproducible.

@@ -1,0 +1,105 @@
+// loft#723 — an element bind through `??` INSIDE A LOOP read a store after it
+// was freed, and the free was one the bytecode generator invented.
+//
+// `owned_ref` in `src/state/codegen.rs::generate_set` decides whether a
+// re-assignment must free the store the variable is dropping. It asked the type:
+// empty deps means owned, by loft's convention. But empty deps is only a PROXY,
+// and it reads "owned" for a borrow whose dep list was never populated — which is
+// exactly what a `??` subject of Reference type is. The parser materialises that
+// subject into `__ncc_N` and marks it `skip_free`, the carried fact saying the
+// store belongs to someone else, while leaving its type deps empty. So the proxy
+// and the carried fact disagreed, and the pre-Set free believed the proxy.
+//
+// Outside a loop nothing showed: the variable is assigned once, so the free ran
+// on a null slot. In a loop it ran on the PREVIOUS iteration's borrow — by then a
+// dangling reference into a store freed at the body exit, whose slot the next
+// `ncc_make()` had already recycled. The free therefore released a store that had
+// just been allocated and was about to be read.
+//
+// The @PLN118 sentinel reset cannot cover this: it hangs off a block-exit free,
+// and a `skip_free` var by definition does not have one.
+//
+// Interpreter-only — `--native` derives the borrow correctly in
+// `generation/dispatch.rs`, and the generated Rust is unchanged by the fix.
+//
+// The first loop is what makes this guard non-vacuous. Without an allocation
+// between the bind and the read, the freed bytes are still intact and the broken
+// binary prints the RIGHT answer — the fault is visible only under
+// `LOFT_POISON=1`. `ncc_other(i)` claims the recycled store and overwrites the
+// record, so `e.a` reads the loop counter instead of 5: measured 1230 instead of
+// 250 on the pre-fix binary, on plain `--interpret` with no sanitizer.
+
+struct NccP {
+  a: integer,
+  b: integer,
+  c: float,
+}
+
+struct NccPs {
+  items: vector<NccP>,
+}
+
+struct NccQ {
+  z: vector<integer>,
+}
+
+fn ncc_make() -> NccPs {
+  NccPs { items: [NccP { a: 5, b: 4, c: 0.7 }] }
+}
+
+// Allocates a store of its own, so it can claim a slot the loop body just freed.
+fn ncc_other(n: integer) -> NccQ {
+  NccQ { z: [n, n, n, n, n, n, n, n] }
+}
+
+fn main() {
+  // The value-visible form: an allocation lands between the bind and the read.
+  s = 0;
+  t = 0;
+  for i in 0..50 {
+    e = ncc_make().items[0] ?? NccP {};
+    o = ncc_other(i);
+    t += len(o.z);
+    s += e.a;
+  }
+  assert(s == 250, "each iteration reads its own element, not a recycled store: {s}");
+  assert(t == 400, "the intervening allocation really ran: {t}");
+
+  // The issue's own reproducer: correct without a sanitizer even when broken, so
+  // it guards the LOFT_POISON gate rather than the value.
+  u = 0;
+  for i in 0..300 {
+    e = ncc_make().items[0] ?? NccP {};
+    u += e.a;
+  }
+  assert(u == 1500, "the plain loop form: {u}");
+
+  // Every field, not just the one the loop sums.
+  for i in 0..8 {
+    e = ncc_make().items[0] ?? NccP {};
+    o = ncc_other(i);
+    assert(e.a == 5 && e.b == 4, "ints survive the recycled slot on round {i}");
+    assert(e.c > 0.69 && e.c < 0.71, "and so does the float on round {i}");
+    assert(len(o.z) == 8, "the intervening store is intact too");
+  }
+
+  // The fix is a dropped free, so it must not have become a leak: the loop above
+  // allocates two stores per round and must give both back.
+  before = store_memory();
+  for i in 0..200 {
+    e = ncc_make().items[0] ?? NccP {};
+    o = ncc_other(i);
+    assert(e.a + len(o.z) == 13, "still reading both stores on round {i}");
+  }
+  assert(store_memory() == before, "no store leaked across 200 rounds");
+
+  // And it must not have become a COPY. A borrow out of a local vector takes the
+  // same `__ncc_N` path; writing through the binding has to reach the source.
+  v: vector<NccP> = [NccP { a: 9, b: 8, c: 1.0 }];
+  for i in 0..3 {
+    b = v[0] ?? NccP {};
+    b.b = 40 + i;
+    back = v[0] ?? NccP {};
+    assert(back.b == 40 + i, "the write reaches the source vector on round {i}");
+  }
+}
