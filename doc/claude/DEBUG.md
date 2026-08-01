@@ -689,6 +689,36 @@ Reading it back: the `pc:` value is a bytecode position, which
 own. If the report says `(none — crash outside interpreter)`, the fault was not
 in an opcode — look at `--native` code or a library call instead.
 
+### An unexplained SIGSEGV in a package: suspect the auto-built cdylib
+
+`--interpret` does **not** mean no native code ran. A library package with
+`[library] compile = "native"` is auto-compiled to `<pkg>/native-auto/*.so` and
+dispatched into even when the script interprets, so `gdb bt` on the core belongs
+before any interpreter theory.
+
+The generated cdylib hardcodes type-table **indices** and field **offsets**, so
+it is valid only against the exact type table it was generated from. Two
+defences keep it honest, and they fail differently:
+
+- The artifact's FILENAME carries the caller's type-layout fingerprint (#715), so
+  two contexts never name the same file.
+- The artifact also DECLARES the layout it was built for
+  (`loft_type_layout_fp_v1`), and the adopter verifies it before use (loft#717).
+  A mismatch rebuilds rather than dispatching.
+
+The second exists because the first is an argument, not a check: it holds only
+while the fingerprint keeps covering every layout difference and while nothing
+else can put a file at that name. When an argument like that fails, the artifact
+is not slightly wrong — it resolves indices against a foreign table, so reads
+land at wrong offsets and the crash surfaces arbitrarily far from the cause.
+That is why the verification is worth a `dlopen`: the failure it prevents is
+unattributable by construction.
+
+Suspect this whenever a crash is intermittent, appears under a parallel sweep,
+and does not repeat afterwards — the artifact is rebuilt on the next run, so the
+evidence deletes itself. `rm -rf <pkg>/native-auto` and re-running is not a
+diagnosis; it is destroying the only copy of the thing that crashed.
+
 ---
 
 ## Before you believe a fault is RANDOM

@@ -468,3 +468,146 @@ fn cdylib_type_indices_stay_valid_across_consumer_contexts() {
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(native_auto);
 }
+
+/// loft#717 — an auto-built cdylib must be VERIFIED against the type layout it
+/// was generated for, not merely trusted because its filename matches.
+///
+/// #715 content-addressed the artifact so two contexts can never name the same
+/// file, and closed the class "by construction". That is an argument, and it
+/// holds exactly as long as two things stay true: the fingerprint keeps covering
+/// every layout difference, and nothing else can put a file at that name. Neither
+/// is checkable at runtime, and when either fails the artifact is not slightly
+/// wrong — the generated cdylib hardcodes type-table INDICES, so it resolves them
+/// against a foreign table and reads at the wrong offsets. That is silent memory
+/// corruption, whose crash lands arbitrarily far from its cause.
+///
+/// So the artifact now names its own layout (`loft_type_layout_fp_v1`) and the
+/// adopter asks. This plants one context's artifact at the other's exact filename
+/// — the aliasing #715 argues is unreachable — and requires that it be rejected.
+///
+/// The test carries its own control, because "it rebuilt" has a boring competing
+/// explanation: copying a file changes its mtime, and a rebuild triggered by mtime
+/// would pass this test while verifying nothing. So the SAME copy is done with a
+/// MATCHING artifact first, and that one must be adopted. Both arms churn the
+/// mtime identically; only the declared layout differs.
+#[test]
+fn a_foreign_context_artifact_is_rejected_not_adopted() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+    let native_auto = std::path::Path::new("tests/lib/mathnative/native-auto");
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_717_layout_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // Two programs over the SAME library whose type tables differ: the second
+    // loads another library first, which shifts every later type index.
+    let bare = tmp.join("bare.loft");
+    std::fs::write(
+        &bare,
+        "use mathnative;\nfn main() { println(\"{double(21)}\"); }\n",
+    )
+    .unwrap();
+    let shifted = tmp.join("shifted.loft");
+    std::fs::write(
+        &shifted,
+        "use typeshift;\nuse mathnative;\n\
+         fn main() { _ = ts_touch(); println(\"{double(21)}\"); }\n",
+    )
+    .unwrap();
+
+    let run = |prog: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--lib")
+            .arg("tests/lib")
+            .arg(prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary")
+    };
+    let sos = || -> Vec<std::path::PathBuf> {
+        let mut v: Vec<_> = std::fs::read_dir(native_auto)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "so" || e == "dylib"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+
+    let _ = std::fs::remove_dir_all(native_auto);
+    assert!(run(&bare).status.success(), "bare context runs");
+    let after_bare = sos();
+    assert_eq!(after_bare.len(), 1, "the bare context built one artifact");
+    let bare_so = after_bare[0].clone();
+
+    assert!(run(&shifted).status.success(), "shifted context runs");
+    let two = sos();
+    if two.len() < 2 {
+        // Both contexts fingerprinted the same, so there is no foreign artifact to
+        // plant and nothing to assert. Say so rather than passing quietly.
+        eprintln!("skip: the two contexts share a type-layout fingerprint");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let other_so = two.iter().find(|p| **p != bare_so).unwrap().clone();
+
+    let mtime = |p: &std::path::Path| std::fs::metadata(p).unwrap().modified().unwrap();
+
+    // CONTROL: the bare context's OWN artifact, re-copied over itself. Same mtime
+    // churn, matching layout — it must be adopted, or the test below proves nothing.
+    let own = std::fs::read(&bare_so).unwrap();
+    std::fs::write(&bare_so, &own).unwrap();
+    let before = mtime(&bare_so);
+    assert!(run(&bare).status.success(), "control run succeeds");
+    assert_eq!(
+        mtime(&bare_so),
+        before,
+        "CONTROL FAILED: a matching artifact was rebuilt anyway, so this test cannot \
+         tell verification from mtime churn"
+    );
+
+    // TEST: the other context's artifact at this context's exact filename.
+    let foreign = std::fs::read(&other_so).unwrap();
+    std::fs::write(&bare_so, &foreign).unwrap();
+    let before = mtime(&bare_so);
+    let out = run(&bare);
+    assert!(
+        out.status.success(),
+        "the run must recover, not fail.\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(
+        mtime(&bare_so),
+        before,
+        "a cdylib built for a DIFFERENT type layout was adopted instead of rebuilt — \
+         its hardcoded type indices would resolve against this context's table"
+    );
+    // Compared by digest: a rebuild is not byte-identical to the original (rustc
+    // embeds paths and is not reproducible here), so the claim that holds is that
+    // what sits there is no longer the FOREIGN artifact.
+    let digest = |b: &[u8]| -> (usize, u64) {
+        let mut h: u64 = 1469598103934665603;
+        for &x in b {
+            h = (h ^ u64::from(x)).wrapping_mul(1099511628211);
+        }
+        (b.len(), h)
+    };
+    assert_ne!(
+        digest(&std::fs::read(&bare_so).unwrap()),
+        digest(&foreign),
+        "the foreign artifact is still in place after the rebuild"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("42"),
+        "and it still computes the right answer"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(native_auto);
+}
