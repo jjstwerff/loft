@@ -2590,14 +2590,57 @@ impl Scopes {
                 let is_body_return = self.scope == 0
                     && bl.result != Type::Void
                     && data.def(self.d_nr).returned != Type::Void;
+                let outer_scope = self.scope;
+                let lift_watermark = self.lift_vars.len();
                 let scope = self.enter_scope();
                 // Move hoisted var from outer scope (0) to body scope so
                 // get_free_vars at body exit can find and free it.
                 if let Some(w) = hoisted_ref {
                     self.var_scope.insert(w, scope);
                 }
-                let ls = self.convert(bl, function, data, is_body_return);
+                let mut ls = self.convert(bl, function, data, is_body_return);
                 self.exit_scope();
+                // loft#722 — a lift temp minted INSIDE a value-producing block must
+                // outlive the block, because the block's result can be a borrow INTO
+                // it.  `x = f().items[0] ?? Fallback {}` lowers the `??` to a block;
+                // the temp holding `f()`'s result was registered at that block's
+                // scope and freed on the way out, while `x` — a binding in the
+                // ENCLOSING scope — still pointed into it.  It read correctly once
+                // and returned zeroes after the store was reused.
+                //
+                // Without the `??` the same expression is lifted at statement level
+                // and is correct, which is exactly the behaviour restored here:
+                // re-register at the ENCLOSING scope and drop the block-exit free,
+                // so the outer scope frees it instead.
+                //
+                // The enclosing scope, not the function: a lift inside a LOOP body
+                // then still frees once per iteration, which is what keeps a loop
+                // over such an expression flat instead of accumulating a store per
+                // round.
+                if !matches!(bl.result, Type::Void) && self.lift_vars.len() > lift_watermark {
+                    let fresh: Vec<u16> = self.lift_vars[lift_watermark..]
+                        .iter()
+                        .copied()
+                        .filter(|v| self.var_scope.get(v) == Some(&scope))
+                        .collect();
+                    // Only the temps the RESULT actually borrows from.  Hoisting
+                    // every lift in a value block moves frees that nothing was
+                    // waiting on, and those then went missing entirely (27 leaked
+                    // `File` stores in the file suite) — the block, not the outer
+                    // scope, is the right owner when the result does not point into
+                    // the temp.
+                    let borrowed = Self::result_borrow_roots(&ls, data);
+                    let hoisted: Vec<u16> =
+                        fresh.into_iter().filter(|v| borrowed.contains(v)).collect();
+                    for v in &hoisted {
+                        self.var_scope.insert(*v, outer_scope);
+                    }
+                    if !hoisted.is_empty() {
+                        ls.retain(|op| {
+                            scope_free_op_var(op, data).is_none_or(|v| !hoisted.contains(&v))
+                        });
+                    }
+                }
                 let block = Value::Block(Box::new(Block {
                     operators: ls,
                     result: bl.result.clone(),
@@ -4988,6 +5031,68 @@ fn push_frees_into_arms(tail: &mut Value, frees: &[Value]) {
             let mut ops: Vec<Value> = frees.to_vec();
             ops.push(v);
             *leaf = Value::Insert(ops);
+        }
+    }
+}
+
+impl Scopes {
+    /// loft#722 — the variables a block's RESULT may point INTO.
+    ///
+    /// `OpGetField` / `OpGetVector` / `OpGetEnum` read into their first argument's
+    /// record, so a chain of them still points at the variable the chain starts
+    /// from — the same "walk the getters to the root" fact loft#666 needed for a
+    /// `match` subject. A chain rooted in a CALL produces a value of its own and
+    /// roots nothing.
+    ///
+    /// The result of a `??` block is a variable assigned EARLIER in the block
+    /// (`__ncc_N = OpGetVectorNullable(OpGetField(tmp, …))`), so a var is resolved
+    /// through its in-block assignment before being reported.
+    fn result_borrow_roots(ops: &[Value], data: &Data) -> HashSet<u16> {
+        // var -> what its assignment points into, for Sets seen in this block.
+        let mut from: HashMap<u16, u16> = HashMap::new();
+        for op in ops {
+            if let Value::Set(v, rhs) = op.unspan()
+                && let Some(root) = Self::borrow_root(rhs, data)
+            {
+                from.insert(*v, root);
+            }
+        }
+        // The result is the last op that is not a scope-exit free; take every var
+        // it could evaluate to (both arms of an `if`, etc.).
+        let Some(result) = ops
+            .iter()
+            .rev()
+            .find(|o| scope_free_op_var(o, data).is_none())
+        else {
+            return HashSet::new();
+        };
+        let mut roots = HashSet::new();
+        result.walk(&mut |n| {
+            if let Some(r) = Self::borrow_root(n, data) {
+                let mut cur = r;
+                // Follow the in-block assignment chain, bounded by its own size so
+                // a cycle cannot spin.
+                for _ in 0..=from.len() {
+                    roots.insert(cur);
+                    match from.get(&cur) {
+                        Some(next) if *next != cur => cur = *next,
+                        _ => break,
+                    }
+                }
+            }
+        });
+        roots
+    }
+
+    /// The variable a value points INTO, following getter chains; `None` when it
+    /// produces a value of its own.
+    fn borrow_root(val: &Value, data: &Data) -> Option<u16> {
+        match val.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Call(d, args) if data.def(*d).name().starts_with("OpGet") => {
+                args.first().and_then(|a| Self::borrow_root(a, data))
+            }
+            _ => None,
         }
     }
 }
