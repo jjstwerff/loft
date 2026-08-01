@@ -290,7 +290,13 @@ impl Stores {
                     .filter_map(|(k, _)| self.key_field(*c, *k).map(|(content, _)| content))
                     .collect()
             }
-            Parts::Hash(c, key) => key
+            // `Radix` (a `spatial<T[x,y]>`) carries the same `(element, key fields)` shape as
+            // `Hash`, and its coordinate axes are as much a key as any other: `read_key` pops
+            // one stack value per entry here, so an empty answer pops NOTHING and the very
+            // next `get_stack::<DbRef>()` reads a leftover key value as the collection —
+            // `sp[3, 3]` then looked up in store #3 (loft#720).  The bytecode was always
+            // right (`GetRecord(… no_keys=2)`); only this list disagreed.
+            Parts::Hash(c, key) | Parts::Radix(c, key) => key
                 .iter()
                 .filter_map(|k| self.key_field(*c, *k).map(|(content, _)| content))
                 .collect(),
@@ -455,7 +461,8 @@ impl Stores {
             Parts::Hash(c, _)
             | Parts::Sorted(c, _)
             | Parts::Index(c, _, _)
-            | Parts::Ordered(c, _) => c,
+            | Parts::Ordered(c, _)
+            | Parts::Radix(c, _) => c,
             _ => return,
         };
         let keys = self.types[db as usize].keys.clone();
@@ -469,8 +476,13 @@ impl Stores {
             // leaves it orphaned — reclaim it (otherwise repeated
             // `coll[k] = v` replaces grow the store unboundedly).  Sorted /
             // index records are inline in the vector / freed by their own
-            // `remove`, so no extra delete there.
-            if matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
+            // `remove`, so no extra delete there.  A `Radix` element holds its
+            // own block exactly as a hash element does (the same pair
+            // `remove_owned` calls `own_block`), so it needs the same reclaim.
+            if matches!(
+                self.types[db as usize].parts,
+                Parts::Hash(_, _) | Parts::Radix(_, _)
+            ) {
                 self.store_mut(coll).delete(existing.rec);
             }
         }

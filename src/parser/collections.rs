@@ -550,15 +550,20 @@ impl Parser {
                 // the removal silently (the element was still there afterwards)
                 // and `--native` failed to compile the void argument.
                 //
-                // `Radix` is deliberately NOT here: `spatial[x, y] = null` panics
-                // in `keys.rs` before this lowering could help, so adding it
-                // would only move the failure.  See loft#720.
+                // `Radix` (a `spatial<T[x,y]>`) belongs here too, and its absence was
+                // loft#720: `sp[x, y] = null` fell through to the same plain
+                // `OpCopyRecord(cell, (), …)` that #719 produced — the interpreter
+                // corrupted the store (it freed a record derived from a leftover key
+                // value) and `--native` failed to compile the void argument.
+                // `Stores::remove_owned` already unlinks a `Radix` element, so the
+                // removal only ever needed routing to it.
                 && matches!(
                     self.database.types[*db_tp_val as usize].parts,
                     Parts::Hash(_, _)
                         | Parts::Index(_, _, _)
                         | Parts::Sorted(_, _)
                         | Parts::Ordered(_, _)
+                        | Parts::Radix(_, _)
                 )
             {
                 let db_tp = *db_tp_val;
@@ -617,7 +622,10 @@ impl Parser {
             && (*db_tp as usize) < self.database.types.len()
             && matches!(
                 self.database.types[*db_tp as usize].parts,
-                Parts::Hash(_, _) | Parts::Sorted(_, _) | Parts::Index(_, _, _)
+                Parts::Hash(_, _)
+                    | Parts::Sorted(_, _)
+                    | Parts::Index(_, _, _)
+                    | Parts::Radix(_, _)
             )
         {
             let db_tp = *db_tp;

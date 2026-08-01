@@ -88,6 +88,82 @@ static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// Holds the program name for the diagnostic prefix.
 static PROGRAM: OnceLock<&'static str> = OnceLock::new();
 
+/// Where the crash diagnostic is ALSO written, resolved once by [`install`].
+///
+/// A signal handler's output is the one thing a build must not lose to a
+/// pipeline: the run that produces it is by definition the run you cannot
+/// repeat.  loft#717 lost a SIGSEGV's opcode/pc/function exactly that way — the
+/// package sweep piped stderr through a filter and the diagnostic went out with
+/// the warnings, leaving one unactionable line.
+///
+/// The path is resolved (and NUL-terminated) at install time because building it
+/// allocates; the handler itself only calls `open`/`write`/`close`, which POSIX
+/// lists as async-signal-safe.  Nothing is created unless a crash actually fires.
+static CRASH_FILE: OnceLock<CrashFile> = OnceLock::new();
+
+/// A crash-report destination: the same path twice, once NUL-terminated for
+/// `libc::open` and once printable for the stderr line that names it.
+struct CrashFile {
+    /// NUL-terminated, ready to hand to `open(2)` without formatting.
+    c_path: Vec<u8>,
+    /// The same path, for the "report written to" line.
+    display: String,
+}
+
+/// Choose where a crash report should land, or `None` when the user turned the
+/// file off with an empty `LOFT_CRASH_FILE`.
+///
+/// `LOFT_CRASH_FILE` wins (a CI run or a test pins an exact path).  Otherwise a
+/// project-local `.loft/` takes it when one already exists — that is the
+/// `loft test` case the report is most wanted in, and it keeps the file beside
+/// the package that crashed.  Everything else falls back to the temp directory,
+/// which is always writable.  The directory is never CREATED: `mkdir` is not
+/// async-signal-safe, and a run that does not crash should leave no trace.
+///
+/// The pid keeps concurrent packages in one sweep from overwriting each other.
+#[cfg(unix)]
+fn choose_crash_file() -> Option<CrashFile> {
+    crash_file_from(std::env::var("LOFT_CRASH_FILE").ok())
+}
+
+/// The destination for a given `LOFT_CRASH_FILE` setting — the decision in
+/// [`choose_crash_file`], separated from reading the environment so it can be
+/// tested without mutating process-wide state (which races every other test in
+/// the binary, and is `unsafe` besides).
+#[cfg(unix)]
+fn crash_file_from(setting: Option<String>) -> Option<CrashFile> {
+    let path = match setting {
+        // Explicitly emptied — the caller wants stderr only.
+        Some(p) if p.is_empty() => return None,
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let name = format!("loft-crash-{}.txt", std::process::id());
+            let dot_loft = std::path::Path::new(".loft");
+            if dot_loft.is_dir() {
+                dot_loft.join(name)
+            } else {
+                std::env::temp_dir().join(name)
+            }
+        }
+    };
+    let display = path.display().to_string();
+    let mut c_path = display.clone().into_bytes();
+    // An interior NUL would silently truncate the path `open` sees; refuse it
+    // rather than write somewhere the user did not name.
+    if c_path.contains(&0) {
+        return None;
+    }
+    c_path.push(0);
+    Some(CrashFile { c_path, display })
+}
+
+/// The resolved crash-report path, once [`install`] has run.  `None` when no
+/// file is configured — the diagnostic then goes to stderr alone, as before.
+#[must_use]
+pub fn crash_file_path() -> Option<String> {
+    CRASH_FILE.get().map(|c| c.display.clone())
+}
+
 /// Update the per-thread context just before an opcode dispatches.
 ///
 /// Call this AT MOST ONCE per opcode.  The inner loop overhead is
@@ -258,6 +334,12 @@ pub fn install(program: &'static str) {
         return;
     }
     let _ = PROGRAM.set(program);
+    // Resolve the report path BEFORE the handlers are armed, so a crash the
+    // instant after this call still has somewhere to write.
+    #[cfg(unix)]
+    if let Some(f) = choose_crash_file() {
+        let _ = CRASH_FILE.set(f);
+    }
     #[cfg(unix)]
     unsafe {
         for &sig in &[libc::SIGSEGV, libc::SIGABRT, libc::SIGBUS] {
@@ -351,6 +433,45 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
             bytes.as_ptr().cast::<libc::c_void>(),
             bytes.len(),
         );
+    }
+    // loft#717 — the same bytes to a FILE, so a pipeline that filters stderr
+    // cannot swallow the one diagnostic that can never be regenerated.  Write
+    // it BEFORE announcing the path, so the line below is only printed when
+    // there is really something at the other end of it.
+    if let Some(target) = CRASH_FILE.get() {
+        let wrote = unsafe {
+            // `open`/`write`/`close` are all on POSIX's async-signal-safe list,
+            // and `c_path` was NUL-terminated at install time, so nothing here
+            // allocates or formats.  0o600: a crash dump names internals, so it
+            // is readable by its owner only.
+            let fd = libc::open(
+                target.c_path.as_ptr().cast::<libc::c_char>(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o600 as libc::c_int,
+            );
+            if fd < 0 {
+                false
+            } else {
+                let n = libc::write(fd, bytes.as_ptr().cast::<libc::c_void>(), bytes.len());
+                libc::close(fd);
+                n > 0
+            }
+        };
+        if wrote {
+            let mut note = [0u8; 1024];
+            let mut nw = Writer::new(&mut note);
+            let _ = nw.str("  report also written to: ");
+            let _ = nw.str(&target.display);
+            let _ = nw.str("\n");
+            let note_bytes = nw.as_bytes();
+            unsafe {
+                let _ = libc::write(
+                    libc::STDERR_FILENO,
+                    note_bytes.as_ptr().cast::<libc::c_void>(),
+                    note_bytes.len(),
+                );
+            }
+        }
     }
     // SA_RESETHAND → the default handler fires next, producing the
     // core dump and terminating the process.
@@ -456,6 +577,47 @@ mod tests {
         // Calling twice should not panic or misbehave.
         install("test");
         install("test");
+    }
+
+    /// loft#717 — where a crash report lands.  The end-to-end guarantee (a real
+    /// signal, stderr discarded, a readable file afterwards) is
+    /// `tests/crash_report_file.rs`; this pins the choice itself, which has three
+    /// outcomes and only one of them is exercised by that test.
+    #[cfg(unix)]
+    #[test]
+    fn crash_file_choice() {
+        // An explicit setting is taken verbatim, and NUL-terminated for `open`.
+        let named = crash_file_from(Some("/tmp/loft-report.txt".to_string()))
+            .expect("an explicit path is used");
+        assert_eq!(named.display, "/tmp/loft-report.txt");
+        assert_eq!(named.c_path.last(), Some(&0), "ready for open(2)");
+        assert_eq!(
+            &named.c_path[..named.c_path.len() - 1],
+            named.display.as_bytes(),
+            "the bytes open(2) sees are the path the user was shown"
+        );
+
+        // Emptied on purpose — stderr only, nothing written and nothing claimed.
+        assert!(
+            crash_file_from(Some(String::new())).is_none(),
+            "an empty setting turns the file off rather than writing to \"\""
+        );
+
+        // Unset — a default that always resolves, and never to a bare directory.
+        let fallback = crash_file_from(None).expect("a default destination always exists");
+        assert!(
+            fallback.display.contains(&std::process::id().to_string()),
+            "the pid keeps concurrent packages in one sweep from overwriting \
+             each other's report: {}",
+            fallback.display
+        );
+
+        // An interior NUL would make `open` see a silently truncated path, so it
+        // is refused rather than written somewhere the user did not name.
+        assert!(
+            crash_file_from(Some("/tmp/a\0b".to_string())).is_none(),
+            "a path open(2) cannot represent faithfully is declined"
+        );
     }
 
     /// Plan-07 phase 3 — source-position lookup for the panic hook +
