@@ -349,14 +349,23 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
     }
     let key = keys::get_key(rec, stores, keys);
     let pos = ordered_find(sorted, true, stores, keys, &key).0;
-    let latest_pos = 8 + length * 4;
-    if latest_pos > pos {
+    // Shift the tail up one slot to open a gap at `pos` — the same three lines
+    // `sorted_finish` runs for the by-value case, with the element size fixed at
+    // the 4-byte rec-id an `ordered` array holds.
+    //
+    // Both halves used to be wrong, in units (loft#719).  The guard read
+    // `8 + length * 4 > pos`, comparing a BYTE OFFSET against an ELEMENT INDEX,
+    // so it was true even when appending at the end (`pos == length`) where
+    // there is nothing to shift.  And the size read `8 + length * 4 - pos * 4`,
+    // which is `(length - pos) * 4` PLUS EIGHT — so every insert copied eight
+    // bytes too many, running past the array on the last slot.
+    if pos < length {
         keys::mut_store(sorted, stores).copy_block(
             sorted_rec,
             8 + pos as isize * 4,
             sorted_rec,
             12 + pos as isize * 4,
-            (latest_pos - pos * 4) as isize,
+            ((length - pos) * 4) as isize,
         );
     }
     keys::mut_store(&rec_ref, stores).set_u32_raw(sorted_rec, 8 + pos * 4, rec.rec);

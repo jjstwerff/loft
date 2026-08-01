@@ -49,6 +49,14 @@ use std::fmt::{Debug, Formatter};
 static A: System = System;
 const SIGNATURE: u32 = 0x53_74_6f_31;
 pub const PRIMARY: u32 = 1;
+/// Byte offset of a record's PAYLOAD — past the 8-byte size header at word 0.
+///
+/// A field's `position` in a struct type is an offset from HERE, so any `DbRef`
+/// used to walk a record's fields must sit at this position.  Naming it makes
+/// the difference visible between such a `DbRef` and one a caller navigated
+/// with: an `index`'s tree cursor carries the red-black link's offset instead,
+/// and walking fields from that is loft#718.
+pub const RECORD_PAYLOAD: u32 = 8;
 /// Maximum store size in words; offsets are stored as `i32` so this is the limit.
 pub const MAX_STORE_WORDS: u32 = i32::MAX as u32;
 

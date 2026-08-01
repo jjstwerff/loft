@@ -539,9 +539,26 @@ impl Parser {
                 && self.data.def(*get_nr).name() == "OpGetRecord"
                 && let Some(Value::Int(db_tp_val)) = get_args.get(1)
                 && (*db_tp_val as usize) < self.database.types.len()
+                // `Ordered` belongs here as much as `Sorted` does, and leaving it
+                // out was loft#719.  A `sorted<T[k]>` becomes an `ORDERED<T[k]>`
+                // — the by-reference twin — as soon as anything else in the
+                // program declares an `index<T[..]>` over the same element type,
+                // so the same source line lowers differently depending on a
+                // declaration somewhere else entirely.  With `Ordered` missing,
+                // `coll[key] = null` fell through to a plain assignment and
+                // generated `OpCopyRecord(cell, (), …)`: the interpreter dropped
+                // the removal silently (the element was still there afterwards)
+                // and `--native` failed to compile the void argument.
+                //
+                // `Radix` is deliberately NOT here: `spatial[x, y] = null` panics
+                // in `keys.rs` before this lowering could help, so adding it
+                // would only move the failure.  See loft#720.
                 && matches!(
                     self.database.types[*db_tp_val as usize].parts,
-                    Parts::Hash(_, _) | Parts::Index(_, _, _) | Parts::Sorted(_, _)
+                    Parts::Hash(_, _)
+                        | Parts::Index(_, _, _)
+                        | Parts::Sorted(_, _)
+                        | Parts::Ordered(_, _)
                 )
             {
                 let db_tp = *db_tp_val;
