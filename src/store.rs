@@ -2305,8 +2305,14 @@ impl Store {
     /// ordinary accessors.
     #[must_use]
     pub fn record_words(&self, rec: u32) -> u32 {
+        // Same tolerance as `valid()`: a FILE-BACKED store does not populate `claims`
+        // (its records come from the mapped image, not from this process's allocator),
+        // so membership says nothing there.  Measured: the same bucket record is in
+        // `claims` for a heap store and absent for the bound one, so without this the
+        // header read asserts "Unknown record" for every bound store — which is
+        // precisely the store `store_verify` is most often asked about.
         debug_assert!(
-            self.read_only || self.claims.contains(&rec),
+            self.read_only || self.is_file_backed() || self.claims.contains(&rec),
             "Unknown record {rec}"
         );
         let size: i32 = *self.addr(rec, 0);

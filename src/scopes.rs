@@ -2617,7 +2617,20 @@ impl Scopes {
                 // then still frees once per iteration, which is what keeps a loop
                 // over such an expression flat instead of accumulating a store per
                 // round.
-                if !matches!(bl.result, Type::Void) && self.lift_vars.len() > lift_watermark {
+                // Not for a BODY return.  The hoist hands the temp to the enclosing
+                // scope and drops the block-exit free on the promise that the outer
+                // scope frees it instead — and when the value block IS the function
+                // body, the enclosing scope is that same function, so the free it was
+                // handed to is the one just dropped and nothing frees it at all.
+                // `fn txt(n: integer) -> text { mk(n).label }` leaked one record per
+                // call for exactly that reason.  A body return also does not need the
+                // hoist: the return delivers its value into the CALLER's buffer, so
+                // freeing the temp at body exit — the behaviour before loft#722 — is
+                // both correct and what the caller's copy relies on.
+                if !matches!(bl.result, Type::Void)
+                    && !is_body_return
+                    && self.lift_vars.len() > lift_watermark
+                {
                     let fresh: Vec<u16> = self.lift_vars[lift_watermark..]
                         .iter()
                         .copied()
@@ -5089,7 +5102,34 @@ impl Scopes {
     fn borrow_root(val: &Value, data: &Data) -> Option<u16> {
         match val.unspan() {
             Value::Var(v) => Some(*v),
-            Value::Call(d, args) if data.def(*d).name().starts_with("OpGet") => {
+            // loft#722 — a getter roots the chain only when it RETURNS A BORROW, and
+            // the stdlib declaration already says which do: `OpGetField(v1, fld) ->
+            // reference[v1]` and `OpGetVector(r, …) -> reference[r]` name the argument
+            // they read into, while `OpGetInt(v1, fld) -> integer` names nothing
+            // because it copies a scalar out.  Read that declared dep instead of the
+            // `OpGet` name prefix: the prefix is a proxy, and it was too wide.
+            //
+            // `run() -> integer { make2().n }` lowers to `OpGetInt(__lift_1, 0)`, whose
+            // result is an integer that cannot point into the temp. Treating it as a
+            // borrow hoisted `__lift_1` to the enclosing scope and dropped its
+            // block-exit free, so the call's store was never freed — one leaked record
+            // per inline struct-returning call, on both backends.
+            //
+            // Every borrowing getter names its FIRST argument, so the walk itself is
+            // unchanged; only which calls enter it.
+            Value::Call(d, args)
+                if data.def(*d).name().starts_with("OpGet")
+                    && matches!(
+                        data.def(*d).returned.base(),
+                        Type::Reference(_, _)
+                            | Type::Vector(_, _)
+                            | Type::Text(_)
+                            | Type::Enum(_, true, _)
+                            | Type::Sorted(_, _, _)
+                            | Type::Hash(_, _, _)
+                            | Type::Index(_, _, _)
+                    ) =>
+            {
                 args.first().and_then(|a| Self::borrow_root(a, data))
             }
             _ => None,

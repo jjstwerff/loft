@@ -1587,7 +1587,14 @@ impl Stores {
                     *problems += 1;
                     return;
                 }
-                let room = store.get_u32_raw(cur, 0);
+                // `room` is the bucket record's SIZE HEADER, which hash.rs deliberately
+                // doubles as data (`src/hash.rs`: "fld 0 : size header (word count =
+                // `room`); see `Store::record_words`").  Read it through the header
+                // accessor: `get_u32_raw` is the FIELD accessor and asserts `fld >= 4`
+                // under armed debug-assertions, because fld 0..4 IS the header it is
+                // meant to sit above — so reading word 0 with it panicked the
+                // debug-assertions gate ("Fld 0 is outside of record N").
+                let room = store.record_words(cur);
                 if room < 2 || u64::from(room) > u64::from(cap) {
                     eprintln!(
                         "[cr-check] {path}: hash bucket rec {cur} insane room {room} (cap {cap})",
