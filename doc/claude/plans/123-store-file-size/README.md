@@ -64,8 +64,8 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | Item | Source | Status |
 |---|---|---|
 | **A0** — trust the high-water mark (`walk_complete`) | [DESIGN.md](DESIGN.md) | **Done** — inert |
-| **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
-| **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
+| **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | **Done** — inert |
+| **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | **Done** — inert |
 | **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | Open — first behaviour change |
 | **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | Open |
 | **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open |
@@ -74,10 +74,12 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 
 ### A — truncate the tail
 
-`resize_store` must stop refusing to shrink, and the tail has to be coalesced
-first: after a mass removal it is thousands of unmerged free blocks (2,696
-mergeable pairs measured), so a naive "is the top block free" check reclaims
-almost nothing.
+`resize_store` keeps refusing to shrink — it is the growth path — so the shrink
+is a sibling, `Store::shrink_to`. A naive "is the top block free" check would
+reclaim almost nothing after a mass removal (2,696 unmerged mergeable pairs
+measured), which is why the cut is made at the **high-water mark** instead;
+that reads the same swept or unswept, so coalescing is about the interior, not
+about how much tail comes back (DESIGN.md § A2).
 
 Safe by construction: everything above the last claimed block is free, so no live
 record and no `DbRef` is affected. Recovers ~59% of the case above on its own.

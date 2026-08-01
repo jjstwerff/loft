@@ -98,7 +98,7 @@ The non-vacuity test is `#[cfg(debug_assertions)]` for the same reason: it
 compiles away together with the instrument it proves, so it can never pass by
 not running.
 
-### A1 — a shrink primitive with no caller (inert)
+### A1 — a shrink primitive with no caller (inert) — **DONE**
 
 - **Code point:** `src/store.rs::resize_store` (1140) refuses `to_size <=
   self.size` and must keep doing so — it is the growth path and every caller
@@ -123,24 +123,58 @@ not running.
   negative: `shrink_to(live_end - 1)` returns `false` and changes nothing.
 - **Does not:** get called from anywhere.
 
-### A2 — reclaim = coalesce, then shrink (inert)
+**Two things the sketch above did not have**, both found by building it:
 
-The tail after a mass removal is **thousands of unmerged free blocks** (2,696
-mergeable pairs measured), because `coalesce_free` is lazy — `claim` runs it only
-when an allocation would otherwise grow the store. So the mark is far below where
-it could be, and shrinking alone reclaims almost nothing.
+*The tail has to be re-tiled, not just cut.* Truncating to somewhere ABOVE the
+mark leaves free space that must become ONE block ending exactly at the new
+size — otherwise the chain no longer partitions the store and every later walk
+breaks on it. `retile_tail` does that, then `fl_rebuild`. Skipping the rebuild
+is not a hygiene issue: with the free tree still naming words that were cut, the
+unit test **SIGSEGVs**, which is F2 happening rather than being argued about.
 
-- **Code point:** `src/store.rs`, next to `coalesce_free` (1676).
-- **Add:** `Store::reclaim_tail(&mut self) -> u32` — returns words freed:
+*The 1024-word floor is a FILE fact, not a store fact.* It exists because
+`Store::open` lifts a small file straight back up. A heap store has no such
+floor — `Store::new` insists on two words — and clamping there would have made
+the primitive refuse on every store under 8 KB, unit tests included. The floor
+now has one home (`MIN_BOUND_WORDS`), which `Store::open` uses as well.
+
+### A2 — reclaim = coalesce, then shrink (inert) — **DONE**
+
+**Correction — the sweep does not move the mark.** This step was written on
+"the tail after a mass removal is thousands of unmerged free blocks, so the mark
+is far below where it could be, and shrinking alone reclaims almost nothing."
+That is true of a *is the top block free* test, and this is not one:
+`live_end_words` is the end of the last CLAIMED block, and merging free blocks
+never moves a claimed one. The same store gives back the same tail swept or
+unswept — pinned by the A2 test, which reclaims twice from identical stores.
+
+The sweep stays, paying for a different thing: those unmerged pairs are in the
+**interior**, and merging them is what decides whether the next large claim
+reuses space or grows the store. An explicit, rare call is the one moment an
+O(blocks) sweep is welcome — and it is the reason nothing on the free path ever
+needs to walk.
+
+- **Code point:** `src/store.rs`, next to `coalesce_free`.
+- **Added:** `Store::reclaim_tail(&mut self) -> u32` — words given back:
   ```
   if self.needs_coalesce { self.coalesce_free(); }
-  let end = self.usage().live_end_words;
-  if self.shrink_to(end) { before - end } else { 0 }
+  let before = self.size;
+  let mark = self.usage().live_end_words;
+  if self.shrink_to(mark) { before - self.size } else { 0 }
   ```
-- **Verify:** the unit test from A1 extended with the fragmented shape — free
-  every other block, assert `reclaim_tail` returns ~the tail, and that
-  `mergeable_free_pairs` is 0 afterwards.
+  Measured against `self.size` after the fact, never `before - mark`:
+  `shrink_to` clamps to its floor, so the mark is not where it necessarily
+  landed.
+- **Verify:** two unit tests — the fragmented shape (tail returned, interior
+  merged, store still usable, and the swept-first control), and a dense store
+  reporting 0 while touching nothing.
 - **Does not:** get called from anywhere.
+
+**A test-shape trap worth keeping.** Freeing every OTHER record produces free
+blocks that are not adjacent, so `mergeable_free_pairs` is already 0 and the
+"the interior was swept" assertion says nothing. The fragmented shape has to
+free in FORWARD runs of two — `delete` merges only with the block after it, and
+that one is still claimed both times, which is what leaves a pair unmerged.
 
 ### A3 — expose it as an explicit call: `store_reclaim(collection)`
 

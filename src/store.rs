@@ -1846,6 +1846,42 @@ impl Store {
         self.needs_coalesce = false;
     }
 
+    /// Sweep, then give the tail back: returns the number of WORDS the store
+    /// shrank by, 0 when there was nothing to give.  The whole of arc A behind
+    /// one call.  @PLN123 A2.
+    ///
+    /// **The sweep does not move the mark**, and the plan's own step said
+    /// otherwise, so it is worth being exact.  `live_end_words` is the end of
+    /// the last CLAIMED block; merging free blocks never moves a claimed one,
+    /// so the tail that comes back is the same with or without the sweep.  (The
+    /// claim it inherited — "a naive check reclaims almost nothing without
+    /// coalescing" — is true of a *is the top block free* test, which is not how
+    /// the mark is computed.)
+    ///
+    /// It is here anyway, and pays for a different thing: a caller reaching for
+    /// this has just dropped a lot, `coalesce_free` is lazy (only `claim` runs
+    /// it, and only when it would otherwise grow the store), so the INTERIOR is
+    /// where those thousands of unmerged free blocks sit — 2,696 mergeable pairs
+    /// in this plan's measurement.  Merging them is what decides whether the
+    /// next large claim reuses space or grows the store, and this explicit, rare
+    /// call is the one moment an O(blocks) sweep is welcome.  Nothing on the
+    /// free path ever walks the chain.
+    #[allow(dead_code)] // @PLN123 A2 lands inert: A3 is what calls it.
+    pub fn reclaim_tail(&mut self) -> u32 {
+        if self.needs_coalesce {
+            self.coalesce_free();
+        }
+        let before = self.size;
+        let mark = self.usage().live_end_words;
+        // `shrink_to` clamps to its floor, so the size it settles on is the
+        // only honest source for what came back — never `before - mark`.
+        if self.shrink_to(mark) {
+            before - self.size
+        } else {
+            0
+        }
+    }
+
     /// Debug-only: walk the LLRB tree and verify its invariants.
     ///
     /// Asserts that:
@@ -3438,6 +3474,95 @@ mod tests {
             "an incomplete walk must refuse, whatever the mark says"
         );
         assert_eq!(store.len(), before);
+    }
+
+    /// @PLN123 A2 — `reclaim_tail` on the shape it exists for: a store whose
+    /// free space is thousands of unmerged blocks because `coalesce_free` is
+    /// lazy.  The tail comes back, the interior is merged, and the store is
+    /// immediately usable again.
+    ///
+    /// It also pins the correction in `reclaim_tail`'s own doc: the sweep does
+    /// NOT decide how much comes back.  The same store reclaims the same tail
+    /// with the sweep already done, because merging free blocks never moves a
+    /// claimed one.
+    #[test]
+    fn reclaim_tail_returns_the_tail_and_merges_the_interior() {
+        // Freed in runs of two, FORWARD order: `delete` merges only with the
+        // block after it, and that one is still claimed both times, so each run
+        // leaves an adjacent-but-unmerged pair — the shape a lazy sweep leaves
+        // behind.  (Freeing every OTHER record would leave nothing mergeable
+        // and make the sweep assertion below say nothing.)
+        fn fragmented() -> (Store, Vec<u32>) {
+            let mut store = Store::new(256);
+            store.free = false;
+            let recs: Vec<u32> = (0..21).map(|_| store.claim(5)).collect();
+            for i in (0..18).step_by(3) {
+                store.delete(recs[i]);
+                store.delete(recs[i + 1]);
+            }
+            (store, recs)
+        }
+
+        let (mut store, recs) = fragmented();
+        let last_live = *recs.last().expect("21 records");
+        assert_eq!(
+            store.usage().mergeable_free_pairs,
+            6,
+            "six unmerged pairs to sweep — the precondition this test needs"
+        );
+        let before = store.len();
+        let freed = store.reclaim_tail();
+        assert_eq!(
+            freed,
+            before - store.len(),
+            "the words it says it gave back"
+        );
+        assert!(
+            freed > 0,
+            "a 256-word store holding 20 five-word records has a tail"
+        );
+        assert_eq!(
+            store.len(),
+            last_live + 5,
+            "capacity is now the end of the last surviving record"
+        );
+        let after = store.usage();
+        assert!(after.walk_complete);
+        assert_eq!(after.mergeable_free_pairs, 0, "the interior was swept");
+        #[cfg(debug_assertions)]
+        store.fl_validate();
+        // Still usable, and the swept interior is what serves the next claim.
+        let cap = store.len();
+        let reused = store.claim(4);
+        assert_eq!(store.len(), cap, "reused interior space instead of growing");
+        assert!(reused < last_live, "and it came from below the last record");
+
+        // The sweep is not what decides the tail: pre-swept, same answer.
+        let (mut swept, _) = fragmented();
+        swept.coalesce_free();
+        let before_swept = swept.len();
+        assert_eq!(
+            swept.reclaim_tail(),
+            before_swept - (last_live + 5),
+            "coalescing first changes nothing about how much comes back"
+        );
+    }
+
+    /// @PLN123 A2 — a dense store has nothing to give, and says so without
+    /// touching anything.  The report is what a caller acts on, so a `0` that
+    /// actually shrank the store would be worse than no call at all.
+    #[test]
+    fn reclaim_tail_reports_zero_when_there_is_no_tail() {
+        let mut store = Store::new(64);
+        store.free = false;
+        while store.len() == 64 {
+            store.claim(5); // fill until the next claim would grow it
+        }
+        let mark = store.usage().live_end_words;
+        assert!(store.shrink_to(mark), "trim to the mark first");
+        let before = store.len();
+        assert_eq!(store.reclaim_tail(), 0, "nothing above the mark to give");
+        assert_eq!(store.len(), before, "and the store is untouched");
     }
 
     /// @PLN123 A0 — non-vacuity for the mark-vs-capacity assertion.  It is a
