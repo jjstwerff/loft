@@ -115,6 +115,11 @@ struct Scopes {
     /// declared deps so the OWNED path deep-copies + frees the slot — otherwise the
     /// displaced owned store is orphaned and leaks. Empty when the flag is off.
     displaced_owned: HashSet<u16>,
+    /// loft#721 — fn-ref variable -> the definition it was assigned, or
+    /// `u32::MAX` when more than one definition reaches it.  A `CallRef`'s callee
+    /// is a runtime value, so this local fact is what lets the lift ask the
+    /// callee's own `returns_borrowed_view()` instead of guessing from the type.
+    fnref_target: HashMap<u16, u32>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -123,6 +128,56 @@ struct Scopes {
 /// and set each variable's scope.  Runs once normally; plan-57 cluster I re-runs
 /// it with a non-empty `confined` map (`__vdb`/local → block scope) so a confined
 /// store registers — and therefore frees — at its block exit (`put_scope`).
+/// loft#721 — map each fn-ref VARIABLE to the definition assigned to it.
+///
+/// A non-capturing lambda is stored as a bare definition number, a capturing one
+/// as `FnRef(d_nr, closure)`; both forms are searched.  A variable that receives
+/// two different definitions maps to `u32::MAX` (ambiguous), and a caller that
+/// cannot name one definition must not lift — see `callref_owned_return`.
+fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
+    let mut out: HashMap<u16, u32> = HashMap::new();
+    code.walk(&mut |v| {
+        let Value::Set(var, rhs) = v else { return };
+        if !matches!(function.tp(*var).base(), Type::Function(_, _, _)) {
+            return;
+        }
+        // An explicit `FnRef`/`FnRefDnr` names the target wherever it sits — a
+        // capturing lambda's assignment is a BLOCK (build the closure record,
+        // then the ref), so the marker is nested.
+        let mut found: Option<u32> = None;
+        let mut ambiguous = false;
+        rhs.walk(&mut |inner| {
+            let d = match inner {
+                Value::FnRef(d, _, _) => u32::try_from(*d).ok(),
+                Value::FnRefDnr(d) => Some(u32::from(*d)),
+                _ => None,
+            };
+            if let Some(d) = d {
+                match found {
+                    Some(prev) if prev != d => ambiguous = true,
+                    _ => found = Some(d),
+                }
+            }
+        });
+        // A NON-capturing lambda is stored as the bare definition number.  Only a
+        // DIRECT integer counts: that same block above is full of unrelated ints
+        // (a type id, a field offset), and treating those as candidates made every
+        // capturing case read as ambiguous.
+        if found.is_none()
+            && let Value::Int(d) = rhs.unspan()
+        {
+            found = u32::try_from(*d).ok();
+        }
+        if let Some(d) = found {
+            let slot = out.entry(*var).or_insert(d);
+            if ambiguous || *slot != d {
+                *slot = u32::MAX;
+            }
+        }
+    });
+    out
+}
+
 fn run_scan_phase(
     data: &mut Data,
     d_nr: u32,
@@ -157,6 +212,7 @@ fn run_scan_phase(
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         displaced_owned,
+        fnref_target: collect_fnref_targets(orig_code, orig_vars),
     };
     let mut function = Function::copy(orig_vars);
     for a in function.arguments() {
@@ -2632,7 +2688,7 @@ impl Scopes {
                     // `Insert([Set(__lift_i, …)…, call])` — the owned result is
                     // the final op.
                     if let Some(last) = ops.last()
-                        && let Some(tp) = Self::inline_struct_return(last, data, u32::MAX)
+                        && let Some(tp) = self.inline_struct_return(last, data, u32::MAX, function)
                     {
                         let tmp = self.new_lift_var(function, &tp);
                         let last = ops.pop().unwrap();
@@ -2641,7 +2697,9 @@ impl Scopes {
                     } else {
                         Value::Drop(Box::new(Value::Insert(ops)))
                     }
-                } else if let Some(tp) = Self::inline_struct_return(&scanned, data, u32::MAX) {
+                } else if let Some(tp) =
+                    self.inline_struct_return(&scanned, data, u32::MAX, function)
+                {
                     let tmp = self.new_lift_var(function, &tp);
                     v_set(tmp, scanned)
                 } else {
@@ -4351,7 +4409,9 @@ impl Scopes {
             // exact shape that triggers the bug.
             if has_create_stack_receiver
                 && arg_idx > 0
-                && Self::inline_struct_return(&scanned, data, outer_call).is_none()
+                && self
+                    .inline_struct_return(&scanned, data, outer_call, function)
+                    .is_none()
                 && let Some(tp) = Self::heap_call_return(&scanned, data)
             {
                 let tmp = self.new_lift_var(function, &tp);
@@ -4409,7 +4469,9 @@ impl Scopes {
                     let final_val = it.next().unwrap();
                     // the remaining Call may also be struct-returning
                     // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
-                    if let Some(tp) = Self::inline_struct_return(&final_val, data, outer_call) {
+                    if let Some(tp) =
+                        self.inline_struct_return(&final_val, data, outer_call, function)
+                    {
                         let tmp = self.new_lift_var(function, &tp);
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
@@ -4419,7 +4481,8 @@ impl Scopes {
                 } else {
                     ls.push(Value::Insert(ops));
                 }
-            } else if let Some(tp) = Self::inline_struct_return(&scanned, data, outer_call) {
+            } else if let Some(tp) = self.inline_struct_return(&scanned, data, outer_call, function)
+            {
                 // inline struct-returning or vector-returning call as argument
                 // — lift to a temporary variable so get_free_vars emits
                 // OpFreeRef at scope exit.  Without this, the callee's store
@@ -4581,7 +4644,58 @@ impl Scopes {
     /// Skips lifting when the outer call's return type depends on this argument
     /// (i.e. the result borrows from the argument's store).  Freeing the lifted
     /// temp at scope exit would be use-after-free in that case.
-    fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<Type> {
+    /// loft#721 — may the aggregate a `CallRef` returns be LIFTED into an owned
+    /// temp (and therefore freed)?
+    ///
+    /// The direct-call branch answers this from the callee's definition; a
+    /// `CallRef`'s callee is a runtime value, so the fn-ref TYPE is all that is
+    /// available at the call — and it is not enough. Measured: a closure that
+    /// calls a struct-returning function and one that hands back a borrowed
+    /// element present the SAME signature (`ret_deps=[1]`, one param), because
+    /// the dep index lives in the callee's attribute space and says nothing on
+    /// its own. Lifting on the type alone frees a borrowed element: a
+    /// use-after-free that only `LOFT_POISON=1` makes visible.
+    ///
+    /// So resolve the target definition instead — `fnref_target` records which
+    /// definition each fn-ref variable was assigned — and then ask the SAME
+    /// canonical question the direct call asks, `returns_borrowed_view()`.
+    /// An unknown or ambiguous target answers `None`: the result is not lifted,
+    /// which is the pre-existing behaviour (it leaks, and a leak is recoverable
+    /// where a premature free is not).
+    fn callref_owned_return(&self, val: &Value, data: &Data, function: &Function) -> Option<Type> {
+        let Value::CallRef(v_nr, _) = val.unspan() else {
+            return None;
+        };
+        let d_nr = match self.fnref_target.get(v_nr).copied() {
+            Some(d) if d != u32::MAX => d,
+            _ => return None,
+        };
+        let def = data.def(d_nr);
+        if def.code == Value::Null || def.returns_borrowed_view() {
+            return None;
+        }
+        // The fn-ref variable's own type is the declared shape; the definition is
+        // the authority on what it returns.
+        let _ = function;
+        match def.returned() {
+            Type::Reference(d, _) => Some(Type::Reference(*d, Deps::none())),
+            Type::Enum(d, true, _) => Some(Type::Enum(*d, true, Deps::none())),
+            _ => None,
+        }
+    }
+
+    fn inline_struct_return(
+        &self,
+        val: &Value,
+        data: &Data,
+        _outer_call: u32,
+        function: &Function,
+    ) -> Option<Type> {
+        // loft#721 — a closure call is lifted only when its target definition is
+        // known AND that definition does not return a borrowed view.
+        if let Some(tp) = self.callref_owned_return(val, data, function) {
+            return Some(tp);
+        }
         // @P297 — a USER struct-returning call (`n_*` with a body) passed
         // directly as a call argument is wrapped in `Value::Span` by
         // `parse_call` (and re-wrapped by `scan`), so the argument reaching
