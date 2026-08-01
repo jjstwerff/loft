@@ -62,9 +62,8 @@
 <pre><code>  f += <span class="st">"Hello world!"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">32</span>, <span class="st">"Size should be 32 bytes (20 + 12)."</span>);
  }  <span class="cm">// The file closes when the handle goes out of scope.</span></code></pre>
-<p><code>move(src, dst)</code> renames a file. It refuses if the destination already exists or if either path would leave the project directory.</p>
+<p><code>move(src, dst)</code> renames a file. It refuses if the destination already exists.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">exists</a></span>(<span class="st">"test.bin"</span>), <span class="st">"File should exist after writing."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"test.bin"</span>, <span class="st">"../test.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Should refuse to move outside the project."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"test.bin"</span>, <span class="st">"test2.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not move the file."</span>);</code></pre>
 <h2 id="reading-back-what-you-wrote">Reading Back What You Wrote</h2>
 <p>When you open an existing file the default format is TextFile. Set <code>f#format</code> to match the format used when writing before you read any bytes. <code>f#read(n) as T</code> reads exactly n bytes and interprets them as type T. <code>f#index</code> is the byte offset where the last read started. <code>f#next</code> is the current read position; assign to it to seek anywhere.</p>
@@ -127,8 +126,8 @@
 <p>Reading a non-existent file produces an empty result, not a crash.</p>
 <pre><code>  ghost = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_file.txt"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ghost#format == <span class="en">NotExists</span>, <span class="st">"non-existent file has NotExists format"</span>);</code></pre>
-<p><code>move</code> refuses paths outside the project directory.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"any.txt"</span>, <span class="st">"../escape.txt"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"move outside project fails"</span>);</code></pre>
+<p><code>move</code> reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains <code>..</code> (loft#712).</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"any.txt"</span>, <span class="st">"../escape.txt"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"move with a missing source fails"</span>);</code></pre>
 <p>Writing to a read-only or invalid path also returns a FileResult. Always check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
 <pre><code>}</code></pre>
 

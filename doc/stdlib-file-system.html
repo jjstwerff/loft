@@ -166,8 +166,14 @@
 <p>Structural integrity check of a store-rooted collection's heap graph: verify every internal pointer targets a live record — no dangling / out-of-bounds / cyclic edge. Returns true when sound, false (with a reason on stderr) when not. The verifier behind the working-set loader's confidence: after any `store_load*`, `store_verify(local)` proves the (partial) copy produced a structurally valid heap, not one with a pointer left aimed at the source. h: hash&lt;Rec[id]&gt; = [] store_load_key(h, &quot;block.store&quot;, 42) assert(store_verify(h))   // the load produced a sound heap</p>
 </div>
 <div class="item">
+<pre><code>pub fn store_reclaim(r: reference) -&gt; integer fs#update</code></pre>
+<p>Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store_persist_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.</p>
+<p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
+</div>
+<div class="item">
 <pre><code>pub fn store_load_key(local: reference, path: text, key: integer) -&gt; boolean fs#read</code></pre>
-<p>Working-set load: fetch ONE integer-keyed entry from a persisted HASH image into the empty local hash `local`, reading only the pages the lookup touches — not the whole file. The bounded-fetch counterpart of `store_load`, for when `local` should hold only the entries actually asked for (a phone pulling the few map tiles a route needs from a large block). Returns false when the key is absent, the file is unreadable, or the collection is not an integer-keyed hash of a FLAT (scalar-field) struct. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)   // tiles now holds entry 42 only</p>
+<p>Working-set load: fetch ONE integer-keyed entry from a persisted HASH image into the empty local hash `local`, reading only the pages the lookup touches — not the whole file. The bounded-fetch counterpart of `store_load`, for when `local` should hold only the entries actually asked for (a phone pulling the few map tiles a route needs from a large block). `path` is a local file or an `http(s)://` URL served with `Range`, on every target including the browser (`--html`), where the fetch goes through the same bridge `store_load_url_trusted` uses. Returns false when the key is absent, the file is unreadable, or the collection is not an integer-keyed hash.</p>
+<p>The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector&lt;text&gt;` or a `vector&lt;vector&gt;` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)   // tiles now holds entry 42 only</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_key_text(local: reference, path: text, key: text) -&gt; boolean fs#read</code></pre>
@@ -175,7 +181,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn store_load_keys(local: reference, path: text, keys: vector&lt;integer&gt;) -&gt; integer fs#read</code></pre>
-<p>Plural form of `store_load_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same FLAT-struct restriction. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] got = store_load_keys(tiles, &quot;block.store&quot;, [7, 13, 42])   // got == 3</p>
+<p>Plural form of `store_load_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same relocation rules as `store_load_key`. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] got = store_load_keys(tiles, &quot;block.store&quot;, [7, 13, 42])   // got == 3</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_range(local: reference, path: text, lo: integer, hi: integer) -&gt; integer fs#read</code></pre>
@@ -184,6 +190,18 @@
 <div class="item">
 <pre><code>pub fn set_file_size(self: File, size: integer) -&gt; FileResult fs#update</code></pre>
 <p>Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an error variant (IsDirectory / NotFound / Other).</p>
+</div>
+<div class="item">
+<pre><code>pub fn seek(self: File, pos: integer) -&gt; boolean fs#update</code></pre>
+<p>Moves the read/write position to `pos` bytes from the start, for random access into a binary file: read an index, jump to the record it names, read that.</p>
+<p>Equivalent to `self#next = pos`, which is the operator form and has always worked; this is the NAME the operation was already documented under, and a consumer who reached for it (three call forms, all of them this one) concluded random access was unsupported and restructured their file format around it.</p>
+<p>Returns false — a no-op — when there is nothing to seek in: a directory, an absent file, a negative `pos`, or a file the process has not yet read from or written to (the OS handle is opened by the first I/O, so seeking before it exists has nothing to move).  Seeking PAST the end is allowed: the position is remembered and a following write extends the file, which is how a free-list or an update-in-place walk lands.</p>
+</div>
+<div class="item">
+<pre><code>pub fn position(self: File) -&gt; integer</code></pre>
+<p>The current read/write position in bytes, i.e. where the next read or write will land.  The read side of [seek]; `self#next` is the operator form.</p>
+<p>Distinct from `self#index`, which is where the LAST read STARTED — after `x = f#read as i32` on a fresh file, `position` is 4 and `f#index` is 0.</p>
+<p>A file this process has not read from or written to yet has no position, and reports null rather than 0 — 0 is a legitimate position, so returning it would make &quot;not opened&quot; indistinguishable from &quot;at the start&quot;.  Discharge with `?? 0` when the distinction does not matter.</p>
 </div>
 <div class="item">
 <pre><code>pub fn sync(self: File) -&gt; boolean fs#update</code></pre>
