@@ -12,16 +12,21 @@ invariants, internal phase numbers)?  See
 
 ---
 
-## 2026-07
+## 2026-08
 
-The **stability and type-safety** release. Two things anchor it: parsing text into a
-number is now *honestly fallible* (it hands you a nullable instead of quietly
-inventing a `0`), and a long-standing class of heap / memory bugs — leaks and
-use-after-free corruption around returns, reassignment, and `match` — has been
-retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
-and reference binding all move forward too.
+The **heap-correctness** release. Almost everything here is one theme seen from a
+dozen angles: a value that outlived the storage it pointed into, or storage that
+outlived the value. Closures that build structs, elements taken out of what a
+function just returned, keyed collections that drop entries, captures that changed
+meaning with declaration order — all of them read correctly once and wrongly later,
+which is the shape that cannot be found by reading the code. They are fixed, and the
+detectors that would have caught them earlier are now part of the nightly gate.
 
-### Unreleased — an element taken out of a returned value stays valid
+Alongside that: a store can give its file back (`store_reclaim`, plus automatic
+compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
+that survives being piped somewhere, and `u32` finally holding every `u32`.
+
+### An element taken out of a returned value stays valid
 
 Binding an element out of a struct a function just returned gave you a reference
 into storage that had already been handed back:
@@ -62,7 +67,7 @@ held = roof_plans();                          // no longer necessary
 plan = held.items[0] ?? RoofPlan {};
 ```
 
-### Unreleased — a closure that builds a struct no longer crashes
+### A closure that builds a struct no longer crashes
 
 A closure that captured something and called a function returning a struct
 crashed the interpreter outright:
@@ -90,7 +95,7 @@ total += pt(r).a;            // no longer leaks
 p = pt(r); total += p.a;     // and neither does binding it first
 ```
 
-### Unreleased — removing from a keyed collection, without the crashes
+### Removing from a keyed collection, without the crashes
 
 Three ways of removing from a keyed collection went wrong, all now fixed:
 
@@ -102,7 +107,7 @@ Three ways of removing from a keyed collection went wrong, all now fixed:
   needed; the declaration did it.
 - Removing by key from a `spatial` collection is covered in its own entry below.
 
-### Unreleased — `spatial` collections answer to a point
+### `spatial` collections answer to a point
 
 A `spatial<Mob[x, y]>` could be appended to, iterated, counted and range-sliced,
 but the plain point subscript did not work — in three different ways, which is
@@ -127,7 +132,7 @@ when the point is empty), `xs[x, y] = value` inserts or replaces, and
 `xs[x, y] = null` removes. Note the coordinates are separate subscripts here —
 `xs[3, 6]` — where the range forms parenthesise them, `xs[(3,6)..(9,9)]`.
 
-### Unreleased — a crash report you can still read afterwards
+### A crash report you can still read afterwards
 
 When loft dies of a segfault it prints what it was doing: the last opcode, where
 it was in the program, and which function. That went to stderr only — so a build
@@ -140,7 +145,7 @@ stderr names the file it wrote. Set `LOFT_CRASH_FILE` to put it somewhere
 specific, or set it to empty for the old stderr-only behaviour. A run that does
 not crash writes nothing.
 
-### Unreleased — removing from a collection now gives the memory back
+### Removing from a collection now gives the memory back
 
 Removing an element unlinked it and stopped there. The element's storage — and
 anything it owned, a `text` or a nested `vector` — was never released, so a
@@ -162,7 +167,7 @@ adds and removes stays flat instead of climbing. Nothing to change in your code.
 If you were working around it by reusing element objects instead of removing
 them, you can stop.
 
-### Unreleased — `reserve(v, n)`, for when many vectors grow at once
+### `reserve(v, n)`, for when many vectors grow at once
 
 Appending to a vector doubles it when it runs out, which is the right default and
 almost never something you think about. It becomes something you think about when
@@ -185,7 +190,7 @@ claimed capacity rather than its length: on a 125-record × 2312-coordinate stor
 reserving took the file from 3,816,152 to 2,609,736 bytes for byte-identical
 data.
 
-### Unreleased — `directory("sub")` now appends the subpath it always advertised
+### `directory("sub")` now appends the subpath it always advertised
 
 `directory`, `user_directory` and `program_directory` each take an optional
 subpath, and each quietly ignored it:
@@ -206,7 +211,7 @@ and the browser build already answered with a directory — so the two targets
 disagreed. If you were compensating for this by trimming the binary name
 yourself, drop that step.
 
-### Unreleased — a file outside your project is now equally out of reach for writing
+### A file outside your project is now equally out of reach for writing
 
 `file("../notes.txt")` reported the file absent, as paths outside the project
 always have — but `f.write(…)`, `f += …` and `write_bytes(…)` went ahead and
@@ -224,7 +229,7 @@ the attempt is visible — `f.write(s).ok()` is `false`, `write_bytes` returns
 absolute path is not restricted; build one with `directory()` or
 `user_directory()`).
 
-### Unreleased — a browser build no longer refuses calls it cannot serve
+### A browser build no longer refuses calls it cannot serve
 
 Naming a builtin the browser has no handler for — `gl_screenshot`, say — failed
 the `--html` build outright, so one source had to become two entry points
@@ -233,7 +238,7 @@ call returns its usual failure value (`false`) and reports itself once in the
 browser console, which is what a caller checking the result already handles. The
 build still tells you which calls those are.
 
-### Unreleased — declaration order no longer changes what a closure sees
+### Declaration order no longer changes what a closure sees
 
 Loft lets you use a struct before you declare it, and that is meant to be invisible.
 Inside a lambda it was not:
@@ -254,7 +259,7 @@ The capture now resolves exactly as it does when the declaration comes first, wh
 was projected out of — a field, a vector element, a whole vector, or a scalar read out of
 one. Declaration order is invisible again.
 
-### Unreleased — the last corner of mutable text captures
+### The last corner of mutable text captures
 
 Making mutated parameter captures work (below) left exactly one combination refused with
 a message: mutating a captured `text` **parameter** inside a function that itself returns
@@ -268,7 +273,7 @@ return text?" rather than "is this the value being returned?". The first questio
 wrong one — a function can return one text while a closure mutates another, and only the
 second question tells them apart.
 
-### Unreleased — a closure can now count with one of your parameters
+### A closure can now count with one of your parameters
 
 The accumulator closure is an old friend:
 
@@ -287,7 +292,7 @@ closure's writes are visible for the rest of the function, and your **caller's v
 untouched** — a scalar parameter is still passed by value. Mutating a `const` parameter
 through a closure is refused, as it is anywhere else.
 
-### Unreleased — a lambda that captures your value no longer eats it
+### A lambda that captures your value no longer eats it
 
 Handing a lambda a value from the surrounding scope is the ordinary way to give a
 library a function it can call:
@@ -314,7 +319,7 @@ never reads something already freed.
 Nothing you can write got stricter — code that avoided closures over store-backed
 values by hand keeps working, and can now stop avoiding them.
 
-### Unreleased — changing a value you matched on now sticks
+### Changing a value you matched on now sticks
 
 Destructuring in a `match` gives you a **view** of what you matched, so writing
 through it changes the value:
@@ -342,7 +347,7 @@ the compiler with an internal error, on perfectly ordinary code.
 If you had worked around any of these by rebuilding the value instead of editing it
 in place, that code keeps working — nothing you can write got slower or stricter.
 
-### Unreleased — a big function no longer breaks its own loops
+### A big function no longer breaks its own loops
 
 A function whose body grew past about 32 KB started behaving impossibly: a
 `while true` would run its body **once** and then simply carry on past the loop,
@@ -362,7 +367,7 @@ were too big simply work now. (Reported from moros, whose editor server sat righ
 on the edge — adding two `println` lines made it exit before any client could
 connect.)
 
-### Unreleased — a `vector<vector<u8>>` finally reads back what you put in
+### A `vector<vector<u8>>` finally reads back what you put in
 
 Nesting a **narrow** number inside a vector — `vector<vector<u8>>`, `<u16>`, `<i16>`,
 `<i32>`, `<u32>` — used to be misread the moment you did anything with the whole
@@ -397,7 +402,7 @@ contract already promised ("a heap element counts as its record pointer, never t
 target's content"); the number had been following the stride bug. `len` is unaffected,
 and no on-disk layout changes.
 
-### Unreleased — `u32` finally holds every `u32`
+### `u32` finally holds every `u32`
 
 Three fixes to narrow-width integers, all found by the crawler consumer building a
 collision grid, all affecting the interpreter and `--native` alike.
@@ -422,6 +427,15 @@ native `u32`, so binary formats see exactly what they expect. `i32` is untouched
 
 If you worked around any of this by using `i32` where you wanted `u32`, or `integer` where
 you wanted `u16`, you can now use the narrow type — and get the smaller footprint with it.
+
+## 2026-07
+
+The **stability and type-safety** release. Two things anchor it: parsing text into a
+number is now *honestly fallible* (it hands you a nullable instead of quietly
+inventing a `0`), and a long-standing class of heap / memory bugs — leaks and
+use-after-free corruption around returns, reassignment, and `match` — has been
+retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
+and reference binding all move forward too.
 
 ### Patch `2026.7.2` — the `len`/`size` text flip (breaking, pre-1)
 
