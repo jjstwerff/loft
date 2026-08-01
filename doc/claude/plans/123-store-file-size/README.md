@@ -7,8 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — problem space fully characterised, arc **A** designed, arc **B** needs its
-relocation walk written down. No implementation yet.
+Open — problem space fully characterised, both arcs' approaches settled. What
+arc **B** still lacks is a cost measurement, not a decision. No implementation yet.
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
@@ -23,7 +23,7 @@ including a **bound (mmap) store**, which is what a long-lived store normally is
 ## Effort + design
 
 - **Effort:** M (A is S, B is M)
-- **Design:** ~ — A settled, B's relocation walk not yet written
+- **Design:** ✓ — A opt-in via `store_reclaim`, B a rebuild-and-swap at persist
 - **Last touched:** 2026-08-01
 
 ## The measurement this plan exists for
@@ -46,7 +46,7 @@ reading `store_memory()` now carries:
 | | recovers | needs | risk | when |
 |---|---|---|---|---|
 | **A** — coalesce + truncate a bound store | the free TAIL above the last record | no record movement | low — everything above the last record is free by definition | **opt-in**, `store_reclaim(collection)` |
-| **B** — compact when writing an image | the INTERIOR free space between records | relocation + pointer rewriting | contained — nothing holds a `DbRef` into a fresh copy | automatic, gated on the ratio |
+| **B** — compact when writing an image | the INTERIOR free space between records | a rebuild into a fresh store, then swap | low — a fresh store has no inbound pointers to rewrite | automatic, gated on the ratio |
 
 **A is opt-in on purpose.** Its benefit is near-zero in every workload measured
 here except one (churn and refill both hold capacity flat, so a reclaimer would
@@ -68,7 +68,7 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | Open — first behaviour change |
 | **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | Open |
 | **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | Open |
-| **B1** — relocate vs re-insert, decided by measurement | [DESIGN.md](DESIGN.md) | Open |
+| **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | Open — approach settled |
 | **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open |
 
 ### A — truncate the tail
@@ -130,10 +130,13 @@ Probes graduate to `tests/scripts/`.
    thrash. See DESIGN.md § A3.
 2. **Does `MmapStorage::resize` shrink cleanly** on every target, and what happens
    to a reader that has the file mapped concurrently?
-3. **Does B relocate, or re-insert?** Re-inserting into a fresh collection reuses
-   the existing relocating-copy machinery (the paged loader already does this per
-   entry) and needs no pointer rewriting at all — but it rebuilds indexes. Measure
-   both before choosing.
+3. ~~Does B relocate, or re-insert?~~ **Settled: rebuild into a fresh store and
+   swap.** It removes compaction's whole risk (a fresh store has no inbound
+   pointers to rewrite), and it is what InnoDB does — `OPTIMIZE TABLE` is a
+   rebuild-and-swap, not an in-place relocation. What remains is measuring its
+   cost. See DESIGN.md § B1.
+4. **Is any of A's stance contradicted by recent MariaDB?** Not verified. A is the
+   arc with no prior art behind it, so it is worth a read before finalising.
 
 ## Ruled out — measured, do not re-chase
 

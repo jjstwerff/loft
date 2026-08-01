@@ -181,20 +181,42 @@ does not exist yet.
 - **Code point:** `tests/store_persist_loft.rs` beside the existing
   `persisted_size_tracks_content_not_construction`.
 
-### B1 — choose relocate vs re-insert, by measuring
+### B1 — measure what rebuild-and-swap costs
 
-Two candidates, both already have machinery:
+**Presumed approach: rebuild into a fresh store and swap.** Not relocation in
+place.
 
-| | Reuses | Cost | Risk |
-|---|---|---|---|
-| **relocate** — walk the chain, move live blocks down, rewrite inbound pointers | `relocate_ptr_fields` (`src/database/allocation.rs:3334`) — but it is bound to `PagedReader`, so it needs generalising | one pass | must find every inbound pointer |
-| **re-insert** — build a fresh collection and copy each record in | `copy_block_cross_store` (`src/database/structures.rs:263`), and `Stores::remove_owned`'s sibling insert path | rebuilds indexes | none — a fresh store has no inbound pointers at all |
+| | Reuses | Risk |
+|---|---|---|
+| **rebuild + swap** — build a fresh collection, copy each record in, swap | `copy_block_cross_store` (`src/database/structures.rs:263`) and the sibling insert path | none — a fresh store has no inbound pointers at all |
+| ~~relocate~~ — move live blocks down, rewrite inbound pointers | `relocate_ptr_fields` (`src/database/allocation.rs:3334`), bound to `PagedReader` so it needs generalising | must find every inbound pointer |
 
-Re-insert is the honest first choice: it needs **no** pointer rewriting, which is
-the entire risk of compaction. Its known cost is measured and bad — a loft-level
-re-insert produced a *larger* file (634,264 vs 437,416) because it becomes the
-fill-then-insert shape — so B1 is a measurement, not an assumption: build both
-against B0's oracle on the same fixture and compare size, time and digest.
+Two independent reasons, and the second is why this is no longer an open choice.
+
+*It removes the risk rather than managing it.* Relocation's whole difficulty is
+finding every pointer AT a moved record; a freshly built store has none, so there
+is nothing to rewrite and nothing to get wrong.
+
+*It is what the established engines do.* InnoDB does not relocate rows to reclaim
+space — `OPTIMIZE TABLE` maps to `ALTER TABLE … FORCE`, which **rebuilds the
+table into a new file and swaps it**, and the space only returns to the
+filesystem with `innodb_file_per_table`. The whole shape of this plan lands on
+the same model: deletes free space *within* the file and never shrink it, an
+explicit operation reclaims it, and a free-space number (`DATA_FREE`, our
+`inner%`) tells you whether it is worth running. Prior art at that scale is worth
+more than a local preference.
+
+So B1 is no longer "which approach" but **"what does it cost"**: build it against
+B0's oracle and measure size, time and digest. The one number already in hand is
+a warning, not a verdict — a *loft-level* re-insert produced a LARGER file
+(634,264 vs 437,416) because writing records one at a time through the normal
+path becomes the fill-then-insert shape. A rebuild that claims each vector at its
+final size (what `reserve` exists for) should not; if it does, that measurement
+is the finding.
+
+**Not verified here:** whether recent MariaDB versions added any automatic
+reclamation. If they did, it is worth reading before A's opt-in stance is final —
+A is the arc with no prior art behind it.
 
 ### B2 — implement the winner behind a flag, off
 
