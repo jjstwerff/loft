@@ -7,14 +7,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Designed, not started.** The architecture probe is built and has run
+**Arc A is done and inert; B–F open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
 one open question is now answered, so the design below is not the one on the
 issue — read this, not that.
 
-Nothing is implemented. `#native` (Rust) is today's path and stays it.
+Arc A ships the declaration and its check (`src/c_signature.rs`): `#c "sym"
+"<c-signature>"` parses, is checked against the loft declaration it annotates,
+and survives the IR round trip. **Nothing calls a `#c` function yet** — `native`
+is deliberately left empty so the Rust dispatch path cannot pick one up.
+`#native` (Rust) is today's path and stays it.
+
+One thing arc A learned the hard way, worth carrying into B: the baked IR field
+offsets in `data_store.rs` are a MIRROR of the registered schema, and the schema
+packs by size rather than declaration order — so two new `text` fields moved
+every trailing boolean and the stride. Hand-guessed offsets segfaulted the
+round-trip test; `baked_layout_mirrors_loft_schema` is the instrument that names
+the real ones, and it must be read *before* the constants are written, not
+after.
 
 ## Goal
 
@@ -143,7 +155,7 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 
 | Item | Status |
 |---|---|
-| **A** — `#c "sym" "<signature>"`: lexer/parser, the `CSignature` type, the compile-time check | Open |
+| **A** — `#c "sym" "<signature>"`: parser, the `CSignature` type, the compile-time check | **Done** — `src/c_signature.rs`, inert; widths resolve per target |
 | **B** — the interpreter caller: `dlopen`/`dlsym` + the per-arity trampolines + return-width dispatch | Open |
 | **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | Open — mostly reuse |
 | **D** — packaging: `[c] lib` / `shim`, `cc` shim build, `loft install` | Open |

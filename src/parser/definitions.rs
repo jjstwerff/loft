@@ -1639,6 +1639,73 @@ impl Parser {
         true
     }
 
+    /// @PLN24 arc A — `#c "<symbol>" "<c-signature>"`.
+    ///
+    /// Stores both strings and checks the signature against the loft
+    /// declaration it annotates. Every problem is reported, not just the first:
+    /// an author fixing a signature wants the whole list, and each message
+    /// names the C position so a long parameter list stays navigable.
+    ///
+    /// The check is the entire safety of this feature. A `#c` call has no
+    /// runtime signal — the probe pointed the caller at a wrong arity and at a
+    /// variadic function and both returned the *right answer* — so a mistake
+    /// that gets past here gets past everything.
+    fn parse_c_binding(&mut self) {
+        // The cursor drifts to the NEXT definition while the two strings are
+        // read, so the annotation's own position is captured up front and every
+        // message below points at it — a signature error that pointed at the
+        // following `fn` would send the author to the wrong line.
+        let at = self.lexer.pos().clone();
+        let Some(symbol) = self.lexer.has_cstring() else {
+            diagnostic_at!(
+                self.lexer,
+                &at,
+                Level::Error,
+                "Expect the C symbol after #c, e.g. #c \"PQstatus\" \"int(void*)\""
+            );
+            return;
+        };
+        let Some(sig_src) = self.lexer.has_cstring() else {
+            diagnostic_at!(
+                self.lexer,
+                &at,
+                Level::Error,
+                "Expect the C signature after the symbol, e.g. #c \"{symbol}\" \"int(void*)\" — \
+                 the signature is required because nothing at runtime can check the binding"
+            );
+            return;
+        };
+        let ctx = self.context as usize;
+        self.data.definitions[ctx].c_symbol.clone_from(&symbol);
+        self.data.definitions[ctx].c_sig.clone_from(&sig_src);
+        if self.first_pass {
+            // Parameter types are not resolved yet on pass 1, so checking here
+            // would report against half-built types.  The strings are stored;
+            // pass 2 does the checking.
+            return;
+        }
+        let target = crate::c_signature::CTarget::host();
+        let sig = match crate::c_signature::CSignature::parse(&symbol, &sig_src, target) {
+            Ok(s) => s,
+            Err(e) => {
+                diagnostic_at!(self.lexer, &at, Level::Error, "#c signature: {e}");
+                return;
+            }
+        };
+        let def = self.data.def(self.context);
+        let params: Vec<crate::data::Type> = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.name.starts_with('#'))
+            .map(|a| a.typedef.clone())
+            .collect();
+        let ret = def.returned().clone();
+        let void_return = matches!(ret, crate::data::Type::Void);
+        for problem in crate::c_signature::check(&self.data, &sig, &params, &ret, void_return) {
+            diagnostic_at!(self.lexer, &at, Level::Error, "#c \"{symbol}\": {problem}");
+        }
+    }
+
     // <rust> ::= { '#rust' <string> | '#iterator' <string> <string> }
     // <native> ::= '#native' <string>   (any file)
     pub(crate) fn parse_rust(&mut self) {
@@ -1699,6 +1766,19 @@ impl Parser {
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Expect rust next string");
                 }
+            } else if id == Some("c".to_string()) {
+                // @PLN24 arc A — `#c "<symbol>" "<c-signature>"` binds this
+                // declaration straight to a C symbol.  Both strings are
+                // required, and the SIGNATURE is the load-bearing one: the
+                // architecture probe (tests/fixtures/c_abi/) showed a runtime
+                // caller cannot detect a wrong arity or a variadic mismatch —
+                // both returned the right answer by luck — so a `#c` binding is
+                // checked here or nowhere.
+                //
+                // Arc A lands INERT: this parses, checks and stores.  Nothing
+                // calls a `#c` function yet, and `native` is deliberately left
+                // empty so the Rust dispatch path does not pick it up.
+                self.parse_c_binding();
             } else if id == Some("null_safe".to_string()) {
                 // @PLN46 W2 — `#null_safe` asserts every nullable parameter
                 // tolerates null and yields a defined result, so a fault-prone

@@ -721,6 +721,8 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t145, "synthetic", t5);
     db.field(t145, "cap", t5); // @PLN86 — kept in sync with ir.loft Definition.cap
     db.field(t145, "superseded", t5); // @PLN102 arc C — kept in sync with ir.loft Definition.superseded
+    db.field(t145, "c_symbol", t5); // @PLN24 arc A — kept in sync with ir.loft Definition.c_symbol
+    db.field(t145, "c_sig", t5); // @PLN24 arc A — kept in sync with ir.loft Definition.c_sig
     let t146 = db.vector(t139);
     let _ = t146; // may be unused
     let t147 = db.vector(t144);

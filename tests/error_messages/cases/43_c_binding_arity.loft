@@ -1,0 +1,9 @@
+// @PLN24 arc A — a `#c` binding's C parameter count is checked against the
+// loft declaration, because nothing at runtime can: the architecture probe
+// called an arity-1 symbol through an arity-3 caller and got the right answer.
+pub fn add(a: integer, b: integer) -> integer;
+#c "lc_add" "int(int)"
+
+fn main() {
+  println("{add(1, 2)}");
+}

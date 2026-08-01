@@ -448,11 +448,47 @@ and null-flow rejects a `τ?` at compile time), a NULL pointer return maps to
 loft null, and a fault *inside* C is undefined — the same failure mode `#native`
 already has, through the same crash handler.
 
-**Status: planned** — design in
-[plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
+#### The declaration (arc A — implemented, inert)
+
+```loft
+pub fn status(conn: integer) -> integer;      #c "PQstatus" "int(void*)"
+pub fn error(conn: integer) -> text;          #c "PQerrorMessage" "const char*(void*)"
+pub fn sum(v: vector<integer>) -> integer;    #c "lc_sum" "long(const long*, long)"
+```
+
+Both strings are required.  The C signature is `<return>(<params>)` in ordinary
+C spelling, and **widths resolve against the target**, exactly as a C compiler
+reads the same header: `long` is 64 bits on Linux and macOS and 32 on Windows,
+plain `char` follows the platform's signedness.  So one declaration stays
+correct everywhere.  An unknown type is refused, never guessed.
+
+**What a loft type looks like from C** — the mapping the arity check counts in:
+
+| loft | C | notes |
+|---|---|---|
+| `integer`, narrow ints, `boolean`, `character` | one C integer | any width; the value is passed full-width |
+| `text` | one `const char*` | **NUL-terminated**, unlike the `#native` path's `ptr, len` |
+| `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* |
+| C-owned handle (`PGconn *`) | `void*` ↔ loft `integer` | the pointer value crosses as an integer |
+| `float` / `single` | — | **refused**: floats travel in SSE registers a fixed caller does not touch — shim it |
+| a loft record | — | **refused**: records live in a store that may move them |
+| a nullable `τ?` | — | **refused at compile time**: C has no null model |
+
+The last two refusals are the design, not gaps.  A record's address is a
+position in an arena the allocator can relocate, so handing it to C is the
+store-lifetime bug class rather than a marshalling detail.  And `#c` is the
+declared edge of loft's no-runtime-errors rule: a null crossing into C would be
+an ordinary number or a fault, so it is rejected where loft still can — which
+costs nothing, because non-null is already the default and null-flow already
+requires a discharge (`?? 0`, `x?`, `match`).
+
+**Status: arc A implemented and inert** — the declaration parses, the signature
+is checked against it, and it survives the IR round trip.  Nothing calls a `#c`
+function yet: the interpreter caller (arc B) and the `--native` emission (arc C)
+are next.  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
 [@PLN24](https://github.com/loft-lang/plans/issues/24) (first consumer: the
 MariaDB/PostgreSQL clients, @PLN23), matrix + probe in
-`tests/fixtures/c_abi/`.  Not yet implemented; `#native` is today's path.
+`tests/fixtures/c_abi/`.  `#native` remains today's path.
 
 ### Registration — zero boilerplate
 

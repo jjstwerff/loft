@@ -1,0 +1,8 @@
+// @PLN24 arc A — a float argument travels in an SSE register the integer-class
+// caller never writes, so it is refused with the cure rather than bound wrong.
+pub fn scale(v: float) -> float;
+#c "lc_f64" "double(double)"
+
+fn main() {
+  println("{scale(2.0)}");
+}

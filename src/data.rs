@@ -3013,6 +3013,26 @@ pub struct Definition {
     /// stdlib symbol loaded from the `LOFT_STDLIB_CACHE` bundle keeps its mark;
     /// mirrored in `tools/ir_schema/ir.loft` (`Definition.superseded`).
     pub superseded: String,
+    /// @PLN24 arc A — the C symbol a `#c` binding names, e.g. `"PQstatus"`.
+    /// Empty = not a C binding.  Deliberately NOT stored in `native`: that
+    /// field means "dispatch this as a Rust native symbol", and a `#c` function
+    /// is not one — reusing it would route the call into the Rust bridge
+    /// registry instead of leaving arc A inert.
+    ///
+    /// Persisted through the IR store (`DEF_C_SYMBOL`) so a cached program does
+    /// not come back with the binding silently unbound; mirrored in
+    /// `tools/ir_schema/ir.loft` (`Definition.c_symbol`).
+    pub c_symbol: String,
+    /// @PLN24 arc A — the C signature exactly as declared, e.g. `"int(void*)"`.
+    /// Empty = not a C binding.
+    ///
+    /// Kept as the author's own spelling rather than a parsed structure,
+    /// because the widths it resolves to depend on the TARGET (`long` is 64
+    /// bits on Linux, 32 on Windows) — so the portable thing to persist is the
+    /// text, and `c_signature::of` is the single place that turns it into
+    /// widths.  Nothing may re-derive those from the loft types: `integer` is
+    /// i64 whatever the C function takes, which is the whole point.
+    pub c_sig: String,
     /// Definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
@@ -4175,6 +4195,8 @@ impl Data {
             pub_visible: false,
             null_safe: false,
             superseded: String::new(),
+            c_symbol: String::new(),
+            c_sig: String::new(),
             closure_record: u32::MAX,
             mutated_captures: Vec::new(),
             scalars_to_box: Vec::new(),

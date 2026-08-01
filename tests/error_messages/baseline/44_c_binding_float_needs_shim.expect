@@ -1,0 +1,28 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: #c "lc_f64": returns a 64-bit float, which comes back in an SSE register the caller does not read. Wrap `lc_f64` in an ANSI-C shim that returns the bit pattern as an integer, and bind that
+  --> <cases>/44_c_binding_float_needs_shim.loft:4:12
+  |
+4 | #c "lc_f64" "double(double)"
+  |            ^
+
+error: #c "lc_f64": parameter 1 is a 64-bit float, which travels in an SSE register the caller does not write. Wrap `lc_f64` in an ANSI-C shim taking the bit pattern as an integer, and bind that
+  --> <cases>/44_c_binding_float_needs_shim.loft:4:12
+  |
+4 | #c "lc_f64" "double(double)"
+  |            ^
+
+error: #c "lc_f64": parameter 1 cannot be bound: a float cannot cross directly — it travels in an SSE register the caller does not touch. Pass the bit pattern as an `integer` through an ANSI-C shim
+  --> <cases>/44_c_binding_float_needs_shim.loft:4:12
+  |
+4 | #c "lc_f64" "double(double)"
+  |            ^
+
+error: #c "lc_f64": the return type cannot be bound: a float cannot cross directly — it travels in an SSE register the caller does not touch. Pass the bit pattern as an `integer` through an ANSI-C shim
+  --> <cases>/44_c_binding_float_needs_shim.loft:4:12
+  |
+4 | #c "lc_f64" "double(double)"
+  |            ^
+
+error: aborting due to 4 previous errors

@@ -1,0 +1,10 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: #c signature: in the return type of `struct timeval(int)`: `struct timeval` is not a C type this binding understands. Allowed: the C integer types (char, short, int, long, long long, size_t, the int*_t / uint*_t family), any pointer (`void*`, `const char*`), `void`, and `float`/`double` — which then need a shim. A struct passed by value, or a type from a header, has to go through an ANSI-C shim that presents it as one of these
+  --> <cases>/46_c_binding_unknown_type.loft:4:13
+  |
+4 | #c "lc_when" "struct timeval(int)"
+  |             ^
+
+error: aborting due to 1 previous error

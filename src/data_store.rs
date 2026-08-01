@@ -287,7 +287,7 @@ pub(crate) const NAMENR_NAME: u32 = 8; // text
 /// `Definition` record (element of `Data.definitions` = `vector<Definition>`).
 /// Inlines `Position` (`DEF_POSITION` base) and `Function` (`DEF_VARIABLES`
 /// base).  `def_type` / `purity` store integer codes (see `ir_store`).
-pub(crate) const DEFINITION_STRIDE: u32 = 159; // @PLN102 arc C — +4 for the superseded text ref
+pub(crate) const DEFINITION_STRIDE: u32 = 167; // @PLN24 arc A — +8 for the two #c text refs
 pub(crate) const DEF_SOURCE: u32 = 0;
 pub(crate) const DEF_DEF_TYPE: u32 = 8;
 pub(crate) const DEF_PARENT: u32 = 16;
@@ -311,9 +311,11 @@ pub(crate) const DEF_FIELD_GROUPS: u32 = 140; // vector<LinkedFieldGroup>
 pub(crate) const DEF_SYNTHETIC: u32 = 144; // Option<&str>; "" = None
 pub(crate) const DEF_CAP: u32 = 148; // @PLN86 the group#right call-gate link; "" = unlinked
 pub(crate) const DEF_SUPERSEDED: u32 = 152; // @PLN102 arc C #superseded "Y"; "" = not superseded
-pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 156;
-pub(crate) const DEF_PUB_VISIBLE: u32 = 157;
-pub(crate) const DEF_NULL_SAFE: u32 = 158; // @PLN46 W2 #null_safe; false = unannotated
+pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 164;
+pub(crate) const DEF_PUB_VISIBLE: u32 = 165;
+pub(crate) const DEF_NULL_SAFE: u32 = 166; // @PLN46 W2 #null_safe; false = unannotated
+pub(crate) const DEF_C_SYMBOL: u32 = 156; // @PLN24 #c "sym"; "" = not a C binding
+pub(crate) const DEF_C_SIG: u32 = 160; // @PLN24 the declared C signature; "" = none
 
 /// `Data` record (the root).
 pub(crate) const DATA_SOURCE: u32 = 0;
@@ -1435,6 +1437,8 @@ mod tests {
         assert_eq!(pos(ids.definition, "field_groups"), DEF_FIELD_GROUPS);
         assert_eq!(pos(ids.definition, "synthetic"), DEF_SYNTHETIC);
         assert_eq!(pos(ids.definition, "cap"), DEF_CAP);
+        assert_eq!(pos(ids.definition, "c_symbol"), DEF_C_SYMBOL); // @PLN24
+        assert_eq!(pos(ids.definition, "c_sig"), DEF_C_SIG); // @PLN24
         assert_eq!(pos(ids.definition, "superseded"), DEF_SUPERSEDED);
         assert_eq!(
             pos(ids.definition, "returned_not_null"),
