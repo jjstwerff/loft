@@ -21,6 +21,48 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — a closure that builds a struct no longer crashes
+
+A closure that captured something and called a function returning a struct
+crashed the interpreter outright:
+
+```loft
+k = 4.0;
+pt = fn(i: integer) -> Point { make_point(k) };
+p = pt(0);                       // SIGSEGV
+```
+
+Worse, the compiled build got it right, so the same program behaved differently
+depending on how you ran it. Both halves were needed to trigger it — a closure
+that captures nothing was fine, and so was one that builds the struct inline
+instead of calling for it — which is why it survived so long and then hit a real
+program doing something perfectly ordinary.
+
+It is fixed, and the two backends agree again.
+
+One related thing is **not** fixed yet: using such a result *inline* still leaks
+a small amount of memory per call.
+
+```loft
+total += pt(r).a;            // leaks one record per call
+p = pt(r); total += p.a;     // no leak — bind it first
+```
+
+Binding the result to a variable avoids it entirely, which is the workaround
+until it is fixed properly.
+
+### Unreleased — removing from a keyed collection, without the crashes
+
+Three ways of removing from a keyed collection went wrong, all now fixed:
+
+- Removing entries from an `index<T[..]>` whose records own a `text` could
+  crash while the loop was still running.
+- Simply *declaring* a struct with both a `sorted<T[..]>` and an `index<T[..]>`
+  over the same element type was enough to break that type everywhere — the
+  interpreter hung and the compiled build produced wrong code. No removal
+  needed; the declaration did it.
+- Removing by key from a `spatial` collection is covered in its own entry below.
+
 ### Unreleased — `spatial` collections answer to a point
 
 A `spatial<Mob[x, y]>` could be appended to, iterated, counted and range-sliced,
