@@ -20,7 +20,8 @@ ADOPTS the image it writes as the live store, and a program demonstrably holds
 interior references across it. Compaction belongs at LOAD, where the bytes are
 already replaced wholesale.
 
-Remaining: the A5 proposal below.
+Remaining: nothing. The A5 proposal below was weighed, built and **rejected on
+its own measurement** — see A5.
 
 One defect this work introduced and has now fixed: **`store_reclaim` before a
 bind used to remove the image's eighth of slack**, because the image size was
@@ -92,8 +93,8 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **B2** — implement behind a flag, off | [DESIGN.md](DESIGN.md) | **Done** — `LOFT_COMPACT_ON_LOAD=1`, 4.8-7.0x, at LOAD not at write |
 | **B3** — on by default, documented, probes graduated | [DESIGN.md](DESIGN.md) | **Done** — default ON, gated, `bind_path` wired |
 | **F4/F6 refusals** — the last two done-bar cells | [DESIGN.md](DESIGN.md) | **Done** — F4's guard was on the wrong subject and did not fire |
-| **Collection-kind matrix** for arc B | [DESIGN.md](DESIGN.md) | **Done** — hash/sorted/index/nested rebuild, spatial refuses; `ordered` blocked by loft#719 |
-| **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | Open — from MariaDB 11.2.0 prior art |
+| **Collection-kind matrix** for arc B | [DESIGN.md](DESIGN.md) | **Done** — hash/sorted/index/nested rebuild, spatial refuses; `ordered` now covered too (loft#719 fixed, `Both` declared in the kinds test) |
+| **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | **Rejected** — built and measured; the premise is false and it makes the file grow (loft#727) |
 
 ### A — truncate the tail
 
@@ -115,24 +116,48 @@ nothing on the free path ever walks the chain. The planned freed-words tally in
 that only ever grew has a tail with no delete behind it) — dropped, see
 DESIGN.md § A3.
 
-### A5 — reclaim at BIND time (proposed, from prior art)
+### A5 — reclaim at BIND time — **REJECTED, measured**
 
-Not built, and not part of what shipped. B1's prior-art check turned up
-**MariaDB 11.2.0 reclaiming unused space at startup**, which is a trigger this
-plan's analysis never considered: it rejected "automatic on the free path" (a
-walk per delete) and chose "the program says when", but a third moment exists
-where neither objection applies.
+The proposal: `store_persist_bind` on an EXISTING file is a third moment arc A
+never weighed. A rejected "automatic on the free path" (a walk per delete) and
+chose "the program says when"; opening a file is neither — the store is being
+opened, "the program has not started allocating into it, so there is no thrash
+risk and no live mapping to invalidate". MariaDB 11.2.0 reclaims unused space at
+startup for that reason. It would have answered the stated cost of A being
+opt-in: a knob nobody knows about is a knob nobody uses.
 
-For loft that moment is `store_persist_bind` on an EXISTING file — the store is
-being opened, the program has not started allocating into it, so there is no
-thrash risk and no live mapping to invalidate, and the walk is amortised against
-an operation that already reads the whole image. It would give back exactly what
-the previous run left behind, for programs that never learn `store_reclaim`
-exists — which is the stated cost of A being opt-in ("a knob nobody knows about
-is a knob nobody uses").
+**The premise is false, and the measurement says so immediately.** The program
+HAS started allocating by the time it matters: iterating a keyed collection
+claims its key-sorted snapshot INSIDE the store, so the first read is an
+allocation. Binding is not a quiescent point.
 
-Worth weighing before A is considered finished; it is additive to `store_reclaim`,
-not a replacement.
+Built anyway (wired into `bind_path`'s existing-file branch, default-on with an
+opt-out) and measured on a 4,000-record hash grown post-bind, re-binding ten
+times:
+
+| | ten successive binds |
+|---|---|
+| A5 on | 357,232 → 411,312 → 465,392 → 523,584, reads spiking to 833,536 / 959,728 / 1,085,912 |
+| A5 off | **566,472, stable, all ten runs** |
+
+So it converts a stable file into a ratchet: each cycle trims to the mark, the
+next read re-grows at 7/3, and the floor settles higher than before. It would
+hand every program the behaviour that today needs an explicit call — which is
+F7 ("the store keeps growing after a shrink") arriving at the moment the
+proposal claimed was safe from it.
+
+**What it did surface** is a defect in what shipped, filed as
+[loft#727](https://github.com/loft-lang/loft/issues/727): `store_reclaim` on a
+BOUND store already ratchets, because `reclaim_tail` shrinks to the bare
+high-water mark and leaves nothing for the next claim. One call costs 1.31×
+(566,472 → 740,936 after a single read); calling it each run grows the file
+~37 KB per run without bound. Giving `reclaim_tail` the mark's eighth — the same
+slack `bind_path` writes into an image — fixes the single-call case outright
+(357,232, stable) and halves the ratchet, but does not close it, so it is filed
+rather than half-fixed: what remains is a design question about what to reserve
+against a claim whose size is a function of the collection, not of the slack.
+
+Arc A stays opt-in, and the stated cost of that stays stated.
 
 ### B — compact the image
 
