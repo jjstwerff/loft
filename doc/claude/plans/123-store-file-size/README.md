@@ -8,7 +8,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 Open — problem space fully characterised, both arcs' approaches settled. What
-arc **B** still lacks is a cost measurement, not a decision. No implementation yet.
+arc **B** still lacks is a cost measurement, not a decision. **A0 is done** (the
+mark now reports whether it can be trusted); A1 is next.
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
@@ -62,7 +63,7 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 
 | Item | Source | Status |
 |---|---|---|
-| **A0** — trust the high-water mark (assertion only) | [DESIGN.md](DESIGN.md) | Open — inert |
+| **A0** — trust the high-water mark (`walk_complete`) | [DESIGN.md](DESIGN.md) | **Done** — inert |
 | **A1** — `Store::shrink_to`, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
 | **A2** — `reclaim_tail` = coalesce + shrink, no caller | [DESIGN.md](DESIGN.md) | Open — inert |
 | **A3** — expose `store_reclaim(collection)` (opt-in) | [DESIGN.md](DESIGN.md) | Open — first behaviour change |

@@ -104,7 +104,23 @@ pub struct StoreUsage {
     /// space only RELOCATION could recover (loft#713).  Reading the two apart
     /// is the difference between "my store has room to give back" and "my
     /// records are spread out", which look identical in `free_words` alone.
+    ///
+    /// **Only meaningful when [`walk_complete`](Self::walk_complete).**
     pub live_end_words: u32,
+    /// Did the block walk reach the end of the store?
+    ///
+    /// @PLN123 A0 — the walk stops early on a zero-size header ("malformed /
+    /// uninitialised tail"), and a store that is `free` or smaller than one
+    /// block is never walked at all.  In both cases `live_end_words` is a LOWER
+    /// bound, not the mark: it can sit below a live record the walk never
+    /// reached.  Anything that would act on the mark — above all truncating to
+    /// it — must refuse unless this is true, because shrinking to a too-low
+    /// mark cuts live data rather than free tail.
+    ///
+    /// The reporting side (`store_memory`) is happy with a lower bound; the
+    /// deciding side is not, and that difference is the whole reason this field
+    /// exists rather than being assumed.
+    pub walk_complete: bool,
 }
 
 impl StoreUsage {
@@ -1133,6 +1149,28 @@ impl Store {
                 u.live_end_words = pos; // a claimed block ends here
             }
         }
+        // @PLN123 A0 — calibrate the mark rather than trust it.  The dangerous
+        // direction is a mark that is too LOW: it reads as "nothing to
+        // reclaim", which is indistinguishable from a healthy store, and arc A
+        // truncates to it.
+        //
+        // Within a COMPLETE walk the mark cannot be too low, and that is worth
+        // stating because it rules out a whole family of assertions: the loop
+        // above raises the mark at every claimed block it passes, so any check
+        // phrased against what this walk saw can only agree with itself.  The
+        // mark's trustworthiness is not a property of the arithmetic — it is
+        // exactly the question of whether the chain tiled the store, which is
+        // what this bit answers and nothing else here can.
+        u.walk_complete = pos == self.size;
+        // Falsifiable, unlike the above: a final block whose header claims more
+        // words than remain drives `pos` past the end, and if that block reads
+        // as claimed the mark lands outside the arena.
+        debug_assert!(
+            u.live_end_words <= u.capacity_words,
+            "high-water mark {} past capacity {}",
+            u.live_end_words,
+            u.capacity_words
+        );
         u
     }
 
@@ -3110,6 +3148,79 @@ mod tests {
             reclaimed >= b && reclaimed < d,
             "reclaimed from the old B/C region (got {reclaimed}, B={b}, D={d})"
         );
+    }
+
+    /// @PLN123 A0 — the high-water mark is the word past the LAST claimed
+    /// block, and everything above it is free.  That is the entire safety
+    /// argument for shrinking a store's file to the mark, so its value is
+    /// pinned here rather than left for arc A's first caller to discover.
+    #[test]
+    fn high_water_mark_ends_at_the_last_claimed_block() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let a = store.claim(5);
+        let b = store.claim(5);
+        let c = store.claim(5);
+        assert!(a < b && b < c, "A, B, C are contiguous and ascending");
+        // Free the two TOP records: the mark falls back to the end of A,
+        // which is where B began.
+        store.delete(c);
+        store.delete(b);
+        let u = store.usage();
+        assert!(u.walk_complete, "a healthy store's chain tiles it exactly");
+        assert_eq!(u.live_end_words, b, "the mark is the word past A");
+        assert_eq!(u.claimed_words, 5, "only A is still claimed");
+        assert_eq!(
+            u.free_words,
+            store.len() - u.live_end_words,
+            "with no interior gap, the free space IS the tail above the mark"
+        );
+    }
+
+    /// @PLN123 A0 — when the block chain does not tile the store the walk
+    /// stops early, so the mark is a LOWER BOUND and a record can live above
+    /// it.  `walk_complete` is what tells that apart from a healthy store, and
+    /// it has to: truncating to a lower bound cuts live data instead of free
+    /// tail.  The two shapes below differ in nothing else a caller can see.
+    #[test]
+    fn an_incomplete_walk_leaves_a_live_record_above_the_mark() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let _a = store.claim(5);
+        let b = store.claim(5);
+        let c = store.claim(5);
+        let healthy = store.usage();
+        assert!(healthy.walk_complete);
+        assert_eq!(healthy.live_end_words, c + 5, "the mark is past C");
+
+        // Corrupt B's header to zero — the "malformed / uninitialised tail"
+        // shape the walk breaks on.  C stays claimed above the break.
+        *store.addr_mut::<i32>(b, 0) = 0;
+        let u = store.usage();
+        assert!(!u.walk_complete, "the chain no longer tiles the store");
+        assert_eq!(u.live_end_words, b, "the walk got no further than A");
+        assert!(
+            u.live_end_words < c,
+            "record C is above the mark, so shrinking to it would cut C — \
+             which is why acting on the mark requires walk_complete"
+        );
+    }
+
+    /// @PLN123 A0 — non-vacuity for the mark-vs-capacity assertion.  It is a
+    /// `debug_assert`, and `[profile.dev.package.loft]` strips those from
+    /// `cargo test`, so this test compiles away with it: it runs only in the
+    /// build that installs the instrument, and proves that build can fail.
+    /// A final block claiming more words than remain drives the walk — and
+    /// with it the mark — past the end of the arena.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "high-water mark")]
+    fn a_mark_past_capacity_is_caught() {
+        let mut store = Store::new(64);
+        store.free = false;
+        let a = store.claim(5);
+        *store.addr_mut::<i32>(a + 5, 0) = 100; // claimed, and 100 > 64 - 6
+        let _ = store.usage();
     }
 
     /// `resize_store` must panic when the requested size exceeds `MAX_STORE_WORDS`.

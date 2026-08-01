@@ -55,18 +55,48 @@ data satisfies every size assertion anyone would write.
 
 ## Arc A — a bound store's file shrinks to its high-water mark
 
-### A0 — trust the mark (inert)
+### A0 — trust the mark (inert) — **DONE**
 
 `StoreUsage::live_end_words` and the `tail%` / `inner%` report already landed with
-the measurements. What is missing is the **calibration**: a blank or wrong mark
+the measurements. What was missing is the **calibration**: a blank or wrong mark
 reads as "nothing to reclaim", which is indistinguishable from a healthy store.
 
-- **Code point:** `src/store.rs::Store::usage` (~1088).
-- **Add:** a `debug_assert!` that no claimed block begins at or after
-  `live_end_words`, and that `live_end_words <= capacity_words`.
-- **Verify:** the debug-assertion suite (`cargo test --profile dev --test wrap
-  loft_suite`) exercises it across every existing store shape.
+**The assertion this step set out to add cannot fail.** `Store::usage` raises the
+mark at every claimed block its walk passes, so "no claimed block begins at or
+after `live_end_words`" is a restatement of the loop, not a check on it — and so
+is every other phrasing against what that same walk saw (word accounting
+included: `claimed + free` is built by the additions that move `pos`). Worth
+writing down because it retires a whole family of assertions someone would
+otherwise keep proposing here.
+
+What the mark's trustworthiness actually rests on is **outside** the arithmetic:
+whether the chain tiled the store at all. So A0 shipped a fact, not a check:
+
+- **Code point:** `src/store.rs::Store::usage`.
+- **Added:** `StoreUsage::walk_complete` — did the walk reach the store's end?
+  It is false when a zero header stops the walk ("malformed / uninitialised
+  tail") and when a `free` or under-one-block store is never walked. In those
+  cases the mark is a **lower bound**, and a live record can sit above it.
+  **A1 must refuse to shrink unless this is true.** Reporting is content with a
+  lower bound; deciding is not, and that gap is the field's whole reason to exist.
+- **Added:** `debug_assert!(live_end_words <= capacity_words)` — the one check
+  here that *is* falsifiable: a final block whose header claims more words than
+  remain drives the walk, and the mark with it, past the arena.
+- **Verify:** three unit tests in `src/store.rs`'s test module — the mark's value
+  on a healthy store, the malformed shape where the mark sits below a live
+  record, and a `#[should_panic]` non-vacuity proof for the assertion.
 - **Does not:** change any behaviour.
+
+**The verification build matters here.** `[profile.dev.package.loft]` sets
+`debug-assertions = false`, so *every* `cargo test` — `--profile dev` included —
+strips the lib's `debug_assert!`s. An earlier draft of this step named that suite
+as its verification, which would have been a calibration failure of its own:
+green there says nothing about a DA-guarded claim. Run the
+[`target-da` calibration lens](../../DEBUG.md#the-debug-assertions-calibration-run-target-da).
+
+The non-vacuity test is `#[cfg(debug_assertions)]` for the same reason: it
+compiles away together with the instrument it proves, so it can never pass by
+not running.
 
 ### A1 — a shrink primitive with no caller (inert)
 
@@ -75,8 +105,10 @@ reads as "nothing to reclaim", which is indistinguishable from a healthy store.
   relies on grow-only.
 - **Add:** `Store::shrink_to(&mut self, words: u32) -> bool`, a sibling, not a
   change to `resize_store`:
-  1. compute `usage()`; return `false` unless `words >= live_end_words` (invariant
-     A, checked against the chain, not against an argument);
+  1. compute `usage()`; return `false` unless **`walk_complete`** (A0 — an
+     incomplete walk reports the mark as a lower bound, and shrinking to a lower
+     bound cuts live data) **and** `words >= live_end_words` (invariant A,
+     checked against the chain, not against an argument);
   2. clamp to `>= 1024` (F6);
   3. mmap branch — `f.resize(words * 8)`; on `Err` return `false` and leave
      `self.size` untouched (F3); on `Ok` refresh `self.ptr` from

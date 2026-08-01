@@ -240,6 +240,42 @@ fn fresh_then_reload_round_trip() {
     );
 }
 
+/// @PLN123 A0 — the high-water mark on the shape arc A actually targets: a
+/// BOUND store, re-opened from its file.  Gating a shrink on `walk_complete`
+/// is only worth anything if a healthy bound store reports it TRUE; were the
+/// image to leave a zero-header tail, the gate would refuse forever and arc A
+/// would be dead on arrival while every test still passed.  A padded image
+/// tiles its arena exactly — `build_padded_store_image` lays one free block
+/// over the slack above the last record — and this pins that.
+#[test]
+fn a_bound_store_image_reports_a_trustworthy_mark() {
+    let dir = scratch("bound_store_mark");
+    let path = dir.join("world.store");
+    let (out, code) = run_smoke(&path, "fresh");
+    assert_eq!(code, 0, "fresh exit: stdout={out:?}");
+
+    let store = loft::store::Store::open(path.to_str().expect("utf-8 path"));
+    let u = store.usage();
+    assert!(
+        u.walk_complete,
+        "a bound store's block chain must tile its file, or arc A can never \
+         shrink one: claimed={} free={} mark={} capacity={}",
+        u.claimed_words, u.free_words, u.live_end_words, u.capacity_words
+    );
+    assert!(u.claimed_words > 0, "the image holds the smoke script's records");
+    assert!(
+        u.live_end_words <= u.capacity_words,
+        "mark {} past capacity {}",
+        u.live_end_words,
+        u.capacity_words
+    );
+    assert!(
+        u.capacity_words - u.live_end_words > 0,
+        "the image keeps an eighth of slack above the mark (loft#710), which is \
+         exactly the tail arc A gives back"
+    );
+}
+
 /// @PLN97 arc G Phase 0.5b — `store_persist_bind` on a `sorted<T[k]>` must
 /// round-trip across processes: a `sorted` is comparison-based (no per-process
 /// hash seed), so the reload process must iterate in key order AND key-look-up
