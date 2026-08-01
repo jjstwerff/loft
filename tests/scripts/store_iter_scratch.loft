@@ -1,0 +1,77 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#727 — iterating a keyed collection must not leak its key-sorted
+// snapshot into the collection's own store.
+//
+// `for r in h` walks a snapshot of rec-nrs claimed INSIDE the hash's store, and
+// the loop epilogue's release used to skip exactly that case (it freed only a
+// scratch that had a store of its own).  So every pass left two records behind:
+// 4 bytes per element, permanently.  In memory that grows a live store for as
+// long as the program iterates; for a BOUND collection the store is a file, so
+// the leak survives the process and each run starts from a bigger file.
+//
+// `store_reclaim` is not the cause and never was — it removes the free tail
+// that was hiding the leak, so what took sixteen runs to show up shows up in
+// one.  Both modes are driven here for that reason.
+//
+// Env in:
+//   MODE   "memory" (default) | "build" | "read"
+//   N      records (default 2000)
+//   PASSES iterations in memory mode (default 40)
+//   LOFT_PERSIST_TEST_PATH   the store file (build / read modes)
+//   RECLAIM                  "1" to call `store_reclaim` after binding (read mode)
+
+struct Rec { const id: integer, const n: integer, const label: text }
+
+fn digest(h: hash<Rec[id]>) -> integer {
+  d = 0;
+  for dg in h { d = (d * 31 + dg.id + dg.n + len(dg.label)) % 1000000007; }
+  d
+}
+
+fn fill(h: hash<Rec[id]>, n: integer) {
+  for i in 0..n { h += [Rec { id: i, n: i * 7, label: "record {i}" }] }
+}
+
+fn main() {
+  mode = env_variable("MODE") ?? "memory";
+  n = (env_variable("N") ?? "") as integer ?? 2000;
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+
+  if mode == "memory" {
+    passes = (env_variable("PASSES") ?? "") as integer ?? 40;
+    h: hash<Rec[id]> = [];
+    fill(h, n);
+    // One pass first: whatever a traversal costs, it has been paid once by
+    // the time the baseline census is taken, so the comparison below is
+    // steady-state against steady-state and cannot pass by measuring nothing.
+    d1 = digest(h);
+    println("census one");
+    println(store_memory());
+    for p in 0..passes { if digest(h) != d1 + p * 0 { println("FAIL digest drift"); return } }
+    println("census many");
+    println(store_memory());
+    println("digest {d1} passes {passes}");
+    return
+  }
+
+  if path == "" { println("FAIL no path"); return }
+  h: hash<Rec[id]> = [];
+
+  if mode == "build" {
+    // Bind EMPTY and grow after: the file then carries the arena's own 7/3
+    // over-allocation, which is the shape the leak hides in.
+    if !store_persist_bind(h, path) { println("FAIL bind"); return }
+    fill(h, n);
+    println("built file {file(path).size}");
+    return
+  }
+
+  // mode == "read" — a fresh process against the file the last one left.
+  if !store_persist_bind(h, path) { println("FAIL bind"); return }
+  if (env_variable("RECLAIM") ?? "") == "1" { store_reclaim(h); }
+  // Stat AFTER the read: the read is what used to grow the file.
+  d = digest(h);
+  println("read digest {d} file {file(path).size}");
+}

@@ -20,6 +20,7 @@
 //   LOFT_PERSIST_TEST_PATH   the store file
 //   MODE                     "" (write + reclaim) | reload
 //   SEAL                     "1" to `store_durable_seal` after binding
+//   GROW                     "1" to grow and drop again AFTER binding
 //   N                        records (default 3000, kept: N/10)
 
 struct Rec { const id: integer, const label: text }
@@ -47,6 +48,18 @@ fn main() {
   for d in (n / 10)..n { h[d] = null }
   if !store_persist_bind(h, path) { println("FAIL bind"); return }
   if seal { store_durable_seal(path); }
+  if (env_variable("GROW") ?? "") == "1" {
+    // Give the store a REAL tail, for the control that has to see reclaim do
+    // its job.  A store that came straight from `bind_path` has no tail to give
+    // back — the image is written at the mark plus an eighth, and that eighth is
+    // exactly what a right-sized store keeps — so `freed 0` there is the correct
+    // answer, not a refusal.  A tail only appears when the store GROWS while
+    // bound: the arena over-allocates by 7/3, and dropping the records again
+    // leaves that over-allocation above the mark.  (Unsealed only: growing the
+    // file after a seal invalidates it, which is what the F4 case is about.)
+    for g in n..(n * 2) { h += [Rec { id: g, label: "label-{g}" }] }
+    for g in n..(n * 2) { h[g] = null }
+  }
   before = file(path).size;
   check_before = store_durable_check(path);
 

@@ -1163,6 +1163,69 @@ impl Stores {
         }
     }
 
+    /// Release an iteration scratch at loop exit — the counterpart of
+    /// [`build_rec_scratch`](Self::build_rec_scratch), and the one home for the
+    /// rule that a scratch's lifetime is **the loop**, in either home it can
+    /// have.  Called from both backends' `OpFreeScratch`.
+    ///
+    /// A read-only source's scratch lives in a store of its own and goes back
+    /// whole.  A writable source keeps it CO-LOCATED, and that case used to be
+    /// a no-op, on the reasoning that its records go back when the source store
+    /// dies.  They do — but only when it dies, and a collection outlives the
+    /// loops that read it, so `for r in h` leaked one snapshot per pass: 4
+    /// bytes per element, plus two records, every time.  Invisible in a short
+    /// program (the arena's slack absorbs it, and the process ends); unbounded
+    /// in a loop that iterates, and permanent for a BOUND store, whose arena is
+    /// a file that outlives the process — 16 runs of a program that only READ a
+    /// 4,000-record hash grew its file 2.33× with nothing else touching it
+    /// (loft#727).
+    ///
+    /// The two records hold raw rec-nrs and own nothing, so deleting each is
+    /// the whole release — no cascade, and the elements the loop yielded are
+    /// records in the SOURCE store, untouched by this.
+    ///
+    /// **Idempotent, and it has to be.** Two sites free the same scratch — the
+    /// loop epilogue and the scope exit that catches a `return` out of the loop
+    /// — and only the interpreter nulls the variable between them; the native
+    /// emitter drops that store, so both calls arrive carrying the same live
+    /// `DbRef`. The dedicated case is idempotent through [`Self::free`]'s
+    /// already-freed no-op; the co-located case is idempotent through
+    /// `is_claimed_record`, which reads the block header a `delete` has just
+    /// made negative. A second call is a no-op, not a double free.
+    ///
+    /// Declines, leaving the scratch where it is, when the store cannot take a
+    /// delete: freed, or pinned read-only / free-protected inside the loop body
+    /// (`expose(…)` mid-iteration), where `delete` asserts.  That is the old
+    /// behaviour for those cases, never worse.
+    pub fn free_iteration_scratch(&mut self, scratch: &DbRef) {
+        if scratch.rec == 0 || scratch.store_nr as usize >= self.allocations.len() {
+            return;
+        }
+        let store = &self.allocations[scratch.store_nr as usize];
+        if store.free || !store.is_claimed_record(scratch.rec) {
+            return;
+        }
+        // Offset 8 of the header (`pos` is 4) — the store the ELEMENTS live in.
+        // Different from the scratch's own store exactly when the source was
+        // read-only and the scratch got a dedicated one.
+        if store.get_u32_raw(scratch.rec, scratch.pos + 4) as u16 != scratch.store_nr {
+            self.free(scratch);
+            return;
+        }
+        if store.read_only || store.is_free_protected() {
+            return;
+        }
+        // Offset 4 of the header — the rec-nr vector.  Read before the header
+        // goes back, and refused unless it still names a claimed block.
+        let vec_rec = store.get_u32_raw(scratch.rec, scratch.pos);
+        let vec_live = vec_rec != scratch.rec && store.is_claimed_record(vec_rec);
+        let store = &mut self.allocations[scratch.store_nr as usize];
+        store.delete(scratch.rec);
+        if vec_live {
+            store.delete(vec_rec);
+        }
+    }
+
     pub fn store_mut(&mut self, r: &DbRef) -> &mut Store {
         #[cfg(debug_assertions)]
         if self.allocations[r.store_nr as usize].free {
@@ -2592,9 +2655,8 @@ impl Stores {
             // key-sorted snapshot inside the store.  The slack is deliberate;
             // it has to survive a caller who tidied up first.
             let live_end = store_image_live_end(&snapshot, src_words).unwrap_or(src_words);
-            let target_words = live_end
-                .saturating_add(live_end / 8)
-                .max(crate::store::MIN_BOUND_WORDS);
+            let target_words =
+                crate::store::slack_target(live_end).max(crate::store::MIN_BOUND_WORDS);
             let padded = match build_padded_store_image(&snapshot, src_words, target_words) {
                 Some(b) => b,
                 None => return false,
