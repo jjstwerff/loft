@@ -1681,8 +1681,22 @@ impl State {
             Type::Text(_) => {
                 stack.add_op("OpConvTextFromNull", self);
             }
+            // loft#725 — a SENTINEL, not an allocated null.  `emit_push_null_ref`
+            // calls `database.null()`, so every typed Reference null claimed a store
+            // that only a variable could later free.  Pushed onto the eval stack and
+            // discarded, nothing ever did: `for i in 0..8 { mk(i) }` leaked one store
+            // per round, because the lift consumes the call's value and leaves the
+            // block with no tail, so codegen synthesises this null purely to satisfy
+            // the block's declared type — then `gen_drop` throws it away.
+            //
+            // The sentinel is what a typed null means here (this function's own name),
+            // and it is not weaker: `store_nr == u16::MAX` reads as null, `free_named`
+            // treats it as a no-op, and an `OpDatabase` landing on such a slot
+            // allocates a fresh store (`state/io.rs::database`), so a null that is
+            // later written through still works.  Interpreter-only — native already
+            // lowers this to `DbRef::NULL` with no allocation.
             Type::Reference(_, _) | Type::Enum(_, true, _) => {
-                self.emit_push_null_ref(stack);
+                self.emit_push_sentinel(stack);
             }
             Type::Integer(_) | Type::Character => {
                 stack.add_op("OpConstInt", self);
