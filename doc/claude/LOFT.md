@@ -1546,7 +1546,12 @@ planned to close.
 **`spatial<T[x,y]>` / `spatial<T[x,y,z]>` (1–3 coordinate axes, @PLN48) is a
 related keyed collection** backed by a Morton/Z-order radix tree.  It shares
 `+=` append, `for` iteration (visited in the tree's natural Morton order —
-no sort, unlike `hash`), and `.len()`.  Proximity queries use range-slice
+no sort, unlike `hash`), `.len()`, and the full point subscript: `xs[x, y]`
+reads the record at exactly that point (`null` when empty), `xs[x, y] = mob`
+inserts-or-replaces, and `xs[x, y] = null` removes — the same three roles
+`h[k]` has on a `hash`.  Note the point subscript takes the coordinates as
+separate subscripts (`xs[3, 6]`), where the range forms below parenthesise
+them.  Proximity queries use range-slice
 syntax instead of new keywords or methods: `xs[(x,y)..]` (open outward walk,
 caller `break`s), `xs[(x,y)..:n]` (capped at `n`), `xs[(x1,y1)..(x2,y2)]`
 (bounding box — the raw Morton-code interval, a superset of the geometric

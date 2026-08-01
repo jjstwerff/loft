@@ -21,6 +21,44 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — `spatial` collections answer to a point
+
+A `spatial<Mob[x, y]>` could be appended to, iterated, counted and range-sliced,
+but the plain point subscript did not work — in three different ways, which is
+why it read as one small bug:
+
+```loft
+mobs: spatial<Mob[x, y]> = [];
+m = mobs[3, 6];                          // crashed
+mobs[3, 6] = Mob { x: 3, y: 6, hp: 10 }; // could destroy the collection
+mobs[3, 6] = null;                       // corrupted the store
+```
+
+Reading a point crashed the interpreter with an index-out-of-bounds while the
+compiled backend answered correctly, so the same program behaved differently
+depending on how you ran it. Assigning at a point that held nothing did not
+insert — it wrote over the collection itself, and four elements read back as
+one. Removing was the case that got reported, and it either corrupted the store
+or refused to compile.
+
+All three now work, and behave as they do on a `hash`: `xs[x, y]` reads (`null`
+when the point is empty), `xs[x, y] = value` inserts or replaces, and
+`xs[x, y] = null` removes. Note the coordinates are separate subscripts here —
+`xs[3, 6]` — where the range forms parenthesise them, `xs[(3,6)..(9,9)]`.
+
+### Unreleased — a crash report you can still read afterwards
+
+When loft dies of a segfault it prints what it was doing: the last opcode, where
+it was in the program, and which function. That went to stderr only — so a build
+that filters stderr threw it away, and the one run that could explain the crash
+was also the one run you cannot repeat.
+
+The report is now written to a file as well: `.loft/loft-crash-<pid>.txt` next to
+the package, or your temp directory when there is no `.loft/`. The report on
+stderr names the file it wrote. Set `LOFT_CRASH_FILE` to put it somewhere
+specific, or set it to empty for the old stderr-only behaviour. A run that does
+not crash writes nothing.
+
 ### Unreleased — removing from a collection now gives the memory back
 
 Removing an element unlinked it and stopped there. The element's storage — and

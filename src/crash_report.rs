@@ -99,10 +99,15 @@ static PROGRAM: OnceLock<&'static str> = OnceLock::new();
 /// The path is resolved (and NUL-terminated) at install time because building it
 /// allocates; the handler itself only calls `open`/`write`/`close`, which POSIX
 /// lists as async-signal-safe.  Nothing is created unless a crash actually fires.
+///
+/// Unix only, like the signal handler that fills it: a target with no fatal
+/// signals to catch has no report to lose.
+#[cfg(unix)]
 static CRASH_FILE: OnceLock<CrashFile> = OnceLock::new();
 
 /// A crash-report destination: the same path twice, once NUL-terminated for
 /// `libc::open` and once printable for the stderr line that names it.
+#[cfg(unix)]
 struct CrashFile {
     /// NUL-terminated, ready to hand to `open(2)` without formatting.
     c_path: Vec<u8>,
@@ -158,10 +163,18 @@ fn crash_file_from(setting: Option<String>) -> Option<CrashFile> {
 }
 
 /// The resolved crash-report path, once [`install`] has run.  `None` when no
-/// file is configured — the diagnostic then goes to stderr alone, as before.
+/// file is configured — the diagnostic then goes to stderr alone, as before,
+/// which is also every non-unix target (there is no signal handler to feed it).
 #[must_use]
 pub fn crash_file_path() -> Option<String> {
-    CRASH_FILE.get().map(|c| c.display.clone())
+    #[cfg(unix)]
+    {
+        CRASH_FILE.get().map(|c| c.display.clone())
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 /// Update the per-thread context just before an opcode dispatches.

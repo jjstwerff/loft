@@ -664,6 +664,31 @@ upward in the generated file from the error line to the nearest
 4. If the opcode itself is wrong (wrong opcode for the operation), check
    `src/state/codegen.rs` and the `Stack::operator` delta table in `src/stack.rs`.
 
+### When the crash will not repeat — the crash report file
+
+On SIGSEGV / SIGABRT / SIGBUS, `src/crash_report.rs` prints the last opcode, its
+bytecode position, the function, and the loft source line. It writes that to
+stderr **and to a file**, because a build that pipes stderr through a filter
+otherwise discards the one diagnostic that cannot be regenerated: the run that
+produced it is by definition the run that will not repeat (loft#717 lost exactly
+this, and all that survived the pipe was the header line).
+
+| | |
+|---|---|
+| Default location | `.loft/loft-crash-<pid>.txt` when a `.loft/` directory already exists (the `loft test` case), else `<tmp>/loft-crash-<pid>.txt` |
+| Override | `LOFT_CRASH_FILE=<path>` |
+| Turn it off | `LOFT_CRASH_FILE=` (empty) — stderr only |
+
+Nothing is written unless a crash actually fires, and the directory is never
+created (a run that does not crash leaves no trace). The stderr report names the
+file it wrote, on a line after the diagnostic — so if you see the report but no
+such line, the write failed and stderr is all there is.
+
+Reading it back: the `pc:` value is a bytecode position, which
+`LOFT_LOG=static` maps to source; `fn:` and `at:` are usually enough on their
+own. If the report says `(none — crash outside interpreter)`, the fault was not
+in an opcode — look at `--native` code or a library call instead.
+
 ---
 
 ## Before you believe a fault is RANDOM
