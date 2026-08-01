@@ -157,6 +157,37 @@ traffic. And it refuses outright on a store carrying a `store_durable_seal`
 sidecar — that sidecar records the file's byte length and CRC, so truncating
 behind its back would report a healthy store as corrupt.
 
+**The INTERIOR is taken automatically, when a store is LOADED** (@PLN123 arc B).
+The space *between* surviving records needs the collection rebuilt somewhere
+dense, which moves records — so it happens only where an interior `DbRef` cannot
+be live: `store_load`, and `store_persist_bind` on an **existing** file. Both are
+loads, and both already replace the slot's bytes wholesale, so a reference held
+across them was already meaningless. Binding to a NEW file is a *write* and is
+deliberately untouched: a program keeps element references across it, and the
+byte-for-byte image is what makes that work.
+
+A bound store that peaked at 2,000 records and settled at 200 came back at
+180,104 bytes every run; it now loads at 26,992 — the same records, the same
+digest, and still bound. The one position that never moves is the collection
+root, because the collection variable itself is a `DbRef` at it.
+
+It is **gated**, which is what lets it be a default: a store whose interior free
+space is under an eighth of its high-water mark is measured and left alone. An
+eighth is the slack the image format already carries on purpose (the mark plus
+an eighth, above), and the estimate is a *lower bound* on what a rebuild returns
+— a rebuild also right-sizes live structures the metric counts as data, such as
+a hash's bucket array still sized for its peak.
+
+It declines, and says why under `LOFT_LOADER_STATS`: a spatial (`Radix`)
+collection, a record holding a `reference<T>` into another store, an untyped,
+read-only or borrowed store, a store at or below the image floor, and one
+carrying a durable sidecar. `LOFT_NO_COMPACT_ON_LOAD` turns the whole thing off.
+
+**Re-binding a store with no slack grows its file 2.33× immediately** — measured
+187,784 → 438,160 with compaction disabled, so it predates this and is not
+caused by it. It is the growth ladder firing on the first claim into a store
+persisted at exactly its mark. Worth chasing; it works against the sizing above.
+
 **`LOFT_HASH_SEED=<n>` makes a build byte-reproducible.** A hash draws a random
 seed (the P253 hash-DoS defense, `keys.rs::fresh_seed`) and stores it in its
 bucket record, where it decides the bucket ORDER — so rebuilding identical data

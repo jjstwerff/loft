@@ -7,14 +7,24 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arc A is COMPLETE and shipped** (`store_reclaim(collection)`, opt-in,
-both backends), and **B0 + B1 + B2 are done**. Compaction now exists behind
-`LOFT_COMPACT_ON_LOAD=1` (off): it rebuilds a collection into a dense store **at
-LOAD**, 4.8-7.0x smaller with the digest unchanged. The step's specified code
-point — compacting when WRITING the image — was falsified: `bind_path` adopts
-the image it writes as the live store, and a program holds interior `DbRef`s
-across it. **B3 is next** (default on, the ratio gate, and `bind_path`'s load
-branch).
+**Both arcs are complete.** Arc **A** ships `store_reclaim(collection)` — opt-in,
+the free TAIL, at any moment the program chooses. Arc **B** compacts the
+INTERIOR automatically **at LOAD** (`store_load`, and `store_persist_bind` on an
+existing file), gated on the interior exceeding an eighth of the high-water mark;
+`LOFT_NO_COMPACT_ON_LOAD` opts out. A bound store that peaked at 2,000 records
+and settled at 200 came back at 180,104 bytes every run and now loads at 26,992.
+
+The step that had to change: B2 specified compaction when WRITING the image, on
+the grounds that nothing holds a `DbRef` into a fresh copy — but `bind_path`
+ADOPTS the image it writes as the live store, and a program demonstrably holds
+interior references across it. Compaction belongs at LOAD, where the bytes are
+already replaced wholesale.
+
+Remaining: the A5 proposal below, and one thing this work found but did not
+cause — **re-binding a store with no slack grows its file 2.33× immediately**
+(187,784 → 438,160, measured with compaction disabled). The growth ladder fires
+on the first claim into a store persisted at exactly its mark; it works against
+loft#710's sizing and deserves its own look.
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
@@ -76,7 +86,7 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | **Done** — sees 5 loss modes, blind to 3 layout levers |
 | **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | **Done** — 77-86% back at ~0.6 µs/record, idempotent |
 | **B2** — implement behind a flag, off | [DESIGN.md](DESIGN.md) | **Done** — `LOFT_COMPACT_ON_LOAD=1`, 4.8-7.0x, at LOAD not at write |
-| **B3** — on by default, documented, probes graduated | [DESIGN.md](DESIGN.md) | Open — next |
+| **B3** — on by default, documented, probes graduated | [DESIGN.md](DESIGN.md) | **Done** — default ON, gated, `bind_path` wired |
 | **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | Open — from MariaDB 11.2.0 prior art |
 
 ### A — truncate the tail

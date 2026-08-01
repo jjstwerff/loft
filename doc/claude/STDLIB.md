@@ -1003,7 +1003,11 @@ difference between free space you get back and free space you do not.
   both.
 - **`inner`** — between records. It is reusable for future allocation, but it
   *is* written to the file, because the image has to span up to the last record.
-  `store_reclaim` does not touch it.
+  `store_reclaim` does not touch it — **loading the store does**, automatically:
+  a collection read back by `store_load`, or bound to an existing file, is
+  rebuilt dense when its interior is worth it (@PLN123 arc B, see
+  [DATABASE.md](DATABASE.md)). So a high `inner` is a number you act on with the
+  next load, not with this call.
 
 A store built once reads `inner 0%`. One whose live set fell well below its peak
 reads a high `inner` — 71% in the case behind loft#713 — and that is the part

@@ -578,7 +578,71 @@ its reason while still loading correctly. Both probes falsify it — skipping
 (it needs the compacted heap store written back and re-mapped); and the gate is
 "did it get smaller", not the live-vs-mark ratio the step asked for.
 
-### B3 — on by default, documented, probes graduated
+### B3 — on by default, documented, probes graduated — **DONE**
+
+**Default ON**, `LOFT_NO_COMPACT_ON_LOAD` opts out — the shape loft uses for its
+other default-on behaviours. It can be a default because it is gated and because
+it only runs where records may move.
+
+**The gate, measured rather than guessed.** Compaction fires when the interior
+free space exceeds an eighth of the high-water mark. An eighth is not an
+arbitrary constant: it is the slack the image format already carries on purpose
+(`bind_path` sizes an image at the mark PLUS an eighth, loft#710), so there is
+one home for "an eighth is the slack we accept".
+
+The estimate is a **lower bound**, not a prediction — recovery runs consistently
+above it, because a rebuild also right-sizes live structures the metric counts as
+data (a hash keeps the bucket array it grew to at its peak):
+
+| inner | recovered |
+|---|---|
+| 0% | 0% (declined) |
+| 2%, 9% | declined |
+| 17% | 24% |
+| 26% | 33% |
+| 43% | 57% |
+
+So the gate is conservative by construction: it never fires where nothing is to
+be had, and declines some cases that would have paid moderately. That is the
+right bias for a default — declining a marginal win costs a little space;
+taking a marginal loss costs every load. A store at or below the image floor is
+also declined: a bound image is padded up to the floor regardless.
+
+**`bind_path`'s existing-file branch is wired up** — the case the plan opened
+with, since a bound store is what a long-lived store normally is. `compact_slot`
+leaves a dense HEAP store, so the file is rewritten and re-mapped; "the hash IS
+the file" has to keep being true. The image goes to a temp file and is renamed
+over, so the file is never half-written, and every failure path re-binds from
+whatever the file holds rather than leaving a heap store that silently stops
+persisting.
+
+Measured across runs: written at 180,104 bytes, re-bound at **26,992** — same
+count, same digest, `store_verify` sound, root reference reading, still bound.
+
+**Two vacuous assertions caught by falsifying the test**, both worth the note:
+
+- *"Still bound"* could not tell a bound collection from a heap copy that wrote
+  the file once — every size, digest and count assertion passes either way. Only
+  a THIRD process can tell: the reload run writes a record after compacting, and
+  the next run must see it. Skipping the re-bind now fails the test.
+- *"A dense store's file is untouched"* tested nothing about the gate, because a
+  dense store rebuilds to about the size it already was. The assertion had to be
+  on the **reason** the loader gives, which is why refusals name themselves.
+
+**And an instrument trap, hit a second time.** The test's own `count`/`digest`
+helpers iterate the bound collection, and that key-sorted snapshot is claimed
+INSIDE the store — 2,000 records took the file 187,784 → 438,160, which reads
+exactly like compaction having inflated it. Stat the file the instant the bind
+returns. B1 recorded this; it still caught the next person, which is the argument
+for it being written down where the next person is.
+
+**Found, not fixed, not caused by this work:** re-binding a store with no slack
+grows its file **2.33× immediately** (187,784 → 438,160, measured with
+compaction disabled). The growth ladder fires on the first claim into a store
+persisted at exactly its mark. It works directly against loft#710's sizing and
+deserves its own look — see README § open items.
+
+### ~~B3 — on by default, documented, probes graduated~~ (original)
 
 ---
 

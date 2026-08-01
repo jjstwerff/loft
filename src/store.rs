@@ -1241,7 +1241,7 @@ impl Store {
     ///   Re-sealing instead is possible; refusing is the safe default.
     #[allow(dead_code)] // @PLN123 A1 lands inert: A3 is what calls it.
     pub fn shrink_to(&mut self, words: u32) -> bool {
-        if self.read_only || self.borrowed || self.durable_meta_path.is_some() {
+        if self.read_only || self.borrowed || self.has_durable_sidecar() {
             return false;
         }
         let mark = {
@@ -1387,6 +1387,24 @@ impl Store {
     #[must_use]
     pub fn is_borrowed(&self) -> bool {
         self.borrowed
+    }
+
+    /// Does a durable `.dmeta` sidecar record this store's file?
+    ///
+    /// The sidecar carries the file's byte length and a payload CRC, so any
+    /// operation that rewrites or shortens the file behind its back turns a
+    /// healthy store into a corrupt one at the next `store_durable_check`.
+    /// Both [`Self::shrink_to`] and @PLN123's compaction refuse on it.
+    #[must_use]
+    pub fn has_durable_sidecar(&self) -> bool {
+        #[cfg(feature = "mmap")]
+        {
+            self.durable_meta_path.is_some()
+        }
+        #[cfg(not(feature = "mmap"))]
+        {
+            false
+        }
     }
 
     /// Return whether this store has an empty claims set (worker clones).

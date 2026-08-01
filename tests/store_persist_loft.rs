@@ -1704,7 +1704,8 @@ fn store_rebuild_b1_recovers_the_interior_and_is_idempotent() {
     );
 }
 
-/// @PLN123 B2 — compaction at LOAD, behind `LOFT_COMPACT_ON_LOAD` (off).
+/// @PLN123 B2/B3 — compaction at LOAD, ON by default
+/// (`LOFT_NO_COMPACT_ON_LOAD` opts out).
 ///
 /// Arc A returns the free tail; the interior between surviving records needs the
 /// collection rebuilt somewhere dense. That moves records, and a `DbRef` is a
@@ -1717,8 +1718,8 @@ fn store_rebuild_b1_recovers_the_interior_and_is_idempotent() {
 ///
 /// What this pins:
 ///
-/// - **Off is off.** With the flag unset the reloaded file is byte-identical to
-///   the source, so nothing here changes what shipped.
+/// - **Opting out is exact.** With `LOFT_NO_COMPACT_ON_LOAD` the reloaded file
+///   is byte-identical to the source — the pre-B2 behaviour, still reachable.
 /// - **On is correct, not merely smaller.** B0's oracle rides along — the digest
 ///   over every field must be unchanged, and `store_verify` must call the
 ///   rebuilt heap graph sound. A compaction that lost data would satisfy every
@@ -1743,9 +1744,9 @@ fn store_compact_b2_rebuilds_at_load_without_losing_anything() {
             .env("LOFT_LOADER_STATS", "1")
             .current_dir(workspace_root());
         if compact {
-            cmd.env("LOFT_COMPACT_ON_LOAD", "1");
+            cmd.env_remove("LOFT_NO_COMPACT_ON_LOAD"); // @PLN123 B3 — on by default
         } else {
-            cmd.env_remove("LOFT_COMPACT_ON_LOAD");
+            cmd.env("LOFT_NO_COMPACT_ON_LOAD", "1");
         }
         let out = cmd.output().expect("failed to invoke loft binary");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -1770,7 +1771,7 @@ fn store_compact_b2_rebuilds_at_load_without_losing_anything() {
     for backend in ["--interpret", "--native"] {
         let tag = backend.trim_start_matches('-');
 
-        // OFF — the load is a wholesale byte replacement, as it has always been.
+        // OPTED OUT — the load is a wholesale byte replacement, as it always was.
         let off = run(backend, &scratch(&format!("b2off_{tag}")), "rich", false);
         assert_eq!(
             field(&off, "loaded", "bytes"),
@@ -1827,6 +1828,145 @@ fn store_compact_b2_rebuilds_at_load_without_losing_anything() {
             "{backend}: and a declined compaction must leave a correct load \
              behind:\n{refused}"
         );
+    }
+}
+
+/// @PLN123 B3 — a BOUND store's file follows what it holds, across runs.
+///
+/// The case the plan opened with: `resize_store` refuses to shrink, so a bound
+/// store only ever grew — a collection that peaked at 2,000 records and settled
+/// at 200 kept the peak-sized file for the rest of its life, and for every life
+/// after, because the next run mapped the same file. Arc A takes the tail when
+/// the program asks; this is the interior, taken automatically at the one moment
+/// records may move.
+///
+/// Compaction here runs on `bind_path`'s EXISTING-file branch, which is a LOAD —
+/// the collection was declared empty, so no interior `DbRef` can be live. The
+/// fresh-file branch is a WRITE and is deliberately untouched (§ B2).
+///
+/// The assertions that matter beyond size: the digest over every field is
+/// unchanged, `store_verify` calls the rebuilt graph sound, the root reference
+/// reads after the rebuild, and the collection is **still bound** — writing to it
+/// must still reach the file, or compaction would have quietly turned a
+/// persisted collection into a heap copy that stops persisting.
+#[test]
+fn store_compact_b3_shrinks_a_bound_file_across_runs() {
+    let script = workspace_root().join("tests/scripts/store_compact_bound_b3.loft");
+    let run = |backend: &str, path: &Path, mode: &str, compact: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", path)
+            .env("MODE", mode)
+            .env("LOFT_LOADER_STATS", "1")
+            .current_dir(workspace_root());
+        if compact {
+            cmd.env_remove("LOFT_NO_COMPACT_ON_LOAD");
+        } else {
+            cmd.env("LOFT_NO_COMPACT_ON_LOAD", "1");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} mode={mode} compact={compact}: {stdout}\n{stderr}"
+        );
+        format!("{stdout}{stderr}")
+    };
+    let field = |out: &str, line: &str, key: &str| -> i64 {
+        let l = out
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("no `{line}` line in:\n{out}"));
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let i = t.iter().position(|x| *x == key).expect(key);
+        t[i + 1].parse().expect("number")
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+
+        // Opted out: re-binding leaves the file exactly as the last run left it.
+        let dir = scratch(&format!("b3off_{tag}"));
+        let path = dir.join("world.store");
+        let wrote = run(backend, &path, "", false);
+        let off = run(backend, &path, "reload", false);
+        assert_eq!(
+            field(&off, "rebound", "bytes"),
+            field(&wrote, "wrote", "bytes"),
+            "{backend}: opted out, a bound store's file must not change on \
+             re-bind:\n{off}"
+        );
+
+        // Default: the file follows the content.
+        let dir = scratch(&format!("b3on_{tag}"));
+        let path = dir.join("world.store");
+        let wrote = run(backend, &path, "", true);
+        let on = run(backend, &path, "reload", true);
+        let before = field(&wrote, "wrote", "bytes");
+        let after = field(&on, "rebound", "bytes");
+        assert!(
+            after * 2 < before,
+            "{backend}: a store that peaked at 2000 records and settled at 200 \
+             must give its file back on the next run (got {after} from \
+             {before}):\n{on}"
+        );
+        for key in ["count", "digest"] {
+            assert_eq!(
+                field(&on, "rebound", key),
+                field(&wrote, "wrote", key),
+                "{backend}: `{key}` changed across the rebuild — the file got \
+                 smaller by LOSING data:\n{wrote}{on}"
+            );
+        }
+        assert!(
+            on.contains("sound true") && on.contains("label label-7"),
+            "{backend}: the rebuilt graph must verify, and the root reference \
+             must still read:\n{on}"
+        );
+        // STILL BOUND — and only a THIRD process can show it.  The `reload` run
+        // added a record after compacting; if compaction had left a heap store
+        // in the slot, that write would have gone to memory and died with the
+        // process, while every size, digest and count assertion above still
+        // passed.  So the question is not "did the file change" but "does the
+        // next run see what the last one wrote".
+        assert_eq!(
+            field(&on, "after_write", "count"),
+            field(&on, "rebound", "count") + 1,
+            "{backend}: the compacted collection must accept a write:\n{on}"
+        );
+        let seen = run(backend, &path, "verify", true);
+        assert_eq!(
+            field(&seen, "verify", "count"),
+            field(&on, "after_write", "count"),
+            "{backend}: a write made AFTER compaction must be on disk for the \
+             next run — otherwise the collection quietly stopped persisting:\n{on}{seen}"
+        );
+
+        // THE GATE — a dense store must be measured and left alone.  Without
+        // this, removing the gate entirely still passes every assertion above,
+        // because compacting a dense store is merely wasteful, not wrong.
+        let dir = scratch(&format!("b3dense_{tag}"));
+        let path = dir.join("dense.store");
+        let _dense_wrote = run(backend, &path, "dense", true);
+        let dense_reload = run(backend, &path, "reload", true);
+        // The REASON is the assertion, not the resulting size.  A dense store
+        // rebuilds to about the size it already was, so "did the file change"
+        // cannot tell a gate that declined from a rebuild that ran and gained
+        // nothing — only the refusal it names can.
+        assert!(
+            dense_reload.contains("not compacted") && dense_reload.contains("under the eighth"),
+            "{backend}: a store with no interior free space must be declined by \
+             the GATE (before any rebuild), not discovered to be pointless \
+             afterwards:\n{dense_reload}"
+        );
+        // Its file size is deliberately NOT asserted here: re-binding a store
+        // with no slack grows the file 2.33x on its own (187,784 -> 438,160,
+        // measured with compaction disabled, so it predates this work). That is
+        // a real thing to chase — @PLN123 README § Re-binding a dense store —
+        // but it is not what this test is about, and asserting it here would
+        // pin somebody else's behaviour to this test.
     }
 }
 
