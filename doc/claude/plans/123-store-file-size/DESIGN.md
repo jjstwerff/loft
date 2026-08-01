@@ -636,11 +636,42 @@ exactly like compaction having inflated it. Stat the file the instant the bind
 returns. B1 recorded this; it still caught the next person, which is the argument
 for it being written down where the next person is.
 
-**Found, not fixed, not caused by this work:** re-binding a store with no slack
-grows its file **2.33× immediately** (187,784 → 438,160, measured with
-compaction disabled). The growth ladder fires on the first claim into a store
-persisted at exactly its mark. It works directly against loft#710's sizing and
-deserves its own look — see README § open items.
+**A defect this work introduced, and the measurement that was not one.** B3
+reported "re-binding a store with no slack grows its file 2.33×" as a
+pre-existing thing to chase. Both halves were wrong, and the matrix said so
+immediately: re-binding grows nothing, at any size, dense or fragmented, with or
+without `store_reclaim` — every cell ratio 1.000.
+
+What actually happened is the **B1 instrument trap for the third time**. The
+write process printed `count`/`digest` AFTER capturing the file size; those
+traversals grew the file before the process exited, and the reload process then
+read a file that was already 438,160. The re-bind was innocent; my own printout
+was the mutation, and I attributed it to the operation I happened to be studying.
+
+Chasing it properly found a real defect — **mine, from arc A**:
+
+`bind_path` sized the image `live_end + live_end/8` **`.min(src_words)`** —
+"never larger than the capacity we would have written before". Safe while
+capacity sat well above the mark. `store_reclaim` trims capacity TO the mark, so
+the clamp collapsed the eighth to ZERO for exactly the stores someone had just
+tidied — and the eighth is the thing loft#710 added to keep a bound store off the
+7/3 resize cliff. Arc A disabled loft#710's protection, and the comment right
+above the clamp predicts the consequence in words.
+
+The claim that trips it is the most ordinary one there is: **reading the
+collection**, because iterating a keyed collection claims its key-sorted snapshot
+inside the store. Measured on a 2,000-record hash:
+
+| | after bind | after ONE read |
+|---|---|---|
+| `store_reclaim` then bind | 187,784 | **438,160** |
+| bind, never reclaimed | 211,256 | 211,256 |
+| after the fix, either way | 211,256 | 211,256 |
+
+So tidying up first made the file **2.07× larger** than not bothering. The clamp
+is gone: the eighth is deliberate and has to survive a caller who tidied first.
+Guarded by `persisted_image_keeps_its_slack_after_store_reclaim`, which fails
+(187,784 → 438,160) the moment the clamp is put back.
 
 ### ~~B3 — on by default, documented, probes graduated~~ (original)
 

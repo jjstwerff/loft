@@ -1961,12 +1961,90 @@ fn store_compact_b3_shrinks_a_bound_file_across_runs() {
              the GATE (before any rebuild), not discovered to be pointless \
              afterwards:\n{dense_reload}"
         );
-        // Its file size is deliberately NOT asserted here: re-binding a store
-        // with no slack grows the file 2.33x on its own (187,784 -> 438,160,
-        // measured with compaction disabled, so it predates this work). That is
-        // a real thing to chase — @PLN123 README § Re-binding a dense store —
-        // but it is not what this test is about, and asserting it here would
-        // pin somebody else's behaviour to this test.
+        // Its file size is deliberately NOT asserted here.  It is stable now
+        // (`persisted_image_keeps_its_slack_after_store_reclaim` owns that
+        // property), but it is not what this test is about, and an earlier
+        // draft that DID assert it read a 2.33x jump as re-bind growth when the
+        // growth was really this script's own digest traversal claiming its
+        // snapshot inside the bound store.
+    }
+}
+
+/// @PLN123 — a persisted image keeps its eighth of slack even when the caller
+/// called `store_reclaim` first.
+///
+/// loft#710 sizes an image at the high-water mark PLUS an eighth, and says why:
+/// a bound store stays live and growth multiplies by 7/3, so a store with no
+/// room left pays a **2.33× file resize on its very next claim** — worse than
+/// the tail that was removed. The clamp keeping the image "never larger than the
+/// arena" was safe while capacity always sat well above the mark. `store_reclaim`
+/// (arc A) trims capacity TO the mark, so the clamp collapsed the eighth to zero
+/// for exactly the stores someone had just tidied, and arc A quietly disabled the
+/// protection loft#710 added.
+///
+/// The claim that trips it is the most ordinary one there is — READING the
+/// collection. Iterating a keyed collection materialises a key-sorted snapshot,
+/// claimed inside the store when the store is bound. Measured before the fix, a
+/// 2,000-record hash: reclaim-then-bind wrote 187,784 bytes and one read took it
+/// to 438,160 — **2.07× larger than never reclaiming at all** (211,256).
+///
+/// So the guard is not "the file is small" but **"tidying up first must not make
+/// it worse"**: both paths must land on the same size, and neither may grow when
+/// the collection is read.
+#[test]
+fn persisted_image_keeps_its_slack_after_store_reclaim() {
+    let script = workspace_root().join("tests/scripts/store_bind_slack.loft");
+    let run = |backend: &str, dir: &Path, reclaim: bool| -> (i64, i64) {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("s.store"))
+            .env("N", "2000")
+            .env("RECLAIM", if reclaim { "1" } else { "0" })
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} reclaim={reclaim}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let t: Vec<&str> = stdout
+            .lines()
+            .find(|l| l.starts_with("reclaim"))
+            .unwrap_or_else(|| panic!("no report in:\n{stdout}"))
+            .split_whitespace()
+            .collect();
+        let num = |k: &str| -> i64 {
+            let i = t.iter().position(|x| *x == k).expect(k);
+            t[i + 1].parse().expect("number")
+        };
+        (num("after_bind"), num("after_read"))
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let (tidy_bind, tidy_read) = run(backend, &scratch(&format!("slack_y_{tag}")), true);
+        let (plain_bind, plain_read) = run(backend, &scratch(&format!("slack_n_{tag}")), false);
+
+        assert_eq!(
+            tidy_read, tidy_bind,
+            "{backend}: reading a bound collection must not resize its file — \
+             the image's eighth of slack has to absorb the iteration snapshot, \
+             or the first read pays the 7/3 ladder ({tidy_bind} -> {tidy_read})"
+        );
+        assert_eq!(
+            plain_read, plain_bind,
+            "{backend}: and the same without `store_reclaim` ({plain_bind} -> \
+             {plain_read})"
+        );
+        assert_eq!(
+            tidy_bind, plain_bind,
+            "{backend}: `store_reclaim` before a bind must not change the image \
+             size — the image is already sized from the mark, so tidying first \
+             can only remove the slack the format wants"
+        );
     }
 }
 

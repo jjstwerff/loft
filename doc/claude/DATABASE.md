@@ -183,10 +183,17 @@ collection, a record holding a `reference<T>` into another store, an untyped,
 read-only or borrowed store, a store at or below the image floor, and one
 carrying a durable sidecar. `LOFT_NO_COMPACT_ON_LOAD` turns the whole thing off.
 
-**Re-binding a store with no slack grows its file 2.33× immediately** — measured
-187,784 → 438,160 with compaction disabled, so it predates this and is not
-caused by it. It is the growth ladder firing on the first claim into a store
-persisted at exactly its mark. Worth chasing; it works against the sizing above.
+**The eighth of slack survives `store_reclaim`** — and for a while it did not.
+The image size used to be clamped to the arena's current capacity ("never larger
+than we would have written before"), which was safe while capacity sat well above
+the mark. `store_reclaim` trims capacity TO the mark, so the clamp collapsed the
+eighth to zero for exactly the stores someone had just tidied, and the next claim
+paid the 7/3 ladder the eighth exists to prevent. The claim that tripped it was
+the most ordinary one there is: READING the collection, because iterating a keyed
+collection claims its key-sorted snapshot inside the store. A 2,000-record hash
+wrote 187,784 bytes and one read took it to 438,160 — **2.07× larger than never
+reclaiming at all**. The clamp is gone; both paths now land on 211,256 and stay
+there. Guarded by `persisted_image_keeps_its_slack_after_store_reclaim`.
 
 **`LOFT_HASH_SEED=<n>` makes a build byte-reproducible.** A hash draws a random
 seed (the P253 hash-DoS defense, `keys.rs::fresh_seed`) and stores it in its

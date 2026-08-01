@@ -2566,15 +2566,28 @@ impl Stores {
             // property the issue is about: two builds of the same data now land
             // within ~5% of each other instead of 1.84× apart.
             //
-            // Never larger than the capacity we would have written before, never
-            // below the 1024-word floor `Store::open` expects, and a chain the
-            // walk cannot follow falls back to the whole capacity — the file is
-            // never shortened on a guess.
+            // Never below the floor `Store::open` expects, and a chain the walk
+            // cannot follow falls back to the whole capacity — the file is never
+            // shortened on a guess.
+            //
+            // The eighth is NOT clamped to the arena's current capacity, and
+            // that is a fix, not an omission (@PLN123).  This read
+            // `.min(src_words)` — "never larger than the capacity we would have
+            // written before" — which was a safe conservatism while capacity was
+            // always comfortably above the mark.  `store_reclaim` (arc A) trims
+            // capacity TO the mark, so the clamp collapsed the eighth to zero
+            // for exactly the stores that had just been tidied, and the first
+            // claim after binding then paid the 7/3 ladder the paragraph above
+            // exists to avoid.  Measured on a 2,000-record hash: reclaim-then-
+            // bind wrote 187,784 bytes and the first READ of the collection took
+            // it to 438,160 — 2.07x LARGER than never reclaiming at all
+            // (211,256), because iterating a keyed collection claims its
+            // key-sorted snapshot inside the store.  The slack is deliberate;
+            // it has to survive a caller who tidied up first.
             let live_end = store_image_live_end(&snapshot, src_words).unwrap_or(src_words);
             let target_words = live_end
                 .saturating_add(live_end / 8)
-                .min(src_words)
-                .max(1024);
+                .max(crate::store::MIN_BOUND_WORDS);
             let padded = match build_padded_store_image(&snapshot, src_words, target_words) {
                 Some(b) => b,
                 None => return false,

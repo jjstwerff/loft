@@ -20,11 +20,15 @@ ADOPTS the image it writes as the live store, and a program demonstrably holds
 interior references across it. Compaction belongs at LOAD, where the bytes are
 already replaced wholesale.
 
-Remaining: the A5 proposal below, and one thing this work found but did not
-cause — **re-binding a store with no slack grows its file 2.33× immediately**
-(187,784 → 438,160, measured with compaction disabled). The growth ladder fires
-on the first claim into a store persisted at exactly its mark; it works against
-loft#710's sizing and deserves its own look.
+Remaining: the A5 proposal below.
+
+One defect this work introduced and has now fixed: **`store_reclaim` before a
+bind used to remove the image's eighth of slack**, because the image size was
+clamped to the arena's capacity and arc A trims capacity to the mark. The next
+claim then paid loft#710's 7/3 cliff — and the claim that tripped it was simply
+READING the collection. Measured: 187,784 bytes at bind, 438,160 after one read,
+against 211,256 for never reclaiming at all. Both paths now hold at 211,256.
+See DESIGN.md § The re-bind measurement that was not one.
 
 Promoted from [loft#713](https://github.com/loft-lang/loft/issues/713) (closed in
 favour of this plan), itself split out of [loft#710](https://github.com/loft-lang/loft/issues/710)
