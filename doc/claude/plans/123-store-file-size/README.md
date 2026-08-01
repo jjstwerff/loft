@@ -48,7 +48,7 @@ reading `store_memory()` now carries:
 | | recovers | needs | risk | when |
 |---|---|---|---|---|
 | **A** — coalesce + truncate a bound store | the free TAIL above the last record | no record movement | low — everything above the last record is free by definition | **opt-in**, `store_reclaim(collection)` |
-| **B** — compact when writing an image | the INTERIOR free space between records | a rebuild into a fresh store, then swap | low — a fresh store has no inbound pointers to rewrite | automatic, gated on the ratio |
+| **B** — compact when LOADING an image | the INTERIOR free space between records | a rebuild into a fresh store, then swap | low — the load path already invalidates interior refs | automatic, gated on the ratio |
 
 **A is opt-in on purpose.** Its benefit is near-zero in every workload measured
 here except one (churn and refill both hold capacity flat, so a reclaimer would
@@ -71,7 +71,7 @@ Build order, failure paths and code points: **[DESIGN.md](DESIGN.md)**.
 | **A4** — docs + probes graduate (no default to flip) | [DESIGN.md](DESIGN.md) | **Done** |
 | **B0** — the digest oracle, before any compaction code | [DESIGN.md](DESIGN.md) | **Done** — sees 5 loss modes, blind to 3 layout levers |
 | **B1** — measure what rebuild-and-swap costs | [DESIGN.md](DESIGN.md) | **Done** — 77-86% back at ~0.6 µs/record, idempotent |
-| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | Open — next; claim each vector at its LENGTH (B1) |
+| **B2/B3** — implement behind a flag, then default on | [DESIGN.md](DESIGN.md) | In progress — code point CORRECTED: compaction belongs at LOAD, not at write |
 | **A5** — reclaim at bind time (proposed) | [README.md](README.md#a5) | Open — from MariaDB 11.2.0 prior art |
 
 ### A — truncate the tail
@@ -115,11 +115,17 @@ not a replacement.
 
 ### B — compact the image
 
-Compact while **writing** the image, not in the live arena. Nothing holds a
-`DbRef` into a fresh copy, so there are no inbound pointers to fix and no way to
-interfere with running code — which is what makes live-arena compaction dangerous
-and this version not. Gated on the live-vs-mark ratio, which persist already has
-from the chain walk it does anyway — so a dense store pays one comparison.
+**Compact while LOADING the image.** The earlier plan said "while writing", on
+the grounds that nothing holds a `DbRef` into a fresh copy — but `bind_path`
+ADOPTS the image it writes as the live store, and a program demonstrably holds
+interior references across that call, so compacting at write would dangle them
+(DESIGN.md § B2). The load path is safe for a stronger reason than absence of
+references: it already replaces the slot's bytes wholesale, so it already
+invalidates them. The root stays at `PRIMARY`, which is the one reference that
+does survive.
+
+Gated on the live-vs-mark ratio, from the walk the load does anyway — so a dense
+store pays one comparison.
 
 Ceiling is the fresh-build number: 1,042,528 → ~179,072 bytes for the same 300
 records.

@@ -442,22 +442,91 @@ Sources: [MariaDB OPTIMIZE TABLE](https://mariadb.com/docs/server/ha-and-perform
 
 ### B2 — implement the winner behind a flag, off
 
-- **Code point:** `src/database/allocation.rs::bind_path` (2514), the fresh-image
-  branch, next to `store_image_live_end` / `build_padded_store_image` — this is
-  already the one place an image is composed.
-- Gate on the live-vs-mark ratio so a dense store is never rewritten.
+**The code point below is UNSAFE, and the reasoning that chose it is wrong.**
+Establishing that is what B2 did first; the corrected step follows.
 
-**B is AUTOMATIC, and that is not inconsistent with A being opt-in.** The
-difference is who already pays for the information: persist ALREADY walks the
-chain — `store_image_live_end` does it today to size the image — so the ratio is
-a subtraction on a walk that happens regardless. A dense store pays one
-comparison and is written exactly as it is now. A's trigger, by contrast, would
-have to walk on a path that does not otherwise walk at all.
+#### ~~The specified code point~~ — falsified
 
-The second difference is timing. B runs at a moment the program already chose,
-once, and produces a fresh file; there is no mapping to invalidate and no
-re-grow to thrash, because the live store is untouched. A mutates the store a
-running program is using.
+> - **Code point:** `src/database/allocation.rs::bind_path` (2514), the
+>   fresh-image branch […] this is already the one place an image is composed.
+> - **B runs at a moment the program already chose, once, and produces a fresh
+>   file; there is no mapping to invalidate** […] because the live store is
+>   untouched.
+
+The load-bearing claim was **"nothing holds a `DbRef` into a fresh copy, so
+there are no inbound pointers to fix"**. It is false, and one probe kills it:
+
+```loft
+e = h[7]                        // an interior DbRef
+store_persist_bind(h, path)
+println("after bind: {e.label}")   // prints label-7 — the ref is LIVE across the bind
+```
+
+`bind_path` does not leave the live store untouched: its last act is
+`self.allocations[slot_idx] = new_store`, so **the fresh image IS adopted as the
+live store**. Every position a compaction moved would be a dangling `DbRef` in
+the running program — held in interpreter stack slots and native locals, which
+nothing can enumerate or rewrite. The reason it looks safe today is exactly the
+thing compaction removes: the image is a byte-for-byte copy, so every record
+keeps its position.
+
+So the property that matters is not *"is the copy fresh"* — it is **"can a
+`DbRef` into this store's interior be live right now"**.
+
+#### The corrected code point: compaction belongs at LOAD, not at write
+
+Enumerate the moments a store's records could move, and ask that question of
+each:
+
+| moment | interior `DbRef` live? | verdict |
+|---|---|---|
+| `bind_path`, fresh-file branch (WRITE) | **yes** — the program just built the collection | unsafe |
+| `bind_path`, existing-file branch (LOAD) | no — the collection was declared empty; its records come into existence here | **safe** |
+| `store_load` / `store_load_key` (LOAD) | no — same shape, and it already replaces the slot's bytes wholesale | **safe** |
+| `store_reclaim` | yes | safe only because it moves nothing (arc A) |
+
+The load path is safe for a reason stronger than "probably nobody holds one":
+**it already invalidates interior references today.** `Store::load` replaces the
+slot's bytes wholesale, so any interior `DbRef` held across it is already
+meaningless — compacting there adds no hazard that loft's contract does not
+already carry. The write path is the opposite: it preserves every position
+today, so compacting there would introduce a hazard that does not exist.
+
+One position must still be honoured: the **root stays at `PRIMARY`** with its
+layout unchanged, because the collection variable itself is a `DbRef` at the
+root and it does survive. A compactor emits the root first, so this holds by
+construction rather than by care.
+
+This also explains why B1's prior-art find was pointing here all along:
+**MariaDB 11.2.0 shrinks at STARTUP** — the load moment — not when writing.
+What was filed as a proposed A5 is the same insight arriving from the other
+direction.
+
+#### What to build, and what is already built
+
+The rebuild does not need new traversal code. `Stores::copy_claims` is already a
+type-directed, **cross-store** deep copy that constructs the destination fresh —
+re-inserting into hash/index spines, bulk-copying vector elements — over the
+`for_each_owned_child` keystone. And it already does the thing B1 asked B2 to do:
+`copy_claims_seq_vector` claims `1 + (size * length).div_ceil(8)`, i.e. **at the
+vector's LENGTH**, not at the source block's size. So the quantised per-vector
+overhead B1 measured through the loft-level insert path should not appear here.
+
+So B2 is a composition, not an algorithm: claim a root record in a fresh store,
+`copy_claims` the collection into it, swap the slot. What it must carry:
+
+- **Refusals, fail-safe.** `copy_claims` panics on `Radix` (spatial) and the
+  keystone returns an empty walk for it; a store with `known_type == u16::MAX`
+  has no schema to walk. Any of these must fall back to loading exactly as
+  today — never a partial compaction.
+- **The gate.** Only compact when the interior is worth it, from the walk the
+  load already does.
+- **The oracle.** B0's digest across the load, and B1's before/after sizes.
+- **Off by default**, as this step always said.
+
+`store_load` does **not** compact today — measured, byte-identical (215,824 →
+215,824), consistent with the ruled-out note about `Store::load` replacing bytes
+wholesale.
 
 ### B3 — on by default, documented, probes graduated
 
