@@ -3689,9 +3689,10 @@ impl Stores {
         // keys touch O(N) pages, not O(file). Off unless asked.
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
             eprintln!(
-                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} distinct={} file={} reads={:?}",
+                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} distinct={} file={} reads={:?}",
                 keys_vals.len(),
                 reader.provider().bytes_fetched(),
+                reader.provider().requests(),
                 reader.provider().distinct_bytes(),
                 reader.size(),
                 reader.read_histogram()
