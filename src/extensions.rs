@@ -228,6 +228,35 @@ fn try_dlsym(name: &str) -> Option<(*const (), bool)> {
     None
 }
 
+/// @PLN24 arc D — `dlopen` a C library a package declared with `[c] libs`, and
+/// KEEP it loaded so its symbols resolve.
+///
+/// Distinct from the `[native] runtime-libs` probe, which opens a library only
+/// to ask whether it exists and drops the handle. Here the handle is the point:
+/// a `#c` symbol is looked up through it. Loading is idempotent (`load_one`
+/// keys on the canonical path), so a library named by several packages opens
+/// once.
+///
+/// A relative name resolves against the declaring package's directory first, so
+/// a library can ship its own `.so`; otherwise it goes to the dynamic linker by
+/// soname, exactly as `runtime-libs` does. Returns whether it loaded — a
+/// missing library is the caller's to report, with the binding that needed it.
+#[cfg(feature = "native-extensions")]
+pub fn load_c_library(name: &str, pkg_dir: &str) -> bool {
+    let beside = std::path::Path::new(pkg_dir).join(name);
+    if beside.exists() {
+        load_one(&beside.to_string_lossy());
+        return true;
+    }
+    // Not a path we can see: hand the soname to the dynamic linker, which knows
+    // the search path we do not.
+    if unsafe { libloading::Library::new(name) }.is_err() {
+        return false;
+    }
+    load_one(name);
+    true
+}
+
 /// @PLN24 arc B — the same lookup, for the `#c` caller: a C binding resolves
 /// against the cdylibs loft has already loaded before it falls back to the
 /// process. One resolver, so a symbol cannot mean two different things

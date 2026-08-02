@@ -483,12 +483,26 @@ an ordinary number or a fault, so it is rejected where loft still can — which
 costs nothing, because non-null is already the default and null-flow already
 requires a discharge (`?? 0`, `x?`, `match`).
 
+#### Declaring the library (arc D)
+
+```toml
+[c]
+libs = "libpq.so.5"            # a soname the dynamic linker knows
+# libs = "../../libmine.so"    # or a path, resolved against the package dir
+```
+
+The interpreter `dlopen`s each entry and keeps it loaded (a `#c` symbol is
+looked up through it); `--native` links the same list.  One declaration, both
+halves.  A binding to **libc needs no entry** — it is already in the process.
+
+Distinct from `[native] runtime-libs`, which names what a Rust cdylib needs
+present and only probes for it.
+
 **Status: it works on both backends** — `--native` compiles the declaration into
 a typed `extern "C"` and calls it directly; the interpreter resolves the symbol
 and calls it through a fixed ladder of per-arity trampolines.  The two produce
-identical results, which is the bar.  What remains is packaging (arc D: declaring
-which library a symbol comes from, so a binding can reach past libc and the
-already-loaded cdylibs) and the wasm/browser targets (arc E).  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
+identical results, which is the bar.  What remains: the `cc` shim build, `loft install` integration, the `text`
+return, and the wasm/browser targets (arc E).  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
 [@PLN24](https://github.com/loft-lang/plans/issues/24) (first consumer: the
 MariaDB/PostgreSQL clients, @PLN23), matrix + probe in
 `tests/fixtures/c_abi/`.  `#native` remains today's path.

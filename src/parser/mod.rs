@@ -9032,6 +9032,19 @@ impl Parser {
         if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == &pkg_dir) {
             self.pending_native_compile.push(pkg_dir.clone());
         }
+        // @PLN24 arc D — a `[c] libs` entry is the ONLY way a `#c` binding
+        // reaches past libc and the cdylibs loft already loaded.  Carried with
+        // the package directory so a library shipping its own `.so` resolves.
+        for lib in &m.c_libs {
+            if !self
+                .data
+                .c_libraries
+                .iter()
+                .any(|(l, d)| l == lib && d == &pkg_dir)
+            {
+                self.data.c_libraries.push((lib.clone(), pkg_dir.clone()));
+            }
+        }
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self
@@ -9306,6 +9319,21 @@ impl Parser {
             self.pending_native_compile.push(pkg_dir.to_string());
         }
         // PKG.4: register native function symbols and package crate info.
+        // @PLN24 arc D — a `[c] libs` entry is the ONLY way a `#c` binding
+        // reaches past libc and the cdylibs loft already loaded.  Carried with
+        // the package directory so a library shipping its own `.so` resolves.
+        for lib in &m.c_libs {
+            if !self
+                .data
+                .c_libraries
+                .iter()
+                .any(|(l, d)| l == lib && d == pkg_dir)
+            {
+                self.data
+                    .c_libraries
+                    .push((lib.clone(), pkg_dir.to_string()));
+            }
+        }
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self

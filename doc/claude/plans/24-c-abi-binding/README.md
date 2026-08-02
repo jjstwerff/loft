@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arcs A, B and C are done; D, E, F open.** The architecture probe is built and has run
+**Arcs A, B, C done; D part-done; E, F open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -71,6 +71,41 @@ while rustc rejected the native side, two different failures for one gap. It is
 now refused at the DECLARATION, so both backends say the same words, and it is
 arc D's to build. That is the pattern this plan keeps landing on: a shape that
 works on one backend only is worse than a shape that works on neither.
+
+**Arc D, first slice: a binding reaches a real library.** `[c] libs` in a
+package manifest is `dlopen`ed by the interpreter and linked by `--native` — one
+declaration, both halves. With it the fixture matrix runs, and it is what makes
+the mechanism testable at all: arcs A–C could only reach libc, which is already
+in the process.
+
+**The matrix is green on both backends, byte-identical**
+(`c_binding_matrix_against_a_declared_library`): every integer width, a text
+argument, a vector as pointer + count, the opaque-handle open/read/bump/close
+cycle, and the 7-argument call that straddles the SysV register/stack boundary.
+
+Three defects the fixture found that libc could not, all of them *other code
+claiming a `#c` definition*:
+
+1. **The handle convention was half-built.** A pointer RETURN could be held as a
+   loft `integer`, but that integer could not be passed back as a pointer
+   ARGUMENT — so `lc_open` bound and `lc_read` did not. loft has no type that
+   distinguishes a handle from an integer (which is why the plan chose `integer`
+   for it), so the check now allows a C pointer wherever a loft scalar sits, in
+   both directions.
+2. **The auto-native driver claimed every `#c` definition.** A body-less
+   declaration looks native-compilable, so a package of `#c` bindings had loft
+   generate a Rust cdylib exporting `loft_shared_*` bridges for symbols that
+   live in C, overwrite `def.native`, and warn "calling it will panic" at every
+   call. A `#c` definition is already bound; `native_gate` now says so.
+3. **The script classifier read a `#c` library as a beginner script.** It
+   consumed one string per annotation, and `#c` takes two — so the signature
+   looked like a loose top-level statement. Annotations may now carry more than
+   one argument.
+
+None of these were in the design. All three are the same shape as arc C's
+"inert wasn't inert": a new kind of definition has to be excluded from every
+path that pattern-matches on *body-less*, and the paths do not announce
+themselves. Arc E should expect more of them.
 
 One thing arc A learned the hard way, worth carrying into B: the baked IR field
 offsets in `data_store.rs` are a MIRROR of the registered schema, and the schema
@@ -210,7 +245,7 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 | **A** — `#c "sym" "<signature>"`: parser, the `CSignature` type, the compile-time check | **Done** — `src/c_signature.rs`, inert; widths resolve per target |
 | **B** — the interpreter caller: `dlsym` + the per-arity trampolines + return-width dispatch | **Done** — `src/c_call.rs`; both backends answer identically |
 | **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | **Done** — loft calls libc directly, no rustc in any library |
-| **D** — packaging: `[c] lib` / `shim`, `cc` shim build, `loft install` | Open |
+| **D** — packaging | **Part-done** — `[c] libs` declares + loads + links; the `cc` shim build, `loft install` and the `text` return remain |
 | **E** — the other two targets (the parity arc) | Open — see below |
 | **F** — prove it: a libpq subset for @PLN23, zero rustc | Open |
 

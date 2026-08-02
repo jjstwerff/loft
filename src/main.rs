@@ -9345,6 +9345,9 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 None,
                 native_deps_dir.as_deref(),
             );
+            // @PLN24 arc D — and the C libraries `#c` bindings resolve against.
+            // Host target only: wasm has no C ABI to link (arc E).
+            native_utils::add_c_library_flags(&mut cmd, &p.data);
             // @PLN54 S6 — native-backend AddressSanitizer.  LOFT_NATIVE_ASAN=1
             // instruments the generated native binary with ASan so a codegen bug
             // that emits an out-of-bounds / use-after-free raw-pointer store access

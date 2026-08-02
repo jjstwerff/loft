@@ -1458,6 +1458,50 @@ pub(crate) fn native_cabi_enabled() -> bool {
 /// Shared by the standalone native compile (`main.rs`), the WASM compile, and
 /// the native test runner (`test_runner.rs`) so all three link a package's
 /// `#native` crate identically (LibCI native library gate).
+/// @PLN24 arc D — link the C libraries the program declared with `[c] libs`, so
+/// the `extern "C"` declarations the `#c` emission wrote resolve.
+///
+/// The interpreter `dlopen`s the same list; this is the compile-time half of
+/// one fact. A library shipped beside its package links by PATH (`-L native=`
+/// plus its stem), which also makes the built binary find it without an
+/// install; a bare soname goes to the linker's own search path, matching what
+/// the dynamic linker does at run time.
+///
+/// A binding to libc needs no entry and gets no flag: it is already linked.
+pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate::data::Data) {
+    for (name, dir) in &data.c_libraries {
+        let beside = std::path::Path::new(dir).join(name);
+        // `libfoo.so.5` -> `foo`: strip the prefix the linker adds back and
+        // every version suffix, because `-l` names the library, not the file.
+        // Taken from the FILE NAME, never the declared string: a library that
+        // ships beside its package is declared as a path (`../../libfoo.so`),
+        // and `-l../../libfoo` is not a library name — the linker said so.
+        let file = std::path::Path::new(name)
+            .file_name()
+            .map_or(name.as_str(), |f| f.to_str().unwrap_or(name));
+        let stem = file
+            .strip_prefix("lib")
+            .unwrap_or(file)
+            .split(".so")
+            .next()
+            .unwrap_or(file)
+            .split(".dylib")
+            .next()
+            .unwrap_or(file)
+            .to_string();
+        if beside.exists()
+            && let Some(parent) = beside.parent()
+        {
+            cmd.arg("-L").arg(format!("native={}", parent.display()));
+            // The built binary has to find it at RUN time too, and a library
+            // that ships beside its package is not on the system search path.
+            cmd.arg("-C")
+                .arg(format!("link-arg=-Wl,-rpath,{}", parent.display()));
+        }
+        cmd.arg("-l").arg(format!("dylib={stem}"));
+    }
+}
+
 pub(crate) fn add_native_extern_flags(
     cmd: &mut std::process::Command,
     data: &crate::data::Data,

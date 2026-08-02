@@ -1047,6 +1047,105 @@ fn interpreted_and_native_c_bindings_agree() -> std::io::Result<()> {
     Ok(())
 }
 
+/// @PLN24 arc D — the composition matrix, against a REAL C library, on both
+/// backends.
+///
+/// Arcs A-C proved the mechanism against libc, which is already in the process.
+/// This is the shape a library actually has: a package that declares
+/// `[c] libs`, a `.so` built by nothing but `cc`, and a binding per cell of the
+/// plan's mapping table — every integer width, a text argument, a vector as
+/// pointer + count, the opaque-handle open/read/bump/close cycle, and the
+/// 7-argument call that straddles the SysV register/stack boundary.
+///
+/// The assertion is that the two backends produce **identical** output, because
+/// that is the only claim worth making: each one alone can be plausibly wrong
+/// in a way the other is not.
+///
+/// Skips when `cc` is absent — the fixture is C, and a machine without a C
+/// compiler cannot build it. It does NOT skip silently on a failed build: that
+/// is a real failure.
+#[test]
+fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let built = std::process::Command::new("make")
+        .arg("-C")
+        .arg(&root)
+        .output()?;
+    assert!(
+        built.status.success(),
+        "the fixture library must build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let prog = std::env::temp_dir().join("loft_pln24_matrix.loft");
+    std::fs::write(
+        &prog,
+        "use lcabi;\n\
+         fn main() {\n\
+         \x20 println(\"i64 {lc_i64(lc_i64(1234567890123))}\");\n\
+         \x20 println(\"neg {lc_neg_i32(1)}\");\n\
+         \x20 println(\"len {lc_strlen(\"loft\")}\");\n\
+         \x20 println(\"byte {lc_byte_at(\"loft\", 0)}\");\n\
+         \x20 v: vector<integer> = [10, 20, 30];\n\
+         \x20 println(\"vec {lc_i64_sum(v)}\");\n\
+         \x20 h = lc_open(1000);\n\
+         \x20 println(\"handle {lc_read(h)} {lc_bump(h, 7)}\");\n\
+         \x20 lc_close(h);\n\
+         \x20 println(\"arity7 {lc_arity7(1,1,1,1,1,1,1)}\");\n\
+         }\n",
+    )?;
+    let libdir = root.join("pkg");
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    // Hand-computed, not copied from a run: `lc_i64` is self-inverse, the
+    // vector sum is position-weighted (10*1 + 20*2 + 30*3), and arity7's
+    // arguments carry distinct prime weights (2+3+5+7+11+13+17).
+    for want in [
+        "i64 1234567890123",
+        "neg -1",
+        "len 4",
+        "byte 108",
+        "vec 140",
+        "handle 1000 1007",
+        "arity7 58",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "the two backends must agree cell for cell against a real library"
+    );
+    Ok(())
+}
+
 /// @PLN24 arc B — a shape neither caller covers is refused at the DECLARATION,
 /// so both backends say the same thing.
 ///

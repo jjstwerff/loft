@@ -520,10 +520,17 @@ pub fn check(
         for (i, p) in params.iter().enumerate() {
             match shape_of(p) {
                 LoftCShape::Scalar => {
-                    if !matches!(sig.params[c], CType::Int { .. }) {
+                    // A C POINTER is allowed here, and deliberately: it is the
+                    // handle convention (`PGconn *` held as a loft `integer`),
+                    // and it has to work in both directions or it is not a
+                    // convention at all — `lc_open` hands one back, `lc_read`
+                    // takes it. loft has no type that distinguishes a handle
+                    // from an integer, which is exactly why the plan chose
+                    // `integer` for it. The ABI is identical: both are one slot.
+                    if !matches!(sig.params[c], CType::Int { .. } | CType::Pointer { .. }) {
                         errs.push(format!(
                             "parameter {} is `{}` in loft but `{}` in C — a scalar needs a C \
-                             integer type",
+                             integer type, or a pointer if it is a handle",
                             i + 1,
                             data.type_name_str(p),
                             sig.params[c].spelling()
@@ -838,6 +845,23 @@ mod tests {
         assert!(
             check(&data(), &sig("long(long)"), &[int()], &int(), false).is_empty(),
             "and the non-null sibling is fine — otherwise this proves nothing"
+        );
+    }
+
+    /// The handle convention has to work in BOTH directions: `lc_open` returns
+    /// `void*` into a loft `integer`, and `lc_read` takes that integer back as
+    /// `void*`. Allowing only the return half made the fixture's open/read/close
+    /// cycle unbindable — half a convention.
+    #[test]
+    fn a_handle_crosses_in_both_directions() {
+        let ret = int();
+        assert!(
+            check(&data(), &sig("void*(long)"), &[int()], &ret, false).is_empty(),
+            "out: a pointer return held as an integer"
+        );
+        assert!(
+            check(&data(), &sig("long(void*)"), &[int()], &ret, false).is_empty(),
+            "and back in: that integer passed as the pointer"
         );
     }
 

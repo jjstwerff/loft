@@ -247,6 +247,14 @@ static C_BINDINGS: std::sync::Mutex<Option<std::collections::HashMap<u16, CBindi
 /// name is what routes the call here.
 pub fn register(state: &mut crate::state::State, data: &crate::data::Data) {
     let target = crate::c_signature::CTarget::host();
+    // @PLN24 arc D — open what the program declared, BEFORE any symbol is
+    // looked up: `resolve` searches loaded libraries first, so a declared
+    // library has to be loaded by the time a call happens. A failure is left
+    // for the call site to report, where the binding that needed it can be
+    // named.
+    for (lib, dir) in &data.c_libraries {
+        crate::extensions::load_c_library(lib, dir);
+    }
     let mut table = std::collections::HashMap::new();
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);

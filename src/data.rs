@@ -3478,6 +3478,14 @@ pub struct Data {
     /// PKG.4: native package crate directories — (`crate_name`, `pkg_dir`).
     /// Used to construct `--extern` flags for `rustc`.
     pub native_packages: Vec<(String, String)>,
+    /// @PLN24 arc D — `(soname, package directory)` for every `[c] libs` entry a
+    /// loaded package declares.
+    ///
+    /// The package directory travels with the name because a library may ship
+    /// its own `.so` beside its `.loft`, so the name alone cannot be resolved.
+    /// Read by the interpreter (which `dlopen`s them so `#c` symbols resolve)
+    /// and by `--native` (which links them for the same symbols).
+    pub c_libraries: Vec<(String, String)>,
     /// Map from `#native "symbol"` names to the Rust crate that provides them.
     /// Populated when a package declares `[native] crate` in loft.toml.
     /// Used by native codegen to emit `crate::symbol(args)` calls.
@@ -3753,6 +3761,7 @@ impl Data {
             operators: HashMap::new(),
             native_symbols: HashMap::new(),
             native_packages: Vec::new(),
+            c_libraries: Vec::new(),
             native_symbol_crates: HashMap::new(),
             wasm_bridge_packages: Vec::new(),
             wasm_bridge_routes: HashMap::new(),

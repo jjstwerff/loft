@@ -228,6 +228,16 @@ fn fn_native_compilable(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> b
     if !matches!(def.def_type(), DefType::Function) {
         return false;
     }
+    // @PLN24 — a `#c` definition is ALREADY bound, to a C symbol, and its empty
+    // body is a declaration rather than compilable loft. Left in, the auto-native
+    // driver claimed it: it generated a cdylib exporting `loft_shared_<name>`
+    // bridges for symbols that live in a C library, overwrote `def.native` with
+    // a bridge name, and every call then warned "could not be wired ... calling
+    // it will panic". The binding is the implementation; nothing here may
+    // replace it.
+    if !def.c_sig.is_empty() {
+        return false;
+    }
     walk(def.code(), data, visited)
 }
 
