@@ -467,7 +467,8 @@ correct everywhere.  An unknown type is refused, never guessed.
 | loft | C | notes |
 |---|---|---|
 | `integer`, narrow ints, `boolean`, `character` | one C integer | any width; the value is passed full-width |
-| `text` | one `const char*` | **NUL-terminated**, unlike the `#native` path's `ptr, len` |
+| `text` argument | one `const char*` | **NUL-terminated**, unlike the `#native` path's `ptr, len` |
+| `text` RETURN | — | **refused for now**: a loft text return crosses through destination-passing, which neither caller is wired into (@PLN24 arc D) |
 | `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* |
 | C-owned handle (`PGconn *`) | `void*` ↔ loft `integer` | the pointer value crosses as an integer |
 | `float` / `single` | — | **refused**: floats travel in SSE registers a fixed caller does not touch — shim it |
@@ -482,10 +483,12 @@ an ordinary number or a fault, so it is rejected where loft still can — which
 costs nothing, because non-null is already the default and null-flow already
 requires a discharge (`?? 0`, `x?`, `match`).
 
-**Status: arc A implemented and inert** — the declaration parses, the signature
-is checked against it, and it survives the IR round trip.  Nothing calls a `#c`
-function yet: the interpreter caller (arc B) and the `--native` emission (arc C)
-are next.  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
+**Status: it works on both backends** — `--native` compiles the declaration into
+a typed `extern "C"` and calls it directly; the interpreter resolves the symbol
+and calls it through a fixed ladder of per-arity trampolines.  The two produce
+identical results, which is the bar.  What remains is packaging (arc D: declaring
+which library a symbol comes from, so a binding can reach past libc and the
+already-loaded cdylibs) and the wasm/browser targets (arc E).  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
 [@PLN24](https://github.com/loft-lang/plans/issues/24) (first consumer: the
 MariaDB/PostgreSQL clients, @PLN23), matrix + probe in
 `tests/fixtures/c_abi/`.  `#native` remains today's path.

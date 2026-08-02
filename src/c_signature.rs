@@ -65,6 +65,15 @@ impl CTarget {
     }
 }
 
+/// The highest arity a `#c` binding can have.
+///
+/// The interpreter calls through a fixed ladder of per-arity trampolines
+/// (`c_call`), and the ceiling is a fact about the CONTRACT rather than about
+/// that caller — the declaration is checked against it, so it lives with the
+/// signature and is readable on every build, including the ones with no C
+/// caller compiled in at all.
+pub const MAX_C_ARITY: usize = 12;
+
 /// A C type as spelled in a `#c` signature.
 ///
 /// Deliberately not a general C type model: it is exactly the vocabulary the
@@ -582,8 +591,20 @@ pub fn check(
             (_, LoftCShape::Refused(why)) => {
                 errs.push(format!("the return type cannot be bound: {why}"));
             }
-            (CType::Int { .. }, LoftCShape::Scalar)
-            | (CType::Pointer { .. }, LoftCShape::Pointer) => {}
+            // A `char *` return is a real C shape and NOT yet buildable: a loft
+            // `text` return crosses through the destination-passing convention
+            // (`is_text_dest_native`), which neither caller is wired into.
+            // Refused at the DECLARATION so both backends agree — the half-built
+            // versions disagreed loudly (a SIGSEGV on the interpreter, a type
+            // error from rustc), and a shape that works on one backend only is
+            // the divergence this plan keeps refusing to ship. @PLN24, arc D.
+            (_, LoftCShape::Pointer) => errs.push(format!(
+                "`{}` returns a C string, which a `#c` binding cannot bring back yet — bind the \
+                 pointer as an `integer` if you only need to pass it on, or wrap the call in an \
+                 ANSI-C shim that writes into a caller-supplied buffer",
+                sig.symbol
+            )),
+            (CType::Int { .. }, LoftCShape::Scalar) => {}
             // A C function returning a pointer bound to a loft `integer` is the
             // handle convention (`PGconn *`), and it is deliberate.
             (CType::Pointer { .. }, LoftCShape::Scalar) => {}

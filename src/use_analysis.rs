@@ -2417,18 +2417,17 @@ pub fn warn_dead_stores(
 /// `make ci` check once the surface is clean).  Every steer thus ships with its fold, or the lint
 /// fires.  INERT until a symbol is actually marked `#superseded`, so the suite is byte-identical.
 /// Populates `diags`; the caller renders them with the other diagnostics.
-/// @PLN24 arc C — refuse a CALL to a `#c` binding on a backend that cannot make
-/// it, loudly, at compile time.
+/// @PLN24 arc B — refuse a CALL to a `#c` binding whose SHAPE the interpreter's
+/// caller does not cover.
 ///
-/// The interpreter has no C caller until arc B. Without this the call compiled
-/// and returned a **plausible wrong number** (`strlen("hello")` answered 7562),
-/// which is the worst possible shape: a program correct under `--native` and
-/// silently wrong under `--interpret`, exactly the cross-backend divergence the
-/// ship gate exists to catch. Declaring a `#c` function stays fine everywhere —
-/// only calling one is refused, which is what keeps arc A genuinely inert.
+/// Arc B calls C for real, so this is no longer "the interpreter cannot do it";
+/// it is the narrow residue. A shape that works on one backend and silently
+/// misbehaves on the other is the divergence class the ship gate exists to
+/// catch — before arc B, `strlen("hello")` compiled under `--interpret` and
+/// answered **7562** — so anything not covered is refused loudly instead.
 ///
-/// Arc B replaces this with the real interpreter caller; the check is meant to
-/// be deleted, not grown.
+/// Declaring a binding of any shape stays fine on every backend; only calling
+/// an uncovered one is refused.
 pub fn c_binding_call_unsupported(
     data: &Data,
     diags: &mut crate::diagnostics::Diagnostics,
@@ -2436,12 +2435,34 @@ pub fn c_binding_call_unsupported(
 ) {
     fn walk(code: &Value, data: &Data, found: &mut Vec<u32>) {
         if let Value::Call(d, _) = code.unspan()
-            && !data.def(*d).c_sig.is_empty()
+            && uncovered(data, *d).is_some()
             && !found.contains(d)
         {
             found.push(*d);
         }
         code.for_each_child(&mut |c| walk(c, data, found));
+    }
+    /// Why this binding cannot be called here, or `None` when it can.
+    fn uncovered(data: &Data, d_nr: u32) -> Option<String> {
+        let def = data.def(d_nr);
+        if def.c_sig.is_empty() {
+            return None;
+        }
+        let sig = match crate::c_signature::of(data, d_nr, crate::c_signature::CTarget::host()) {
+            Some(Ok(s)) => s,
+            // A signature that did not parse was already reported where it was
+            // written; do not report it twice at every call site.
+            _ => return None,
+        };
+        if sig.params.len() > crate::c_signature::MAX_C_ARITY {
+            return Some(format!(
+                "it takes {} C arguments and the interpreter's caller covers 0..={} — wrap it in \
+                 an ANSI-C shim with fewer parameters",
+                sig.params.len(),
+                crate::c_signature::MAX_C_ARITY
+            ));
+        }
+        None
     }
     let mut called: Vec<u32> = Vec::new();
     for d_nr in 0..data.definitions() {
@@ -2455,11 +2476,12 @@ pub fn c_binding_call_unsupported(
         } else {
             pos.file.as_str()
         };
+        let why = uncovered(data, d_nr).unwrap_or_default();
         diags.add_at(
             crate::diagnostics::Level::Error,
             &format!(
                 "`{}` is bound to the C symbol `{}` with `#c`, which the interpreter cannot \
-                 call yet — run it with `--native` (@PLN24 arc B is the interpreter half)",
+                 call: {why}",
                 def.display_name(),
                 def.c_symbol
             ),

@@ -4186,16 +4186,6 @@ extern crate loft;"
         // fix the probe asked for.
         match (&sig.ret, def.returned().base()) {
             (crate::c_signature::CType::Void, _) => writeln!(w, "  {call};")?,
-            (_, Type::Text(_)) => {
-                // A C string return: walk to the NUL and copy. NULL comes back
-                // as loft's empty text rather than a fault — the mapping the
-                // declaration promises.
-                writeln!(w, "  let _cp = {call} as *const u8;")?;
-                writeln!(
-                    w,
-                    "  if _cp.is_null() {{ String::new() }} else {{ let mut _n = 0usize; while unsafe {{ *_cp.add(_n) }} != 0 {{ _n += 1; }} String::from_utf8_lossy(unsafe {{ std::slice::from_raw_parts(_cp, _n) }}).into_owned() }}"
-                )?;
-            }
             (_, Type::Boolean) => writeln!(w, "  (({call}) != 0) as u8")?,
             _ => writeln!(w, "  ({call}) as i64")?,
         }

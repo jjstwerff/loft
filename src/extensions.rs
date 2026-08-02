@@ -228,6 +228,16 @@ fn try_dlsym(name: &str) -> Option<(*const (), bool)> {
     None
 }
 
+/// @PLN24 arc B — the same lookup, for the `#c` caller: a C binding resolves
+/// against the cdylibs loft has already loaded before it falls back to the
+/// process. One resolver, so a symbol cannot mean two different things
+/// depending on which caller asked for it.
+#[cfg(feature = "native-extensions")]
+#[must_use]
+pub fn try_dlsym_pub(name: &str) -> Option<(*const (), bool)> {
+    try_dlsym(name)
+}
+
 // ── Auto-marshal: wire cdylib functions via type-driven dispatch ────────
 
 /// Argument type tag for auto-marshalling.
@@ -1245,6 +1255,16 @@ unsafe extern "C" fn ffi_reload(ctx: LoftStoreCtx, out_ptr: *mut *mut u8, out_si
 }
 
 /// Set the current library index for auto-dispatch. Called from `State::static_call()`.
+/// The library index of the static call in flight — the only way a
+/// `Call = fn(&mut Stores, &mut DbRef)` handler learns WHICH binding it is
+/// serving. Read by the `#c` dispatcher (@PLN24 arc B) for the same reason the
+/// native auto-dispatcher reads it.
+#[cfg(feature = "native-extensions")]
+#[must_use]
+pub fn current_lib_idx() -> u16 {
+    CURRENT_LIB_IDX.with(std::cell::Cell::get)
+}
+
 pub fn set_current_lib_idx(idx: u16) {
     CURRENT_LIB_IDX.with(|c| c.set(idx));
 }

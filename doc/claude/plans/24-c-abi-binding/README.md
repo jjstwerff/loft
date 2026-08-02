@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arcs A and C are done; B, D, E, F open.** The architecture probe is built and has run
+**Arcs A, B and C are done; D, E, F open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -47,6 +47,30 @@ Three things the build corrected, which is why C was ordered before B:
    interpreter now REFUSES the call with a message naming `--native`. Declaring
    a binding stays fine on every backend, which is what keeps arc A inert; arc B
    replaces the refusal with the real caller.
+
+**Arc B closes the divergence arc C opened.** The interpreter resolves the
+symbol and calls it through the fixed 0..=12 trampoline ladder, and the two
+backends now produce **byte-identical output** on the same program. It needed no
+codegen change at all: a body-less definition with no `#native` symbol already
+resolves through `library_names` under its own name, so registering the binding
+there is what routes the call.
+
+The return is the one place the interpreter differs from `--native` in kind, and
+it is where the declaration earns its keep twice over. rustc gets the ABI right
+from the typed extern; the interpreter reads a **raw `u64` register**, so
+`atoi("-1")` is 4294967295 until the declared width truncates and re-extends it.
+`narrow_return` is that one step, and its unit test pins the raw register value
+so the failure mode is written down rather than described.
+
+**What arc B refused, and why it is refused on BOTH backends.** A `char *`
+return is a real C shape and not yet buildable: a loft `text` return crosses
+through the destination-passing convention (`is_text_dest_native`), which
+neither caller is wired into. Arc C had written a half version of it that no
+test covered — arc B's first attempt at the same shape SIGSEGV'd the interpreter
+while rustc rejected the native side, two different failures for one gap. It is
+now refused at the DECLARATION, so both backends say the same words, and it is
+arc D's to build. That is the pattern this plan keeps landing on: a shape that
+works on one backend only is worse than a shape that works on neither.
 
 One thing arc A learned the hard way, worth carrying into B: the baked IR field
 offsets in `data_store.rs` are a MIRROR of the registered schema, and the schema
@@ -184,7 +208,7 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 | Item | Status |
 |---|---|
 | **A** — `#c "sym" "<signature>"`: parser, the `CSignature` type, the compile-time check | **Done** — `src/c_signature.rs`, inert; widths resolve per target |
-| **B** — the interpreter caller: `dlopen`/`dlsym` + the per-arity trampolines + return-width dispatch | Open |
+| **B** — the interpreter caller: `dlsym` + the per-arity trampolines + return-width dispatch | **Done** — `src/c_call.rs`; both backends answer identically |
 | **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | **Done** — loft calls libc directly, no rustc in any library |
 | **D** — packaging: `[c] lib` / `shim`, `cc` shim build, `loft install` | Open |
 | **E** — the other two targets (the parity arc) | Open — see below |

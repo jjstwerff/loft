@@ -983,52 +983,124 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
     Ok(())
 }
 
-/// @PLN24 arc C — and the same binding must REFUSE on the interpreter rather
-/// than inventing an answer.
+/// @PLN24 arc B — the interpreter calls the same C symbols, and answers the
+/// SAME thing.
 ///
-/// Before the guard, `c_strlen("hello")` compiled under `--interpret` and
-/// returned **7562**: a program correct on one backend and silently wrong on the
-/// other, which is the divergence class the ship gate exists to catch, not a
-/// missing feature. Arc B replaces the refusal with the real caller.
+/// The interpreter has no compiler at the call site, so it resolves the symbol
+/// and calls it through the fixed per-arity trampolines the architecture probe
+/// validated. This test is the parity half: identical stdout from both
+/// backends, cell for cell, which is the bar a `#c` binding has to meet before
+/// it can be said to work at all. Before arc B, `strlen("hello")` compiled
+/// under `--interpret` and answered **7562**.
+///
+/// The `neg` cell carries the whole reason the declaration has a signature: the
+/// interpreter reads a raw `u64` return register, so `atoi("-1")` arrives as
+/// 4294967295 unless the DECLARED width truncates and re-extends it.
 #[test]
-fn interpreted_c_binding_refuses_instead_of_inventing() -> std::io::Result<()> {
-    let path = std::env::temp_dir().join("loft_pln24_c_interp.loft");
+fn interpreted_and_native_c_bindings_agree() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let path = std::env::temp_dir().join("loft_pln24_c_parity.loft");
     std::fs::write(
         &path,
         "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
-         fn main() { println(\"{c_strlen(\"hello\")}\") }\n",
+         pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
+         pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
+         pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
+         fn main() {\n\
+         \x20 println(\"len {c_strlen(\"hello\")}\");\n\
+         \x20 println(\"neg {c_atoi(\"-1\")}\");\n\
+         \x20 println(\"abs {c_abs(-7)}\");\n\
+         \x20 b: vector<u8> = [];\n\
+         \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
+         \x20 println(\"wrote {c_write(1, b)}\");\n\
+         }\n",
     )?;
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+    let interp = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
         .arg("--interpret")
         .arg(&path)
         .output()?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let out = String::from_utf8_lossy(&interp.stdout).into_owned();
+    let err = String::from_utf8_lossy(&interp.stderr);
+    assert!(interp.status.success(), "interpret failed: {out}\n{err}");
+    assert!(out.contains("len 5"), "{out}");
     assert!(
-        !out.status.success(),
-        "an uncallable binding must fail, not answer: {stdout}"
+        out.contains("neg -1"),
+        "the interpreter reads a RAW return register — without the declared \
+         width this is 4294967295: {out}"
     );
-    assert!(
-        stderr.contains("cannot call yet") && stderr.contains("--native"),
-        "and the message must say which backend does work: {stderr}"
-    );
+    assert!(out.contains("abs 7") && out.contains("wrote 3"), "{out}");
 
-    // The control: DECLARING one is fine on every backend — that is what keeps
-    // the declaration inert. Without this the test above would pass just as well
-    // if `#c` had been banned outright.
-    let decl = std::env::temp_dir().join("loft_pln24_c_declonly.loft");
+    // The parity half. `prepare_native_test` may skip (no rustc / low space),
+    // and a skipped comparison must not read as agreement.
+    let job = prepare_native_test(&path)?;
+    if !compile_native_job(&job, &find_loft_rlib())? {
+        return Ok(());
+    }
+    let native = std::process::Command::new(&job.binary).output()?;
+    let nout = String::from_utf8_lossy(&native.stdout);
+    assert_eq!(
+        out, nout,
+        "the two backends must answer identically, cell for cell"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc B — a shape neither caller covers is refused at the DECLARATION,
+/// so both backends say the same thing.
+///
+/// A `char *` return is a real C shape and not yet buildable: a loft `text`
+/// return crosses through the destination-passing convention, which neither
+/// caller is wired into. Built half-way it disagreed loudly — a SIGSEGV on the
+/// interpreter, a rustc type error on `--native` — and a shape that works on one
+/// backend only is the divergence this plan keeps refusing to ship. Refusing
+/// where the binding is WRITTEN is what makes the two identical.
+#[test]
+fn a_c_string_return_is_refused_identically_on_both_backends() -> std::io::Result<()> {
+    let path = std::env::temp_dir().join("loft_pln24_c_textret.loft");
     std::fs::write(
-        &decl,
+        &path,
+        "pub fn c_strerror(n: integer) -> text;   #c \"strerror\" \"char*(int)\"\n\
+         fn main() { println(\"{c_strerror(2)}\") }\n",
+    )?;
+    let mut seen = Vec::new();
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&path)
+            .output()?;
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(!out.status.success(), "{backend} must refuse: {stderr}");
+        assert!(
+            stderr.contains("returns a C string") && stderr.contains("shim"),
+            "{backend}: the refusal must name the cure: {stderr}"
+        );
+        seen.push(
+            stderr
+                .lines()
+                .find(|l| l.starts_with("error"))
+                .unwrap_or_default()
+                .to_string(),
+        );
+    }
+    assert_eq!(seen[0], seen[1], "and say it in the same words");
+
+    // The control: a binding that IS covered must still run, or this test would
+    // pass just as well with `#c` disabled altogether.
+    let ok = std::env::temp_dir().join("loft_pln24_c_textret_ctl.loft");
+    std::fs::write(
+        &ok,
         "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
-         fn main() { println(\"ok\") }\n",
+         fn main() { println(\"{c_strlen(\"abc\")}\") }\n",
     )?;
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
         .arg("--interpret")
-        .arg(&decl)
+        .arg(&ok)
         .output()?;
     assert!(
-        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("ok"),
-        "declaring a #c binding must stay fine: {}",
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains('3'),
+        "a covered binding must still run: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     Ok(())
