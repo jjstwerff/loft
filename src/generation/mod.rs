@@ -3619,8 +3619,19 @@ extern crate loft;"
         {
             let vars = def.variables();
             for v in 0..vars.count() {
+                // loft#731 — the iteration scratch belongs here for exactly the
+                // reason above, and was missed because it arrives by a different
+                // route. `scopes.rs` gives every `hash_scratch` var an
+                // `OpFreeScratch` at the FUNCTION's scope exit (a `return` out
+                // of an exposed loop bypasses the loop epilogue), while its
+                // null-init is placed wherever the variable is first used — an
+                // `else if` branch puts that inside a nested block, and the
+                // function-level free then names a binding that is out of scope.
+                // Same E0425, same cure: bind the sentinel up front so the `let`
+                // position stops depending on where the null-init landed.
+                let is_iter_scratch = vars.name(v).contains("hash_scratch");
                 if !vars.is_argument(v)
-                    && vars.name(v).starts_with("__vdb")
+                    && (vars.name(v).starts_with("__vdb") || is_iter_scratch)
                     && rust_type(vars.tp(v), &Context::Variable) == "DbRef"
                 {
                     use std::fmt::Write as _;

@@ -38,9 +38,6 @@ fn main() {
   const N = 40;
   const W = 3000;
 
-  // NOTE: the two modes are separate `if` statements, not an `if/else if`
-  // chain. A collection declared and iterated inside an `else if` branch does
-  // not compile on --native (loft#731), and this fixture met it.
   if mode == "write" {
     h: hash<SRec[k]> = [];
     for i in 0..N {
@@ -50,9 +47,7 @@ fn main() {
     }
     if !store_persist_bind(h, path) { println("FAIL write-bind"); return }
     println("slack content={N * W * 8} file={file(path).size} digest={digest_of(h)}");
-    return
-  }
-  if mode == "rebind" {
+  } else if mode == "rebind" {
     h: hash<SRec[k]> = [];
     if !store_persist_bind(h, path) { println("FAIL rebind"); return }
     n = 0;
@@ -62,5 +57,5 @@ fn main() {
     // anything (the loft#710 / loft#727 shape — iterating a keyed collection
     // claims a snapshot inside it).
     println("slack rebound={n} file={file(path).size} digest={digest_of(h)}");
-  }
+  } else { println("FAIL unknown-mode") }
 }
