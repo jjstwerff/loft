@@ -1793,6 +1793,10 @@ extern crate loft;"
             }
             writeln!(w, "];")?;
             writeln!(w, "static __C_LIB_SYMS: &[(&str, &[&str])] = &[")?;
+            // The table lives in `c_call`, which exists only with
+            // `native-extensions`. Without it nothing can be `dlopen`ed, so the
+            // right table is the empty one rather than a build failure.
+            #[cfg(feature = "native-extensions")]
             for (lib, syms) in crate::c_call::library_symbol_table(data) {
                 write!(w, "    ({lib:?}, &[")?;
                 for s in &syms {

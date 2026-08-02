@@ -550,11 +550,12 @@ symbol attributable to it resolves.  Both halves matter: a library of the wrong
 vintage loads and exports only some of its symbols, so "the file is there" would
 say yes where the call still faults.
 
-**Declare an optional library in a package that binds it alone.**  A `#c`
-annotation never names the library it comes from, so symbols are attributed by
-package — and in a package declaring several libraries nothing says which one
-exports what.  Such a package still answers the load question correctly, but
-gives up the version-skew half.  One package per optional library keeps it.
+**Declare at most one optional library per package.**  A `#c` annotation never
+names the library it comes from, so symbols are attributed by package — and with
+two optional libraries in one package nothing says which one exports what.  Such
+a package still answers the load question correctly but gives up the skew half.
+Required entries do not count: a package cannot load without them, and one of
+them is usually its own `shim`, which loft just built.
 
 **`shim`** names ANSI-C sources the package ships for the signatures the fixed
 trampolines cannot express — a `double` argument, a struct by value, varargs, an

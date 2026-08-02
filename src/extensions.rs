@@ -1003,7 +1003,10 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
 /// Both exist so a compiled artifact records `/cargo` and `/rustc` instead of
 /// whoever's home directory produced it — the difference between a release
 /// anyone can rebuild and one that only matches on the maintainer's laptop.
-#[cfg(feature = "native-extensions")]
+// Not gated on `native-extensions`: its only caller, `auto_build_native`, is
+// not either, so gating it broke `--no-default-features` (E0425). Nothing in
+// the body needs the feature — it reads `rustc --print sysroot` and two env
+// vars.
 fn local_remap_flags() -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

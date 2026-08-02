@@ -448,10 +448,16 @@ carrying into any future work on this plan.
    worked." Built, that is not conservative, it is useless: a package binding
    sqlite AND duckdb reports **sqlite** unavailable because a duckdb symbol is
    missing, which is exactly the arrangement optional libraries exist for. So a
-   symbol is attributable only when its library is the only one its package
-   declares; a multi-library package answers the load question and gives up the
-   skew half. The rule is now one sentence, and the recommendation that follows
-   from it — one package per optional library — is in PACKAGES.md.
+   symbol is attributable only when its library is the only OPTIONAL one its
+   package declares.
+
+   The word "optional" in that rule was itself a correction. Counting *every*
+   declared library switched skew detection off for the duckdb backend written
+   to demonstrate it — because a `#c` package almost always ships a `[c] shim`,
+   which registers as an ordinary library and so read as a competing one. A
+   required entry can never be why a symbol is missing (the package does not
+   load without it), and a shim is present by construction because loft just
+   built it. Only another OPTIONAL library makes attribution ambiguous.
 
 2. **Process-global state does not reach a package cdylib.** The runtime tables
    were static, which is correct in the interpreter and in a `--native` binary

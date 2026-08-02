@@ -276,12 +276,19 @@ pub fn library_symbol_table(data: &crate::data::Data) -> Vec<(String, Vec<String
     data.c_libraries
         .iter()
         .map(|lib| {
+            // Only OTHER OPTIONAL libraries make attribution ambiguous. A
+            // required entry cannot be the reason a symbol is missing — the
+            // package does not load at all without it — and one of them is
+            // almost always the package's own `[c] shim`, which loft just
+            // built and which is therefore present by construction. Counting
+            // those would switch skew detection off for nearly every real
+            // package, since nearly every `#c` package ships a shim.
             let alone = data
                 .c_libraries
                 .iter()
-                .filter(|c| c.pkg_dir == lib.pkg_dir)
+                .filter(|c| c.pkg_dir == lib.pkg_dir && c.optional)
                 .count()
-                == 1;
+                <= 1;
             let mut syms = if alone {
                 by_pkg
                     .get(lib.pkg_dir.as_str())

@@ -638,7 +638,7 @@ pub fn env_variable(name: text) -> text env#read;
 //
 // A library the program never declared answers false.
 pub fn c_library_available(soname: text) -> boolean env#read;
-#rust"loft::c_call::library_available_native(@soname, __C_LIBS, __C_LIB_SYMS)"
+#rust"codegen_runtime::c_library_available(@soname, __C_LIBS, __C_LIB_SYMS)"
 #impure(host_io)
 // --- System directories (#635) ---
 // Private native: the OS temp dir, "" only where there is no filesystem.

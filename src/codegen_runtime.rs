@@ -4427,6 +4427,27 @@ unsafe extern "C" fn _ffi_resize(ctx: loft_ffi::LoftStoreCtx, rec: u32, words: u
     })
 }
 
+/// @PLN24 arc G — `c_library_available`, for generated Rust.
+///
+/// The body of the `c_library_available` declaration in `default/02_files.loft`
+/// calls THIS rather than `c_call` directly, because a `#rust` body is emitted
+/// into every program that calls it while `c_call` exists only under the
+/// `native-extensions` feature. Without that feature loft cannot `dlopen`
+/// anything, so no C library is available and false is not a stub answer — it
+/// is the true one.
+#[must_use]
+pub fn c_library_available(name: &str, libs: &[(&str, &str)], syms: &[(&str, &[&str])]) -> bool {
+    #[cfg(feature = "native-extensions")]
+    {
+        crate::c_call::library_available_native(name, libs, syms)
+    }
+    #[cfg(not(feature = "native-extensions"))]
+    {
+        let _ = (name, libs, syms);
+        false
+    }
+}
+
 /// Build a `LoftStore` handle for calling `extern "C"` native functions that
 /// need store access.  Sets a thread-local pointer so the FFI callbacks can
 /// reach back into the stores.

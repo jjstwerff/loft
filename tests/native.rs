@@ -1251,6 +1251,91 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
+/// @PLN24 arc G — `c_library_available` is symbol-granular, not file-granular.
+///
+/// The cell that matters: a library that LOADS but does not export a symbol the
+/// package declared. A file-granular answer says yes here and the call then
+/// faults — the version-skew hole that makes a naive query worse than none, and
+/// the reason the answer checks symbols at all.
+///
+/// The library is built here rather than mocked, and the control is the call
+/// that WORKS (`sk_present(41)` is 42, by hand): without it a `false` could just
+/// mean nothing loaded, which is the vacuous pass this test exists to refuse.
+#[test]
+fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the fixture library is built by `cc` here
+    }
+    let dir = std::env::temp_dir().join(format!("loft_skew_{}", std::process::id()));
+    let pkg = dir.join("pkg/skewlib/src");
+    std::fs::create_dir_all(&pkg)?;
+    let src = dir.join("old.c");
+    std::fs::write(&src, "long sk_present(long v) { return v + 1; }\n")?;
+    let so = dir.join("libskew.so");
+    let built = std::process::Command::new("cc")
+        .args(["-O2", "-fPIC", "-shared", "-o"])
+        .arg(&so)
+        .arg(&src)
+        .output()?;
+    assert!(built.status.success(), "fixture library must build");
+
+    let so_str = so.to_string_lossy().into_owned();
+    std::fs::write(
+        dir.join("pkg/skewlib/loft.toml"),
+        format!(
+            "[library]\nname = \"skewlib\"\nversion = \"0.1.0\"\n\n[c]\noptional-libs = \"{so_str}\"\n"
+        ),
+    )?;
+    std::fs::write(
+        pkg.join("skewlib.loft"),
+        format!(
+            "pub fn sk_present(v: integer) -> integer;  #c \"sk_present\" \"long(long)\"\n\
+             // Declared, and absent from this vintage of the library.\n\
+             pub fn sk_newer(v: integer) -> integer;    #c \"sk_newer\" \"long(long)\"\n\
+             pub const SKEW_SONAME = \"{so_str}\";\n\
+             pub fn skew_ok() -> boolean {{ return c_library_available(SKEW_SONAME); }}\n"
+        ),
+    )?;
+    let script = dir.join("probe.loft");
+    std::fs::write(
+        &script,
+        "use skewlib;\nfn go() {\n  println(\"ok={skew_ok()}\");\n  println(\"call={sk_present(41)}\");\n}\ngo();\n",
+    )?;
+
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(dir.join("pkg"))
+            .arg(&script)
+            .output()?;
+        let s = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {s}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            s.contains("call=42"),
+            "{backend}: the control must prove the library IS loaded and callable:\n{s}"
+        );
+        assert!(
+            s.contains("ok=false"),
+            "{backend}: a loadable library missing a declared symbol is NOT available:\n{s}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
 /// @PLN23 — one uniform interface over four different C libraries.
 ///
 /// `dump <D: SqlDb>` and `seed <D: SqlDb>` in the fixture never name a backend,
