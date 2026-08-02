@@ -3689,11 +3689,12 @@ impl Stores {
         // keys touch O(N) pages, not O(file). Off unless asked.
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
             eprintln!(
-                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} distinct={} file={}",
+                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} distinct={} file={} reads={:?}",
                 keys_vals.len(),
                 reader.provider().bytes_fetched(),
                 reader.provider().distinct_bytes(),
-                reader.size()
+                reader.size(),
+                reader.read_histogram()
             );
         }
         loaded
@@ -3728,9 +3729,23 @@ impl Stores {
         let store = &mut self.allocations[local.store_nr as usize];
         let new_rec = store.claim(size);
         store.zero_fill(new_rec);
+        // One fetch for the entry's field words, unpacked locally — the twin of
+        // the bulk read in `copy_flat_subrecord` (loft#729).
+        let body = usize::try_from((size * 8).saturating_sub(8)).unwrap_or(0);
+        let wordwise = std::env::var_os("LOFT_LOADER_WORDWISE").is_some();
+        let buf = if wordwise {
+            Vec::new()
+        } else {
+            reader.resolve(u64::from(matched) * 8 + 8, body)
+        };
         let mut fld = 8u32;
         while fld + 4 <= size * 8 {
-            let w = reader.u32_at(matched, fld);
+            let i = (fld - 8) as usize;
+            let w = if wordwise {
+                reader.u32_at(matched, fld)
+            } else {
+                u32::from_ne_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]])
+            };
             self.allocations[local.store_nr as usize].set_u32_raw(new_rec, fld, w);
             fld += 4;
         }
@@ -3816,9 +3831,29 @@ impl Stores {
         let ssz = reader.record_words(src_rec);
         let new = self.allocations[store_nr as usize].claim(ssz.max(2));
         self.allocations[store_nr as usize].zero_fill(new);
+        // loft#729 — fetch the record's body ONCE, then unpack it locally.
+        // Reading it word by word issued one `resolve` per 4 bytes: on a real
+        // 162 MB store a single 42-key viewport made 1 073 065 of them and
+        // 101 of everything else, so every byte of a working set arrived
+        // through a 4-byte request. That is what made the reader's cost
+        // page-shaped — a word-at-a-time walk pays a page of rounding wherever
+        // it lands, and no span-sized optimisation below it can bite on a
+        // request that is never bigger than a word.
+        let body = usize::try_from((ssz * 8).saturating_sub(4)).unwrap_or(0);
+        let wordwise = std::env::var_os("LOFT_LOADER_WORDWISE").is_some();
+        let buf = if wordwise {
+            Vec::new()
+        } else {
+            reader.resolve(u64::from(src_rec) * 8 + 4, body)
+        };
         let mut sf = 4u32;
         while sf + 4 <= ssz * 8 {
-            let w = reader.u32_at(src_rec, sf);
+            let i = (sf - 4) as usize;
+            let w = if wordwise {
+                reader.u32_at(src_rec, sf)
+            } else {
+                u32::from_ne_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]])
+            };
             self.allocations[store_nr as usize].set_u32_raw(new, sf, w);
             sf += 4;
         }

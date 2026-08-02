@@ -265,6 +265,11 @@ pub struct PagedReader<P: PageProvider> {
     lru: std::collections::VecDeque<u64>,
     /// Max resident pages.
     capacity: usize,
+    /// loft#729 — `resolve` calls and bytes asked for, bucketed by power-of-two
+    /// size (bucket `i` is `2^i ..< 2^(i+1)`). What the traversal ASKS for is a
+    /// separate fact from what the provider FETCHES, and only the first says
+    /// whether a span-shaped optimisation has anything to bite on.
+    reads: [(u64, u64); 32],
 }
 
 impl<P: PageProvider> PagedReader<P> {
@@ -301,7 +306,20 @@ impl<P: PageProvider> PagedReader<P> {
             pages: std::collections::HashMap::new(),
             lru: std::collections::VecDeque::new(),
             capacity: capacity.max(1),
+            reads: [(0, 0); 32],
         }
+    }
+
+    /// loft#729 — the `resolve` size histogram as `(log2 bucket, calls, bytes)`,
+    /// skipping empty buckets.
+    #[must_use]
+    pub fn read_histogram(&self) -> Vec<(u32, u64, u64)> {
+        self.reads
+            .iter()
+            .enumerate()
+            .filter(|(_, (c, _))| *c > 0)
+            .map(|(i, (c, b))| (u32::try_from(i).unwrap_or(0), *c, *b))
+            .collect()
     }
 
     /// The underlying provider (e.g. to read its fetch log).
@@ -340,7 +358,20 @@ impl<P: PageProvider> PagedReader<P> {
     /// fetching any missing page(s). A read within one page copies from that
     /// page; a read spanning a page boundary is coalesced here. The common
     /// index-traversal read (4–8 bytes) stays within a page.
+    ///
+    /// **Every** read goes through the page table, including a whole record
+    /// body — fetching a large span directly instead was measured and is WORSE
+    /// (loft#729). It reads as an obvious win and is not: a working set's
+    /// records are neighbours, so the pages under them are SHARED, and a span
+    /// that bypasses the table pays its own bytes while the pages around it get
+    /// fetched anyway for the traversal words. On a real 162 MB store, one
+    /// 42-key viewport, bytes fetched: 5 832 704 paged, against 6 384 300 /
+    /// 7 367 532 / 7 896 716 as the direct-span threshold came down from 256 KiB
+    /// to 4 KiB. Sharing is the whole value of the page, and the amplification
+    /// #729 reports is not the reader's to give back.
     pub fn resolve(&mut self, off: u64, len: usize) -> Vec<u8> {
+        self.reads[(usize::BITS - len.max(1).leading_zeros() - 1) as usize % 32].0 += 1;
+        self.reads[(usize::BITS - len.max(1).leading_zeros() - 1) as usize % 32].1 += len as u64;
         let mut out = vec![0u8; len];
         let mut done = 0usize;
         while done < len {

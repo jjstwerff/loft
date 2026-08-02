@@ -492,6 +492,59 @@ fn store_load_keys_loads_the_requested_subset_both_backends() {
     }
 }
 
+/// loft#729 — the loader reads a record's body in ONE fetch, and that must not
+/// change a single loaded byte.
+///
+/// It used to read word by word: one `resolve` per 4 bytes, which on a real
+/// 162 MB store made 1 073 065 requests for one 42-key viewport and 101 of every
+/// other size. `LOFT_LOADER_WORDWISE` keeps that path so the two can be compared
+/// in ONE binary — a build-to-build comparison would fold in every other change,
+/// and the obvious oracle (persist both and diff the files) is blind here:
+/// `store_persist_bind` is not byte-deterministic run to run, so the same path
+/// twice already differs. The content is what must agree, so the content is what
+/// this reads.
+#[test]
+fn a_bulk_record_read_loads_exactly_what_the_word_at_a_time_read_did() {
+    let dir = scratch("store_load_bulk_729");
+    let path = dir.join("vs.store");
+
+    let (out_w, code_w) = run_mode(&vecstruct_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (bulk, c1) = run_mode_backend(backend, &vecstruct_script(), &path, "loadkey");
+        assert_eq!(c1, 0, "{backend} bulk exit: {bulk:?}");
+        let wordwise = {
+            let out = Command::new(loft_bin())
+                .arg(backend)
+                .arg(vecstruct_script())
+                .env("LOFT_PERSIST_TEST_PATH", &path)
+                .env("LOFT_PERSIST_TEST_MODE", "loadkey")
+                .env("LOFT_LOADER_WORDWISE", "1")
+                .current_dir(workspace_root())
+                .output()
+                .expect("failed to invoke loft binary");
+            assert!(out.status.success(), "{backend} wordwise exit");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert_eq!(
+            bulk, wordwise,
+            "{backend}: the bulk read must load exactly what the word-at-a-time read did"
+        );
+        // The control: an oracle that reports agreement without reading anything
+        // would pass this too. These pin the values, so the comparison is between
+        // two CORRECT reads rather than two empty ones.
+        assert!(
+            bulk.contains("vs e0=10,ten") && bulk.contains("vs e2=30,thirty"),
+            "{backend}: relocated vector<struct> elements must read correctly: {bulk:?}"
+        );
+        assert!(
+            bulk.contains("vs verify=true"),
+            "{backend}: the loaded heap must be sound: {bulk:?}"
+        );
+    }
+}
+
 /// @PLN97 arc G Phase 3b.2 — a hash whose entry has a `text` field is now
 /// partially loadable: `store_load_key` relocates the source string sub-record
 /// into the local store and repoints the field. The loaded entry reads the right
