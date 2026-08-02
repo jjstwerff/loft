@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#730 — a store must not keep the slack its vectors GREW to.
+//
+// A vector that grows in place is left at 7/4 of the size that triggered the
+// growth (`Store::resize`), and that amortisation is never given back, so it is
+// written into the image. It is a fully claimed, entirely live record, so the
+// interior-free-space measure compaction gated on reported such a store as
+// DENSE — the shape a rebuild pays best on was the one shape it refused.
+//
+// `write` builds the vectors by appending, which is what acquires the slack and
+// what a streaming generator does. `rebind` is the compaction moment: a fresh
+// process binds the same path, and the store must come back smaller while
+// holding exactly the same data.
+
+struct SRec {
+  const k: integer,
+  const data: vector<integer>,
+}
+
+fn digest_of(h: hash<SRec[k]>) -> integer {
+  d = 0;
+  for r in h {
+    d = (d * 31 + r.k) % 1000000007;
+    i = 0;
+    for v in r.data {
+      d = (d * 31 + v * (i + 1)) % 1000000007;
+      i += 1;
+    }
+  }
+  return d;
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+  const N = 40;
+  const W = 3000;
+
+  if mode == "write" {
+    h: hash<SRec[k]> = [];
+    for i in 0..N {
+      v: vector<integer> = [];
+      for j in 0..W { v += [i * W + j]; }
+      h += [SRec { k: i, data: v }];
+    }
+    if !store_persist_bind(h, path) { println("FAIL write-bind"); return }
+    println("slack content={N * W * 8} file={file(path).size} digest={digest_of(h)}");
+  } else if mode == "rebind" {
+    h: hash<SRec[k]> = [];
+    if !store_persist_bind(h, path) { println("FAIL rebind"); return }
+    n = 0;
+    for r in h { n += 1; }
+    // Read the size AFTER the walk: compaction happens at bind, and a store
+    // that shed its slack only to re-grow it on the first read has not fixed
+    // anything (the loft#710 / loft#727 shape — iterating a keyed collection
+    // claims a snapshot inside it).
+    println("slack rebound={n} file={file(path).size} digest={digest_of(h)}");
+  } else { println("FAIL unknown-mode") }
+}

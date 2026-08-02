@@ -1,0 +1,7 @@
+# Build output — `make` produces these; nothing here is committed.
+liblc_types.so
+liblc_types.dylib
+lc_types.dll
+lc_selftest
+*.o
+probe_trampoline

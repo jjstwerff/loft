@@ -1163,6 +1163,69 @@ impl Stores {
         }
     }
 
+    /// Release an iteration scratch at loop exit — the counterpart of
+    /// [`build_rec_scratch`](Self::build_rec_scratch), and the one home for the
+    /// rule that a scratch's lifetime is **the loop**, in either home it can
+    /// have.  Called from both backends' `OpFreeScratch`.
+    ///
+    /// A read-only source's scratch lives in a store of its own and goes back
+    /// whole.  A writable source keeps it CO-LOCATED, and that case used to be
+    /// a no-op, on the reasoning that its records go back when the source store
+    /// dies.  They do — but only when it dies, and a collection outlives the
+    /// loops that read it, so `for r in h` leaked one snapshot per pass: 4
+    /// bytes per element, plus two records, every time.  Invisible in a short
+    /// program (the arena's slack absorbs it, and the process ends); unbounded
+    /// in a loop that iterates, and permanent for a BOUND store, whose arena is
+    /// a file that outlives the process — 16 runs of a program that only READ a
+    /// 4,000-record hash grew its file 2.33× with nothing else touching it
+    /// (loft#727).
+    ///
+    /// The two records hold raw rec-nrs and own nothing, so deleting each is
+    /// the whole release — no cascade, and the elements the loop yielded are
+    /// records in the SOURCE store, untouched by this.
+    ///
+    /// **Idempotent, and it has to be.** Two sites free the same scratch — the
+    /// loop epilogue and the scope exit that catches a `return` out of the loop
+    /// — and only the interpreter nulls the variable between them; the native
+    /// emitter drops that store, so both calls arrive carrying the same live
+    /// `DbRef`. The dedicated case is idempotent through [`Self::free`]'s
+    /// already-freed no-op; the co-located case is idempotent through
+    /// `is_claimed_record`, which reads the block header a `delete` has just
+    /// made negative. A second call is a no-op, not a double free.
+    ///
+    /// Declines, leaving the scratch where it is, when the store cannot take a
+    /// delete: freed, or pinned read-only / free-protected inside the loop body
+    /// (`expose(…)` mid-iteration), where `delete` asserts.  That is the old
+    /// behaviour for those cases, never worse.
+    pub fn free_iteration_scratch(&mut self, scratch: &DbRef) {
+        if scratch.rec == 0 || scratch.store_nr as usize >= self.allocations.len() {
+            return;
+        }
+        let store = &self.allocations[scratch.store_nr as usize];
+        if store.free || !store.is_claimed_record(scratch.rec) {
+            return;
+        }
+        // Offset 8 of the header (`pos` is 4) — the store the ELEMENTS live in.
+        // Different from the scratch's own store exactly when the source was
+        // read-only and the scratch got a dedicated one.
+        if store.get_u32_raw(scratch.rec, scratch.pos + 4) as u16 != scratch.store_nr {
+            self.free(scratch);
+            return;
+        }
+        if store.read_only || store.is_free_protected() {
+            return;
+        }
+        // Offset 4 of the header — the rec-nr vector.  Read before the header
+        // goes back, and refused unless it still names a claimed block.
+        let vec_rec = store.get_u32_raw(scratch.rec, scratch.pos);
+        let vec_live = vec_rec != scratch.rec && store.is_claimed_record(vec_rec);
+        let store = &mut self.allocations[scratch.store_nr as usize];
+        store.delete(scratch.rec);
+        if vec_live {
+            store.delete(vec_rec);
+        }
+    }
+
     pub fn store_mut(&mut self, r: &DbRef) -> &mut Store {
         #[cfg(debug_assertions)]
         if self.allocations[r.store_nr as usize].free {
@@ -1844,7 +1907,23 @@ impl Stores {
         // uses (`for_each_owned_child` → `hash::records`), so the bucket layout
         // lives in ONE place.  Each child carries its element record in
         // `owning_elem`; re-insert that entry into the emptied destination.
-        for child in self.for_each_owned_child(rec, tp).children {
+        // loft#730 — re-insert in SOURCE RECORD ORDER, not bucket order.
+        //
+        // The destination claims sequentially, so the order entries are visited
+        // IS the physical order of the rebuilt file. Bucket order is key-hash
+        // order, which bears no relation to how the source was laid out — so a
+        // rebuild scattered whatever locality the generator had built in, and a
+        // reader paging a spatially-coherent working set paid for it. Measured
+        // on a real 162 MB store, one wide viewport: 31 129 600 bytes read
+        // before compaction and 45 613 056 after, while the file itself had
+        // HALVED. Compaction is meant to make reads cheaper, and it was making
+        // the one that matters more expensive.
+        //
+        // Sorting by the source element record restores the source's order, so
+        // compaction changes a store's SIZE without changing its shape.
+        let mut children = self.for_each_owned_child(rec, tp).children;
+        children.sort_by_key(|c| c.owning_elem.unwrap_or(0));
+        for child in children {
             let Some(elm) = child.owning_elem else {
                 continue;
             };
@@ -2592,9 +2671,8 @@ impl Stores {
             // key-sorted snapshot inside the store.  The slack is deliberate;
             // it has to survive a caller who tidied up first.
             let live_end = store_image_live_end(&snapshot, src_words).unwrap_or(src_words);
-            let target_words = live_end
-                .saturating_add(live_end / 8)
-                .max(crate::store::MIN_BOUND_WORDS);
+            let target_words =
+                crate::store::slack_target(live_end).max(crate::store::MIN_BOUND_WORDS);
             let padded = match build_padded_store_image(&snapshot, src_words, target_words) {
                 Some(b) => b,
                 None => return false,
@@ -2755,11 +2833,42 @@ impl Stores {
             }
         };
         // The slot now holds a dense heap store; put it on disk and map it back.
-        let words = self.allocations[slot as usize].capacity_words();
+        //
+        // loft#730 — at the CONTENT size plus the format's eighth, not at the
+        // arena's capacity. `compact_slot` builds the dense store by claiming
+        // into a fresh arena, so its capacity is whatever the arena's own 7/3
+        // growth last landed on — and writing that raw put the growth tail
+        // straight back into the file the compaction had just earned. Measured
+        // on a 100-record store: compaction brought the live bytes from
+        // 5 468 440 to 3 227 032 (1.008x its content, a perfect rebuild) while
+        // the file only went 6 152 000 -> 5 172 832, because 1 945 792 bytes of
+        // arena tail were written out with it. The next pass then read the file
+        // as dense and declined, so the loss was permanent.
+        //
+        // This is the same fact `bind_path` already applies to the image it
+        // writes, and it is deliberately the same call: the eighth exists
+        // because a store trimmed to exactly its content pays a 2.33x resize on
+        // its very next claim, and merely READING a keyed collection claims a
+        // snapshot inside it (loft#710, loft#727).
+        // `build_padded_store_image` is what makes the shorter image a valid
+        // store: it copies up to the last live record and writes ONE free block
+        // covering the rest, so the free chain never points past EOF. A raw
+        // slice of the arena would carry a free list describing bytes the file
+        // no longer has.
         let image = {
             let s = &self.allocations[slot as usize];
-            let raw = unsafe { std::slice::from_raw_parts(s.base_ptr(), (words as usize) * 8) };
-            raw.to_vec()
+            let cap = s.capacity_words();
+            let raw = unsafe { std::slice::from_raw_parts(s.base_ptr(), (cap as usize) * 8) };
+            let live_end = store_image_live_end(raw, cap).unwrap_or(cap);
+            let target = crate::store::slack_target(live_end)
+                .max(crate::store::MIN_BOUND_WORDS)
+                .min(cap);
+            match build_padded_store_image(raw, cap, target) {
+                Some(b) => b,
+                // Sizing failed (a malformed chain): write what compaction
+                // produced rather than lose it.
+                None => raw.to_vec(),
+            }
         };
         let rebound = write_image_atomic(path, &image).is_ok() && self.rebind(slot, path);
         if !rebound {
@@ -2824,6 +2933,115 @@ impl Stores {
     /// `_ => true` would refuse nothing.  `Radix` is the one live refusal:
     /// `copy_claims` panics on it and the `for_each_owned_child` keystone
     /// returns an empty walk, so a spatial index would come back empty.
+    /// loft#730 — can a value of `tp` own a heap record? Decides whether a
+    /// vector's ELEMENTS must be walked or the container alone is the whole
+    /// story, which is the difference between visiting 5 000 records and
+    /// 5 600 000 of them on a real store.
+    fn type_owns_heap(&self, tp: u16, seen: &mut Vec<u16>) -> bool {
+        if tp as usize >= self.types.len() || seen.contains(&tp) {
+            return false;
+        }
+        seen.push(tp);
+        match &self.types[tp as usize].parts {
+            // text and reference are the two heap-owning primitives.
+            Parts::Base => matches!(tp, 5 | 6),
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .clone()
+                .iter()
+                .any(|f| self.type_owns_heap(f.content, seen)),
+            Parts::Byte(..)
+            | Parts::Short(..)
+            | Parts::Int(..)
+            | Parts::ShortRaw(..)
+            | Parts::Enum(_)
+            | Parts::DbRef => false,
+            _ => true,
+        }
+    }
+
+    /// loft#730 — words of INTRA-RECORD slack reachable from `rec`: for every
+    /// vector container, its record size minus what its length actually needs.
+    ///
+    /// This is the quantity `usage()` cannot see. `usage()` walks the block
+    /// chain and reports free space BETWEEN records; a vector left at 7/4 of its
+    /// content by `Store::resize` is a fully claimed, entirely live record, so a
+    /// store made of nothing else reports as dense — which is why compaction
+    /// declined the very shape it would have paid best on.
+    ///
+    /// A LOWER bound by construction, like the interior estimate it joins:
+    /// `budget` stops the walk on a pathological graph and the shortfall only
+    /// ever makes the gate more reluctant, never less.
+    fn intra_record_slack(&self, rec: &DbRef, tp: u16, budget: &mut u32) -> u32 {
+        if *budget == 0 || tp as usize >= self.types.len() {
+            return 0;
+        }
+        *budget -= 1;
+        match &self.types[tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                let fields = fields.clone();
+                let mut total = 0u32;
+                for f in &fields {
+                    if self.type_owns_heap(f.content, &mut Vec::new()) {
+                        let at = DbRef {
+                            store_nr: rec.store_nr,
+                            rec: rec.rec,
+                            pos: rec.pos + u32::from(f.position),
+                        };
+                        total =
+                            total.saturating_add(self.intra_record_slack(&at, f.content, budget));
+                    }
+                }
+                total
+            }
+            Parts::Vector(v) | Parts::Sorted(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return 0;
+                }
+                let length = vector::length_vector(rec, &self.allocations);
+                let esize = u32::from(self.size(v));
+                // What `copy_claims_seq_vector` would claim for the same content.
+                let need = 1 + esize.saturating_mul(length).div_ceil(8);
+                let have = self.store(rec).record_words(cur);
+                let mut total = have.saturating_sub(need);
+                if self.type_owns_heap(v, &mut Vec::new()) {
+                    for i in 0..length {
+                        let at = DbRef {
+                            store_nr: rec.store_nr,
+                            rec: cur,
+                            pos: 8 + esize * i,
+                        };
+                        total = total.saturating_add(self.intra_record_slack(&at, v, budget));
+                        if *budget == 0 {
+                            break;
+                        }
+                    }
+                }
+                total
+            }
+            // Keyed / per-element containers: the keystone already knows how to
+            // enumerate one child per ENTRY, which is the granularity wanted.
+            Parts::Array(_)
+            | Parts::Ordered(_, _)
+            | Parts::Hash(_, _)
+            | Parts::Index(_, _, _)
+            | Parts::ChildRec(_) => {
+                let walk = self.for_each_owned_child(rec, tp);
+                let mut total = 0u32;
+                for c in walk.children {
+                    total =
+                        total.saturating_add(self.intra_record_slack(&c.child, c.child_tp, budget));
+                    if *budget == 0 {
+                        break;
+                    }
+                }
+                total
+            }
+            _ => 0,
+        }
+    }
+
     fn type_is_compactable(&self, tp: u16, seen: &mut Vec<u16>) -> bool {
         if tp as usize >= self.types.len() {
             return false;
@@ -2949,9 +3167,27 @@ impl Stores {
                 return Err("the store is at or below the image floor");
             }
             let interior = u.live_end_words.saturating_sub(u.claimed_words);
-            if interior.saturating_mul(8) <= u.live_end_words {
+            // loft#730 — the interior is only HALF of what a rebuild returns,
+            // and on a store built by appending it is the smaller half. A vector
+            // left at 7/4 of its content by `Store::resize` is a fully claimed,
+            // entirely live record, so a store made of nothing else is dense by
+            // the measure above and was declined — the shape compaction pays
+            // best on was the one shape it refused. Measured on a 100-record
+            // store: interior said 2%, and rebuilding returned 41%.
+            let mut budget = 200_000u32;
+            let slack = self.intra_record_slack(
+                &DbRef {
+                    store_nr: slot,
+                    rec: PRIMARY,
+                    pos: 8,
+                },
+                tp,
+                &mut budget,
+            );
+            if interior.saturating_add(slack).saturating_mul(8) <= u.live_end_words {
                 return Err(
-                    "interior free space is under the eighth the image format already allows",
+                    "free space between records and slack inside them are together under the \
+                     eighth the image format already allows",
                 );
             }
         }
@@ -3627,10 +3863,13 @@ impl Stores {
         // keys touch O(N) pages, not O(file). Off unless asked.
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
             eprintln!(
-                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} file={}",
+                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} distinct={} file={} reads={:?}",
                 keys_vals.len(),
                 reader.provider().bytes_fetched(),
-                reader.size()
+                reader.provider().requests(),
+                reader.provider().distinct_bytes(),
+                reader.size(),
+                reader.read_histogram()
             );
         }
         loaded
@@ -3665,9 +3904,23 @@ impl Stores {
         let store = &mut self.allocations[local.store_nr as usize];
         let new_rec = store.claim(size);
         store.zero_fill(new_rec);
+        // One fetch for the entry's field words, unpacked locally — the twin of
+        // the bulk read in `copy_flat_subrecord` (loft#729).
+        let body = usize::try_from((size * 8).saturating_sub(8)).unwrap_or(0);
+        let wordwise = std::env::var_os("LOFT_LOADER_WORDWISE").is_some();
+        let buf = if wordwise {
+            Vec::new()
+        } else {
+            reader.resolve(u64::from(matched) * 8 + 8, body)
+        };
         let mut fld = 8u32;
         while fld + 4 <= size * 8 {
-            let w = reader.u32_at(matched, fld);
+            let i = (fld - 8) as usize;
+            let w = if wordwise {
+                reader.u32_at(matched, fld)
+            } else {
+                u32::from_ne_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]])
+            };
             self.allocations[local.store_nr as usize].set_u32_raw(new_rec, fld, w);
             fld += 4;
         }
@@ -3720,7 +3973,15 @@ impl Stores {
                 // Flat sub-record pointer (text / vector<scalar>).
                 let src_sub = reader.u32_at(src_rec, src_off);
                 if src_sub != 0 {
-                    let new_sub = self.copy_flat_subrecord(reader, src_sub, store_nr);
+                    // `text` is one byte per unit; a vector<scalar> is its element.
+                    let esz = if ftp == 5 {
+                        1
+                    } else if let Parts::Vector(e) = self.types[ftp as usize].parts {
+                        u32::from(self.size(e))
+                    } else {
+                        0
+                    };
+                    let new_sub = self.copy_flat_subrecord(reader, src_sub, store_nr, esz);
                     self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
                 }
             } else if matches!(
@@ -3749,13 +4010,61 @@ impl Stores {
         reader: &mut crate::paged_reader::PagedReader<P>,
         src_rec: u32,
         store_nr: u16,
+        elem_size: u32,
     ) -> u32 {
         let ssz = reader.record_words(src_rec);
-        let new = self.allocations[store_nr as usize].claim(ssz.max(2));
+        // loft#729 — claim what the LENGTH needs, not what the source's CAPACITY
+        // is.
+        //
+        // A record that grew in place is left at 7/4 of the size that triggered
+        // the growth (`Store::resize`), and that amortisation is never given
+        // back — so a persisted store carries it, and a loader that claims
+        // `record_words` faithfully reproduces it in the working set. It is
+        // invisible to compaction, which reclaims free space BETWEEN records and
+        // cannot see slack INSIDE one: on the store below, compaction correctly
+        // reports "interior free space is under the eighth the image format
+        // already allows" while every vector record is up to 1.75x its content.
+        //
+        // Measured on a real 162 MB store, the 42-tile working set written back
+        // out: 4 890 240 bytes claiming capacity, 2 198 904 claiming length —
+        // 2.22x, with the content digest unchanged. That is the bulk of the
+        // amplification reported in loft#729, and it is memory the browser pays
+        // for every viewport.
+        //
+        // `min(ssz)` because the source is the authority on what can be read: a
+        // length that disagrees with the record size must never widen the copy.
+        let want = if elem_size > 0 {
+            let len = u64::from(reader.u32_at(src_rec, 4));
+            let bytes = 8 + len * u64::from(elem_size);
+            u32::try_from(bytes.div_ceil(8)).unwrap_or(ssz).min(ssz)
+        } else {
+            ssz
+        };
+        let new = self.allocations[store_nr as usize].claim(want.max(2));
         self.allocations[store_nr as usize].zero_fill(new);
+        // loft#729 — fetch the record's body ONCE, then unpack it locally.
+        // Reading it word by word issued one `resolve` per 4 bytes: on a real
+        // 162 MB store a single 42-key viewport made 1 073 065 of them and
+        // 101 of everything else, so every byte of a working set arrived
+        // through a 4-byte request. That is what made the reader's cost
+        // page-shaped — a word-at-a-time walk pays a page of rounding wherever
+        // it lands, and no span-sized optimisation below it can bite on a
+        // request that is never bigger than a word.
+        let body = usize::try_from((want * 8).saturating_sub(4)).unwrap_or(0);
+        let wordwise = std::env::var_os("LOFT_LOADER_WORDWISE").is_some();
+        let buf = if wordwise {
+            Vec::new()
+        } else {
+            reader.resolve(u64::from(src_rec) * 8 + 4, body)
+        };
         let mut sf = 4u32;
-        while sf + 4 <= ssz * 8 {
-            let w = reader.u32_at(src_rec, sf);
+        while sf + 4 <= want * 8 {
+            let i = (sf - 4) as usize;
+            let w = if wordwise {
+                reader.u32_at(src_rec, sf)
+            } else {
+                u32::from_ne_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]])
+            };
             self.allocations[store_nr as usize].set_u32_raw(new, sf, w);
             sf += 4;
         }
@@ -3773,9 +4082,9 @@ impl Stores {
         elem_tp: u16,
         store_nr: u16,
     ) -> u32 {
-        let new_inner = self.copy_flat_subrecord(reader, src_inner, store_nr);
-        let length = reader.u32_at(src_inner, 4);
         let esize = u32::from(self.size(elem_tp));
+        let new_inner = self.copy_flat_subrecord(reader, src_inner, store_nr, esize);
+        let length = reader.u32_at(src_inner, 4);
         if esize == 0 {
             return new_inner;
         }

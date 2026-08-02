@@ -434,9 +434,99 @@ has no C ABI / `dlopen`).  It is the foundation for binding system C libraries
 (databases, codecs, …) without the rustc toolchain, keeping loft-core minimal —
 the linking tool lives in core, all complexity in the library + shim.
 
-**Status: planned** — design in [@PLN24](https://github.com/loft-lang/plans/issues/24)
-(first consumer: the MariaDB/PostgreSQL clients, @PLN23).  Not yet implemented;
-`#native` is today's path.
+**Two things the architecture probe settled**, before anyone writes a binding.
+The per-arity caller works for **arguments** — int, long, pointer, `char *`,
+bool all cross correctly at every arity, including across the register/stack
+boundary — but **not for returns**: a 32-bit C return read back as 64 bits turns
+−1 into 4294967295, quietly.  So the declaration carries the C signature
+(`#c "PQstatus" "int(void*)"`), and it is the **sole** authority: pointed at a
+wrong arity or a variadic function, the caller returned the *right answer* by
+luck, so there is no runtime signal to catch a mismatch — the check is at
+compile time or nowhere.  Second: `#c` is the declared edge of loft's
+no-runtime-errors rule.  Arguments cost nothing (non-null is already the default
+and null-flow rejects a `τ?` at compile time), a NULL pointer return maps to
+loft null, and a fault *inside* C is undefined — the same failure mode `#native`
+already has, through the same crash handler.
+
+#### The declaration (arc A — implemented, inert)
+
+```loft
+pub fn status(conn: integer) -> integer;      #c "PQstatus" "int(void*)"
+pub fn error(conn: integer) -> text?;         #c "PQerrorMessage" "const char*(void*)"
+pub fn sum(v: vector<integer>) -> integer;    #c "lc_sum" "long(const long*, long)"
+```
+
+Both strings are required.  The C signature is `<return>(<params>)` in ordinary
+C spelling, and **widths resolve against the target**, exactly as a C compiler
+reads the same header: `long` is 64 bits on Linux and macOS and 32 on Windows,
+plain `char` follows the platform's signedness.  So one declaration stays
+correct everywhere.  An unknown type is refused, never guessed.
+
+**What a loft type looks like from C** — the mapping the arity check counts in:
+
+| loft | C | notes |
+|---|---|---|
+| `integer`, narrow ints, `boolean`, `character` | one C integer | any width; the value is passed full-width |
+| `text` argument | one `const char*` | **NUL-terminated**, unlike the `#native` path's `ptr, len` |
+| `text` / `text?` RETURN | `char*` | the bytes are **copied** up to the first NUL; loft never frees the pointer |
+| `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* |
+| C-owned handle (`PGconn *`) | `void*` ↔ loft `integer` | the pointer value crosses as an integer |
+| `float` / `single` | — | **refused**: floats travel in SSE registers a fixed caller does not touch — shim it |
+| a loft record | — | **refused**: records live in a store that may move them |
+| a nullable `τ?` ARGUMENT | — | **refused at compile time**: C has no null model |
+
+The last two refusals are the design, not gaps.  A record's address is a
+position in an arena the allocator can relocate, so handing it to C is the
+store-lifetime bug class rather than a marshalling detail.  And `#c` is the
+declared edge of loft's no-runtime-errors rule: a null crossing *into* C would be
+an ordinary number or a fault, so it is rejected where loft still can — which
+costs nothing, because non-null is already the default and null-flow already
+requires a discharge (`?? 0`, `x?`, `match`).
+
+**The `char *` return — three answers C's type system cannot give**, so the
+binding gives them, the same way on every backend:
+
+- **loft never frees it.**  `strerror` and `PQerrorMessage` hand back storage the
+  caller must *not* free; `strdup` hands back storage it must.  `const` does not
+  separate them — POSIX spells both `char *` — so a guess would free static
+  memory, and that failure is not recoverable while a leak is.  A **caller-frees**
+  function therefore goes through an ANSI-C shim, which is what shims are for.
+- **The bytes end at the first NUL**, because that is what `char *` means.  A loft
+  `text` carries a length and may hold an interior NUL; the crossing truncates
+  there rather than inventing a length.
+- **NULL is loft null, and invalid UTF-8 is replaced** (loft text is UTF-8; a
+  locale-encoded byte from C must not take the program down).  Spell the return
+  **`text?`** when NULL is a real answer — it does not add the null, it makes the
+  null-flow analysis demand a discharge for it, which a bare `text` carries
+  silently.
+
+A pointer return that is *not* spelled `char *` is refused against a `text`
+declaration: `void*` bound to `text` is either a mistake or a handle that wanted
+`integer`, and nothing at runtime tells the two apart.
+
+#### Declaring the library (arc D)
+
+```toml
+[c]
+libs = "libpq.so.5"            # a soname the dynamic linker knows
+# libs = "../../libmine.so"    # or a path, resolved against the package dir
+```
+
+The interpreter `dlopen`s each entry and keeps it loaded (a `#c` symbol is
+looked up through it); `--native` links the same list.  One declaration, both
+halves.  A binding to **libc needs no entry** — it is already in the process.
+
+Distinct from `[native] runtime-libs`, which names what a Rust cdylib needs
+present and only probes for it.
+
+**Status: it works on both backends** — `--native` compiles the declaration into
+a typed `extern "C"` and calls it directly; the interpreter resolves the symbol
+and calls it through a fixed ladder of per-arity trampolines.  The two produce
+identical results, which is the bar.  What remains: the `cc` shim build, `loft install`
+integration, and the wasm/browser targets (arc E).  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
+[@PLN24](https://github.com/loft-lang/plans/issues/24) (first consumer: the
+MariaDB/PostgreSQL clients, @PLN23), matrix + probe in
+`tests/fixtures/c_abi/`.  `#native` remains today's path.
 
 ### Registration — zero boilerplate
 

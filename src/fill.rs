@@ -1390,15 +1390,7 @@ fn free_ref_if_distinct(s: &mut State) {
 
 fn free_scratch(s: &mut State) {
     let v_scratch = *s.get_stack::<DbRef>();
-    if v_scratch.rec != 0 {
-        let __src = s
-            .database
-            .store(&v_scratch)
-            .get_u32_raw(v_scratch.rec, v_scratch.pos + 4) as u16;
-        if __src != v_scratch.store_nr {
-            s.database.free(&v_scratch);
-        }
-    }
+    s.database.free_iteration_scratch(&v_scratch);
 }
 
 fn sizeof_ref(s: &mut State) {

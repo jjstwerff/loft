@@ -434,21 +434,13 @@ pub fn OpFreeRefIfDistinct(
     }
 }
 
-/// Free an `on=4` iteration scratch's DEDICATED store at loop exit.  Frees the whole
-/// scratch store only when it differs from the SOURCE store recorded in the scratch
-/// header (offset `pos + 4`); co-located (writable source) and null (rec 0) scratches
-/// are no-ops.  Bytecode equivalent: `free_scratch` in `src/fill.rs`.
+/// Free an `on=4` iteration scratch at loop exit — a dedicated store goes back
+/// whole, a co-located one goes back as the two records it claimed inside the
+/// source store.  Both cases live in `Stores::free_iteration_scratch`, so the
+/// two backends cannot drift.  Bytecode equivalent: `free_scratch` in `src/fill.rs`.
 pub fn OpFreeScratch(cell: &std::cell::UnsafeCell<Stores>, scratch: DbRef) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    if scratch.rec == 0 {
-        return;
-    }
-    let source = stores
-        .store(&scratch)
-        .get_u32_raw(scratch.rec, scratch.pos + 4) as u16;
-    if source != scratch.store_nr {
-        stores.free(&scratch);
-    }
+    stores.free_iteration_scratch(&scratch);
 }
 
 /// Format a database record as text and append it to the output string.

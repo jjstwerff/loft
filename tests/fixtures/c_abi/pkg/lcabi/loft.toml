@@ -1,0 +1,9 @@
+[library]
+name = "lcabi"
+version = "0.1.0"
+
+# @PLN24 arc D — the declaration that lets a `#c` binding reach a library.
+# A relative path resolves against this package directory, so the fixture's
+# own `.so` (built by `make` one level up) is found without installing it.
+[c]
+libs = "../../liblc_types.so"

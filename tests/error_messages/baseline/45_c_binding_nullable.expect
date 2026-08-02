@@ -1,0 +1,10 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: #c "lc_raw_i64": parameter 1 cannot be bound: a nullable value cannot cross into C — C has no null model, so the sentinel would arrive as an ordinary number or a fault. Discharge it first (`?? 0`, `x?`, or a `match`) and declare the parameter non-null
+  --> <cases>/45_c_binding_nullable.loft:5:16
+  |
+5 | #c "lc_raw_i64" "long(long)"
+  |                ^
+
+error: aborting due to 1 previous error

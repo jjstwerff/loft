@@ -492,6 +492,177 @@ fn store_load_keys_loads_the_requested_subset_both_backends() {
     }
 }
 
+/// loft#730 — a store does not keep the slack its vectors grew to.
+///
+/// `Store::resize` leaves an in-place growth at 7/4 of the size that triggered
+/// it and never gives it back, so the image carries it. Compaction could not see
+/// it: the measure it gated on is free space BETWEEN records, and this is a
+/// fully claimed, entirely live record. A store made of nothing else reported as
+/// dense, so the shape a rebuild pays best on was the one shape it refused.
+///
+/// Sizes are asserted with the digest, because a file that got smaller by LOSING
+/// data satisfies every size assertion anyone would write.
+#[test]
+fn a_rebound_store_sheds_the_slack_its_vectors_grew_to() {
+    let dir = scratch("store_compact_slack_730");
+    let path = dir.join("s.store");
+    let script = workspace_root().join("tests/scripts/store_compact_slack_730.loft");
+
+    let field = |out: &str, key: &str| -> String {
+        out.split_whitespace()
+            .find_map(|t| t.strip_prefix(key).map(str::to_string))
+            .unwrap_or_default()
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("store.dschema"));
+        let (w, cw) = run_mode_backend(backend, &script, &path, "write");
+        assert_eq!(cw, 0, "{backend} write exit: {w:?}");
+        let (r, cr) = run_mode_backend(backend, &script, &path, "rebind");
+        assert_eq!(cr, 0, "{backend} rebind exit: {r:?}");
+
+        assert_eq!(
+            field(&w, "digest="),
+            field(&r, "digest="),
+            "{backend}: the rebound store must hold the same data:\n  {w}\n  {r}"
+        );
+        let content: f64 = field(&w, "content=").parse().expect("content");
+        let written: f64 = field(&w, "file=").parse().expect("written");
+        let rebound: f64 = field(&r, "file=").parse().expect("rebound");
+        // The fixture has to ACQUIRE the slack, or the shrink below proves nothing.
+        assert!(
+            written / content > 1.5,
+            "{backend}: growth must leave slack to reclaim: content={content} written={written}"
+        );
+        assert!(
+            rebound < written * 0.8,
+            "{backend}: binding must shed the growth slack: written={written} rebound={rebound}"
+        );
+        // And it must land near the content, not merely somewhere smaller.
+        assert!(
+            rebound / content < 1.3,
+            "{backend}: a compacted store should be its content plus the format's \
+             eighth: content={content} rebound={rebound}"
+        );
+    }
+}
+
+/// loft#729 — a loaded working set is sized by what it HOLDS, not by what the
+/// source store's records were grown to.
+///
+/// A vector that grew in place is left at 7/4 of the size that triggered the
+/// growth (`Store::resize`) and never gives it back, so the file carries it. A
+/// loader claiming `record_words` reproduced it exactly. Compaction cannot see
+/// it — it reclaims free space BETWEEN records, and this is slack INSIDE one, so
+/// a store full of it correctly reports as dense.
+///
+/// The digest is asserted alongside the sizes, and that pairing is the point: a
+/// working set that got smaller by LOSING data satisfies every size assertion
+/// anyone would write.
+#[test]
+fn a_loaded_working_set_does_not_inherit_the_source_growth_slack() {
+    let dir = scratch("store_load_density_729");
+    let path = dir.join("d.store");
+    let script = workspace_root().join("tests/scripts/store_load_density_729.loft");
+
+    let field = |out: &str, key: &str| -> String {
+        out.split_whitespace()
+            .find_map(|t| t.strip_prefix(key).map(str::to_string))
+            .unwrap_or_default()
+    };
+
+    for backend in ["--interpret", "--native"] {
+        // Each backend starts from NO file. Binding an existing one compacts it
+        // (loft#730), so a second backend writing over the first backend's file
+        // would measure an already-dense store and the slack precondition below
+        // would fail for a reason that has nothing to do with the loader.
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("store.dschema"));
+        let _ = fs::remove_file(format!("{}.loaded", path.display()));
+        let _ = fs::remove_file(format!("{}.loaded.dschema", path.display()));
+        let (w, cw) = run_mode_backend(backend, &script, &path, "write");
+        assert_eq!(cw, 0, "{backend} write exit: {w:?}");
+        let (l, cl) = run_mode_backend(backend, &script, &path, "load");
+        assert_eq!(cl, 0, "{backend} load exit: {l:?}");
+
+        assert_eq!(
+            field(&w, "digest="),
+            field(&l, "digest="),
+            "{backend}: the loaded set must hold the same data, or the sizes compare nothing:\n  \
+             {w}\n  {l}"
+        );
+        let content: f64 = field(&w, "content=").parse().expect("content");
+        let src: f64 = field(&w, "src=").parse().expect("src");
+        let dst: f64 = field(&l, "dst=").parse().expect("dst");
+        // The source is what growth leaves behind — well above its content.
+        assert!(
+            src / content > 1.5,
+            "{backend}: the fixture must actually ACQUIRE slack, or this test proves \
+             nothing: content={content} src={src}"
+        );
+        // The load must not carry it over.
+        assert!(
+            dst < src * 0.8,
+            "{backend}: the loaded set inherited the source's growth slack: \
+             src={src} dst={dst}"
+        );
+    }
+}
+
+/// loft#729 — the loader reads a record's body in ONE fetch, and that must not
+/// change a single loaded byte.
+///
+/// It used to read word by word: one `resolve` per 4 bytes, which on a real
+/// 162 MB store made 1 073 065 requests for one 42-key viewport and 101 of every
+/// other size. `LOFT_LOADER_WORDWISE` keeps that path so the two can be compared
+/// in ONE binary — a build-to-build comparison would fold in every other change,
+/// and the obvious oracle (persist both and diff the files) is blind here:
+/// `store_persist_bind` is not byte-deterministic run to run, so the same path
+/// twice already differs. The content is what must agree, so the content is what
+/// this reads.
+#[test]
+fn a_bulk_record_read_loads_exactly_what_the_word_at_a_time_read_did() {
+    let dir = scratch("store_load_bulk_729");
+    let path = dir.join("vs.store");
+
+    let (out_w, code_w) = run_mode(&vecstruct_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (bulk, c1) = run_mode_backend(backend, &vecstruct_script(), &path, "loadkey");
+        assert_eq!(c1, 0, "{backend} bulk exit: {bulk:?}");
+        let wordwise = {
+            let out = Command::new(loft_bin())
+                .arg(backend)
+                .arg(vecstruct_script())
+                .env("LOFT_PERSIST_TEST_PATH", &path)
+                .env("LOFT_PERSIST_TEST_MODE", "loadkey")
+                .env("LOFT_LOADER_WORDWISE", "1")
+                .current_dir(workspace_root())
+                .output()
+                .expect("failed to invoke loft binary");
+            assert!(out.status.success(), "{backend} wordwise exit");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert_eq!(
+            bulk, wordwise,
+            "{backend}: the bulk read must load exactly what the word-at-a-time read did"
+        );
+        // The control: an oracle that reports agreement without reading anything
+        // would pass this too. These pin the values, so the comparison is between
+        // two CORRECT reads rather than two empty ones.
+        assert!(
+            bulk.contains("vs e0=10,ten") && bulk.contains("vs e2=30,thirty"),
+            "{backend}: relocated vector<struct> elements must read correctly: {bulk:?}"
+        );
+        assert!(
+            bulk.contains("vs verify=true"),
+            "{backend}: the loaded heap must be sound: {bulk:?}"
+        );
+    }
+}
+
 /// @PLN97 arc G Phase 3b.2 — a hash whose entry has a `text` field is now
 /// partially loadable: `store_load_key` relocates the source string sub-record
 /// into the local store and repoints the field. The loaded entry reads the right
@@ -2068,13 +2239,14 @@ fn persisted_image_keeps_its_slack_after_store_reclaim() {
 #[test]
 fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
     let script = workspace_root().join("tests/scripts/store_reclaim_refusals.loft");
-    let run = |backend: &str, dir: &Path, mode: &str, seal: bool, n: &str| -> String {
+    let run_grow = |backend: &str, dir: &Path, mode: &str, seal: bool, n: &str, grow: bool| {
         let out = Command::new(loft_bin())
             .arg(backend)
             .arg(&script)
             .env("LOFT_PERSIST_TEST_PATH", dir.join("r.store"))
             .env("MODE", mode)
             .env("SEAL", if seal { "1" } else { "0" })
+            .env("GROW", if grow { "1" } else { "0" })
             .env("N", n)
             .env("LOFT_LOADER_STATS", "1")
             .current_dir(workspace_root())
@@ -2087,6 +2259,9 @@ fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
             "{backend} mode={mode} seal={seal}: {stdout}\n{stderr}"
         );
         format!("{stdout}{stderr}")
+    };
+    let run = |backend: &str, dir: &Path, mode: &str, seal: bool, n: &str| -> String {
+        run_grow(backend, dir, mode, seal, n, false)
     };
     let field = |out: &str, line: &str, key: &str| -> String {
         let l = out
@@ -2127,8 +2302,16 @@ fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
 
         // CONTROL — without the sidecar, reclaim must still do its job.  A
         // refusal that fires everywhere is just the feature turned off.
+        //
+        // The control GROWS the store after binding, because a store that came
+        // straight from `bind_path` has nothing to give back: the image is
+        // written at the mark plus an eighth, and the eighth is exactly what
+        // `store_reclaim` now leaves behind (loft#727 — trimming to the bare
+        // mark put the store one claim away from a 7/3 re-grow, so the call
+        // made the file bigger).  `freed 0` there is the right answer, and a
+        // control that read it as a refusal would be asserting the old bug.
         let dir = scratch(&format!("f4ctl_{tag}"));
-        let plain = run(backend, &dir, "", false, "3000");
+        let plain = run_grow(backend, &dir, "", false, "3000", true);
         assert!(
             num(&plain, "seal", "freed") > 0
                 && num(&plain, "seal", "after") < num(&plain, "seal", "before"),
@@ -2285,6 +2468,141 @@ fn fixed_hash_seed_makes_a_persisted_store_reproducible() {
         c != d,
         "without LOFT_HASH_SEED the bytes must still vary — otherwise this test proves nothing"
     );
+}
+
+/// loft#727 — READING a keyed collection must cost its store nothing, in
+/// memory and on disk.
+///
+/// `for r in h` walks a key-sorted snapshot of rec-nrs claimed inside the
+/// hash's own store, and the loop epilogue released it only when it had a store
+/// of its own (the read-only/`expose`d case). The co-located case — every
+/// ordinary hash — was a no-op, on the reasoning that the records go back when
+/// the store dies. They do; but a collection outlives the loops that read it,
+/// and a BOUND collection's store is a FILE that outlives the process, so the
+/// leak accumulated across runs and grew the file with nothing else touching
+/// it. Measured before the fix: a 4,000-record hash read once per run, sixteen
+/// runs, no writes and no `store_reclaim` — 566,472 bytes to 1,321,768.
+///
+/// The two halves are one test because they are one defect seen through two
+/// windows. The in-memory half is the sensitive one (it counts records, so it
+/// fails on the first leaked pass); the bound half is the one that was filed,
+/// and it is what makes the leak permanent rather than merely unbounded.
+///
+/// Which cells actually falsify, replayed through the pre-fix binary: the
+/// memory census (4,012 records → 4,092 over 40 passes) and the bound
+/// `reclaim=true` series (347,216 → 365,936 → 384,664 → 403,384). The bound
+/// `reclaim=false` cell passes on the broken binary at this size — four runs of
+/// leak still fit in the arena's slack, and it took sixteen to break through —
+/// so it is a companion, not the guard. It stays because it is the shape a
+/// program actually has.
+#[test]
+fn reading_a_collection_leaks_nothing_into_its_store() {
+    let script = workspace_root().join("tests/scripts/store_iter_scratch.loft");
+    let run = |backend: &str, dir: &Path, mode: &str, reclaim: bool| -> String {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", dir.join("s.store"))
+            .env("LOFT_HASH_SEED", "727")
+            .env("MODE", mode)
+            .env("N", "2000")
+            .env("PASSES", "40")
+            .env("RECLAIM", if reclaim { "1" } else { "0" })
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} {mode}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout
+    };
+    // The `store_memory()` row for the collection, from the census printed
+    // after `marker`. Carries the record count and the largest free block, both
+    // exact — the MB column is rounded and would hide two records.
+    let rows = |stdout: &str, marker: &str| -> Vec<String> {
+        let found: Vec<String> = stdout
+            .lines()
+            .skip_while(|l| !l.starts_with(marker))
+            .take_while(|l| !l.starts_with("census") || l.starts_with(marker))
+            .filter(|l| l.contains("type hash<") || l.contains("type spatial<"))
+            // Drop the leading slot number: two runs need not land in the same
+            // slot, and the slot is not the subject.
+            .filter_map(|l| l.split_once("MB").map(|(_, rest)| rest.trim().to_string()))
+            .collect();
+        assert!(
+            !found.is_empty(),
+            "no census row after '{marker}' in:\n{stdout}"
+        );
+        found
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+
+        // In memory: 41 traversals must leave the census exactly where 1 did.
+        let mem = run(
+            backend,
+            &scratch(&format!("iter_mem_{tag}")),
+            "memory",
+            false,
+        );
+        assert_eq!(
+            rows(&mem, "census one"),
+            rows(&mem, "census many"),
+            "{backend}: 40 more reads of the same collection changed its store\n{mem}"
+        );
+
+        // Every way OUT of such a loop, and both builders.  `break` leaves
+        // through the epilogue, `return` skips it for the scope exit, a nested
+        // loop holds two scratches at once, and a spatial collection builds
+        // its scratch through a different pair of builders.  The release must
+        // also survive being called twice on the same value, which is what the
+        // emitted IR does — the epilogue's free and the scope exit's free are
+        // adjacent, and the null-assignment meant to separate them is dropped.
+        let exits = run(
+            backend,
+            &scratch(&format!("iter_exits_{tag}")),
+            "exits",
+            false,
+        );
+        assert_eq!(
+            rows(&exits, "census one"),
+            rows(&exits, "census many"),
+            "{backend}: 40 rounds of break / return / nested / spatial / range \
+             changed a store\n{exits}"
+        );
+
+        // Bound: the same read, in a fresh process each time, against a file
+        // grown post-bind so its capacity sits above the mark.  With
+        // `store_reclaim` too — that call gives the free tail back, so it
+        // removes the slack a leak would otherwise hide in, and one run then
+        // shows what sixteen showed without it.
+        for reclaim in [false, true] {
+            let dir = scratch(&format!("iter_bound_{tag}_{}", u8::from(reclaim)));
+            run(backend, &dir, "build", reclaim);
+            let sizes: Vec<String> = (0..4)
+                .map(|_| run(backend, &dir, "read", reclaim))
+                .map(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("read "))
+                        .expect("read report")
+                        .to_string()
+                })
+                .collect();
+            // Every line carries the digest as well as the size, so a file that
+            // stopped growing by losing records fails here too.
+            assert!(
+                sizes.windows(2).all(|w| w[0] == w[1]),
+                "{backend} reclaim={reclaim}: reading a bound collection resized \
+                 its file — the iteration snapshot is being left behind in it \
+                 (loft#727):\n{}",
+                sizes.join("\n")
+            );
+        }
+    }
 }
 
 /// `scratch` wipes the directory; this returns the same path without wiping, so

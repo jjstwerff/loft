@@ -71,6 +71,27 @@ const MIN_FREE_TREE: i32 = 2;
 /// re-grow.  One home for the floor, since three places depend on it.  A heap
 /// store has no floor beyond [`Store::new`]'s two words.
 pub const MIN_BOUND_WORDS: u32 = 1024;
+
+/// The capacity a store of `live_end` words of content should be given: the
+/// high-water mark plus an **eighth**.  One home for a fact two paths need —
+/// the image [`crate::database::Stores::bind_path`] writes, and the capacity
+/// [`Store::reclaim_tail`] shrinks a live store to.
+///
+/// Never the bare mark, on either path.  A store that survives the operation
+/// keeps allocating, and growth multiplies by 7/3 ([`Store::resize_store`]), so
+/// a store trimmed to exactly its content pays a **2.33× resize on its very
+/// next claim** — for a bound store, on the file.  The claim that trips it is
+/// the most ordinary one there is: iterating a keyed collection claims its
+/// key-sorted snapshot inside the store, so merely READING the collection back
+/// re-grew the file the caller had just shortened (loft#710, loft#727).
+///
+/// An eighth, rather than a fixed reserve, because the quantity it has to
+/// absorb is a function of the CONTENT: that snapshot is 4 bytes per element.
+#[must_use]
+pub fn slack_target(live_end: u32) -> u32 {
+    live_end.saturating_add(live_end / 8)
+}
+
 /// Byte offset of LLRB left-child field within a free block.
 const FL_LEFT: u32 = 4;
 /// Byte offset of LLRB right-child field within a free block.
@@ -1935,9 +1956,16 @@ impl Store {
         }
         let before = self.size;
         let mark = self.usage().live_end_words;
+        // Not to the bare mark: the store stays LIVE, so it keeps allocating,
+        // and a store with no slack pays 7/3 on its next claim — which for a
+        // bound store means the file comes back BIGGER than before the call
+        // (loft#727).  `slack_target` is the same eighth the image format
+        // already gives a freshly-bound store; both routes to a right-sized
+        // store now leave it in the same shape.
+        let target = slack_target(mark);
         // `shrink_to` clamps to its floor, so the size it settles on is the
         // only honest source for what came back — never `before - mark`.
-        if self.shrink_to(mark) {
+        if self.shrink_to(target) {
             before - self.size
         } else {
             0
@@ -2321,6 +2349,21 @@ impl Store {
             "Freed record {rec} (size={size}) read as a record header"
         );
         size as u32
+    }
+
+    /// Does `rec` name a CLAIMED block in this arena?  Bounds + block header,
+    /// checked for real in release builds — unlike [`Self::valid`], whose
+    /// checks are `debug_assert`s.
+    ///
+    /// For a record number that arrives as **data** rather than from the
+    /// allocator: the iteration scratch's header names its rec-nr vector, and a
+    /// stale or corrupt value there must be refused, not deleted
+    /// ([`crate::database::Stores::free_iteration_scratch`]).  `claims` cannot
+    /// answer this — it is in-memory bookkeeping a re-opened file-backed store
+    /// does not have.
+    #[must_use]
+    pub fn is_claimed_record(&self, rec: u32) -> bool {
+        rec > PRIMARY && rec < self.size && *self.addr::<i32>(rec, 0) > 0
     }
 
     /// 4-byte unsigned raw read — for internal collection headers
@@ -3232,7 +3275,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_STORE_WORDS, Store};
+    use super::{MAX_STORE_WORDS, Store, slack_target};
 
     /// Growing the store through many claims must not wrap or silently fail.
     #[test]
@@ -3591,8 +3634,10 @@ mod tests {
         );
         assert_eq!(
             store.len(),
-            last_live + 5,
-            "capacity is now the end of the last surviving record"
+            slack_target(last_live + 5),
+            "capacity is now the end of the last surviving record, plus the \
+             eighth every right-sized store keeps — trimming to the bare mark \
+             leaves the store one claim away from a 7/3 re-grow (loft#727)"
         );
         let after = store.usage();
         assert!(after.walk_complete);
@@ -3611,7 +3656,7 @@ mod tests {
         let before_swept = swept.len();
         assert_eq!(
             swept.reclaim_tail(),
-            before_swept - (last_live + 5),
+            before_swept - slack_target(last_live + 5),
             "coalescing first changes nothing about how much comes back"
         );
     }

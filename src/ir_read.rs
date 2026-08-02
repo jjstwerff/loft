@@ -631,6 +631,8 @@ pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
         rust: r.field_str(stores, ds::DEF_RUST).to_string(),
         native: r.field_str(stores, ds::DEF_NATIVE).to_string(),
         cap: r.field_str(stores, ds::DEF_CAP).to_string(), // @PLN86
+        c_symbol: r.field_str(stores, ds::DEF_C_SYMBOL).to_string(), // @PLN24
+        c_sig: r.field_str(stores, ds::DEF_C_SIG).to_string(), // @PLN24
         superseded: r.field_str(stores, ds::DEF_SUPERSEDED).to_string(), // @PLN102 arc C
         op_code: r.field_int(stores, ds::DEF_OP_CODE) as u16,
         known_type: r.field_int(stores, ds::DEF_KNOWN_TYPE) as u16,
@@ -1628,6 +1630,62 @@ mod tests {
             "the #superseded mark must survive the store round-trip"
         );
         crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. superseded");
+    }
+
+    /// @PLN24 arc A — a `#c` binding survives the store round-trip.
+    ///
+    /// The signature is the SOLE authority on how the C function is called
+    /// (nothing at runtime can check it), so a cached program that came back
+    /// with an empty one would be a binding silently unbound — the failure this
+    /// whole arc exists to make impossible.  Guarding it here, while nothing
+    /// consumes the field yet, is the cheap moment: arc B and arc C would each
+    /// inherit the hole otherwise.
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn c_binding_survives_store_round_trip() {
+        use crate::data::Data;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let src = "pub fn c_len(s: text) -> integer;\n#c \"strlen\" \"size_t(const char*)\"\n";
+        let lpath = std::env::temp_dir().join(format!("loft_c_rt_{}.loft", std::process::id()));
+        std::fs::write(&lpath, src).unwrap();
+        p.parse(lpath.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&lpath);
+        let fresh = p.data;
+        let d = fresh.def(fresh.def_nr("n_c_len"));
+        assert_eq!(d.c_symbol, "strlen", "parsed `#c` must store the symbol");
+        assert_eq!(d.c_sig, "size_t(const char*)", "and the signature verbatim");
+
+        let spath = std::env::temp_dir().join(format!("loft_c_rt_{}.store", std::process::id()));
+        let spath_str = spath.to_str().unwrap();
+        fresh.save(spath_str).expect("Data::save");
+        let loaded = Data::open(spath_str).expect("Data::open");
+        let _ = std::fs::remove_file(&spath);
+        let d = loaded.def(loaded.def_nr("n_c_len"));
+        assert_eq!(
+            d.c_symbol, "strlen",
+            "the symbol must survive the round-trip"
+        );
+        assert_eq!(
+            d.c_sig, "size_t(const char*)",
+            "and so must the signature — an empty one is a binding nobody can check"
+        );
+        // The text is what persists; the WIDTHS it means are re-derived per
+        // target, so the accessor is what a consumer must go through.
+        let sig = crate::c_signature::of(
+            &loaded,
+            loaded.def_nr("n_c_len"),
+            crate::c_signature::CTarget {
+                long_bits: 64,
+                char_signed: true,
+            },
+        )
+        .expect("a #c definition reports a signature")
+        .expect("and it parses");
+        assert_eq!(sig.symbol, "strlen");
+        assert_eq!(sig.params.len(), 1);
+        crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. #c");
     }
 
     #[test]

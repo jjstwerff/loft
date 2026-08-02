@@ -922,6 +922,392 @@ fn native_binary_script() -> std::io::Result<()> {
     run_native_job(&job)
 }
 
+/// @PLN24 arc C — a `#c` binding calls a real C symbol from native-compiled loft,
+/// with no Rust wrapper and no rustc in any library.
+///
+/// Bound to **libc**, deliberately: it is linked into every Rust binary, so this
+/// proves the whole path — declaration, typed `extern "C"`, marshalling, call —
+/// with no build step and nothing to install.
+///
+/// `atoi("-1")` is the cell that matters. A C `int` return read back as a bare
+/// `u64` — what a signature-blind caller does — is 4294967295, a plausible large
+/// positive that every `>= 0` check accepts; it is the shape that silently
+/// defeated `loft-libs-net`'s `server::listen`. It comes back as -1 here only
+/// because the declared width goes into the extern, so rustc truncates at the
+/// ABI and the cast then sign-extends. That is the plan's invariant, executing.
+///
+/// `write(1, ptr, count)` covers the other half: a loft `vector` crosses as a
+/// pointer AND a count, because C carries no length.
+#[test]
+fn native_c_binding_calls_libc() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let rlib_info = find_loft_rlib();
+    let path = std::env::temp_dir().join("loft_pln24_c_binding.loft");
+    std::fs::write(
+        &path,
+        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+         pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
+         pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
+         pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
+         fn main() {\n\
+         \x20 println(\"len {c_strlen(\"hello\")}\");\n\
+         \x20 println(\"neg {c_atoi(\"-1\")}\");\n\
+         \x20 println(\"abs {c_abs(-7)}\");\n\
+         \x20 b: vector<u8> = [];\n\
+         \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
+         \x20 println(\"wrote {c_write(1, b)}\");\n\
+         }\n",
+    )?;
+    let job = prepare_native_test(&path)?;
+    // Ok(false) = skipped (rustc absent / low space) — not a failure.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
+    let out = std::process::Command::new(&job.binary).output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("len 5"), "strlen: {stdout}");
+    assert!(
+        stdout.contains("neg -1"),
+        "a 32-bit C return must sign-extend, not come back as 4294967295 — the \
+         declared width is what makes that work: {stdout}"
+    );
+    assert!(stdout.contains("abs 7"), "abs: {stdout}");
+    assert!(
+        stdout.contains("hi\n") && stdout.contains("wrote 3"),
+        "a vector must cross as pointer + count: {stdout}"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc B — the interpreter calls the same C symbols, and answers the
+/// SAME thing.
+///
+/// The interpreter has no compiler at the call site, so it resolves the symbol
+/// and calls it through the fixed per-arity trampolines the architecture probe
+/// validated. This test is the parity half: identical stdout from both
+/// backends, cell for cell, which is the bar a `#c` binding has to meet before
+/// it can be said to work at all. Before arc B, `strlen("hello")` compiled
+/// under `--interpret` and answered **7562**.
+///
+/// The `neg` cell carries the whole reason the declaration has a signature: the
+/// interpreter reads a raw `u64` return register, so `atoi("-1")` arrives as
+/// 4294967295 unless the DECLARED width truncates and re-extends it.
+#[test]
+fn interpreted_and_native_c_bindings_agree() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let path = std::env::temp_dir().join("loft_pln24_c_parity.loft");
+    std::fs::write(
+        &path,
+        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+         pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
+         pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
+         pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
+         fn main() {\n\
+         \x20 println(\"len {c_strlen(\"hello\")}\");\n\
+         \x20 println(\"neg {c_atoi(\"-1\")}\");\n\
+         \x20 println(\"abs {c_abs(-7)}\");\n\
+         \x20 b: vector<u8> = [];\n\
+         \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
+         \x20 println(\"wrote {c_write(1, b)}\");\n\
+         }\n",
+    )?;
+    let interp = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--interpret")
+        .arg(&path)
+        .output()?;
+    let out = String::from_utf8_lossy(&interp.stdout).into_owned();
+    let err = String::from_utf8_lossy(&interp.stderr);
+    assert!(interp.status.success(), "interpret failed: {out}\n{err}");
+    assert!(out.contains("len 5"), "{out}");
+    assert!(
+        out.contains("neg -1"),
+        "the interpreter reads a RAW return register — without the declared \
+         width this is 4294967295: {out}"
+    );
+    assert!(out.contains("abs 7") && out.contains("wrote 3"), "{out}");
+
+    // The parity half. `prepare_native_test` may skip (no rustc / low space),
+    // and a skipped comparison must not read as agreement.
+    let job = prepare_native_test(&path)?;
+    if !compile_native_job(&job, &find_loft_rlib())? {
+        return Ok(());
+    }
+    let native = std::process::Command::new(&job.binary).output()?;
+    let nout = String::from_utf8_lossy(&native.stdout);
+    assert_eq!(
+        out, nout,
+        "the two backends must answer identically, cell for cell"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc D — the composition matrix, against a REAL C library, on both
+/// backends.
+///
+/// Arcs A-C proved the mechanism against libc, which is already in the process.
+/// This is the shape a library actually has: a package that declares
+/// `[c] libs`, a `.so` built by nothing but `cc`, and a binding per cell of the
+/// plan's mapping table — every integer width, a text argument, a vector as
+/// pointer + count, the opaque-handle open/read/bump/close cycle, and the
+/// 7-argument call that straddles the SysV register/stack boundary.
+///
+/// The assertion is that the two backends produce **identical** output, because
+/// that is the only claim worth making: each one alone can be plausibly wrong
+/// in a way the other is not.
+///
+/// Skips when `cc` is absent — the fixture is C, and a machine without a C
+/// compiler cannot build it. It does NOT skip silently on a failed build: that
+/// is a real failure.
+#[test]
+fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let built = std::process::Command::new("make")
+        .arg("-C")
+        .arg(&root)
+        .output()?;
+    assert!(
+        built.status.success(),
+        "the fixture library must build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let prog = std::env::temp_dir().join("loft_pln24_matrix.loft");
+    std::fs::write(
+        &prog,
+        "use lcabi;\n\
+         fn main() {\n\
+         \x20 println(\"i64 {lc_i64(lc_i64(1234567890123))}\");\n\
+         \x20 println(\"neg {lc_neg_i32(1)}\");\n\
+         \x20 println(\"len {lc_strlen(\"loft\")}\");\n\
+         \x20 println(\"byte {lc_byte_at(\"loft\", 0)}\");\n\
+         \x20 v: vector<integer> = [10, 20, 30];\n\
+         \x20 println(\"vec {lc_i64_sum(v)}\");\n\
+         \x20 h = lc_open(1000);\n\
+         \x20 println(\"handle {lc_read(h)} {lc_bump(h, 7)}\");\n\
+         \x20 lc_close(h);\n\
+         \x20 println(\"arity7 {lc_arity7(1,1,1,1,1,1,1)}\");\n\
+         \x20 t = lc_static_text();\n\
+         \x20 println(\"text {t} {t.len()}\");\n\
+         \x20 println(\"textarg {lc_strlen(lc_static_text())}\");\n\
+         \x20 println(\"cat [{lc_static_text()}][{lc_static_text()}]\");\n\
+         \x20 println(\"some {lc_maybe_text(1)}\");\n\
+         \x20 println(\"none {lc_opt_text(0) ?? \"<null>\"}\");\n\
+         \x20 println(\"latin1 {lc_latin1_text().len()}\");\n\
+         \x20 c_text_positions();\n\
+         }\n\
+         // A text return has to reach EVERY value position, because the caller\n\
+         // needs a destination record handed to it and only some positions were\n\
+         // routed at first: a struct literal, a vector literal, a field write, a\n\
+         // `match` subject and a comparison all lower to `w += producer()`, which\n\
+         // is a different emission site from a plain local assignment. Missing it\n\
+         // is not a slow path for a `#c` binding — there is no non-destination\n\
+         // sibling to fall back to, so it SIGSEGV'd the interpreter while\n\
+         // `--native` stayed correct. One function per position, so a regression\n\
+         // names the position it broke.\n\
+         struct CRec { name: text, n: integer }\n\
+         fn c_text_positions() {\n\
+         \x20 o = CRec{name: lc_static_text(), n: 1};\n\
+         \x20 println(\"p-lit {o.name}\");\n\
+         \x20 o.name = lc_maybe_text(1);\n\
+         \x20 println(\"p-field {o.name}\");\n\
+         \x20 if lc_static_text() == \"loft/c-abi\" { println(\"p-cmp ok\") } else { println(\"p-cmp NO\") }\n\
+         \x20 m = match lc_static_text() { \"loft/c-abi\" => lc_maybe_text(1), _ => \"-\" };\n\
+         \x20 println(\"p-match {m}\");\n\
+         \x20 v: vector<text> = [lc_static_text(), lc_maybe_text(1)];\n\
+         \x20 println(\"p-vlit {v[0]} {v[1]}\");\n\
+         \x20 println(\"p-cond {if lc_static_text().len() > 3 { lc_static_text() } else { \"-\" }}\");\n\
+         \x20 for i in 0..2 { println(\"p-loop{i} {lc_static_text()}\") }\n\
+         \x20 s = lc_static_text() + \"!\";\n\
+         \x20 println(\"p-concat {s}\");\n\
+         }\n",
+    )?;
+    let libdir = root.join("pkg");
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    // Hand-computed, not copied from a run: `lc_i64` is self-inverse, the
+    // vector sum is position-weighted (10*1 + 20*2 + 30*3), and arity7's
+    // arguments carry distinct prime weights (2+3+5+7+11+13+17).
+    for want in [
+        "i64 1234567890123",
+        "neg -1",
+        "len 4",
+        "byte 108",
+        "vec 140",
+        "handle 1000 1007",
+        "arity7 58",
+        // @PLN24 arc D — the `char *` return. Hand-computed: "loft/c-abi" is 10
+        // characters, so C's byte count and loft's character count agree on it
+        // (`textarg` re-crosses the answer to prove the copy is NUL-terminated,
+        // not merely non-empty). NULL reads as loft null. "caf\xE9" is 3 ASCII
+        // bytes plus one invalid UTF-8 byte, which becomes ONE replacement
+        // character — 4, not 3 (dropped) and not 5 (bytes counted as characters).
+        "text loft/c-abi 10",
+        "textarg 10",
+        "cat [loft/c-abi][loft/c-abi]",
+        "some here",
+        "none <null>",
+        "latin1 4",
+        // Every value position, each named so a failure says which one broke.
+        "p-lit loft/c-abi",
+        "p-field here",
+        "p-cmp ok",
+        "p-match here",
+        "p-vlit loft/c-abi here",
+        "p-cond loft/c-abi",
+        "p-loop0 loft/c-abi",
+        "p-loop1 loft/c-abi",
+        "p-concat loft/c-abi!",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "the two backends must agree cell for cell against a real library"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc D — a C `char *` comes back as loft `text`, identically on both
+/// backends, from libc alone (no fixture, no library to install).
+///
+/// `strerror` is the shape a real binding meets: borrowed storage the caller
+/// must not free, a plain `int` argument, and an answer the C library owns. The
+/// interpreter copies out of a raw return register and `--native` copies out of
+/// a typed `*const c_void`; the two arrive at the same text or this crossing is
+/// two mappings rather than one.
+#[test]
+fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<()> {
+    let path = std::env::temp_dir().join("loft_pln24_c_textret.loft");
+    std::fs::write(
+        &path,
+        "pub fn c_strerror(n: integer) -> text;   #c \"strerror\" \"char*(int)\"\n\
+         pub fn c_strlen(s: text) -> integer;     #c \"strlen\" \"size_t(const char*)\"\n\
+         fn main() {\n\
+         \x20 e = c_strerror(2);\n\
+         \x20 println(\"len {c_strlen(e)} chars {e.len()}\");\n\
+         \x20 println(\"arg {c_strlen(c_strerror(2))}\");\n\
+         }\n",
+    )?;
+    let mut seen = Vec::new();
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&path)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Not an exact string: `strerror(2)` is locale-dependent (it is "No such
+        // file or directory" in the C locale). What IS pinned is that the text
+        // survived the crossing — a non-empty answer whose byte length C agrees
+        // with, which a truncated or NUL-terminated-at-zero copy fails.
+        assert!(
+            !stdout.contains("len 0 ") && !stdout.contains("arg 0"),
+            "{backend}: an empty `strerror` means the crossing dropped the text:\n{stdout}"
+        );
+        seen.push(stdout);
+    }
+    assert_eq!(
+        seen[0], seen[1],
+        "the two backends must bring back the same text"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc D — the return spellings a `#c` declaration must refuse, because
+/// nothing at runtime would.
+///
+/// The plan's central measurement is that a wrong binding produces a plausible
+/// answer rather than a failure, so every one of these is caught at the
+/// declaration or not at all. Both backends must refuse in the same words: a
+/// shape rejected by one and accepted by the other is the divergence this plan
+/// exists to keep out.
+#[test]
+fn a_text_return_must_say_it_is_a_c_string() -> std::io::Result<()> {
+    // (declaration, the words the refusal has to carry)
+    let cases = [
+        (
+            "pub fn f() -> text;   #c \"lc_x\" \"void*(void)\"",
+            "spell the return `char*`",
+        ),
+        (
+            "pub fn f() -> text;   #c \"lc_x\" \"int(void)\"",
+            "the loft declaration returns `text`",
+        ),
+        (
+            // A `vector` return cannot be reconstructed from a pointer: C
+            // carries no length, which is why an ARGUMENT crosses as a PAIR and
+            // a return cannot cross at all.
+            "pub fn f() -> vector<integer>;   #c \"lc_x\" \"char*(void)\"",
+            "returns `vector<integer>` but the C signature returns `char *`",
+        ),
+    ];
+    for (decl, want) in cases {
+        let path = std::env::temp_dir().join("loft_pln24_c_textret_refuse.loft");
+        std::fs::write(&path, format!("{decl}\nfn main() {{ println(\"x\") }}\n"))?;
+        let mut seen = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+                .arg(backend)
+                .arg("--errors=compact")
+                .arg(&path)
+                .output()?;
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                !out.status.success(),
+                "{backend} must refuse `{decl}`: {stderr}"
+            );
+            assert!(
+                stderr.contains(want),
+                "{backend}: refusing `{decl}` must say `{want}`: {stderr}"
+            );
+            seen.push(stderr);
+        }
+        assert_eq!(
+            seen[0], seen[1],
+            "and both backends must say it identically"
+        );
+    }
+    Ok(())
+}
+
 /// @PLN28: unbounded recursion in native-compiled code must surface loft's typed
 /// `call stack overflow` (exit non-zero) — the same cap the interpreter enforces —
 /// NOT the opaque Rust `fatal runtime error: stack overflow, aborting`.  The

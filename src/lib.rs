@@ -142,6 +142,8 @@ pub mod api_diff;
 pub mod api_surface;
 pub mod base64;
 pub mod build_phase;
+pub mod c_call;
+pub mod c_signature;
 pub mod cache;
 mod calc;
 pub mod crash_report;

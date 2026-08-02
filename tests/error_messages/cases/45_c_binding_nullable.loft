@@ -1,0 +1,9 @@
+// @PLN24 arc A — `#c` is the declared edge of loft's no-runtime-errors rule.
+// C has no null model, so a nullable value is refused AT COMPILE TIME and the
+// guarantee stays where loft can keep it.
+pub fn take(n: integer?) -> integer;
+#c "lc_raw_i64" "long(long)"
+
+fn main() {
+  println("take is declared, never called");
+}

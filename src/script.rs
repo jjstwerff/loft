@@ -304,33 +304,50 @@ fn strip_leading_annotations(item: &str) -> &str {
         while i < n && (b[i] == b' ' || b[i] == b'\t') {
             i += 1;
         }
-        match b.get(i) {
-            Some(b'"') => {
-                i += 1;
-                while i < n && b[i] != b'"' {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-                i += 1;
-            }
-            Some(b'(') => {
-                let mut d = 0i32;
-                while i < n {
-                    match b[i] {
-                        b'(' => d += 1,
-                        b')' => {
-                            d -= 1;
-                            i += 1;
-                            if d == 0 {
-                                break;
-                            }
-                            continue;
-                        }
-                        _ => {}
+        // An annotation's arguments, of which there may be MORE THAN ONE:
+        // `#c "strlen" "size_t(const char*)"` takes two strings (@PLN24). Reading
+        // only the first left the second looking like a loose statement, so a
+        // library of `#c` declarations classified as a beginner script.
+        loop {
+            match b.get(i) {
+                Some(b'"') => {
+                    i += 1;
+                    while i < n && b[i] != b'"' {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
                     }
                     i += 1;
                 }
+                Some(b'(') => {
+                    let mut d = 0i32;
+                    while i < n {
+                        match b[i] {
+                            b'(' => d += 1,
+                            b')' => {
+                                d -= 1;
+                                i += 1;
+                                if d == 0 {
+                                    break;
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                }
+                _ => break,
             }
-            _ => {}
+            // Another argument only if a space separates it from the last one; a
+            // newline ends the annotation.
+            let mut j = i;
+            while j < n && (b[j] == b' ' || b[j] == b'\t') {
+                j += 1;
+            }
+            if j < n && (b[j] == b'"' || b[j] == b'(') {
+                i = j;
+            } else {
+                break;
+            }
         }
         i = skip_trivia(b, i);
     }

@@ -190,6 +190,35 @@ impl PageSource {
             PageSource::Http(p) => p.bytes_fetched(),
         }
     }
+
+    /// PROBE (loft#729): bytes over DISTINCT offsets — how much of the image the
+    /// traversal actually touched, ignoring re-fetches. `bytes_fetched` minus
+    /// this is what the cache failed to keep, and the two answer different
+    /// questions: over-READ (touching bytes nobody wanted) versus re-READ
+    /// (touching the same bytes again). One is a layout/traversal cost, the
+    /// other is a cache cost, and a single total cannot tell them apart.
+    /// Number of provider calls — the round-trip count an HTTP source pays,
+    /// which bytes alone does not show.
+    #[must_use]
+    pub fn requests(&self) -> usize {
+        match self {
+            PageSource::Local(p) => p.fetches.len(),
+            PageSource::Http(p) => p.fetches.len(),
+        }
+    }
+
+    #[must_use]
+    pub fn distinct_bytes(&self) -> usize {
+        let log = match self {
+            PageSource::Local(p) => &p.fetches,
+            PageSource::Http(p) => &p.fetches,
+        };
+        let mut seen = std::collections::HashSet::new();
+        log.iter()
+            .filter(|(off, _)| seen.insert(*off))
+            .map(|(_, l)| l)
+            .sum()
+    }
 }
 
 impl PageProvider for PageSource {
@@ -246,12 +275,35 @@ pub struct PagedReader<P: PageProvider> {
     lru: std::collections::VecDeque<u64>,
     /// Max resident pages.
     capacity: usize,
+    /// loft#729 — `resolve` calls and bytes asked for, bucketed by power-of-two
+    /// size (bucket `i` is `2^i ..< 2^(i+1)`). What the traversal ASKS for is a
+    /// separate fact from what the provider FETCHES, and only the first says
+    /// whether a span-shaped optimisation has anything to bite on.
+    reads: [(u64, u64); 32],
 }
 
 impl<P: PageProvider> PagedReader<P> {
     /// A reader with the default 64 KiB page and a 64-page (4 MiB) cache.
     pub fn new(provider: P) -> Self {
-        Self::with_config(provider, PAGE_SIZE, 64)
+        // loft#729 — the page size and the cache are separately settable so the
+        // two causes of a large `bytes_fetched` can be told apart. They are
+        // easily confused: shrinking the page ALSO shrinks a page-counted cache,
+        // so a naive page sweep measures thrash and reads it as granularity.
+        // The cache is therefore sized in BYTES and held constant across a
+        // sweep. Reading a store with the page driven to 8 bytes gives the
+        // traversal's true byte footprint, which is what page-rounding waste has
+        // to be measured against — assuming that footprint instead is how
+        // loft#729 came to attribute a 4× to page granularity that measured
+        // 1.36× on the reporter's own data.
+        let ps = std::env::var("LOFT_PAGE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(PAGE_SIZE);
+        let cache_bytes = std::env::var("LOFT_PAGE_CACHE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(64 * PAGE_SIZE);
+        Self::with_config(provider, ps, (cache_bytes / ps).max(1))
     }
 
     /// A reader with an explicit page size and cache cap (both clamped to ≥ 1).
@@ -264,7 +316,20 @@ impl<P: PageProvider> PagedReader<P> {
             pages: std::collections::HashMap::new(),
             lru: std::collections::VecDeque::new(),
             capacity: capacity.max(1),
+            reads: [(0, 0); 32],
         }
+    }
+
+    /// loft#729 — the `resolve` size histogram as `(log2 bucket, calls, bytes)`,
+    /// skipping empty buckets.
+    #[must_use]
+    pub fn read_histogram(&self) -> Vec<(u32, u64, u64)> {
+        self.reads
+            .iter()
+            .enumerate()
+            .filter(|(_, (c, _))| *c > 0)
+            .map(|(i, (c, b))| (u32::try_from(i).unwrap_or(0), *c, *b))
+            .collect()
     }
 
     /// The underlying provider (e.g. to read its fetch log).
@@ -299,11 +364,72 @@ impl<P: PageProvider> PagedReader<P> {
         }
     }
 
+    /// Fetch the pages a read needs in as few provider calls as possible: each
+    /// maximal run of CONSECUTIVE absent pages becomes one request (loft#729).
+    ///
+    /// Byte-neutral by construction — the same pages arrive, and one request for
+    /// a run of them carries exactly what N requests would have. What it removes
+    /// is round-trips, which is the cost that does not show up in
+    /// `bytes_fetched` and is the one an HTTP source actually pays. It matters
+    /// now because record bodies are read whole: a 256 KB body is four
+    /// consecutive 64 KiB pages, and it used to ask for them one at a time.
+    ///
+    /// A run is fetched only where pages are ABSENT, so a read straddling
+    /// resident pages still costs nothing for the parts already held.
+    fn prefetch_run(&mut self, off: u64, len: usize) {
+        if len <= self.page_size {
+            return; // at most two pages, and `ensure_page` handles those
+        }
+        let ps = self.page_size as u64;
+        let (first, last) = (off / ps, (off + len as u64 - 1) / ps);
+        let mut p = first;
+        while p <= last {
+            if self.pages.contains_key(&p) {
+                p += 1;
+                continue;
+            }
+            let start = p;
+            while p <= last && !self.pages.contains_key(&p) {
+                p += 1;
+            }
+            let count = usize::try_from(p - start).unwrap_or(1);
+            if count == 1 {
+                continue; // `ensure_page` will take it; no run to coalesce
+            }
+            let bytes = self.provider.fetch(start * ps, count * self.page_size);
+            for (i, chunk) in bytes.chunks(self.page_size).enumerate().take(count) {
+                let mut page = chunk.to_vec();
+                page.resize(self.page_size, 0); // the last page zero-pads past EOF
+                self.pages.insert(start + i as u64, page);
+                self.lru.push_back(start + i as u64);
+            }
+            while self.pages.len() > self.capacity {
+                if let Some(old) = self.lru.pop_front() {
+                    self.pages.remove(&old);
+                }
+            }
+        }
+    }
+
     /// Copy `len` bytes at absolute byte offset `off` into a fresh buffer,
     /// fetching any missing page(s). A read within one page copies from that
     /// page; a read spanning a page boundary is coalesced here. The common
     /// index-traversal read (4–8 bytes) stays within a page.
+    ///
+    /// **Every** read goes through the page table, including a whole record
+    /// body — fetching a large span directly instead was measured and is WORSE
+    /// (loft#729). It reads as an obvious win and is not: a working set's
+    /// records are neighbours, so the pages under them are SHARED, and a span
+    /// that bypasses the table pays its own bytes while the pages around it get
+    /// fetched anyway for the traversal words. On a real 162 MB store, one
+    /// 42-key viewport, bytes fetched: 5 832 704 paged, against 6 384 300 /
+    /// 7 367 532 / 7 896 716 as the direct-span threshold came down from 256 KiB
+    /// to 4 KiB. Sharing is the whole value of the page, and the amplification
+    /// #729 reports is not the reader's to give back.
     pub fn resolve(&mut self, off: u64, len: usize) -> Vec<u8> {
+        self.reads[(usize::BITS - len.max(1).leading_zeros() - 1) as usize % 32].0 += 1;
+        self.reads[(usize::BITS - len.max(1).leading_zeros() - 1) as usize % 32].1 += len as u64;
+        self.prefetch_run(off, len);
         let mut out = vec![0u8; len];
         let mut done = 0usize;
         while done < len {
@@ -537,6 +663,37 @@ mod tests {
 
     fn ramp(n: usize) -> Vec<u8> {
         (0..n).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// loft#729 — a read covering a run of absent pages costs ONE provider call,
+    /// and carries exactly the same bytes.
+    ///
+    /// The bytes are asserted alongside the call count on purpose: a coalescer
+    /// that mis-slices the returned buffer into the page table would still show
+    /// the improved count, so counting alone would report the bug as a success.
+    #[test]
+    fn a_run_of_absent_pages_is_one_request_carrying_the_same_bytes() {
+        let img = ramp(1600);
+        let mut coalesced = PagedReader::with_config(VecProvider::new(img.clone()), 16, 999);
+        let got = coalesced.resolve(0, 1600);
+        assert_eq!(got, img, "coalescing must not disturb the bytes");
+        assert_eq!(
+            coalesced.provider().pages_fetched(),
+            1,
+            "100 consecutive absent pages are one run, so one request"
+        );
+
+        // Resident pages are not re-fetched: seed page 3, then read across it.
+        let mut partial = PagedReader::with_config(VecProvider::new(img.clone()), 16, 999);
+        let _ = partial.resolve(48, 16); // page 3 alone
+        assert_eq!(partial.provider().pages_fetched(), 1);
+        let got = partial.resolve(0, 160);
+        assert_eq!(got, &img[0..160], "the seeded page must still read right");
+        assert_eq!(
+            partial.provider().pages_fetched(),
+            3,
+            "the seeded page splits the run in two, so two more requests"
+        );
     }
 
     #[test]

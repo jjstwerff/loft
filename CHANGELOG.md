@@ -167,6 +167,40 @@ adds and removes stays flat instead of climbing. Nothing to change in your code.
 If you were working around it by reusing element objects instead of removing
 them, you can stop.
 
+### Reading a collection no longer costs it anything
+
+`for r in collection` over a `hash`, `spatial` or `index` walks a key-ordered
+snapshot, and that snapshot was left behind in the collection's own storage
+afterwards — about 4 bytes per element, on every pass. A program that reads a
+collection inside a loop grew for as long as it ran, without adding anything:
+
+```
+built:            2,000 records, 0.29 MB
+after 50 reads:   2,000 records, 0.67 MB     // same 2,000 records
+```
+
+For a collection bound to a file with `store_persist_bind` it was worse, because
+the storage is the file and the file outlives the program. Each run started from
+what the last one left, so a program that only ever READ a 4,000-record
+collection took its file from 566 KB to 1.3 MB over sixteen runs.
+
+Reading is free now, in memory and on disk. Nothing to change in your code — and
+if you had a rule about not iterating a bound collection, or about stat-ing the
+file before touching it, you can drop it.
+
+### `store_reclaim` leaves a little room
+
+`store_reclaim` trimmed a store to its exact contents, which sounds like the
+point of it and was not: the store is still in use, and it grows by 7/3 when it
+runs out, so the very next thing the program did made it 2.33× bigger. On a bound
+collection that meant the call gave back 40% of a file and the next read took
+more than that back.
+
+It now keeps an eighth of the content as room to grow — the same margin a freshly
+bound file gets. So the number it reports is a little smaller, a store that is
+already the right size reports `0` instead of shrinking into the cliff, and
+calling it no longer makes a file bigger than never calling it.
+
 ### `reserve(v, n)`, for when many vectors grow at once
 
 Appending to a vector doubles it when it runs out, which is the right default and

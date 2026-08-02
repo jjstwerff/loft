@@ -71,6 +71,12 @@ pub fn byte_code_from(
     if start_d_nr == 0 {
         native::init(state);
         register_native_stubs(state, data);
+        // @PLN24 arc B — wire every `#c` declaration into the same static-call
+        // table.  Registered under the def's OWN name, which is what the call
+        // site already falls back to for a body-less definition with no
+        // `#native` symbol, so no codegen change is needed.
+        #[cfg(feature = "native-extensions")]
+        crate::c_call::register(state, data);
     }
     let init_ms = t_init.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
     let t_codegen = timing.then(std::time::Instant::now);

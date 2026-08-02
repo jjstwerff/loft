@@ -1,0 +1,8 @@
+// @PLN24 arc A — an unknown C type is refused, never guessed: a binding nobody
+// can check at runtime must not contain a type nobody checked at compile time.
+pub fn when(t: integer) -> integer;
+#c "lc_when" "struct timeval(int)"
+
+fn main() {
+  println("when is declared, never called");
+}

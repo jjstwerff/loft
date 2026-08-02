@@ -228,6 +228,45 @@ fn try_dlsym(name: &str) -> Option<(*const (), bool)> {
     None
 }
 
+/// @PLN24 arc D — `dlopen` a C library a package declared with `[c] libs`, and
+/// KEEP it loaded so its symbols resolve.
+///
+/// Distinct from the `[native] runtime-libs` probe, which opens a library only
+/// to ask whether it exists and drops the handle. Here the handle is the point:
+/// a `#c` symbol is looked up through it. Loading is idempotent (`load_one`
+/// keys on the canonical path), so a library named by several packages opens
+/// once.
+///
+/// A relative name resolves against the declaring package's directory first, so
+/// a library can ship its own `.so`; otherwise it goes to the dynamic linker by
+/// soname, exactly as `runtime-libs` does. Returns whether it loaded — a
+/// missing library is the caller's to report, with the binding that needed it.
+#[cfg(feature = "native-extensions")]
+pub fn load_c_library(name: &str, pkg_dir: &str) -> bool {
+    let beside = std::path::Path::new(pkg_dir).join(name);
+    if beside.exists() {
+        load_one(&beside.to_string_lossy());
+        return true;
+    }
+    // Not a path we can see: hand the soname to the dynamic linker, which knows
+    // the search path we do not.
+    if unsafe { libloading::Library::new(name) }.is_err() {
+        return false;
+    }
+    load_one(name);
+    true
+}
+
+/// @PLN24 arc B — the same lookup, for the `#c` caller: a C binding resolves
+/// against the cdylibs loft has already loaded before it falls back to the
+/// process. One resolver, so a symbol cannot mean two different things
+/// depending on which caller asked for it.
+#[cfg(feature = "native-extensions")]
+#[must_use]
+pub fn try_dlsym_pub(name: &str) -> Option<(*const (), bool)> {
+    try_dlsym(name)
+}
+
 // ── Auto-marshal: wire cdylib functions via type-driven dispatch ────────
 
 /// Argument type tag for auto-marshalling.
@@ -1245,6 +1284,16 @@ unsafe extern "C" fn ffi_reload(ctx: LoftStoreCtx, out_ptr: *mut *mut u8, out_si
 }
 
 /// Set the current library index for auto-dispatch. Called from `State::static_call()`.
+/// The library index of the static call in flight — the only way a
+/// `Call = fn(&mut Stores, &mut DbRef)` handler learns WHICH binding it is
+/// serving. Read by the `#c` dispatcher (@PLN24 arc B) for the same reason the
+/// native auto-dispatcher reads it.
+#[cfg(feature = "native-extensions")]
+#[must_use]
+pub fn current_lib_idx() -> u16 {
+    CURRENT_LIB_IDX.with(std::cell::Cell::get)
+}
+
 pub fn set_current_lib_idx(idx: u16) {
     CURRENT_LIB_IDX.with(|c| c.set(idx));
 }

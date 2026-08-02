@@ -1079,6 +1079,10 @@ fn write_definition(out: &mut String, d: &Definition) {
     write_str(out, &d.cap);
     out.push_str(",\"superseded\":"); // @PLN102 arc C
     write_str(out, &d.superseded);
+    out.push_str(",\"c_symbol\":"); // @PLN24 arc A
+    write_str(out, &d.c_symbol);
+    out.push_str(",\"c_sig\":");
+    write_str(out, &d.c_sig);
     let _ = write!(
         out,
         ",\"op_code\":{},\"known_type\":{},\"pub_visible\":{},\"null_safe\":{},\"closure_record\":{}",
@@ -1334,6 +1338,8 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
         native: as_str(field(p, "native")?)?,
         cap: as_str(field(p, "cap")?)?,               // @PLN86
         superseded: as_str(field(p, "superseded")?)?, // @PLN102 arc C
+        c_symbol: as_str(field(p, "c_symbol")?)?,     // @PLN24
+        c_sig: as_str(field(p, "c_sig")?)?,           // @PLN24
         op_code: as_u16(field(p, "op_code")?)?,
         known_type: as_u16(field(p, "known_type")?)?,
         pub_visible: as_bool(field(p, "pub_visible")?)?,
@@ -2231,6 +2237,8 @@ mod tests {
             native: String::new(),
             cap: String::new(),
             superseded: String::new(),
+            c_symbol: String::new(),
+            c_sig: String::new(),
             op_code: u16::MAX,
             code_position: 0,
             code_length: 0,
@@ -2303,6 +2311,8 @@ mod tests {
             native: String::new(),
             cap: String::new(),
             superseded: String::new(),
+            c_symbol: String::new(),
+            c_sig: String::new(),
             op_code: u16::MAX,
             code_position: 0,
             code_length: 0,

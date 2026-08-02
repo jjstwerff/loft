@@ -7532,6 +7532,11 @@ fn main() {
     // Y (unresolvable = hard error) and shim over it (un-folded = advisory warning). Inert until a
     // symbol is marked, so a no-op for every program today.
     loft::use_analysis::superseded_fold_diagnostics(&p.data, &mut p.diagnostics, &abs_file);
+    // @PLN24 arc B — the interpreter calls `#c` bindings for real now; what
+    // remains gated is the ONE shape its caller does not cover.
+    if !native_mode {
+        loft::use_analysis::c_binding_call_unsupported(&p.data, &mut p.diagnostics, &abs_file);
+    }
     // @PLN102 build step 2/3 — report-only link oracles (no-op unless LOFT_DUMP_LINK_SAFE/OBS).
     loft::use_analysis::dump_link_safety(&p.data);
     loft::use_analysis::dump_link_observability(&p.data);
@@ -9340,6 +9345,9 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 None,
                 native_deps_dir.as_deref(),
             );
+            // @PLN24 arc D — and the C libraries `#c` bindings resolve against.
+            // Host target only: wasm has no C ABI to link (arc E).
+            native_utils::add_c_library_flags(&mut cmd, &p.data);
             // @PLN54 S6 — native-backend AddressSanitizer.  LOFT_NATIVE_ASAN=1
             // instruments the generated native binary with ASan so a codegen bug
             // that emits an out-of-bounds / use-after-free raw-pointer store access

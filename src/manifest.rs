@@ -181,6 +181,19 @@ pub struct Manifest {
     /// ("install `<dev-lib>`").  Distinct from `runtime_libs` (the `-dev` headers
     /// vs the runtime `.so`).
     pub build_deps: Vec<String>,
+    /// @PLN24 arc D — `[c] libs = "liblc_types.so, libpq.so.5"`: the C shared
+    /// libraries this package's `#c` bindings resolve against.
+    ///
+    /// Distinct from `[native] runtime-libs`, which names what a Rust cdylib
+    /// needs present and only PROBES for it. These are `dlopen`ed and kept
+    /// loaded, because a `#c` symbol is looked up in them — and they are linked
+    /// on `--native` for the same reason. A binding to libc needs no entry: it
+    /// is already in the process.
+    ///
+    /// Names are sonames as the dynamic linker knows them (`libpq.so.5`), the
+    /// same spelling `runtime-libs` uses; a bare path resolves against the
+    /// package directory so a library can ship its own `.so`.
+    pub c_libs: Vec<String>,
     /// PKG.4: loft function name → Rust symbol path from `[native.functions]`.
     pub native_functions: Vec<(String, String)>,
     /// PKG.5: WASM-specific overrides from `[native.wasm]`.
@@ -518,6 +531,7 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
         ("dependencies", _) => m.dependencies.push((key.to_string(), value.scalar())),
         ("native", "crate") => m.native_crate = Some(value.scalar()),
         ("native", "in_binary") => m.native_in_binary = value.is_true(),
+        ("c", "libs") => m.c_libs = split_list(&value.scalar()),
         ("native", "runtime-libs") => m.runtime_libs = split_list(&value.scalar()),
         ("native", "build-deps") => m.build_deps = split_list(&value.scalar()),
         ("native.functions", _) => m.native_functions.push((key.to_string(), value.scalar())),
