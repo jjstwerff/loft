@@ -130,7 +130,8 @@ alongside one.
 | **S0** | a scoped test server exists | `loft` user restricted to `loft_test*`; anything else is `ERROR 1044`. Tests self-skip when absent — **done** |
 | **S1** | `#c` reaches libmariadb at all | **done** — `mysql_get_client_info() -> text`, zero rustc, both backends identical. Also closes **@PLN24 arc F** |
 | **S2** | the handle lifecycle | **done** — `mysql_init` / `mysql_real_connect` / `mysql_close`; the handle round-trips and C's own error crosses back as `text` |
-| **S3** | the cursor model | `mysql_query` + `mysql_store_result` + `mysql_fetch_row`; read one row of scalars |
+| **S3** | the cursor model | **done** — `mysql_query` / `mysql_store_result` / `mysql_fetch_row`, a real result set walked through a loft-built shim, SQL NULL distinct from `''` |
+| **S3b** | one contract, several libraries | **done** — `SqlDb` over sqlite, postgres and mariadb; one generic `dump` that never names a backend. duckdb proven too, not vendored (70 MB) |
 | **S4** | prepared statements | `mysql_stmt_*`. `MYSQL_BIND` is an array of structs, so this is where the ANSI-C shim earns its keep (@PLN24 arc D) |
 | **S5** | a FLAT struct round-trips | one loft struct ↔ one table, written and read back, compared by content digest |
 | **S6** | sub-records, one kind per step | `vector<scalar>` → `vector<struct>` → `hash` → `sorted`. Each is one child table and one addressing rule |
@@ -173,6 +174,47 @@ sit after S7 — a **drop at scope end** that ends a transaction, and **stored
 procedures written with string formatting**. Both put a side effect where the
 reader is not looking (one at a brace, one inside a string), which is what those
 designs have to make safe. Design only; nothing built.
+
+## What is NOT designed yet
+
+The addressing rule above answers *"where does a sub-record go"*, and the ladder
+carries it to a working mapping. It is **not** a finished database library. These
+gaps are named here rather than discovered later:
+
+**Types with no mapping.**
+- **Data enums** (`Enum(_, true, _)` — a tagged union with per-variant payloads).
+  Relationally that is the classic choice between one wide nullable table, one
+  table per variant, or a discriminator plus a payload, and each loses something
+  different. loft has them as a first-class type, so a mapping that cannot carry
+  them is not finished.
+- **Tuples** — anonymous and positional, with no field names to become columns.
+- **`boolean` is THREE-state** (false / true / **null**, @PLN17). SQL `BOOLEAN`
+  is two-state plus NULL, which happens to line up — but loft's null is a *value*
+  (255), not an absence, so the round trip needs stating rather than assuming.
+- `ChildRec` / stored `DbRef` — they exist in `Parts` and are unaddressed here.
+- `float` / `single` precision across a `NUMERIC` column.
+
+**Atomicity is missing, and it is not optional.** The mapping is defined for
+whole-collection writes — replace the child rows for one owner — which is several
+statements. Without a transaction around them a crash leaves a collection half
+written, and the read path cannot tell. Every write of an object graph is one
+transaction, or the mapping is unsound.
+
+**Concurrency is unaddressed.** Ordinals are not stable under mutation (noted
+above), and two writers to one owner's child rows interleave. There is no design
+for optimistic versioning or row locking.
+
+**The reverse direction is absent.** Everything here maps a loft object INTO SQL.
+Reading a schema someone else owns — the ETL half of the BROADENING.md gap —
+needs SQL types to become loft types, a different problem with its own lossiness
+(unsigned, `DECIMAL`, arrays, `JSONB`).
+
+**Migration is one word in S7.** A struct that gains, loses or renames a field
+needs a defined answer, and "the address function drives it" is not one.
+
+None of these blocks S4–S6, which is why the ladder still stands: each of those
+is provable on flat structs and single-kind collections without an answer here.
+They do block calling the library finished.
 
 ## Open
 
