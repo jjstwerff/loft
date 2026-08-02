@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arcs A, B, C, D done; E, F and G open.** The architecture probe is built and has run
+**Arcs A, B, C, D, G done; E and F open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -437,6 +437,37 @@ too — `compute_sig` derives the signature from the loft declarations alone and
 there is `auto_build_native`, a cargo BUILD, and deferring it moves when compile
 errors surface. Different fact, different plan (@PLN21/@PLN11).
 
+### What the build corrected
+
+Two of the design's claims came back changed, and the second is the one worth
+carrying into any future work on this plan.
+
+1. **The attribution rule was wrong in the direction that mattered.** The design
+   said a package declaring several libraries lists its symbols under each, and
+   called the result "conservative — it can only say no where a call would have
+   worked." Built, that is not conservative, it is useless: a package binding
+   sqlite AND duckdb reports **sqlite** unavailable because a duckdb symbol is
+   missing, which is exactly the arrangement optional libraries exist for. So a
+   symbol is attributable only when its library is the only one its package
+   declares; a multi-library package answers the load question and gives up the
+   skew half. The rule is now one sentence, and the recommendation that follows
+   from it — one package per optional library — is in PACKAGES.md.
+
+2. **Process-global state does not reach a package cdylib.** The runtime tables
+   were static, which is correct in the interpreter and in a `--native` binary
+   and WRONG in the third configuration nobody had listed: an auto-built package
+   cdylib links its own copy of loft, so it has its own copy of the statics. The
+   symptom was as clean as it gets — `duckdb_available()` answered **false** from
+   inside the package while the identical call from the program answered
+   **true**, on the same run. The generated source carries the tables and now
+   passes them in (`library_available_native`), so the answer no longer depends
+   on which linkage unit asked.
+
+   The lesson generalises past this arc: **"both backends" is not the same as
+   "every linkage unit."** The `#c` calls themselves were fine here only because
+   the generator already emits its tables into the cdylib; a fact reached through
+   a `#rust` body has three homes to be right in, not two.
+
 ## Sub-arcs
 
 | Item | Status |
@@ -447,7 +478,7 @@ errors surface. Different fact, different plan (@PLN21/@PLN11).
 | **D** — packaging | **Done** — `[c] libs` declares + loads + links, a `char *` return crosses as `text` / `text?`, and `[c] shim` is ANSI-C loft compiles itself (`cc`, never rustc) at parse and at `loft install` |
 | **E** — the other two targets (the parity arc) | Open — see below |
 | **F** — prove it: a libpq subset for @PLN23, zero rustc | Open |
-| **G** — optional libraries: `[c] optional-libs` loaded on demand, both backends, plus the availability query | Open — designed above; the blocker is the `--native` link line, not the interpreter |
+| **G** — optional libraries: `[c] optional-libs` loaded on demand, both backends, plus the availability query | **Done** — `c_library_available`, a duckdb backend in `tests/fixtures/sqldb/duckdb/`, both backends byte-identical present AND absent |
 
 ## Phase ordering
 

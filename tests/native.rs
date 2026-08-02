@@ -1251,13 +1251,14 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
-/// @PLN23 — one uniform interface over three different C libraries.
+/// @PLN23 — one uniform interface over four different C libraries.
 ///
 /// `dump <D: SqlDb>` and `seed <D: SqlDb>` in the fixture never name a backend,
 /// and every backend runs them unchanged. That is the whole claim, and it is not
 /// a small one: sqlite STEPS a prepared statement, libpq MATERIALISES the result
-/// and indexes it by (row, col), and libmariadb streams rows as `char **`. Three
-/// result models behind one cursor.
+/// and indexes it by (row, col), libmariadb streams rows as `char **`, and
+/// duckdb materialises and is read by (col, row) with a caller-frees string.
+/// Four result models behind one cursor.
 ///
 /// **sqlite is the cell that keeps this honest.** It needs no server, so a
 /// machine with no database still proves the interface, the bindings, the shim
@@ -1266,11 +1267,14 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
 /// never silently counted as a pass, which is how a dead binding would otherwise
 /// look green everywhere.
 ///
-/// duckdb is a fourth working backend and is deliberately NOT here: it is not
-/// packaged by any distro and its `.so` is 70 MB, so vendoring it would cost more
-/// than it proves. See plans/23-db-clients/OBJECT_MAPPING.md.
+/// **duckdb is the fourth, and it is here because of @PLN24 arc G.** It was
+/// proven once before and left out of the tree: no distro packages it and its
+/// `.so` is 70 MB, so a REQUIRED declaration would have made every machine
+/// running this test fetch it. Declared `[c] optional-libs` it costs nothing —
+/// the fixture builds and runs without it, and says so — which is what makes
+/// keeping a fourth backend in the tree cheap rather than a vendoring decision.
 #[test]
-fn one_sql_interface_drives_three_different_c_libraries() -> std::io::Result<()> {
+fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> {
     let _guard = native_suite_lock()
         .lock()
         .unwrap_or_else(|p| p.into_inner());
@@ -1345,6 +1349,33 @@ fn one_sql_interface_drives_three_different_c_libraries() -> std::io::Result<()>
             run("--native", mode)?,
             out,
             "{mode}: both backends must agree"
+        );
+    }
+
+    // @PLN24 arc G — duckdb, declared `[c] optional-libs`.
+    //
+    // This cell is unconditional ON PURPOSE, and it is the one that proves the
+    // arc: every mode above needs its C library installed to run at all, and
+    // before arc G a declared-but-absent library failed the `--native` LINK, so
+    // a program that never called into it did not build. Here the program is
+    // expected to build and run either way — the only question is which of the
+    // two answers it gives.
+    let out = run("--interpret", "duckdb")?;
+    let native = run("--native", "duckdb")?;
+    assert_eq!(
+        native, out,
+        "duckdb: both backends must agree about an optional library"
+    );
+    if out.contains("SKIP") {
+        // libduckdb absent — the interesting half. The program still ran.
+        assert!(
+            out.contains("not installed"),
+            "an absent optional library must be REPORTED, not inferred from silence:\n{out}"
+        );
+    } else {
+        assert!(
+            out.contains(&format!("duckdb {expect}")),
+            "duckdb must render the same three cells as sqlite:\n{out}"
         );
     }
     Ok(())

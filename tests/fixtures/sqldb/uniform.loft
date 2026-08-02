@@ -18,6 +18,7 @@ use sql;
 use sqlite;
 use postgres;
 use maria;
+use duckdb;
 
 // The rows every backend is given, so their outputs are comparable:
 //   1 'ada'   an ordinary value
@@ -87,6 +88,25 @@ fn main() {
     println("maria {dump(dm, "SELECT id, name FROM loft_u ORDER BY id")}");
     _ = dm.db_exec("DROP TABLE loft_u");
     dm.db_shut();
+    return
+  }
+
+  // @PLN24 arc G — the backend whose C library may simply not be here.
+  //
+  // It ASKS first. Everything above this point needs its library installed to
+  // run at all; this one runs either way, and that is the whole difference an
+  // optional library makes. The skip is printed, never counted as a pass.
+  if mode == "duckdb" {
+    if !duckdb_available() { println("SKIP duckdb libduckdb.so not installed"); return }
+    dd = duck();
+    if !dd.db_open(env_or("LOFT_DUCKDB", ":memory:")) {
+      println("SKIP duckdb {dd.db_last_error()}"); dd.db_shut(); return
+    }
+    if !seed(dd, "CREATE TABLE loft_u (id BIGINT PRIMARY KEY, name VARCHAR)") {
+      println("FAIL seed {dd.db_last_error()}"); dd.db_shut(); return
+    }
+    println("duckdb {dump(dd, "SELECT id, name FROM loft_u ORDER BY id")}");
+    dd.db_shut();
     return
   }
 

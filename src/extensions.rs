@@ -250,7 +250,15 @@ pub fn load_c_library(name: &str, pkg_dir: &str) -> bool {
     }
     // Not a path we can see: hand the soname to the dynamic linker, which knows
     // the search path we do not.
-    if unsafe { libloading::Library::new(name) }.is_err() {
+    if let Err(e) = unsafe { libloading::Library::new(name) } {
+        // @PLN24 arc G — an OPTIONAL library that does not open is an ordinary
+        // answer (`c_library_available` says false and the program takes its
+        // fallback), so this must not print by default. But "not installed" and
+        // "installed and unloadable" are very different problems with the same
+        // symptom, and only the linker's own text tells them apart.
+        if std::env::var_os("LOFT_C_DEBUG").is_some() {
+            eprintln!("loft: `[c]` library '{name}' did not open: {e}");
+        }
         return false;
     }
     load_one(name);

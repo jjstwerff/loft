@@ -1,0 +1,18 @@
+[library]
+name = "duckdb"
+version = "0.0.1"
+
+# @PLN24 arc G — duckdb is declared OPTIONAL, and it is the reason arc G exists.
+# libduckdb is a ~70 MB download that no distribution installs by default, so a
+# package that REQUIRED it would make every consumer of this fixture install it
+# to run the sqlite cell. Declared here, the library is neither linked by
+# `--native` nor opened at load: a program that never calls into it builds and
+# runs on a machine that has never heard of duckdb, and `c_library_available`
+# is how this backend finds out whether it may proceed.
+#
+# One optional library per package is not a style rule — it is what makes the
+# availability answer symbol-granular (`c_call::library_symbol_table`), because
+# a `#c` annotation never names the library it comes from.
+[c]
+optional-libs = "libduckdb.so"
+shim = "src/shim.c"

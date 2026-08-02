@@ -1780,25 +1780,27 @@ extern crate loft;"
             // undefined reference left to keep its `DT_NEEDED` entry alive, and
             // re-opening one that is already loaded costs nothing.
             //
-            // Emitted whenever the program declares any C library — not only
-            // when something is lazy — because `c_library_available` must be
-            // answerable in a program that makes no lazy call at all.
-            if !data.c_libraries.is_empty() {
-                writeln!(w, "static __C_LIBS: &[(&str, &str)] = &[")?;
-                for lib in &data.c_libraries {
-                    writeln!(w, "    ({:?}, {:?}),", lib.name, lib.pkg_dir)?;
-                }
-                writeln!(w, "];")?;
-                writeln!(w, "static __C_LIB_SYMS: &[(&str, &[&str])] = &[")?;
-                for (lib, syms) in crate::c_call::library_symbol_table(data) {
-                    write!(w, "    ({lib:?}, &[")?;
-                    for s in &syms {
-                        write!(w, "{s:?}, ")?;
-                    }
-                    writeln!(w, "]),")?;
-                }
-                writeln!(w, "];")?;
+            // Emitted UNCONDITIONALLY, even empty. `c_library_available`'s
+            // `#rust` body reads them, and that body is compiled into whichever
+            // unit calls it — the main binary or an auto-built package cdylib,
+            // which links its own copy of loft and therefore has its own copy of
+            // these tables. Emitting them only "when needed" is what made the
+            // same query answer true from a program and false from inside the
+            // package that declared the library.
+            writeln!(w, "static __C_LIBS: &[(&str, &str)] = &[")?;
+            for lib in &data.c_libraries {
+                writeln!(w, "    ({:?}, {:?}),", lib.name, lib.pkg_dir)?;
             }
+            writeln!(w, "];")?;
+            writeln!(w, "static __C_LIB_SYMS: &[(&str, &[&str])] = &[")?;
+            for (lib, syms) in crate::c_call::library_symbol_table(data) {
+                write!(w, "    ({lib:?}, &[")?;
+                for s in &syms {
+                    write!(w, "{s:?}, ")?;
+                }
+                writeln!(w, "]),")?;
+            }
+            writeln!(w, "];")?;
             if !lazy.is_empty() {
                 write!(w, "{lazy}")?;
             }
@@ -2096,17 +2098,6 @@ extern crate loft;"
             return (String::new(), String::new());
         }
         let mut prelude = String::new();
-        // @PLN24 arc G — hand the baked-in C-library tables to the runtime before
-        // any loft code runs, so `c_library_available` can answer in a program
-        // that never makes a lazy `#c` call. Emitted only for a program that
-        // declares C libraries, which keeps every other program's generated
-        // source byte-identical.
-        if !self.data.c_libraries.is_empty() {
-            let _ = writeln!(
-                prelude,
-                "    loft::c_call::register_native(__C_LIBS, __C_LIB_SYMS);"
-            );
-        }
         let mut args = String::new();
         for (i, a) in self.data.def(d_nr).attributes().iter().enumerate() {
             if !a.hidden {

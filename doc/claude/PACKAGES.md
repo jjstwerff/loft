@@ -510,6 +510,7 @@ declaration: `void*` bound to `text` is either a mistake or a handle that wanted
 [c]
 libs = "libpq.so.5"            # a soname the dynamic linker knows
 # libs = "../../libmine.so"    # or a path, resolved against the package dir
+optional-libs = "libduckdb.so" # bound, but not required to be installed
 shim = "src/shim.c"            # ANSI-C loft compiles itself, with `cc`
 ```
 
@@ -519,6 +520,41 @@ halves.  A binding to **libc needs no entry** — it is already in the process.
 
 Distinct from `[native] runtime-libs`, which names what a Rust cdylib needs
 present and only probes for it.
+
+#### Optional libraries — `optional-libs` (arc G)
+
+**`libs` means the package does not work without it.**  Absent, the failure is
+early and actionable: the interpreter reports it, and `--native` will not even
+link.  That is the right answer for a package's one reason to exist.
+
+**`optional-libs` means the package binds it but works without it.**  It is not
+linked and not opened at load; it is opened when a symbol from it is first
+looked up, and `--native` resolves it at that moment too instead of putting it
+on the link line.  So a program that never calls into it **builds and runs on a
+machine where the library is not installed** — which is what lets one package
+offer several backends without making a user install all of them to use one.
+
+The cost is that presence becomes a question the program must ask:
+
+```loft
+if c_library_available("libduckdb.so") { … } else { /* fall back */ }
+```
+
+Ask it *before* the first call.  A `#c` symbol that cannot be resolved **faults**
+— `#c` is the declared edge of loft's totality, not a null-returning
+computation — so this query is what keeps an optional backend inside the
+no-runtime-errors rule (C80).
+
+`c_library_available` answers true when the library loads **and** every `#c`
+symbol attributable to it resolves.  Both halves matter: a library of the wrong
+vintage loads and exports only some of its symbols, so "the file is there" would
+say yes where the call still faults.
+
+**Declare an optional library in a package that binds it alone.**  A `#c`
+annotation never names the library it comes from, so symbols are attributed by
+package — and in a package declaring several libraries nothing says which one
+exports what.  Such a package still answers the load question correctly, but
+gives up the version-skew half.  One package per optional library keeps it.
 
 **`shim`** names ANSI-C sources the package ships for the signatures the fixed
 trampolines cannot express — a `double` argument, a struct by value, varargs, an

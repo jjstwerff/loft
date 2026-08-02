@@ -426,6 +426,25 @@ pub fn register_native(libs: &[(&str, &str)], syms: &[(&str, &[&str])]) {
 /// dynamic linker for it. Asking about one is a program bug, and false is the
 /// answer that keeps a caller on its fallback path instead of into a fault
 /// (C80: no runtime errors, ever).
+/// [`library_available`], for generated Rust — the main binary AND every
+/// auto-built package cdylib.
+///
+/// A cdylib links its own copy of loft, so the tables [`register`] filled in
+/// the interpreter's process are NOT the tables a function compiled into a
+/// package can see: measured, `duckdb_available()` answered false from inside
+/// the package while the identical call from the program answered true. The
+/// generated source carries the tables, so passing them is what makes one
+/// question have one answer wherever it is asked from.
+#[must_use]
+pub fn library_available_native(
+    name: &str,
+    libs: &[(&str, &str)],
+    syms: &[(&str, &[&str])],
+) -> bool {
+    register_native(libs, syms);
+    library_available(name)
+}
+
 #[must_use]
 pub fn library_available(name: &str) -> bool {
     open_pending_optional();
