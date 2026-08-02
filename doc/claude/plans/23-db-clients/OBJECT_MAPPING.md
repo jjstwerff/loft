@@ -128,8 +128,8 @@ alongside one.
 | step | what it proves | how it is proved |
 |---|---|---|
 | **S0** | a scoped test server exists | `loft` user restricted to `loft_test*`; anything else is `ERROR 1044`. Tests self-skip when absent — **done** |
-| **S1** | `#c` reaches libmariadb at all | `mysql_get_client_info() -> text`, one declaration, zero rustc, both backends identical. Also closes **@PLN24 arc F** |
-| **S2** | the handle lifecycle | `mysql_init` / `mysql_real_connect` / `mysql_close` through the opaque-handle convention (`integer`) |
+| **S1** | `#c` reaches libmariadb at all | **done** — `mysql_get_client_info() -> text`, zero rustc, both backends identical. Also closes **@PLN24 arc F** |
+| **S2** | the handle lifecycle | **done** — `mysql_init` / `mysql_real_connect` / `mysql_close`; the handle round-trips and C's own error crosses back as `text` |
 | **S3** | the cursor model | `mysql_query` + `mysql_store_result` + `mysql_fetch_row`; read one row of scalars |
 | **S4** | prepared statements | `mysql_stmt_*`. `MYSQL_BIND` is an array of structs, so this is where the ANSI-C shim earns its keep (@PLN24 arc D) |
 | **S5** | a FLAT struct round-trips | one loft struct ↔ one table, written and read back, compared by content digest |
@@ -139,6 +139,32 @@ alongside one.
 S1–S3 are worth doing even if the mapping is never built: they are the proof
 @PLN24 has been waiting for since arc F was written, on a real library rather
 than a fixture.
+
+## What S1 and S2 already changed
+
+**The raw C surface is not the loft API surface, and loft says so itself.**
+Declaring `mysql_real_connect` verbatim trips loft's own advice at the
+declaration:
+
+> `db_connect` takes 8 required parameters — every caller has to get all 8 right,
+> in order. Parameters that travel together are usually one thing.
+
+It is right, and it is the argument for the plan's `connect(opts)` shape rather
+than a restatement of the C prototype. The `#c` layer stays a faithful binding of
+what the library actually exports; the `sql` interface above it is where the API
+is designed. Keeping those two apart is what stops the C API's ergonomics
+becoming loft's.
+
+**A NULL pointer argument needs a non-`text` parameter.** `mysql_real_connect`
+takes `unix_socket` as `const char *` that is normally NULL, and loft `text` is
+non-null with no way to spell a null pointer. It is declared `integer` (0 = NULL),
+which the handle convention already allows in both directions. Any C parameter
+that is "a string, or NULL" meets this — it is a recurring shape, not a one-off.
+
+**The error path crosses.** `mysql_errno` / `mysql_error` bring C's own diagnosis
+back as an `integer` and a `text` — measured: `errno=1045`, `Access denied for
+user 'loft'@'localhost' (using password: YES)`. So the error taxonomy the plan
+asks for has a real source; it does not need inventing.
 
 ## Open
 

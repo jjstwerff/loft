@@ -1251,6 +1251,97 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
+/// @PLN23 S2 — the opaque-handle lifecycle against a real client library.
+///
+/// `MYSQL *` crosses as a loft `integer` holding the pointer, which is the
+/// convention @PLN24 chose because loft has no type separating a handle from a
+/// number. Three things have to hold: a handle comes back, it survives being
+/// passed BACK in, and a failure carries C's own message across.
+///
+/// Deliberately **not** gated on a running server. A test that skips when the
+/// database is absent cannot tell "no server" from "the binding is broken", and
+/// would report a dead binding as a pass on every machine without MariaDB. So
+/// the cells here need no server at all: `mysql_init` and `mysql_close` are
+/// client-side, and connecting to a port nothing listens on exercises the error
+/// path — the binding is proved either way, and only the SPEED of the failure
+/// depends on the environment.
+#[test]
+fn a_c_library_handle_survives_the_round_trip_and_carries_its_error() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let present = [
+        "/lib/x86_64-linux-gnu/libmariadb.so.3",
+        "/usr/lib/libmariadb.so.3",
+    ]
+    .iter()
+    .any(|p| std::path::Path::new(p).exists());
+    if !present {
+        return Ok(());
+    }
+    let dir = std::env::temp_dir().join("loft_pln23_s2");
+    let pkg = dir.join("mariadb").join("src");
+    std::fs::create_dir_all(&pkg)?;
+    std::fs::write(
+        dir.join("mariadb").join("loft.toml"),
+        "[library]\nname = \"mariadb\"\nversion = \"0.0.1\"\n\n[c]\nlibs = \"libmariadb.so.3\"\n",
+    )?;
+    std::fs::write(
+        pkg.join("mariadb.loft"),
+        // `unix_socket` is `integer`, not `text`: it has to be able to be NULL,
+        // and loft text is non-null with no way to spell a null pointer.
+        "pub fn db_init(h: integer) -> integer;  #c \"mysql_init\" \"void*(void*)\"\n\
+         pub fn db_close(h: integer);            #c \"mysql_close\" \"void(void*)\"\n\
+         pub fn db_errno(h: integer) -> integer; #c \"mysql_errno\" \"int(void*)\"\n\
+         pub fn db_error(h: integer) -> text;    #c \"mysql_error\" \"const char*(void*)\"\n\
+         pub fn db_connect(h: integer, host: text, user: text, pass: text, db: text, port: integer, sock: integer, flags: integer) -> integer;\n\
+         #c \"mysql_real_connect\" \"void*(void*, const char*, const char*, const char*, const char*, int, const char*, long)\"\n",
+    )?;
+    let prog = dir.join("s2.loft");
+    std::fs::write(
+        &prog,
+        "use mariadb;\n\
+         fn main() {\n\
+         \x20 h = db_init(0);\n\
+         \x20 println(\"handle {h != 0}\");\n\
+         \x20 // Port 1 has no MariaDB anywhere; the point is the error crossing.\n\
+         \x20 c = db_connect(h, \"127.0.0.1\", \"nobody\", \"nothing\", \"\", 1, 0, 0);\n\
+         \x20 println(\"refused {c == 0} errno {db_errno(h) != 0} msg {db_error(h).len() > 0}\");\n\
+         \x20 db_close(h);\n\
+         \x20 println(\"closed\");\n\
+         }\n",
+    )?;
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&dir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        "handle true",                      // a pointer came back as an integer
+        "refused true errno true msg true", // and C's own diagnosis came back with it
+        "closed",                           // the handle was still usable at the end
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    assert_eq!(run("--native")?, interp, "both backends, one C library");
+    Ok(())
+}
+
 /// @PLN24 arc F / @PLN23 S1 — a `#c` binding reaches a real SYSTEM library, on
 /// both backends, with no rustc and no dev headers.
 ///
