@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arcs A, B, C, D done; E and F open.** The architecture probe is built and has run
+**Arcs A, B, C, D done; E, F and G open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -318,6 +318,125 @@ What it costs, precisely — less than it sounds:
 Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 (out-of-process placement), not this plan's.
 
+## Arc G — optional libraries: binding more than the user installs
+
+@PLN23's client binds three C libraries (sqlite3, mariadb, libpq). A package
+that declares all three today REQUIRES all three, so "supports three databases"
+reads to a user as "install three database clients to get one". The question is
+whether a declared library can be loaded on demand, and the answer is **not
+symmetric across the backends** — which is the finding, because it means this
+is not the interpreter change it looks like.
+
+**Measured on this tree** (2026-08-02), not reasoned from the code. The probe is
+`tests/fixtures/c_abi/pkg/lcabi` with one bogus soname appended to its `[c]
+libs` and one binding declared against it: a package naming one present library
+and one absent one, with the absent one's binding called in only the second
+cell. The present library's call (`lc_strlen("hello")` → **5**, hand-computed)
+is in every cell, so a cell that prints nothing is a broken harness rather than
+a result:
+
+| | `--interpret` | `--native` |
+|---|---|---|
+| absent library, its binding **never called** | runs, right answer | **does not build** — `unable to find library -l:libtotallynotreal.so.9` |
+| absent library, its binding **called** | right answer, then a Rust panic at the call | does not build |
+
+Two facts, neither of them what the code reads like:
+
+- **The interpreter is already lazy for an ABSENT library, and nobody designed
+  it that way.** `c_call::register` calls `load_c_library` and discards the
+  result (`src/c_call.rs:259`), and `c_call::dispatch` resolves the symbol PER
+  CALL (`src/c_call.rs:360`) rather than caching a pointer at wiring time — so
+  `CBinding` holds no pointer and a failed `dlopen` costs nothing until a
+  lookup. The eager loop is a startup COST for libraries that exist, not a
+  barrier to ones that do not.
+- **`--native` fails earlier than "won't start": it won't BUILD.** Every
+  declared library goes on the link line (`add_c_library_flags`,
+  `src/native_utils.rs:1471`), so an absent one is a link error on a program
+  that never calls into it. `--native` is the default backend, so that link
+  line is the whole of the gap.
+
+### The invariant this arc must not break
+
+Arc D already paid for one half of this: `-lmariadb` resolves to the `-dev`
+package's symlink while the interpreter `dlopen`s `libmariadb.so.3`, so one
+declaration named two different files, and `-l:<file>` was the fix. Making the
+interpreter lazier while `--native` stays eager re-opens that seam one level up
+— the same manifest would run under `--interpret` and refuse to build under
+`--native`, on a machine where nothing is wrong. **Laziness is a two-backend
+change or it is not taken.** The asymmetry in the table above is not a
+precedent for shipping another one; it is the defect.
+
+### Design
+
+1. **`[c] optional-libs = "libpq.so.5, libmariadb.so.3"` — a second list, not a
+   flip of the first.** `[c] libs` keeps meaning *this package does not work
+   without it*, which is worth an early and actionable failure. Optionality is a
+   claim the author makes about their own library, and the manifest is where
+   they make it — deriving it from whether a `dlopen` happened to succeed would
+   make the same package required on one machine and optional on the next.
+2. **Interpreter:** drop optional entries from `register`'s eager loop and load
+   them from `resolve`'s MISS path — loaded cdylibs → the process → `dlopen` the
+   declared-but-unopened optional libraries → retry. Arc B's rule survives
+   intact: one resolver, so a symbol cannot mean two different things depending
+   on which caller asked.
+3. **`--native`:** no `-l` flag for an optional entry, and
+   `output_c_direct_call` emits the call through a per-symbol lazily-resolved
+   pointer (`dlopen` the declared soname + `dlsym` on first use, memoised)
+   instead of a plain `extern "C"`. **The resolved pointer must be transmuted to
+   the typed signature `CSignature` already produces.** A `u64` trampoline here
+   would throw away the one thing arc C bought — rustc getting the ABI right
+   from the declared widths — and hand back the exact wrong-width return arc C
+   measured (`atoi("-1")` read as 4294967295).
+4. **The availability query, without which "optional" only moves the failure
+   later.** A missing symbol panics (`src/c_call.rs:361`) — and it arrives as a
+   Rust panic naming a `src/` path, not as a loft diagnostic. That is the right
+   answer for a library the manifest PROMISED. It is the wrong answer for one it
+   merely offered, because the point of the arc is that the library CHOOSES a
+   backend, and choosing means asking first. Lean a builtin taking the declared
+   soname (`c_library_available("libpq.so.5")`) over per-binding null returns: it
+   answers before the call rather than at it, and it does not put a `τ?` on
+   every binding in an optional library.
+5. **The query answers about SYMBOLS, not about the file.** A present library of
+   the wrong vintage exports a subset, so a file-granular answer is available
+   where the call still panics — the version-skew hole, and the one place a
+   naive implementation of (4) is worse than no query at all. `available` is
+   therefore *the `dlopen` succeeded AND every `#c` symbol declared against this
+   library resolves in it*. Both are already computable at the moment the query
+   runs, and the loft declarations are the list to check against, which is this
+   plan's invariant doing its job.
+
+### Re-assertion sites — counted, before any code
+
+Optional-vs-required is a new fact, restated by (1) the interpreter's load
+decision, (2) the native link line, (3) the native emission (`extern "C"` vs
+lazy pointer), and (4) the availability query. Four sites, and this plan's
+counted risk is that omission is **silent at every one**. The collapse is the
+one the plan already uses for signatures: parse the manifest once into a flag on
+the `data.c_libraries` entry, and have all four read that. Nothing re-derives
+optionality from a name, a path shape, or a `dlopen` outcome.
+
+### What would falsify it
+
+- **A lazily-resolved `--native` call is too slow** for a driver in its inner
+  loop (one predictable branch per call, against a direct `extern "C"`). Measure
+  on arc F's libpq subset before making it the emission for optional entries; if
+  it bites, the answer is one resolved-once table per library, not abandoning
+  the arc.
+- **`dlopen` from a generated binary needs a link flag on some target** (`-ldl`
+  historically), which would put a flag back on the line this arc exists to
+  empty. Check against the target list arc E settles, not just this host.
+- **The `--interpret` cell above is a bug, not a feature.** A required library
+  that is absent should arguably fail at load with the package named, and today
+  it does not — the discarded `load_c_library` result. If tightening that is
+  right, it lands with this arc rather than against it, because the two halves
+  are one decision: required fails early, optional does not fail at all.
+
+Rust cdylibs (`#native`) are deliberately **out of scope**. They could go lazy
+too — `compute_sig` derives the signature from the loft declarations alone and
+`native_auto_dispatch` already does a per-call table lookup — but the eager step
+there is `auto_build_native`, a cargo BUILD, and deferring it moves when compile
+errors surface. Different fact, different plan (@PLN21/@PLN11).
+
 ## Sub-arcs
 
 | Item | Status |
@@ -328,6 +447,7 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 | **D** — packaging | **Done** — `[c] libs` declares + loads + links, a `char *` return crosses as `text` / `text?`, and `[c] shim` is ANSI-C loft compiles itself (`cc`, never rustc) at parse and at `loft install` |
 | **E** — the other two targets (the parity arc) | Open — see below |
 | **F** — prove it: a libpq subset for @PLN23, zero rustc | Open |
+| **G** — optional libraries: `[c] optional-libs` loaded on demand, both backends, plus the availability query | Open — designed above; the blocker is the `--native` link line, not the interpreter |
 
 ## Phase ordering
 
@@ -341,7 +461,10 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
    is the calibration that says the oracle itself is sound.
 4. **D**, then **F** — a real library is the only thing that finds what the
    fixture did not imagine.
-5. **E** last, and only against a real consumer's actual target list.
+5. **G after F**, for the same reason D came before F: the three-backend client
+   is what says whether "optional" is worth a manifest key or whether a user
+   installing one client library was never actually the complaint.
+6. **E** last, and only against a real consumer's actual target list.
 
 ## Composition matrix — Stage A
 
@@ -378,7 +501,9 @@ involved. Arc B is done when every cell is green on both backends.
 ## Cross-arc dependencies
 
 - **@PLN23** (MariaDB + PostgreSQL clients) — the first consumer and the reason
-  the fixture carries the opaque-handle shape. Blocked on this.
+  the fixture carries the opaque-handle shape. Blocked on this, and the reason
+  arc G exists: it binds three C libraries, and without G a user gets one
+  database by installing three.
 - **@PLN119** (out-of-process libraries) — arc E's most likely answer for any
   `#c` library whose capability does not exist in wasm at all.
 - **@PLN21** (prebuilt native libs) — a `#c` library needs no rustc prebuild,
