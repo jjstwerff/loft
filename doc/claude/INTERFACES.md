@@ -386,8 +386,8 @@ the order of apparent size:
    `const` can recover it afterwards (both measured). This is what blocks a safe
    SQL, shell, HTML or path builder — the whole injection family, which is one
    construction with different `lit`/`hole` pairs. Designed in
-   [plans/23-db-clients/INTERPOLATION_HOOK.md](plans/23-db-clients/INTERPOLATION_HOOK.md);
-   re-assertion count is **1**, because `formatted_string` already branches on
+   [plans/23-db-clients/INTERPOLATION_HOOK.md](plans/23-db-clients/INTERPOLATION_HOOK.md)
+   and tracked as **@PLN124**; re-assertion count is **1**, because `formatted_string` already branches on
    target kind and the result is ordinary method calls, so neither backend needs
    a new path.
 
@@ -395,7 +395,7 @@ the order of apparent size:
    interface cannot say "a connection, and the cursor type it produces", so the
    cursor became state ON the connection; and an interpolation `hole` cannot be
    generic over the value, so it needs one method per scalar kind. Both are
-   liveable and both are the same missing feature.
+   liveable and both are the same missing feature. Tracked as **@PLN125**.
 
 3. **A hook at scope end.** loft already computes the fact — the ownership model
    decides per binding whether this scope owns a value and whether it dies here,

@@ -185,7 +185,9 @@ writing a collection non-atomically is not a smaller step, it is a wrong one.
 
 ## Status
 
-Design only. The hook is a **language feature** and belongs to loft rather than
-to @PLN23 — the DB library is its first consumer and its motivating case, not its
+Design only, and now tracked as **@PLN124** (`status:next`). The companion
+constraint — `hole` needing one method per scalar kind — is **@PLN125**
+(associated types). The hook is a **language feature** and belongs to loft rather
+than to @PLN23 — the DB library is its first consumer and its motivating case, not its
 owner. The measurement above (neither types nor `const` can carry the
 distinction) is the argument for building it rather than working around it.
