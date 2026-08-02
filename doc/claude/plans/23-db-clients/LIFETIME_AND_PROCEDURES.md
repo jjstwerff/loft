@@ -95,6 +95,53 @@ for `sql` is a hook with one user. If it lands, it should be `#drop fn` on a
 struct, wired to the existing free site, and its first proof should be a
 transaction *and* something unrelated, or the invariant is untested.
 
+## Part 1b — transactions: the contract the mapping depends on
+
+Atomicity is not a feature of this design, it is a **precondition of the object
+mapping**. A whole-collection write is "replace the child rows for one owner" —
+several statements. Without one transaction around them, a crash leaves a
+collection half written and the read path cannot tell: it sees rows, they are
+wrong, and nothing says so. So:
+
+> **One object-graph write is one transaction.** Not "should be" — the mapping is
+> unsound otherwise, and no reader can detect the damage afterwards.
+
+### On the interface
+
+Three methods, because all three backends spell them the same way (`BEGIN` /
+`COMMIT` / `ROLLBACK` are ordinary statements on sqlite, MariaDB and
+PostgreSQL — this is the rare place where uniform is free):
+
+```loft
+fn db_begin(self: Self) -> boolean
+fn db_commit(self: Self) -> boolean      // may FAIL, and you get the answer
+fn db_rollback(self: Self) -> boolean
+```
+
+`db_commit` returns a status because a commit can fail for real — a constraint,
+a deadlock, a lost connection — and that is precisely the moment a caller must
+find out. This is the asymmetry Part 1 rests on: **commit is a call that answers;
+rollback-on-abandon is the drop that does not.**
+
+### What must be refused rather than emulated
+
+- **Nesting.** None of the three nest `BEGIN`. `SAVEPOINT` is the real mechanism
+  and is spelled differently enough to be a separate design; until then a
+  `db_begin` inside a transaction is an error, not a silent no-op. A silent
+  no-op is the dangerous version, because the inner "rollback" would then discard
+  the OUTER transaction's work.
+- **DDL inside a transaction.** MariaDB commits implicitly on DDL; PostgreSQL and
+  sqlite do not. So a migration that mixes DDL and data in one transaction is
+  atomic on two backends and not on the third — refused, not papered over.
+
+### Interaction with the procedure emulation
+
+A server-side procedure is one round trip and therefore implicitly atomic for the
+statements inside it. The sqlite emulation (Part 2) is several round trips and is
+**not**. So a procedure that relies on internal atomicity must be called inside an
+explicit transaction, and the emulation is what makes that a rule rather than an
+accident of which backend you are on.
+
 ## Part 2 — a procedure defined by string formatting
 
 ### The distinction the whole design rests on
@@ -123,7 +170,15 @@ So the rule:
 
 `"{x}"` interpolates anything, so the type system cannot tell a table name from a
 user's surname. Left there, the rule is a comment and the first mistake is a
-vulnerability. Two ways to make it hold, and they compose:
+vulnerability.
+
+**The real answer is [INTERPOLATION_HOOK.md](INTERPOLATION_HOOK.md)** — make the
+literal/hole boundary survive into a library type, so a value has no path into
+SQL syntax at all. Two mechanisms were tried first and both were MEASURED to
+fail: a type cannot carry it (formatting renders everything to text) and `const`
+cannot either (a const string interpolates runtime data quite happily). The two
+gates below are what a library can do *without* the hook, and they remain useful
+with it:
 
 1. **A distinct type for what may be interpolated.** `SqlIdent` is constructed by
    a checked function (`ident("orders")` — refuses anything that is not a bare

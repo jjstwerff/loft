@@ -133,6 +133,7 @@ alongside one.
 | **S3** | the cursor model | **done** — `mysql_query` / `mysql_store_result` / `mysql_fetch_row`, a real result set walked through a loft-built shim, SQL NULL distinct from `''` |
 | **S3b** | one contract, several libraries | **done** — `SqlDb` over sqlite, postgres and mariadb; one generic `dump` that never names a backend. duckdb proven too, not vendored (70 MB) |
 | **S4** | prepared statements | `mysql_stmt_*`. `MYSQL_BIND` is an array of structs, so this is where the ANSI-C shim earns its keep (@PLN24 arc D) |
+| **T1–T3** | transactions | begin / commit / rollback on all three backends; nesting refused. See [INTERPOLATION_HOOK.md § Transaction ladder](INTERPOLATION_HOOK.md) — cheap, and S5 needs it |
 | **S5** | a FLAT struct round-trips | one loft struct ↔ one table, written and read back, compared by content digest |
 | **S6** | sub-records, one kind per step | `vector<scalar>` → `vector<struct>` → `hash` → `sorted`. Each is one child table and one addressing rule |
 | **S7** | the mapping generalises | the single address function drives DDL, write, read; migration on a changed struct |
@@ -194,11 +195,12 @@ gaps are named here rather than discovered later:
 - `ChildRec` / stored `DbRef` — they exist in `Parts` and are unaddressed here.
 - `float` / `single` precision across a `NUMERIC` column.
 
-**Atomicity is missing, and it is not optional.** The mapping is defined for
-whole-collection writes — replace the child rows for one owner — which is several
-statements. Without a transaction around them a crash leaves a collection half
-written, and the read path cannot tell. Every write of an object graph is one
-transaction, or the mapping is unsound.
+**Atomicity** — now designed, in
+[LIFETIME_AND_PROCEDURES.md § Part 1b](LIFETIME_AND_PROCEDURES.md). One
+object-graph write is one transaction; the mapping is unsound otherwise, because
+a crash leaves a collection half written and the read path cannot tell. It
+belongs in **S5/S6**, not S7: S6 writes collections, and writing them
+non-atomically is not a smaller step, it is a wrong one.
 
 **Concurrency is unaddressed.** Ordinals are not stable under mutation (noted
 above), and two writers to one owner's child rows interleave. There is no design
