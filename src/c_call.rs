@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I74 — CDylib extension loader: the `#c` direct C-ABI caller (@PLN24 arc B).
 
 //! @PLN24 arc B — the interpreter's caller for a `#c` binding.
 //!

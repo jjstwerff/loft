@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I74 — CDylib extension loader: the `#c` signature every caller derives from (@PLN24 arc A).
 
 //! @PLN24 arc A — the C signature a `#c` binding declares, and the one place it
 //! is understood.
