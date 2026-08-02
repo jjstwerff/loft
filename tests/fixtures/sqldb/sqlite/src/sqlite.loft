@@ -52,12 +52,9 @@ pub fn db_next(self: Sqlite) -> boolean {
   return false;
 }
 
-pub fn db_is_null(self: Sqlite, i: integer) -> boolean {
-  return s3_col_type(self.st, i) == 5;              // 5 = SQLITE_NULL
-}
-
-pub fn db_col(self: Sqlite, i: integer) -> text {
-  return s3_col_text(self.st, i) ?? "";
+pub fn db_col(self: Sqlite, i: integer) -> text? {
+  if s3_col_type(self.st, i) == 5 { return null }   // 5 = SQLITE_NULL
+  return s3_col_text(self.st, i);
 }
 
 pub fn db_width(self: Sqlite) -> integer { return s3_col_count(self.st); }

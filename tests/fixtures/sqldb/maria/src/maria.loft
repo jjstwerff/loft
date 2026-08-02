@@ -60,8 +60,7 @@ pub fn db_next(self: Maria) -> boolean {
   return false;
 }
 
-pub fn db_is_null(self: Maria, i: integer) -> boolean { return my_col(self.row, i) == null; }
-pub fn db_col(self: Maria, i: integer) -> text { return my_col(self.row, i) ?? ""; }
+pub fn db_col(self: Maria, i: integer) -> text? { return my_col(self.row, i); }
 pub fn db_width(self: Maria) -> integer { return my_nfields(self.res); }
 pub fn db_last_error(self: Maria) -> text { return my_error(self.conn); }
 pub fn db_shut(self: Maria) {

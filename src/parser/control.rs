@@ -949,6 +949,24 @@ impl Parser {
                 }
                 Self::push_text_arms_into(&mut tail, av);
                 l[last] = tail;
+                // loft#733 — introduce `av` at THIS scope, BEFORE the branch that
+                // writes it. The per-arm `Set`s live INSIDE the branch, so without
+                // this statement nothing introduces `av` here: codegen declares it
+                // where it is first assigned — inside the `ncc` block — and the read
+                // that follows the block is out of scope.
+                //
+                // Non-generic code hid this: `text_return` promotes `av` to the
+                // hidden `&text` PARAMETER, so there is no local to misplace. A
+                // generic MONOMORPH re-runs promotion in
+                // `promote_monomorph_text_return`, which binds its own `__tret` and
+                // promotes THAT — leaving `av` a block-local read from outside. The
+                // interpreter then read an empty text (a wrong ANSWER, exit 0) and
+                // native failed to compile: the accept/reject divergence in #733.
+                //
+                // The bind-site analogue (`push_text_arms_into`'s caller) already
+                // documents this leading `Set` as load-bearing for exactly the same
+                // reason; the tail promotion was missing it.
+                l.insert(last, crate::data::v_set(av, Value::Text(String::new())));
                 l.push(if is_ret {
                     Value::Return(Box::new(Value::Var(av)))
                 } else {

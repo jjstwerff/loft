@@ -8,19 +8,16 @@
 // That is a real constraint, not a preference — and it is the honest shape for
 // a language whose generics specialise at compile time.
 //
-// The nullable column is SPLIT into `db_is_null` + `db_col` rather than one
-// `text?`. That is a workaround for loft#733 (a `text?` interface method through
-// a bounded generic returns nothing on --interpret and does not compile on
-// --native), and it is worth saying so: the one-accessor `text?` form is the API
-// anyone would design, and it should come back when #733 is fixed. The split
-// happens to match what JDBC/ODBC do, which makes it liveable, not right.
+// A nullable column is ONE accessor returning `text?`: SQL NULL and the empty
+// string are different answers and the type says so, so a caller must discharge
+// the null rather than receive it unannounced. (This was split into
+// `is_null` + `col` while loft#733 was open; that bug is fixed.)
 pub interface SqlDb {
   fn db_open(self: Self, target: text) -> boolean
   fn db_exec(self: Self, sql: text) -> boolean
   fn db_select(self: Self, sql: text) -> boolean
   fn db_next(self: Self) -> boolean
-  fn db_is_null(self: Self, i: integer) -> boolean
-  fn db_col(self: Self, i: integer) -> text
+  fn db_col(self: Self, i: integer) -> text?
   fn db_width(self: Self) -> integer
   fn db_last_error(self: Self) -> text
   fn db_shut(self: Self)

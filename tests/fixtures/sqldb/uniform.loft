@@ -34,7 +34,8 @@ fn dump <D: SqlDb> (d: D, sql: text) -> text {
   out = "";
   if !d.db_select(sql) { return "select failed: {d.db_last_error()}" }
   while d.db_next() {
-    if d.db_is_null(1) { out += "<null> " } else { out += "[{d.db_col(1)}] " }
+    c = d.db_col(1);
+    if c == null { out += "<null> " } else { out += "[{c ?? ""}] " }
   }
   return out;
 }

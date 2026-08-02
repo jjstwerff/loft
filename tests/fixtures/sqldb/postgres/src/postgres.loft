@@ -50,11 +50,8 @@ pub fn db_next(self: Postgres) -> boolean {
   return false;
 }
 
-pub fn db_is_null(self: Postgres, i: integer) -> boolean {
-  return pq_getisnull(self.res, self.at, i) == 1;
-}
-
-pub fn db_col(self: Postgres, i: integer) -> text {
+pub fn db_col(self: Postgres, i: integer) -> text? {
+  if pq_getisnull(self.res, self.at, i) == 1 { return null }
   return pq_getvalue(self.res, self.at, i);
 }
 
