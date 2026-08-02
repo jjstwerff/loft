@@ -100,6 +100,15 @@ LC_API const char *lc_static_text(void);
 LC_API char *lc_alloc_text(const char *s);
 LC_API void lc_free(void *p);
 
+/* The two answers a `char *` return can carry that loft `text` has no C
+ * counterpart for, so a binding has to decide them rather than inherit them:
+ * a NULL pointer (C's "no string"; loft's null is a CONTENT sentinel), and
+ * bytes that are not UTF-8 (loft text is UTF-8 by definition; C is bytes).
+ * Both must read identically on the two backends or the crossing is not one
+ * mapping but two. */
+LC_API const char *lc_maybe_text(int64_t present);
+LC_API const char *lc_latin1_text(void);
+
 /* ---- DIRECT: vectors (pointer + count) ---------------------------------- */
 LC_API int64_t lc_i64_sum(const int64_t *p, int64_t n);
 LC_API int64_t lc_i32_sum(const int32_t *p, int64_t n);

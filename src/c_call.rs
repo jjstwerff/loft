@@ -232,6 +232,9 @@ pub struct CBinding {
     /// alone is half of it.
     pub loft_params: Vec<crate::data::Type>,
     pub void_return: bool,
+    /// A `char *` return bound to loft `text`, which comes back through the
+    /// destination record rather than the value stack (@PLN24 arc D).
+    pub text_return: bool,
 }
 
 /// Side table: library index -> the binding that index calls. Populated by
@@ -274,6 +277,7 @@ pub fn register(state: &mut crate::state::State, data: &crate::data::Data) {
             sig,
             loft_params,
             void_return: matches!(def.returned(), crate::data::Type::Void),
+            text_return: crate::state::codegen::is_c_text_call(def),
         };
         state.static_fn(def.name(), dispatch);
         if let Some(&idx) = state.library_names.get(def.name()) {
@@ -372,9 +376,58 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     if binding.void_return {
         return;
     }
+    if binding.text_return {
+        // The dest was stashed by `n_set_bridge_dest`, which the call site emits
+        // immediately before this one (`gen_cdylib_text_dest_call`). Write into
+        // it and push nothing — the codegen's stack accounting expects exactly
+        // that, the same contract the cdylib bridge honours.
+        let Some(dest) = stores.bridge_text_dest.take() else {
+            panic!(
+                "`#c` text binding '{}' was called with no destination — a text return \
+                 reaches C only through `gen_cdylib_text_dest_call`",
+                binding.sig.symbol
+            );
+        };
+        let s = c_text(raw);
+        stores
+            .store_mut(&dest)
+            .addr_mut::<String>(dest.rec, dest.pos)
+            .push_str(&s);
+        return;
+    }
     // The declared width is what makes this right; read raw, a negative `int`
     // would arrive as a large positive.
     stores.put(stack, narrow_return(raw, &binding.sig.ret));
+}
+
+/// Bring a C `char *` return back as loft text.
+///
+/// Three decisions, and both backends make the same three (`--native` emits the
+/// twin of this in `output_c_direct_call`) — a text return that differed between
+/// them would be exactly the divergence arc C was built to stop:
+///
+/// - **NULL is loft null.** text-null is CONTENT-based (`STRING_NULL`), so the
+///   record carries it and `??` / `!` / `match` read it as null.
+/// - **The bytes end at the first NUL**, because that is what `char *` means. A
+///   loft text carries a length and can hold an interior NUL; a C string cannot,
+///   so the crossing truncates there rather than inventing a length.
+/// - **Invalid UTF-8 is replaced, not refused** — loft text is UTF-8, and a
+///   locale-encoded byte from C must not take the program down (C80).
+///
+/// The pointer is COPIED and never freed. See the return check in
+/// `c_signature::check` for why borrowed is the only safe default.
+#[must_use]
+fn c_text(raw: u64) -> String {
+    if raw == 0 {
+        return crate::state::STRING_NULL.to_string();
+    }
+    let p = raw as *const std::ffi::c_char;
+    // SAFETY: the declaration says this symbol returns `char *`, and that
+    // declaration is the sole authority (there is no runtime signal to check it
+    // against — the plan's central measurement). A non-NUL pointer from a
+    // correctly declared symbol points at a NUL-terminated string.
+    let bytes = unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes();
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 #[cfg(test)]

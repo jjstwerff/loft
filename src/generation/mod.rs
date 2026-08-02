@@ -745,11 +745,16 @@ pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
 ///   aligned with the body selector — an inlined native-lib fn (`Block` body AND
 ///   `native()` set, main's C71 consumer build) returns `Str`, not `String`;
 /// - a bufferless ("nwb") user text fn (`def_returns_owned_text`).
+/// - @PLN24 arc D — a **`#c` binding** returning a C `char *`.  Its wrapper owns
+///   the copied bytes (`output_c_direct_call` builds the `String`), exactly as an
+///   FFI-direct text native does; a `#c` def carries no `native` symbol, so it
+///   needs naming here rather than riding the clause above.
 pub(crate) fn returns_owned_string(def: &crate::data::Definition) -> bool {
     // @PLN25 slice (b): peel `Optional` — a `text?` return uses the same owned-String ABI.
     matches!(def.returned().base(), Type::Text(_))
         && (native_returns_owned_string(def.name())
             || (*def.code() == Value::Null && !def.native().is_empty())
+            || (*def.code() == Value::Null && !def.c_sig.is_empty())
             || def_returns_owned_text(def))
 }
 
@@ -4187,6 +4192,26 @@ extern crate loft;"
         match (&sig.ret, def.returned().base()) {
             (crate::c_signature::CType::Void, _) => writeln!(w, "  {call};")?,
             (_, Type::Boolean) => writeln!(w, "  (({call}) != 0) as u8")?,
+            // @PLN24 arc D — a `char *` return, copied into an owned `String`
+            // (the wrapper is `-> String` via `returns_owned_string`).  The
+            // three decisions are the interpreter's, restated: NULL is loft
+            // null, the bytes end at the first NUL, invalid UTF-8 is replaced.
+            // `c_call::c_text` is the twin — they are checked against each
+            // other by the fixture matrix, which requires byte-identical output.
+            (_, Type::Text(_)) => {
+                writeln!(w, "  {{")?;
+                writeln!(w, "    let _p = {call}.cast::<std::ffi::c_char>();")?;
+                writeln!(
+                    w,
+                    "    if _p.is_null() {{ loft::state::STRING_NULL.to_string() }} else {{"
+                )?;
+                writeln!(
+                    w,
+                    "      String::from_utf8_lossy(unsafe {{ std::ffi::CStr::from_ptr(_p) }}.to_bytes()).into_owned()"
+                )?;
+                writeln!(w, "    }}")?;
+                writeln!(w, "  }}")?;
+            }
             _ => writeln!(w, "  ({call}) as i64")?,
         }
         writeln!(w, "}}")?;

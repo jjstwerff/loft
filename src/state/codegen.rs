@@ -105,6 +105,23 @@ pub(crate) fn is_cdylib_text_call(def: &crate::data::Definition) -> bool {
     !def.native().is_empty() && matches!(def.returned(), Type::Text(_))
 }
 
+/// @PLN24 arc D — a **`#c` binding** returning text: a C `char *` brought back
+/// as a loft `text`.
+///
+/// Routed exactly like [`is_cdylib_text_call`] (`n_set_bridge_dest` +
+/// `gen_cdylib_text_dest_call`), and for the same reason: a body-less external
+/// declaration has no `_dest` sibling to call and no promoted work buffer of its
+/// own, so the destination has to be handed over as a separate step. Disjoint
+/// from both neighbours — a `#c` definition carries no `native` symbol (arc A
+/// leaves it empty so the Rust dispatch path cannot claim it) and no `default/`
+/// declaration carries a `c_sig`.
+pub(crate) fn is_c_text_call(def: &crate::data::Definition) -> bool {
+    // `.base()` peels `Optional`: a `text?` return uses the same owned-text ABI,
+    // and for a `char *` it is the spelling that lets the null-flow analysis see
+    // the NULL the crossing carries either way.
+    !def.c_sig.is_empty() && matches!(def.returned().base(), Type::Text(_))
+}
+
 impl State {
     /**
     Define byte code for a function.
@@ -2940,6 +2957,22 @@ impl State {
             return false;
         };
         let inner_name = stack.data.def(*inner_op).name().to_owned();
+        // @PLN24 arc D — the `#c` twin. This is the THIRD place a text producer
+        // has to be recognised (`set_var`'s two branches are the others), and the
+        // one that is easy to miss: it fires for the `w += producer()` IR the
+        // assignment lowering builds, which is what a call inside a struct
+        // literal, a vector literal, a `match` subject or a field write becomes.
+        // Missing it here is not a missed optimisation for a `#c` binding the way
+        // it is for a `_dest` native — a `_dest` native has a working non-dest
+        // sibling to fall back to, and a `#c` binding has none.
+        if is_c_text_call(stack.data.def(*inner_op))
+            && let Some(&c_lib) = self.library_names.get(&inner_name)
+        {
+            let (dest_var, inner_op) = (*dest_var, *inner_op);
+            let inner_args = inner_args.clone();
+            self.gen_cdylib_text_dest_call(stack, dest_var, inner_op, &inner_args, c_lib);
+            return true;
+        }
         if !is_text_dest_native(&inner_name) {
             return false;
         }
@@ -3047,6 +3080,26 @@ impl State {
         if self.try_text_dest_pass(stack, op, parameters) {
             return Type::Void;
         }
+        // @PLN24 arc D — a `#c` text binding reaching the ORDINARY call emission
+        // is a routing gap, and it has to stop here.
+        //
+        // For a `_dest` native the dest route is an optimisation: miss it and the
+        // plain sibling still answers correctly. A `#c` binding has no plain
+        // sibling — the definition is body-less, so the ordinary emission calls
+        // into a function that does not exist and the interpreter walks off into
+        // whatever follows. That is a SIGSEGV in a position nobody tested, which
+        // is exactly how this crossing would come to differ between the backends
+        // (`--native` has no such hole: rustc calls a typed extern whatever the
+        // position). Failing loudly HERE turns a future uncovered position into
+        // one message naming the shape, instead of a corrupted stack.
+        assert!(
+            !is_c_text_call(stack.data.def(op)),
+            "loft: `{}` is a `#c` binding returning text, called in a position the \
+             compiler cannot route a destination into. This is a compiler gap, not a \
+             mistake in the program — please report it with the calling expression \
+             (@PLN24 arc D)",
+            stack.data.def(op).name().strip_prefix("n_").unwrap_or("?"),
+        );
         for (a_nr, a) in stack.data.def(op).attributes().iter().enumerate() {
             if a.mutable {
                 let stack_before = stack.position;
@@ -3970,6 +4023,19 @@ impl State {
                             return;
                         }
                     }
+                    // @PLN24 arc D — a `#c` binding returning text. Registered
+                    // under its OWN name (`c_call::register`), so the library
+                    // index comes from the definition rather than a `#native`
+                    // symbol; the dest hand-over is the same two-call shape.
+                    if is_c_text_call(stack.data.def(*op))
+                        && let Some(&c_lib) = self.library_names.get(stack.data.def(*op).name())
+                    {
+                        let var_pos = stack.var_pos(var);
+                        stack.add_op("OpClearStackText", self);
+                        self.code_add(var_pos);
+                        self.gen_cdylib_text_dest_call(stack, var, *op, args, c_lib);
+                        return;
+                    }
                 }
                 // always clear RefVar(Text) before appending — prevents
                 // text accumulation across reassignments in text-returning functions.
@@ -4067,6 +4133,14 @@ impl State {
                     self.gen_cdylib_text_dest_call(stack, var, *op, args, cdylib_lib);
                     return;
                 }
+            }
+            // @PLN24 arc D — the `#c` twin of the line above, keyed on the
+            // definition's own name (a `#c` binding carries no `#native` symbol).
+            if is_c_text_call(stack.data.def(*op))
+                && let Some(&c_lib) = self.library_names.get(stack.data.def(*op).name())
+            {
+                self.gen_cdylib_text_dest_call(stack, var, *op, args, c_lib);
+                return;
             }
         }
         // Plan-06 spine 8c hardening: catch IR shapes where `value`'s

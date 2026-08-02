@@ -590,7 +590,25 @@ pub fn check(
             ));
         }
     } else {
-        match (&sig.ret, shape_of(ret)) {
+        // `shape_of` answers for the ARGUMENT direction, where a nullable type is
+        // genuinely unrepresentable — loft has no value to hand C for it. A
+        // RETURN is not symmetric: C's NULL is exactly "no string", so a
+        // `char *` coming back is the one place a `τ?` is the HONEST type, and
+        // the only one where loft can see the null the crossing already carries.
+        // Declared `text`, the same NULL still arrives as loft's content
+        // sentinel — spelling it `text?` does not add the null, it makes the
+        // null-flow analysis demand a discharge for it.
+        let ret_shape = match ret {
+            Type::Optional(inner)
+                if matches!(**inner, Type::Text(_))
+                    && matches!(sig.ret, CType::Pointer { ref pointee, .. }
+                        if pointee.ends_with("char")) =>
+            {
+                LoftCShape::Pointer
+            }
+            other => shape_of(other),
+        };
+        match (&sig.ret, ret_shape) {
             (CType::Void, _) => errs.push(format!(
                 "the loft declaration returns `{}` but the C signature returns `void`",
                 data.type_name_str(ret)
@@ -598,17 +616,27 @@ pub fn check(
             (_, LoftCShape::Refused(why)) => {
                 errs.push(format!("the return type cannot be bound: {why}"));
             }
-            // A `char *` return is a real C shape and NOT yet buildable: a loft
-            // `text` return crosses through the destination-passing convention
-            // (`is_text_dest_native`), which neither caller is wired into.
-            // Refused at the DECLARATION so both backends agree — the half-built
-            // versions disagreed loudly (a SIGSEGV on the interpreter, a type
-            // error from rustc), and a shape that works on one backend only is
-            // the divergence this plan keeps refusing to ship. @PLN24, arc D.
-            (_, LoftCShape::Pointer) => errs.push(format!(
-                "`{}` returns a C string, which a `#c` binding cannot bring back yet — bind the \
-                 pointer as an `integer` if you only need to pass it on, or wrap the call in an \
-                 ANSI-C shim that writes into a caller-supplied buffer",
+            // A `char *` return bound to loft `text`. The bytes are COPIED up to
+            // the first NUL and the pointer is never freed, which is the one
+            // ownership answer C's type system cannot give: `strerror` and
+            // `PQerrorMessage` hand back storage the caller must NOT free, while
+            // `strdup` hands back storage it must. `const` does not separate them
+            // (POSIX spells both `char *`), so guessing from the signature would
+            // free static memory on a wrong guess — the failure that cannot be
+            // recovered from. Borrowed is therefore the only default, and a
+            // caller-frees function goes through the plan's shim, which is what
+            // the shims are for. Stated at the boundary in PACKAGES.md.
+            (CType::Pointer { pointee, .. }, LoftCShape::Pointer) if pointee.ends_with("char") => {}
+            // A text return from a pointer that is not spelled `char *`. The
+            // declaration is the sole authority here, so it has to SAY it means a
+            // string — `void *` bound to `text` is either a mistake or a handle
+            // that wanted `integer`, and nothing at runtime tells the two apart.
+            // (This is the one decision the pointee spelling carries; everywhere
+            // else it is diagnostics only, because pointers share one ABI.)
+            (CType::Pointer { pointee, .. }, LoftCShape::Pointer) => errs.push(format!(
+                "`{}` returns `{pointee}*`, which cannot come back as a loft `text` — spell the \
+                 return `char*` if it really is a C string, or bind it as an `integer` if it is \
+                 an opaque handle",
                 sig.symbol
             )),
             (CType::Int { .. }, LoftCShape::Scalar) => {}

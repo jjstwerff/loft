@@ -1102,6 +1102,39 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
          \x20 println(\"handle {lc_read(h)} {lc_bump(h, 7)}\");\n\
          \x20 lc_close(h);\n\
          \x20 println(\"arity7 {lc_arity7(1,1,1,1,1,1,1)}\");\n\
+         \x20 t = lc_static_text();\n\
+         \x20 println(\"text {t} {t.len()}\");\n\
+         \x20 println(\"textarg {lc_strlen(lc_static_text())}\");\n\
+         \x20 println(\"cat [{lc_static_text()}][{lc_static_text()}]\");\n\
+         \x20 println(\"some {lc_maybe_text(1)}\");\n\
+         \x20 println(\"none {lc_opt_text(0) ?? \"<null>\"}\");\n\
+         \x20 println(\"latin1 {lc_latin1_text().len()}\");\n\
+         \x20 c_text_positions();\n\
+         }\n\
+         // A text return has to reach EVERY value position, because the caller\n\
+         // needs a destination record handed to it and only some positions were\n\
+         // routed at first: a struct literal, a vector literal, a field write, a\n\
+         // `match` subject and a comparison all lower to `w += producer()`, which\n\
+         // is a different emission site from a plain local assignment. Missing it\n\
+         // is not a slow path for a `#c` binding — there is no non-destination\n\
+         // sibling to fall back to, so it SIGSEGV'd the interpreter while\n\
+         // `--native` stayed correct. One function per position, so a regression\n\
+         // names the position it broke.\n\
+         struct CRec { name: text, n: integer }\n\
+         fn c_text_positions() {\n\
+         \x20 o = CRec{name: lc_static_text(), n: 1};\n\
+         \x20 println(\"p-lit {o.name}\");\n\
+         \x20 o.name = lc_maybe_text(1);\n\
+         \x20 println(\"p-field {o.name}\");\n\
+         \x20 if lc_static_text() == \"loft/c-abi\" { println(\"p-cmp ok\") } else { println(\"p-cmp NO\") }\n\
+         \x20 m = match lc_static_text() { \"loft/c-abi\" => lc_maybe_text(1), _ => \"-\" };\n\
+         \x20 println(\"p-match {m}\");\n\
+         \x20 v: vector<text> = [lc_static_text(), lc_maybe_text(1)];\n\
+         \x20 println(\"p-vlit {v[0]} {v[1]}\");\n\
+         \x20 println(\"p-cond {if lc_static_text().len() > 3 { lc_static_text() } else { \"-\" }}\");\n\
+         \x20 for i in 0..2 { println(\"p-loop{i} {lc_static_text()}\") }\n\
+         \x20 s = lc_static_text() + \"!\";\n\
+         \x20 println(\"p-concat {s}\");\n\
          }\n",
     )?;
     let libdir = root.join("pkg");
@@ -1132,6 +1165,28 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
         "vec 140",
         "handle 1000 1007",
         "arity7 58",
+        // @PLN24 arc D — the `char *` return. Hand-computed: "loft/c-abi" is 10
+        // characters, so C's byte count and loft's character count agree on it
+        // (`textarg` re-crosses the answer to prove the copy is NUL-terminated,
+        // not merely non-empty). NULL reads as loft null. "caf\xE9" is 3 ASCII
+        // bytes plus one invalid UTF-8 byte, which becomes ONE replacement
+        // character — 4, not 3 (dropped) and not 5 (bytes counted as characters).
+        "text loft/c-abi 10",
+        "textarg 10",
+        "cat [loft/c-abi][loft/c-abi]",
+        "some here",
+        "none <null>",
+        "latin1 4",
+        // Every value position, each named so a failure says which one broke.
+        "p-lit loft/c-abi",
+        "p-field here",
+        "p-cmp ok",
+        "p-match here",
+        "p-vlit loft/c-abi here",
+        "p-cond loft/c-abi",
+        "p-loop0 loft/c-abi",
+        "p-loop1 loft/c-abi",
+        "p-concat loft/c-abi!",
     ] {
         assert!(
             interp.contains(want),
@@ -1146,22 +1201,26 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
     Ok(())
 }
 
-/// @PLN24 arc B — a shape neither caller covers is refused at the DECLARATION,
-/// so both backends say the same thing.
+/// @PLN24 arc D — a C `char *` comes back as loft `text`, identically on both
+/// backends, from libc alone (no fixture, no library to install).
 ///
-/// A `char *` return is a real C shape and not yet buildable: a loft `text`
-/// return crosses through the destination-passing convention, which neither
-/// caller is wired into. Built half-way it disagreed loudly — a SIGSEGV on the
-/// interpreter, a rustc type error on `--native` — and a shape that works on one
-/// backend only is the divergence this plan keeps refusing to ship. Refusing
-/// where the binding is WRITTEN is what makes the two identical.
+/// `strerror` is the shape a real binding meets: borrowed storage the caller
+/// must not free, a plain `int` argument, and an answer the C library owns. The
+/// interpreter copies out of a raw return register and `--native` copies out of
+/// a typed `*const c_void`; the two arrive at the same text or this crossing is
+/// two mappings rather than one.
 #[test]
-fn a_c_string_return_is_refused_identically_on_both_backends() -> std::io::Result<()> {
+fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<()> {
     let path = std::env::temp_dir().join("loft_pln24_c_textret.loft");
     std::fs::write(
         &path,
         "pub fn c_strerror(n: integer) -> text;   #c \"strerror\" \"char*(int)\"\n\
-         fn main() { println(\"{c_strerror(2)}\") }\n",
+         pub fn c_strlen(s: text) -> integer;     #c \"strlen\" \"size_t(const char*)\"\n\
+         fn main() {\n\
+         \x20 e = c_strerror(2);\n\
+         \x20 println(\"len {c_strlen(e)} chars {e.len()}\");\n\
+         \x20 println(\"arg {c_strlen(c_strerror(2))}\");\n\
+         }\n",
     )?;
     let mut seen = Vec::new();
     for backend in ["--interpret", "--native"] {
@@ -1169,39 +1228,83 @@ fn a_c_string_return_is_refused_identically_on_both_backends() -> std::io::Resul
             .arg(backend)
             .arg(&path)
             .output()?;
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        assert!(!out.status.success(), "{backend} must refuse: {stderr}");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         assert!(
-            stderr.contains("returns a C string") && stderr.contains("shim"),
-            "{backend}: the refusal must name the cure: {stderr}"
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
         );
-        seen.push(
-            stderr
-                .lines()
-                .find(|l| l.starts_with("error"))
-                .unwrap_or_default()
-                .to_string(),
+        // Not an exact string: `strerror(2)` is locale-dependent (it is "No such
+        // file or directory" in the C locale). What IS pinned is that the text
+        // survived the crossing — a non-empty answer whose byte length C agrees
+        // with, which a truncated or NUL-terminated-at-zero copy fails.
+        assert!(
+            !stdout.contains("len 0 ") && !stdout.contains("arg 0"),
+            "{backend}: an empty `strerror` means the crossing dropped the text:\n{stdout}"
+        );
+        seen.push(stdout);
+    }
+    assert_eq!(
+        seen[0], seen[1],
+        "the two backends must bring back the same text"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc D — the return spellings a `#c` declaration must refuse, because
+/// nothing at runtime would.
+///
+/// The plan's central measurement is that a wrong binding produces a plausible
+/// answer rather than a failure, so every one of these is caught at the
+/// declaration or not at all. Both backends must refuse in the same words: a
+/// shape rejected by one and accepted by the other is the divergence this plan
+/// exists to keep out.
+#[test]
+fn a_text_return_must_say_it_is_a_c_string() -> std::io::Result<()> {
+    // (declaration, the words the refusal has to carry)
+    let cases = [
+        (
+            "pub fn f() -> text;   #c \"lc_x\" \"void*(void)\"",
+            "spell the return `char*`",
+        ),
+        (
+            "pub fn f() -> text;   #c \"lc_x\" \"int(void)\"",
+            "the loft declaration returns `text`",
+        ),
+        (
+            // A `vector` return cannot be reconstructed from a pointer: C
+            // carries no length, which is why an ARGUMENT crosses as a PAIR and
+            // a return cannot cross at all.
+            "pub fn f() -> vector<integer>;   #c \"lc_x\" \"char*(void)\"",
+            "returns `vector<integer>` but the C signature returns `char *`",
+        ),
+    ];
+    for (decl, want) in cases {
+        let path = std::env::temp_dir().join("loft_pln24_c_textret_refuse.loft");
+        std::fs::write(&path, format!("{decl}\nfn main() {{ println(\"x\") }}\n"))?;
+        let mut seen = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+                .arg(backend)
+                .arg("--errors=compact")
+                .arg(&path)
+                .output()?;
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                !out.status.success(),
+                "{backend} must refuse `{decl}`: {stderr}"
+            );
+            assert!(
+                stderr.contains(want),
+                "{backend}: refusing `{decl}` must say `{want}`: {stderr}"
+            );
+            seen.push(stderr);
+        }
+        assert_eq!(
+            seen[0], seen[1],
+            "and both backends must say it identically"
         );
     }
-    assert_eq!(seen[0], seen[1], "and say it in the same words");
-
-    // The control: a binding that IS covered must still run, or this test would
-    // pass just as well with `#c` disabled altogether.
-    let ok = std::env::temp_dir().join("loft_pln24_c_textret_ctl.loft");
-    std::fs::write(
-        &ok,
-        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
-         fn main() { println(\"{c_strlen(\"abc\")}\") }\n",
-    )?;
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
-        .arg("--interpret")
-        .arg(&ok)
-        .output()?;
-    assert!(
-        out.status.success() && String::from_utf8_lossy(&out.stdout).contains('3'),
-        "a covered binding must still run: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
     Ok(())
 }
 

@@ -452,7 +452,7 @@ already has, through the same crash handler.
 
 ```loft
 pub fn status(conn: integer) -> integer;      #c "PQstatus" "int(void*)"
-pub fn error(conn: integer) -> text;          #c "PQerrorMessage" "const char*(void*)"
+pub fn error(conn: integer) -> text?;         #c "PQerrorMessage" "const char*(void*)"
 pub fn sum(v: vector<integer>) -> integer;    #c "lc_sum" "long(const long*, long)"
 ```
 
@@ -468,20 +468,41 @@ correct everywhere.  An unknown type is refused, never guessed.
 |---|---|---|
 | `integer`, narrow ints, `boolean`, `character` | one C integer | any width; the value is passed full-width |
 | `text` argument | one `const char*` | **NUL-terminated**, unlike the `#native` path's `ptr, len` |
-| `text` RETURN | — | **refused for now**: a loft text return crosses through destination-passing, which neither caller is wired into (@PLN24 arc D) |
+| `text` / `text?` RETURN | `char*` | the bytes are **copied** up to the first NUL; loft never frees the pointer |
 | `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* |
 | C-owned handle (`PGconn *`) | `void*` ↔ loft `integer` | the pointer value crosses as an integer |
 | `float` / `single` | — | **refused**: floats travel in SSE registers a fixed caller does not touch — shim it |
 | a loft record | — | **refused**: records live in a store that may move them |
-| a nullable `τ?` | — | **refused at compile time**: C has no null model |
+| a nullable `τ?` ARGUMENT | — | **refused at compile time**: C has no null model |
 
 The last two refusals are the design, not gaps.  A record's address is a
 position in an arena the allocator can relocate, so handing it to C is the
 store-lifetime bug class rather than a marshalling detail.  And `#c` is the
-declared edge of loft's no-runtime-errors rule: a null crossing into C would be
+declared edge of loft's no-runtime-errors rule: a null crossing *into* C would be
 an ordinary number or a fault, so it is rejected where loft still can — which
 costs nothing, because non-null is already the default and null-flow already
 requires a discharge (`?? 0`, `x?`, `match`).
+
+**The `char *` return — three answers C's type system cannot give**, so the
+binding gives them, the same way on every backend:
+
+- **loft never frees it.**  `strerror` and `PQerrorMessage` hand back storage the
+  caller must *not* free; `strdup` hands back storage it must.  `const` does not
+  separate them — POSIX spells both `char *` — so a guess would free static
+  memory, and that failure is not recoverable while a leak is.  A **caller-frees**
+  function therefore goes through an ANSI-C shim, which is what shims are for.
+- **The bytes end at the first NUL**, because that is what `char *` means.  A loft
+  `text` carries a length and may hold an interior NUL; the crossing truncates
+  there rather than inventing a length.
+- **NULL is loft null, and invalid UTF-8 is replaced** (loft text is UTF-8; a
+  locale-encoded byte from C must not take the program down).  Spell the return
+  **`text?`** when NULL is a real answer — it does not add the null, it makes the
+  null-flow analysis demand a discharge for it, which a bare `text` carries
+  silently.
+
+A pointer return that is *not* spelled `char *` is refused against a `text`
+declaration: `void*` bound to `text` is either a mistake or a handle that wanted
+`integer`, and nothing at runtime tells the two apart.
 
 #### Declaring the library (arc D)
 
@@ -501,8 +522,8 @@ present and only probes for it.
 **Status: it works on both backends** — `--native` compiles the declaration into
 a typed `extern "C"` and calls it directly; the interpreter resolves the symbol
 and calls it through a fixed ladder of per-arity trampolines.  The two produce
-identical results, which is the bar.  What remains: the `cc` shim build, `loft install` integration, the `text`
-return, and the wasm/browser targets (arc E).  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
+identical results, which is the bar.  What remains: the `cc` shim build, `loft install`
+integration, and the wasm/browser targets (arc E).  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
 [@PLN24](https://github.com/loft-lang/plans/issues/24) (first consumer: the
 MariaDB/PostgreSQL clients, @PLN23), matrix + probe in
 `tests/fixtures/c_abi/`.  `#native` remains today's path.

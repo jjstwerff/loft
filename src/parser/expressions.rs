@@ -360,6 +360,9 @@ impl Parser {
             &*v,
             Value::Call(op, _) if crate::state::codegen::is_text_dest_native(self.data.def(*op).name())
                 || crate::state::codegen::is_cdylib_text_call(self.data.def(*op))
+                // @PLN24 arc D — a `#c` binding returning text is a value-position
+                // producer like the other two, and needs the same work-text temp.
+                || crate::state::codegen::is_c_text_call(self.data.def(*op))
         );
         if wrap_here {
             if let Value::Call(_, args) = v {

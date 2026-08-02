@@ -51,7 +51,9 @@ and here you can read them and see.
 | `character` | `uint32_t` codepoint | `lc_char` | direct |
 | `text` | `const char *` (NUL-terminated) | `lc_strlen`, `lc_byte_at`, `lc_len_upto` | direct |
 | `text` return, borrowed | `const char *` static | `lc_static_text` | direct |
-| `text` return, owned | `char *` + `lc_free` | `lc_alloc_text` | direct |
+| `text` return, owned | `char *` + `lc_free` | `lc_alloc_text` | **shim** — loft never frees |
+| `text?` return, NULL | `const char *` = 0 | `lc_maybe_text` | direct |
+| `text` return, not UTF-8 | `const char *` Latin-1 | `lc_latin1_text` | direct |
 | `vector<integer>` | `const int64_t *`, count | `lc_i64_sum` | direct |
 | `vector<i32>` | `const int32_t *`, count | `lc_i32_sum` | direct |
 | `vector<text>` | `const char *const *`, count | `lc_strv_total` | direct |
@@ -138,33 +140,37 @@ loft-core.
    paths, not a detail — a library moving from `#native` to `#c` meets it.) The
    `lc_static_text` / `lc_alloc_text` pair asks the other half: who frees a
    returned buffer, which the C type system cannot express, so the binding must
-   carry the answer per function.
+   carry the answer per function. **Answered (@PLN24 arc D): loft never frees.**
+   `const` does not separate the two — POSIX spells both `char *` — so a rule
+   read off the signature would free static memory on a wrong guess, and that
+   failure is not recoverable while a leak is. `lc_alloc_text` is therefore the
+   case that goes through a shim, and it is bound in the package as nothing at
+   all. `lc_maybe_text` and `lc_latin1_text` ask the two remaining questions a
+   `char *` return raises — a NULL answer and bytes that are not UTF-8 — because
+   both are ordinary in C and both are places the two backends could quietly
+   disagree.
 3. **`boolean` is three-state and C has no such type.** loft has false 0 / true 1
    / **null 255**. `lc_raw_bool` reports whatever arrives rather than judging it,
    so the answer is measured instead of assumed.
 
-## The loft side, once `#c` exists
+## The loft side
 
-Not committed as a `.loft` file: `#c` is not implemented, so a live file would
-not compile. This is the surface phase 1 has to produce.
+Live, in [`pkg/lcabi/src/lcabi.loft`](pkg/lcabi/src/lcabi.loft) — one `#c`
+declaration per shape in the table above, plus the `[c] libs` entry that points
+at the `.so` this directory builds. Read that file rather than an example here:
+it is what the matrix test actually runs, so it cannot drift.
 
-```loft
-// Direct — integer-class, straight to the symbol.
-pub fn lc_i64(v: integer) -> integer;              #c "lc_i64"
-pub fn lc_strlen(s: text) -> integer;              #c "lc_strlen"
-pub fn lc_i64_sum(p: vector<integer>) -> integer;  #c "lc_i64_sum"
-pub fn lc_open(seed: integer) -> integer;          #c "lc_open"    // handle
-
-// Boundary — bound to the SHIM, never to the float symbol.
-pub fn lc_shim_f64(bits: integer) -> integer;      #c "lc_shim_f64"
-```
+`lc_alloc_text` is deliberately **not** bound. It is the caller-frees half of the
+ownership pair, and loft never frees a returned pointer — it is the case that
+belongs to a shim, and leaving it unbound is what says so.
 
 ## Status
 
-`#c` is **not implemented** — `#native` (Rust) is today's path. Nothing in the
-build or the test suite depends on this directory yet; it is inert until
-@PLN24 phase 1 lands, at which point these functions become that phase's
-composition matrix and `make check` becomes its calibration.
+`#c` works on both backends, and this directory is its composition matrix:
+`tests/native.rs::c_binding_matrix_against_a_declared_library` builds the `.so`,
+runs the package under `--interpret` and `--native`, and requires byte-identical
+output against hand-computed expectations. `make check` is the calibration that
+says the C oracle itself is sound before any loft is involved.
 
 The probe is a *design* instrument, deliberately not a test: it answers a
 question that is settled once, and wiring it into CI would make every machine

@@ -110,6 +110,19 @@ char *lc_alloc_text(const char *s) {
 
 void lc_free(void *p) { free(p); }
 
+/* NULL is a routine answer in C, not a fault — `PQerrorMessage` returns it
+ * whenever there is no error.  Returning it conditionally (rather than always)
+ * keeps ONE binding covering both halves, so the two cells cannot drift apart. */
+const char *lc_maybe_text(int64_t present) {
+  return present != 0 ? "here" : 0;
+}
+
+/* 0xE9 is `e`-acute in Latin-1 and an invalid UTF-8 lead byte.  A C library
+ * that hands back locale-encoded bytes is ordinary, and loft text is UTF-8 by
+ * definition, so the crossing has to answer for this — identically on both
+ * backends, and without taking the program down (C80). */
+const char *lc_latin1_text(void) { return "caf\xE9"; }
+
 /* ---- vectors ------------------------------------------------------------ */
 
 int64_t lc_i64_sum(const int64_t *p, int64_t n) {

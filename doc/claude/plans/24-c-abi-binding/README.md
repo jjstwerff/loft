@@ -7,7 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arcs A, B, C done; D part-done; E, F open.** The architecture probe is built and has run
+**Arcs A, B, C done; D part-done (the `text` return is in, the shim build and
+`loft install` are not); E, F open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -71,6 +72,56 @@ while rustc rejected the native side, two different failures for one gap. It is
 now refused at the DECLARATION, so both backends say the same words, and it is
 arc D's to build. That is the pattern this plan keeps landing on: a shape that
 works on one backend only is worse than a shape that works on neither.
+
+**Arc D, second slice: the `char *` return, built.** The refusal is gone and the
+shape works on both backends, in every value position. What made it small was
+reading the emission before writing any of it: the parser ALREADY normalises a
+text-producing call in argument, operand or element position into a synthetic
+local assignment (`wrap_value_text_dest` → `{#synth text dest}`), so there is
+exactly ONE emission site to teach rather than one per position. A `#c` text
+binding is then a third member of an existing class — body-less, external, no
+`_dest` sibling and no work buffer of its own — and reuses the cdylib route
+(`n_set_bridge_dest` + the call) unchanged. The whole interpreter half is one
+predicate (`is_c_text_call`) read at three sites, and `--native` is one clause in
+`returns_owned_string` plus the copy in the emitted body.
+
+The design cost sat entirely in **three questions C's type system cannot
+answer**, which the plan had left to the fixture — and the fixture had already
+written both halves of the first one down:
+
+1. **Who frees it.** `strerror` and `PQerrorMessage` hand back storage the caller
+   must not free; `strdup` hands back storage it must. `const` does NOT separate
+   them (POSIX spells both `char *`), so a rule read off the signature would free
+   static memory on a wrong guess. A leak is recoverable and that is not, so
+   **loft never frees**, and caller-frees goes through the shim — which is the
+   plan's own routing, now measured rather than assumed.
+2. **Where the bytes end.** At the first NUL, because that is what `char *` means.
+   loft text carries a length and may hold an interior NUL; the crossing
+   truncates rather than inventing one.
+3. **NULL, and bytes that are not UTF-8.** NULL is loft null (a CONTENT sentinel,
+   so a dest record carries it); invalid UTF-8 is replaced, not refused — a
+   locale-encoded byte from a C library must not take the program down (C80).
+
+**And the boundary probe found a real defect in the arc-A check**, which is the
+whole reason to probe the edge rather than the happy path: `-> text?` was
+*refused*, with a message written for the ARGUMENT direction ("declare the
+parameter non-null"). But the two directions are not symmetric. loft can hand C
+no value for a null, so a nullable ARGUMENT is genuinely unrepresentable — while
+C's NULL *return* is exactly "no string", and `text?` is the one spelling that
+lets the null-flow analysis SEE the null the crossing already carries. Declared
+`text`, that same NULL still arrives, silently, as the content sentinel. So
+`text?` is now accepted for a `char *` return and is the recommended spelling;
+everything else `Optional` stays refused.
+
+Two cells the fixture could not express before, added to it: a symbol that
+returns NULL conditionally (`lc_maybe_text`), and one that returns Latin-1 bytes
+(`lc_latin1_text`). Both are ordinary C, and both are places the two backends
+could have drifted apart without either looking wrong.
+
+The pointee spelling earns one decision here, having been demoted to
+diagnostics-only by arc C: a pointer return bound to `text` must be spelled
+`char*`. `void*` bound to `text` is either a mistake or a handle that wanted
+`integer`, and — the plan's premise again — nothing at runtime tells them apart.
 
 **Arc D, first slice: a binding reaches a real library.** `[c] libs` in a
 package manifest is `dlopen`ed by the interpreter and linked by `--native` — one
@@ -245,7 +296,7 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 | **A** — `#c "sym" "<signature>"`: parser, the `CSignature` type, the compile-time check | **Done** — `src/c_signature.rs`, inert; widths resolve per target |
 | **B** — the interpreter caller: `dlsym` + the per-arity trampolines + return-width dispatch | **Done** — `src/c_call.rs`; both backends answer identically |
 | **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | **Done** — loft calls libc directly, no rustc in any library |
-| **D** — packaging | **Part-done** — `[c] libs` declares + loads + links; the `cc` shim build, `loft install` and the `text` return remain |
+| **D** — packaging | **Part-done** — `[c] libs` declares + loads + links, and a `char *` return crosses as `text` / `text?`; the `cc` shim build and `loft install` remain |
 | **E** — the other two targets (the parity arc) | Open — see below |
 | **F** — prove it: a libpq subset for @PLN23, zero rustc | Open |
 
