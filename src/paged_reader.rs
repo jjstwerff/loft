@@ -190,6 +190,25 @@ impl PageSource {
             PageSource::Http(p) => p.bytes_fetched(),
         }
     }
+
+    /// PROBE (loft#729): bytes over DISTINCT offsets — how much of the image the
+    /// traversal actually touched, ignoring re-fetches. `bytes_fetched` minus
+    /// this is what the cache failed to keep, and the two answer different
+    /// questions: over-READ (touching bytes nobody wanted) versus re-READ
+    /// (touching the same bytes again). One is a layout/traversal cost, the
+    /// other is a cache cost, and a single total cannot tell them apart.
+    #[must_use]
+    pub fn distinct_bytes(&self) -> usize {
+        let log = match self {
+            PageSource::Local(p) => &p.fetches,
+            PageSource::Http(p) => &p.fetches,
+        };
+        let mut seen = std::collections::HashSet::new();
+        log.iter()
+            .filter(|(off, _)| seen.insert(*off))
+            .map(|(_, l)| l)
+            .sum()
+    }
 }
 
 impl PageProvider for PageSource {
@@ -251,7 +270,25 @@ pub struct PagedReader<P: PageProvider> {
 impl<P: PageProvider> PagedReader<P> {
     /// A reader with the default 64 KiB page and a 64-page (4 MiB) cache.
     pub fn new(provider: P) -> Self {
-        Self::with_config(provider, PAGE_SIZE, 64)
+        // loft#729 — the page size and the cache are separately settable so the
+        // two causes of a large `bytes_fetched` can be told apart. They are
+        // easily confused: shrinking the page ALSO shrinks a page-counted cache,
+        // so a naive page sweep measures thrash and reads it as granularity.
+        // The cache is therefore sized in BYTES and held constant across a
+        // sweep. Reading a store with the page driven to 8 bytes gives the
+        // traversal's true byte footprint, which is what page-rounding waste has
+        // to be measured against — assuming that footprint instead is how
+        // loft#729 came to attribute a 4× to page granularity that measured
+        // 1.36× on the reporter's own data.
+        let ps = std::env::var("LOFT_PAGE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(PAGE_SIZE);
+        let cache_bytes = std::env::var("LOFT_PAGE_CACHE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(64 * PAGE_SIZE);
+        Self::with_config(provider, ps, (cache_bytes / ps).max(1))
     }
 
     /// A reader with an explicit page size and cache cap (both clamped to ≥ 1).
