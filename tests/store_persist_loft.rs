@@ -492,6 +492,60 @@ fn store_load_keys_loads_the_requested_subset_both_backends() {
     }
 }
 
+/// loft#729 — a loaded working set is sized by what it HOLDS, not by what the
+/// source store's records were grown to.
+///
+/// A vector that grew in place is left at 7/4 of the size that triggered the
+/// growth (`Store::resize`) and never gives it back, so the file carries it. A
+/// loader claiming `record_words` reproduced it exactly. Compaction cannot see
+/// it — it reclaims free space BETWEEN records, and this is slack INSIDE one, so
+/// a store full of it correctly reports as dense.
+///
+/// The digest is asserted alongside the sizes, and that pairing is the point: a
+/// working set that got smaller by LOSING data satisfies every size assertion
+/// anyone would write.
+#[test]
+fn a_loaded_working_set_does_not_inherit_the_source_growth_slack() {
+    let dir = scratch("store_load_density_729");
+    let path = dir.join("d.store");
+    let script = workspace_root().join("tests/scripts/store_load_density_729.loft");
+
+    let field = |out: &str, key: &str| -> String {
+        out.split_whitespace()
+            .find_map(|t| t.strip_prefix(key).map(str::to_string))
+            .unwrap_or_default()
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let (w, cw) = run_mode_backend(backend, &script, &path, "write");
+        assert_eq!(cw, 0, "{backend} write exit: {w:?}");
+        let (l, cl) = run_mode_backend(backend, &script, &path, "load");
+        assert_eq!(cl, 0, "{backend} load exit: {l:?}");
+
+        assert_eq!(
+            field(&w, "digest="),
+            field(&l, "digest="),
+            "{backend}: the loaded set must hold the same data, or the sizes compare nothing:\n  \
+             {w}\n  {l}"
+        );
+        let content: f64 = field(&w, "content=").parse().expect("content");
+        let src: f64 = field(&w, "src=").parse().expect("src");
+        let dst: f64 = field(&l, "dst=").parse().expect("dst");
+        // The source is what growth leaves behind — well above its content.
+        assert!(
+            src / content > 1.5,
+            "{backend}: the fixture must actually ACQUIRE slack, or this test proves \
+             nothing: content={content} src={src}"
+        );
+        // The load must not carry it over.
+        assert!(
+            dst < src * 0.8,
+            "{backend}: the loaded set inherited the source's growth slack: \
+             src={src} dst={dst}"
+        );
+    }
+}
+
 /// loft#729 — the loader reads a record's body in ONE fetch, and that must not
 /// change a single loaded byte.
 ///

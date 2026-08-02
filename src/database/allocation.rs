@@ -3799,7 +3799,15 @@ impl Stores {
                 // Flat sub-record pointer (text / vector<scalar>).
                 let src_sub = reader.u32_at(src_rec, src_off);
                 if src_sub != 0 {
-                    let new_sub = self.copy_flat_subrecord(reader, src_sub, store_nr);
+                    // `text` is one byte per unit; a vector<scalar> is its element.
+                    let esz = if ftp == 5 {
+                        1
+                    } else if let Parts::Vector(e) = self.types[ftp as usize].parts {
+                        u32::from(self.size(e))
+                    } else {
+                        0
+                    };
+                    let new_sub = self.copy_flat_subrecord(reader, src_sub, store_nr, esz);
                     self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
                 }
             } else if matches!(
@@ -3828,9 +3836,37 @@ impl Stores {
         reader: &mut crate::paged_reader::PagedReader<P>,
         src_rec: u32,
         store_nr: u16,
+        elem_size: u32,
     ) -> u32 {
         let ssz = reader.record_words(src_rec);
-        let new = self.allocations[store_nr as usize].claim(ssz.max(2));
+        // loft#729 — claim what the LENGTH needs, not what the source's CAPACITY
+        // is.
+        //
+        // A record that grew in place is left at 7/4 of the size that triggered
+        // the growth (`Store::resize`), and that amortisation is never given
+        // back — so a persisted store carries it, and a loader that claims
+        // `record_words` faithfully reproduces it in the working set. It is
+        // invisible to compaction, which reclaims free space BETWEEN records and
+        // cannot see slack INSIDE one: on the store below, compaction correctly
+        // reports "interior free space is under the eighth the image format
+        // already allows" while every vector record is up to 1.75x its content.
+        //
+        // Measured on a real 162 MB store, the 42-tile working set written back
+        // out: 4 890 240 bytes claiming capacity, 2 198 904 claiming length —
+        // 2.22x, with the content digest unchanged. That is the bulk of the
+        // amplification reported in loft#729, and it is memory the browser pays
+        // for every viewport.
+        //
+        // `min(ssz)` because the source is the authority on what can be read: a
+        // length that disagrees with the record size must never widen the copy.
+        let want = if elem_size > 0 {
+            let len = u64::from(reader.u32_at(src_rec, 4));
+            let bytes = 8 + len * u64::from(elem_size);
+            u32::try_from(bytes.div_ceil(8)).unwrap_or(ssz).min(ssz)
+        } else {
+            ssz
+        };
+        let new = self.allocations[store_nr as usize].claim(want.max(2));
         self.allocations[store_nr as usize].zero_fill(new);
         // loft#729 — fetch the record's body ONCE, then unpack it locally.
         // Reading it word by word issued one `resolve` per 4 bytes: on a real
@@ -3840,7 +3876,7 @@ impl Stores {
         // page-shaped — a word-at-a-time walk pays a page of rounding wherever
         // it lands, and no span-sized optimisation below it can bite on a
         // request that is never bigger than a word.
-        let body = usize::try_from((ssz * 8).saturating_sub(4)).unwrap_or(0);
+        let body = usize::try_from((want * 8).saturating_sub(4)).unwrap_or(0);
         let wordwise = std::env::var_os("LOFT_LOADER_WORDWISE").is_some();
         let buf = if wordwise {
             Vec::new()
@@ -3848,7 +3884,7 @@ impl Stores {
             reader.resolve(u64::from(src_rec) * 8 + 4, body)
         };
         let mut sf = 4u32;
-        while sf + 4 <= ssz * 8 {
+        while sf + 4 <= want * 8 {
             let i = (sf - 4) as usize;
             let w = if wordwise {
                 reader.u32_at(src_rec, sf)
@@ -3872,9 +3908,9 @@ impl Stores {
         elem_tp: u16,
         store_nr: u16,
     ) -> u32 {
-        let new_inner = self.copy_flat_subrecord(reader, src_inner, store_nr);
-        let length = reader.u32_at(src_inner, 4);
         let esize = u32::from(self.size(elem_tp));
+        let new_inner = self.copy_flat_subrecord(reader, src_inner, store_nr, esize);
+        let length = reader.u32_at(src_inner, 4);
         if esize == 0 {
             return new_inner;
         }
