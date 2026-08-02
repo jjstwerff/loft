@@ -1498,7 +1498,26 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
             cmd.arg("-C")
                 .arg(format!("link-arg=-Wl,-rpath,{}", parent.display()));
         }
-        cmd.arg("-l").arg(format!("dylib={stem}"));
+        // A VERSIONED soname links by exact filename, not by stem.
+        //
+        // `-l dylib=mariadb` makes the linker look for `libmariadb.so`, which is
+        // the `-dev` package's symlink — while the interpreter `dlopen`s
+        // `libmariadb.so.3`, the runtime file, which is all a user has.  So one
+        // declaration resolved to two different facts: the program ran under
+        // `--interpret` and failed to LINK under `--native` with "unable to find
+        // library -lmariadb", on a machine where the library is plainly present.
+        // That is the backend divergence this plan keeps refusing to ship, and it
+        // would have made every `#c` binding to a system library need dev headers
+        // that `#c` exists to avoid.
+        //
+        // `-l:<file>` names the file itself, so both backends resolve exactly the
+        // library the declaration named.  Passed as a link-arg because rustc's own
+        // `-l` takes a library NAME and would reject the `:file` form.
+        if file.contains(".so.") {
+            cmd.arg("-C").arg(format!("link-arg=-l:{file}"));
+        } else {
+            cmd.arg("-l").arg(format!("dylib={stem}"));
+        }
     }
 }
 

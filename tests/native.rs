@@ -1251,6 +1251,87 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
+/// @PLN24 arc F / @PLN23 S1 — a `#c` binding reaches a real SYSTEM library, on
+/// both backends, with no rustc and no dev headers.
+///
+/// The fixture proved the mechanism; a system library proves the parts a fixture
+/// cannot have. `libmariadb.so.3` is a VERSIONED soname, and that is the whole
+/// point of this test: `-l dylib=mariadb` makes the linker look for
+/// `libmariadb.so`, the `-dev` symlink, while the interpreter `dlopen`s
+/// `libmariadb.so.3`, the runtime file — so one declaration resolved to two
+/// different files and the program ran interpreted and failed to LINK natively on
+/// a machine where the library is plainly installed.
+///
+/// Skips when libmariadb is absent, because a machine without it says nothing.
+#[test]
+fn a_c_binding_reaches_a_versioned_system_library_on_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    // Present only if the runtime package is installed; the `-dev` symlink is
+    // deliberately NOT required, which is the property under test.
+    let present = [
+        "/lib/x86_64-linux-gnu/libmariadb.so.3",
+        "/usr/lib/libmariadb.so.3",
+    ]
+    .iter()
+    .any(|p| std::path::Path::new(p).exists());
+    if !present {
+        return Ok(());
+    }
+    let dir = std::env::temp_dir().join("loft_pln23_s1");
+    let pkg = dir.join("mariadb").join("src");
+    std::fs::create_dir_all(&pkg)?;
+    std::fs::write(
+        dir.join("mariadb").join("loft.toml"),
+        "[library]\nname = \"mariadb\"\nversion = \"0.0.1\"\n\n[c]\nlibs = \"libmariadb.so.3\"\n",
+    )?;
+    std::fs::write(
+        pkg.join("mariadb.loft"),
+        "pub fn client_info() -> text;       #c \"mysql_get_client_info\" \"const char*(void)\"\n\
+         pub fn client_version() -> integer; #c \"mysql_get_client_version\" \"long(void)\"\n",
+    )?;
+    let prog = dir.join("s1.loft");
+    std::fs::write(
+        &prog,
+        "use mariadb;\nfn main() { println(\"{client_info()} {client_version()}\") }\n",
+    )?;
+
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&dir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    // Not an exact version — that is the machine's. What is pinned: the text came
+    // back non-empty and the integer is a real version, so both crossings worked.
+    let v: i64 = interp
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    assert!(
+        v > 10000,
+        "the client version must cross as a real number: {interp:?}"
+    );
+    assert_eq!(
+        run("--native")?,
+        interp,
+        "both backends, one system library"
+    );
+    Ok(())
+}
+
 /// @PLN24 arc D — loft compiles the ANSI-C shim itself, with `cc` and no rustc.
 ///
 /// The plan's trade is that loft-core stays a generic linking tool and every
