@@ -163,6 +163,37 @@ VAOs, shaders, buffers, and textures are GL handles in JS
 tables; loft programs pass around the integer ids returned by
 `gl_create_*` functions.
 
+### Text and authored pixels (loft#737, loft#738)
+
+The browser already HAS a rasteriser, so the text bridge is a 2D canvas:
+`measureText` for the metrics, `fillText` for the coverage bitmap.  The alpha
+channel of white-on-transparent IS the coverage, which is the same 8-bit bitmap
+fontdue gives the desktop backend — bitmap height = line height, baseline at
+`ascent` from the top — so `gl_measure_text` / `gl_text_height` /
+`gl_font_ascent` / `rasterize_text_into` / `gl_text_texture` all agree with it.
+
+A font PATH resolves to a **CSS family**, not a file: nothing here can load font
+bytes synchronously, and an async load would change the metrics *between* the
+measure and the rasterise of one string.  A page that wants its real font
+declares it with `@font-face` under the file's base name (its own CSS, or the
+`[wasm.bridge] host_js`); `document.fonts.check` then finds it and it is used
+exactly.  Otherwise the base name picks a generic family, so text still draws.
+
+`gl_upload_alpha_texture` takes a coverage buffer the PROGRAM computed — already
+in wasm memory, so no fetch and no asset pipeline.  WebGL2 has no
+`TEXTURE_SWIZZLE`, which is how the desktop backend makes a RED texture sample as
+`(1,1,1,r)`, so the bridge expands to RGBA: same sampling result, and the shaders
+stay identical across targets.  `gl_load_texture` serves a **bundled** asset —
+`--html` embeds every `.png` sibling of the entry file and decodes it before
+`loft_start`, so the lookup is synchronous; a runtime URL genuinely needs async
+and reports failure (`0`, never a valid handle — `hold` is 1-based).
+
+Gate: `tests/gl_text_bridge.rs` drives `tests/data/gl_text_probe.html` in
+headless chromium.  It asserts what the bridge PRODUCES — ink in the coverage,
+metrics that scale with size, handles that are handles — because the failure this
+replaces was stubs that returned plausible numbers and no pixels, which every
+import-shape check passed.
+
 ### Shader translation: desktop GLSL → GLSL ES 3.00
 
 `lib/graphics/src/*.loft` writes shaders for desktop OpenGL

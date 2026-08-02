@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>loft-gl text bridge probe</title>
+<body style="margin:0;background:#000">
+<canvas id="gl" width="64" height="64"></canvas>
+<canvas id="c" width="256" height="64"></canvas>
+<pre id="out" style="color:#0f0"></pre>
+<script src="/doc/loft-gl-wasm.js"></script>
+<script>
+const ctrl = { ac: null, assets: {} };
+const fail = [];
+function ck(name, cond, extra) {
+  if (!cond) { fail.push(name + (extra === undefined ? '' : ' (' + extra + ')')); }
+}
+window.addEventListener('load', () => {
+  const mem = new WebAssembly.Memory({ initial: 4 });
+  const getMem = () => mem;
+  const enc = new TextEncoder();
+  let top = 1024;
+  const put = (s) => { const b = enc.encode(s); new Uint8Array(mem.buffer).set(b, top);
+                       const r = [top, b.length]; top += b.length + 8; return r; };
+  const imports = buildLoftImports(document.getElementById('gl'),
+                                   document.getElementById('out'), getMem, ctrl);
+  const g = imports.loft_gl;
+
+  // 1 — a font path resolves to a usable handle (0-based; i32::MIN is the null).
+  const [fp, fl] = put('DejaVuSans-Bold.ttf');
+  const font = g.loft_gl_load_font(fp, fl);
+  ck('load_font handle', font >= 0, font);
+
+  // 2 — metrics are real, and grow with the size.
+  const [tp, tl] = put('Hello');
+  const w32 = g.loft_gl_measure_text(font, tp, tl, 32);
+  const w64 = g.loft_gl_measure_text(font, tp, tl, 64);
+  ck('measure_text > 0', w32 > 0, w32);
+  ck('measure_text scales', w64 > w32 * 1.5, w32 + '/' + w64);
+  const h32 = g.loft_text_height(font, 32);
+  ck('text_height > 0', h32 > 0, h32);
+  ck('text_height plausible', h32 >= 32 && h32 < 32 * 3, h32);
+  const asc = g.loft_gl_font_ascent(font, 32);
+  ck('font_ascent within height', asc > 0 && asc <= h32, asc);
+
+  // 3 — rasterize_text_into writes REAL coverage at i64 stride, and returns the width.
+  const bw = Math.ceil(w32) + 1, bh = h32, bufPtr = 4096, count = bw * bh;
+  new Int32Array(mem.buffer, bufPtr, count * 2).fill(0);
+  const rw = g.loft_rasterize_text_into(font, tp, tl, 32, bufPtr, count);
+  ck('rasterize returns width', rw > 0 && rw <= bw, rw + '/' + bw);
+  const words = new Int32Array(mem.buffer, bufPtr, count * 2);
+  let ink = 0, maxA = 0, hiSet = 0;
+  for (let i = 0; i < count; i++) {
+    const a = words[i * 2];
+    if (words[i * 2 + 1] !== 0) hiSet++;
+    if (a > 0) ink++;
+    if (a > maxA) maxA = a;
+  }
+  // The whole point of #737: the bridge must produce actual glyph coverage.
+  ck('rasterize produced ink', ink > 20, ink);
+  ck('rasterize alpha is 0-255', maxA > 128 && maxA <= 255, maxA);
+  ck('rasterize high word zero', hiSet === 0, hiSet);
+
+  // 4 — text_texture returns a handle and reports its size through the out-params.
+  const wp = 8192, hp = 8196;
+  const tex = g.loft_gl_text_texture(font, tp, tl, 32, wp, hp);
+  const oi = new Int32Array(mem.buffer);
+  ck('text_texture handle', tex > 0, tex);
+  ck('text_texture width', oi[wp >> 2] > 0, oi[wp >> 2]);
+  ck('text_texture height', oi[hp >> 2] > 0, oi[hp >> 2]);
+
+  // 5 — #738: an authored alpha buffer becomes a texture.
+  const ap = 16384, aw = 8, ah = 4;
+  const ab = new Uint8Array(mem.buffer, ap, aw * ah);
+  for (let i = 0; i < aw * ah; i++) ab[i] = (i * 8) & 255;
+  const atex = g.loft_gl_upload_alpha_texture(ap, aw, ah);
+  ck('upload_alpha_texture handle', atex > 0, atex);
+  ck('alpha texture is a NEW handle', atex !== tex, atex + '/' + tex);
+  ck('upload_alpha_texture rejects empty', g.loft_gl_upload_alpha_texture(ap, 0, 0) === 0);
+
+  // 6 — an unknown font handle must not throw, and must report "nothing".
+  ck('unknown font measures 0', g.loft_gl_measure_text(99, tp, tl, 32) === 0);
+  ck('unknown font rasterizes 0', g.loft_rasterize_text_into(99, tp, tl, 32, bufPtr, count) === 0);
+  const [bp2, bl2] = put('');
+  ck('empty path is null font', g.loft_gl_load_font(bp2, bl2) === -2147483648);
+
+  // 7 — a texture with no bundled asset reports failure, not a bogus handle.
+  const [pp, pl] = put('nope.png');
+  ck('load_texture without asset = 0', g.loft_gl_load_texture(pp, pl) === 0);
+
+  // Paint the coverage so the screenshot layer independently sees real glyphs.
+  // Stride is the RETURNED width, exactly as loft's `draw_text` indexes it — using the
+  // requested buffer width instead shears the glyphs by a pixel per row.
+  const cx = document.getElementById('c').getContext('2d');
+  const img = cx.createImageData(rw, bh);
+  for (let i = 0; i < rw * bh; i++) {
+    const a = words[i * 2];
+    img.data[i * 4] = a; img.data[i * 4 + 1] = a; img.data[i * 4 + 2] = a; img.data[i * 4 + 3] = 255;
+  }
+  cx.putImageData(img, 0, 0);
+
+  if (fail.length) console.error('TEXT BRIDGE PROBE FAILED: ' + fail.join(' | '));
+  document.getElementById('out').textContent =
+    fail.length ? 'FAIL: ' + fail.join(' | ') : 'PROBE OK (ink=' + ink + ' w=' + rw + ' h=' + bh + ')';
+});
+</script>
+</body>
