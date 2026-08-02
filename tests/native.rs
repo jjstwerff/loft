@@ -1251,6 +1251,95 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
+/// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
+/// compiled itself, with SQL NULL kept distinct from the empty string.
+///
+/// The whole vertical slice in one test — loft → libmariadb + a loft-built
+/// ANSI-C shim → a live server → rows back — with no rustc anywhere.
+///
+/// **The `shim` mode is what keeps this honest.** The cursor needs a server, and
+/// a test that merely skips when one is absent cannot tell "no database" from "a
+/// dead binding", so it would report a broken shim as a pass on every machine
+/// without MariaDB. The `shim` mode needs no server and still exercises the
+/// pieces that can silently rot: the shim compiled, `char *` → `text?`, and a
+/// NULL pointer arriving as loft null. Only the SERVER half is conditional.
+#[test]
+fn a_sql_cursor_walks_real_rows_and_keeps_null_apart_from_empty() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let present = [
+        "/lib/x86_64-linux-gnu/libmariadb.so.3",
+        "/usr/lib/libmariadb.so.3",
+    ]
+    .iter()
+    .any(|p| std::path::Path::new(p).exists());
+    if !present
+        || std::process::Command::new("cc")
+            .arg("--version")
+            .output()
+            .is_err()
+    {
+        return Ok(());
+    }
+    let libdir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Beside the fixture it needs, NOT in tests/scripts/ — that directory is swept
+    // and every script there must run standalone, while this one needs `--lib`.
+    let script = libdir.join("mariadb").join("cursor.loft");
+    let run = |backend: &str, mode: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .env("LOFT_PLN23_MODE", mode)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}/{mode}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+
+    // Always: the shim and the null crossing, no server involved.
+    let shim = run("--interpret", "shim")?;
+    assert!(
+        shim.contains("shim null=true") && shim.contains("shim info=true"),
+        "the shim must build and a null row must cross as loft null:\n{shim}"
+    );
+    assert_eq!(
+        run("--native", "shim")?,
+        shim,
+        "both backends, one loft-built shim"
+    );
+
+    // Conditional: the cursor itself.
+    let cursor = run("--interpret", "cursor")?;
+    if cursor.contains("SKIP unreachable") {
+        return Ok(()); // no server here; the shim half above still ran
+    }
+    for want in [
+        "cols 3 rows 3",
+        "row 1 ada NULL", // SQL NULL
+        "row 2 grace [hi]",
+        "row 3 kay []", // the empty string — NOT the same thing
+        "done",
+    ] {
+        assert!(cursor.contains(want), "cursor missing `{want}`:\n{cursor}");
+    }
+    assert_eq!(
+        run("--native", "cursor")?,
+        cursor,
+        "both backends must read the same rows"
+    );
+    Ok(())
+}
+
 /// @PLN23 S2 — the opaque-handle lifecycle against a real client library.
 ///
 /// `MYSQL *` crosses as a loft `integer` holding the pointer, which is the

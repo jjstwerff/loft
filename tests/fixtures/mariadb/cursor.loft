@@ -1,0 +1,84 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN23 S3 — the cursor model, against a real MariaDB.
+//
+// Driven by `tests/native.rs`. Two modes, and the split is the point:
+//
+//   shim    needs NO server. It exercises the ANSI-C shim loft compiled, the
+//           `char *`-to-`text?` crossing, and the NULL that a null pointer
+//           becomes. This is what stops the whole test being vacuous on a
+//           machine with no database — a skip cannot then hide a dead binding.
+//   cursor  needs the server. It walks a real result set and pins the one
+//           distinction a SQL binding exists to keep: NULL is not "".
+
+use mariadb;
+
+// `env_variable` answers "" for an unset variable, not null, so `??` never
+// fires on it. Treating "" as absent is the caller's job — and getting this
+// wrong silently connected as the OS user and skipped the whole cursor half
+// while the test still reported ok.
+fn env_or(name: text, fallback: text) -> text {
+  v = env_variable(name) ?? "";
+  if v == "" { return fallback }
+  return v;
+}
+
+fn run(h: integer, sql: text) -> boolean {
+  if db_query(h, sql) != 0 { println("SQL FAILED [{sql}] {db_error(h)}"); return false }
+  return true;
+}
+
+fn main() {
+  mode = env_variable("LOFT_PLN23_MODE");
+
+  if mode == "shim" {
+    // A null row pointer through the shim is loft null — no database involved.
+    c = db_col(0, 0);
+    println("shim null={c == null}");
+    println("shim info={client_info().len() > 0}");
+    return
+  }
+
+  h = db_init(0);
+  if h == 0 { println("FAIL init"); return }
+  host = env_or("LOFT_DB_HOST", "127.0.0.1");
+  user = env_or("LOFT_DB_USER", "loft");
+  pass = env_or("LOFT_DB_PASS", "loft");
+  if db_connect(h, host, user, pass, "", 3306, 0, 0) == 0 {
+    // The harness reads this and skips; it never reads it as a pass.
+    println("SKIP unreachable {db_error(h)}");
+    db_close(h);
+    return
+  }
+  if !run(h, "CREATE DATABASE IF NOT EXISTS loft_test_s3") { return }
+  if !run(h, "USE loft_test_s3") { return }
+  if !run(h, "DROP TABLE IF EXISTS t") { return }
+  if !run(h, "CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(32), note VARCHAR(32))") { return }
+  // Row 1 has SQL NULL, row 3 has the empty string. Keeping those apart is the
+  // whole reason the column accessor is `text?` and not `text`.
+  if !run(h, "INSERT INTO t VALUES (1,'ada',NULL),(2,'grace','hi'),(3,'kay','')") { return }
+  if !run(h, "SELECT id, name, note FROM t ORDER BY id") { return }
+
+  res = db_store(h);
+  if res == 0 { println("FAIL no result {db_error(h)}"); return }
+  println("cols {db_cols(res)} rows {db_rows(res)}");
+  more = true;
+  while more {
+    row = db_next_row(res);
+    if row == 0 { more = false } else {
+      id = db_col(row, 0) ?? "?";
+      name = db_col(row, 1) ?? "?";
+      note = db_col(row, 2);
+      if note == null {
+        println("row {id} {name} NULL");
+      } else {
+        println("row {id} {name} [{note ?? ""}]");
+      }
+    }
+  }
+  db_free(res);
+  _ = run(h, "DROP DATABASE loft_test_s3");
+  db_close(h);
+  println("done");
+}
