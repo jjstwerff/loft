@@ -492,6 +492,62 @@ fn store_load_keys_loads_the_requested_subset_both_backends() {
     }
 }
 
+/// loft#730 — a store does not keep the slack its vectors grew to.
+///
+/// `Store::resize` leaves an in-place growth at 7/4 of the size that triggered
+/// it and never gives it back, so the image carries it. Compaction could not see
+/// it: the measure it gated on is free space BETWEEN records, and this is a
+/// fully claimed, entirely live record. A store made of nothing else reported as
+/// dense, so the shape a rebuild pays best on was the one shape it refused.
+///
+/// Sizes are asserted with the digest, because a file that got smaller by LOSING
+/// data satisfies every size assertion anyone would write.
+#[test]
+fn a_rebound_store_sheds_the_slack_its_vectors_grew_to() {
+    let dir = scratch("store_compact_slack_730");
+    let path = dir.join("s.store");
+    let script = workspace_root().join("tests/scripts/store_compact_slack_730.loft");
+
+    let field = |out: &str, key: &str| -> String {
+        out.split_whitespace()
+            .find_map(|t| t.strip_prefix(key).map(str::to_string))
+            .unwrap_or_default()
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("store.dschema"));
+        let (w, cw) = run_mode_backend(backend, &script, &path, "write");
+        assert_eq!(cw, 0, "{backend} write exit: {w:?}");
+        let (r, cr) = run_mode_backend(backend, &script, &path, "rebind");
+        assert_eq!(cr, 0, "{backend} rebind exit: {r:?}");
+
+        assert_eq!(
+            field(&w, "digest="),
+            field(&r, "digest="),
+            "{backend}: the rebound store must hold the same data:\n  {w}\n  {r}"
+        );
+        let content: f64 = field(&w, "content=").parse().expect("content");
+        let written: f64 = field(&w, "file=").parse().expect("written");
+        let rebound: f64 = field(&r, "file=").parse().expect("rebound");
+        // The fixture has to ACQUIRE the slack, or the shrink below proves nothing.
+        assert!(
+            written / content > 1.5,
+            "{backend}: growth must leave slack to reclaim: content={content} written={written}"
+        );
+        assert!(
+            rebound < written * 0.8,
+            "{backend}: binding must shed the growth slack: written={written} rebound={rebound}"
+        );
+        // And it must land near the content, not merely somewhere smaller.
+        assert!(
+            rebound / content < 1.3,
+            "{backend}: a compacted store should be its content plus the format's \
+             eighth: content={content} rebound={rebound}"
+        );
+    }
+}
+
 /// loft#729 — a loaded working set is sized by what it HOLDS, not by what the
 /// source store's records were grown to.
 ///
@@ -517,6 +573,14 @@ fn a_loaded_working_set_does_not_inherit_the_source_growth_slack() {
     };
 
     for backend in ["--interpret", "--native"] {
+        // Each backend starts from NO file. Binding an existing one compacts it
+        // (loft#730), so a second backend writing over the first backend's file
+        // would measure an already-dense store and the slack precondition below
+        // would fail for a reason that has nothing to do with the loader.
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("store.dschema"));
+        let _ = fs::remove_file(format!("{}.loaded", path.display()));
+        let _ = fs::remove_file(format!("{}.loaded.dschema", path.display()));
         let (w, cw) = run_mode_backend(backend, &script, &path, "write");
         assert_eq!(cw, 0, "{backend} write exit: {w:?}");
         let (l, cl) = run_mode_backend(backend, &script, &path, "load");
