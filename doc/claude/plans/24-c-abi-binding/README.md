@@ -7,8 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arcs A, B, C done; D part-done (the `text` return is in, the shim build and
-`loft install` are not); E, F open.** The architecture probe is built and has run
+**Arcs A, B, C, D done; E and F open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -166,6 +165,36 @@ round-trip test; `baked_layout_mirrors_loft_schema` is the instrument that names
 the real ones, and it must be read *before* the constants are written, not
 after.
 
+**Arc D, third slice: the shim builds, so the trade is real.** Every signature
+the fixed trampolines cannot express routes to an ANSI-C shim — that is the
+plan's whole complexity trade, and this session widened the dependency by
+sending caller-frees `char *` returns there too. Until now loft could not build
+one, which made the escape hatch a claim: an author's actual alternative was the
+rustc toolchain `#c` exists to avoid.
+
+`[c] shim = "src/shim.c"` is compiled with `cc` and the result is registered
+**exactly like a `[c] libs` entry**. That is the design decision worth naming:
+nothing downstream can tell a shim from any other C library, so the `dlopen`,
+the `--native` link line and the symbol resolver stay ONE code path. The plan's
+counted risk is `N × silence` — a fact restated at several sites goes wrong
+quietly at each — and a shim registered as its own kind of thing would have
+added a fourth site to every one of them. Registering both through one helper
+also collapsed the two copies the `[c] libs` loop already had.
+
+The artifact is content-addressed by the sources plus the compiler's identity,
+for the reason loft#715 made the Rust cdylibs content-addressed: an edit
+produces a different file rather than racing to overwrite one another process is
+reading, and a toolchain change rebuilds rather than reusing a stale ABI.
+
+`loft install` builds it too — not to make it work (the parser would), but to
+move WHEN the answer arrives: a package needing a C compiler should say so while
+the user is installing packages, not inside the first run of their program.
+
+The fixture is `pkg/lcshim/`, one cell per shape that needs a shim: a `double`
+argument, an out-parameter, and a caller-frees `char *`. The float cell is
+hand-computed — 2.5 × 4.0 is exactly 10.0 — so a shim returning a plausible
+wrong double fails rather than agreeing with itself.
+
 ## Goal
 
 A loft library binds directly to a system C library — **no rustc anywhere in
@@ -296,7 +325,7 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 | **A** — `#c "sym" "<signature>"`: parser, the `CSignature` type, the compile-time check | **Done** — `src/c_signature.rs`, inert; widths resolve per target |
 | **B** — the interpreter caller: `dlsym` + the per-arity trampolines + return-width dispatch | **Done** — `src/c_call.rs`; both backends answer identically |
 | **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | **Done** — loft calls libc directly, no rustc in any library |
-| **D** — packaging | **Part-done** — `[c] libs` declares + loads + links, and a `char *` return crosses as `text` / `text?`; the `cc` shim build and `loft install` remain |
+| **D** — packaging | **Done** — `[c] libs` declares + loads + links, a `char *` return crosses as `text` / `text?`, and `[c] shim` is ANSI-C loft compiles itself (`cc`, never rustc) at parse and at `loft install` |
 | **E** — the other two targets (the parity arc) | Open — see below |
 | **F** — prove it: a libpq subset for @PLN23, zero rustc | Open |
 

@@ -1,0 +1,9 @@
+[library]
+name = "lcshim"
+version = "0.1.0"
+
+# @PLN24 arc D — C source loft compiles ITSELF, with `cc` and no rustc. The
+# built library is then registered exactly like a `[c] libs` entry, so nothing
+# downstream can tell a shim from any other C library.
+[c]
+shim = "src/lc_shim.c"

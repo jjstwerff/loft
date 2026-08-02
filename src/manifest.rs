@@ -194,6 +194,17 @@ pub struct Manifest {
     /// same spelling `runtime-libs` uses; a bare path resolves against the
     /// package directory so a library can ship its own `.so`.
     pub c_libs: Vec<String>,
+    /// @PLN24 arc D — `[c] shim = "src/shim.c"`: ANSI-C sources this package
+    /// ships for the signatures the fixed trampolines cannot express (a float
+    /// argument, a struct by value, varargs, an out-parameter, a caller-frees
+    /// `char *` return).
+    ///
+    /// Compiled by `cc` — never rustc, which is the whole point of `#c` — and
+    /// the result is then registered exactly like a `[c] libs` entry, so
+    /// nothing downstream can tell a shim from any other C library.
+    ///
+    /// Paths resolve against the package directory.
+    pub c_shim: Vec<String>,
     /// PKG.4: loft function name → Rust symbol path from `[native.functions]`.
     pub native_functions: Vec<(String, String)>,
     /// PKG.5: WASM-specific overrides from `[native.wasm]`.
@@ -532,6 +543,7 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
         ("native", "crate") => m.native_crate = Some(value.scalar()),
         ("native", "in_binary") => m.native_in_binary = value.is_true(),
         ("c", "libs") => m.c_libs = split_list(&value.scalar()),
+        ("c", "shim") => m.c_shim = split_list(&value.scalar()),
         ("native", "runtime-libs") => m.runtime_libs = split_list(&value.scalar()),
         ("native", "build-deps") => m.build_deps = split_list(&value.scalar()),
         ("native.functions", _) => m.native_functions.push((key.to_string(), value.scalar())),

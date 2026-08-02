@@ -9032,19 +9032,7 @@ impl Parser {
         if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == &pkg_dir) {
             self.pending_native_compile.push(pkg_dir.clone());
         }
-        // @PLN24 arc D — a `[c] libs` entry is the ONLY way a `#c` binding
-        // reaches past libc and the cdylibs loft already loaded.  Carried with
-        // the package directory so a library shipping its own `.so` resolves.
-        for lib in &m.c_libs {
-            if !self
-                .data
-                .c_libraries
-                .iter()
-                .any(|(l, d)| l == lib && d == &pkg_dir)
-            {
-                self.data.c_libraries.push((lib.clone(), pkg_dir.clone()));
-            }
-        }
+        self.register_c_libraries(&m, &pkg_dir);
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self
@@ -9290,6 +9278,45 @@ impl Parser {
     /// native-symbol / native-crate bookkeeping, sibling-dependency search
     /// paths (`lib_dirs`), and queued transitive package loads
     /// (`pending_pkg_deps`).
+    /// @PLN24 arc D — register a package's C libraries: the ones it DECLARES
+    /// (`[c] libs`) and the one it SHIPS SOURCE FOR (`[c] shim`, built by `cc`).
+    ///
+    /// A `[c]` entry is the only way a `#c` binding reaches past libc and the
+    /// cdylibs loft already loaded, and both parser paths into a manifest need
+    /// it — which is exactly why it lives here once. The plan's own risk is
+    /// `N × silence`: a fact restated at several sites goes wrong quietly at
+    /// each, and this fact already had two homes before the shim would have
+    /// made it four.
+    ///
+    /// **A built shim is registered as an ordinary library**, so the
+    /// interpreter's `dlopen`, the `--native` link line and the symbol resolver
+    /// stay one code path and cannot disagree about what a shim is.
+    fn register_c_libraries(&mut self, m: &manifest::Manifest, pkg_dir: &str) {
+        let mut entries: Vec<String> = m.c_libs.clone();
+        if !m.c_shim.is_empty() {
+            match crate::c_shim::build(pkg_dir, &m.c_shim) {
+                Ok(so) => entries.push(so.to_string_lossy().into_owned()),
+                // Reported, not swallowed: without the shim its symbols are
+                // absent, and the failure the author would otherwise meet is
+                // "`#c` symbol not found" at the call — which names neither the
+                // shim nor the compiler that could not build it.
+                Err(why) => self
+                    .lexer
+                    .diagnostic(Level::Error, &format!("`[c] shim` for `{pkg_dir}`: {why}")),
+            }
+        }
+        for lib in entries {
+            if !self
+                .data
+                .c_libraries
+                .iter()
+                .any(|(l, d)| l == &lib && d == pkg_dir)
+            {
+                self.data.c_libraries.push((lib, pkg_dir.to_string()));
+            }
+        }
+    }
+
     fn apply_manifest_side_effects(&mut self, dir: &str, pkg_dir: &str, m: &manifest::Manifest) {
         // register native shared library path for loading after byte_code().
         // Pre-built location first, then auto-build from source (one home:
@@ -9319,21 +9346,7 @@ impl Parser {
             self.pending_native_compile.push(pkg_dir.to_string());
         }
         // PKG.4: register native function symbols and package crate info.
-        // @PLN24 arc D — a `[c] libs` entry is the ONLY way a `#c` binding
-        // reaches past libc and the cdylibs loft already loaded.  Carried with
-        // the package directory so a library shipping its own `.so` resolves.
-        for lib in &m.c_libs {
-            if !self
-                .data
-                .c_libraries
-                .iter()
-                .any(|(l, d)| l == lib && d == pkg_dir)
-            {
-                self.data
-                    .c_libraries
-                    .push((lib.clone(), pkg_dir.to_string()));
-            }
-        }
+        self.register_c_libraries(m, pkg_dir);
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self

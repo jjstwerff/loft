@@ -510,6 +510,7 @@ declaration: `void*` bound to `text` is either a mistake or a handle that wanted
 [c]
 libs = "libpq.so.5"            # a soname the dynamic linker knows
 # libs = "../../libmine.so"    # or a path, resolved against the package dir
+shim = "src/shim.c"            # ANSI-C loft compiles itself, with `cc`
 ```
 
 The interpreter `dlopen`s each entry and keeps it loaded (a `#c` symbol is
@@ -518,6 +519,25 @@ halves.  A binding to **libc needs no entry** — it is already in the process.
 
 Distinct from `[native] runtime-libs`, which names what a Rust cdylib needs
 present and only probes for it.
+
+**`shim`** names ANSI-C sources the package ships for the signatures the fixed
+trampolines cannot express — a `double` argument, a struct by value, varargs, an
+out-parameter, a caller-frees `char *` return.  loft compiles them with **`cc`,
+never rustc** (the whole point of `#c`), and the result is then registered
+*exactly like a `libs` entry*: nothing downstream can tell a shim from any other
+C library, so the interpreter's `dlopen`, the `--native` link line and the symbol
+resolver stay one code path.
+
+The artifact lands in the package's `native-auto/` and is **content-addressed**
+by the shim sources plus the compiler's identity — editing a shim produces a
+different file rather than racing to overwrite one another process may be
+reading, and a toolchain change rebuilds rather than reusing a stale ABI.  An
+existing artifact IS the freshness check, so a warm run costs nothing.
+
+`loft install` builds it at install time, so a package needing a C compiler says
+so while the user is installing packages, not inside the first run of their
+program.  A failure there is surfaced and the install still succeeds — the
+parser reports it again, with the `use` site, if the package is actually used.
 
 **Status: it works on both backends** — `--native` compiles the declaration into
 a typed `extern "C"` and calls it directly; the interpreter resolves the symbol

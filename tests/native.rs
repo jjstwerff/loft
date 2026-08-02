@@ -1251,6 +1251,91 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
+/// @PLN24 arc D — loft compiles the ANSI-C shim itself, with `cc` and no rustc.
+///
+/// The plan's trade is that loft-core stays a generic linking tool and every
+/// signature the fixed trampolines cannot express is wrapped in a few lines of C
+/// the library ships. That trade only holds if loft can BUILD those lines —
+/// otherwise the escape hatch is a claim, and the author's alternative is the
+/// rustc toolchain `#c` exists to avoid.
+///
+/// One cell per shape that needs a shim: a `double` argument (a different
+/// register file, so it crosses as its bit pattern), an out-parameter (two
+/// answers, one return slot), and a caller-frees `char *` (loft never frees one,
+/// so the shim owns the release). The float cell is hand-computed rather than
+/// copied from a run — 2.5 × 4.0 is exactly 10.0, whose bit pattern is pinned
+/// below, so a shim that returned a plausible-but-wrong double fails.
+#[test]
+fn loft_builds_the_ansi_c_shim_a_package_ships() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    let libdir = root.join("pkg");
+    // Start from no artifact, so the build itself is what is under test.
+    let _ = std::fs::remove_dir_all(libdir.join("lcshim").join("native-auto"));
+
+    let prog = std::env::temp_dir().join("loft_pln24_shim.loft");
+    std::fs::write(
+        &prog,
+        "use lcshim;\n\
+         fn main() {\n\
+         \x20 println(\"scale {shim_scale(4612811918334230528, 4616189618054758400)}\");\n\
+         \x20 println(\"mod {shim_mod(17, 5)}\");\n\
+         \x20 println(\"owned {shim_owned(7)}\");\n\
+         }\n",
+    )?;
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        // 2.5 * 4.0 = 10.0 → 0x4024000000000000.
+        "scale 4621819117588971520",
+        "mod 2",
+        "owned shim-7",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    // The artifact is the proof loft did the compiling: nothing else put it there.
+    let built: Vec<_> = std::fs::read_dir(libdir.join("lcshim").join("native-auto"))
+        .map(|d| d.filter_map(Result::ok).map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(
+        !built.is_empty(),
+        "loft must have built the shim into native-auto/"
+    );
+
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "a shim-backed binding must answer the same on both backends"
+    );
+    Ok(())
+}
+
 /// @PLN24 arc D — the return spellings a `#c` declaration must refuse, because
 /// nothing at runtime would.
 ///

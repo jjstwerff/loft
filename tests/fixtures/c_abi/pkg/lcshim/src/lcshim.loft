@@ -1,0 +1,9 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN24 arc D — bound to the SHIM, never to the shape it wraps. Each of these
+// is a signature the fixed trampolines cannot call directly.
+
+pub fn shim_scale(bits: integer, by_bits: integer) -> integer; #c "lcs_shim_scale" "long(long, long)"
+pub fn shim_mod(a: integer, b: integer) -> integer;            #c "lcs_shim_mod" "long(long, long)"
+pub fn shim_owned(n: integer) -> text;                         #c "lcs_shim_owned" "const char*(long)"
