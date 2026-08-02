@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @SCRIPT — an intentional beginner-script fixture (no `fn main`), so the script-detector
+// corpus sweep skips it: it is NOT accepted by the plain compiler.
+//
+// loft#736 — `if … else` at SCRIPT scope (loose top-level statements, no `fn main`).
+//
+// The script splitter ended a top-level item at the `}` that closed it back to depth 0,
+// so `else { … }` became a separate item and parsed as a bare `else` ("Expect token ;").
+// The `if` half alone always worked, which is what made this read as an `else`-only gap
+// rather than a splitter boundary.
+//
+// Every layout below is one statement, and each covers a different way the continuation
+// is reached: same line, own line, across a comment, an `else if` chain, and the
+// EXPRESSION form (`y = if … else …`), which the same boundary broke.
+
+fn label(n: integer) -> text {
+  if n > 2 { "big" } else { "small" }
+}
+
+seen = "";
+
+// same line
+x = 3;
+if x > 2 { seen += "A" } else { seen += "a" }
+
+// `else` on its own line
+if x > 5 {
+  seen += "B"
+}
+else {
+  seen += "b"
+}
+
+// a comment between the brace and the `else`
+if x > 2 { seen += "C" } // pick one
+else { seen += "c" }
+
+// an `else if` chain, arms on separate lines
+if x > 5 {
+  seen += "D"
+}
+else if x > 1 {
+  seen += "d"
+}
+else {
+  seen += "E"
+}
+
+// the expression form — an `if … else` on the right of an assignment
+y = if x > 2 { 7 } else { 0 };
+seen += "{y}";
+
+// nested, so an inner `}` that does NOT return to depth 0 is unaffected
+if x > 2 { if x > 5 { seen += "F" } else { seen += "f" } } else { seen += "G" }
+
+// two adjacent `if`s with no `else` must stay TWO statements, not merge
+if x > 2 { seen += "H" }
+if x > 1 { seen += "I" }
+
+// a def is still hoisted, and an identifier that merely starts with "else" is a
+// statement of its own rather than a continuation
+elsewhere = label(1);
+seen += elsewhere;
+
+println("seen={seen}");
