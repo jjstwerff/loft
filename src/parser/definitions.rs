@@ -1227,7 +1227,16 @@ impl Parser {
                         // implementations.  Without this, the call-site argument count
                         // won't match after re_resolve_call substitutes the concrete
                         // text-returning method (which has the hidden param).
-                        if matches!(t_ret_type, crate::data::Type::Text(_)) {
+                        //
+                        // loft#733 — `.base()` peels `Optional`: a `-> text?` method uses
+                        // the SAME buffered-text ABI as `-> text` (@PLN25 slice (c) — the
+                        // sentinel layout is shared, so `text_return` converts both), but
+                        // the bare `Type::Text(_)` match here saw only the unwrapped form.
+                        // The stub then carried one attribute fewer than the impl
+                        // `re_resolve_call` substitutes, and the result was read from a
+                        // slot nobody wrote: the call returned EMPTY on `--interpret` —
+                        // exit 0, no diagnostic — and did not compile on `--native`.
+                        if matches!(t_ret_type.base(), crate::data::Type::Text(_)) {
                             self.data.add_attribute(
                                 &mut self.lexer,
                                 t_stub_nr,
@@ -3101,9 +3110,15 @@ impl Parser {
                         );
                     }
                     self.data.definitions[stub_nr as usize].parent = d_nr;
-                    if let Some(ref rt) = return_tp {
-                        self.data.set_returned(stub_nr, rt.clone());
-                    }
+                    // loft#734 — a method with NO `->` returns Void, and the stub
+                    // has to say so. Leaving it unset kept the definition's
+                    // default `Unknown`, which the native generator renders as
+                    // `??` — `fn __iface_N_shut(…) -> ?? {`, invalid Rust, so any
+                    // interface with a `close`/`shut`/`flush` method could not be
+                    // compiled at all. `--interpret` never asked for the type and
+                    // ran correctly, which is what kept it hidden.
+                    self.data
+                        .set_returned(stub_nr, return_tp.clone().unwrap_or(Type::Void));
                 }
             }
             // I5 (phase 1): factory methods (Self in return without self: Self first param)
