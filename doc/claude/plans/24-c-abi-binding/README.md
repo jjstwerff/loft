@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arc A is done and inert; B–F open.** The architecture probe is built and has run
+**Arcs A and C are done; B, D, E, F open.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -19,6 +19,34 @@ Arc A ships the declaration and its check (`src/c_signature.rs`): `#c "sym"
 and survives the IR round trip. **Nothing calls a `#c` function yet** — `native`
 is deliberately left empty so the Rust dispatch path cannot pick one up.
 `#native` (Rust) is today's path and stays it.
+
+**Arc C works end to end**: `--native` compiles a `#c` declaration into a typed
+`extern "C"` and calls it. Proven against **libc** — linked into every Rust
+binary, so it needs no build step and nothing installed — with `strlen`, `abs`,
+`atoi` and `write`. The cell that matters is `atoi("-1")` answering **-1**: the
+declared width goes into the extern, so rustc truncates at the ABI and the cast
+sign-extends. A signature-blind caller reads the same return as 4294967295.
+
+Three things the build corrected, which is why C was ordered before B:
+
+1. **The pointee spelling is not needed for emission.** The design said the
+   parser keeps it "for the `--native` extern emission, which has to write a
+   real Rust type". It does not: every pointer is `*const c_void`, because
+   pointers share one ABI whatever they point at. The spelling stays for
+   diagnostics only.
+2. **A vector's count must sit immediately after its pointer**, and real C APIs
+   do not always oblige — `memchr(ptr, ch, n)` and `fwrite(ptr, size, n, f)`
+   separate them. The adjacent pair covers the common case (`write(fd, ptr, n)`
+   works); anything else needs a shim. That is consistent with the plan's
+   complexity sink, but it is a real limit and it is now written down rather
+   than discovered by a library author.
+3. **"Inert" was not inert.** A `#c` call under `--interpret` compiled and
+   returned a plausible wrong number — `strlen("hello")` answered **7562**. A
+   program correct on one backend and silently wrong on the other is the
+   divergence class the ship gate exists to catch, not a missing feature, so the
+   interpreter now REFUSES the call with a message naming `--native`. Declaring
+   a binding stays fine on every backend, which is what keeps arc A inert; arc B
+   replaces the refusal with the real caller.
 
 One thing arc A learned the hard way, worth carrying into B: the baked IR field
 offsets in `data_store.rs` are a MIRROR of the registered schema, and the schema
@@ -157,7 +185,7 @@ Isolation for C that cannot be trusted to be well-behaved is @PLN119's job
 |---|---|
 | **A** — `#c "sym" "<signature>"`: parser, the `CSignature` type, the compile-time check | **Done** — `src/c_signature.rs`, inert; widths resolve per target |
 | **B** — the interpreter caller: `dlopen`/`dlsym` + the per-arity trampolines + return-width dispatch | Open |
-| **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | Open — mostly reuse |
+| **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | **Done** — loft calls libc directly, no rustc in any library |
 | **D** — packaging: `[c] lib` / `shim`, `cc` shim build, `loft install` | Open |
 | **E** — the other two targets (the parity arc) | Open — see below |
 | **F** — prove it: a libpq subset for @PLN23, zero rustc | Open |

@@ -922,6 +922,118 @@ fn native_binary_script() -> std::io::Result<()> {
     run_native_job(&job)
 }
 
+/// @PLN24 arc C — a `#c` binding calls a real C symbol from native-compiled loft,
+/// with no Rust wrapper and no rustc in any library.
+///
+/// Bound to **libc**, deliberately: it is linked into every Rust binary, so this
+/// proves the whole path — declaration, typed `extern "C"`, marshalling, call —
+/// with no build step and nothing to install.
+///
+/// `atoi("-1")` is the cell that matters. A C `int` return read back as a bare
+/// `u64` — what a signature-blind caller does — is 4294967295, a plausible large
+/// positive that every `>= 0` check accepts; it is the shape that silently
+/// defeated `loft-libs-net`'s `server::listen`. It comes back as -1 here only
+/// because the declared width goes into the extern, so rustc truncates at the
+/// ABI and the cast then sign-extends. That is the plan's invariant, executing.
+///
+/// `write(1, ptr, count)` covers the other half: a loft `vector` crosses as a
+/// pointer AND a count, because C carries no length.
+#[test]
+fn native_c_binding_calls_libc() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let rlib_info = find_loft_rlib();
+    let path = std::env::temp_dir().join("loft_pln24_c_binding.loft");
+    std::fs::write(
+        &path,
+        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+         pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
+         pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
+         pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
+         fn main() {\n\
+         \x20 println(\"len {c_strlen(\"hello\")}\");\n\
+         \x20 println(\"neg {c_atoi(\"-1\")}\");\n\
+         \x20 println(\"abs {c_abs(-7)}\");\n\
+         \x20 b: vector<u8> = [];\n\
+         \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
+         \x20 println(\"wrote {c_write(1, b)}\");\n\
+         }\n",
+    )?;
+    let job = prepare_native_test(&path)?;
+    // Ok(false) = skipped (rustc absent / low space) — not a failure.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
+    let out = std::process::Command::new(&job.binary).output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("len 5"), "strlen: {stdout}");
+    assert!(
+        stdout.contains("neg -1"),
+        "a 32-bit C return must sign-extend, not come back as 4294967295 — the \
+         declared width is what makes that work: {stdout}"
+    );
+    assert!(stdout.contains("abs 7"), "abs: {stdout}");
+    assert!(
+        stdout.contains("hi\n") && stdout.contains("wrote 3"),
+        "a vector must cross as pointer + count: {stdout}"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc C — and the same binding must REFUSE on the interpreter rather
+/// than inventing an answer.
+///
+/// Before the guard, `c_strlen("hello")` compiled under `--interpret` and
+/// returned **7562**: a program correct on one backend and silently wrong on the
+/// other, which is the divergence class the ship gate exists to catch, not a
+/// missing feature. Arc B replaces the refusal with the real caller.
+#[test]
+fn interpreted_c_binding_refuses_instead_of_inventing() -> std::io::Result<()> {
+    let path = std::env::temp_dir().join("loft_pln24_c_interp.loft");
+    std::fs::write(
+        &path,
+        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+         fn main() { println(\"{c_strlen(\"hello\")}\") }\n",
+    )?;
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--interpret")
+        .arg(&path)
+        .output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "an uncallable binding must fail, not answer: {stdout}"
+    );
+    assert!(
+        stderr.contains("cannot call yet") && stderr.contains("--native"),
+        "and the message must say which backend does work: {stderr}"
+    );
+
+    // The control: DECLARING one is fine on every backend — that is what keeps
+    // the declaration inert. Without this the test above would pass just as well
+    // if `#c` had been banned outright.
+    let decl = std::env::temp_dir().join("loft_pln24_c_declonly.loft");
+    std::fs::write(
+        &decl,
+        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+         fn main() { println(\"ok\") }\n",
+    )?;
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--interpret")
+        .arg(&decl)
+        .output()?;
+    assert!(
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("ok"),
+        "declaring a #c binding must stay fine: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Ok(())
+}
+
 /// @PLN28: unbounded recursion in native-compiled code must surface loft's typed
 /// `call stack overflow` (exit non-zero) — the same cap the interpreter enforces —
 /// NOT the opaque Rust `fatal runtime error: stack overflow, aborting`.  The

@@ -4,5 +4,5 @@ pub fn when(t: integer) -> integer;
 #c "lc_when" "struct timeval(int)"
 
 fn main() {
-  println("{when(0)}");
+  println("when is declared, never called");
 }

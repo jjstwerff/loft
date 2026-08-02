@@ -1661,6 +1661,58 @@ extern crate loft;"
         writeln!(w, "use loft::tree;")?;
         writeln!(w, "use loft::codegen_runtime;")?;
         writeln!(w, "use loft::codegen_runtime::*;")?;
+
+        // @PLN24 arc C — one typed `extern "C"` declaration per `#c` symbol.
+        //
+        // This is where the plan's invariant pays off: the DECLARED widths go
+        // straight into the extern, so rustc performs the ABI truncation and
+        // the call site's `as i64` then extends correctly.  A caller that read
+        // the same 32-bit return as a bare `u64` — which is what a
+        // signature-blind trampoline does — turns -1 into 4294967295.  Nothing
+        // here re-derives a width from the loft types; they cannot express one.
+        //
+        // No reachability filter, matching the `#native` block above: the fn
+        // emitter writes a wrapper for every body-less def, so every symbol
+        // needs a declaration or the wrapper fails to compile.  An unreferenced
+        // extern is dead, not a link error.
+        if !wasm_browser {
+            let target = crate::c_signature::CTarget::host();
+            let mut declared_c: HashSet<String> = HashSet::new();
+            let mut block = String::new();
+            for d_nr in 0..data.definitions() {
+                let def = data.def(d_nr);
+                if def.c_sig.is_empty() || *def.code() != Value::Null {
+                    continue;
+                }
+                let Some(Ok(sig)) = crate::c_signature::of(data, d_nr, target) else {
+                    continue; // the parse error was already reported at the declaration
+                };
+                if !declared_c.insert(sig.symbol.clone()) {
+                    continue;
+                }
+                let params = sig
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| format!("a{i}: {}", t.rust_type()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ret = match sig.ret {
+                    crate::c_signature::CType::Void => String::new(),
+                    ref t => format!(" -> {}", t.rust_type()),
+                };
+                // Aliased like the `#native` block, and for the same reason: a
+                // C symbol may share the wrapper fn's name (E0428).
+                use std::fmt::Write as _;
+                let _ = writeln!(block, "    #[link_name = \"{}\"]", sig.symbol);
+                let _ = writeln!(block, "    fn __c_{}({params}){ret};", sig.symbol);
+            }
+            if !block.is_empty() {
+                writeln!(w, "unsafe extern \"C\" {{")?;
+                write!(w, "{block}")?;
+                writeln!(w, "}}")?;
+            }
+        }
         Ok(())
         // @PLAN12 phase 3.5a (2026-05-24) — removed the `mod external {…}`
         // shim that wrapped cr_rand_int / cr_rand_seed.  No `#rust
@@ -3741,7 +3793,13 @@ extern crate loft;"
             // primary callers always have a crate, so the def.native path
             // wins.
             let user_name = def.name().strip_prefix("n_").unwrap_or(def.name());
-            if !def.native().is_empty() {
+            if !def.c_sig.is_empty() {
+                // @PLN24 arc C — a `#c` binding: call the C symbol directly,
+                // through the typed extern the header declared.  Checked FIRST
+                // because a `#c` def never carries `native` (arc A leaves it
+                // empty on purpose, so the Rust dispatch path cannot claim it).
+                self.output_c_direct_call(w, def_nr)?;
+            } else if !def.native().is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
                 if self.wasm_browser {
                     // #623 — on the browser target a `#native` symbol reaches its
@@ -4001,6 +4059,150 @@ extern crate loft;"
     /// (no `LoftStore` or `LoftRef` involved).
     ///
     /// The return value is converted back to the loft type.
+    /// @PLN24 arc C — emit the body of a `#c` binding: marshal the loft
+    /// arguments into the declared C types, call the symbol through the typed
+    /// extern, and bring the result back.
+    ///
+    /// Separate from [`Self::output_native_direct_call`] rather than folded
+    /// into it, because the two marshal genuinely different things and folding
+    /// them would be a false unification. A `#native` text argument crosses as
+    /// `ptr, len`; a C one has to be NUL-terminated. A `#native` symbol takes a
+    /// `LoftStore` handle and reads a struct through it; a C symbol has no such
+    /// API, which is exactly why a loft record is refused at the declaration.
+    ///
+    /// The RETURN is where the declared width earns its keep: the extern is
+    /// declared at the C width, so rustc truncates at the ABI boundary and the
+    /// `as i64` below extends correctly. -1 from an `int` stays -1 rather than
+    /// becoming 4294967295.
+    fn output_c_direct_call(&self, w: &mut dyn Write, d_nr: u32) -> std::io::Result<()> {
+        let def = self.data.def(d_nr);
+        let target = crate::c_signature::CTarget::host();
+        // The declaration already reported a parse failure; emit a body anyway so
+        // the wrapper compiles into a coherent error rather than an E0308 cascade.
+        let Some(Ok(sig)) = crate::c_signature::of(self.data, d_nr, target) else {
+            writeln!(
+                w,
+                "{{ compile_error!(\"loft --native: this `#c` binding's signature did not parse\") }}"
+            )?;
+            return Ok(());
+        };
+        if self.wasm_browser {
+            let name = def.name().strip_prefix("n_").unwrap_or(def.name());
+            writeln!(
+                w,
+                "{{ compile_error!(\"loft: `{name}` is bound to the C symbol '{}' with #c, and the browser target has no C ABI to bind to. Give the library a wasm path or drop the --html claim (@PLN24 arc E)\") }}",
+                sig.symbol
+            )?;
+            return Ok(());
+        }
+
+        let params: Vec<&crate::data::Attribute> = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.name.starts_with("__") && !a.name.starts_with('#'))
+            .collect();
+        let needs_stores = params
+            .iter()
+            .any(|a| matches!(a.typedef.base(), Type::Vector(_, _)));
+
+        writeln!(w, "{{")?;
+        if needs_stores {
+            writeln!(
+                w,
+                "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+            )?;
+        }
+        // Prologue: every argument that needs a temporary to exist for the
+        // duration of the call. Bound here, in the wrapper's own block, so the
+        // buffers outlive the call rather than dropping at the end of the call
+        // expression.
+        for attr in &params {
+            let var = sanitize(&attr.name);
+            match attr.typedef.base() {
+                Type::Text(_) => {
+                    // loft text is UTF-8 PLUS A LENGTH; C reads to the first
+                    // NUL. The copy is what makes them the same thing, and it
+                    // is per-call rather than cached because the callee may
+                    // hold the pointer for its duration.
+                    writeln!(
+                        w,
+                        "  let _cs_{var}: Vec<u8> = {{ let p = var_{var}.as_ptr(); let n = var_{var}.len(); let mut b = Vec::with_capacity(n + 1); if !p.is_null() && n > 0 {{ b.extend_from_slice(unsafe {{ std::slice::from_raw_parts(p, n) }}); }} b.push(0u8); b }};"
+                    )?;
+                }
+                Type::Vector(elem_tp, _) => {
+                    let elem = Self::vector_elem_rust_type(elem_tp);
+                    writeln!(
+                        w,
+                        "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(var_{var}.rec, var_{var}.pos);"
+                    )?;
+                    writeln!(
+                        w,
+                        "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(_vr_{var}, 4) }};"
+                    )?;
+                    // The elements live in a loft store the allocator may grow,
+                    // so this pointer is valid FOR THE CALL and no longer — the
+                    // contract the declaration's mapping table states.
+                    writeln!(
+                        w,
+                        "  let _vp_{var}: *const {elem} = if _vr_{var} == 0 {{ std::ptr::null() }} else {{ loft::keys::store(&var_{var}, &stores.allocations).addr::<{elem}>(_vr_{var}, 8) as *const {elem} }};"
+                    )?;
+                }
+                _ => {}
+            }
+        }
+
+        // The call itself, argument by argument, against the DECLARED C types.
+        let mut args: Vec<String> = Vec::new();
+        let mut c_i = 0usize;
+        for attr in &params {
+            let var = sanitize(&attr.name);
+            match attr.typedef.base() {
+                Type::Text(_) => {
+                    args.push(format!("_cs_{var}.as_ptr().cast::<std::ffi::c_void>()"));
+                    c_i += 1;
+                }
+                Type::Vector(_, _) => {
+                    args.push(format!("_vp_{var}.cast::<std::ffi::c_void>()"));
+                    let count_ty = sig
+                        .params
+                        .get(c_i + 1)
+                        .map_or("i64", crate::c_signature::CType::rust_type);
+                    args.push(format!("(_vc_{var} as {count_ty})"));
+                    c_i += 2;
+                }
+                _ => {
+                    let ty = sig
+                        .params
+                        .get(c_i)
+                        .map_or("i64", crate::c_signature::CType::rust_type);
+                    args.push(format!("((var_{var}) as {ty})"));
+                    c_i += 1;
+                }
+            }
+        }
+        let call = format!("unsafe {{ __c_{}({}) }}", sig.symbol, args.join(", "));
+
+        // The return. `as i64` after a width-correct extern is the whole of the
+        // fix the probe asked for.
+        match (&sig.ret, def.returned().base()) {
+            (crate::c_signature::CType::Void, _) => writeln!(w, "  {call};")?,
+            (_, Type::Text(_)) => {
+                // A C string return: walk to the NUL and copy. NULL comes back
+                // as loft's empty text rather than a fault — the mapping the
+                // declaration promises.
+                writeln!(w, "  let _cp = {call} as *const u8;")?;
+                writeln!(
+                    w,
+                    "  if _cp.is_null() {{ String::new() }} else {{ let mut _n = 0usize; while unsafe {{ *_cp.add(_n) }} != 0 {{ _n += 1; }} String::from_utf8_lossy(unsafe {{ std::slice::from_raw_parts(_cp, _n) }}).into_owned() }}"
+                )?;
+            }
+            (_, Type::Boolean) => writeln!(w, "  (({call}) != 0) as u8")?,
+            _ => writeln!(w, "  ({call}) as i64")?,
+        }
+        writeln!(w, "}}")?;
+        Ok(())
+    }
+
     fn output_native_direct_call(
         &self,
         w: &mut dyn Write,

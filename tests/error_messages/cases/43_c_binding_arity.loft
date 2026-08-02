@@ -5,5 +5,5 @@ pub fn add(a: integer, b: integer) -> integer;
 #c "lc_add" "int(int)"
 
 fn main() {
-  println("{add(1, 2)}");
+  println("add is declared, never called");
 }

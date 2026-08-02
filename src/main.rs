@@ -7532,6 +7532,14 @@ fn main() {
     // Y (unresolvable = hard error) and shim over it (un-folded = advisory warning). Inert until a
     // symbol is marked, so a no-op for every program today.
     loft::use_analysis::superseded_fold_diagnostics(&p.data, &mut p.diagnostics, &abs_file);
+    // @PLN24 arc C — a `#c` call has no interpreter caller until arc B, and
+    // compiling it produced a plausible WRONG number rather than an error, which
+    // is a cross-backend divergence rather than a missing feature.  Gated on the
+    // BACKEND, not on the declaration: `--native` calls C correctly today, and
+    // merely declaring a `#c` binding stays fine everywhere.
+    if !native_mode {
+        loft::use_analysis::c_binding_call_unsupported(&p.data, &mut p.diagnostics, &abs_file);
+    }
     // @PLN102 build step 2/3 — report-only link oracles (no-op unless LOFT_DUMP_LINK_SAFE/OBS).
     loft::use_analysis::dump_link_safety(&p.data);
     loft::use_analysis::dump_link_observability(&p.data);

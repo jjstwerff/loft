@@ -2417,6 +2417,59 @@ pub fn warn_dead_stores(
 /// `make ci` check once the surface is clean).  Every steer thus ships with its fold, or the lint
 /// fires.  INERT until a symbol is actually marked `#superseded`, so the suite is byte-identical.
 /// Populates `diags`; the caller renders them with the other diagnostics.
+/// @PLN24 arc C — refuse a CALL to a `#c` binding on a backend that cannot make
+/// it, loudly, at compile time.
+///
+/// The interpreter has no C caller until arc B. Without this the call compiled
+/// and returned a **plausible wrong number** (`strlen("hello")` answered 7562),
+/// which is the worst possible shape: a program correct under `--native` and
+/// silently wrong under `--interpret`, exactly the cross-backend divergence the
+/// ship gate exists to catch. Declaring a `#c` function stays fine everywhere —
+/// only calling one is refused, which is what keeps arc A genuinely inert.
+///
+/// Arc B replaces this with the real interpreter caller; the check is meant to
+/// be deleted, not grown.
+pub fn c_binding_call_unsupported(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    fn walk(code: &Value, data: &Data, found: &mut Vec<u32>) {
+        if let Value::Call(d, _) = code.unspan()
+            && !data.def(*d).c_sig.is_empty()
+            && !found.contains(d)
+        {
+            found.push(*d);
+        }
+        code.for_each_child(&mut |c| walk(c, data, found));
+    }
+    let mut called: Vec<u32> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        walk(data.def(d_nr).code(), data, &mut called);
+    }
+    for d_nr in called {
+        let def = data.def(d_nr);
+        let pos = def.position();
+        let file = if pos.file.is_empty() {
+            fallback_file
+        } else {
+            pos.file.as_str()
+        };
+        diags.add_at(
+            crate::diagnostics::Level::Error,
+            &format!(
+                "`{}` is bound to the C symbol `{}` with `#c`, which the interpreter cannot \
+                 call yet — run it with `--native` (@PLN24 arc B is the interpreter half)",
+                def.display_name(),
+                def.c_symbol
+            ),
+            file,
+            pos.line,
+            pos.pos,
+        );
+    }
+}
+
 pub fn superseded_fold_diagnostics(
     data: &Data,
     diags: &mut crate::diagnostics::Diagnostics,

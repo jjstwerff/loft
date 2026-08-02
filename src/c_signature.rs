@@ -103,6 +103,54 @@ impl CType {
         matches!(self, CType::Int { .. } | CType::Pointer { .. })
     }
 
+    /// The Rust type this C type is declared as in a generated `extern "C"`
+    /// block (@PLN24 arc C).
+    ///
+    /// The declared width is what makes a call correct, and the RETURN width
+    /// especially: rustc truncates a 32-bit C return at the ABI boundary, so
+    /// `as i64` then sign-extends it properly. A caller that read the same
+    /// return as a bare `u64` — which is what a signature-blind trampoline does
+    /// — turns -1 into 4294967295.
+    ///
+    /// Every pointer is `*const c_void`, because pointers share one ABI whatever
+    /// they point at. The parser keeps the pointee spelling for diagnostics; the
+    /// emission does not need it, which is one prediction the build corrected.
+    #[must_use]
+    pub fn rust_type(&self) -> &'static str {
+        match self {
+            CType::Void => "()",
+            CType::Int {
+                bits: 8,
+                signed: true,
+            } => "i8",
+            CType::Int {
+                bits: 8,
+                signed: false,
+            } => "u8",
+            CType::Int {
+                bits: 16,
+                signed: true,
+            } => "i16",
+            CType::Int {
+                bits: 16,
+                signed: false,
+            } => "u16",
+            CType::Int {
+                bits: 32,
+                signed: true,
+            } => "i32",
+            CType::Int {
+                bits: 32,
+                signed: false,
+            } => "u32",
+            CType::Int { signed: true, .. } => "i64",
+            CType::Int { signed: false, .. } => "u64",
+            CType::Pointer { .. } => "*const std::ffi::c_void",
+            CType::Float { bits: 32 } => "f32",
+            CType::Float { .. } => "f64",
+        }
+    }
+
     /// How the type is named back to the author in a diagnostic.
     #[must_use]
     pub fn spelling(&self) -> String {

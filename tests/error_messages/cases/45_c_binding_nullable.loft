@@ -5,5 +5,5 @@ pub fn take(n: integer?) -> integer;
 #c "lc_raw_i64" "long(long)"
 
 fn main() {
-  println("{take(1)}");
+  println("take is declared, never called");
 }
