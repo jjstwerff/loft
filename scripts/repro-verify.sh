@@ -27,6 +27,7 @@
 # Usage:
 #   scripts/repro-verify.sh                 # newest release, this platform's target
 #   scripts/repro-verify.sh --version 2026.7.3
+#   scripts/repro-verify.sh --target x86_64-apple-darwin
 #   scripts/repro-verify.sh --keep          # leave the work tree for inspection
 #
 # Exit: 0 identical · 1 differs · 3 cannot verify (says why; never a silent pass).
@@ -37,6 +38,7 @@ REPO="loft-lang/loft"
 # verifications side by side, which costs byte-identity and says so.
 ROOT="${LOFT_REPRO_ROOT:-/tmp/loft-repro}"
 VERSION=""
+TARGET_REQ=""
 KEEP=0
 
 die() { echo "repro-verify: $*" >&2; exit 3; }
@@ -44,6 +46,7 @@ die() { echo "repro-verify: $*" >&2; exit 3; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="${2:-}"; [ -n "$VERSION" ] || die "--version needs a value"; shift 2 ;;
+    --target)  TARGET_REQ="${2:-}"; [ -n "$TARGET_REQ" ] || die "--target needs a value"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     -h|--help) sed -n '5,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)         die "unknown option: $1" ;;
@@ -59,12 +62,27 @@ if command -v sha256sum >/dev/null; then SHA="sha256sum"; else SHA="shasum -a 25
 # cross-compiled binary is not expected to equal a natively built one.
 host=$(rustc -vV | sed -n 's/^host: //p')
 case "$host" in
-  x86_64-unknown-linux-gnu)  TARGET="x86_64-unknown-linux-musl" ;;
-  x86_64-apple-darwin)       TARGET="x86_64-apple-darwin" ;;
-  aarch64-apple-darwin)      TARGET="aarch64-apple-darwin" ;;
-  x86_64-pc-windows-msvc)    TARGET="x86_64-pc-windows-msvc" ;;
+  x86_64-unknown-linux-gnu)  NATIVE="x86_64-unknown-linux-musl" ;;
+  x86_64-apple-darwin)       NATIVE="x86_64-apple-darwin" ;;
+  aarch64-apple-darwin)      NATIVE="aarch64-apple-darwin" ;;
+  x86_64-pc-windows-msvc)    NATIVE="x86_64-pc-windows-msvc" ;;
   *) die "no published target for host $host" ;;
 esac
+
+# `--target` names WHICH published bundle to verify; without it, this host's own.
+#
+# It must be given when the caller has a target in mind, and it must be CHECKED:
+# deriving the target from the host alone let a job labelled `x86_64-apple-darwin`
+# run on an arm64 runner, download the AARCH64 bundle, rebuild aarch64, and report
+# the result under the x86_64 name.  It could only ever fail, it said nothing about
+# x86_64, and the x86_64 bundle went unverified while looking verified.  A verifier
+# that reports on a target it did not build is the exact failure this script's "never
+# a silent pass" rule exists to prevent — so a mismatch is `cannot verify` (3), not a
+# difference (1).
+TARGET="${TARGET_REQ:-$NATIVE}"
+if [ "$TARGET" != "$NATIVE" ]; then
+  die "asked to verify $TARGET, but this host ($host) natively builds $NATIVE. A cross-compiled binary is not expected to equal a natively built one, so this runner cannot verify that target — give the job a $TARGET runner"
+fi
 
 if [ -z "$VERSION" ]; then
   VERSION=$(gh release view -R "$REPO" --json tagName -q '.tagName' 2>/dev/null | sed 's/^v//')
