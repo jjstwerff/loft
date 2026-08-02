@@ -194,6 +194,22 @@ pub struct Manifest {
     /// same spelling `runtime-libs` uses; a bare path resolves against the
     /// package directory so a library can ship its own `.so`.
     pub c_libs: Vec<String>,
+    /// @PLN24 arc G — `[c] optional-libs = "libduckdb.so, libpq.so.5"`: C
+    /// libraries this package binds but does NOT require.
+    ///
+    /// Same spelling and same resolution rules as `c_libs`; the difference is
+    /// entirely in when the library is needed. A required library is opened at
+    /// load and linked by `--native`, so its absence is an early, actionable
+    /// failure. An optional one is neither: it is opened when a symbol from it
+    /// is first looked up, and `--native` resolves it at that moment too rather
+    /// than putting it on the link line — so a program that never calls into it
+    /// BUILDS AND RUNS on a machine where it is not installed.
+    ///
+    /// That is what lets one package bind several backends (a database client
+    /// over sqlite, postgres and duckdb) without making a user install all of
+    /// them to use one. The cost is that "is it there?" becomes a question the
+    /// program must ask before calling — `c_library_available`.
+    pub c_optional_libs: Vec<String>,
     /// @PLN24 arc D — `[c] shim = "src/shim.c"`: ANSI-C sources this package
     /// ships for the signatures the fixed trampolines cannot express (a float
     /// argument, a struct by value, varargs, an out-parameter, a caller-frees
@@ -543,6 +559,7 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
         ("native", "crate") => m.native_crate = Some(value.scalar()),
         ("native", "in_binary") => m.native_in_binary = value.is_true(),
         ("c", "libs") => m.c_libs = split_list(&value.scalar()),
+        ("c", "optional-libs") => m.c_optional_libs = split_list(&value.scalar()),
         ("c", "shim") => m.c_shim = split_list(&value.scalar()),
         ("native", "runtime-libs") => m.runtime_libs = split_list(&value.scalar()),
         ("native", "build-deps") => m.build_deps = split_list(&value.scalar()),

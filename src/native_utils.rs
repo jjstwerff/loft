@@ -1469,7 +1469,13 @@ pub(crate) fn native_cabi_enabled() -> bool {
 ///
 /// A binding to libc needs no entry and gets no flag: it is already linked.
 pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate::data::Data) {
-    for (name, dir) in &data.c_libraries {
+    for lib in data.c_libraries.iter().filter(|c| !c.optional) {
+        // @PLN24 arc G — an OPTIONAL library gets no flag at all. On the link
+        // line it would be a BUILD dependency: measured, a declared-absent
+        // soname fails `rust-lld: unable to find library -l:libfoo.so.9` on a
+        // program that never calls into it. The emission resolves it at first
+        // call instead (`output_c_direct_call`).
+        let (name, dir) = (&lib.name, &lib.pkg_dir);
         let beside = std::path::Path::new(dir).join(name);
         // `libfoo.so.5` -> `foo`: strip the prefix the linker adds back and
         // every version suffix, because `-l` names the library, not the file.

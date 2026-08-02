@@ -3431,6 +3431,32 @@ pub enum Context {
     Variable,
 }
 
+/// @PLN24 arc D/G — one C library a package declared, as every consumer of the
+/// declaration needs to see it.
+///
+/// A named struct rather than a tuple because four sites read it and each reads
+/// a different field for a different purpose — the interpreter's load, the
+/// `--native` link line, the `--native` emission, and the availability query.
+/// A positional `bool` in a tuple is read wrong at one of them eventually, and
+/// this plan's counted risk is that such a mistake is SILENT.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CLibrary {
+    /// The soname as the dynamic linker knows it (`libpq.so.5`), or a path
+    /// relative to `pkg_dir` for a library the package ships itself.
+    pub name: String,
+    /// The declaring package's directory. It travels with the name because a
+    /// library may ship its own `.so` beside its `.loft`, so the name alone
+    /// cannot be resolved.
+    pub pkg_dir: String,
+    /// `[c] optional-libs` rather than `[c] libs`: the package works without
+    /// it, so it is NOT linked and NOT opened until a symbol needs it.
+    ///
+    /// The author's claim about their own library, never inferred from whether
+    /// a `dlopen` happened to succeed — that would make one package required on
+    /// one machine and optional on the next.
+    pub optional: bool,
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 /// The immutable data of a parsed loft program
@@ -3478,14 +3504,14 @@ pub struct Data {
     /// PKG.4: native package crate directories — (`crate_name`, `pkg_dir`).
     /// Used to construct `--extern` flags for `rustc`.
     pub native_packages: Vec<(String, String)>,
-    /// @PLN24 arc D — `(soname, package directory)` for every `[c] libs` entry a
-    /// loaded package declares.
+    /// @PLN24 arc D — every C library a loaded package declares, and whether it
+    /// is required or optional.
     ///
-    /// The package directory travels with the name because a library may ship
-    /// its own `.so` beside its `.loft`, so the name alone cannot be resolved.
-    /// Read by the interpreter (which `dlopen`s them so `#c` symbols resolve)
-    /// and by `--native` (which links them for the same symbols).
-    pub c_libraries: Vec<(String, String)>,
+    /// Read by the interpreter (which `dlopen`s them so `#c` symbols resolve),
+    /// by `--native` (which links or lazily resolves them for the same symbols),
+    /// and by the availability query. One parse, one flag, every reader — the
+    /// plan counts `N × silence` at exactly these re-assertion sites.
+    pub c_libraries: Vec<CLibrary>,
     /// Map from `#native "symbol"` names to the Rust crate that provides them.
     /// Populated when a package declares `[native] crate` in loft.toml.
     /// Used by native codegen to emit `crate::symbol(args)` calls.
@@ -5242,6 +5268,44 @@ impl Data {
     #[must_use]
     pub fn source_is_owned(&self, source: u16) -> bool {
         source == MAIN_SOURCE
+    }
+
+    /// @PLN24 arc G — the package that owns `file`, among those that declared C
+    /// libraries: the longest declared `pkg_dir` that is a prefix of it.
+    ///
+    /// The longest-prefix rule is the one the repo already uses to attribute a
+    /// definition to its package (`native_symbol_crates`), so a nested package
+    /// wins over the parent that contains it.
+    #[must_use]
+    pub fn c_owner_pkg(&self, file: &str) -> Option<&str> {
+        self.c_libraries
+            .iter()
+            .filter(|c| !c.pkg_dir.is_empty() && file.starts_with(c.pkg_dir.as_str()))
+            .max_by_key(|c| c.pkg_dir.len())
+            .map(|c| c.pkg_dir.as_str())
+    }
+
+    /// @PLN24 arc G — must a `#c` symbol declared in `file` be resolved at RUN
+    /// time rather than linked?
+    ///
+    /// True when its owning package declares any `[c] optional-libs` entry. The
+    /// question is answered per PACKAGE and not per symbol because **a `#c`
+    /// declaration does not name the library it comes from** — nothing in the
+    /// source says which of a package's libraries exports a given symbol, and
+    /// guessing from a name prefix would be a second source of truth of exactly
+    /// the kind this plan's invariant refuses.
+    ///
+    /// The consequence is deliberate and worth stating: a package that declares
+    /// only required libraries emits what arc C emitted, byte for byte, so the
+    /// lazy path cannot regress a library that never asked for it.
+    #[must_use]
+    pub fn c_symbol_is_lazy(&self, file: &str) -> bool {
+        let Some(pkg) = self.c_owner_pkg(file) else {
+            return false;
+        };
+        self.c_libraries
+            .iter()
+            .any(|c| c.pkg_dir == pkg && c.optional)
     }
 
     /// @PLN102 arc C — is the source CURRENTLY being compiled owned (see

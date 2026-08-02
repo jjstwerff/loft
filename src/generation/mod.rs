@@ -1684,6 +1684,13 @@ extern crate loft;"
             let target = crate::c_signature::CTarget::host();
             let mut declared_c: HashSet<String> = HashSet::new();
             let mut block = String::new();
+            // @PLN24 arc G — a symbol from a package that declares an OPTIONAL
+            // library cannot be declared `extern "C"`: an extern that is CALLED
+            // is an undefined reference, and with the library off the link line
+            // the program fails to build (measured — `rust-lld: unable to find
+            // library`, even for a call the program never reaches).  It gets a
+            // resolving wrapper instead, below.
+            let mut lazy = String::new();
             for d_nr in 0..data.definitions() {
                 let def = data.def(d_nr);
                 if def.c_sig.is_empty() || *def.code() != Value::Null {
@@ -1706,9 +1713,55 @@ extern crate loft;"
                     crate::c_signature::CType::Void => String::new(),
                     ref t => format!(" -> {}", t.rust_type()),
                 };
+                use std::fmt::Write as _;
+                if data.c_symbol_is_lazy(&def.position().file) {
+                    let fn_ty = format!(
+                        "unsafe extern \"C\" fn({}){ret}",
+                        sig.params
+                            .iter()
+                            .map(crate::c_signature::CType::rust_type)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    let args = (0..sig.params.len())
+                        .map(|i| format!("a{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    // An `unsafe fn` under the SAME name the call site already
+                    // writes, so nothing changes at the call: the emission of a
+                    // `#c` call stays one shape whether or not it is lazy.
+                    //
+                    // The pointer is transmuted to the DECLARED signature, never
+                    // called through a `u64` trampoline — that is arc C's whole
+                    // gain (rustc applies the C widths at the ABI), and a lazy
+                    // call that dropped it would reintroduce `atoi("-1")`
+                    // answering 4294967295.
+                    let _ = writeln!(lazy, "#[inline]");
+                    let _ = writeln!(lazy, "unsafe fn __c_{}({params}){ret} {{", sig.symbol);
+                    let _ = writeln!(
+                        lazy,
+                        "  static P: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();"
+                    );
+                    let _ = writeln!(
+                        lazy,
+                        "  match P.get_or_init(|| loft::c_call::resolve_native({:?}, __C_LIBS, __C_LIB_SYMS).map(|p| p as usize)) {{",
+                        sig.symbol
+                    );
+                    let _ = writeln!(
+                        lazy,
+                        "    Some(p) => unsafe {{ std::mem::transmute::<usize, {fn_ty}>(*p)({args}) }},"
+                    );
+                    let _ = writeln!(
+                        lazy,
+                        "    None => panic!(\"{{}}\", loft::c_call::missing_symbol_message({:?})),",
+                        sig.symbol
+                    );
+                    let _ = writeln!(lazy, "  }}");
+                    let _ = writeln!(lazy, "}}");
+                    continue;
+                }
                 // Aliased like the `#native` block, and for the same reason: a
                 // C symbol may share the wrapper fn's name (E0428).
-                use std::fmt::Write as _;
                 let _ = writeln!(block, "    #[link_name = \"{}\"]", sig.symbol);
                 let _ = writeln!(block, "    fn __c_{}({params}){ret};", sig.symbol);
             }
@@ -1716,6 +1769,38 @@ extern crate loft;"
                 writeln!(w, "unsafe extern \"C\" {{")?;
                 write!(w, "{block}")?;
                 writeln!(w, "}}")?;
+            }
+            // The tables a compiled program needs because it never runs
+            // `c_call::register`: which libraries may be opened on demand, and
+            // which `#c` symbols each is expected to provide (the availability
+            // query's symbol-granular half).
+            //
+            // EVERY declared library is listed, not just the optional ones: with
+            // its symbols resolved lazily a required library may have no
+            // undefined reference left to keep its `DT_NEEDED` entry alive, and
+            // re-opening one that is already loaded costs nothing.
+            //
+            // Emitted whenever the program declares any C library — not only
+            // when something is lazy — because `c_library_available` must be
+            // answerable in a program that makes no lazy call at all.
+            if !data.c_libraries.is_empty() {
+                writeln!(w, "static __C_LIBS: &[(&str, &str)] = &[")?;
+                for lib in &data.c_libraries {
+                    writeln!(w, "    ({:?}, {:?}),", lib.name, lib.pkg_dir)?;
+                }
+                writeln!(w, "];")?;
+                writeln!(w, "static __C_LIB_SYMS: &[(&str, &[&str])] = &[")?;
+                for (lib, syms) in crate::c_call::library_symbol_table(data) {
+                    write!(w, "    ({lib:?}, &[")?;
+                    for s in &syms {
+                        write!(w, "{s:?}, ")?;
+                    }
+                    writeln!(w, "]),")?;
+                }
+                writeln!(w, "];")?;
+            }
+            if !lazy.is_empty() {
+                write!(w, "{lazy}")?;
             }
         }
         Ok(())
@@ -2011,6 +2096,17 @@ extern crate loft;"
             return (String::new(), String::new());
         }
         let mut prelude = String::new();
+        // @PLN24 arc G — hand the baked-in C-library tables to the runtime before
+        // any loft code runs, so `c_library_available` can answer in a program
+        // that never makes a lazy `#c` call. Emitted only for a program that
+        // declares C libraries, which keeps every other program's generated
+        // source byte-identical.
+        if !self.data.c_libraries.is_empty() {
+            let _ = writeln!(
+                prelude,
+                "    loft::c_call::register_native(__C_LIBS, __C_LIB_SYMS);"
+            );
+        }
         let mut args = String::new();
         for (i, a) in self.data.def(d_nr).attributes().iter().enumerate() {
             if !a.hidden {

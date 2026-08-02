@@ -9305,14 +9305,26 @@ impl Parser {
                     .diagnostic(Level::Error, &format!("`[c] shim` for `{pkg_dir}`: {why}")),
             }
         }
-        for lib in entries {
+        // @PLN24 arc G — the optional list joins here, flagged. A shim is never
+        // optional: the package ships its source and loft just built it, so it
+        // is present by construction and an absent one is a build failure the
+        // author has already been told about.
+        let entries = entries
+            .into_iter()
+            .map(|l| (l, false))
+            .chain(m.c_optional_libs.iter().map(|l| (l.clone(), true)));
+        for (lib, optional) in entries {
             if !self
                 .data
                 .c_libraries
                 .iter()
-                .any(|(l, d)| l == &lib && d == pkg_dir)
+                .any(|c| c.name == lib && c.pkg_dir == pkg_dir)
             {
-                self.data.c_libraries.push((lib, pkg_dir.to_string()));
+                self.data.c_libraries.push(crate::data::CLibrary {
+                    name: lib,
+                    pkg_dir: pkg_dir.to_string(),
+                    optional,
+                });
             }
         }
     }
