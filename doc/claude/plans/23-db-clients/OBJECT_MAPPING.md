@@ -166,6 +166,14 @@ back as an `integer` and a `text` — measured: `errno=1045`, `Access denied for
 user 'loft'@'localhost' (using password: YES)`. So the error taxonomy the plan
 asks for has a real source; it does not need inventing.
 
+## Beyond the ladder
+
+[LIFETIME_AND_PROCEDURES.md](LIFETIME_AND_PROCEDURES.md) designs two things that
+sit after S7 — a **drop at scope end** that ends a transaction, and **stored
+procedures written with string formatting**. Both put a side effect where the
+reader is not looking (one at a brace, one inside a string), which is what those
+designs have to make safe. Design only; nothing built.
+
 ## Open
 
 1. A bounded-text declaration, for `text` used as a key column.
