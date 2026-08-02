@@ -989,6 +989,39 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
 /// the Call function. We need a different mechanism.
 ///
 /// Solution: use a thread-local that `static_call` sets before invoking.
+/// The `--remap-path-prefix` flags for the machine doing the building.
+///
+/// Mirrors `scripts/repro-flags.sh`, which does the same for the release build.
+/// Both exist so a compiled artifact records `/cargo` and `/rustc` instead of
+/// whoever's home directory produced it — the difference between a release
+/// anyone can rebuild and one that only matches on the maintainer's laptop.
+#[cfg(feature = "native-extensions")]
+fn local_remap_flags() -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    // The toolchain sysroot first: it lives inside the rustup home and carries
+    // the toolchain's own directory NAME, so a build on `stable` and one pinned
+    // to an exact version would otherwise still differ.
+    if let Ok(o) = std::process::Command::new(std::env::var("RUSTC").as_deref().unwrap_or("rustc"))
+        .arg("--print")
+        .arg("sysroot")
+        .output()
+        && o.status.success()
+    {
+        let root = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if !root.is_empty() {
+            let _ = write!(out, "--remap-path-prefix={root}=/rustc ");
+        }
+    }
+    let cargo_home = std::env::var("CARGO_HOME")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.cargo")));
+    if let Some(c) = cargo_home {
+        let _ = write!(out, "--remap-path-prefix={c}=/cargo");
+    }
+    out
+}
+
 #[cfg(feature = "native-extensions")]
 fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef) {
     // Read the current library index from the thread-local.
@@ -1729,7 +1762,13 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         // rustc aborts at the generated program's link step.  Force it
         // (overriding any ambient value) and clear `CARGO_ENCODED_RUSTFLAGS` so
         // cargo doesn't see both forms at once.
-        cmd.env("RUSTFLAGS", env!("LOFT_BUILD_RUSTFLAGS"))
+        // The baked flags carry no `--remap-path-prefix` (build.rs strips them:
+        // they name the RELEASE machine's paths).  Recompute them for THIS
+        // machine so loft's rlibs and the package crate agree on `/cargo` and
+        // `/rustc`, which is what #274's SVH match actually needs — and which
+        // also keeps the consumer's cdylib free of their own home directory.
+        let flags = format!("{} {}", env!("LOFT_BUILD_RUSTFLAGS"), local_remap_flags());
+        cmd.env("RUSTFLAGS", flags.trim())
             .env_remove("CARGO_ENCODED_RUSTFLAGS");
         if use_redirected_target {
             if let Some(parent) = target_root.parent() {

@@ -18,11 +18,19 @@
 # a private `RUSTUP_HOME` takes ~15s and ~600MB, and leaves the caller's default
 # toolchain untouched.
 #
-# That same private root is also the canonicalisation lever.  A build embeds absolute
-# paths (`$CARGO_HOME/registry/...`, `$RUSTUP_HOME/toolchains/...` — 192 strings for
-# loft), so two machines agree only if those paths agree.  Putting RUSTUP_HOME,
-# CARGO_HOME and the source under one FIXED root makes them agree without a container —
-# which matters, since a container is a dependency not every verifier has.
+# ## Why there is no fixed root any more
+#
+# A build embeds absolute paths (`$CARGO_HOME/registry/...`, `$RUSTUP_HOME/toolchains/...`
+# — 193 strings for loft), so two machines agree only if those paths agree.  This script
+# used to force RUSTUP_HOME, CARGO_HOME and the source under one FIXED root to make that
+# happen.  It could not work, and did not: only the VERIFIER used that root, while the
+# release was cut from the maintainer's own checkout and home directory.  Every
+# verification failed, on every platform, and the failure read as "the source does not
+# produce this binary".
+#
+# The paths are now erased on BOTH sides instead (`scripts/repro-flags.sh`, sourced by
+# `make-release.sh` and by the rebuild below), so a rebuild matches from ANY directory,
+# with no container and no magic path.
 #
 # Usage:
 #   scripts/repro-verify.sh                 # newest release, this platform's target
@@ -109,6 +117,14 @@ if [ ! -f "$info" ]; then
 fi
 RUSTC_VER=$(sed -n 's/^rustc = //p' "$info" | sed 's/ .*//')
 [ -n "$RUSTC_VER" ] || die "BUILD-INFO names no rustc"
+# A release cut before the build stopped embedding its machine's absolute paths
+# cannot be reproduced anywhere else — it carried ~193 of them
+# (`/home/<user>/.cargo/registry/...`), and those strings differ, and differ in
+# LENGTH, on every other machine.  Exit 3, not 1: reporting it as a DIFFERENCE
+# would blame the source for the toolchain's behaviour, which is the same
+# dishonesty as a silent pass, pointing the other way.
+grep -q '^reproducible-paths = yes' "$info" \
+  || die "v$VERSION was built before paths were made deterministic, so its bytes are tied to the machine that cut it — nothing here can be compared"
 echo "   rustc $RUSTC_VER (from the bundle's BUILD-INFO)"
 
 # 2. The source the release was cut from.  `git archive` of the tag, taken from the
@@ -118,7 +134,14 @@ echo "   rustc $RUSTC_VER (from the bundle's BUILD-INFO)"
 unzip -q "$ROOT/src.zip" -d "$ROOT/srcroot" || die "cannot unpack the source archive"
 SRC="$ROOT/src"; mv "$ROOT/srcroot/loft-$VERSION" "$SRC" 2>/dev/null || mv "$ROOT/srcroot" "$SRC"
 
-# 3. The exact compiler, in a private root that is also the canonical path.
+# 3. The exact compiler, in a private root that leaves the caller's toolchain alone.
+#
+# The root is no longer a canonicalisation lever, and never worked as one: only
+# the VERIFIER used it, while the release was cut from the maintainer's own
+# checkout and home directory, so the paths never had a chance to agree.  The
+# build now erases them on BOTH sides (scripts/repro-flags.sh), which is why a
+# rebuild matches from any directory.  The private root stays for the reason it
+# is actually good: a throwaway toolchain that does not disturb the caller's.
 export RUSTUP_HOME="$ROOT/rustup" CARGO_HOME="$ROOT/cargo"
 echo "   installing rustc $RUSTC_VER (throwaway)"
 rustup toolchain install "$RUSTC_VER" --profile minimal --target "$TARGET" >/dev/null 2>&1 \
@@ -126,7 +149,8 @@ rustup toolchain install "$RUSTC_VER" --profile minimal --target "$TARGET" >/dev
 
 # 4. Rebuild, exactly as make-release.sh does.
 echo "   building $TARGET"
-( cd "$SRC" && CARGO_INCREMENTAL=0 rustup run "$RUSTC_VER" cargo build --release --bin loft --target "$TARGET" ) \
+( cd "$SRC" && . "$SRC/scripts/repro-flags.sh" \
+    && CARGO_INCREMENTAL=0 rustup run "$RUSTC_VER" cargo build --release --bin loft --target "$TARGET" ) \
   || die "the rebuild failed"
 
 exe="loft"; case "$TARGET" in *windows*) exe="loft.exe" ;; esac
