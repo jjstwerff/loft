@@ -1,0 +1,70 @@
+use sql;
+
+fn my_init(h: integer) -> integer;      #c "mysql_init" "void*(void*)"
+fn my_close(h: integer);                #c "mysql_close" "void(void*)"
+fn my_error(h: integer) -> text;        #c "mysql_error" "const char*(void*)"
+fn my_query(h: integer, sql: text) -> integer;  #c "mysql_query" "int(void*, const char*)"
+fn my_store(h: integer) -> integer;     #c "mysql_store_result" "void*(void*)"
+fn my_fetch(r: integer) -> integer;     #c "mysql_fetch_row" "void*(void*)"
+fn my_nfields(r: integer) -> integer;   #c "mysql_num_fields" "int(void*)"
+fn my_free(r: integer);                 #c "mysql_free_result" "void(void*)"
+fn my_col(row: integer, i: integer) -> text?;  #c "lm_row_col" "const char*(void*, long)"
+fn my_connect(h: integer, host: text, user: text, pass: text, db: text,
+              port: integer, sock: integer, flags: integer) -> integer;
+#c "mysql_real_connect" "void*(void*, const char*, const char*, const char*, const char*, int, const char*, long)"
+
+// Each backend reads `target` in its OWN dialect — sqlite a path, libpq a
+// conninfo string, and this one `key=value` pairs — which is what a uniform API
+// across real drivers looks like. The interface promises one SHAPE, not one
+// connection syntax; JDBC does exactly the same.
+fn opt(target: text, key: text, fallback: text) -> text {
+  k = "{key}=";
+  p = target.find(k);
+  if p == null { return fallback }
+  rest = target[((p ?? 0) + size(k))..];
+  e = rest.find(" ");
+  if e == null { if rest == "" { return fallback } return rest }
+  v = rest[0..(e ?? 0)];
+  if v == "" { return fallback }
+  return v;
+}
+
+pub struct Maria { conn: integer, res: integer, row: integer }
+
+pub fn maria() -> Maria { return Maria { conn: 0, res: 0, row: 0 }; }
+
+pub fn db_open(self: Maria, target: text) -> boolean {
+  self.conn = my_init(0);
+  if self.conn == 0 { return false }
+  h = opt(target, "host", "127.0.0.1");
+  u = opt(target, "user", "loft");
+  p = opt(target, "pass", "loft");
+  d = opt(target, "db", "");
+  return my_connect(self.conn, h, u, p, d, 3306, 0, 0) != 0;
+}
+
+pub fn db_exec(self: Maria, sql: text) -> boolean { return my_query(self.conn, sql) == 0; }
+
+pub fn db_select(self: Maria, sql: text) -> boolean {
+  if my_query(self.conn, sql) != 0 { return false }
+  self.res = my_store(self.conn);
+  return self.res != 0;
+}
+
+pub fn db_next(self: Maria) -> boolean {
+  if self.res == 0 { return false }
+  self.row = my_fetch(self.res);
+  if self.row != 0 { return true }
+  my_free(self.res);
+  self.res = 0;
+  return false;
+}
+
+pub fn db_is_null(self: Maria, i: integer) -> boolean { return my_col(self.row, i) == null; }
+pub fn db_col(self: Maria, i: integer) -> text { return my_col(self.row, i) ?? ""; }
+pub fn db_width(self: Maria) -> integer { return my_nfields(self.res); }
+pub fn db_last_error(self: Maria) -> text { return my_error(self.conn); }
+pub fn db_shut(self: Maria) {
+  if self.res != 0 { my_free(self.res); self.res = 0; }
+  if self.conn != 0 { my_close(self.conn); self.conn = 0; }
+}

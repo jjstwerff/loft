@@ -1,0 +1,9 @@
+[library]
+name = "postgres"
+version = "0.0.1"
+
+# libpq needs no shim: every handle comes back as a return value, never through
+# an out-parameter — the opposite of sqlite, and the reason this backend is
+# shorter despite being the client-server one.
+[c]
+libs = "libpq.so.5"

@@ -1,0 +1,7 @@
+[library]
+name = "maria"
+version = "0.0.1"
+
+[c]
+libs = "libmariadb.so.3"
+shim = "src/row.c"

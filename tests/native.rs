@@ -1251,6 +1251,105 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
+/// @PLN23 — one uniform interface over three different C libraries.
+///
+/// `dump <D: SqlDb>` and `seed <D: SqlDb>` in the fixture never name a backend,
+/// and every backend runs them unchanged. That is the whole claim, and it is not
+/// a small one: sqlite STEPS a prepared statement, libpq MATERIALISES the result
+/// and indexes it by (row, col), and libmariadb streams rows as `char **`. Three
+/// result models behind one cursor.
+///
+/// **sqlite is the cell that keeps this honest.** It needs no server, so a
+/// machine with no database still proves the interface, the bindings, the shim
+/// loft compiled, and SQL NULL staying distinct from the empty string. Only
+/// postgres and mariadb are conditional, and a skip is printed and recognised —
+/// never silently counted as a pass, which is how a dead binding would otherwise
+/// look green everywhere.
+///
+/// duckdb is a fourth working backend and is deliberately NOT here: it is not
+/// packaged by any distro and its `.so` is 70 MB, so vendoring it would cost more
+/// than it proves. See plans/23-db-clients/OBJECT_MAPPING.md.
+#[test]
+fn one_sql_interface_drives_three_different_c_libraries() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the sqlite backend ships a shim loft must compile
+    }
+    let has = |names: &[&str]| {
+        names.iter().any(|n| {
+            ["/lib/x86_64-linux-gnu/", "/usr/lib/", "/usr/lib64/"]
+                .iter()
+                .any(|d| std::path::Path::new(&format!("{d}{n}")).exists())
+        })
+    };
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("uniform.loft");
+    let run = |backend: &str, mode: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .env("LOFT_SQLDB_MODE", mode)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}/{mode}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+
+    // The three rows every backend is given, rendered by the SAME generic code:
+    // a value, SQL NULL, and the empty string.
+    let expect = "[ada] <null> [] ";
+
+    // sqlite — unconditional. No server, so a failure here is always real.
+    if has(&["libsqlite3.so.0"]) {
+        let s = run("--interpret", "sqlite")?;
+        assert!(
+            s.contains(&format!("sqlite {expect}")),
+            "sqlite must render value / NULL / empty distinctly:\n{s}"
+        );
+        assert_eq!(
+            run("--native", "sqlite")?,
+            s,
+            "both backends, one interface"
+        );
+    }
+
+    // postgres and mariadb — conditional, and a skip is recognised as a skip.
+    for (mode, lib) in [("postgres", "libpq.so.5"), ("maria", "libmariadb.so.3")] {
+        if !has(&[lib]) {
+            continue;
+        }
+        let out = run("--interpret", mode)?;
+        if out.contains("SKIP") {
+            continue; // no server reachable here
+        }
+        assert!(
+            out.contains(&format!("{mode} {expect}")),
+            "{mode} must render the same three cells as sqlite:\n{out}"
+        );
+        assert_eq!(
+            run("--native", mode)?,
+            out,
+            "{mode}: both backends must agree"
+        );
+    }
+    Ok(())
+}
+
 /// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
 /// compiled itself, with SQL NULL kept distinct from the empty string.
 ///

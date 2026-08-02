@@ -1,0 +1,93 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN23 — one contract, three C libraries, driven by `tests/native.rs`.
+//
+// `dump` and `seed` below are the whole claim: they are generic over `SqlDb`,
+// they never name a backend, and every backend runs them unchanged. If the
+// uniform API were a fiction, these two functions could not exist.
+//
+// **sqlite needs no server**, so it is the cell that keeps this honest: a
+// machine with no database still proves the interface, the bindings, the shim
+// loft compiled, and the NULL crossing. postgres and mariadb are conditional and
+// say so — a skip is printed, never counted as a pass.
+//
+// Modes: `sqlite` (always), `postgres`, `maria`.
+
+use sql;
+use sqlite;
+use postgres;
+use maria;
+
+// The rows every backend is given, so their outputs are comparable:
+//   1 'ada'   an ordinary value
+//   2 NULL    SQL NULL
+//   3 ''      the empty string — NOT the same thing, and the distinction a SQL
+//             binding exists to preserve
+fn seed <D: SqlDb> (d: D, create: text) -> boolean {
+  _ = d.db_exec("DROP TABLE IF EXISTS loft_u");
+  if !d.db_exec(create) { return false }
+  return d.db_exec("INSERT INTO loft_u VALUES (1,'ada'),(2,NULL),(3,'')");
+}
+
+fn dump <D: SqlDb> (d: D, sql: text) -> text {
+  out = "";
+  if !d.db_select(sql) { return "select failed: {d.db_last_error()}" }
+  while d.db_next() {
+    if d.db_is_null(1) { out += "<null> " } else { out += "[{d.db_col(1)}] " }
+  }
+  return out;
+}
+
+fn env_or(name: text, fallback: text) -> text {
+  // `env_variable` answers "" for an unset variable, not null, so `??` never
+  // fires on it — treating "" as absent is the caller's job.
+  v = env_variable(name) ?? "";
+  if v == "" { return fallback }
+  return v;
+}
+
+fn main() {
+  mode = env_variable("LOFT_SQLDB_MODE") ?? "";
+
+  if mode == "sqlite" {
+    ds = sqlite();
+    if !ds.db_open(":memory:") { println("FAIL open"); return }
+    if !seed(ds, "CREATE TABLE loft_u (id INTEGER PRIMARY KEY, name TEXT)") {
+      println("FAIL seed {ds.db_last_error()}"); ds.db_shut(); return
+    }
+    println("sqlite {dump(ds, "SELECT id, name FROM loft_u ORDER BY id")}");
+    ds.db_shut();
+    return
+  }
+
+  if mode == "postgres" {
+    dp = postgres();
+    if !dp.db_open(env_or("LOFT_PG_CONN", "dbname=loft_test_pg")) {
+      println("SKIP postgres {dp.db_last_error()}"); dp.db_shut(); return
+    }
+    if !seed(dp, "CREATE TABLE loft_u (id INT PRIMARY KEY, name TEXT)") {
+      println("FAIL seed {dp.db_last_error()}"); dp.db_shut(); return
+    }
+    println("postgres {dump(dp, "SELECT id, name FROM loft_u ORDER BY id")}");
+    _ = dp.db_exec("DROP TABLE loft_u");
+    dp.db_shut();
+    return
+  }
+
+  if mode == "maria" {
+    dm = maria();
+    if !dm.db_open(env_or("LOFT_MY_CONN", "host=127.0.0.1 user=loft pass=loft db=loft_test_uni")) {
+      println("SKIP maria {dm.db_last_error()}"); dm.db_shut(); return
+    }
+    if !seed(dm, "CREATE TABLE loft_u (id BIGINT PRIMARY KEY, name VARCHAR(32))") {
+      println("SKIP maria {dm.db_last_error()}"); dm.db_shut(); return
+    }
+    println("maria {dump(dm, "SELECT id, name FROM loft_u ORDER BY id")}");
+    _ = dm.db_exec("DROP TABLE loft_u");
+    dm.db_shut();
+    return
+  }
+
+  println("FAIL unknown-mode");
+}

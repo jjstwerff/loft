@@ -1,0 +1,27 @@
+// @PLN23 — the uniform contract both backends satisfy.
+//
+// loft interfaces are STATIC dispatch and have no associated types, so the
+// cursor cannot be a second type the connection returns. It is state ON the
+// connection instead: `select` opens a cursor, `next` advances it, `col` reads
+// the current row. One type per backend, satisfying one interface.
+//
+// That is a real constraint, not a preference — and it is the honest shape for
+// a language whose generics specialise at compile time.
+//
+// The nullable column is SPLIT into `db_is_null` + `db_col` rather than one
+// `text?`. That is a workaround for loft#733 (a `text?` interface method through
+// a bounded generic returns nothing on --interpret and does not compile on
+// --native), and it is worth saying so: the one-accessor `text?` form is the API
+// anyone would design, and it should come back when #733 is fixed. The split
+// happens to match what JDBC/ODBC do, which makes it liveable, not right.
+pub interface SqlDb {
+  fn db_open(self: Self, target: text) -> boolean
+  fn db_exec(self: Self, sql: text) -> boolean
+  fn db_select(self: Self, sql: text) -> boolean
+  fn db_next(self: Self) -> boolean
+  fn db_is_null(self: Self, i: integer) -> boolean
+  fn db_col(self: Self, i: integer) -> text
+  fn db_width(self: Self) -> integer
+  fn db_last_error(self: Self) -> text
+  fn db_shut(self: Self)
+}

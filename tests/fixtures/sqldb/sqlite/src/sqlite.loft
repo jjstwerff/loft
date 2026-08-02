@@ -1,0 +1,68 @@
+use sql;
+
+// --- the C surface, bound verbatim -----------------------------------------
+fn s3_open(path: text, out: integer) -> integer;   #c "sqlite3_open" "int(const char*, void*)"
+fn s3_close(db: integer) -> integer;               #c "sqlite3_close" "int(void*)"
+fn s3_errmsg(db: integer) -> text;                 #c "sqlite3_errmsg" "const char*(void*)"
+fn s3_prepare(db: integer, sql: text, n: integer, out: integer, tail: integer) -> integer;
+#c "sqlite3_prepare_v2" "int(void*, const char*, int, void*, void*)"
+fn s3_step(st: integer) -> integer;                #c "sqlite3_step" "int(void*)"
+fn s3_finalize(st: integer) -> integer;            #c "sqlite3_finalize" "int(void*)"
+fn s3_col_count(st: integer) -> integer;           #c "sqlite3_column_count" "int(void*)"
+fn s3_col_text(st: integer, i: integer) -> text?;  #c "sqlite3_column_text" "const char*(void*, int)"
+fn s3_col_type(st: integer, i: integer) -> integer; #c "sqlite3_column_type" "int(void*, int)"
+
+fn slot_a() -> integer;      #c "ls_slot_a" "void*(void)"
+fn slot_b() -> integer;      #c "ls_slot_b" "void*(void)"
+fn take_a() -> integer;      #c "ls_take_a" "void*(void)"
+fn take_b() -> integer;      #c "ls_take_b" "void*(void)"
+
+// --- the loft type that satisfies SqlDb ------------------------------------
+pub struct Sqlite { db: integer, st: integer, live: boolean }
+
+pub fn sqlite() -> Sqlite { return Sqlite { db: 0, st: 0, live: false }; }
+
+pub fn db_open(self: Sqlite, target: text) -> boolean {
+  if s3_open(target, slot_a()) != 0 { return false }
+  self.db = take_a();
+  return self.db != 0;
+}
+
+pub fn db_exec(self: Sqlite, sql: text) -> boolean {
+  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return false }
+  st = take_b();
+  r = s3_step(st);          // 101 = SQLITE_DONE
+  _ = s3_finalize(st);
+  return r == 101 || r == 100;
+}
+
+pub fn db_select(self: Sqlite, sql: text) -> boolean {
+  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return false }
+  self.st = take_b();
+  self.live = true;
+  return self.st != 0;
+}
+
+pub fn db_next(self: Sqlite) -> boolean {
+  if !self.live { return false }
+  if s3_step(self.st) == 100 { return true }   // 100 = SQLITE_ROW
+  _ = s3_finalize(self.st);
+  self.st = 0;
+  self.live = false;
+  return false;
+}
+
+pub fn db_is_null(self: Sqlite, i: integer) -> boolean {
+  return s3_col_type(self.st, i) == 5;              // 5 = SQLITE_NULL
+}
+
+pub fn db_col(self: Sqlite, i: integer) -> text {
+  return s3_col_text(self.st, i) ?? "";
+}
+
+pub fn db_width(self: Sqlite) -> integer { return s3_col_count(self.st); }
+pub fn db_last_error(self: Sqlite) -> text { return s3_errmsg(self.db); }
+pub fn db_shut(self: Sqlite) {
+  if self.live { _ = s3_finalize(self.st); self.live = false; }
+  if self.db != 0 { _ = s3_close(self.db); self.db = 0; }
+}
