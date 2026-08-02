@@ -395,7 +395,7 @@ the order of apparent size:
    interface cannot say "a connection, and the cursor type it produces", so the
    cursor became state ON the connection; and an interpolation `hole` cannot be
    generic over the value, so it needs one method per scalar kind. Both are
-   liveable and both are the same missing feature. Tracked as **@PLN125**.
+   liveable and both are the same missing feature. **@PLN125 arc A.**
 
 3. **A hook at scope end.** loft already computes the fact — the ownership model
    decides per binding whether this scope owns a value and whether it dies here,
@@ -404,12 +404,14 @@ the order of apparent size:
    cases that are easy to get wrong (loft#731 exists because of exactly those).
    The cost to state up front: a drop **cannot fail** under C80, so anything
    whose failure matters stays an explicit call. Designed in
-   [plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md).
+   [plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md),
+   **@PLN125 arc B** — which requires a second, unrelated consumer before it
+   lands, because a hook with one user is a hook whose invariant is untested.
 
 4. **Indexing.** The smallest and least urgent: `OpIndex` would let a matrix, a
    bitset, a row or a ring buffer read as `x[i]` instead of `x.at(i)`. Nothing is
    impossible without it; it is the one remaining place where a library type is
-   visibly not a built-in one.
+   visibly not a built-in one. **@PLN125 arc C.**
 
 Each is independently landable, and each should land **inert first** — the
 contract declared, every existing program proved byte-identical in IR and native

@@ -230,3 +230,9 @@ one. The type is the chokepoint; the rule is not repeated anywhere.
 Design only — nothing here is built. It sits after the S1–S7 ladder in
 OBJECT_MAPPING.md, because both parts need a working `sql` interface underneath
 and the transaction wrapper is S-level work that the closure form already covers.
+
+Part 1 is a **language** feature and is tracked as **@PLN125 arc B** (B1–B5),
+alongside associated types (arc A) and indexing (arc C) — the remaining gaps
+between a library type and a built-in one. B5 requires a **second, unrelated
+consumer** before it lands: a transaction alone would leave the invariant tested
+by exactly one shape. Parts 1b and 2 stay here, with @PLN23.
