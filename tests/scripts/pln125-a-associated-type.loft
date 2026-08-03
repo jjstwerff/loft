@@ -61,6 +61,40 @@ struct Num { v: integer }
 fn twice(self: Num) -> integer { return self.v * 2; }
 fn twice_of<P: Plain2>(p: P) -> integer { return p.twice(); }
 
+// --- A2b: `Self.X` in a signature resolves to the declared placeholder ---
+//
+// A1 only reserved `type X`; the return type still could not NAME it, and
+// writing `-> Self.Rows` desynced the interface-body loop into two "Expected
+// 'fn' in interface body" errors pointing at neither the cause nor the fix.
+//
+// A2b registers the declaration and resolves `Self.X` against it. Still not
+// BOUND: the placeholder stands for whatever companion the implementor
+// supplies, and nothing yet says which type that is — so satisfaction accepts
+// any concrete return where the interface declared an associated type. A2c is
+// what binds it per monomorph and checks the declared bound; until then this
+// pins that the contract is WRITABLE and that writing it does not break
+// satisfaction, dispatch, or a direct call.
+interface Cursor {
+  fn width(self: Self) -> integer
+}
+
+interface Source {
+  type Rows: Cursor
+  fn open(self: Self) -> Self.Rows
+  fn label(self: Self) -> text
+}
+
+struct FileRows { w: integer }
+struct FileSource { tag: text }
+
+fn width(self: FileRows) -> integer { return self.w; }
+fn open(self: FileSource) -> FileRows { return FileRows { w: len(self.tag) }; }
+fn label(self: FileSource) -> text { return self.tag; }
+
+// The generic still dispatches on the METHODS, with an associated type declared
+// AND used in a sibling method's return position.
+fn label_of<S: Source>(s: S) -> text { return s.label(); }
+
 fn main() {
   c = Conn { n: 7, label: "conn" };
   assert(width_of(c) == 7, "a bounded generic still dispatches on the interface");
@@ -70,5 +104,13 @@ fn main() {
   n = Num { v: 21 };
   assert(twice_of(n) == 42, "an interface with no associated type is unaffected");
 
-  println("pln125 a1 associated type inert ok");
+  // A2b — the companion type is real, and the method returning `Self.Rows`
+  // resolves to it on a direct call.
+  f = FileSource { tag: "abcd" };
+  r = f.open();
+  assert(r.w == 4, "a method declared `-> Self.Rows` returns the companion: {r.w}");
+  assert(r.width() == 4, "and the companion's own interface method is callable");
+  assert(label_of(f) == "abcd", "satisfaction survives a `Self.X` return type");
+
+  println("pln125 arc A associated type ok");
 }

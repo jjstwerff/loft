@@ -2156,6 +2156,58 @@ impl Parser {
     // before the Phase-2 default flip gives the marker teeth. The vector ELEMENT
     // `?` (`vector<S?>`) is consumed earlier in `sub_type_inner` (before this
     // returns), so this wrapper never steals it — it only catches the outer `?`.
+    /// @PLN125 arc A step A2b — resolve a `Self.X` associated-type reference.
+    ///
+    /// `base` is the type just parsed.  Answers `Some(placeholder)` only when all of it
+    /// holds: the parser is inside an interface body, `base` is that interface's `Self`,
+    /// the next token is `.`, and the name after it was declared by a `type` line in this
+    /// interface.  Anything else leaves the lexer untouched and answers `None`, so no
+    /// existing spelling changes meaning.
+    ///
+    /// A `.` after `Self` naming something NOT declared is an error rather than a silent
+    /// fallthrough: the alternative is the A1 symptom, where the leftover `.X` desynced the
+    /// interface-body loop and reported "Expected 'fn' in interface body" twice, pointing
+    /// at neither the cause nor the line the author has to change.
+    fn self_assoc_type(&mut self, base: &Type) -> Option<Type> {
+        let iface = self.context;
+        if iface == u32::MAX || !matches!(self.data.def_type(iface), DefType::Interface) {
+            return None;
+        }
+        let self_nr = self.data.def_nr("Self");
+        if self_nr == u32::MAX || !matches!(base, Type::Reference(nr, _) if *nr == self_nr) {
+            return None;
+        }
+        if !self.lexer.has_token(".") {
+            return None;
+        }
+        let Some(name) = self.lexer.has_identifier() else {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect an associated type name after 'Self.'"
+                );
+            }
+            return None;
+        };
+        let a_nr = self
+            .data
+            .def_nr(&format!("{}.{name}", self.data.def(iface).name()));
+        if a_nr == u32::MAX {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'{}' has no associated type '{name}' — declare it with `type {name}` \
+                     in the interface body",
+                    self.data.def(iface).name()
+                );
+            }
+            return Some(Type::Unknown(0));
+        }
+        Some(self.data.def(a_nr).returned().clone())
+    }
+
     pub(crate) fn parse_type(
         &mut self,
         on_d: u32,
@@ -2163,6 +2215,23 @@ impl Parser {
         returned: bool,
     ) -> Option<Type> {
         let t = self.parse_type_inner(on_d, type_name, returned)?;
+        // @PLN125 arc A step A2b — `Self.X`, an interface's ASSOCIATED TYPE used in one
+        // of its own method signatures:
+        //
+        //   interface SqlDb {
+        //     type Rows: SqlRows
+        //     fn select(self: Self, sql: text) -> Self.Rows
+        //   }
+        //
+        // Resolves to the placeholder the `type` line registered, which is what lets the
+        // signature parse and the generic body type against a name rather than a concrete
+        // def.  Inert: the placeholder behaves as any interface-scoped type does today, and
+        // A2c is what binds it to the implementor's companion per monomorph.  Only fires
+        // inside an interface body on the `Self` type — anywhere else `.` after a type is
+        // not this construct, and is left to fail as it always has.
+        if let Some(assoc) = self.self_assoc_type(&t) {
+            return Some(assoc);
+        }
         if self.lexer.has_token("?") {
             // @PLN101 — a `value struct` is stored INLINE (bytes, no `DbRef`), so it has no
             // `store_nr` null sentinel: `<value struct>?` cannot be represented. Reject it with
@@ -3110,7 +3179,8 @@ impl Parser {
             // `type` is a reserved token (the typedef keyword), so it arrives as
             // `Token`, not `Identifier` — `has_token`, like `parse_typedef`.
             if self.lexer.has_token("type") {
-                if self.lexer.has_identifier().is_none() && !self.first_pass {
+                let assoc_name = self.lexer.has_identifier();
+                if assoc_name.is_none() && !self.first_pass {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -3118,17 +3188,66 @@ impl Parser {
                     );
                 }
                 // `: Bound [+ Bound]*` — the same shape a bounded generic uses.
+                let mut bounds: Vec<String> = Vec::new();
                 if self.lexer.has_token(":") {
                     loop {
-                        if self.lexer.has_identifier().is_none() && !self.first_pass {
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "Expect an interface name after ':' in an associated type bound"
-                            );
+                        match self.lexer.has_identifier() {
+                            Some(b) => bounds.push(b),
+                            None => {
+                                if !self.first_pass {
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "Expect an interface name after ':' in an associated \
+                                         type bound"
+                                    );
+                                }
+                            }
                         }
                         if !self.lexer.has_token("+") {
                             break;
+                        }
+                    }
+                }
+                // @PLN125 arc A step A2b — RECORD the declaration, so `Self.X` in a
+                // signature below has something to resolve against.  Still inert: the
+                // placeholder stands where the concrete companion will go, and A2c is
+                // what binds it per monomorph and checks `bounds`.
+                //
+                // Held as a CHILD definition rather than a new `Definition` field, because
+                // that is what an interface's methods already are: `children_of` enumerates
+                // them, and it needs no IR-store schema change to survive a cached parse.
+                // `check_satisfaction` walks the same children looking for METHODS, and
+                // tells them apart by `DefType` — a method stub is a `Function`, this is a
+                // `Struct`.
+                //
+                // Named `<Interface>.<Name>`, which is both interface-scoped (two
+                // interfaces may declare the same associated type) and what the author
+                // wrote, so a diagnostic naming this type reads back as source.  A `.`
+                // cannot occur in a user identifier, so the name cannot collide with one.
+                //
+                // Its `returned` points at ITSELF, exactly as `Self` does — that is what
+                // makes it usable as a type before any concrete type is known.
+                if let Some(name) = assoc_name
+                    && self.first_pass
+                    && d_nr != u32::MAX
+                {
+                    let assoc_def = format!("{}.{name}", self.data.def(d_nr).name());
+                    if self.data.def_nr(&assoc_def) == u32::MAX {
+                        let a_nr = self
+                            .data
+                            .add_def(&assoc_def, self.lexer.pos(), DefType::Struct);
+                        self.data
+                            .set_returned(a_nr, Type::Reference(a_nr, crate::data::Deps::none()));
+                        self.data.definitions[a_nr as usize].parent = d_nr;
+                        // The declared bounds ride on the placeholder's own `bounds`, the
+                        // same list a bounded generic carries, so A2c can hand it straight
+                        // to `check_satisfaction` without a second representation.
+                        for b in &bounds {
+                            let b_nr = self.data.def_nr(b);
+                            if b_nr != u32::MAX {
+                                self.data.definitions[a_nr as usize].bounds.push(b_nr);
+                            }
                         }
                     }
                 }

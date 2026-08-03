@@ -4447,6 +4447,19 @@ impl Parser {
             let children: Vec<u32> = self.data.children_of(iface_nr).collect();
             for child_nr in children {
                 let child_name = self.data.def(child_nr).name().to_string();
+                // @PLN125 arc A step A2b — an interface's children are its method stubs
+                // AND, since A2b, its associated-type placeholders.  Only the methods are
+                // structural satisfaction; a companion type is matched by A2c against the
+                // implementor's own, not by looking for a method of that name.  Without
+                // this skip, `type Rows` would demand a `rows()` method of every
+                // implementor and no type could satisfy the interface at all.
+                //
+                // Told apart by `DefType`, not by the name: a method stub is registered as
+                // a `Function` and a placeholder as a `Struct`, so this stays right if the
+                // placeholder is ever renamed.
+                if !matches!(self.data.def_type(child_nr), DefType::Function) {
+                    continue;
+                }
                 // Extract method name from "__iface_{d_nr}_{method}" or legacy "t_4Self_{method}"
                 let self_prefix = format!("t_{}Self_", "Self".len());
                 let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_") {
@@ -4550,6 +4563,27 @@ impl Parser {
             return None;
         };
         if w == g {
+            return None;
+        }
+        // @PLN125 arc A step A2b — the interface declares `Self.X`, an ASSOCIATED type.
+        // Its placeholder stands for whatever companion the implementor supplies, so at
+        // this step any concrete return satisfies it: there is nothing yet that says which
+        // type the companion is.  A2c is what binds the placeholder per monomorph and
+        // checks the declared bound; until then the alternative is worse than unchecked —
+        // every implementor would be rejected for returning something other than the
+        // placeholder itself, which no type can be, so `Self.X` would be unwritable in the
+        // very step that introduces it.
+        //
+        // This widens NOTHING that A2a narrowed: it applies only where the interface's
+        // declared return is one of its own associated-type placeholders, which could not
+        // be spelled before A2b.
+        // The placeholder and the method stub are both children of the interface, so
+        // "declared by the interface this method belongs to" is a parent comparison.
+        let iface = self.data.def(iface_method).parent;
+        if iface != u32::MAX
+            && self.data.def(w).parent == iface
+            && matches!(self.data.def_type(w), DefType::Struct)
+        {
             return None;
         }
         Some(format!(
