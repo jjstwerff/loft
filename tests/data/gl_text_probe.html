@@ -75,6 +75,34 @@ window.addEventListener('load', () => {
   ck('alpha texture is a NEW handle', atex !== tex, atex + '/' + tex);
   ck('upload_alpha_texture rejects empty', g.loft_gl_upload_alpha_texture(ap, 0, 0) === 0);
 
+  // 5b — `gl_upload_canvas` must read the pixel vector at the stride loft actually
+  // marshals: a `vector<integer>` reaches this import as `*const i64` (codegen picks the
+  // element width from the STORAGE stride, @P310), packed 0xAARRGGBB in the LOW half.
+  // Reading at i32 stride still gets pixel 0 right and turns every ODD pixel into a
+  // neighbour's zero high-half — transparent black — so a one-pixel canvas cannot tell
+  // the two apart and this uses TWO. Read back through an FBO rather than trusting the
+  // handle: the whole point of #737/#738 is that a plausible return value proves nothing.
+  const cp = 24576;
+  const cw2 = new Int32Array(mem.buffer, cp, 4);
+  cw2[0] = 0xFF102030 | 0; cw2[1] = 0;   // pixel 0, i64 low + high
+  cw2[2] = 0xFF405060 | 0; cw2[3] = 0;   // pixel 1
+  const ctex = g.loft_gl_upload_canvas(cp, 2, 2, 1);
+  ck('upload_canvas handle', ctex > 0, ctex);
+  const gl2 = document.getElementById('gl').getContext('webgl2');
+  const fbo = gl2.createFramebuffer();
+  gl2.bindFramebuffer(gl2.FRAMEBUFFER, fbo);
+  g.loft_gl_framebuffer_texture(g.loft_gl_create_framebuffer(), 0, ctex);
+  gl2.framebufferTexture2D(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.TEXTURE_2D,
+                           gl2.getParameter(gl2.TEXTURE_BINDING_2D), 0);
+  const back = new Uint8Array(8);
+  gl2.readPixels(0, 0, 2, 1, gl2.RGBA, gl2.UNSIGNED_BYTE, back);
+  const got = Array.from(back).join(',');
+  ck('upload_canvas pixel 0', back[0] === 0x10 && back[1] === 0x20 && back[2] === 0x30, got);
+  // The discriminator: at i32 stride this pixel reads the high half of element 0 = 0.
+  ck('upload_canvas pixel 1 (stride)',
+     back[4] === 0x40 && back[5] === 0x50 && back[6] === 0x60, got);
+  gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+
   // 6 — an unknown font handle must not throw, and must report "nothing".
   ck('unknown font measures 0', g.loft_gl_measure_text(99, tp, tl, 32) === 0);
   ck('unknown font rasterizes 0', g.loft_rasterize_text_into(99, tp, tl, 32, bufPtr, count) === 0);

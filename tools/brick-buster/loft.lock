@@ -4,14 +4,30 @@ schema_version = 1
 
 [[package]]
 name = "graphics"
-version = "0.3.0"
-url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.3.0/graphics-0.3.0.tar.gz"
-sha256 = "788bb7426a666d04571dbca6f318c35533c7109b384a52d81aa77907a57e5cad"
+version = "0.5.0"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.5.0/graphics-0.5.0.tar.gz"
+sha256 = "398d1e1fcb272a1da21a49e3eeaadf93ab49f711876dfc6d9c0fcbaac94fcabe"
 source = "registry"
+deps = ["glb", "mesh3d"]
 
 [[package]]
 name = "shapes"
-version = "0.3.0"
-url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.3.0/shapes-0.3.0.tar.gz"
-sha256 = "7ad0ec172316fc8a75df9a8ea8d4994b3d75080e59cc2947e35d21759914539b"
+version = "0.4.0"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.4.0/shapes-0.4.0.tar.gz"
+sha256 = "11adad405b0ae96ec91835e576d0bda4b74677e635bce5ac7ee809c3d3b53ce4"
+source = "registry"
+
+[[package]]
+name = "glb"
+version = "0.1.2"
+url = "https://github.com/loft-lang/loft-libs-assets/releases/download/glb-v0.1.2/glb-0.1.2.tar.gz"
+sha256 = "8a1021c6b4eadd6152d1c9806501514cd8d26ef901ebdc7501f406e3c82de01c"
+source = "registry"
+deps = ["mesh3d"]
+
+[[package]]
+name = "mesh3d"
+version = "0.1.1"
+url = "https://github.com/loft-lang/loft-libs-assets/releases/download/mesh3d-v0.1.1/mesh3d-0.1.1.tar.gz"
+sha256 = "de8fdb1fedea6521d90634bc40b4acab2c1bb965010d766a177e40b1e8e66cfd"
 source = "registry"

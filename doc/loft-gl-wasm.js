@@ -506,10 +506,19 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       },
       loft_gl_upload_canvas(ptr, count, w, h) {
         // C58: no upload-side Y flip; canvas-top = GL TC.y=0.
-        const data = new Int32Array(getMem().buffer, ptr, count);
+        //
+        // A `vector<integer>` marshals to this import as `*const i64` — codegen picks the
+        // element width from the vector's STORAGE STRIDE (`vector_elem_rust_type`, @P310),
+        // and a plain `integer` vector strides 8 bytes with the packed 0xAARRGGBB colour in
+        // the LOW half.  Reading it at i32 stride took every other 4-byte word, so half the
+        // "pixels" were a neighbour's zero high-half — transparent black.  The native
+        // backend documents fixing exactly this at the 2c migration ("moiré on textured
+        // surfaces, missing pixels on rasterised text"); this bridge still had the old read.
+        // `count` is the ELEMENT count, so the word view is twice as long.
+        const data = new Int32Array(getMem().buffer, ptr, count * 2);
         const px = new Uint8Array(w * h * 4);
         for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) { const c = data[y * w + x], di = (y * w + x) * 4;
+          for (let x = 0; x < w; x++) { const c = data[(y * w + x) * 2], di = (y * w + x) * 4;
             px[di] = (c>>>16)&0xff; px[di+1] = (c>>>8)&0xff; px[di+2] = c&0xff; px[di+3] = (c>>>24)&0xff;
           }
         }
