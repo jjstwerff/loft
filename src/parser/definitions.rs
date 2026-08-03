@@ -815,6 +815,51 @@ impl Parser {
                     );
                 }
             }
+            // loft#744 — the same policy, for the carrier the text case does not
+            // cover. A constant is pasted at each use, so ANY frame slot its
+            // initialiser carries is numbering that means something else wherever
+            // it lands. Text has two ways out above (fold, or rebind); a value that
+            // needs a TEMPORARY has neither — `const R = item_at(0).s_r;` holds a
+            // work-ref for the struct the call returns, and pasting that number
+            // into `main` named a slot that was not there. It SIGSEGV'd at the
+            // REFERENCE, after the program had run, so it read as a crash in
+            // whatever was executing rather than as a bad constant.
+            //
+            // Refused HERE, at the declaration, for the reason the text case gives
+            // — and because that is the line worth naming. The report that found
+            // this had no file, no line and no mention of the constant.
+            //
+            // `visit_constant_vars` is exhaustive, so a new IR variant that carries
+            // a variable arrives here rather than silently pasting. A scalar call
+            // (`const N = count();`) carries no slot and is unaffected, which is
+            // the shape the reporter actually wanted.
+            // Text and Vector have their own answers above; a Reference (a
+            // struct-VALUED constant, `POINT_NONE = Point { x: 1 }`) has its own
+            // refusal too, and that message names the limitation better than this
+            // one would. This covers what is left: a constant whose VALUE is a
+            // scalar but whose initialiser needs a temporary to compute it.
+            if !self.first_pass
+                && !matches!(
+                    tp.base(),
+                    Type::Text(_) | Type::Vector(_, _) | Type::Reference(_, _)
+                )
+            {
+                let mut carries_a_slot = false;
+                let mut probe = val.clone();
+                let accounted = visit_constant_vars(&mut probe, &mut |_| carries_a_slot = true);
+                if carries_a_slot || !accounted {
+                    let fn_name = id.to_lowercase();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "constant '{id}' has an initialiser that needs a temporary, and a \
+                         constant is inlined at every reference — the slot it names belongs \
+                         to this declaration, not to the function it is pasted into.  A call \
+                         returning a struct is the usual cause.  Use a zero-argument function \
+                         instead: `fn {fn_name}() -> … {{ … }}`, then call `{fn_name}()`"
+                    );
+                }
+            }
             if !self.first_pass
                 && crate::keys::const_effect_lint_enabled()
                 && let Some(callee) = self.const_initialiser_cost(&val)

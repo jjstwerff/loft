@@ -1379,6 +1379,11 @@ impl Parser {
                     *code = rebound;
                     return tp;
                 }
+                // loft#744 — an initialiser that carries a frame slot is refused at
+                // the DECLARATION (`parse_constant`), where the text case refuses
+                // too and where the constant can be named. By the time a paste
+                // reaches here the useful line is already behind us, so there is no
+                // second policy at the use site — one home for the rule.
                 *code = const_code;
                 return const_tp;
             }
