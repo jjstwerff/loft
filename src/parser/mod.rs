@@ -4426,6 +4426,7 @@ impl Parser {
         // delivers through a hidden `&text` buffer (no orphaned owned String).
         // Runs BEFORE returning `d_nr` so the call site sees the promoted ABI.
         self.promote_monomorph_text_return(d_nr);
+        self.instantiate_nested_generics(d_nr, &concrete);
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
         if !self.check_satisfaction(g_nr, type_nr) {
@@ -4715,6 +4716,118 @@ impl Parser {
         } else {
             d_nr
         }
+    }
+
+    /// The half of [`re_resolve_call`] that has to CREATE rather than look up.
+    ///
+    /// `re_resolve_call` re-points a call whose target depends on the type variable at the
+    /// concrete function, with `find_fn`. That is enough when the concrete function already
+    /// exists — a user's `area(self: Box)` does. It cannot be enough when the target is
+    /// another GENERIC, because that one's monomorph does not exist until somebody makes it,
+    /// and a lookup only finds. So the lookup fell back to the template itself and the
+    /// monomorph shipped a call to a definition nothing ever emits: native cannot find
+    /// `n_inner`, and the interpreter enters a template whose frame does not match the call,
+    /// losing it whole — no output, exit 0.
+    ///
+    /// A generic reached ONLY through another generic gets no other chance. Instantiation
+    /// happens at a call site with a concrete argument type, and inside a template that
+    /// argument is the type variable — so `fn outer<S>(s: S) { inner(s) }` is the one shape
+    /// where nobody ever names `inner`'s concrete form. Adding any direct `inner(box)` call
+    /// elsewhere in the program hid the bug, which is why it survived: the fixtures that
+    /// exercise nested generics happen to call the inner one directly as well.
+    ///
+    /// The substitution has already replaced the type variable throughout, so the argument
+    /// that was `S` is now `concrete` — which is exactly the instantiation to ask for.
+    ///
+    /// Called after `add_def` has registered THIS monomorph, so a self-recursive generic
+    /// (`fn f<T>(t: T) { f(t) }`) finds itself in the `existing` check and stops, rather
+    /// than instantiating forever.
+    fn instantiate_nested_generics(&mut self, d_nr: u32, concrete: &Type) {
+        let mut targets: Vec<u32> = Vec::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, _) = v
+                && *d != u32::MAX
+                && (*d as usize) < self.data.definitions.len()
+                && self.data.def(*d).def_type() == DefType::Generic
+                && !targets.contains(d)
+            {
+                targets.push(*d);
+            }
+        });
+        if targets.is_empty() {
+            return;
+        }
+        // Create the monomorphs FIRST, before the context swap below: instantiation
+        // parses against `self.vars` / `self.context`, and it must see the ordinary
+        // ones, not this monomorph's.
+        let mut remap: HashMap<u32, u32> = HashMap::new();
+        for t in targets {
+            let Some(name) = self
+                .data
+                .def(t)
+                .name()
+                .strip_prefix("n_")
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let inst = self.try_generic_instantiation(&name, std::slice::from_ref(concrete));
+            if inst != u32::MAX && inst != t {
+                remap.insert(t, inst);
+            }
+        }
+        if remap.is_empty() {
+            return;
+        }
+        let promoted: std::collections::HashSet<u32> = remap.values().copied().collect();
+        // Swap this monomorph's parse context in — `add_defaults`, reached through
+        // `patch_tret_call`, mints a work-text into `self.vars`, which must be THIS
+        // function's table. Same swap `promote_monomorph_text_return` performs.
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let before: std::collections::HashSet<u16> = self.vars.work_texts().into_iter().collect();
+        self.vars.sync_work_counters();
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        Self::retarget_calls(&mut code, &remap);
+        // A `-> text` callee was promoted to deliver through a hidden `&text` buffer
+        // (`promote_monomorph_text_return`, inside the instantiation above), so the call
+        // this body already carries is one argument short of the ABI it now targets —
+        // the "Too few parameters on t_6Sqlite_inner (got 3, need 4)" ICE. This is the
+        // same mismatch `patch_tret_callers` fixes for a directly-parsed caller, so it is
+        // the same repair.
+        self.patch_tret_call(&mut code, &promoted);
+        // A minted retbuf is not declared at the top level, so `scopes::check` would
+        // scope it to the arg block and free it there — before the callee fills it.
+        // Replay the hoist `patch_tret_callers` does for exactly this reason.
+        if let Value::Block(bl) = &mut code {
+            for wt in self.vars.work_texts() {
+                if !before.contains(&wt) {
+                    bl.operators
+                        .insert(0, v_set(wt, Value::Text(String::new())));
+                }
+            }
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+
+    /// Re-point every `Call` in the tree whose target appears in `remap`.
+    fn retarget_calls(v: &mut Value, remap: &HashMap<u32, u32>) {
+        if let Value::Call(d, _) = v
+            && let Some(&to) = remap.get(d)
+        {
+            *d = to;
+        }
+        v.for_each_child_mut(&mut |c| Self::retarget_calls(c, remap));
     }
 
     /// Substitute all occurrences of `Type::Reference(tv_nr, _)` with `concrete` in a type.
