@@ -1227,29 +1227,51 @@ use #count instead"
         // (#533).  The buffer is also renamed to a promoted local (`r`) by
         // text_return, so its `__`-name is not reliable — only the type is.  self
         // is attr 0 (the struct being formatted, never text/RefVar).
-        let mut has_spec = false;
-        let mut has_work = false;
+        // Fill ONE argument per attribute, walking the definition's own order.
+        // The count is the fact, not the presence: a body with more than one
+        // formatted `return` promotes one text work buffer PER return
+        // (`__work_1`, `__work_2`, …), and a boolean cannot carry "two". It read
+        // as "has a work buffer", the call went out one argument short, and
+        // `generate_call` asserted — an internal compiler error on BOTH
+        // backends, from a `to_text` whose only sin was an early `return`. The
+        // tail-`if` form that #533 fixed happens to promote exactly one, which
+        // is why a boolean survived that round: the working member hid the
+        // omission.
+        let mut args = vec![format.clone()];
+        let mut spec_given = false;
         for a in 1..self.data.attributes(stub_nr) {
             match self.data.attr_type(stub_nr, a) {
-                Type::Text(_) => has_spec = true,
-                Type::RefVar(_) => has_work = true,
+                // The user's `spec: text`. At most one — a second `text`
+                // parameter is not a shape this hook defines, so it falls
+                // through to the arity guard rather than silently receiving the
+                // spec twice.
+                Type::Text(_) if !spec_given => {
+                    spec_given = true;
+                    args.push(Value::str(spec));
+                }
+                Type::RefVar(_) => {
+                    let wv = self.vars.work_text(&mut self.lexer);
+                    args.push(v_block(
+                        vec![
+                            v_set(wv, Value::Text(String::new())),
+                            self.cl("OpCreateStack", &[Value::Var(wv)]),
+                        ],
+                        Type::Reference(
+                            self.data.def_nr("reference"),
+                            crate::data::Deps::frame1(wv),
+                        ),
+                        "p242_to_text_work",
+                    ));
+                }
                 _ => {}
             }
         }
-        let mut args = vec![format.clone()];
-        if has_spec {
-            args.push(Value::str(spec));
-        }
-        if has_work {
-            let wv = self.vars.work_text(&mut self.lexer);
-            args.push(v_block(
-                vec![
-                    v_set(wv, Value::Text(String::new())),
-                    self.cl("OpCreateStack", &[Value::Var(wv)]),
-                ],
-                Type::Reference(self.data.def_nr("reference"), crate::data::Deps::frame1(wv)),
-                "p242_to_text_work",
-            ));
+        // The chokepoint: emit the call only when the argument list FITS the
+        // definition. Any other signature is one this hook cannot spell, and
+        // falling back to the generic field dump is a defined answer where a
+        // short call is an internal compiler error.
+        if args.len() != self.data.attributes(stub_nr) {
+            return None;
         }
         Some(Value::Call(stub_nr, args))
     }
