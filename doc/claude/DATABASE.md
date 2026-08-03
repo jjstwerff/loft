@@ -161,6 +161,30 @@ and rewriting every `DbRef` — compaction, which @PLN123 arc B remains open for
 the size now follows the content, but two construction orders can still differ by
 the fragmentation each genuinely leaves.
 
+⚠ **That fix is on the IMAGE WRITE, so it reaches `store_persist_bind` LAST and
+nothing else (loft#752).** Bind a store FIRST and its file IS the live arena: the
+size is the arena's **capacity**, which grows by 7/3 and never shrinks on its own —
+the exact shape #710 was filed about, on the path #710 did not touch. The file is
+therefore quantized to a ladder and can sit up to **57%** (`1 − 3/7`) above its
+content. Measured on one generator shape, varying only the feature count:
+
+| features | file (bytes) |
+|---|---|
+| 150 000 | 39,179,744 |
+| 200 000 – 400 000 | **91,419,400** (unchanged across a 2× data increase) |
+| 500 000 – 700 000 | 213,311,928 |
+
+**So a bound store's file size compares NOTHING.** Two builds differing by a rung
+differ by 133% with byte-identical content, and one differing by 2× of data can be
+equal. `store_reclaim(collection)` after the build is what makes the number mean
+content again — on that shape it answered `0` for one insertion order and gave back
+94 MB for another, leaving a 1.30× spread that IS the fragmentation the two orders
+genuinely left. Read a file size only after reclaiming, or do not read it.
+
+This is not a footnote: a consumer measured the two orders, saw 2.3×, and concluded
+that feeding keys in order — the thing that bounds a generator's working set — was
+the worse strategy on every axis. Both numbers were rungs (loft#747).
+
 **A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
 happens when the image is WRITTEN; after that `resize_store` returns early on any
 request at or below the current size, so a bound store that grew ten-fold and
