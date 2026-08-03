@@ -11381,6 +11381,20 @@ fn test() {
 }
 fn json_escape(s: text) -> text { s }"
     )
+    // The shape under test is the codegen one (loop + if-arm reassign + forward
+    // call + struct field), so the source stays exactly as `scan_link_line` wrote
+    // it — including `nl = line.len()` used as a slice bound.  That mixes units
+    // (loft#749: `len()` counts characters, a slice bound is a byte offset) and
+    // the @PLN110 lint now says so.  It is right to: this only computes "tag"
+    // because the literal is ASCII.  Declared rather than corrected — rewriting
+    // the source to `size(line)` would quietly change the shape this test exists
+    // to pin.
+    .warning(
+        "a text slice ends at `len(text)` (a character count) but slice bounds are byte \
+         offsets — this stops short on multi-byte text; use `size(text)` for the byte \
+         length, or `text[i..]` for the rest (@PLN110 strict-index) at \
+         p279_forward_fn_via_intermediate_local:10:36",
+    )
     .result(Value::Null);
 }
 

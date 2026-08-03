@@ -6344,6 +6344,18 @@ pub fn join(self: vector<text>, sep: text) -> text
 
 Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.
 
+```rust
+pub fn byte_at(self: text, i: integer) -> integer
+```
+
+These two are TEXT functions that happen to sit after the Environment marker. Re-opening the section files them under Text in the generated reference, which is where a reader looks for them — `text\_from\_bytes` existed for two releases and was reported as missing (loft\#748) because `doc/stdlib-text.html` did not list it.  Declaring the section rather than MOVING the definitions is deliberate: definition order is the order types are minted, and the native `init()` replays that order, so relocating `vector\<u8\>`'s first mention shifts every type id after it (loft\#739 / \#742).  A comment cannot. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text\[i\]` for pure-ASCII checks.
+
+```rust
+pub fn text_from_bytes(bytes: vector<u8>) -> text
+```
+
+Build a text from the raw UTF-8 bytes of a vector\<u8\> — the inverse of byte\_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell "empty input" from "invalid bytes" apart.
+
 == Collections
 
 Operations on vector\<T\> — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index. All structures are passed by reference instead of by value
@@ -6818,18 +6830,6 @@ Functions for interacting with the host operating system. Returns the script-lev
 ```rust
 pub fn arguments() -> vector<text>
 ```
-
-```rust
-pub fn byte_at(self: text, i: integer) -> integer
-```
-
-Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text\[i\]` for pure-ASCII checks.
-
-```rust
-pub fn text_from_bytes(bytes: vector<u8>) -> text
-```
-
-Build a text from the raw UTF-8 bytes of a vector\<u8\> — the inverse of byte\_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell "empty input" from "invalid bytes" apart.
 
 ```rust
 pub fn ymd_days_ago(days: integer) -> text

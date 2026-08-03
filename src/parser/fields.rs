@@ -1235,6 +1235,41 @@ impl Parser {
         )
     }
 
+    /// @PLN110 3a / loft#749 — warn when a text slice ENDS at `len()` of the same text.
+    ///
+    /// `end` is the range end as written (before `convert` wraps it) and `subject` is the
+    /// text being sliced.  Only a bound naming the SAME text warns: `s[i..len(other)]` is
+    /// a different (and possibly deliberate) expression, and a bound held in a local is
+    /// carried by `len_bound_locals` the same way the loop form carries it — that spelling
+    /// is not a stylistic variant, it is the one real code reaches for.
+    fn warn_text_len_slice_bound(&mut self, end: &Value, subject: &Value) {
+        if self.first_pass || !crate::keys::text_index_units_lint_enabled() {
+            return;
+        }
+        let bound = match end {
+            Value::Call(d, largs)
+                if matches!(
+                    self.data.def(*d).original_name().as_str(),
+                    "len" | "LengthVector"
+                ) && largs.len() == 1 =>
+            {
+                crate::parser::operators::vec_key(&largs[0], &self.data)
+            }
+            Value::Var(n) => self.len_bound_locals.get(n).copied(),
+            _ => None,
+        };
+        if bound.is_none() || bound != crate::parser::operators::vec_key(subject, &self.data) {
+            return;
+        }
+        diagnostic!(
+            self.lexer,
+            Level::Warning,
+            "a text slice ends at `len(text)` (a character count) but slice bounds are \
+             byte offsets — this stops short on multi-byte text; use `size(text)` for the \
+             byte length, or `text[i..]` for the rest (@PLN110 strict-index)"
+        );
+    }
+
     pub(crate) fn parse_text_index(
         &mut self,
         code: &mut Value,
@@ -1265,6 +1300,9 @@ impl Parser {
                 );
             } else {
                 let ot_type = self.expression(&mut other);
+                // @PLN110 3a / loft#749 — snapshot the END before `convert` wraps it, for
+                // the units lint below.
+                let raw_end = other.unspan().clone();
                 if !self.convert(&mut other, &ot_type, &I32) {
                     diagnostic!(
                         self.lexer,
@@ -1273,6 +1311,14 @@ impl Parser {
                         ot_type.name(&self.data)
                     );
                 }
+                // @PLN110 3a / loft#749 — `s[i..len(s)]` mixes units: a slice bound is a
+                // BYTE offset but `len(text)` is a CHARACTER count, so on any text with a
+                // multi-byte character the slice stops short.  It is the obvious spelling
+                // of "from here to the end" and it is wrong for exactly the inputs an
+                // ASCII test never produces — a `key=value` parse over an author-given
+                // name reached it on the first accented character.  `size(s)` is the byte
+                // count and is what this means; `s[i..]` says it without a bound at all.
+                self.warn_text_len_slice_bound(&raw_end, code);
                 if incl {
                     other = self.cl("OpAddInt", &[other.clone(), Value::Int(1)]);
                 }

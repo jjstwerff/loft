@@ -189,6 +189,15 @@ pub fn join(self: vector<text>, sep: text) -> text {
 pub fn arguments() -> vector<text>;
 #rust"stores.os_arguments()"
 #impure(host_io)
+// --- Text ---
+// These two are TEXT functions that happen to sit after the Environment marker.
+// Re-opening the section files them under Text in the generated reference, which
+// is where a reader looks for them — `text_from_bytes` existed for two releases
+// and was reported as missing (loft#748) because `doc/stdlib-text.html` did not
+// list it.  Declaring the section rather than MOVING the definitions is
+// deliberate: definition order is the order types are minted, and the native
+// `init()` replays that order, so relocating `vector<u8>`'s first mention shifts
+// every type id after it (loft#739 / #742).  A comment cannot.
 // Return the BYTE at position `i` (0..len) as integer 0-255,
 // or 0 for out-of-bounds.  Unlike `text[i]` which decodes the
 // UTF-8 codepoint containing byte `i` (walking back through
@@ -210,6 +219,7 @@ pub fn text_from_bytes(bytes: vector<u8>) -> text;
 #rust"stores.text_from_bytes_native(@bytes)"
 #pure
 
+// --- Environment ---
 // Returns the UTC calendar date `days` days before today as `YYYY-MM-DD`.
 // Use for cutoff dates in time-window filters; negative `days` clamps to today.
 pub fn ymd_days_ago(days: integer) -> text;
