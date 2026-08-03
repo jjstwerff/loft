@@ -1,0 +1,7 @@
+LOFT-DSCHEMA v1
+hash=14920550855156194575
+--
+@endian	little
+Rec	size=16	struct{k@0:integer, v@8:integer}
+hash<Rec[k]>	size=4	hash<Rec>(keys=[0],elem_size=16)
+integer	size=8	base
