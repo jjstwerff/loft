@@ -306,67 +306,12 @@ pub fn load_c_library(name: &str, pkg_dir: &str) -> bool {
 /// spelling already is the host's.
 #[cfg(feature = "native-extensions")]
 fn host_lib_variants(name: &str) -> Vec<String> {
-    let host = if cfg!(target_os = "macos") {
-        LibOs::Macos
-    } else if cfg!(windows) {
-        LibOs::Windows
-    } else {
-        LibOs::Linux
-    };
-    lib_variants(name, host)
-}
-
-/// Which naming convention [`lib_variants`] should translate into.
-///
-/// A parameter rather than a `cfg!` inside the translation, so the macOS and
-/// Windows spellings are checkable from any machine. Left implicit, each one is
-/// only ever exercised on its own platform — and this whole fallback exists
-/// because a platform nobody could run locally had been broken for a while.
-#[cfg(feature = "native-extensions")]
-#[derive(Clone, Copy, PartialEq)]
-enum LibOs {
-    Linux,
-    Macos,
-    Windows,
-}
-
-/// [`host_lib_variants`], with the target convention passed in.
-#[cfg(feature = "native-extensions")]
-fn lib_variants(name: &str, os: LibOs) -> Vec<String> {
-    let mut out = vec![name.to_string()];
-    if os == LibOs::Linux {
-        return out; // the declared spelling already is this host's
-    }
-    // Split a trailing directory off so the translation only rewrites the file
-    // name — `../../liblc_types.so` must stay relative to the same place.
-    let (dir, file) = match name.rfind(['/', '\\']) {
-        Some(i) => (&name[..=i], &name[i + 1..]),
-        None => ("", name),
-    };
-    // `libfoo.so.3` → stem `libfoo`, version `3`; `libfoo.so` → no version.
-    let Some((stem, rest)) = file.split_once(".so") else {
-        return out; // not a Linux spelling — nothing to translate
-    };
-    let version = rest.strip_prefix('.').filter(|v| !v.is_empty());
-    let mut push = |f: String| out.push(format!("{dir}{f}"));
-    if os == LibOs::Macos {
-        if let Some(v) = version {
-            push(format!("{stem}.{v}.dylib"));
-        }
-        push(format!("{stem}.dylib"));
-    } else {
-        // No `lib` prefix and no soversion in a DLL name; try both spellings
-        // because a MinGW-built library keeps the prefix.
-        let bare = stem.strip_prefix("lib").unwrap_or(stem);
-        push(format!("{bare}.dll"));
-        push(format!("{stem}.dll"));
-    }
-    out
+    crate::platform::host_lib_variants(name)
 }
 
 #[cfg(all(test, feature = "native-extensions"))]
 mod c_lib_naming_tests {
-    use super::{LibOs, lib_variants};
+    use crate::platform::{LibOs, lib_variants};
 
     /// The declared spelling is authoritative: it is always first, on every
     /// host, so a translation can only ever ADD a fallback.
@@ -2387,5 +2332,51 @@ mod dlopen_diag_tests {
     fn undefined_symbol_is_abi_mismatch() {
         let m = dlopen_diagnostic("/x/lib.so", "undefined symbol: n_foo");
         assert!(m.contains("ABI mismatch") || m.contains("loft-ffi"), "{m}");
+    }
+}
+
+#[cfg(all(test, feature = "native-extensions"))]
+mod c_lib_beside_tests {
+    use crate::platform::{LibOs, existing_lib_beside};
+
+    /// A package that ships its own library declares a PATH, and its Makefile
+    /// builds the HOST's spelling — `liblc_types.dylib` on macOS for a
+    /// `../../liblc_types.so` declaration. Both the loader and the link line
+    /// have to find it; the link line did not, so macOS emitted no `-L` and no
+    /// rpath and sent `-l dylib=lc_types` to the system search path.
+    ///
+    /// Run from any host by passing the convention in — the point of taking
+    /// `LibOs` as an argument. Left implicit this could only ever be checked on
+    /// a Mac, which is exactly how it stayed broken.
+    #[test]
+    fn the_host_spelling_beside_a_package_is_found() {
+        let dir = std::env::temp_dir().join(format!("loft_beside_{}", std::process::id()));
+        let sub = dir.join("pkg");
+        std::fs::create_dir_all(&sub).expect("probe dir");
+        // Only the macOS artefact exists, as on a Mac that just ran `make`.
+        std::fs::write(dir.join("liblc_types.dylib"), b"x").expect("write probe");
+
+        assert_eq!(
+            existing_lib_beside(&sub, "../liblc_types.so", LibOs::Macos).as_deref(),
+            Some("../liblc_types.dylib"),
+            "macOS must fall back to the .dylib the Makefile actually built"
+        );
+        assert_eq!(
+            existing_lib_beside(&sub, "../liblc_types.so", LibOs::Linux),
+            None,
+            "Linux must NOT invent one — the declared .so is genuinely absent"
+        );
+
+        // With the declared spelling present, it wins on every host: the
+        // fallback may only ever ADD a candidate.
+        std::fs::write(dir.join("liblc_types.so"), b"x").expect("write probe");
+        for os in [LibOs::Linux, LibOs::Macos, LibOs::Windows] {
+            assert_eq!(
+                existing_lib_beside(&sub, "../liblc_types.so", os).as_deref(),
+                Some("../liblc_types.so"),
+                "the declared spelling is authoritative when it is there"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
