@@ -926,25 +926,31 @@ impl Parser {
         //
         // Forward-ref-SAFE: an `if` is structurally an `If` on both passes.
         // Gated on BOTH arms YIELDING a text value (not a guard `if c { return
-        // … }` — that would suppress the missing-return diagnostic) and a
-        // NON-nullable tail (a `text?` tail must keep its `(N-Store)` reject).
+        // … }` — that would suppress the missing-return diagnostic).
         //
-        // loft#741 — the nullable exclusion looks redundant, because
-        // `if_tail_yields_text` already refuses a literal-`null` arm
-        // (`arm_yields_text` answers false for `Value::Null`). It is not. The
-        // accumulator writes each arm into a NON-NULL `&text` buffer, which is
-        // exactly the nullable-into-non-null store the `(N-Store)` teeth exist
-        // to catch — and the write swallows it silently. Measured: dropping
-        // this condition compiles every shape in #741 and both backends agree
-        // on every value, while `nstore_return_position_names_offending_fn` and
-        // `wrong_field_guard_still_rejects` go quiet. Trading a compile error
-        // for a silenced null-safety diagnostic is the wrong direction, so the
-        // condition stays until the accumulator can carry nullability —
-        // NATIVE.md records the same conclusion for the `null`-arm twin.
+        // loft#741 — the nullability condition is about the store this rewrite
+        // PERFORMS, so it reads the DECLARED RETURN, not the tail.
+        //
+        // The accumulator writes each arm into the caller's text buffer. When
+        // the function declares `-> text?` that is a nullable value reaching a
+        // nullable destination: legitimate, and a null survives it because loft
+        // carries one as a content sentinel. When it declares `-> text` and the
+        // tail is nullable, the SAME rewrite is a nullable-into-non-null store
+        // — exactly what the `(N-Store)` teeth exist to catch — and performing
+        // it silently swallows the diagnostic.
+        //
+        // Keying on the TAIL conflated the two and excluded both. That cost
+        // every `-> text?` branch tail its per-arm delivery, so the whole
+        // `match` compiled as ONE Rust expression whose arms must unify — a
+        // buffered call yields `Str` where a formatted string yields `&String`,
+        // E0308, while the interpreter was correct. Keying on the declared
+        // return keeps `read_off() -> text { … self.w[i] … }` reporting its
+        // N-Store (the tail is nullable, the destination is not) and lets a
+        // `-> text?` tail deliver per arm.
         let do_if_acc = !do_tret_bind
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
-            && !matches!(t, Type::Optional(_))
+            && (matches!(result, Type::Optional(_)) || !matches!(t, Type::Optional(_)))
             && !self
                 .data
                 .def(self.context)
@@ -952,7 +958,18 @@ impl Parser {
                 .starts_with("replmain_")
             && l.last().is_some_and(Self::if_tail_yields_text);
         if do_if_acc {
-            let av = self.create_unique("__acc", &Type::Text(Deps::none()));
+            // The accumulator IS the return value, so it carries the declared
+            // return's nullability. Typing it non-null while a `-> text?` tail
+            // writes nullable arms through it would leave the destination
+            // lying about what it holds — and a nullable-into-non-null store
+            // that no diagnostic fires on is exactly the hole this rewrite
+            // must not open (loft#741).
+            let acc_type = if matches!(result, Type::Optional(_)) {
+                Type::Optional(Box::new(Type::Text(Deps::none())))
+            } else {
+                Type::Text(Deps::none())
+            };
+            let av = self.create_unique("__acc", &acc_type);
             if av != u16::MAX {
                 let last = l.len() - 1;
                 let mut tail = std::mem::replace(&mut l[last], Value::Null);
