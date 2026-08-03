@@ -62,9 +62,12 @@ projects, so a find of our own is `hit-by:loft` — not a blank.
 It says who HIT it, nothing more.  A follow-on we filed while fixing something else is
 `hit-by:loft` even when a consumer's report is what sent us into that subsystem: we hit it.
 
-**Lineage is `Found-via: #N`, and it is kept SEPARATE on purpose.**  Writing "what prompted the
-work" into `hit-by:` would overload one field with two facts and make both unreliable — you
-could no longer ask "what did routing actually run into" without unpicking inherited credit.
+**Lineage is `Found-via: #N`, and it is kept SEPARATE on purpose.**  A consumer filters
+`hit-by:<their project>` to find what THEY reported.  Inherited credit puts issues in that list
+they never ran into and cannot recognise — they read it as us misfiling against them, and the
+one label they rely on stops being trustworthy.  That is the cost that lands on a person; the
+analytic cost is the same shape, one field carrying two facts, so you could no longer ask "what
+did routing actually run into" without unpicking a chain.
 Keep the pointer direct and the chain explicit, and the prompted-by view is *derivable*: walk
 `Found-via:` to its root and read the root's `hit-by:`.  So the late-July store-lifetime cluster
 is `hit-by:loft` (we hit it) with a chain leading back to routing's tickets — and both the
