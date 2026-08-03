@@ -193,6 +193,42 @@ set — was the worse strategy on every axis. Both numbers were rungs (loft#747)
 Right-sized, the same shape leaves a 1.30× spread, which IS the fragmentation the
 two orders genuinely differ by.
 
+### Binding FIRST is the low-memory choice, and its pages are reclaimable
+
+**`store_persist_bind` FIRST uses far LESS memory than binding last**, which is the
+opposite of what a reader expects and of what loft#747 was filed claiming. Measured
+across two generator shapes and two boxes:
+
+| features / tiles | RSS, bind FIRST | RSS, bind LAST |
+|---|---|---|
+| 400 000 / 40 000 | **12 MB** | 29 MB |
+| 1 600 000 / 160 000 | **31 MB** | 125 MB |
+| 4 000 000 / 400 000 | **65 MB** | 289 MB |
+
+4.4× lower here, 2.8–5.3× lower on a heavier consumer shape. Bind LAST builds in
+anonymous heap and then writes an image; bind FIRST makes the file the arena, and
+**file-backed pages are reclaimable while anonymous heap is not**. So the dataset
+size does not set a hard memory requirement — it sets a working-set/throughput
+tradeoff. Under a hard cgroup cap with swap disabled:
+
+| | result |
+|---|---|
+| 4 M features, `MemoryMax=32M` | **completes**, 34 MB peak, 271 s, correct read-back |
+| 1.6 M, cap 96 MB, bind FIRST | **completes**, 88 MB peak, 27.6 s (12.7 s uncapped) |
+| 1.6 M, cap 96 MB, bind LAST | **OOM-killed** |
+
+⚠ **`MemoryMax` alone proves nothing on a box with swap.** A first attempt at the
+table above had BOTH orders passing under 96 MB, because the unbound heap simply
+paged out to 8 GB of swap. `MemorySwapMax=0` is what makes a cap a cap; without it
+the measurement is vacuous in the direction that looks like success.
+
+The cost of capping is that the kernel's LRU only learns the working set by evicting
+the wrong pages first — ~2× wall at a modest cap, 271 s at an aggressive one. Letting
+a program say "this record is finished" would turn that cliff into a curve; that is
+**@PLN126**, and it opens on a measurement (does ordered insertion leave a finished
+record contiguous?) rather than on an API, because `MADV_DONTNEED` is per PAGE and a
+per-record hint cannot drop a record interleaved with live ones.
+
 **A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
 happens when the image is WRITTEN; after that `resize_store` returns early on any
 request at or below the current size, so a bound store that grew ten-fold and
