@@ -9,18 +9,67 @@ use crate::data::{Context, Type, Value};
 
 use super::{Function, size};
 
+/// Keep every variable a call borrows alive until that call runs (loft#745).
+///
+/// A `&`-argument is lowered to `OpCreateStack(v)`: the callee receives a REFERENCE to
+/// `v`'s stack slot and writes through it for the whole call, so `v` is still live at the
+/// call even though its last textual read is the `OpCreateStack` itself.  Without this the
+/// slot allocator hands `v`'s slot to a temporary built by a LATER argument — an object
+/// literal's element record — and the callee writes through a reference to that temporary.
+fn extend_borrowed_args(args: &[Value], function: &mut Function, create_stack_nr: u32, seq: u32) {
+    if create_stack_nr == u32::MAX {
+        return;
+    }
+    for arg in args {
+        walk_create_stack(arg, function, create_stack_nr, seq);
+    }
+}
+
+/// Mark every variable that `v` hands to a callee by reference as still live at `seq`.
+///
+/// Descends the transparent statement wrappers the parser builds around a `&`-argument
+/// (`Insert` for the work-ref materialisation, `Block` for the `&text` work copy, `Span`
+/// for source positions), but NOT into another call's arguments — that call extends its
+/// own borrows at its own sequence point.
+fn walk_create_stack(v: &Value, function: &mut Function, create_stack_nr: u32, seq: u32) {
+    match v {
+        Value::Call(d_nr, cargs) if *d_nr == create_stack_nr => {
+            if let Some(Value::Var(nr)) = cargs.first().map(Value::unspan) {
+                let nr = *nr as usize;
+                if nr < function.variables.len() {
+                    function.variables[nr].last_use = function.variables[nr].last_use.max(seq);
+                }
+            }
+        }
+        Value::Insert(ops) => {
+            for op in ops {
+                walk_create_stack(op, function, create_stack_nr, seq);
+            }
+        }
+        Value::Block(bl) => {
+            for op in &bl.operators {
+                walk_create_stack(op, function, create_stack_nr, seq);
+            }
+        }
+        Value::Span(b) => walk_create_stack(&b.1, function, create_stack_nr, seq),
+        _ => {}
+    }
+}
+
 /// Walk the IR tree in execution order, recording sequence numbers for each `Set` and `Var` node.
 /// After this pass every variable has `first_def` and `last_use` populated so that
 /// overlapping live intervals can be detected by `validate_slots`.
 ///
-/// `free_text_nr` / `free_ref_nr` are the definition numbers of `OpFreeText` / `OpFreeRef`
-/// (pass `u32::MAX` if the definition is not yet registered).
+/// `free_text_nr` / `free_ref_nr` / `create_stack_nr` are the definition numbers of
+/// `OpFreeText` / `OpFreeRef` / `OpCreateStack` (pass `u32::MAX` if the definition is
+/// not yet registered).
 #[allow(clippy::too_many_lines)]
 pub fn compute_intervals(
     val: &Value,
     function: &mut Function,
     free_text_nr: u32,
     free_ref_nr: u32,
+    create_stack_nr: u32,
     seq: &mut u32,
     depth: usize,
 ) {
@@ -60,7 +109,15 @@ pub fn compute_intervals(
                 *seq += 1;
             }
             // Process the value expression (inner variables get seq numbers after the target).
-            compute_intervals(value, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                value,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
             // Small/primitive types and Vector types: record first_def after traversing value
             // so that inner temporaries (which finish before this assignment takes effect) can
             // potentially share the same stack slot as this variable.
@@ -86,14 +143,30 @@ pub fn compute_intervals(
         Value::Block(bl) => {
             function.record_scope_origin(bl.scope, bl.name);
             for op in &bl.operators {
-                compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
+                compute_intervals(
+                    op,
+                    function,
+                    free_text_nr,
+                    free_ref_nr,
+                    create_stack_nr,
+                    seq,
+                    depth + 1,
+                );
             }
         }
         Value::Loop(lp) => {
             function.record_scope_origin(lp.scope, lp.name);
             let seq_start = *seq;
             for op in &lp.operators {
-                compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
+                compute_intervals(
+                    op,
+                    function,
+                    free_text_nr,
+                    free_ref_nr,
+                    create_stack_nr,
+                    seq,
+                    depth + 1,
+                );
             }
             let seq_end = *seq;
             function.record_loop_range(lp.scope, seq_start, seq_end);
@@ -145,21 +218,62 @@ pub fn compute_intervals(
                 function.variables[v].last_use = function.variables[v].last_use.max(*seq);
             }
             *seq += 1;
-            compute_intervals(create, function, free_text_nr, free_ref_nr, seq, depth + 1);
-            compute_intervals(next, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                create,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
+            compute_intervals(
+                next,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
             compute_intervals(
                 extra_init,
                 function,
                 free_text_nr,
                 free_ref_nr,
+                create_stack_nr,
                 seq,
                 depth + 1,
             );
         }
         Value::If(test, t_val, f_val) => {
-            compute_intervals(test, function, free_text_nr, free_ref_nr, seq, depth + 1);
-            compute_intervals(t_val, function, free_text_nr, free_ref_nr, seq, depth + 1);
-            compute_intervals(f_val, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                test,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
+            compute_intervals(
+                t_val,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
+            compute_intervals(
+                f_val,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
         }
         Value::Call(op_nr, args) => {
             // OpFreeText / OpFreeRef are implicit last uses of the variable they free.
@@ -175,25 +289,59 @@ pub fn compute_intervals(
                 return;
             }
             for arg in args {
-                compute_intervals(arg, function, free_text_nr, free_ref_nr, seq, depth + 1);
+                compute_intervals(
+                    arg,
+                    function,
+                    free_text_nr,
+                    free_ref_nr,
+                    create_stack_nr,
+                    seq,
+                    depth + 1,
+                );
             }
+            extend_borrowed_args(args, function, create_stack_nr, *seq);
             *seq += 1;
         }
         Value::CallRef(v_nr, args) => {
             for a in args {
-                compute_intervals(a, function, free_text_nr, free_ref_nr, seq, depth + 1);
+                compute_intervals(
+                    a,
+                    function,
+                    free_text_nr,
+                    free_ref_nr,
+                    create_stack_nr,
+                    seq,
+                    depth + 1,
+                );
             }
+            extend_borrowed_args(args, function, create_stack_nr, *seq);
             // Mark the fn-ref variable as used at this point
             function.variables[*v_nr as usize].last_use =
                 function.variables[*v_nr as usize].last_use.max(*seq);
             *seq += 1;
         }
         Value::Return(v) | Value::Drop(v) => {
-            compute_intervals(v, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                v,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
         }
         Value::Insert(ops) => {
             for op in ops {
-                compute_intervals(op, function, free_text_nr, free_ref_nr, seq, depth + 1);
+                compute_intervals(
+                    op,
+                    function,
+                    free_text_nr,
+                    free_ref_nr,
+                    create_stack_nr,
+                    seq,
+                    depth + 1,
+                );
             }
         }
         Value::Break(_) | Value::Continue(_) | Value::Null | Value::Line(_) => {}
@@ -203,7 +351,15 @@ pub fn compute_intervals(
             // so reads of the wrapped operands update their `last_use`.
             // Without this, a variable used only inside a wrapped expression
             // appears dead at birth and assign_slots aliases its slot.
-            compute_intervals(&b.1, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                &b.1,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
         }
         Value::ParFor(b) => {
             // Plan-06 spine step 3 — recurse into each child Value.  x_var
@@ -215,6 +371,7 @@ pub fn compute_intervals(
                 function,
                 free_text_nr,
                 free_ref_nr,
+                create_stack_nr,
                 seq,
                 depth + 1,
             );
@@ -223,6 +380,7 @@ pub fn compute_intervals(
                 function,
                 free_text_nr,
                 free_ref_nr,
+                create_stack_nr,
                 seq,
                 depth + 1,
             );
@@ -231,10 +389,19 @@ pub fn compute_intervals(
                 function,
                 free_text_nr,
                 free_ref_nr,
+                create_stack_nr,
                 seq,
                 depth + 1,
             );
-            compute_intervals(&b.body, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                &b.body,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
         }
         // P240 fix (2026-05-11): tuple-literal reads.  Without explicit
         // arms, `Return(Tuple([Var(a), Var(b)]))` fell through to the
@@ -248,7 +415,15 @@ pub fn compute_intervals(
         // their `last_use`.
         Value::Tuple(elems) => {
             for elem in elems {
-                compute_intervals(elem, function, free_text_nr, free_ref_nr, seq, depth + 1);
+                compute_intervals(
+                    elem,
+                    function,
+                    free_text_nr,
+                    free_ref_nr,
+                    create_stack_nr,
+                    seq,
+                    depth + 1,
+                );
             }
             *seq += 1;
         }
@@ -268,7 +443,15 @@ pub fn compute_intervals(
             // update last_use AND first_def (Set-style).  Recurse into
             // the inner value expression so the RHS's variable reads
             // get tracked.
-            compute_intervals(inner, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                inner,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
             let v = *v as usize;
             if v < function.variables.len() {
                 if function.variables[v].first_def == u32::MAX {
@@ -291,12 +474,28 @@ pub fn compute_intervals(
         // `p226_vector_literal_in_yield_across_simple_arms`).  Recurse so
         // yield/break/parallel-interior writes get real live intervals.
         Value::Yield(inner) | Value::BreakWith(_, inner) => {
-            compute_intervals(inner, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                inner,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                create_stack_nr,
+                seq,
+                depth + 1,
+            );
             *seq += 1;
         }
         Value::Parallel(arms) => {
             for arm in arms {
-                compute_intervals(arm, function, free_text_nr, free_ref_nr, seq, depth + 1);
+                compute_intervals(
+                    arm,
+                    function,
+                    free_text_nr,
+                    free_ref_nr,
+                    create_stack_nr,
+                    seq,
+                    depth + 1,
+                );
             }
             *seq += 1;
         }

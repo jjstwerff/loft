@@ -728,3 +728,85 @@ fn keyed_collection_over_imported_struct_keeps_type_ids_aligned() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// loft#746 — with the same second declaration in play, INSERTING into a
+/// separate keyed collection over that library struct aborted.
+///
+/// Same fixture and same trigger as the test above: `use keyedlib::(KTile)`
+/// pre-registers `hash<KTile[tkey]>` while the LIBRARY is filled, then `Blk`'s
+/// field registers it again from the importing program.  There the damage was a
+/// sized read answering null; here it is `record_new` resolving the insert's
+/// element type to `Blk` — a struct, not a collection — and raising "Cannot add
+/// to none-structure 'Blk'" from `src/database/structures.rs`.  Deleting the
+/// `Blk` line makes the identical program run, which is what made the report
+/// read as "an unused declaration breaks an unrelated insert".
+///
+/// This needs its own guard: `LOFT_STRICT_SCHEMA_IDS` stays SILENT on this
+/// shape, so the schema-drift assertion in the test above does not cover it.
+/// Both the loop count and `tile_count` are asserted — the count alone passes on
+/// a build that inserts nothing, and passing the collection back through the
+/// library's own API is what proves the element type survived the round trip.
+#[test]
+fn inserting_into_a_keyed_collection_over_an_imported_struct_works() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (--native needs it)");
+        return;
+    }
+
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_i746_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prog = tmp.join("main.loft");
+
+    // `Blk` is never constructed — declaring the field is the whole trigger, so
+    // it must stay. The keys are large and scattered because the report's were;
+    // they are not load-bearing (0.. behaves the same), but keeping them costs
+    // nothing and matches the shape that was filed.
+    std::fs::write(
+        &prog,
+        "use keyedlib::(KTile, tile_count);\n\
+         \n\
+         struct Blk { tiles: hash<KTile[tkey]> }\n\
+         \n\
+         fn main() {\n\
+         \x20   idx: hash<KTile[tkey]> = [];\n\
+         \x20   for i in 0..100 { idx += KTile { tkey: 128000000 + i, name: \"t{i}\" }; }\n\
+         \x20   n = 0;\n\
+         \x20   for t in idx { n += 1; }\n\
+         \x20   println(\"{n} {tile_count(idx)}\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    let mut outputs = Vec::new();
+    for mode in ["--interpret", "--native"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(mode)
+            .arg("--lib")
+            .arg("tests/lib")
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "{mode} exited non-zero — the insert resolved its element type to a \
+             non-collection.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.trim() == "100 100",
+            "{mode}: expected `100 100`, got `{}`",
+            stdout.trim()
+        );
+        outputs.push(stdout);
+    }
+    assert_eq!(
+        outputs[0], outputs[1],
+        "the two backends disagree on the keyed inserts"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

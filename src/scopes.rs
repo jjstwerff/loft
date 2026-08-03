@@ -2195,12 +2195,14 @@ pub fn check(data: &mut Data) {
             store_lifetime_guard(&d.code, &d.variables, free_ref_nr, gf_nr, &d.name);
         }
         let code_ref = data.definitions[d_nr as usize].code.clone();
+        let create_stack_nr = data.def_nr("OpCreateStack");
         let mut seq = 0u32;
         compute_intervals(
             &code_ref,
             &mut data.definitions[d_nr as usize].variables,
             free_text_nr,
             free_ref_nr,
+            create_stack_nr,
             &mut seq,
             0,
         );
@@ -4512,10 +4514,19 @@ impl Scopes {
                 // hoisting it stays as the arg value, while the Set moves
                 // into the enclosing statement list so the work-ref lives
                 // at function scope (its slot must survive the call).
+                //
+                // loft#745 — a work-ref that ALREADY holds a value carries its
+                // overwrite-free, so the parser's `Set` arrives wrapped as
+                // `Insert([OpFreeRef(__ref_N), Set(__ref_N, …)])`.  Matching only the
+                // bare `Set` left that shape unhoisted, so the materialisation stayed
+                // INSIDE the argument: native then had no `OpCreateStack(Var(_))` to
+                // recognise, hoisted the whole argument into a `let _pre_N = …`
+                // binding whose value is the assignment's `()`, and rustc rejected the
+                // call with E0308 (expected `&mut DbRef`, found `()`).
                 let is_p179_hoisted = n >= 2
-                    && ops[..n - 1].iter().all(|v| {
-                        matches!(v, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__ref_"))
-                    })
+                    && ops[..n - 1]
+                        .iter()
+                        .all(|v| Self::is_ref_materialisation(v, function, data))
                     && matches!(&ops[n - 1], Value::Call(d_nr, _)
                         if data.def(*d_nr).name == "OpCreateStack");
                 if is_a56_hoisted || is_p135_hoisted || is_p179_hoisted {
@@ -4572,6 +4583,30 @@ impl Scopes {
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// True when `v` writes the work-ref that a `&`-argument's `OpCreateStack` then
+    /// borrows — the `Set(__ref_N, …)` the parser emits for a non-`Var` `&`-source,
+    /// either bare or wrapped with the overwrite-`OpFreeRef` a re-assigned work-ref
+    /// carries (loft#745).  `scan_args` hoists these out of the argument so the
+    /// work-ref lives at function scope and its slot survives the call.
+    fn is_ref_materialisation(v: &Value, function: &Function, data: &Data) -> bool {
+        let writes_work_ref = |op: &Value| matches!(op, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__ref_"));
+        match v {
+            Value::Set(_, _) => writes_work_ref(v),
+            // The free targets the work-ref's PREVIOUS value and belongs with the write,
+            // so the pair hoists as one unit.  A wrapper holding anything else is not a
+            // materialisation and stays inside the argument.
+            Value::Insert(inner) => {
+                inner.iter().any(writes_work_ref)
+                    && inner.iter().all(|op| {
+                        writes_work_ref(op)
+                            || matches!(op, Value::Call(d_nr, _)
+                                if data.def(*d_nr).name == "OpFreeRef")
+                    })
+            }
+            _ => false,
+        }
     }
 
     /// @PLN90 / loft#506 — a computed-lvalue `&`-WRITE-BACK argument.  The arg is
