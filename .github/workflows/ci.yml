@@ -1263,6 +1263,16 @@ jobs:
       # Run anywhere else and it self-skips on staleness, which is how it went dormant:
       # a skipping gate and a passing one are indistinguishable in a green log.
       # Kept off the PR path, as it was before.
+      # This job never installed nextest, while the step below has always been
+      # able to run on any non-PR event.  It survived on push-to-main and the
+      # schedule only because their warm cargo cache happened to carry a nextest
+      # binary; the first COLD run on this job failed with `error: no such
+      # command: nextest`, which is what a manual dispatch on a new branch is.
+      # A gate that depends on a cache being warm is not a gate.
+      - name: Install cargo-nextest
+        if: github.event_name != 'pull_request'
+        uses: taiki-e/install-action@nextest
+
       - name: Browser render (nightly — off the flaky PR path)
         if: github.event_name != 'pull_request'
         run: cargo nextest run --profile ci -E 'binary(html_render)'
