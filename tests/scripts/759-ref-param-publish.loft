@@ -1,0 +1,129 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#759) — a callee has TWO ways to hand a heap value to its
+// caller: a `return`, and a write through a `&` parameter.  Only the first was
+// asserted anywhere, so the work-ref buffer a call filled and the callee then
+// published through its `&` parameter kept its plain `OpFreeRef` at scope exit
+// — freeing the record the caller went on reading and writing through.
+//
+// It was filed as a `File` bug, because `file()` is `result = File{..}; result`
+// — a callee that returns the buffer its caller handed it, which is exactly the
+// failing shape.  Any user struct built by a callee of that shape corrupted
+// identically, text fields included.  The cells below are the boundary matrix:
+// the ones that were BROKEN, and the neighbours that were already correct and
+// must stay that way.
+//
+// The value is usually still right without `LOFT_POISON=1` — the freed bytes
+// have not been reused yet — which is why `make ci` was 3705/3705 with this
+// present.  `tests/ref_param_publish.rs` runs this file under the poison gate on
+// both backends; that is what makes it a guard rather than a hope.
+
+// @PLN9: cwd-relative paths — the File cell does cwd-relative file I/O.
+#cwd
+
+struct Box { v: integer, tag: text }
+
+// ADOPTING callee — builds a local and returns it, so the caller's work-ref
+// buffer IS the record that comes back.  The failing shape.
+fn mk_adopt(n: integer) -> Box { b = Box { v: n, tag: "n{n}" }; b.v = b.v + 1; return b; }
+
+// FRESH callee — the record is built in the return expression, so the caller's
+// buffer is never adopted.  The neighbour that always worked.
+fn mk_fresh(n: integer) -> Box { return Box { v: n + 1, tag: "n{n}" }; }
+
+// Recycle a few stores, so a record freed too early is handed out again rather
+// than sitting undisturbed with its bytes still readable.
+fn churn() -> integer {
+  z1 = mk_adopt(700);
+  z2 = mk_adopt(800);
+  z3 = mk_adopt(900);
+  return z1.v + z2.v + z3.v;
+}
+
+fn reb_adopt(b: &Box, n: integer) -> integer { x = b.v; b = mk_adopt(n); return x; }
+fn reb_fresh(b: &Box, n: integer) -> integer { x = b.v; b = mk_fresh(n); return x; }
+fn reb_cond(b: &Box, n: integer, c: boolean) -> integer { x = b.v; if c { b = mk_adopt(n) } return x; }
+fn reb_twice(b: &Box, n: integer) -> integer { x = b.v; b = mk_adopt(n); b = mk_adopt(n + 11); return x; }
+fn reb_loop(b: &Box) -> integer { x = b.v; for i in 0..4 { b = mk_adopt(100 + i) } return x; }
+fn reb_tag(b: &Box, n: integer) -> text { x = b.tag; b = mk_adopt(n); return x; }
+
+// A `&File` whose callee rebinds — the shape the issue was filed from.
+fn append_one(f: &File, p: text, v: integer) -> boolean {
+  f += (v as i32);
+  e = f#exists;
+  f = file(p);
+  f#format = LittleEndian;
+  return e;
+}
+
+fn main() {
+  // The published record survives, and the caller reads what the callee wrote.
+  churned = 0;
+  a = Box { v: 11, tag: "a" };
+  prev = reb_adopt(a, 22);
+  churned += churn();
+  assert(prev == 11, "adopt: value before the publish is {prev}, want 11");
+  assert(a.v == 23, "adopt: published record reads {a.v}, want 23");
+
+  // A fresh-returning callee never adopts the buffer, so the buffer must still
+  // be freed here — the neighbour a blanket free-suppression would leak.
+  af = Box { v: 11, tag: "a" };
+  pf = reb_fresh(af, 22);
+  churned += churn();
+  assert(pf == 11 && af.v == 23, "fresh: {pf}/{af.v}, want 11/23");
+
+  // Published on the taken branch only.
+  ct = Box { v: 11, tag: "a" };
+  pt = reb_cond(ct, 22, true);
+  churned += churn();
+  assert(pt == 11 && ct.v == 23, "cond taken: {pt}/{ct.v}, want 11/23");
+
+  // NOT published: the buffer is this frame's to free, and the caller's record
+  // is untouched.  A fix that suppresses the free unconditionally leaks here.
+  cf = Box { v: 11, tag: "a" };
+  pn = reb_cond(cf, 22, false);
+  churned += churn();
+  assert(pn == 11 && cf.v == 11, "cond not taken: {pn}/{cf.v}, want 11/11");
+
+  // Two publishes: the first record is freed, the second survives.
+  tw = Box { v: 11, tag: "a" };
+  p2 = reb_twice(tw, 22);
+  churned += churn();
+  assert(p2 == 11 && tw.v == 34, "twice: {p2}/{tw.v}, want 11/34");
+
+  // N publishes from a loop — the buffer is reused per iteration.
+  lp = Box { v: 11, tag: "a" };
+  pl = reb_loop(lp);
+  churned += churn();
+  assert(pl == 11 && lp.v == 104, "loop: {pl}/{lp.v}, want 11/104");
+
+  // A text field on the published record: its String must survive the publish
+  // too — the over-free orphaned it and the field read back null.
+  tg = Box { v: 11, tag: "a" };
+  pg = reb_tag(tg, 22);
+  churned += churn();
+  assert(pg == "a", "tag: value before the publish is {pg}, want a");
+  assert(tg.tag == "n22", "tag: published record reads {tg.tag}, want n22");
+
+  // The filed instance: two appends through a `&File` whose callee rebinds,
+  // then a plain read-back that shares none of the fix's code path.
+  p = "test_loft_759_ref_param.bin";
+  delete(p);
+  w = file(p);
+  w#format = LittleEndian;
+  assert(append_one(w, p, 4242), "file: #exists through &File");
+  assert(append_one(w, p, 7), "file: #exists through &File, second record");
+  d = file(p);
+  d#format = LittleEndian;
+  first = d#read as i32;
+  second = d#read as i32;
+  assert(first == 4242, "file: first record {first}, want 4242");
+  assert(second == 7, "file: second record {second}, want 7");
+  delete(p);
+
+  // 7 rounds of (701 + 801 + 901): the recycled records must read back what they
+  // were built with, not the bytes of something freed too early.
+  assert(churned == 16821, "churn total {churned}, want 16821");
+  println("759 ref-param publish OK");
+}

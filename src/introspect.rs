@@ -878,6 +878,18 @@ fn emit_ownership(
                 vars.name(store)
             )?;
         }
+        // loft#759 — the second escape route. A `return` is not the only way a value
+        // leaves this frame: a write through a `&` parameter publishes into storage the
+        // caller owns, and the buffer that write delivered must not then be plain-freed.
+        for store in crate::use_analysis::ref_param_publish_freed(data, d_nr) {
+            writeln!(
+                w,
+                "  ⚠ UAF: `{}` was PUBLISHED through a `&` parameter, then freed by a \
+                 plain `OpFreeRef` — the caller reads and writes a freed store (use \
+                 OpFreeRefIfDistinct); ref-param-publish-free",
+                vars.name(store)
+            )?;
+        }
         // @PLN103 P1.5 — delivery lens: the delivery OUTCOME for a heap (vector/reference)
         // return, read from `def.returned`'s deps on the COMMITTED IR — `["__retbuf"]` (a
         // synth buffer) = MATERIALISED into the return buffer, `[arg]` = a borrowed VIEW
