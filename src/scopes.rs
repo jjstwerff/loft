@@ -3749,6 +3749,51 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return
+            && !expr_is_terminal
+            && ret_var == u16::MAX
+            && is_heap_return_type(tp)
+            && !matches!(expr, Value::Var(_))
+            && expr.is_place_read(data)
+        {
+            // loft#754 — the B5-L3 rule for a HEAP return (`vector` / record /
+            // struct-enum) whose tail is a PLACE read.  `is_value_return_type`
+            // names only the scalars and the text branch below only text, so
+            // such a tail with pending frees reached the fall-through and was
+            // emitted as a DISCARDED statement plus a fabricated
+            // `Return(Null)`.  The interpreter read the value off eval-stack
+            // top and answered correctly; native emitted
+            // `let _ = expr; …; return DbRef::NULL`, so
+            // `fn f(w) -> vector<u8> { if … { return []; } w.items[0].bytes }`
+            // handed back an EMPTY vector — silently, and on one backend only.
+            // (rustc even flagged it as `unused_must_use` on the dropped
+            // element read.)
+            //
+            // The hoist states the interpreter's own order in the IR: evaluate
+            // the tail, run the frees, return the captured value.
+            //
+            // A PLACE read is the whole class, and the bound is load-bearing in
+            // both directions.  Only a place leaves its value on the eval stack
+            // alone — it allocates nothing and writes no return buffer — so
+            // only a place can be dropped by a `Return(Null)`; and `Set(tmp,
+            // place)` is a bare `DbRef` copy, which is why the hoist adds no
+            // ownership.  A CALL tail already delivers through its hidden
+            // buffer, and hoisting one instead engaged the store-transfer
+            // machinery (`protect_store_frees` + `CopyRefOrNull`) around a
+            // borrowed argument, which over-froze the caller's store
+            // ("Delete on locked store", `return-borrow-of-mutated-arg`).  A
+            // bare `Var` is excluded because the fast path above already
+            // returns it directly.
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let mut result = Vec::with_capacity(ls.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
         } else if is_return && matches!(tp.base(), Type::Text(_)) && !expr_is_terminal {
             // B5-L3 extension for text returns: save the expression's text
             // to a `__ret_N` temp, run free ops, then return the temp.  The
@@ -5442,6 +5487,19 @@ fn is_value_return_type(tp: &Type) -> bool {
             | Type::Character
             | Type::Enum(_, false, _)
     )
+}
+
+/// loft#754 — a return type delivered as a store POINTER (`DbRef`): a vector, a
+/// record, or a struct-enum, including one reached through a `&`-parameter
+/// place ref.  Names the half of the return space that neither
+/// `is_value_return_type` nor the text branch covers, so a tail expression of
+/// this shape is hoisted before the scope frees instead of being dropped.
+fn is_heap_return_type(tp: &Type) -> bool {
+    match tp.base() {
+        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => true,
+        Type::RefVar(inner) => is_heap_return_type(inner),
+        _ => false,
+    }
 }
 
 /// A branch whose TAIL is literally null — `Value::Null` or the
@@ -7516,16 +7574,27 @@ fn block_result_type(code: &Value) -> String {
     }
 }
 
+/// loft#750 — the result is a `BTreeMap`, and the ORDER is load-bearing.  Its
+/// caller relocates each confined `__vdb`'s null-init, and a relocation that
+/// cannot reach its block puts the init back at body position 0; run over
+/// several confined stores, the visit order therefore PERMUTES the null-inits
+/// at the head of the body — which moves the stack slots under them.  A
+/// `HashMap` gave that order Rust's per-process hash seed, so compiling one
+/// file twice with one binary produced different bytecode and different slots
+/// (same answers, but no reproducible `--native` build, and a byte-identical-IR
+/// inertness gate that could not tell "my change did nothing" from "the seed
+/// moved").  Keyed by variable number, the visit order is now the declaration
+/// order.
 fn store_confinement(
     code: &Value,
     vars: &Function,
     free_ref_nr: u32,
     gf_nr: u32,
-) -> HashMap<u16, (u16, u16)> {
+) -> BTreeMap<u16, (u16, u16)> {
     // Plan-57 cluster-III Route 2 (gated, experimental): recover the backer of an
     // orphaned (overwritten) store so its per-block store can confine.
     let recover = std::env::var("LOFT_CONF_RECOVER").is_ok();
-    let mut out: HashMap<u16, (u16, u16)> = HashMap::new();
+    let mut out: BTreeMap<u16, (u16, u16)> = BTreeMap::new();
     for vdb in 0..vars.count() {
         if !vars.name(vdb).starts_with("__vdb") {
             continue;

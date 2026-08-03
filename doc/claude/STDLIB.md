@@ -1010,12 +1010,14 @@ difference between free space you get back and free space you do not.
 - **`tail`** — above the last record. This is what `store_reclaim` returns, less
   the eighth it leaves behind. A persisted store's image already ends at the last
   record, so the tail is arena capacity, not file bytes — until the store is
-  BOUND, where it is both. ⚠ **On a bound store that tail is why the FILE SIZE
-  compares nothing**: capacity grows by 7/3 and never shrinks by itself, so the
-  file is a rung on a ladder — two builds a rung apart differ by 133% holding
-  identical records, and one holding twice the data can be byte-identical. Call
-  `store_reclaim` before reading a bound store's size as a measurement of its
-  content (loft#752).
+  BOUND, where it is both. ⚠ **On a bound store, MID-RUN, that tail is why the
+  FILE SIZE compares nothing**: capacity grows by 7/3 and never shrinks by
+  itself, so between the bind and the release the file is a rung on a ladder —
+  two points a rung apart differ by 133% holding identical records, and one
+  holding twice the data can be byte-identical. Call `store_reclaim` before
+  reading a size in the middle of a run. The file a program LEAVES BEHIND needs
+  no such call: releasing the collection hands the tail back, so the finished
+  file follows its content (loft#752).
 - **`inner`** — between records. It is reusable for future allocation, but it
   *is* written to the file, because the image has to span up to the last record.
   `store_reclaim` does not touch it — **loading the store does**, automatically:

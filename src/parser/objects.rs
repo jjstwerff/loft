@@ -660,8 +660,7 @@ impl Parser {
     }
 
     pub(crate) fn is_file_var(&self, var_nr: u16) -> bool {
-        let file_def = self.data.def_nr("File");
-        matches!(self.vars.tp(var_nr), Type::Reference(d, _) if *d == file_def)
+        self.is_file_var_type(self.vars.tp(var_nr))
     }
 
     pub(crate) fn file_op(&mut self, code: &mut Value, t: &mut Type, var_nr: u16) {
@@ -949,8 +948,26 @@ impl Parser {
         }
     }
 
+    /// loft#753 — is `tp` a `File` handle, INCLUDING one reached through a `&`
+    /// parameter?  A `&File` is `RefVar(Reference(File))`, and codegen already
+    /// dereferences such a slot (`OpVarRef` + `OpGetStackRef`), so every File
+    /// operation works through it once this says yes.  While it said no, the
+    /// three sites that ask — `+=`, the `#` attribute surface, and field
+    /// assignment — each fell through to the GENERIC code and reported what
+    /// that code saw: `f#read` became "Unknown loop attribute '#f'", `f += v`
+    /// became "No matching operator 'Add' on '&File' and '&File'".  `File` was
+    /// the only type whose `&` form was special, so the wall read as "I wrote
+    /// it wrong" and was walked around rather than reported.
+    ///
+    /// The peel lives here, in the ONE predicate both callers share, rather
+    /// than at any single question site — the shape of loft#740, where two
+    /// guards decided one question and only one of them peeled.
     pub(crate) fn is_file_var_type(&self, tp: &Type) -> bool {
         let file_def = self.data.def_nr("File");
+        let mut tp = tp.base();
+        while let Type::RefVar(inner) = tp {
+            tp = inner.base();
+        }
         matches!(tp, Type::Reference(d, _) if *d == file_def)
     }
 

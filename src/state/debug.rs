@@ -1060,7 +1060,16 @@ impl State {
             if let Some(t) = self.types.get(&p)
                 && *t != u16::MAX
             {
-                write!(f, " type={} {t:}", self.database.types[*t as usize].name)?;
+                // A dump must never panic: after a compile ERROR the schema is
+                // partial, so a position can still carry a type id that names
+                // nothing (`44-nested-match.loft` recorded id 652 against a
+                // 67-entry table and `introspect` aborted mid-dump).  Print the
+                // bare id in that case — it is the one fact still known, and it
+                // is what a reader needs to chase the drift.
+                match self.database.types.get(*t as usize) {
+                    Some(td) => write!(f, " type={} {t:}", td.name)?,
+                    None => write!(f, " type=?{t:}")?,
+                }
             }
             if annotate_slots && let Some(v) = self.vars.get(&p) {
                 let vars = data.def(d_nr).variables();

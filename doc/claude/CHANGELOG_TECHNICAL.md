@@ -9,6 +9,94 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A tail expression that is a place read no longer reaches the Return as null (loft#754) (2026-08-03)
+
+A function body ending in `w.items[i].bytes` returned an EMPTY vector under
+`--native` and the right one under `--interpret`; putting `return` in front of
+the identical expression fixed it.
+
+A tail with pending scope frees is hoisted to a `__ret_N` temp so the frees run
+between the read and the `Return` (`scopes.rs`, the B5-L3 rule). That rule named
+only the SCALAR return types and a later branch only text, so a `vector` / record
+/ struct-enum tail fell through to a fabricated `Return(Null)` with the
+expression left as a discarded statement. The interpreter read the value off
+eval-stack top; native emitted `let _ = expr; …; return DbRef::NULL`.
+
+The hoist now covers the heap return types, bounded to a PLACE READ
+(`Value::is_place_read` — a bare accessor chain over a variable, now the one home
+for the question `Parser::is_addressable` already asked). The bound is
+load-bearing in both directions: only a place leaves its value on the eval stack
+alone, so only a place can be dropped; and `Set(tmp, place)` is a bare `DbRef`
+copy, so the hoist adds no ownership. A CALL tail already delivers through its
+hidden buffer, and hoisting one engaged the store-transfer machinery
+(`protect_store_frees` + `CopyRefOrNull`) around a borrowed argument and
+over-froze the caller's store.
+
+### A vector's element WIDTH is part of its type at a call (loft#751) (2026-08-03)
+
+`Type::is_equal`'s vector arm compared elements with the scalar-integer rule —
+kind only, ignoring width — so a `vector<integer>` was accepted wherever a
+`vector<u8>` was declared and its 8-byte elements were re-read as bytes. Silent:
+the element COUNT is stored, so `len()` still agreed and every length-based check
+passed while only the bytes were wrong. The same mismatch written as a literal
+was already refused, so the two spellings of one mistake disagreed.
+
+In a register an `integer` and a `u8` are one type; in a vector the element width
+IS the stride. `Type::same_element_storage` states that, keyed on the canonical
+`IntegerSpec::byte_width` (so `integer(0,100)` and `u8` are correctly the same
+layout) plus the sign of the lower bound (so `i8` and `u8` are not). Refuses at
+the call, the assignment, the field init and the return — all four went through
+`is_equal`. The suite needed no change, so nothing in tree relied on it.
+
+### Compilation is reproducible again (loft#750) (2026-08-03)
+
+`store_confinement` answered a `HashMap`, and its caller relocates each confined
+`__vdb`'s null-init; a relocation that cannot reach its block puts the init back
+at body position 0, so visiting several confined stores in Rust's per-process
+hash order PERMUTED the null-inits at the head of the body and moved the slots
+under them. Compiling one file twice with one binary produced different bytecode
+and different slots. It is a `BTreeMap` now, so the visit order is declaration
+order. Over the 645-file script corpus, self-differing files: 3 → 0.
+
+Program output was never affected. The cost was that a `--native` artifact could
+not be bit-reproducible (#711), and that "prove this change emits byte-identical
+IR" — the standing gate for every inert-first plan step — could not tell "my
+change did nothing" from "the hash seed moved".
+
+### The whole File surface works through a `&File` parameter (loft#753) (2026-08-03)
+
+`&File` was accepted and then nothing you can do with a `File` worked through it:
+`f#read` reported "Unknown loop attribute '#f'", `f += v` reported "No matching
+operator 'Add' on '&File' and '&File'". A `&File` is `RefVar(Reference(File))` and
+`is_file_var` / `is_file_var_type` both matched a bare `Reference(File)`, so every
+File path fell through to the generic operator / attribute code and reported what
+THAT code saw. Codegen had always dereferenced such a slot (`OpVarRef` +
+`OpGetStackRef`). The peel now lives in the one predicate both callers share — the
+loft#740 shape, two guards deciding one question with one of them peeling.
+
+### Releasing a bound store hands its file tail back (loft#752) (2026-08-03)
+
+loft#710 decided a persisted store's size must follow its content and fixed the
+IMAGE-write path. A store bound with `store_persist_bind` FIRST never goes through
+it: its file IS the live arena, which grows by 7/3 and never shrinks by itself, so
+the file left behind was a rung on a ladder — up to 57% above its content, with
+40 000 and 60 000 features writing a byte-identical file.
+
+`free_named` now calls `reclaim_tail` on a file-backed store before marking the
+slot free. That placement is the fix: `usage()` early-returns on a freed store, so
+after the flag the chain walk reports mark 0 and `shrink_to` (rightly) refuses.
+It does not contradict @PLN123 A3's "the program says when" — that rule is about
+the middle of a run, where a reclaim is paid back at 7/3 by the next claim; at
+release there is no next claim, which is the one moment the runtime can tell a
+permanent drop from a lull. `shrink_to` still declines a read-only store, an
+incomplete walk, and a durable `.dmeta` sidecar.
+
+### A bytecode dump survives a partial schema (2026-08-03)
+
+`introspect` aborted mid-dump on a file that failed to compile: a position still
+carried a type id the (partial) schema did not have, and the dump indexed the
+type table raw. It prints the bare id now — a dump must never panic.
+
 ### @PLN124: a format expression hands its parts to the type being built (2026-08-03)
 
 `parse_string` gains a target: when the type a format string is assigned to

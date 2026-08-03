@@ -26,6 +26,74 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A function ending in `v[i].field` gives you the field
+
+A function whose body ended in a value read out of a collection — no `return`, the
+expression on its own as the last line — handed back an EMPTY vector when compiled
+with `--native`, while the same program run with `--interpret` was right:
+
+```loft
+fn bytes_of(w: World, tag: integer) -> vector<u8> {
+  at = section_at(w, tag);
+  if at < 0 { return []; }
+  w.sections[at].bytes        // gave back nothing, on --native only
+}
+```
+
+Writing `return` in front of the same expression worked, which is what made it so
+hard to see — the fault was in a four-line getter, and it showed up as the data
+being absent somewhere else entirely. Records and struct-enums had the same hole.
+
+### A `vector<integer>` is no longer accepted as a `vector<u8>`
+
+Handing a `vector<integer>` to something that asked for a `vector<u8>` compiled
+without a word, and then read each 8-byte number as eight separate bytes:
+
+```loft
+b: vector<integer> = [72, 105];
+print(text_from_bytes(b));      // "H " — silently, exit 0
+```
+
+`len()` agreed the whole time (the count is stored), so any check written in terms
+of the length passed while only the bytes were wrong. Writing the same mistake as
+a literal was already refused, so the two spellings disagreed. Now both are
+refused, and you convert the elements yourself — which is what the machine would
+have had to do anyway.
+
+### A `&File` parameter works
+
+`fn write_all(f: &File, …)` was accepted and then nothing you can do with a file
+worked through it — `f#read`, `f#exists`, `f#format = …` and `f += value` each
+failed, and one of them complained about a loop you had not written. `File` was
+the only type whose `&` form was special. All four work now. (`&` on a parameter
+is still only worth writing when you REASSIGN the whole binding — loft will say so
+if you do not.)
+
+### A generator's store file is the size of what it holds
+
+A collection bound with `store_persist_bind` keeps its file as its working
+storage, and that storage grows in jumps and never shrinks by itself. So the file
+left at the end was whichever jump the build happened to stop on — up to 57% bigger
+than the data, and two builds could differ by 133% holding identical records:
+
+```
+40,000 features   ->  7,196,280 bytes
+60,000 features   ->  7,196,280 bytes     // half as much data again, same file
+```
+
+That is fixed: letting go of the collection gives the spare room back, so the file
+a program leaves behind measures its content. Nothing to change — if you were
+calling `store_reclaim` at the end of a build, it now has nothing left to find and
+you can drop it. It is still the right call in the MIDDLE of a run, when something
+has been unloaded for good.
+
+### The compiler produces the same bytecode every time
+
+Compiling one file twice with the same binary could produce different bytecode and
+different stack slots. Every run computed the right answer, so nothing was visibly
+wrong — but a compiled build was not reproducible, and neither was any before/after
+comparison of generated code.
+
 ### A format string can build a value, not just text
 
 `"… {x} …"` normally joins everything into one `text`. When the type it is

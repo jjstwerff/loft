@@ -161,29 +161,37 @@ and rewriting every `DbRef` — compaction, which @PLN123 arc B remains open for
 the size now follows the content, but two construction orders can still differ by
 the fragmentation each genuinely leaves.
 
-⚠ **That fix is on the IMAGE WRITE, so it reaches `store_persist_bind` LAST and
-nothing else (loft#752).** Bind a store FIRST and its file IS the live arena: the
-size is the arena's **capacity**, which grows by 7/3 and never shrinks on its own —
-the exact shape #710 was filed about, on the path #710 did not touch. The file is
-therefore quantized to a ladder and can sit up to **57%** (`1 − 3/7`) above its
-content. Measured on one generator shape, varying only the feature count:
+**The bind-first path reaches the same answer at RELEASE (loft#752).** That #710
+fix is on the IMAGE WRITE, so it covers `store_persist_bind` LAST and nothing
+else. Bind a store FIRST and its file IS the live arena: while the program runs,
+the size is the arena's **capacity**, which grows by 7/3 and never shrinks on its
+own. So the file used to be quantized to a ladder and could sit up to **57%**
+(`1 − 3/7`) above its content. Measured on one generator shape, varying only the
+feature count:
 
-| features | file (bytes) |
-|---|---|
-| 150 000 | 39,179,744 |
-| 200 000 – 400 000 | **91,419,400** (unchanged across a 2× data increase) |
-| 500 000 – 700 000 | 213,311,928 |
+| features | file (bytes), before | after |
+|---|---|---|
+| 150 000 | 39,179,744 | content-sized |
+| 200 000 – 400 000 | **91,419,400** (unchanged across a 2× data increase) | one size per count |
+| 500 000 – 700 000 | 213,311,928 | content-sized |
 
-**So a bound store's file size compares NOTHING.** Two builds differing by a rung
-differ by 133% with byte-identical content, and one differing by 2× of data can be
-equal. `store_reclaim(collection)` after the build is what makes the number mean
-content again — on that shape it answered `0` for one insertion order and gave back
-94 MB for another, leaving a 1.30× spread that IS the fragmentation the two orders
-genuinely left. Read a file size only after reclaiming, or do not read it.
+Freeing the collection's store now hands the tail back before the slot is marked
+free — the same `reclaim_tail` `store_reclaim` calls, at the one moment the
+runtime can tell a permanent drop from a lull, because there is no next claim to
+pay 7/3 for. `store_reclaim` at the end of a build is therefore no longer needed
+and finds nothing left: measured over 40 000 and 60 000 features, with and
+without it, the files are byte-identical per count and differ between counts.
 
-This is not a footnote: a consumer measured the two orders, saw 2.3×, and concluded
-that feeding keys in order — the thing that bounds a generator's working set — was
-the worse strategy on every axis. Both numbers were rungs (loft#747).
+⚠ **MID-RUN, a bound store's file size still compares nothing.** Between the bind
+and the release it is capacity: two points a rung apart differ by 133% with
+byte-identical content. Call `store_reclaim(collection)` before reading a size in
+the middle of a run, or do not read it.
+
+This is not a footnote: a consumer measured two insertion orders, saw 2.3×, and
+concluded that feeding keys in order — the thing that bounds a generator's working
+set — was the worse strategy on every axis. Both numbers were rungs (loft#747).
+Right-sized, the same shape leaves a 1.30× spread, which IS the fragmentation the
+two orders genuinely differ by.
 
 **A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
 happens when the image is WRITTEN; after that `resize_store` returns early on any

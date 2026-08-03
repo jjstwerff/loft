@@ -9785,16 +9785,7 @@ impl Parser {
         // Plan-07 phase 1: unspan() so wraps on `[` / `.` (steps 1.11
         // / 1.12) don't hide an addressable shape from the `&` arg
         // check.
-        match val.unspan() {
-            Value::Var(_) => true,
-            Value::Call(d_nr, args) => {
-                let name = data.def(*d_nr).name();
-                (name == "OpGetField" || name == "OpGetVector" || name == "OpVectorRef")
-                    && !args.is_empty()
-                    && Self::is_addressable(&args[0], data)
-            }
-            _ => false,
-        }
+        val.is_place_read(data)
     }
 
     /// @PLN87 #1 — is `val` a PLACE (an addressable lvalue: a variable, struct field,

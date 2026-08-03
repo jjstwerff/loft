@@ -473,17 +473,18 @@ pub fn store_verify(r: reference) -> boolean;
 // `store_memory()` first — its `tail%` is exactly what this call returns, and
 // its `inner%` is the space BETWEEN records, which this does not touch.
 //
-// ⚠ CALL THIS BEFORE YOU BELIEVE A BOUND STORE'S FILE SIZE. A store bound with
-// `store_persist_bind` FIRST keeps its file AS the live arena, and the arena's
-// capacity grows by 7/3 and never shrinks by itself — so the file is a rung on a
-// ladder, not a measure of content, and it can sit 57% above what it holds. Two
-// builds one rung apart differ by 133% with identical records, and one holding
-// twice the data can be exactly equal. A generator that ends with this call has a
-// file that means something; one that does not, does not (loft#752).
+// You do NOT need this to right-size a file at the END of a run. A bound store
+// keeps its file AS the live arena, and the arena's capacity grows by 7/3 and
+// never shrinks by itself — so mid-run the file is a rung on a ladder, not a
+// measure of content, and can sit 57% above what it holds. Releasing the
+// collection hands that tail back on its own, so the file a program leaves
+// behind follows its content whether or not this was ever called (loft#752).
+// Call it MID-RUN, when a live set has dropped for good and the memory (or the
+// disk) is wanted back before the end.
 //   world: hash<Hex[q, r]> = []
 //   store_persist_bind(world, "world.store")
 //   // …a region is unloaded for good…
-//   store_reclaim(world)          // the file follows what the world holds
+//   store_reclaim(world)          // the file follows what the world holds NOW
 // Returns 0, changing nothing, for a store that is read-only, shares another
 // store's memory, or carries a `store_durable_seal` sidecar — truncating behind
 // that sidecar's back would report a healthy store as corrupt.
