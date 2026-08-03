@@ -9,6 +9,69 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN124: a format expression hands its parts to the type being built (2026-08-03)
+
+`parse_string` gains a target: when the type a format string is assigned to
+defines `lit`, the string lowers to `lit` / `hole_<kind>` method calls on an
+accumulator of that type instead of appending into a text work buffer. The
+literal/hole boundary already existed at parse time and was erased only because
+every branch appended into the same buffer.
+
+`Parser::interpolation_target` is a fifth SHAPE read off the one `⇐` expected-type
+channel, beside `lambda_hint` / `enum_hint` / `vector_hint` / `read_target_type` —
+not a sixth side-channel. `var_tp` supplies the target for a typed local, a typed
+reassignment and a field init; `expected` for a call argument (free function and
+method) and a return body.
+
+Three constraints the build settled:
+
+- **The mint must be pass-stable.** Taking the branch mints an accumulator, and
+  the variable tables persist across passes BY NAME (loft#662), so the branch
+  keys on method defs (collected on both passes, as the `to_text` hook already
+  relies on) and the accumulator draws from its own `__fmt_N` counter
+  (`Function::work_format`) rather than sharing `__work_N` or `__ref_N`.
+- **The expected-type channel leaked across a nested call.** Each hint SET it when
+  it applied and none CLEARED it when it did not, so in `take(build_one("arg"))`
+  the literal — `build_one`'s `text` parameter — was checked against `take`'s
+  parameter type. Latent while only the enum / collection / function shapes read
+  the channel; immediate once a `text` parameter could be shadowed by a struct
+  target. Now cleared per argument at both call sites.
+- **Nullability is not a kind.** `format_hole` peels `Optional`, so a `text?` hole
+  is a text hole whose value may be absent and the target's own parameter type
+  decides whether it takes one.
+
+An unsupported hole kind and a format spec on a hole are both compile errors —
+never a silent fall back to rendering, which would put a value back on the text
+path.
+
+Inertness is the gate:
+`doc/claude/plans/124-interpolation-hook/bytecode-comparisons/format-corpus.loft`
+covers 104 format sites (specs, `text?` holes, the `OpTagFault` path, an inner
+fault that must not tag, JSON/pretty, a custom `to_text` spec, three `for` forms,
+backtick, escaped braces, `+=`, argument position) and `loft introspect`
+before/after is byte-identical.
+
+### Format hook: a boolean cannot carry a count of hidden work buffers (2026-08-03)
+
+`to_text(self, spec)` with a conditional early `return` was an internal compiler
+error — *"Too few parameters on t_5Money_to_text (got 3, need 4)"* — on both
+backends, for every interpolation of the type, and on the released binary.
+
+Each formatted `return` promotes its own hidden text work buffer, so two of them
+make the hook `(self, spec, __work_1, __work_2)`.  `try_bound_to_text_call`
+recorded the buffers in a BOOLEAN, which cannot carry "two": it appended one work
+argument and `generate_call`'s arity assert fired.
+
+#533 hardened this same site by classifying parameters by TYPE rather than by
+count — correct, and still not enough, because it left the COUNT unrepresented. A
+one-buffer body worked, and that working member hid the omission.
+
+The fix fills one argument per attribute, walking the definition's own order, and
+refuses to emit a call whose argument list does not fit the definition — so a
+signature this hook cannot spell falls back to the generic field dump, which is a
+defined answer where a short call is a crash. Guard:
+`tests/scripts/format-hook-early-return.loft`.
+
 ### `LOFT_UAF_GEN`: a stamp keyed by offset cannot say which store it is about (2026-08-01)
 
 Detector (c) reported a use-after-free on 25 of the 548 corpus scripts, all of them

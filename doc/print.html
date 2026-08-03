@@ -64,6 +64,7 @@
 <li class="toc-indent"><a href="#stdlib-field-iteration-support-types">Field iteration support types</a></li>
 <li class="toc-indent"><a href="#stdlib-file-system">File System</a></li>
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
+<li class="toc-indent"><a href="#stdlib-optional-c-libraries-pln24-arc-g">Optional C libraries (@PLN24 arc G)</a></li>
 <li class="toc-indent"><a href="#stdlib-system-directories-635">System directories (#635)</a></li>
 <li class="toc-indent"><a href="#stdlib-time">Time</a></li>
 <li class="toc-indent"><a href="#stdlib-memory-diagnostics">Memory diagnostics</a></li>
@@ -2415,8 +2416,25 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>Loft strings can embed expressions inside <code>{...}</code> braces.  A colon after the expression introduces a format specifier that controls width, alignment, precision, number base, and output style.</p>
 <h2 id="basic-interpolation">Basic interpolation</h2>
 <p>Any expression inside <code>{...}</code> is evaluated and converted to text.</p>
-<pre><code><span class="kw">struct</span> <span class="en">Point</span> { x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
-<span class="kw">fn</span> <span class="fn-call">main</span>() {
+<pre><code><span class="kw">struct</span> <span class="en">Point</span> { x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span> }</code></pre>
+<p>A type that receives the PARTS of a format string. See the last section.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Query</span> {
+  const parts: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;,
+  const values: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;,
+}</code></pre>
+<p><code>lit</code> gets the bytes you wrote in the source file.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">lit</span>(self: <span class="en">Query</span>, s: <span class="ty"><a href="stdlib-types.html">text</a></span>) { self.parts += [s]; }</code></pre>
+<p><code>hole_text</code> gets an interpolated value. It is never added to <code>parts</code>.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">hole_text</span>(self: <span class="en">Query</span>, v: <span class="ty"><a href="stdlib-types.html">text</a></span>?) { self.values += [v ?? <span class="st">""</span>]; }</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">hole_int</span>(self: <span class="en">Query</span>, v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) { self.values += [<span class="st">"{v}"</span>]; }</code></pre>
+<p>Show the two lists separately, so you can see what went where.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">shape</span>(self: <span class="en">Query</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  out = <span class="st">""</span>;
+  <span class="kw">for</span> q_part <span class="kw">in</span> self.parts { out += <span class="st">"&lt;{q_part}&gt;"</span> }
+  <span class="kw">for</span> q_val <span class="kw">in</span> self.values { out += <span class="st">"[{q_val}]"</span> }
+  <span class="kw">return</span> out;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   name = <span class="st">"world"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"hello {name}"</span> == <span class="st">"hello world"</span>, <span class="st">"basic interpolation"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1 + 2 = {1 + 2}"</span> == <span class="st">"1 + 2 = 3"</span>, <span class="st">"expression in braces"</span>);</code></pre>
@@ -2480,8 +2498,25 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{c}"</span> == <span class="st">"A"</span>, <span class="st">"character default"</span>);</code></pre>
 <h2 id="boolean-format">Boolean format</h2>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{true}"</span> == <span class="st">"true"</span>, <span class="st">"boolean true"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"boolean false"</span>);
-}</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"boolean false"</span>);</code></pre>
+<h2 id="building-a-value-instead-of-text">Building a value instead of text</h2>
+<p>Everything above joins the pieces into one <code>text</code>.  When the type you assign to says so, the format string <strong>builds that type instead</strong>, and the type is told which bytes you wrote and which came from a value.</p>
+<p>A type opts in by defining <code>lit</code> (for your bytes) and one <code>hole_…</code> method per value kind it accepts: <code>hole_text</code>, <code>hole_int</code>, <code>hole_float</code>, <code>hole_single</code>, <code>hole_boolean</code>, <code>hole_character</code>.  There is no new syntax — the type you assign to decides — and plain <code>text</code> is unchanged.</p>
+<pre><code>  who = <span class="st">"ada"</span>;
+  q: <span class="en">Query</span> = <span class="st">"SELECT * FROM t WHERE name = {who}"</span>;</code></pre>
+<p>The text you wrote is in <code>parts</code>; the value is in <code>values</code>, never in the text.  That separation is the point: a value cannot turn into syntax, because the only way into the text is <code>lit</code>, and <code>lit</code> only ever receives bytes from your source file.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(q.<span class="fn-call">shape</span>() == <span class="st">"&lt;SELECT * FROM t WHERE name = &gt;[ada]"</span>,
+         <span class="st">"the literal and the value stay apart"</span>);</code></pre>
+<p>The value can be anything at all, including text that would otherwise change the meaning of the statement.  It is still just a value.</p>
+<pre><code>  danger = <span class="st">"'; DROP TABLE t; --"</span>;
+  q2: <span class="en">Query</span> = <span class="st">"WHERE name = {danger}"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(q2.<span class="fn-call">shape</span>() == <span class="st">"&lt;WHERE name = &gt;['; DROP TABLE t; --]"</span>,
+         <span class="st">"a value that looks like syntax is still a value"</span>);</code></pre>
+<p>Each kind goes to its own method, so the type sees the real type.</p>
+<pre><code>  q3: <span class="en">Query</span> = <span class="st">"id={7} name={who}"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(q3.<span class="fn-call">shape</span>() == <span class="st">"&lt;id=&gt;&lt; name=&gt;[7][ada]"</span>, <span class="st">"an integer hole calls hole_int"</span>);</code></pre>
+<p>The database clients use this, so a query needs no placeholders to count: q: SqlText = "SELECT id FROM users WHERE name = {name}"; db.db_rows(q)</p>
+<pre><code>}</code></pre>
 </section>
 <section class="print-section" id="31-ref-forward">
 <h1>Reference parameter forwarding</h1>
@@ -3518,6 +3553,13 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn source_dir() -&gt; text</code></pre>
 <p>Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.</p>
+</div>
+<h2 id="stdlib-optional-c-libraries-pln24-arc-g">Optional C libraries (@PLN24 arc G)</h2>
+<div class="item">
+<pre><code>pub fn c_library_available(soname: text) -&gt; boolean env#read</code></pre>
+<p>Returns whether the C library soname is usable right now: it loads, and every `#c` binding declared against it resolves in it.</p>
+<p>Ask this before calling into a library declared with `[c] optional-libs`, which is not installed on every machine and is loaded only when a binding needs it. Both halves of the answer matter — a library of the wrong version loads and then exports only some of the symbols, so &quot;the file is there&quot; would say yes where the call still fails.</p>
+<p>A library the program never declared answers false.</p>
 </div>
 <h2 id="stdlib-system-directories-635">System directories (#635)</h2>
 <p class="section-desc">Private native: the OS temp dir, &quot;&quot; only where there is no filesystem.</p>

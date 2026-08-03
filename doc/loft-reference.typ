@@ -5368,6 +5368,45 @@ Any expression inside `{...}` is evaluated and converted to text.
 
 ```rust
 struct Point { x: integer, y: integer }
+```
+
+A type that receives the PARTS of a format string. See the last section.
+
+```rust
+struct Query {
+  const parts: vector<text>,
+  const values: vector<text>,
+}
+```
+
+`lit` gets the bytes you wrote in the source file.
+
+```rust
+fn lit(self: Query, s: text) { self.parts += [s]; }
+```
+
+`hole_text` gets an interpolated value. It is never added to `parts`.
+
+```rust
+fn hole_text(self: Query, v: text?) { self.values += [v ?? ""]; }
+```
+
+```rust
+fn hole_int(self: Query, v: integer) { self.values += ["{v}"]; }
+```
+
+Show the two lists separately, so you can see what went where.
+
+```rust
+fn shape(self: Query) -> text {
+  out = "";
+  for q_part in self.parts { out += "<{q_part}>" }
+  for q_val in self.values { out += "[{q_val}]" }
+  return out;
+}
+```
+
+```rust
 fn main() {
   name = "world";
   assert("hello {name}" == "hello world", "basic interpolation");
@@ -5497,6 +5536,50 @@ The `:\#` specifier expands a struct across a spaced, readable layout instead of
 ```rust
   assert("{true}" == "true", "boolean true");
   assert("{false}" == "false", "boolean false");
+```
+
+=== Building a value instead of text
+
+Everything above joins the pieces into one `text`.  When the type you assign to says so, the format string \*\*builds that type instead\*\*, and the type is told which bytes you wrote and which came from a value.
+
+A type opts in by defining `lit` (for your bytes) and one `hole_…` method per value kind it accepts: `hole_text`, `hole_int`, `hole_float`, `hole_single`, `hole_boolean`, `hole_character`.  There is no new syntax — the type you assign to decides — and plain `text` is unchanged.
+
+```rust
+  who = "ada";
+  q: Query = "SELECT * FROM t WHERE name = {who}";
+```
+
+The text you wrote is in `parts`; the value is in `values`, never in the text.  That separation is the point: a value cannot turn into syntax, because the only way into the text is `lit`, and `lit` only ever receives bytes from your source file.
+
+```rust
+  assert(q.shape() == "<SELECT * FROM t WHERE name = >[ada]",
+         "the literal and the value stay apart");
+```
+
+The value can be anything at all, including text that would otherwise change the meaning of the statement.  It is still just a value.
+
+```rust
+  danger = "'; DROP TABLE t; --";
+  q2: Query = "WHERE name = {danger}";
+  assert(q2.shape() == "<WHERE name = >['; DROP TABLE t; --]",
+         "a value that looks like syntax is still a value");
+```
+
+Each kind goes to its own method, so the type sees the real type.
+
+```rust
+  q3: Query = "id={7} name={who}";
+  assert(q3.shape() == "<id=>< name=>[7][ada]", "an integer hole calls hole_int");
+```
+
+The database clients use this, so a query needs no placeholders to count:
+
+```
+  q: SqlText = "SELECT id FROM users WHERE name = {name}";
+  db.db_rows(q)
+```
+
+```rust
 }
 ```
 
@@ -6777,6 +6860,16 @@ pub fn source_dir() -> text
 ```
 
 Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.
+
+== Optional C libraries (\@PLN24 arc G)
+
+```rust
+pub fn c_library_available(soname: text) -> boolean env#read
+```
+
+Returns whether the C library soname is usable right now: it loads, and every `\#c` binding declared against it resolves in it.
+Ask this before calling into a library declared with `\[c\] optional-libs`, which is not installed on every machine and is loaded only when a binding needs it. Both halves of the answer matter — a library of the wrong version loads and then exports only some of the symbols, so "the file is there" would say yes where the call still fails.
+A library the program never declared answers false.
 
 == System directories (\#635)
 

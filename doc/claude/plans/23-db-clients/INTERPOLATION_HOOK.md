@@ -185,7 +185,18 @@ writing a collection non-atomically is not a smaller step, it is a wrong one.
 
 ## Status
 
-Design only, and now tracked as **@PLN124** (`status:next`). The companion
+**H1–H5 are BUILT** — see [plans/124-interpolation-hook.md](../124-interpolation-hook.md)
+for what shipped, what the build corrected, and the proof. The design below stands
+as written; two details changed on contact:
+
+- **The hole methods take the value, and an unsupported kind is a compile error**
+  rather than a fall back to `hole_text`. Falling back would put a value onto the
+  text path, which is the hole this exists to close.
+- **A format spec on a hole is refused.** `"{x:>8}"` has nothing to format when
+  the value is handed over rather than rendered, so H4's "each with a spec" became
+  "each kind, no spec".
+
+H6 (`SqlIdent`) and H7 (procedures) are **not built**. The companion
 constraint — `hole` needing one method per scalar kind — is **@PLN125 arc A**
 (associated types; arc B is the scope-end hook, arc C indexing). The hook is a **language feature** and belongs to loft rather
 than to @PLN23 — the DB library is its first consumer and its motivating case, not its

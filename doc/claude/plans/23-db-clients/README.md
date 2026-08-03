@@ -7,9 +7,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S3 built and in the repo; S4+ (the object mapping) is
-designed, not built. Two language gaps it surfaced are tracked separately as @PLN124 and
-@PLN125. Depends on @PLN24 (`#c`), also active.
+**@PLN23 `status:active`** — S1–S4 built and in the repo; S5+ (the object mapping) is
+designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
+is its first consumer; @PLN125 is not. Depends on @PLN24 (`#c`), also active.
 
 ## Goal
 
@@ -20,12 +20,12 @@ together.
 
 ## What is built
 
-`tests/fixtures/sqldb/` — `sql/` (the interface) plus `sqlite/`, `postgres/`, `maria/`,
-driven from `tests/native.rs`.
+`tests/fixtures/sqldb/` — `sql/` (the interface) plus `sqlite/`, `postgres/`, `maria/` and
+`duckdb/`, driven from `tests/native.rs`.
 
-The whole claim is two functions in `uniform.loft`: `seed` and `dump` are generic over
-`SqlDb`, **never name a backend, and every backend runs them unchanged**. If the uniform
-API were a fiction, those two could not exist.
+The whole claim is three functions in `uniform.loft`: `seed`, `dump` and `bound` are
+generic over `SqlDb`, **never name a backend, and every backend runs them unchanged**. If
+the uniform API were a fiction, those three could not exist.
 
 **sqlite is the cell that keeps it honest** — it needs no server, so a machine with no
 database still proves the interface, the bindings, the shim loft compiled, and the NULL
@@ -84,7 +84,7 @@ compiled against the authoritative `mariadb_stmt.h` comparing `sizeof` and
 `offsetof` field by field — 112 bytes, all 19 offsets equal. MariaDB's layout is
 not MySQL's (`flags` where MySQL has `param_number`), which is why guessing was
 not an option; `libmariadb.so.3` in the manifest is what pins the ABI it matches.
-The procedure is in [bytecode-comparisons/](../124-interpolation-hook/) —
+The procedure is committed beside this file —
 re-run it with `apt-get download libmariadb-dev` when the connector major changes.
 
 ### What S4 proves, and how it cannot pass vacuously
@@ -135,7 +135,10 @@ attack cell loudly.
   (Part 1, now **@PLN125 arc B**), transactions (Part 1b), and procedures written as text
   (Part 2).
 - **[INTERPOLATION_HOOK.md](INTERPOLATION_HOOK.md)** — the language change that makes a
-  safe builder possible at all, now **@PLN124**.
+  safe builder possible at all. Built as **@PLN124**; what shipped is in
+  [plans/124-interpolation-hook.md](../124-interpolation-hook.md).
+- **[mysql-bind-layout-check.c](mysql-bind-layout-check.c)** — the check that keeps the
+  hand-declared `MYSQL_BIND` in `maria/src/stmt.c` honest against the real header.
 
 ## The ordering that matters
 
@@ -147,11 +150,12 @@ inside a transaction that silently no-ops is the dangerous version, because the 
 ## What loft itself was missing
 
 Building this measured four gaps between a library type and a built-in one — recorded in
-[INTERFACES.md § How first-grade a library type is](../../INTERFACES.md). Two are tracked:
-**@PLN124** (the parts of an interpolation — the only one whose absence makes a library
-*unsafe* rather than awkward) and **@PLN125** (associated types, the scope-end hook,
-indexing). Neither belongs to @PLN23: the DB library is their first consumer and
-motivating case, not their owner.
+[INTERFACES.md § How first-grade a library type is](../../INTERFACES.md).
+
+**@PLN124** — the parts of an interpolation, the only one whose absence made a library
+*unsafe* rather than awkward — is **built**, and S4 is its first consumer. The remaining
+three (associated types, the scope-end hook, indexing) are **@PLN125**. Neither belongs to
+@PLN23: the DB library is their first consumer and motivating case, not their owner.
 
 ## Bugs this plan surfaced
 

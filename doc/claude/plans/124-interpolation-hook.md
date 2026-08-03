@@ -14,7 +14,7 @@ Its first consumer is @PLN23 S4, which is built on it.
 
 The design — why neither the type system nor `const` can carry the distinction,
 and why the parser already knows it — is
-[@PLN23's INTERPOLATION_HOOK.md](../23-db-clients/INTERPOLATION_HOOK.md). This
+[@PLN23's INTERPOLATION_HOOK.md](23-db-clients/INTERPOLATION_HOOK.md). This
 file records what was BUILT and what it cost.
 
 ## The contract
@@ -83,7 +83,7 @@ NULL a distinct bound value rather than the text `"null"`.
 
 ## Proof
 
-- **H1, inertness.** `bytecode-comparisons/format-corpus.loft` is one function per
+- **H1, inertness.** `124-interpolation-hook/bytecode-comparisons/format-corpus.loft` is one function per
   format-string path the dispatch can reach — literals, bare holes, alternation,
   the numeric spec grammar, a `text?` hole, a fault-prone hole (`OpTagFault`), an
   inner fault that must NOT tag, struct/JSON/pretty specs, a custom `to_text` spec,
@@ -96,7 +96,7 @@ NULL a distinct bound value rather than the text `"null"`.
   tell the hook from ordinary formatting. Every scalar kind routes to its own
   method; both backends.
 - **The target shape was captured BEFORE the parser was touched.**
-  `bytecode-comparisons/target-shape.loft` is the hand-written program whose IR
+  `124-interpolation-hook/bytecode-comparisons/target-shape.loft` is the hand-written program whose IR
   the branch had to reproduce, proven on both backends first. It also settled a
   design question by measurement: a default-constructed `T { }` is equivalent to a
   named constructor, so the contract needs only methods and `Interpolated` stays a
