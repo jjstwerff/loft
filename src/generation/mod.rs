@@ -3209,6 +3209,26 @@ extern crate loft;"
         Ok(())
     }
 
+    /// The content type id `fill_database` recorded for `host_type_id`'s field
+    /// `field_name`, if the host is a struct/enum-value with such a field.
+    ///
+    /// The compiler's own answer to "what type does this field hold", including
+    /// any element narrowing it applied. Reading it beats re-deriving one from
+    /// the loft `Type`, which cannot see a `forced_size` through
+    /// `type_def_nr` (loft#742).
+    fn recorded_field_content(&self, host_type_id: u16, field_name: &str) -> Option<u16> {
+        let (crate::database::Parts::Struct(fields) | crate::database::Parts::EnumValue(_, fields)) =
+            &self.stores.types.get(host_type_id as usize)?.parts
+        else {
+            return None;
+        };
+        fields
+            .iter()
+            .find(|f| f.name == field_name)
+            .map(|f| f.content)
+            .filter(|c| *c != u16::MAX)
+    }
+
     /// Use this to emit a single struct field into the db-builder output.
     /// Dispatches on the field's `typedef` to produce the correct `db.*` call.
     /// `s_var` is the Rust variable holding the parent struct's runtime id
@@ -3323,6 +3343,48 @@ extern crate loft;"
             // registers the nested layers in the same order, regardless of
             // which other types happened to register `vector<X>` first.
             if matches!(&**c, Type::Vector(_, _)) {
+                // loft#742 — prefer the content id `fill_database` RECORDED for
+                // this field over anything re-derived from the loft `Type`.
+                //
+                // The chain below rebuilds the nesting from `Type`, and a
+                // `Type::Integer` carries its narrowing in a `forced_size` that
+                // `type_def_nr` throws away: both `vector<vector<integer>>` and
+                // `vector<vector<integer(-32768, 32767)>>` came out as
+                // `db.vector(db.vector(<plain integer>))`. That is the wrong
+                // ELEMENT WIDTH, and it also mints `vector<vector<integer>>` —
+                // a type the compiler holds at a different id, or not at all at
+                // that point — so every runtime id after it shifted by one and
+                // `verify_schema_ids` flagged it.
+                //
+                // The recorded content is already narrowed
+                // (`vector<vector<short_raw<-32768,false>>>`) and already
+                // registered, so referencing it is both the right width and the
+                // right id. Same move as the sibling arms above and below,
+                // which read a content id rather than rebuilding one.
+                // Only when the content's `let t{N}` is ALREADY in scope — a
+                // bare type that has been flushed, or a definition type with a
+                // lower id (`type_defs` is sorted by id and emits each
+                // creation before its fields, so a lower id is already bound).
+                //
+                // Deliberately no `flush_bare_through` here to make one
+                // available. Flushing a bare VECTOR early emits
+                // `db.vector(t73)` for an element whose own binding the walk
+                // has not reached yet (E0425 in `186_nested_comprehension`),
+                // and referencing an unflushed id has the same fault one level
+                // up (E0425 in 11 scripts). A forward reference falls through
+                // to the chain below, exactly as before — no worse than it was,
+                // and the shapes this issue is about are backward references.
+                let content = self.recorded_field_content(host_type_id, field_name);
+                if let Some(content) = content
+                    && (if bare_io.iter().any(|(tid, _)| *tid == content) {
+                        bare_emitted[content as usize]
+                    } else {
+                        content < host_type_id
+                    })
+                {
+                    emit_db_field(w, s_var, field_name, "vec", &type_id_ref(content))?;
+                    return Ok(());
+                }
                 // Count nesting depth and find the innermost non-Vector type.
                 // For `vector<vector<...vector<X>>>`, emit
                 // `{ let _v0 = db.vector(<X_ref>); let _v1 = db.vector(_v0); ...

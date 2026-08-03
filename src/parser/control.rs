@@ -928,6 +928,19 @@ impl Parser {
         // Gated on BOTH arms YIELDING a text value (not a guard `if c { return
         // … }` — that would suppress the missing-return diagnostic) and a
         // NON-nullable tail (a `text?` tail must keep its `(N-Store)` reject).
+        //
+        // loft#741 — the nullable exclusion looks redundant, because
+        // `if_tail_yields_text` already refuses a literal-`null` arm
+        // (`arm_yields_text` answers false for `Value::Null`). It is not. The
+        // accumulator writes each arm into a NON-NULL `&text` buffer, which is
+        // exactly the nullable-into-non-null store the `(N-Store)` teeth exist
+        // to catch — and the write swallows it silently. Measured: dropping
+        // this condition compiles every shape in #741 and both backends agree
+        // on every value, while `nstore_return_position_names_offending_fn` and
+        // `wrong_field_guard_still_rejects` go quiet. Trading a compile error
+        // for a silenced null-safety diagnostic is the wrong direction, so the
+        // condition stays until the accumulator can carry nullability —
+        // NATIVE.md records the same conclusion for the `null`-arm twin.
         let do_if_acc = !do_tret_bind
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))

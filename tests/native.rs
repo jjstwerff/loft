@@ -2335,3 +2335,56 @@ fn record_env_skips(suite: &str, reason: &str, skips: &[(String, String)]) {
         .collect();
     let _ = std::fs::write(path, body);
 }
+
+/// loft#742 — a NESTED vector field must reference the content type the
+/// compiler recorded, not one rebuilt from the loft `Type`.
+///
+/// `type_def_nr` cannot see an element's `forced_size`, so rebuilding the
+/// nesting produced `db.vector(db.vector(<plain integer>))` for BOTH
+/// `vector<vector<integer>>` and `vector<vector<integer(-32768, 32767)>>` —
+/// the wrong element width, and a `vector<vector<integer>>` minted at an id
+/// the compiler had assigned to something else, which shifted every runtime
+/// type id after it.
+///
+/// The check is `LOFT_STRICT_SCHEMA_IDS`, which turns the `init()` schema
+/// comparison into a hard failure at the first divergence — the same gate that
+/// found this. Asserting the program's OUTPUT alone would not catch it: these
+/// programs print correct answers today, because nothing happened to bake an
+/// id at or past the shift.
+#[test]
+fn a_nested_narrow_vector_field_keeps_the_type_ids_aligned() {
+    if std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skip: rustc unavailable (--native needs it)");
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Each of these carries a differently-shaped nested narrow vector, and each
+    // drifted by a different amount before the fix.
+    for script in [
+        "tests/scripts/184-nested-narrow-int-vector.loft",
+        "tests/scripts/624-nested-narrow-width.loft",
+        "tests/scripts/432-untyped-vector-literal-arg.loft",
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--native")
+            .arg(root.join(script))
+            .env("LOFT_STRICT_SCHEMA_IDS", "1")
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("diverges from the compiler"),
+            "{script}: the generated schema drifted from the compiler's.\n{stderr}"
+        );
+        assert!(
+            out.status.success(),
+            "{script}: exited non-zero.\n{}\n{stderr}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
