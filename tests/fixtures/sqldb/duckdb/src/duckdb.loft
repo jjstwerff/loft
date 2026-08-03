@@ -70,10 +70,11 @@ pub struct Duck {
   live: boolean,
   stmt: integer,
   err: text,
+  tx: Tx,
 }
 
 pub fn duck() -> Duck {
-  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "" };
+  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "", tx: tx_new() };
 }
 
 // Is this backend usable on this machine?
@@ -221,6 +222,33 @@ pub fn db_rows(self: Duck, q: SqlText) -> boolean {
   self.row = -1;
   self.live = true;
   return true;
+}
+
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// duckdb wants the `TRANSACTION` word — the one backend of the four whose
+// keyword differs, which is why the keyword is the backend's to supply.
+//
+// UNPROVEN like the rest of this backend: libduckdb is not installed on the
+// machine this was built on, so these three were read and never run.
+//
+// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
+// not leave the connection believing it holds a transaction it never opened.
+pub fn db_begin(self: Duck) -> boolean {
+  if !self.tx.tx_enter() { return false }
+  if self.db_exec("BEGIN TRANSACTION") { return true }
+  _ = self.tx.tx_leave();
+  return false;
+}
+
+pub fn db_commit(self: Duck) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("COMMIT");
+}
+
+pub fn db_rollback(self: Duck) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("ROLLBACK");
 }
 
 pub fn db_shut(self: Duck) {

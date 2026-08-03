@@ -42,10 +42,11 @@ pub struct Postgres {
   seq: integer,
   ps: text,
   err: text,
+  tx: Tx,
 }
 
 pub fn postgres() -> Postgres {
-  return Postgres { conn: 0, res: 0, at: -1, n: 0, seq: 0, ps: "", err: "" };
+  return Postgres { conn: 0, res: 0, at: -1, n: 0, seq: 0, ps: "", err: "", tx: tx_new() };
 }
 
 pub fn db_open(self: Postgres, target: text) -> boolean {
@@ -164,6 +165,29 @@ pub fn db_rows(self: Postgres, q: SqlText) -> boolean {
   self.n = pq_ntuples(self.res);
   self.at = -1;
   return true;
+}
+
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// PostgreSQL spells all three as plain statements.
+//
+// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
+// not leave the connection believing it holds a transaction it never opened.
+pub fn db_begin(self: Postgres) -> boolean {
+  if !self.tx.tx_enter() { return false }
+  if self.db_exec("BEGIN") { return true }
+  _ = self.tx.tx_leave();
+  return false;
+}
+
+pub fn db_commit(self: Postgres) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("COMMIT");
+}
+
+pub fn db_rollback(self: Postgres) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("ROLLBACK");
 }
 
 pub fn db_shut(self: Postgres) {

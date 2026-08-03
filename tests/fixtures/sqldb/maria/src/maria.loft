@@ -80,10 +80,11 @@ pub struct Maria {
   cols: integer,
   from_ps: boolean,
   err: text,
+  tx: Tx,
 }
 
 pub fn maria() -> Maria {
-  return Maria { conn: 0, res: 0, row: 0, ps: 0, cols: 0, from_ps: false, err: "" };
+  return Maria { conn: 0, res: 0, row: 0, ps: 0, cols: 0, from_ps: false, err: "", tx: tx_new() };
 }
 
 pub fn db_open(self: Maria, target: text) -> boolean {
@@ -214,6 +215,35 @@ pub fn db_rows(self: Maria, q: SqlText) -> boolean {
   if my_stmt_store_result(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
   self.from_ps = true;
   return true;
+}
+
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// MariaDB spells all three as plain statements — `BEGIN`, not postgres's
+// optional `TRANSACTION` word, and not `START TRANSACTION`, which is MariaDB's
+// own longer spelling of the same thing.
+//
+// DDL commits implicitly here and does NOT on the other backends, so a migration
+// mixing DDL and data in one transaction is atomic on two backends and not on
+// this one. That is refused at the mapping layer rather than papered over.
+//
+// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
+// not leave the connection believing it holds a transaction it never opened.
+pub fn db_begin(self: Maria) -> boolean {
+  if !self.tx.tx_enter() { return false }
+  if self.db_exec("BEGIN") { return true }
+  _ = self.tx.tx_leave();
+  return false;
+}
+
+pub fn db_commit(self: Maria) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("COMMIT");
+}
+
+pub fn db_rollback(self: Maria) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("ROLLBACK");
 }
 
 pub fn db_shut(self: Maria) {

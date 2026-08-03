@@ -1423,6 +1423,23 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     //            re-fetch is exercised, not merely written.
     let bound = "p=2 [ada] <null> [] ['); DROP TABLE loft_p; --] hit=4 big=1000";
 
+    // @PLN23 T1–T3 — the transaction line, from one generic `transact<D: SqlDb>` that
+    // names no backend. It lands before the object mapping because writing a collection
+    // non-atomically is not a smaller step, it is a wrong one.
+    //
+    //   nested=false      a `db_begin` INSIDE a transaction is REFUSED. The silent
+    //                     no-op is the dangerous version: the inner "rollback" would
+    //                     discard the OUTER transaction's work, and nothing afterwards
+    //                     can tell.
+    //   rows=0/1          rollback DISCARDED the row, commit KEPT it. The pair is what
+    //                     makes the cell non-vacuous — three of these four fields move
+    //                     when the transaction is a fiction.
+    //   stray=false/false commit or rollback with nothing open is refused.
+    //
+    // Proven to FIRE by replacing sqlite's three methods with `return true` (a backend
+    // that reports transactions it never opens): `nested=true rows=1/2 stray=true/true`.
+    let tx = "begin=true/true nested=false rollback=true commit=true rows=0/1 stray=false/false";
+
     // sqlite — unconditional. No server, so a failure here is always real.
     if has(&["libsqlite3.so.0"]) {
         let s = run("--interpret", "sqlite")?;
@@ -1433,6 +1450,11 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
         assert!(
             s.contains(&format!("sqlite bound {bound}")),
             "sqlite: a bound value must reach the server as DATA, never as syntax:\n{s}"
+        );
+        assert!(
+            s.contains(&format!("sqlite tx {tx}")),
+            "sqlite: rollback must discard, commit must persist, and a nested begin \
+             must be REFUSED:\n{s}"
         );
         assert_eq!(
             run("--native", "sqlite")?,
@@ -1461,6 +1483,12 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
         assert!(
             out.contains(&format!("{mode} bound {bound}")),
             "{mode}: the bound statement must give the same answer as sqlite:\n{out}"
+        );
+        // The same generic `transact<D: SqlDb>`, byte-identical to sqlite's answer:
+        // three servers with three transaction implementations, one contract.
+        assert!(
+            out.contains(&format!("{mode} tx {tx}")),
+            "{mode}: transactions must behave exactly as sqlite's do:\n{out}"
         );
         assert_eq!(
             run("--native", mode)?,

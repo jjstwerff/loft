@@ -43,10 +43,10 @@ fn transient() -> integer;   #c "ls_transient" "void*(void)"
 // `db_width` are unchanged — they read `st` either way — while `db_next` still
 // knows whether reaching the end should FINALIZE the statement (an ad-hoc
 // select owns its own) or merely RESET it (a prepared one is reused).
-pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean }
+pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean, tx: Tx }
 
 pub fn sqlite() -> Sqlite {
-  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false };
+  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false, tx: tx_new() };
 }
 
 pub fn db_open(self: Sqlite, target: text) -> boolean {
@@ -136,6 +136,31 @@ pub fn db_rows(self: Sqlite, q: SqlText) -> boolean {
   self.live = true;
   self.from_ps = true;
   return true;
+}
+
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// sqlite spells all three as plain statements, so each of these is the shared
+// state machine plus a keyword.
+//
+// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
+// not leave the connection believing it holds a transaction it never opened —
+// the next `db_begin` would then be refused for no reason.
+pub fn db_begin(self: Sqlite) -> boolean {
+  if !self.tx.tx_enter() { return false }
+  if self.db_exec("BEGIN") { return true }
+  _ = self.tx.tx_leave();
+  return false;
+}
+
+pub fn db_commit(self: Sqlite) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("COMMIT");
+}
+
+pub fn db_rollback(self: Sqlite) -> boolean {
+  if !self.tx.tx_leave() { return false }
+  return self.db_exec("ROLLBACK");
 }
 
 pub fn db_shut(self: Sqlite) {

@@ -117,6 +117,60 @@ pub fn as_text(self: Bound) -> text {
   return self.t;
 }
 
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// Atomicity is not a feature here, it is a PRECONDITION of the object mapping:
+// writing one object graph is several statements, and without a transaction
+// around them a crash leaves a collection half written that no later reader can
+// tell apart from a whole one. So this lands before the mapping does.
+//
+// `BEGIN` / `COMMIT` / `ROLLBACK` are ordinary statements on every backend here,
+// which makes the uniform part free — the rare place where it is.
+//
+// The STATE MACHINE has one home: a connection carries a `Tx`, and `tx_enter` /
+// `tx_leave` are the only things that read or write it, so what "already in a
+// transaction" means is decided once. What each backend repeats is the
+// sequencing and its own keyword. That split is not the one this would have
+// picked: a helper that ran the statement itself would be a generic bounded by
+// `SqlDb`, called from a `SqlDb` method — the cycle that aborts the compiler
+// with an H5 cross-pass divergence (loft#763). When that closes, the sequencing
+// belongs here too.
+pub struct Tx { open: boolean }
+
+pub fn tx_new() -> Tx { return Tx { open: false }; }
+
+// Is a transaction open on this connection?
+pub fn tx_open(self: Tx) -> boolean { return self.open; }
+
+// Claim the transaction, or REFUSE because one is already open.
+//
+// Nesting is refused rather than emulated. None of these backends nest `BEGIN`
+// — `SAVEPOINT` is the real mechanism and is spelled differently enough to be
+// its own design — and a silent no-op is the dangerous version, because the
+// inner "rollback" would then discard the OUTER transaction's work, which no
+// reader can detect afterwards.
+pub fn tx_enter(self: Tx) -> boolean {
+  if self.open { return false }
+  self.open = true;
+  return true;
+}
+
+// Release it, or REFUSE because none is open. Committing or rolling back
+// outside a transaction is a caller error, not a no-op: it means the caller
+// believes it has work to keep or discard, and it has none.
+//
+// A commit that FAILS still leaves, and still reports the failure. A commit can
+// fail for real — a constraint, a deadlock, a lost connection — and that is
+// exactly when a caller must find out. But no backend here leaves the
+// transaction open after a failed `COMMIT` (postgres aborts it), so staying
+// `open` would strand the connection in a state it is not in and refuse the
+// next `db_begin` for no reason.
+pub fn tx_leave(self: Tx) -> boolean {
+  if !self.open { return false }
+  self.open = false;
+  return true;
+}
+
 pub interface SqlDb {
   fn db_open(self: Self, target: text) -> boolean
   // Author-written SQL with no values in it — DDL, and the statements a
@@ -134,4 +188,11 @@ pub interface SqlDb {
   // `db_rows` for a cursor the methods above then read.
   fn db_run(self: Self, q: SqlText) -> boolean
   fn db_rows(self: Self, q: SqlText) -> boolean
+
+  // T1–T3 — a transaction is a state of the CONNECTION. Each backend forwards
+  // to `tx_begin` / `tx_commit` / `tx_rollback` above with its own keyword, so
+  // the refusal rule is stated once and satisfied identically by all of them.
+  fn db_begin(self: Self) -> boolean
+  fn db_commit(self: Self) -> boolean
+  fn db_rollback(self: Self) -> boolean
 }

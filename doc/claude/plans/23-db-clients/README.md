@@ -7,8 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S4 built and in the repo; S5+ (the object mapping) is
-designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
+**@PLN23 `status:active`** — S1–S4 and T1–T3 built and in the repo; S5+ (the object
+mapping) is designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
 is its first consumer; @PLN125 is not. Depends on @PLN24 (`#c`), also active.
 
 ## Goal
@@ -40,6 +40,7 @@ exists at all.
 | S2 the handle round-trips, C's own error comes back with it | done |
 | S3 a real cursor, and NULL is not the empty string | done |
 | S4 prepared statements, on all four backends | done |
+| T1–T3 begin / commit / rollback, and nesting REFUSED | done |
 | S5+ the object mapping | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
 
 ## S4 — a value cannot become syntax
@@ -121,10 +122,15 @@ attack cell loudly.
   answer is still an open item above.
 - **One statement per connection**, and one parameter array per process: the
   shims' slots are static. The same single-slot limit S1–S3 already carried.
-- **loft#740 is worked around, not fixed** — a `text?` function with two
-  `return <call>` statements frees the returned buffer on `--native`. Only
-  mariadb's `db_col` has that shape (two column sources behind one nullable
-  accessor); it uses the verified single-return form until #740 closes.
+- **A `db_begin` inside a transaction is refused, and the SEQUENCING is repeated**
+  per backend. The state machine has one home (`Tx` + `tx_enter` / `tx_leave` in
+  `sql`), but the helper that would also RUN the statement cannot exist: it would
+  be a generic bounded by `SqlDb`, called from a `SqlDb` method, and that cycle
+  aborts the compiler with an H5 cross-pass divergence (loft#763). Four copies of
+  a three-line sequence is the cost until that closes.
+- **duckdb's transactions are unproven** for the same reason its S4 cells are —
+  libduckdb is not installed here, and it is the one backend of the four whose
+  keyword differs (`BEGIN TRANSACTION`).
 
 ## The documents
 
