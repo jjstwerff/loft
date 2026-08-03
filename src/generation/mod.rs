@@ -2372,9 +2372,28 @@ extern crate loft;"
         // `content(tp)` returns u16::MAX → `set_default_value` panics on
         // `--native`.  Collect the field-referenced keyed type ids here so
         // the bare_io collection below can emit the local-only ones.
+        //
+        // loft#739 — "created inline by the container" holds only when the mint
+        // really did FOLLOW the container. `fill_all` pre-registers the keyed
+        // type of a LIBRARY-imported content struct while the library's own
+        // definitions are still being filled, which is BEFORE the user struct
+        // that carries the field is registered — so the keyed id PRECEDES its
+        // container's. Leaving it out of the bare stream then creates it inline
+        // at the container's position instead of its own, and since a keyed
+        // type is created once, every runtime id from that point on is one
+        // lower than the compile-time id baked into the emitted ops. The
+        // observed symptoms were a `f#read as u16` silently returning null (its
+        // `db_tp` const resolved to a struct) and a keyed lookup aborting with
+        // `find called on non-collection type` naming an unrelated type.
+        //
+        // So decide per keyed type, using the LOWEST-id container that
+        // references it — the one whose field emission would create it — and
+        // exclude it only when its own id comes after that container.
         let field_keyed: HashSet<u16> = {
             let mut set = HashSet::new();
-            for tp in &self.stores.types {
+            let mut decided: HashSet<u16> = HashSet::new();
+            for (idx, tp) in self.stores.types.iter().enumerate() {
+                let container = idx as u16;
                 if let crate::database::Parts::Struct(fields)
                 | crate::database::Parts::EnumValue(_, fields) = &tp.parts
                 {
@@ -2384,7 +2403,9 @@ extern crate loft;"
                             crate::database::Parts::Sorted(_, _)
                                 | crate::database::Parts::Hash(_, _)
                                 | crate::database::Parts::Index(_, _, _)
-                        ) {
+                        ) && decided.insert(f.content)
+                            && f.content > container
+                        {
                             set.insert(f.content);
                         }
                     }
@@ -2595,6 +2616,14 @@ extern crate loft;"
                 )?;
             }
         }
+        // The emission above REPLAYS the parse-time registration order rather
+        // than reading ids from it, and every type id baked into the generated
+        // ops assumes the replay lands each type at the same index. Nothing
+        // used to check that, so a type created one position early or late
+        // shifted every id after it and a `db_tp` quietly named a neighbouring
+        // type — the unattributable null reads and wrong-type abort of
+        // loft#739. Close the loop where the two orders can be compared.
+        self.write_schema_id_check(w)?;
         Ok(())
     }
 
@@ -3004,6 +3033,22 @@ extern crate loft;"
     }
 
     /// Phase 1 — emit just the type-creation call for `dnr` (no fields,
+    /// Emit the `init()`-closing call that compares the schema the generated
+    /// program just built against the compiler's own table, index by index.
+    ///
+    /// See [`Stores::verify_schema_ids`] for why this exists: the two orders
+    /// are derived independently and a single misplaced type silently renames
+    /// every id after it.  The names are emitted in compile-time index order,
+    /// which is exactly the order `init()` is supposed to reproduce.
+    fn write_schema_id_check(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        writeln!(w, "    db.verify_schema_ids(&[")?;
+        for tp in &self.stores.types {
+            writeln!(w, "        {:?},", tp.name)?;
+        }
+        writeln!(w, "    ]);")?;
+        Ok(())
+    }
+
     /// no enum values).  Captures the runtime id in a `let t{type_id}`
     /// binding so Phase 2 field/value emission can reference it.
     fn emit_type_creation(
