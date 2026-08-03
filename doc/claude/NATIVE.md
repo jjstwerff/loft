@@ -115,6 +115,42 @@ Each generated file contains:
 2. Rust functions for each loft function, receiving `stores: &mut Stores` as first arg
 3. A `#[test]` wrapper that calls `init()` then the test function
 
+#### The type-id correspondence (and how it is checked)
+
+`init()` **replays** the parse-time registration order; it does not read ids
+from the compiler. Every type id the generated ops carry — `OpReadFile`'s
+`db_tp`, `OpDatabase`'s type, every keyed-collection id — is a plain integer
+baked in at compile time. So the emission order is load-bearing: **the type
+created Nth by `init()` must be the compiler's type N.** One type created a
+position early or late renames every id after it.
+
+Nothing used to check this, and the failures it produced named the wrong thing.
+A `f#read as u16` returned null because its `db_tp` had come to point at a
+struct, while the other widths out of the same handle stayed right; a keyed
+lookup aborted with `find called on non-collection type` naming whatever type
+sat at the shifted id — a type in a library the program never called (loft#739).
+
+`Stores::verify_schema_ids`, emitted at the end of every `init()`, now compares
+the two tables and names a type the program placed at a different id than the
+compiler did. It **reports and continues**: some drifts predate the check and
+produce correct output today, so aborting would fail working programs. Set
+`LOFT_STRICT_SCHEMA_IDS` to make it fatal — that is what you want while hunting
+one. It deliberately stays quiet about a name the runtime table lacks entirely
+(`db.sorted` registers `sorted<Rec[id]>` for a recorded `ordered<Rec[id]>`,
+`db.vector` registers `vector<X>` for `array<X>` — different rendering, same
+slot) and about a name the compiler's table holds twice (prelude shadowing),
+since neither can witness a move.
+
+Known drifts it currently reports, all producing correct output so far and none
+yet run down: a nested narrow-int vector registers `vector<vector<integer>>`
+where the compiler recorded `main_vector<vector<integer(-32768, 32767)>>`,
+losing the narrow element type and minting an extra type; and `short<0,true>`
+lands one late behind the same nested-vector shape.
+
+`LOFT_TRACE_MINT=1` is the companion instrument: it narrates every
+collection-type lookup as `hit=<nr>` or `MINT=<nr>` with caller frames, so
+diffing a working run against a broken one shows the extra mint.
+
 ### Per-Op emitter dispatch (plan 09 phase 00)
 
 Every `#rust` template substitution AND every user-fn / Op-stub call

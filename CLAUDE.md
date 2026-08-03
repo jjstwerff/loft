@@ -263,7 +263,12 @@ SOURCE LINE; `LOFT_TIMELINE_BT=1` adds the stack). DbRef dumps tune via `LOFT_DU
 variable table with every type dep resolved to `name(index)` plus its ownership flags —
 reach for it when a borrow points somewhere impossible, because the IR dump names variables
 without numbering them and a code/table desync then reads as one consistent story (loft#666).
-Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
+For a `--native` wrong-type fault — a sized `f#read` answering null, a keyed lookup naming a
+type the program never used — reach for **`LOFT_STRICT_SCHEMA_IDS=1`**: generated `init()`
+REPLAYS the parse-time type order, so one type created a position early renames every id
+after it, and this makes that drift fatal instead of a report (loft#739, NATIVE.md §
+Architecture). `LOFT_TRACE_MINT=1` is its companion — it names the lookup that minted the
+extra type. Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
 
 **Two diagnostic tiers.** `warning` GATES a library's CI (`LOFT_DENY_WARNINGS=1`);
 `advice` never does and has no deny switch. The rule: **a diagnostic gates if and only if
