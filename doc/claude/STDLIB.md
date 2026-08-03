@@ -179,6 +179,32 @@ for c in path {
 }
 ```
 
+### Bytes and code points
+
+Text is UTF-8, so a `text` has two lengths and two ways in. `len()` counts
+CHARACTERS and `size()` counts BYTES; `text[i]` decodes the code point *containing*
+byte `i`, walking back through continuation bytes. These four are the explicit
+routes between the two views.
+
+| Function | Description |
+|----------|-------------|
+| `byte_at(self: text, i: integer) -> integer` | The raw BYTE at byte offset `i` as 0–255, `0` out of bounds. A pure O(1) read — unlike `text[i]`, no UTF-8 decode — for ASCII-heavy scanning (tokenisers, regex-like loops), ~5–10× faster there. |
+| `text_from_bytes(bytes: vector<u8>) -> text` | Build a text from raw UTF-8 bytes — the inverse of `byte_at`. For binary decoders that assemble a buffer and need text back. Bytes that are not valid UTF-8 yield `""` (never a crash), so validate first if you must tell "empty input" from "invalid bytes". Carries an embedded NUL. |
+| `chr(cp: integer) -> text` | Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that iteration gives. `chr(65)` → `"A"`, `chr(20013)` → `"中"`, `chr(128512)` → `"😀"`. For decoding an escape (`\u{…}`, an HTML entity) or reassembling text a code point at a time. |
+| `ch as integer` | The code point of a `character` (via `as i32?` for a nullable). The direction that already existed; `chr` is its inverse. |
+
+⚠ **A code point that names no character gives `""`, not an error** (C80): a
+surrogate (`D800`–`DFFF`), anything past `U+10FFFF`, a negative number — and `0`,
+because `character` uses 0 as its null and text ITERATION STOPS at a NUL, so a
+NUL built by `chr` could not be read back by the loop it is the inverse of. The
+byte route still carries one: `text_from_bytes([0])` is one byte long.
+
+> `text_from_bytes` and `byte_at` existed for two releases and were reported
+> missing (loft#748) because the generated reference filed them under Environment
+> — a keyword sweep of the Text page came back empty and was read as a language
+> gap. Check an instrument against something it *should* find before trusting it
+> to report an absence; `grep default/*.loft` answers in one call.
+
 ### Character Classification
 
 These functions return true only if **every character** in the text satisfies the condition.

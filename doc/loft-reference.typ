@@ -6356,6 +6356,12 @@ pub fn text_from_bytes(bytes: vector<u8>) -> text
 
 Build a text from the raw UTF-8 bytes of a vector\<u8\> — the inverse of byte\_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell "empty input" from "invalid bytes" apart.
 
+```rust
+pub fn chr(cp: integer) -> text
+```
+
+Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text\_from\_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      "A"     chr(233)    "é" chr(20013)   "中"    chr(128512) "😀" A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text\_from\_bytes(\[0\])` carries one.
+
 == Collections
 
 Operations on vector\<T\> — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index. All structures are passed by reference instead of by value

@@ -218,6 +218,22 @@ pub fn byte_at(self: text, i: integer) -> integer;
 pub fn text_from_bytes(bytes: vector<u8>) -> text;
 #rust"stores.text_from_bytes_native(@bytes)"
 #pure
+// Build a one-character text from a Unicode CODE POINT — the inverse of the
+// `ch as integer` that text iteration already gives you, and the code-point
+// twin of text_from_bytes' byte route.  Use when you have a number and need
+// the character it names: decoding an escape (`\u{...}`, an HTML entity),
+// walking a code-point table, or reassembling text a code point at a time.
+//   chr(65)      "A"     chr(233)    "é"
+//   chr(20013)   "中"    chr(128512) "😀"
+// A code point that names no character answers the EMPTY text, never a crash:
+// a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and
+// also 0, because `character` uses 0 as its null and text iteration stops
+// there, so a NUL built here could not be read back.  If you need an embedded
+// NUL, go through the byte route: `text_from_bytes([0])` carries one.
+pub fn chr(cp: integer) -> text {
+  "{cp as character}"
+}
+#pure
 
 // --- Environment ---
 // Returns the UTC calendar date `days` days before today as `YYYY-MM-DD`.

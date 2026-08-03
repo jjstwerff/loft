@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `chr(cp)` names the code-point constructor that already worked (loft#748) (2026-08-03)
+
+`cp as character` already produced the right character and interpolating it
+produced the right text, so what was missing was the ENTRY POINT, not the
+capability — the same shape as this issue's byte half, where `text_from_bytes`
+had existed for two releases and was reported missing because the generated
+reference filed it under Environment.
+
+`chr` is a loft-level definition in `default/03_text.loft` beside
+`text_from_bytes`, not a new `#rust` native: the mechanism is already proven on
+both backends, and loft covering it is exactly when not to add a dependency.
+
+The refusal set is `""`, never a crash (C80): a surrogate, past `U+10FFFF`, a
+negative number — and `0`, which is the one that needed deciding. `character`
+uses 0 as its null, and text ITERATION STOPS at an embedded NUL (measured: a
+3-byte `"A\0B"` reports `len` 3 and slices at 3, and yields ONE character to
+`for`), so a NUL built by `chr` could not be read back by the loop `chr` is the
+inverse of. The byte route still carries one. That iteration/`len` disagreement
+is filed separately.
+
+`doc/claude/STDLIB.md` gained a **Bytes and code points** section: it listed
+neither `byte_at` nor `text_from_bytes` either, so #748's discoverability defect
+was live in the agent-facing doc as well as the generated one.
+
 ### A tail expression that is a place read no longer reaches the Return as null (loft#754) (2026-08-03)
 
 A function body ending in `w.items[i].bytes` returned an EMPTY vector under

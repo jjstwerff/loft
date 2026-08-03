@@ -117,6 +117,7 @@ const SEARCH_INDEX=[
 {name:"join",kind:"fn",url:"stdlib-text.html"},
 {name:"byte_at",kind:"fn",url:"stdlib-text.html"},
 {name:"text_from_bytes",kind:"fn",url:"stdlib-text.html"},
+{name:"chr",kind:"fn",url:"stdlib-text.html"},
 {name:"len",kind:"fn",url:"stdlib-collections.html"},
 {name:"len",kind:"fn",url:"stdlib-collections.html"},
 {name:"clear",kind:"fn",url:"stdlib-collections.html"},

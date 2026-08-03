@@ -26,6 +26,25 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `chr(65)` gives you `"A"`
+
+There was no way to turn a code point back into text — `ch as integer` took a
+character apart, and nothing put one together. `chr` does:
+
+```loft
+chr(65)       // "A"
+chr(20013)    // "中"
+chr(128512)   // "😀"
+```
+
+Use it to decode an escape (`\u{...}`, an HTML entity) or to rebuild text a
+character at a time. A number that names no character gives you `""` rather than
+an error — a surrogate, anything past `U+10FFFF`, a negative number, and `0`.
+
+Its byte-level partner `text_from_bytes` has been there for two releases; it was
+listed on the wrong reference page, which is why it reads as new. Both are now
+under **Text**, together with `byte_at`.
+
 ### A function ending in `v[i].field` gives you the field
 
 A function whose body ended in a value read out of a collection — no `return`, the
