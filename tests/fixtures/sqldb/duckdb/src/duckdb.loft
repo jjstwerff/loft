@@ -30,11 +30,30 @@ fn ddb_free(p: integer);                               #c "duckdb_free" "void(vo
 fn ddb_disconnect(out: integer);                       #c "duckdb_disconnect" "void(void*)"
 fn ddb_close(out: integer);                            #c "duckdb_close" "void(void*)"
 
+// --- S4: prepared statements ------------------------------------------------
+// duckdb's placeholders are `?`, so the statement text is assembled the same way
+// as sqlite's and mariadb's; only postgres numbers them.
+fn ddb_prepare(conn: integer, sql: text, out: integer) -> integer;
+#c "duckdb_prepare" "int(void*, const char*, void*)"
+fn ddb_prepare_error(stmt: integer) -> text?;  #c "duckdb_prepare_error" "const char*(void*)"
+fn ddb_nparams(stmt: integer) -> integer;      #c "duckdb_nparams" "unsigned long(void*)"
+fn ddb_bind_varchar(stmt: integer, i: integer, v: text) -> integer;
+#c "duckdb_bind_varchar" "int(void*, unsigned long, const char*)"
+fn ddb_bind_int64(stmt: integer, i: integer, v: integer) -> integer;
+#c "duckdb_bind_int64" "int(void*, unsigned long, long long)"
+fn ddb_bind_null(stmt: integer, i: integer) -> integer;
+#c "duckdb_bind_null" "int(void*, unsigned long)"
+fn ddb_execute_prepared(stmt: integer, res: integer) -> integer;
+#c "duckdb_execute_prepared" "int(void*, void*)"
+fn ddb_destroy_prepare(out: integer);          #c "duckdb_destroy_prepare" "void(void*)"
+
 // --- the shim's slots ------------------------------------------------------
 fn slot_db() -> integer;     #c "ld_slot_db" "void*(void)"
 fn slot_conn() -> integer;   #c "ld_slot_conn" "void*(void)"
 fn take_db() -> integer;     #c "ld_take_db" "void*(void)"
 fn take_conn() -> integer;   #c "ld_take_conn" "void*(void)"
+fn slot_stmt() -> integer;   #c "ld_slot_stmt" "void*(void)"
+fn take_stmt() -> integer;   #c "ld_take_stmt" "void*(void)"
 fn result_buf() -> integer;  #c "ld_result" "void*(void)"
 fn as_text(p: integer) -> text?; #c "ld_str" "const char*(void*)"
 
@@ -49,11 +68,12 @@ pub struct Duck {
   row: integer,
   rows: integer,
   live: boolean,
+  stmt: integer,
   err: text,
 }
 
 pub fn duck() -> Duck {
-  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, err: "" };
+  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "" };
 }
 
 // Is this backend usable on this machine?
@@ -140,7 +160,71 @@ pub fn db_width(self: Duck) -> integer {
 
 pub fn db_last_error(self: Duck) -> text { return self.err; }
 
+// --- S4: prepare, bind, execute ---------------------------------------------
+//
+// Unproven on the machine this was written on: libduckdb is not installed here,
+// so the cells below have been read but never RUN, and the fixture reports SKIP.
+// Said plainly rather than left to look covered — a skip that reads as a pass is
+// how a dead binding stays green.
+
+fn release(self: Duck) {
+  if self.stmt != 0 { ddb_destroy_prepare(slot_stmt()); self.stmt = 0 }
+}
+
+fn prepare_bind(self: Duck, q: SqlText) -> boolean {
+  if self.conn == 0 { return false }
+  self.release();
+  if ddb_prepare(self.conn, q.statement(false), slot_stmt()) != 0 {
+    self.stmt = take_stmt();
+    self.err = ddb_prepare_error(self.stmt) ?? "prepare failed";
+    self.release();
+    return false
+  }
+  self.stmt = take_stmt();
+  if self.stmt == 0 { self.err = "prepare gave no statement"; return false }
+  // The driver's own count against the parser's — the same independent check
+  // the other three backends make.
+  if ddb_nparams(self.stmt) != q.params() {
+    self.err = "statement wants {ddb_nparams(self.stmt)} parameters, {q.params()} were interpolated";
+    return false
+  }
+  for b in q.binds {
+    at = b#count + 1;                       // duckdb counts parameters from 1
+    ok = if b.kind == SQL_NULL { ddb_bind_null(self.stmt, at) }
+      else if b.kind == SQL_INT { ddb_bind_int64(self.stmt, at, b.i) }
+      else if b.kind == SQL_BOOLEAN { ddb_bind_int64(self.stmt, at, b.i) }
+      else { ddb_bind_varchar(self.stmt, at, b.as_text()) };
+    if ok != 0 { self.err = "binding parameter {at} failed"; return false }
+  }
+  return true;
+}
+
+pub fn db_run(self: Duck, q: SqlText) -> boolean {
+  if !self.prepare_bind(q) { return false }
+  ok = ddb_execute_prepared(self.stmt, result_buf()) == 0;
+  if !ok { self.err = ddb_result_error(result_buf()) ?? "execute failed" }
+  ddb_destroy_result(result_buf());
+  self.release();
+  return ok;
+}
+
+pub fn db_rows(self: Duck, q: SqlText) -> boolean {
+  if !self.prepare_bind(q) { return false }
+  if self.live { ddb_destroy_result(result_buf()); self.live = false }
+  if ddb_execute_prepared(self.stmt, result_buf()) != 0 {
+    self.err = ddb_result_error(result_buf()) ?? "execute failed";
+    ddb_destroy_result(result_buf());
+    self.release();
+    return false
+  }
+  self.rows = ddb_row_count(result_buf());
+  self.row = -1;
+  self.live = true;
+  return true;
+}
+
 pub fn db_shut(self: Duck) {
+  self.release();
   if self.live { ddb_destroy_result(result_buf()); self.live = false }
   if self.conn != 0 { ddb_disconnect(slot_conn()); self.conn = 0 }
   if self.db != 0 { ddb_close(slot_db()); self.db = 0 }

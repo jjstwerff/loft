@@ -1,0 +1,84 @@
+// @PLN124 H1 — the WORKING shape, hand-written.
+//
+// This is what `q: Acc = "SELECT {name} END"` must lower to. It is a real
+// runnable program rather than a guess, so its IR is the emission spec the
+// parser branch has to reproduce: mint an accumulator at the target type,
+// construct it, drive `lit` / `hole_*` through it in SOURCE ORDER, and yield
+// the accumulator as the value of the expression.
+//
+// Capturing it BEFORE touching the parser is the gate — a branch written
+// without it is a guess, and guesses in codegen regress the suite.
+
+struct Acc {
+  const parts: vector<text>,
+  const holes: vector<text>,
+  tail: text,
+}
+
+fn acc() -> Acc { return Acc { parts: [], holes: [], tail: "" }; }
+
+// A literal chunk the AUTHOR wrote. It is the only path into the statement
+// text, and it is only ever called with bytes from the source file.
+fn lit(self: Acc, s: text) { self.tail += s; }
+
+// An interpolated VALUE. It closes the current literal chunk and is recorded
+// beside the text, never in it.
+fn hole_text(self: Acc, v: text) {
+  self.parts += [self.tail];
+  self.tail = "";
+  self.holes += [v];
+}
+
+fn hole_int(self: Acc, v: integer) { self.hole_text("{v}"); }
+
+// Render the accumulator the way a backend would: literals joined by a
+// placeholder, values kept apart.
+fn show(self: Acc) -> text {
+  out = "";
+  for p in self.parts { out += "{p}?" }
+  out += self.tail;
+  for h in self.holes { out += " <{h}>" }
+  return out;
+}
+
+// The shape the parser must emit for `q: Acc = "SELECT {name} END"`.
+fn build_one(name: text) -> Acc {
+  q = acc();
+  q.lit("SELECT ");
+  q.hole_text(name);
+  q.lit(" END");
+  return q;
+}
+
+// Two holes and a leading hole, so the alternation is in the spec too.
+fn build_two(a: text, b: integer) -> Acc {
+  q = acc();
+  q.hole_text(a);
+  q.lit(" mid ");
+  q.hole_int(b);
+  return q;
+}
+
+// The same, but with the accumulator DEFAULT-CONSTRUCTED inline instead of
+// through a named constructor. If this is equivalent, the contract needs only
+// the methods — a type does not also have to publish a maker, and `Interpolated`
+// stays a pure interface (a zero-arg free function could never be a member of
+// one anyway).
+fn build_inline(name: text) -> Acc {
+  q = Acc { };
+  q.lit("SELECT ");
+  q.hole_text(name);
+  q.lit(" END");
+  return q;
+}
+
+// The accumulator standing in ARGUMENT position — no destination variable to
+// build through, which is the case that needs a work-ref of its own.
+fn take(q: Acc) -> text { return q.show(); }
+
+fn main() {
+  println(build_one("ada").show());
+  println(build_two("x", 7).show());
+  println(build_inline("bee").show());
+  println(take(build_one("arg")));
+}

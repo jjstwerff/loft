@@ -42,6 +42,18 @@ void **ld_slot_db(void) { return &g_db; }
 void **ld_slot_conn(void);
 void **ld_slot_conn(void) { return &g_conn; }
 
+/* @PLN23 S4 — the prepared statement, which duckdb also hands back through an
+ * out-parameter (`duckdb_prepare(conn, sql, duckdb_prepared_statement *out)`)
+ * and takes the address of again to destroy.  One slot serves both, exactly as
+ * the database and connection handles above do. */
+static void *g_stmt;
+
+void **ld_slot_stmt(void);
+void **ld_slot_stmt(void) { return &g_stmt; }
+
+void *ld_take_stmt(void);
+void *ld_take_stmt(void) { return g_stmt; }
+
 void *ld_take_db(void);
 void *ld_take_db(void) { return g_db; }
 

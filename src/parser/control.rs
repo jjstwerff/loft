@@ -11571,7 +11571,9 @@ impl Parser {
                     for a in 0..self.data.attributes(hint_d_nr) {
                         if self.data.attr_name(hint_d_nr, a) == arg_name {
                             let expected = self.data.attr_type(hint_d_nr, a);
-                            if Self::seeds_collection_hint(&expected) {
+                            if Self::seeds_collection_hint(&expected)
+                                || self.interpolation_target(&expected) != u32::MAX
+                            {
                                 self.expected = expected;
                             }
                             break;
@@ -11595,6 +11597,14 @@ impl Parser {
                     "Positional argument after named argument"
                 );
             }
+            // The `⇐` push belongs to THIS argument. Whatever is still in the
+            // channel is the ENCLOSING call's expectation, and a nested call must
+            // not inherit it: in `take(build_one("arg"))` the string is
+            // `build_one`'s `text` parameter, but the channel still held `take`'s
+            // parameter type, so the literal was checked against the wrong one.
+            // The hints below each set it when they apply; none of them cleared it
+            // when they did not.
+            self.expected = Type::Unknown(0);
             if let Some(d_nr) = fn_def_nr
                 && arg_idx < self.data.attributes(d_nr)
             {
@@ -11621,6 +11631,14 @@ impl Parser {
                         // stride instead of `vector<integer>`.  Both passes (like the
                         // enum hint): the literal's element type must agree across
                         // passes, and the callee is already registered on pass 1.
+                        self.expected = expected;
+                    } else if self.interpolation_target(&expected) != u32::MAX {
+                        // @PLN124 — seed a format-string argument's target type, so
+                        // `f("… {x} …")` BUILDS the parameter's type instead of
+                        // rendering text the call would then reject. Both passes, for
+                        // the same reason the two hints above are: taking the branch
+                        // mints an accumulator, and a one-pass mint would shift the
+                        // name-keyed variable tables.
                         self.expected = expected;
                     }
                 }
@@ -12314,9 +12332,17 @@ impl Parser {
             // attribute index of the explicit argument about to be parsed.  Seed a
             // bare vector-literal argument's element width from that parameter type,
             // matching the free-function path in `parse_call`.
+            // Same rule as the free-function path: the channel is this argument's,
+            // so a nested call does not inherit the enclosing one's expectation.
+            self.expected = Type::Unknown(0);
             if md_nr != u32::MAX && list.len() < self.data.attributes(md_nr) {
                 let expected = self.data.attr_type(md_nr, list.len());
-                if Self::seeds_collection_hint(&expected) {
+                // @PLN124 — a format-string argument to a METHOD builds the
+                // parameter's type too (`db.run("… {id} …")`), which is the shape a
+                // library API actually presents.
+                if Self::seeds_collection_hint(&expected)
+                    || self.interpolation_target(&expected) != u32::MAX
+                {
                     self.expected = expected;
                 }
             }

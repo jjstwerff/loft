@@ -1403,12 +1403,36 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     // a value, SQL NULL, and the empty string.
     let expect = "[ada] <null> [] ";
 
+    // @PLN23 S4 — the prepared-statement line, and every token in it is a
+    // separate claim:
+    //
+    //   p=2      two holes, and the DRIVER's own parameter count agreed with the
+    //            parser's (each backend fails `prepare` outright when they differ)
+    //   [ada] <null> []   value / SQL NULL / empty string, still three answers
+    //                     — now arriving through the BIND path rather than as
+    //                     literals in the statement text
+    //   ['); DROP TABLE loft_p; --]
+    //            the cell that matters. Spliced into SQL this closes the VALUES
+    //            list and drops the table; bound, it is stored verbatim. That the
+    //            SELECT after it returns rows at all is the proof the table
+    //            survived, so this assertion cannot pass vacuously.
+    //   hit=4    the same hostile text found its own row by EQUALITY, which it
+    //            could only do by crossing intact as data rather than as syntax.
+    //   big=1000 a value far past the 256-byte column buffer mariadb's result
+    //            binds start with, round-tripped at full length — the truncation
+    //            re-fetch is exercised, not merely written.
+    let bound = "p=2 [ada] <null> [] ['); DROP TABLE loft_p; --] hit=4 big=1000";
+
     // sqlite — unconditional. No server, so a failure here is always real.
     if has(&["libsqlite3.so.0"]) {
         let s = run("--interpret", "sqlite")?;
         assert!(
             s.contains(&format!("sqlite {expect}")),
             "sqlite must render value / NULL / empty distinctly:\n{s}"
+        );
+        assert!(
+            s.contains(&format!("sqlite bound {bound}")),
+            "sqlite: a bound value must reach the server as DATA, never as syntax:\n{s}"
         );
         assert_eq!(
             run("--native", "sqlite")?,
@@ -1429,6 +1453,14 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
         assert!(
             out.contains(&format!("{mode} {expect}")),
             "{mode} must render the same three cells as sqlite:\n{out}"
+        );
+        // Byte-identical to sqlite's, from the same generic `bound<D: SqlDb>`:
+        // three placeholder dialects, three bind APIs, three result models, one
+        // answer. A backend that quietly concatenated would differ HERE and
+        // nowhere else, which is what makes the line worth comparing whole.
+        assert!(
+            out.contains(&format!("{mode} bound {bound}")),
+            "{mode}: the bound statement must give the same answer as sqlite:\n{out}"
         );
         assert_eq!(
             run("--native", mode)?,

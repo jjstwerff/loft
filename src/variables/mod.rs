@@ -256,6 +256,19 @@ pub struct Function {
     /// value — so the only local depending on it is an ELEMENT inside it, and confining
     /// the store to the element's block left the block's own result unfreed.
     work_kvb: u16,
+    /// @PLN124 — separate counter for the accumulator a format string BUILDS when
+    /// its target type implements the interpolation contract (`"…{x}…"` into a
+    /// `SqlText` rather than into text).
+    ///
+    /// Its own namespace for the same reason every counter above has one: the
+    /// variable tables persist across passes BY NAME, so a mint that fires on
+    /// only some strings must not shift anyone else's numbering (loft#662).  It
+    /// is not a `__work_N` because it is not a text buffer, and not a `__ref_N`
+    /// because that stem is reserved for return buffers whose `ref_return` match
+    /// is name-based.  Like `__kvb_N`, the accumulator IS the value — no wrapper
+    /// record backs its store — so it is function-scoped and the exit sweep frees
+    /// it.
+    work_fmt: u16,
     // Work variables for texts
     work_texts: BTreeSet<u16>,
     // Work variables for stores
@@ -371,6 +384,7 @@ impl Function {
             work_ref: 0,
             work_vdb: 0,
             work_kvb: 0,
+            work_fmt: 0,
             variables: Vec::new(),
             annotated: HashSet::new(),
             work_texts: BTreeSet::new(),
@@ -517,6 +531,7 @@ impl Function {
         self.work_ref = 0;
         self.work_vdb = 0;
         self.work_kvb = 0;
+        self.work_fmt = 0;
         self.work_texts.clear();
         self.work_refs.clear();
         self.arm_consumed.clear();
@@ -559,6 +574,7 @@ impl Function {
             work_ref: 0,
             work_vdb: 0,
             work_kvb: 0,
+            work_fmt: 0,
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
             inline_ref_vars: other.inline_ref_vars.clone(),
@@ -1975,13 +1991,14 @@ impl Function {
         fn index(name: &str, prefix: &str) -> Option<u16> {
             name.strip_prefix(prefix)?.parse::<u16>().ok()
         }
-        let (mut text, mut ctext, mut p2, mut refs, mut vdb, mut kvb) = (
+        let (mut text, mut ctext, mut p2, mut refs, mut vdb, mut kvb, mut fmt) = (
             self.work_text,
             self.work_ctext,
             self.work_text_p2,
             self.work_ref,
             self.work_vdb,
             self.work_kvb,
+            self.work_fmt,
         );
         for name in self.names.keys() {
             if let Some(k) = index(name, "__work_") {
@@ -2002,6 +2019,9 @@ impl Function {
             if let Some(k) = index(name, "__kvb_") {
                 kvb = kvb.max(k);
             }
+            if let Some(k) = index(name, "__fmt_") {
+                fmt = fmt.max(k);
+            }
         }
         self.work_text = text;
         self.work_ctext = ctext;
@@ -2009,6 +2029,7 @@ impl Function {
         self.work_ref = refs;
         self.work_vdb = vdb;
         self.work_kvb = kvb;
+        self.work_fmt = fmt;
     }
     #[track_caller]
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
@@ -2127,6 +2148,28 @@ impl Function {
     pub fn work_keyed(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
         let n = format!("__kvb_{}", self.work_kvb + 1);
         self.work_kvb += 1;
+        let v = if let Some(nr) = self.names.get(&n) {
+            let nr = *nr;
+            self.set_type(nr, tp.clone());
+            nr
+        } else {
+            self.add_variable(&n, tp, lexer)
+        };
+        self.work_refs.insert(v);
+        v
+    }
+
+    /// @PLN124 — the accumulator a format string builds when its target type
+    /// implements the interpolation contract, in its own `__fmt_N` namespace.
+    ///
+    /// Function-scoped, like [`Function::work_keyed`] and for the same reason:
+    /// the accumulator IS the value the expression produces, so no wrapper
+    /// record backs its store, and a block-local temp would leave one in an
+    /// argument position unfreed.
+    #[track_caller]
+    pub fn work_format(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
+        let n = format!("__fmt_{}", self.work_fmt + 1);
+        self.work_fmt += 1;
         let v = if let Some(nr) = self.names.get(&n) {
             let nr = *nr;
             self.set_type(nr, tp.clone());

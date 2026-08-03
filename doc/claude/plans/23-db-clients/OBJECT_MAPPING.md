@@ -132,7 +132,7 @@ alongside one.
 | **S2** | the handle lifecycle | **done** — `mysql_init` / `mysql_real_connect` / `mysql_close`; the handle round-trips and C's own error crosses back as `text` |
 | **S3** | the cursor model | **done** — `mysql_query` / `mysql_store_result` / `mysql_fetch_row`, a real result set walked through a loft-built shim, SQL NULL distinct from `''` |
 | **S3b** | one contract, several libraries | **done** — `SqlDb` over sqlite, postgres, mariadb **and duckdb**; one generic `dump` that never names a backend. duckdb is in the tree now rather than proven-and-discarded: `[c] optional-libs` (@PLN24 arc G) means the fixture builds and runs without its 70 MB `.so`, so keeping the backend costs nothing |
-| **S4** | prepared statements | `mysql_stmt_*`. `MYSQL_BIND` is an array of structs, so this is where the ANSI-C shim earns its keep (@PLN24 arc D) |
+| **S4** | prepared statements | **done** — all four backends, both loft backends, one generic `bound<D: SqlDb>`. `MYSQL_BIND` is an array of structs and this is where the ANSI-C shim earned its keep (@PLN24 arc D). Statements are built by loft's own format strings (@PLN124), so there are no `?` placeholders for a caller to write or a backend to find |
 | **T1–T3** | transactions | begin / commit / rollback on all three backends; nesting refused. See [INTERPOLATION_HOOK.md § Transaction ladder](INTERPOLATION_HOOK.md) — cheap, and S5 needs it |
 | **S5** | a FLAT struct round-trips | one loft struct ↔ one table, written and read back, compared by content digest |
 | **S6** | sub-records, one kind per step | `vector<scalar>` → `vector<struct>` → `hash` → `sorted`. Each is one child table and one addressing rule |

@@ -1,0 +1,125 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN124 — a format string whose TARGET TYPE implements the interpolation
+// contract hands over its parts instead of appending them into a text buffer.
+//
+// The fact under test is the SEQUENCE, not the result: `lit` receives the bytes
+// the author wrote, `hole_*` receives the interpolated VALUE, and they arrive in
+// source order. A target that only checked the final string could not tell the
+// hook from ordinary formatting — which is the whole point, because the erasure
+// of that boundary is what lets a value become syntax.
+//
+// `text` is unaffected throughout; the corpus under
+// doc/claude/plans/124-interpolation-hook/ pins that separately as a
+// byte-identical IR diff.
+
+struct Trace {
+  const calls: vector<text>,
+  const holes: vector<text>,
+}
+
+// A literal chunk the author wrote. The ONLY path into the text.
+fn lit(self: Trace, s: text) { self.calls += ["lit({s})"]; }
+
+fn hole_text(self: Trace, v: text) {
+  self.calls += ["text"];
+  self.holes += [v];
+}
+
+fn hole_int(self: Trace, v: integer) {
+  self.calls += ["int"];
+  self.holes += ["{v}"];
+}
+
+fn hole_float(self: Trace, v: float) {
+  self.calls += ["float"];
+  self.holes += ["{v}"];
+}
+
+fn hole_boolean(self: Trace, v: boolean) {
+  self.calls += ["boolean"];
+  self.holes += ["{v}"];
+}
+
+fn hole_character(self: Trace, v: character) {
+  self.calls += ["character"];
+  self.holes += ["{v}"];
+}
+
+// The call sequence, verbatim and in order.
+fn seq(self: Trace) -> text {
+  out = "";
+  for c in self.calls { if c#first { out += c } else { out += ">{c}" } }
+  return out;
+}
+
+// The values, kept apart from the text.
+fn vals(self: Trace) -> text {
+  out = "";
+  for h in self.holes { out += "[{h}]" }
+  return out;
+}
+
+// A target in ARGUMENT position — no destination variable to build through, so
+// the accumulator has to stand on its own.
+fn seq_of(t: Trace) -> text { return t.seq(); }
+
+fn main() {
+  name = "ada";
+  n = 7;
+
+  // A typed local declaration: `var_tp` carries the target.
+  a: Trace = "SELECT {name} END";
+  assert(a.seq() == "lit(SELECT )>text>lit( END)", "literal, hole, literal in order");
+  assert(a.vals() == "[ada]", "the value reached the type as a value");
+
+  // No holes at all still builds the target — a statement with no parameters
+  // is still a statement.
+  b: Trace = "SELECT 1";
+  assert(b.seq() == "lit(SELECT 1)", "a string with no holes still builds");
+  assert(b.vals() == "", "and binds nothing");
+
+  // A hole with NO surrounding literal at either end: the boundary is the
+  // string's own edge, and an empty chunk must not be reported as a literal.
+  c: Trace = "{name}";
+  assert(c.seq() == "text", "a bare hole emits no empty literal");
+
+  // Adjacent holes: two values, no literal between them.
+  d: Trace = "{name}{n}";
+  assert(d.seq() == "text>int", "adjacent holes stay two holes");
+  assert(d.vals() == "[ada][7]", "and keep their order");
+
+  // Every scalar kind reaches its own method, so the target sees the TYPE.
+  e: Trace = "{name}|{n}|{1.5}|{true}|{'z'}";
+  assert(e.seq() == "text>lit(|)>int>lit(|)>float>lit(|)>boolean>lit(|)>character",
+         "each scalar kind routes to its own hole method");
+  assert(e.vals() == "[ada][7][1.5][true][z]", "and every value crosses intact");
+
+  // An expression hole, not a bare variable — the value is computed, then handed
+  // over; it never touches the text.
+  f: Trace = "x{n + 1}y";
+  assert(f.seq() == "lit(x)>int>lit(y)", "an expression hole is still one hole");
+  assert(f.vals() == "[8]", "the computed value crosses");
+
+  // Argument position: the `expected` push is what carries the target here.
+  assert(seq_of("p{n}q") == "lit(p)>int>lit(q)", "a format string builds in argument position");
+
+  // The bytes an author writes are literals even when they LOOK like data.
+  g: Trace = "a'b\"c;--{name}";
+  assert(g.seq() == "lit(a'b\"c;--)>text", "author bytes stay literal whatever they contain");
+  assert(g.vals() == "[ada]", "and the hole is still just the value");
+
+  // The value can be the thing a naive builder would splice into syntax. It is
+  // handed over as a value, so it appears in the holes and NEVER in the text.
+  attack = "'); DROP TABLE t; --";
+  h: Trace = "WHERE name = {attack}";
+  assert(h.seq() == "lit(WHERE name = )>text", "a hostile value is still one hole");
+  assert(h.vals() == "['); DROP TABLE t; --]", "and arrives verbatim as a VALUE");
+
+  // text is untouched — the same string with no target is ordinary formatting.
+  plain = "WHERE name = {attack}";
+  assert(plain == "WHERE name = '); DROP TABLE t; --", "text keeps today's behaviour");
+
+  println("interpolation hook ok");
+}

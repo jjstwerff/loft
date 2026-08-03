@@ -2,8 +2,13 @@
 name = "postgres"
 version = "0.0.1"
 
-# libpq needs no shim: every handle comes back as a return value, never through
-# an out-parameter — the opposite of sqlite, and the reason this backend is
-# shorter despite being the client-server one.
+# libpq needs no shim for the CURSOR half: every handle comes back as a return
+# value, never through an out-parameter — the opposite of sqlite, and the reason
+# this backend is shorter despite being the client-server one.
+#
+# The BIND half needs one, for a different reason: `PQexecPrepared` reads its
+# parameters out of a `const char *const *`, and loft can pass one string but
+# not an array of them. The shim owns that array and calls no libpq symbol.
 [c]
 libs = "libpq.so.5"
+shim = "src/shim.c"

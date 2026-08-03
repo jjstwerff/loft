@@ -2471,6 +2471,38 @@ impl Parser {
         self.expected.without_deps()
     }
 
+    /// @PLN124 — the struct a format string should BUILD rather than render into
+    /// text, or `u32::MAX` when the string is ordinary text.
+    ///
+    /// The TARGET TYPE decides, which is why the hook needs no new syntax:
+    /// `q: SqlText = "… {id} …"` and `f("… {id} …")` are the same string, and only
+    /// what receives it differs.  Satisfaction is structural — the rule every loft
+    /// interface already uses — and `lit` is the whole test: a type that can accept
+    /// the author's literal bytes is a type that can be built, and the `hole_*`
+    /// methods it goes on to define say which value kinds it takes natively.
+    ///
+    /// This is a fifth SHAPE read off the one `⇐` channel, beside `lambda_hint` /
+    /// `enum_hint` / `vector_hint` / `read_target_type` — not a sixth side-channel.
+    ///
+    /// Pass-stable: method defs are collected on BOTH parser passes, so both take
+    /// the same branch — the same property the `to_text` hook relies on.  That
+    /// matters more here than it looks, because taking the branch mints an
+    /// accumulator variable, and a mint that fired on only one pass would shift
+    /// the name-keyed variable tables underneath every later work variable.
+    pub(crate) fn interpolation_target(&self, tp: &Type) -> u32 {
+        let Type::Reference(d_nr, _) = tp else {
+            return u32::MAX;
+        };
+        if self.data.def_type(*d_nr) != DefType::Struct {
+            return u32::MAX;
+        }
+        let nm = self.data.def(*d_nr).name();
+        if nm.is_empty() || self.data.def_nr(&format!("t_{}{}_lit", nm.len(), nm)) == u32::MAX {
+            return u32::MAX;
+        }
+        *d_nr
+    }
+
     /// @PLAN48 P2: true when converting `src` → `dst` narrows a loft integer to a
     /// smaller explicit width (e.g. `integer` → `i32`, or `i32` → `u8`), which
     /// loses data.  Widening (`i32` → `integer`) and same-width are not narrowing.

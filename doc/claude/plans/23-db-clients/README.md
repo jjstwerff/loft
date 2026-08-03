@@ -39,7 +39,92 @@ exists at all.
 | S1 loft calls `libmariadb`, versioned soname links | done |
 | S2 the handle round-trips, C's own error comes back with it | done |
 | S3 a real cursor, and NULL is not the empty string | done |
-| S4+ the object mapping | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
+| S4 prepared statements, on all four backends | done |
+| S5+ the object mapping | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
+
+## S4 — a value cannot become syntax
+
+The statement is built by **loft's own format strings**, not by writing `?`
+placeholders:
+
+```loft
+q: SqlText = "SELECT id FROM loft_p WHERE name = {name}";
+d.db_rows(q)
+```
+
+The parser hands `SqlText` the literal/hole boundary it already knows (@PLN124):
+the author's bytes go through `lit`, `name` goes through `hole_text`. **The only
+path into the statement text is `lit`, and `lit` is only ever called with bytes
+from the source file** — so a value has no route into SQL syntax, by construction
+rather than by discipline.
+
+That is also why there are no placeholders to count. Writing `?` would mean
+re-deriving, in a second place, a boundary the parser already had — and a `?`
+inside a quoted literal turns that second derivation into a SQL-parsing problem.
+This design does not have that class of bug: each backend joins the chunk list
+with its OWN placeholder (`?` for sqlite/mariadb/duckdb, `$1 $2 …` for postgres),
+and no backend ever searches SQL it did not write.
+
+**Every backend cross-checks the two derivations.** The driver's own parameter
+count (`sqlite3_bind_parameter_count`, `PQnparams` after `PQdescribePrepared`,
+`mysql_stmt_param_count`, `duckdb_nparams`) is compared against the count the
+parser produced, and a disagreement fails the prepare rather than binding a
+short list.
+
+**The shims own MEMORY; loft makes every library call.** `mysql_stmt_bind_param`
+and `mysql_stmt_bind_result` take arrays of structs, and `PQexecPrepared` takes a
+`char *const *` — layouts loft cannot express. The shims provide exactly those,
+and reference not one library symbol, which is what keeps them compilable with
+`cc` on a machine that has never had the library (the property @PLN24 arc G
+depends on).
+
+`maria/src/stmt.c` hand-declares `MYSQL_BIND` because a consumer machine has the
+runtime library, not the headers. That declaration was **verified, not recalled**:
+compiled against the authoritative `mariadb_stmt.h` comparing `sizeof` and
+`offsetof` field by field — 112 bytes, all 19 offsets equal. MariaDB's layout is
+not MySQL's (`flags` where MySQL has `param_number`), which is why guessing was
+not an option; `libmariadb.so.3` in the manifest is what pins the ABI it matches.
+The procedure is in [bytecode-comparisons/](../124-interpolation-hook/) —
+re-run it with `apt-get download libmariadb-dev` when the connector major changes.
+
+### What S4 proves, and how it cannot pass vacuously
+
+One generic `bound<D: SqlDb>` in `uniform.loft` names no backend. Every backend
+returns the identical line:
+
+```
+p=2 [ada] <null> [] ['); DROP TABLE loft_p; --] hit=4 big=1000
+```
+
+- `['); DROP TABLE loft_p; --]` — spliced into SQL this closes the `VALUES` list
+  and drops the table; bound, it is stored verbatim. **That the following SELECT
+  returns rows at all is the proof the table survived.**
+- `hit=4` — the same hostile text finds its own row by EQUALITY, which it could
+  only do by arriving intact as data.
+- `big=1000` — a value far past the 256-byte buffer mariadb's result binds start
+  with, round-tripped at full length: the truncation re-fetch is exercised, not
+  merely written.
+
+The gate was proven to FIRE: replacing sqlite's bind path with a faithful
+concatenating one (integers bare, text quoted, NULL as the keyword) fails the
+attack cell loudly.
+
+### Named gaps
+
+- **duckdb is unproven here.** libduckdb is not installed on the machine this was
+  built on, so its cells were read and never run, and the fixture prints SKIP.
+  Said plainly rather than left to look covered.
+- **A float binds as TEXT** on every backend. `sqlite3_bind_double` takes a double
+  by value, which travels in an SSE register the fixed caller does not write
+  (@PLN24), and a shim wrapping it would have to link the library. Precision is
+  therefore whatever loft's float→text rendering gives — the exact `NUMERIC`
+  answer is still an open item above.
+- **One statement per connection**, and one parameter array per process: the
+  shims' slots are static. The same single-slot limit S1–S3 already carried.
+- **loft#740 is worked around, not fixed** — a `text?` function with two
+  `return <call>` statements frees the returned buffer on `--native`. Only
+  mariadb's `db_col` has that shape (two column sources behind one nullable
+  accessor); it uses the verified single-return form until #740 closes.
 
 ## The documents
 

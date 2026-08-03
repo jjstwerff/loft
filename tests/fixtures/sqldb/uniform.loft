@@ -1,18 +1,18 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN23 — one contract, three C libraries, driven by `tests/native.rs`.
+// @PLN23 — one contract, four C libraries, driven by `tests/native.rs`.
 //
-// `dump` and `seed` below are the whole claim: they are generic over `SqlDb`,
-// they never name a backend, and every backend runs them unchanged. If the
-// uniform API were a fiction, these two functions could not exist.
+// `seed`, `dump` and `bound` below are the whole claim: they are generic over
+// `SqlDb`, they never name a backend, and every backend runs them unchanged. If
+// the uniform API were a fiction, these could not exist.
 //
 // **sqlite needs no server**, so it is the cell that keeps this honest: a
 // machine with no database still proves the interface, the bindings, the shim
 // loft compiled, and the NULL crossing. postgres and mariadb are conditional and
 // say so — a skip is printed, never counted as a pass.
 //
-// Modes: `sqlite` (always), `postgres`, `maria`.
+// Modes: `sqlite` (always), `postgres`, `maria`, `duckdb`.
 
 use sql;
 use sqlite;
@@ -41,6 +41,71 @@ fn dump <D: SqlDb> (d: D, sql: text) -> text {
   return out;
 }
 
+// --- S4 -----------------------------------------------------------------
+//
+// The value that decides whether this is a real binding or a string builder.
+// Spliced into SQL it closes the VALUES list and drops the table; bound, it is
+// just four-and-twenty bytes of text that has to come back unchanged.
+const ATTACK = "'); DROP TABLE loft_p; --";
+
+// Longer than the 256-byte column buffer the mariadb result binds start with,
+// so the truncation re-fetch is exercised rather than merely written.
+fn long_value() -> text {
+  s = "";
+  for _n in 0..200 { s += "abcde" }
+  return s;
+}
+
+// Prepared statements, over the same interface and with no backend named.
+//
+// Every statement here is built by loft's own format strings (@PLN124): the
+// literal chunks the author wrote reach `lit`, the interpolated values reach
+// `hole_*`, and the backend joins the chunks with its own placeholder. A value
+// has no path into the statement text — which is what the ATTACK cell measures.
+fn bound <D: SqlDb> (d: D, create: text) -> text {
+  _ = d.db_exec("DROP TABLE IF EXISTS loft_p");
+  if !d.db_exec(create) { return "FAIL create {d.db_last_error()}" }
+
+  ada: text? = "ada";
+  none: text? = null;
+  empty: text? = "";
+  attack: text? = ATTACK;
+  big: text? = long_value();
+
+  q1: SqlText = "INSERT INTO loft_p VALUES ({1}, {ada})";
+  // The statement the backend will prepare, and the count the DRIVER must
+  // agree with. Reported so a wrong one is visible rather than merely fatal.
+  n = q1.params();
+  if !d.db_run(q1) { return "FAIL i1 {d.db_last_error()}" }
+  q2: SqlText = "INSERT INTO loft_p VALUES ({2}, {none})";
+  if !d.db_run(q2) { return "FAIL i2 {d.db_last_error()}" }
+  q3: SqlText = "INSERT INTO loft_p VALUES ({3}, {empty})";
+  if !d.db_run(q3) { return "FAIL i3 {d.db_last_error()}" }
+  q4: SqlText = "INSERT INTO loft_p VALUES ({4}, {attack})";
+  if !d.db_run(q4) { return "FAIL i4 {d.db_last_error()}" }
+  q5: SqlText = "INSERT INTO loft_p VALUES ({5}, {big})";
+  if !d.db_run(q5) { return "FAIL i5 {d.db_last_error()}" }
+
+  // The table is still here — so the ATTACK row was stored, not executed.
+  rows = dump(d, "SELECT id, name FROM loft_p WHERE id < 5 ORDER BY id");
+
+  // A bound value is COMPARED, not interpolated: the hostile text finds its own
+  // row. It could only do that by arriving intact, as data.
+  hit = "";
+  q6: SqlText = "SELECT id FROM loft_p WHERE name = {attack}";
+  if !d.db_rows(q6) { return "FAIL q6 {d.db_last_error()}" }
+  while d.db_next() { hit += "{d.db_col(0) ?? "?"}" }
+
+  // The long value round-trips at full length, through the prepared cursor.
+  got = 0;
+  q7: SqlText = "SELECT name FROM loft_p WHERE id = {5}";
+  if !d.db_rows(q7) { return "FAIL q7 {d.db_last_error()}" }
+  while d.db_next() { got = size(d.db_col(0) ?? "") }
+
+  _ = d.db_exec("DROP TABLE loft_p");
+  return "p={n} {rows}hit={hit} big={got}";
+}
+
 fn env_or(name: text, fallback: text) -> text {
   // `env_variable` answers "" for an unset variable, not null, so `??` never
   // fires on it — treating "" as absent is the caller's job.
@@ -59,6 +124,7 @@ fn main() {
       println("FAIL seed {ds.db_last_error()}"); ds.db_shut(); return
     }
     println("sqlite {dump(ds, "SELECT id, name FROM loft_u ORDER BY id")}");
+    println("sqlite bound {bound(ds, "CREATE TABLE loft_p (id INTEGER PRIMARY KEY, name TEXT)")}");
     ds.db_shut();
     return
   }
@@ -72,6 +138,7 @@ fn main() {
       println("FAIL seed {dp.db_last_error()}"); dp.db_shut(); return
     }
     println("postgres {dump(dp, "SELECT id, name FROM loft_u ORDER BY id")}");
+    println("postgres bound {bound(dp, "CREATE TABLE loft_p (id INT PRIMARY KEY, name TEXT)")}");
     _ = dp.db_exec("DROP TABLE loft_u");
     dp.db_shut();
     return
@@ -86,6 +153,7 @@ fn main() {
       println("SKIP maria {dm.db_last_error()}"); dm.db_shut(); return
     }
     println("maria {dump(dm, "SELECT id, name FROM loft_u ORDER BY id")}");
+    println("maria bound {bound(dm, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR(2000))")}");
     _ = dm.db_exec("DROP TABLE loft_u");
     dm.db_shut();
     return
@@ -106,6 +174,7 @@ fn main() {
       println("FAIL seed {dd.db_last_error()}"); dd.db_shut(); return
     }
     println("duckdb {dump(dd, "SELECT id, name FROM loft_u ORDER BY id")}");
+    println("duckdb bound {bound(dd, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR)")}");
     dd.db_shut();
     return
   }

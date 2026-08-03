@@ -13,6 +13,46 @@ fn my_connect(h: integer, host: text, user: text, pass: text, db: text,
               port: integer, sock: integer, flags: integer) -> integer;
 #c "mysql_real_connect" "void*(void*, const char*, const char*, const char*, const char*, int, const char*, long)"
 
+// --- S4: the mysql_stmt_* surface -------------------------------------------
+//
+// loft makes every one of these calls itself. The shim beside this file owns
+// only the MYSQL_BIND arrays they read, which is what keeps it free of mysql
+// symbols and therefore buildable on a machine with no libmariadb.
+fn my_stmt_init(h: integer) -> integer;        #c "mysql_stmt_init" "void*(void*)"
+fn my_stmt_prepare(st: integer, sql: text, n: integer) -> integer;
+#c "mysql_stmt_prepare" "int(void*, const char*, unsigned long)"
+fn my_stmt_param_count(st: integer) -> integer;
+#c "mysql_stmt_param_count" "unsigned long(void*)"
+fn my_stmt_bind_param(st: integer, b: integer) -> integer;
+#c "mysql_stmt_bind_param" "char(void*, void*)"
+fn my_stmt_execute(st: integer) -> integer;    #c "mysql_stmt_execute" "int(void*)"
+fn my_stmt_field_count(st: integer) -> integer;
+#c "mysql_stmt_field_count" "unsigned int(void*)"
+fn my_stmt_bind_result(st: integer, b: integer) -> integer;
+#c "mysql_stmt_bind_result" "char(void*, void*)"
+fn my_stmt_store_result(st: integer) -> integer; #c "mysql_stmt_store_result" "int(void*)"
+fn my_stmt_fetch(st: integer) -> integer;      #c "mysql_stmt_fetch" "int(void*)"
+fn my_stmt_fetch_column(st: integer, b: integer, col: integer, off: integer) -> integer;
+#c "mysql_stmt_fetch_column" "int(void*, void*, unsigned int, unsigned long)"
+fn my_stmt_free_result(st: integer) -> integer; #c "mysql_stmt_free_result" "char(void*)"
+fn my_stmt_close(st: integer) -> integer;      #c "mysql_stmt_close" "char(void*)"
+fn my_stmt_error(st: integer) -> text;         #c "mysql_stmt_error" "const char*(void*)"
+
+// --- the shim's MYSQL_BIND arrays -------------------------------------------
+fn lm_param_reset(n: integer) -> integer;      #c "lm_param_reset" "int(long)"
+fn lm_param_text(i: integer, s: text) -> integer; #c "lm_param_text" "int(long, const char*)"
+fn lm_param_int(i: integer, v: integer) -> integer; #c "lm_param_int" "int(long, long long)"
+fn lm_param_null(i: integer) -> integer;       #c "lm_param_null" "int(long)"
+fn lm_param_binds() -> integer;                #c "lm_param_binds" "void*(void)"
+fn lm_result_reset(n: integer) -> integer;     #c "lm_result_reset" "int(long)"
+fn lm_result_binds() -> integer;               #c "lm_result_binds" "void*(void)"
+fn lm_result_is_null(i: integer) -> integer;   #c "lm_result_is_null" "int(long)"
+fn lm_result_len(i: integer) -> integer;       #c "lm_result_len" "long(long)"
+fn lm_result_cap(i: integer) -> integer;       #c "lm_result_cap" "long(long)"
+fn lm_result_grow(i: integer, need: integer) -> integer;
+#c "lm_result_grow" "void*(long, long)"
+fn lm_result_text(i: integer) -> text?;        #c "lm_result_text" "const char*(long)"
+
 // Each backend reads `target` in its OWN dialect — sqlite a path, libpq a
 // conninfo string, and this one `key=value` pairs — which is what a uniform API
 // across real drivers looks like. The interface promises one SHAPE, not one
@@ -29,9 +69,22 @@ fn opt(target: text, key: text, fallback: text) -> text {
   return v;
 }
 
-pub struct Maria { conn: integer, res: integer, row: integer }
+// `res`/`row` are the text-protocol cursor; `ps`/`cols` are the prepared one.
+// `from_ps` says which the cursor methods are reading, so the two result models
+// stay one cursor from the outside.
+pub struct Maria {
+  conn: integer,
+  res: integer,
+  row: integer,
+  ps: integer,
+  cols: integer,
+  from_ps: boolean,
+  err: text,
+}
 
-pub fn maria() -> Maria { return Maria { conn: 0, res: 0, row: 0 }; }
+pub fn maria() -> Maria {
+  return Maria { conn: 0, res: 0, row: 0, ps: 0, cols: 0, from_ps: false, err: "" };
+}
 
 pub fn db_open(self: Maria, target: text) -> boolean {
   self.conn = my_init(0);
@@ -52,6 +105,15 @@ pub fn db_select(self: Maria, sql: text) -> boolean {
 }
 
 pub fn db_next(self: Maria) -> boolean {
+  if self.from_ps {
+    r = my_stmt_fetch(self.ps);
+    // 0 = a row. 101 = MYSQL_DATA_TRUNCATED, which is ALSO a row: a column did
+    // not fit its buffer, and `db_col` re-fetches that one at its true length.
+    if r == 0 || r == 101 { return true }
+    _ = my_stmt_free_result(self.ps);
+    self.from_ps = false;
+    return false
+  }
   if self.res == 0 { return false }
   self.row = my_fetch(self.res);
   if self.row != 0 { return true }
@@ -60,10 +122,115 @@ pub fn db_next(self: Maria) -> boolean {
   return false;
 }
 
-pub fn db_col(self: Maria, i: integer) -> text? { return my_col(self.row, i); }
-pub fn db_width(self: Maria) -> integer { return my_nfields(self.res); }
-pub fn db_last_error(self: Maria) -> text { return my_error(self.conn); }
+// ONE return, with the branches ASSIGNING, because this is the only backend
+// whose `db_col` has two sources and loft#740 corrupts that shape: a `text?`
+// function with two `return <call>` statements frees the returned buffer before
+// returning it, so `--native` hands back garbage for the early branch while
+// `--interpret` is correct. Two returns of LITERALS are fine, and so is a
+// non-null `text` — it is the nullable-plus-call-result combination that breaks.
+// This form is the verified one; revert it when #740 closes.
+pub fn db_col(self: Maria, i: integer) -> text? {
+  out: text? = null;
+  if !self.from_ps {
+    out = my_col(self.row, i);
+  } else if lm_result_is_null(i) == 0 {
+    // The library reports the value's TRUE length even when it did not fit, so
+    // a longer-than-buffer column is re-fetched at exactly its own size rather
+    // than silently returning a prefix.
+    need = lm_result_len(i);
+    ok = true;
+    if need > lm_result_cap(i) {
+      b = lm_result_grow(i, need);
+      if b == 0 {
+        ok = false;
+      } else if my_stmt_fetch_column(self.ps, b, i, 0) != 0 {
+        ok = false;
+      }
+    }
+    if ok { out = lm_result_text(i) }
+  }
+  return out;
+}
+
+pub fn db_width(self: Maria) -> integer {
+  if self.from_ps { return self.cols }
+  return my_nfields(self.res);
+}
+
+pub fn db_last_error(self: Maria) -> text {
+  if self.err != "" { return self.err }
+  return my_error(self.conn);
+}
+
+// --- S4: prepare, bind, execute ---------------------------------------------
+
+fn release(self: Maria) {
+  if self.from_ps { self.from_ps = false }
+  if self.ps != 0 { _ = my_stmt_close(self.ps); self.ps = 0 }
+}
+
+// Compile the statement and fill the parameter MYSQL_BIND array.
+//
+// `size(sql)` is the BYTE count `mysql_stmt_prepare` wants — `len` would be the
+// character count, which is a different number the moment the author's SQL
+// contains anything outside ASCII.
+fn prepare_bind(self: Maria, q: SqlText) -> boolean {
+  self.err = "";
+  self.release();
+  self.ps = my_stmt_init(self.conn);
+  if self.ps == 0 { self.err = "cannot allocate a statement"; return false }
+  sql = q.statement(false);
+  if my_stmt_prepare(self.ps, sql, size(sql)) != 0 {
+    self.err = my_stmt_error(self.ps);
+    return false
+  }
+  // The driver's own count, against the one the parser produced.
+  np = my_stmt_param_count(self.ps);
+  if np != q.params() {
+    self.err = "statement wants {np} parameters, {q.params()} were interpolated";
+    return false
+  }
+  if lm_param_reset(np) == 0 { self.err = "no memory for parameters"; return false }
+  for b in q.binds {
+    at = b#count;
+    ok = if b.kind == SQL_NULL { lm_param_null(at) }
+      else if b.kind == SQL_INT { lm_param_int(at, b.i) }
+      else if b.kind == SQL_BOOLEAN { lm_param_int(at, b.i) }
+      else { lm_param_text(at, b.as_text()) };
+    if ok == 0 { self.err = "binding parameter {at} failed"; return false }
+  }
+  if np > 0 && my_stmt_bind_param(self.ps, lm_param_binds()) != 0 {
+    self.err = my_stmt_error(self.ps);
+    return false
+  }
+  return true;
+}
+
+pub fn db_run(self: Maria, q: SqlText) -> boolean {
+  if !self.prepare_bind(q) { return false }
+  if my_stmt_execute(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
+  self.release();
+  return true;
+}
+
+pub fn db_rows(self: Maria, q: SqlText) -> boolean {
+  if !self.prepare_bind(q) { return false }
+  if my_stmt_execute(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
+  self.cols = my_stmt_field_count(self.ps);
+  // Every column is bound as a string, so the conversion is the library's job
+  // and `db_col` keeps its one answer: text, or null.
+  if lm_result_reset(self.cols) == 0 { self.err = "no memory for the result"; return false }
+  if self.cols > 0 && my_stmt_bind_result(self.ps, lm_result_binds()) != 0 {
+    self.err = my_stmt_error(self.ps);
+    return false
+  }
+  if my_stmt_store_result(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
+  self.from_ps = true;
+  return true;
+}
+
 pub fn db_shut(self: Maria) {
+  self.release();
   if self.res != 0 { my_free(self.res); self.res = 0; }
   if self.conn != 0 { my_close(self.conn); self.conn = 0; }
 }

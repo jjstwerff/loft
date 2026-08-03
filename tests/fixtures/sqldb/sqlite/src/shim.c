@@ -16,3 +16,15 @@ void **ls_slot_a(void); void **ls_slot_a(void) { return &g_slot_a; }
 void **ls_slot_b(void); void **ls_slot_b(void) { return &g_slot_b; }
 void *ls_take_a(void);  void *ls_take_a(void)  { return g_slot_a; }
 void *ls_take_b(void);  void *ls_take_b(void)  { return g_slot_b; }
+
+/* SQLITE_TRANSIENT — the pointer `(void *)-1`, which tells sqlite to COPY the
+ * bytes before returning.  That copy is what makes it correct to bind a loft
+ * text: loft owns the buffer and makes no promise about it outliving the call,
+ * so SQLITE_STATIC would leave sqlite holding a pointer into someone else's
+ * memory.
+ *
+ * It is here because loft has no way to spell a negative pointer constant, not
+ * because sqlite is involved — this function names a value and still references
+ * no sqlite symbol, so the shim keeps compiling on a machine without the
+ * library. */
+void *ls_transient(void); void *ls_transient(void) { return (void *)-1; }
