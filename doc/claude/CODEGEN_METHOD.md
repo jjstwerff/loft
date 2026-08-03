@@ -139,6 +139,19 @@ IS the proof you changed nothing emitted.**
    covers both backends — the dump carries the IR + bytecode AND the generated
    native Rust. Confirm the corpus runs clean on `--interpret` and `--native`
    (`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`) so the baseline is leak-free.
+
+   ⚠ **First, prove the capture is deterministic** — run it TWICE on the same
+   binary and diff. A file that differs from ITSELF makes this whole gate read
+   "everything changed", and it fails in the safe-looking direction only by luck.
+   Compilation is not yet fully reproducible (loft#750): 23 of 599 scripts differed
+   from themselves before the emitter half was fixed, 3 still do. Discard
+   self-differing files from the corpus and SAY how many you discarded — a gate that
+   silently skips is a gate that passed for the wrong reason.
+
+   The other blind-instrument tell here is the **stdlib path**: a `before` binary
+   run from a worktree with `--path <worktree>` embeds that path in every
+   `// loft:…` line, so the diff is 1700 lines of nothing. Point both binaries at
+   the same `default/` (confirm with `diff -r`) before reading the diff.
 3. **Refactor, then prove AFTER == BEFORE.** `loft introspect corpus.loft >
    after.txt; diff before.txt after.txt`. **Empty = you changed nothing emitted, on
    both backends** — exactly the claim of a behaviour-preserving refactor. Re-run
