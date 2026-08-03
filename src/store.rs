@@ -924,10 +924,24 @@ impl Store {
 
     /// Delete a record, this assumes that all links towards this record are already removed
     pub fn delete(&mut self, rec: u32) {
-        // BOTH `read_only` and `free_protected` block deletes: the
-        // first is hard immutability (CONST_STORE / workers); the
-        // second is the call-bracket's "don't free me" marker.
-        let frozen = self.read_only || self.free_protected;
+        // `read_only` is IMMUTABILITY — CONST_STORE, workers, the user-facing
+        // `d#lock` tripwire — so nothing in the store may change, deletes included.
+        //
+        // `free_protected` is NOT that (loft#760). It is the call bracket's "do not
+        // FREE my argument", and both places that could — `do_copy_record` and
+        // `replace_keyed`, the two `0x8000` source-frees — already refuse on it
+        // themselves before calling `database.free`. Blocking `delete` as well was
+        // strictly wider than the marker's job, and it caught the wrong thing: a
+        // container the callee is legitimately mutating releases its own old block
+        // when it regrows, and `AppendVector` on a passed-by-value struct's field
+        // then aborted the interpreter. That is a WRITE, which the bracket exists to
+        // keep legal — @P290's whole point was to stop using `lock_store` here,
+        // because a callee iterating a passed-in hash field must not crash.
+        //
+        // Native never had this check and was always correct on the same source,
+        // which is what made the `&`-redundancy advice right on one backend and
+        // wrong on the other.
+        let frozen = self.read_only;
         debug_assert!(
             !frozen,
             "Delete on locked store (rec={rec}) (locked by: {})",
@@ -1390,9 +1404,12 @@ impl Store {
     }
 
     /// @P290 — mark the store as PROTECTED-FROM-FREE for the duration
-    /// of a fn-call deep-copy bracket.  Writes / claims stay legal;
-    /// only `delete` (and `OpCopyRecord`'s `0x8000` source-free) is
-    /// blocked.  Cleared by `clear_free_protected()`.
+    /// of a fn-call deep-copy bracket.  Writes, claims AND deletes stay
+    /// legal; the one thing blocked is the `0x8000` source-free, refused
+    /// by `do_copy_record` and `replace_keyed` themselves.  Deleting was
+    /// blocked here too until loft#760 — wider than the marker's job, and
+    /// it aborted on a container releasing its own block as it regrew.
+    /// Cleared by `clear_free_protected()`.
     pub fn set_free_protected(&mut self, origin: impl Into<String>) {
         let origin = origin.into();
         if !self.free_protected && crate::log_config::lock_trace_enabled() {
@@ -3276,6 +3293,42 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::{MAX_STORE_WORDS, Store, slack_target};
+
+    /// loft#760 — the call bracket's `free_protected` marker must NOT block a delete.
+    ///
+    /// It means "do not FREE my argument", and the two `0x8000` source-frees that could
+    /// (`do_copy_record`, `replace_keyed`) refuse on it themselves. Blocking `delete` as
+    /// well was wider than the marker's job and caught the wrong thing: a container the
+    /// callee is legitimately mutating releases its own old block when it regrows, so
+    /// appending to a passed-by-value struct's field aborted the interpreter with
+    /// "Delete on locked store" while `--native`, which has no such check, was correct
+    /// on the same source.
+    ///
+    /// Written against `Store` rather than as a `.loft` program on purpose: the shape
+    /// that reaches this needs a whole consumer package to arise (the reduction attempts
+    /// on the issue and here all came out clean), while the invariant itself is one bit.
+    #[test]
+    fn free_protection_permits_a_delete() {
+        let mut store = Store::new(4);
+        store.free = false;
+        let rec = store.claim(2);
+        store.set_free_protected("call_bracket(test)");
+        assert!(store.is_free_protected(), "the marker is set");
+        store.delete(rec); // must not panic — this is the regression
+    }
+
+    /// The other direction, so the test above cannot pass by the guard being gone
+    /// entirely: `read_only` is IMMUTABILITY (CONST_STORE, workers, `d#lock`) and still
+    /// refuses a delete.
+    #[test]
+    #[should_panic(expected = "Delete on locked store")]
+    fn read_only_still_refuses_a_delete() {
+        let mut store = Store::new(4);
+        store.free = false;
+        let rec = store.claim(2);
+        store.read_only = true;
+        store.delete(rec);
+    }
 
     /// Growing the store through many claims must not wrap or silently fail.
     #[test]
