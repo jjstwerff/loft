@@ -109,10 +109,10 @@ body:
       label: Filed as a direct result of another ticket?
       description: >-
         If this was found BECAUSE of another ticket — a follow-on of that investigation, a
-        sibling the matrix turned up, a defect in the fix — put `Found-via: #N` here.  It sets
-        this issue's `hit-by:*` to the SAME source as #N, because the consumer that pointed us
-        at that area is why this one was found too.  Leave blank if nothing prompted it (a
-        nightly gate, a sanitizer, an unprompted sweep) — that is `hit-by:loft`.
+        sibling the matrix turned up, a defect in the fix — put `Found-via: #N` here.  It does
+        NOT change `hit-by:*`, which stays a direct pointer to whoever ran into THIS one; it
+        records the chain, so "what set us looking" can be derived by walking it.  Leave blank
+        if nothing prompted it.
       placeholder: "Found-via: #747"
     validations:
       required: false

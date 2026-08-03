@@ -49,39 +49,38 @@ statically-typed language.  Source flows: **text → parser → IR → codegen �
 | `area:stdlib` | the standard library (`default/*.loft`) + native stdlib functions | a stdlib function returns the wrong thing / is missing an edge | `default/*.loft`, the native-fn registry |
 | `area:packages` | the package format, registry, multi-file `use` resolution, library extraction | a cross-package resolution bug, a manifest/registry issue, a build-pipeline gap | `src/package.rs`, `src/manifest.rs`, `doc/claude/lib_plans/` |
 
-## `hit-by:` — what caused this to be found
+## `hit-by:` — which project hit it
 
-One per issue.  It answers *"what made us look here?"*, **not** *"who typed the report"* — the
-consumers file through the owner, so the author never distinguishes them.
+One per issue: a **direct pointer to the project that ran into it**.  loft is one of those
+projects, so a find of our own is `hit-by:loft` — not a blank.
 
 | Label | Meaning |
 |---|---|
-| `hit-by:moros` / `:routing` / `:dryopea` / `:crawler` / `:zerotrust` | a dogfood consumer surfaced it |
-| `hit-by:loft` | loft's own instruments found it with **nothing prompting the work** — a nightly gate, a sanitizer, an unprompted sweep |
+| `hit-by:moros` / `:routing` / `:dryopea` / `:crawler` / `:zerotrust` | that dogfood consumer ran into it |
+| `hit-by:loft` | loft itself ran into it — a nightly gate, a sanitizer, a sweep, a follow-on investigation |
 
-**A consumer that PROMPTED the investigation keeps the credit.**  When a consumer's report sends
-us into a subsystem and the sweep that follows turns up ten more, those ten are that consumer's
-yield too — it is why we were looking.  Labelling them `hit-by:loft` because we typed them
-ourselves reads as "our instruments found these", and that is the opposite of what happened.
-The late-July store-lifetime cluster is the worked example: routing filed six, the follow-on
-investigation filed about a dozen more, and all of it is routing's signal.
+It says who HIT it, nothing more.  A follow-on we filed while fixing something else is
+`hit-by:loft` even when a consumer's report is what sent us into that subsystem: we hit it.
 
-**Say so at filing time — `Found-via: #N`.**  Lineage cannot be recovered from prose afterwards,
-and two plausible-looking shortcuts both mislabel:
+**Lineage is `Found-via: #N`, and it is kept SEPARATE on purpose.**  Writing "what prompted the
+work" into `hit-by:` would overload one field with two facts and make both unreliable — you
+could no longer ask "what did routing actually run into" without unpicking inherited credit.
+Keep the pointer direct and the chain explicit, and the prompted-by view is *derivable*: walk
+`Found-via:` to its root and read the root's `hit-by:`.  So the late-July store-lifetime cluster
+is `hit-by:loft` (we hit it) with a chain leading back to routing's tickets — and both the
+"who hit it" and the "what set us looking" counts stay answerable.
 
-- *by area + date* — sweeps the whole cluster in, including the ones that came from elsewhere
-  (a defect in our OWN ownership oracle, a bug found while writing the SQL client).
+**Record it at filing time.**  Lineage cannot be recovered from prose afterwards, and two
+plausible-looking shortcuts both mislabel:
+
+- *by area + date* — sweeps in issues that came from elsewhere: a defect in our OWN ownership
+  oracle and a bug found while writing the SQL client both sit inside the store-lifetime window.
 - *by citation* — an issue citing another is usually "related to" or "same root cause as", not
-  "caused by".  Three unrelated issues all cite one old hub ticket; loft#755 cites loft#748 to
+  "caused by".  Three unrelated issues cite one old hub ticket; loft#755 cites loft#748 to
   explain a design decision it did not come from.
 
-So the `bug_report` template asks for it directly, and `Found-via: #N` means *this issue exists
-because of #N* — it inherits #N's `hit-by:*`.  Nothing to inherit means nothing prompted it:
-`hit-by:loft`.
-
-**An unlabelled issue means "not established", never "no consumer".**  Roughly 90 issues filed
-before this convention carry no `hit-by:` and are not worth guessing at; treat any count over
-that period as a floor, not a total.
+**An unlabelled issue means "not established", never "nobody".**  Roughly 84 issues filed before
+this convention carry no `hit-by:`; treat any count over that period as a floor, not a total.
 
 ## Cross-cutting
 
