@@ -517,6 +517,44 @@ fn resolve_in_loaded(symbol: &str) -> Option<*const ()> {
             return Some(*sym);
         }
     }
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::Library;
+        // There is no process-wide symbol table on Windows: `GetProcAddress`
+        // answers per MODULE, and the C runtime is its own DLL rather than
+        // something linked into the executable's export table. So the Unix
+        // `Library::this()` step has no direct twin — searching only the
+        // executable finds nothing, which is why `strlen` and `atoi` were
+        // unresolvable and the whole `#c`-against-libc surface was Linux/macOS
+        // only.
+        //
+        // Ask the modules the process ALREADY has open, in the order a C
+        // symbol is most likely to live: the executable itself (its own
+        // exports), then the UCRT, then the legacy CRT shim, then the Win32
+        // base DLLs. `open_already_loaded` is `GetModuleHandle` — it never
+        // loads anything, so this widens the search without changing what the
+        // process has mapped.
+        if let Ok(this) = Library::this()
+            && let Ok(sym) = unsafe { this.get::<*const ()>(symbol.as_bytes()) }
+        {
+            return Some(*sym);
+        }
+        for module in [
+            "ucrtbase.dll",
+            "api-ms-win-crt-string-l1-1-0.dll",
+            "api-ms-win-crt-convert-l1-1-0.dll",
+            "api-ms-win-crt-stdio-l1-1-0.dll",
+            "api-ms-win-crt-heap-l1-1-0.dll",
+            "msvcrt.dll",
+            "kernel32.dll",
+        ] {
+            if let Ok(lib) = Library::open_already_loaded(module)
+                && let Ok(sym) = unsafe { lib.get::<*const ()>(symbol.as_bytes()) }
+            {
+                return Some(*sym);
+            }
+        }
+    }
     None
 }
 

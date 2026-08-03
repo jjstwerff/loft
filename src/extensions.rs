@@ -135,7 +135,15 @@ fn dlopen_diagnostic(path: &str, err: &str) -> String {
 /// Otherwise, the library is kept loaded and individual symbols will be
 /// resolved on demand via `try_dlsym` during `wire_native_fns`.
 #[cfg(feature = "native-extensions")]
-fn load_one(path: &str) {
+/// Returns whether the library is loaded when this returns — false only when
+/// `dlopen` itself refused it.
+///
+/// Existing on disk is not the same fact as loading: an ELF `.so` left in a
+/// tree by a Linux build is a file macOS cannot map, and a caller that reads
+/// "the path is there" as "the symbols are there" reports success and then
+/// fails at the first `#c` call, naming the symbol rather than the library
+/// (loft#739's neighbour — see `load_c_library`, which used to do exactly this).
+fn load_one(path: &str) -> bool {
     use libloading::Library;
     use std::collections::HashSet;
 
@@ -151,14 +159,14 @@ fn load_one(path: &str) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let loaded = guard.get_or_insert_with(HashSet::new);
     if loaded.contains(&canonical) {
-        return;
+        return true;
     }
 
     let lib = match unsafe { Library::new(path) } {
         Ok(l) => l,
         Err(e) => {
             eprintln!("{}", dlopen_diagnostic(path, &e.to_string()));
-            return;
+            return false;
         }
     };
 
@@ -206,6 +214,7 @@ fn load_one(path: &str) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .push((lib, uses_v1));
+    true
 }
 
 /// Try to resolve a symbol by name from any loaded cdylib.  Returns the symbol
@@ -241,28 +250,208 @@ fn try_dlsym(name: &str) -> Option<(*const (), bool)> {
 /// a library can ship its own `.so`; otherwise it goes to the dynamic linker by
 /// soname, exactly as `runtime-libs` does. Returns whether it loaded — a
 /// missing library is the caller's to report, with the binding that needed it.
+///
+/// The declared spelling is tried first and unchanged, then the same library
+/// under the HOST's naming ([`host_lib_variants`]). A manifest carries one
+/// string, and every `[c] libs` in this repo and the registry spells it the
+/// Linux way (`libmariadb.so.3`), so without the fallback the whole of @PLN24 is
+/// Linux-only: the fixture's `../../liblc_types.so` is built as
+/// `liblc_types.dylib` by its own Makefile on macOS, so the declaration pointed
+/// at a file that could not exist and every `#c` symbol in it went unresolved.
 #[cfg(feature = "native-extensions")]
 pub fn load_c_library(name: &str, pkg_dir: &str) -> bool {
-    let beside = std::path::Path::new(pkg_dir).join(name);
-    if beside.exists() {
-        load_one(&beside.to_string_lossy());
-        return true;
-    }
-    // Not a path we can see: hand the soname to the dynamic linker, which knows
-    // the search path we do not.
-    if let Err(e) = unsafe { libloading::Library::new(name) } {
-        // @PLN24 arc G — an OPTIONAL library that does not open is an ordinary
-        // answer (`c_library_available` says false and the program takes its
-        // fallback), so this must not print by default. But "not installed" and
-        // "installed and unloadable" are very different problems with the same
-        // symptom, and only the linker's own text tells them apart.
-        if std::env::var_os("LOFT_C_DEBUG").is_some() {
-            eprintln!("loft: `[c]` library '{name}' did not open: {e}");
+    let mut last_err = None;
+    for cand in host_lib_variants(name) {
+        let beside = std::path::Path::new(pkg_dir).join(&cand);
+        // `load_one`, not `exists()`: a file that will not `dlopen` (a Linux
+        // `.so` sitting in the tree on macOS) must fall through to the next
+        // candidate rather than be reported as loaded.
+        if beside.exists() && load_one(&beside.to_string_lossy()) {
+            return true;
         }
-        return false;
+        // Not a path we can see: hand the soname to the dynamic linker, which
+        // knows the search path we do not.
+        match unsafe { libloading::Library::new(&cand) } {
+            Ok(_) => {
+                load_one(&cand);
+                return true;
+            }
+            Err(e) => last_err = Some((cand, e)),
+        }
     }
-    load_one(name);
-    true
+    // @PLN24 arc G — an OPTIONAL library that does not open is an ordinary
+    // answer (`c_library_available` says false and the program takes its
+    // fallback), so this must not print by default. But "not installed" and
+    // "installed and unloadable" are very different problems with the same
+    // symptom, and only the linker's own text tells them apart.
+    if std::env::var_os("LOFT_C_DEBUG").is_some()
+        && let Some((cand, e)) = last_err
+    {
+        eprintln!("loft: `[c]` library '{name}' did not open (last tried '{cand}'): {e}");
+    }
+    false
+}
+
+/// The declared library name, then the same library spelled for THIS host.
+///
+/// A `[c] libs` entry is one string in a manifest, so it cannot say `.so` on
+/// Linux and `.dylib` on macOS. Rather than invent a per-platform manifest key,
+/// translate at load time: the declared spelling is authoritative and always
+/// tried first, and these are what to try when the host does not use it.
+///
+/// The versioned forms matter as much as the bare one — a real declaration is
+/// `libmariadb.so.3`, whose macOS twin is `libmariadb.3.dylib` (the soversion
+/// moves BEFORE the extension) and whose Windows twin drops both the `lib`
+/// prefix and the version. Returns just the declared name on Linux, where the
+/// spelling already is the host's.
+#[cfg(feature = "native-extensions")]
+fn host_lib_variants(name: &str) -> Vec<String> {
+    let host = if cfg!(target_os = "macos") {
+        LibOs::Macos
+    } else if cfg!(windows) {
+        LibOs::Windows
+    } else {
+        LibOs::Linux
+    };
+    lib_variants(name, host)
+}
+
+/// Which naming convention [`lib_variants`] should translate into.
+///
+/// A parameter rather than a `cfg!` inside the translation, so the macOS and
+/// Windows spellings are checkable from any machine. Left implicit, each one is
+/// only ever exercised on its own platform — and this whole fallback exists
+/// because a platform nobody could run locally had been broken for a while.
+#[cfg(feature = "native-extensions")]
+#[derive(Clone, Copy, PartialEq)]
+enum LibOs {
+    Linux,
+    Macos,
+    Windows,
+}
+
+/// [`host_lib_variants`], with the target convention passed in.
+#[cfg(feature = "native-extensions")]
+fn lib_variants(name: &str, os: LibOs) -> Vec<String> {
+    let mut out = vec![name.to_string()];
+    if os == LibOs::Linux {
+        return out; // the declared spelling already is this host's
+    }
+    // Split a trailing directory off so the translation only rewrites the file
+    // name — `../../liblc_types.so` must stay relative to the same place.
+    let (dir, file) = match name.rfind(['/', '\\']) {
+        Some(i) => (&name[..=i], &name[i + 1..]),
+        None => ("", name),
+    };
+    // `libfoo.so.3` → stem `libfoo`, version `3`; `libfoo.so` → no version.
+    let Some((stem, rest)) = file.split_once(".so") else {
+        return out; // not a Linux spelling — nothing to translate
+    };
+    let version = rest.strip_prefix('.').filter(|v| !v.is_empty());
+    let mut push = |f: String| out.push(format!("{dir}{f}"));
+    if os == LibOs::Macos {
+        if let Some(v) = version {
+            push(format!("{stem}.{v}.dylib"));
+        }
+        push(format!("{stem}.dylib"));
+    } else {
+        // No `lib` prefix and no soversion in a DLL name; try both spellings
+        // because a MinGW-built library keeps the prefix.
+        let bare = stem.strip_prefix("lib").unwrap_or(stem);
+        push(format!("{bare}.dll"));
+        push(format!("{stem}.dll"));
+    }
+    out
+}
+
+#[cfg(all(test, feature = "native-extensions"))]
+mod c_lib_naming_tests {
+    use super::{LibOs, lib_variants};
+
+    /// The declared spelling is authoritative: it is always first, on every
+    /// host, so a translation can only ever ADD a fallback.
+    #[test]
+    fn the_declared_name_is_always_tried_first() {
+        for os in [LibOs::Linux, LibOs::Macos, LibOs::Windows] {
+            assert_eq!(lib_variants("libmariadb.so.3", os)[0], "libmariadb.so.3");
+        }
+        assert_eq!(
+            lib_variants("libmariadb.so.3", LibOs::Linux).len(),
+            1,
+            "Linux needs no fallback — the declared spelling is already its own"
+        );
+    }
+
+    /// The soversion moves BEFORE the extension on macOS: `libmariadb.so.3` is
+    /// `libmariadb.3.dylib`, not `libmariadb.so.3.dylib`.
+    #[test]
+    fn a_versioned_soname_becomes_the_macos_spelling() {
+        assert_eq!(
+            lib_variants("libmariadb.so.3", LibOs::Macos),
+            ["libmariadb.so.3", "libmariadb.3.dylib", "libmariadb.dylib"],
+            "versioned first, then the unversioned fallback"
+        );
+        assert_eq!(
+            lib_variants("libsqlite3.so.0", LibOs::Macos)[1],
+            "libsqlite3.0.dylib"
+        );
+    }
+
+    /// The fixture's own shape — a RELATIVE path, which must stay relative to
+    /// the same directory (this is what the macOS daily CI caught).
+    #[test]
+    fn a_relative_path_keeps_its_directory() {
+        assert_eq!(
+            lib_variants("../../liblc_types.so", LibOs::Macos),
+            ["../../liblc_types.so", "../../liblc_types.dylib"]
+        );
+        assert!(
+            lib_variants("../../liblc_types.so", LibOs::Windows)
+                .contains(&"../../lc_types.dll".to_string())
+        );
+    }
+
+    /// A DLL carries neither the `lib` prefix nor the soversion, but a
+    /// MinGW-built one keeps the prefix — so both spellings are tried.
+    #[test]
+    fn a_windows_name_drops_the_prefix_and_the_version() {
+        assert_eq!(
+            lib_variants("libmariadb.so.3", LibOs::Windows),
+            ["libmariadb.so.3", "mariadb.dll", "libmariadb.dll"]
+        );
+    }
+
+    /// A name that is not a Linux spelling is passed through untouched —
+    /// translating `sqlite3.dll` or a bare soname would invent a library.
+    #[test]
+    fn a_non_linux_spelling_is_left_alone() {
+        for n in ["sqlite3.dll", "libfoo.dylib", "foo"] {
+            assert_eq!(lib_variants(n, LibOs::Macos), [n.to_string()], "{n}");
+            assert_eq!(lib_variants(n, LibOs::Windows), [n.to_string()], "{n}");
+        }
+    }
+
+    /// A library file that EXISTS but cannot be mapped answers false.
+    ///
+    /// This is what makes the host-spelling fallback reachable at all. The
+    /// candidate loop used to accept a path on `exists()` alone, so on macOS a
+    /// `liblc_types.so` left behind by a Linux build — the fixture's `.so` is
+    /// git-ignored, but any dev tree that ran `make` on Linux has one — would
+    /// be taken as loaded and the `.dylib` beside it never tried. The symptom
+    /// then names the missing SYMBOL, pointing at the binding rather than at
+    /// the library that never opened.
+    #[test]
+    fn a_file_that_cannot_be_mapped_is_not_reported_as_loaded() {
+        let dir = std::env::temp_dir().join(format!("loft_cload_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("probe dir");
+        let bogus = dir.join("libnotanelf.so");
+        std::fs::write(&bogus, b"this is not a shared object").expect("write probe");
+        assert!(
+            !super::load_c_library("libnotanelf.so", &dir.to_string_lossy()),
+            "a path that exists but will not dlopen must not count as loaded"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// @PLN24 arc B — the same lookup, for the `#c` caller: a C binding resolves
