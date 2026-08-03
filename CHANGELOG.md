@@ -45,6 +45,44 @@ Its byte-level partner `text_from_bytes` has been there for two releases; it was
 listed on the wrong reference page, which is why it reads as new. Both are now
 under **Text**, together with `byte_at`.
 
+### `for` over text no longer stops at a NUL
+
+A text can hold a NUL — `text_from_bytes([65, 0, 66])` builds one, and `len`, `size`,
+`byte_at`, `find` and slicing all read straight past it. Only the loop stopped there:
+
+```loft
+s = text_from_bytes([65, 0, 66]);
+for c in s { n += 1; }          // n was 1, while len(s) said 3
+```
+
+Everything after the first NUL was dropped, silently, and any check written in terms
+of the length agreed the data was there. It bit exactly the code `text_from_bytes`
+exists for — a decoder that assembles bytes and then walks the result.
+
+A loop over text now yields `len(s)` characters however the text is spelled, the way
+a loop over a vector yields `len(v)` elements whatever the elements are. The NUL
+position reads as `null`, which is what `s[1]` has always answered there.
+
+Do keep in mind that a NUL survives a round trip through *bytes*, not through
+*characters*: `character`'s null is code point 0, so the two cannot be told apart.
+To preserve NULs, walk `for i in 0..size(s) { s.byte_at(i) }` and keep the data as
+`vector<u8>`.
+
+### A destructured name may be a stdlib name
+
+`trim = 7` has always made an ordinary local — `trim` being a stdlib method does not
+stop you. The same name in a destructuring did stop you:
+
+```loft
+(chq, chr) = px_to_hex(cx, cz);      // "requires plain variable names"
+```
+
+The message was the puzzle: `chr` *is* a plain variable name as far as the author
+knows, none of the three errors named `chr`, and the fix was a rename that ordinary
+assignment would never have needed. Both forms now agree on what a name may be — and
+where one is genuinely refused (a global function like `chr` or `print`), you get one
+error that says so by name.
+
 ### A function ending in `v[i].field` gives you the field
 
 A function whose body ended in a value read out of a collection — no `return`, the

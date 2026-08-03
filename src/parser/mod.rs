@@ -151,6 +151,12 @@ pub struct Parser {
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
+    /// True while parsing the LHS of a tuple destructuring — `(a, b) = expr`.
+    /// The names there are BINDINGS, exactly like the `x` in `x = expr`, so a
+    /// name that also belongs to a definition must still mint a variable
+    /// rather than resolve to that definition (loft#756).  See
+    /// `Parser::at_binding_name`.
+    pub(crate) in_tuple_lhs: bool,
     /// @PLN86 — the host-supplied sandbox policy (profiles + designations).
     /// Empty by default; set by the embedder before parsing.  A script cannot
     /// designate itself — the designation is read from here, not the source.
@@ -759,6 +765,7 @@ impl Parser {
             cc_deepest: HashMap::new(),
             cc_nest: 0,
             in_format_expr: false,
+            in_tuple_lhs: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
             sandbox_unbounded_loops: HashMap::new(),

@@ -1205,7 +1205,12 @@ emoji or accented letter is added.  When you want a 0-based character count
 that matches vector semantics, use `c#count`; when you want byte offsets for
 slicing (e.g. `txt[c#index..c#next]`), use `c#index`.
 
-Text iteration example — `#index` and `#next` are always consistent: `c#next == c#index + len(c)`:
+Text iteration example — `#index` and `#next` are consistent: `c#next == c#index + len(c)`,
+with one exception.  A NUL character reports `len(c) == 0` (`character`'s null IS code
+point 0, so the two are one value), while the walk still steps over its one byte — there
+`c#next == c#index + 1`.  Slicing `txt[c#index..c#next]` stays correct either way; only
+`len(c)` under-reports.  Guaranteeing forward progress is what stops a NUL from ending
+the loop, or spinning it forever (loft#755).
 ```
 // "Hi 😊!": H@0..1, i@1..2, ' '@2..3, '😊'@3..7, '!'@7..8
 for c in "Hi 😊!" {

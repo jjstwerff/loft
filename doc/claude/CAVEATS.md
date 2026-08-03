@@ -51,6 +51,26 @@ tables.
   consumer yet.  Build it when one appears; today collect explicitly for an unbounded source.
   Guard `tests/scripts/35p-iterator-match.loft`.
 
+- **A NUL character has no representation of its own (loft#755, loft#748).**  `character`'s
+  null IS code point 0, and loft's null *text* IS the one-byte NUL string, so a NUL is
+  reachable in a text but never distinguishable from "no character":
+  * `text_from_bytes([65, 0, 66])` is a real 3-character text — `len`/`size` say 3,
+    `byte_at` returns `65, 0, 66`, `find`/slicing work.
+  * `s[1]` on that text answers **null**, and `for c in s` yields **null** at that
+    position: the same answer, which is the guarantee — iteration yields exactly
+    `len(s)` characters and each equals `s[i]`.  Before loft#755 the loop terminated
+    on the character VALUE, so it stopped at the NUL and silently dropped the rest
+    while every other accessor read past it.
+  * `chr(0)` answers `""` for the same reason, and `text_from_bytes([0])` — a lone NUL —
+    is the null text, for which `size` still says 1 but iteration correctly yields nothing.
+
+  So a NUL survives a round trip through **bytes** (`byte_at` / `text_from_bytes`) but not
+  through **characters**.  A decoder that must preserve NULs should walk
+  `for i in 0..size(s) { s.byte_at(i) }` and keep the data as `vector<u8>`.  Giving
+  `character` a null distinct from 0 would fix this properly; it is a representation change
+  across both backends with no consumer asking for it yet.
+  Guard `tests/scripts/text-nul-iteration-755.loft`.
+
 ---
 
 ## Native build — same-symbol cross-package `#native` collision (fix deferred → @PLN26)

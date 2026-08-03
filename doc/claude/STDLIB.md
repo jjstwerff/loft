@@ -156,7 +156,16 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 
 ### Iterating over text
 
-`for c in some_text` yields one `character` per UTF-8 code point.
+`for c in some_text` yields one `character` per UTF-8 code point — exactly `len(s)` of
+them, and the character at each position is the same value `s[…]` reads there.  The
+count is a fact about the text, never about the characters in it: a text carrying a
+NUL (`text_from_bytes([65, 0, 66])`) yields all three, with the NUL position reading
+as `null` (loft#755 — it used to end the loop there).  A NUL therefore round-trips
+through `byte_at`, not through iteration; see
+[CAVEATS.md](CAVEATS.md#accepted-trade-offs-not-scheduled-for-change).
+
+The one text this does not describe is loft's **null text**, which IS the one-byte NUL
+string: `size` answers 1 for it, and it yields nothing.
 
 Inside the loop body two positional attributes are available:
 

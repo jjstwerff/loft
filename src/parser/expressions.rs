@@ -1,7 +1,9 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
+use super::{
+    Level, LexItem, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set,
+};
 use crate::data::Deps;
 
 /// @PLN86 step 0.1 — maximum expression-nesting depth allowed inside a sandboxed
@@ -2943,6 +2945,65 @@ use a separate collection or add after the loop"
         }
     }
 
+    /// The ONE home for "is the identifier the lexer is parked on a BINDING
+    /// occurrence?" — a name being declared, rather than a name being read.
+    ///
+    /// A binding name always wins over a definition of the same name: `len = 5`
+    /// and `trim = 7` are ordinary locals even though `len` and `trim` are
+    /// stdlib functions.  Two shapes bind, and before loft#756 only the first
+    /// was recognised:
+    ///
+    /// * `name = …` / `name: T = …` — the next token is `=` (never `==`).
+    /// * an element of a tuple destructuring, `(a, trim) = pair()`, where the
+    ///   next token is the `,` or `)` of the LHS list.  Missing this made the
+    ///   two assignment forms disagree about what a legal binding name is:
+    ///   `trim` resolved to the definition, the element was not a plain
+    ///   variable, and the user got *"Tuple destructuring requires plain
+    ///   variable names"* about a name that is exactly that.
+    ///
+    /// `in_tuple_lhs` is only ever set for a `( … ) =` statement, so the `,`
+    /// and `)` arms cannot fire on an ordinary parenthesised expression.
+    pub(crate) fn at_binding_name(&self) -> bool {
+        (self.lexer.peek_token("=") && !self.lexer.peek_token("=="))
+            || (self.in_tuple_lhs && (self.lexer.peek_token(",") || self.lexer.peek_token(")")))
+    }
+
+    /// Look ahead for a tuple-destructuring LHS: a statement opening with `(`
+    /// whose matching `)` is followed by `=`.  Pure lookahead — the lexer is
+    /// reverted to where it started, so nothing is parsed twice.
+    ///
+    /// The scan accepts ONLY what such an LHS can contain — names, commas and
+    /// nesting — and gives up the moment it meets anything else.  That bound is
+    /// load-bearing, not tidiness: the lexer carries state across a format
+    /// string, which `revert` does not restore, so a lookahead that walked into
+    /// one desynced the real parse.  `(s.value, "v{s.value}")` is an ordinary
+    /// tuple expression and is rejected on the `.`, long before the string.
+    fn peek_tuple_lhs(&mut self) -> bool {
+        if !self.lexer.peek_token("(") {
+            return false;
+        }
+        let lnk = self.lexer.link();
+        self.lexer.cont(); // step over "("
+        let mut depth: u32 = 1;
+        let mut names_only = true;
+        while depth > 0 {
+            if self.lexer.peek_token("(") {
+                depth += 1;
+            } else if self.lexer.peek_token(")") {
+                depth -= 1;
+            } else if !self.lexer.peek_token(",")
+                && !matches!(self.lexer.peek().has, LexItem::Identifier(_))
+            {
+                names_only = false;
+                break;
+            }
+            self.lexer.cont();
+        }
+        let binds = names_only && self.lexer.peek_token("=") && !self.lexer.peek_token("==");
+        self.lexer.revert(lnk);
+        binds
+    }
+
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
         // @PLN87 D-bind-7 — does THIS statement begin with a prefix `&`?  No valid
@@ -2955,7 +3016,16 @@ use a separate collection or add after the loop"
         // at the `&` (the cursor has drifted to `;`/`}` by detection time).
         let stmt_start_pos = self.lexer.peek_pos().clone();
         let started_with_amp = self.lexer.peek_token("&");
+        // loft#756 — mark the names in a `( … ) =` LHS as bindings for the whole
+        // LHS parse.  Only ever SET here (never cleared): a nested parse_assign
+        // inside the list must not un-mark the elements around it.  Restored
+        // below, so the RHS — parsed further down — sees the outer state again.
+        let saved_tuple_lhs = self.in_tuple_lhs;
+        if self.peek_tuple_lhs() {
+            self.in_tuple_lhs = true;
+        }
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
+        self.in_tuple_lhs = saved_tuple_lhs;
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);
         }

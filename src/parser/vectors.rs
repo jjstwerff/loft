@@ -1990,7 +1990,20 @@ impl Parser {
             u16::MAX
         };
         let mut lp = vec![for_next];
-        if !matches!(in_type, Type::Iterator(_, _)) {
+        if matches!(in_type, Type::Text(_))
+            && let Some(idx) = pre_var
+        {
+            // loft#755 — a comprehension / par materialisation over text
+            // terminates on the POSITION, never on the character read: a NUL
+            // the text really holds is `character`'s null.  Same fact, same
+            // home as the plain `for c in s` loop.
+            let tcn = self.data.def_nr("OpTextCharacterNullable");
+            let coll = super::collections::find_text_coll(lp.first().unwrap_or(&Value::Null), tcn)
+                .unwrap_or_else(|| create_iter.clone());
+            for step in self.text_loop_break(&coll, idx) {
+                lp.push(step);
+            }
+        } else if !matches!(in_type, Type::Iterator(_, _)) {
             let mut test_for = Value::Var(for_var);
             self.convert(&mut test_for, var_tp, &Type::Boolean);
             test_for = self.cl("OpNot", &[test_for]);

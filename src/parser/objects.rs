@@ -433,7 +433,7 @@ impl Parser {
                 t = t.depending(self.closure_param);
             }
         } else if self.data.def_nr(name) != u32::MAX
-            && (!self.lexer.peek_token("=") || self.lexer.peek_token("=="))
+            && !self.at_binding_name()
             && !matches!(
                 self.data.def_type(self.data.def_nr(name)),
                 // @PLN22 Phase 1 — exclude EnumValue: a bare variant used as a
@@ -508,7 +508,12 @@ impl Parser {
                 // `Value::Int`, back in parse_assign the `if let Value::Var(_)
                 // = code` arm doesn't match, the `:` is never consumed, and
                 // the user sees a confusing `Expect token ;` at the `:`.
-                let un_annotated = self.lexer.peek_token("=") && !self.lexer.peek_token("==");
+                // loft#756 — a tuple-destructuring element binds too, and it
+                // reaches here spelled `, ` / `)` rather than `=`.  Routing it
+                // through the same predicate makes `(a, chr) = pair()` report
+                // the collision by name, instead of the misleading "requires
+                // plain variable names".
+                let un_annotated = self.at_binding_name();
                 let typed_local = self.lexer.peek_token(":");
                 if un_annotated || typed_local {
                     diagnostic!(

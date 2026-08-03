@@ -145,6 +145,21 @@ x = t.0                 // element access — works
 t.1 = "world"           // element assignment — works
 ```
 
+A destructuring LHS is a **binding position**, so its names follow the same rule as
+`name = expr`: a name that a definition also uses still mints a local.
+
+```loft
+(a, trim) = pair()      // fine — `trim` is a local, as `trim = 7` always was
+(a, chr) = pair()       // "Cannot redefine function 'chr' as a variable"
+```
+
+Both forms answer identically, which is the rule to keep: methods and type names may
+be shadowed, a global function may not. Before loft#756 only `name = …` was recognised
+as a binding, so a destructured element resolved to the definition instead and the
+author got *"Tuple destructuring requires plain variable names"* about a name that is
+exactly that, plus an arity error counting the names that had been dropped.
+`Parser::at_binding_name` is the single predicate both forms read.
+
 `parse_match` dispatches on the subject type. `Type::Tuple` falls into the catch-all
 and emits "match requires an enum, struct, or scalar type" — not yet handled.
 
