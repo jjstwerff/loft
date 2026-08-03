@@ -1,0 +1,137 @@
+// @PLN23 — the uniform contract every backend satisfies.
+//
+// loft interfaces are STATIC dispatch and have no associated types, so the
+// cursor cannot be a second type the connection returns. It is state ON the
+// connection instead: `select` opens a cursor, `next` advances it, `col` reads
+// the current row. One type per backend, satisfying one interface.
+//
+// That is a real constraint, not a preference — and it is the honest shape for
+// a language whose generics specialise at compile time.
+//
+// A nullable column is ONE accessor returning `text?`: SQL NULL and the empty
+// string are different answers and the type says so, so a caller must discharge
+// the null rather than receive it unannounced. (This was split into
+// `is_null` + `col` while loft#733 was open; that bug is fixed.)
+
+// --- S4: a statement, and the values that are NOT in it ---------------------
+//
+// A `SqlText` is built by loft's own format strings (@PLN124). The parser hands
+// this type the literal/hole boundary it already knows, so:
+//
+//   q: SqlText = "SELECT id FROM t WHERE name = {name}";
+//
+// puts `SELECT id FROM t WHERE name = ` through `lit` and `name` through
+// `hole_text`. **The only path into the statement text is `lit`, and `lit` is
+// only ever called with bytes from the source file.** A value therefore cannot
+// become SQL syntax — not by discipline, by construction.
+//
+// That is why there are no `?` placeholders for a caller to write and count.
+// Writing them means re-deriving, in a second place, a boundary the parser
+// already had; and a `?` inside a quoted literal makes that second derivation a
+// SQL-parsing problem, which is a class of bug this design simply does not have.
+
+pub const SQL_TEXT = 0;
+pub const SQL_INT = 1;
+pub const SQL_FLOAT = 2;
+pub const SQL_BOOLEAN = 3;
+pub const SQL_NULL = 4;
+
+// One interpolated value, carried beside the statement rather than inside it.
+pub struct Bound {
+  kind: integer,
+  t: text,
+  i: integer,
+  f: float,
+}
+
+pub struct SqlText {
+  // The author's literal chunk that comes BEFORE each value, so
+  // `len(chunks) == len(binds)` always.
+  const chunks: vector<text>,
+  // The literal after the last value — the only chunk with no value after it.
+  tail: text,
+  const binds: vector<Bound>,
+}
+
+// A literal chunk the author wrote.
+pub fn lit(self: SqlText, s: text) { self.tail += s; }
+
+// An interpolated value closes the current literal chunk and is recorded apart
+// from it. `text?` rather than `text`, so an absent value is SQL NULL — which is
+// not the empty string, and the type is what keeps the two apart.
+pub fn hole_text(self: SqlText, v: text?) {
+  self.chunks += [self.tail];
+  self.tail = "";
+  if v == null {
+    self.binds += [Bound { kind: SQL_NULL, t: "", i: 0, f: 0.0 }];
+  } else {
+    self.binds += [Bound { kind: SQL_TEXT, t: v ?? "", i: 0, f: 0.0 }];
+  }
+}
+
+pub fn hole_int(self: SqlText, v: integer) {
+  self.chunks += [self.tail];
+  self.tail = "";
+  self.binds += [Bound { kind: SQL_INT, t: "", i: v, f: 0.0 }];
+}
+
+pub fn hole_float(self: SqlText, v: float) {
+  self.chunks += [self.tail];
+  self.tail = "";
+  self.binds += [Bound { kind: SQL_FLOAT, t: "", i: 0, f: v }];
+}
+
+// The value rides in `i` so a backend needs one integer path, not two.
+pub fn hole_boolean(self: SqlText, v: boolean) {
+  self.chunks += [self.tail];
+  self.tail = "";
+  n = if v { 1 } else { 0 };
+  self.binds += [Bound { kind: SQL_BOOLEAN, t: "", i: n, f: 0.0 }];
+}
+
+// How many values the statement binds.
+pub fn params(self: SqlText) -> integer { return len(self.binds); }
+
+// The statement in the backend's own placeholder dialect: `$1 $2 …` when
+// `numbered` (postgres), `?` otherwise (sqlite, mariadb, duckdb).
+//
+// Assembled from the chunks rather than by rewriting a caller's text, so no
+// backend ever has to find a placeholder inside SQL it did not write.
+pub fn statement(self: SqlText, numbered: boolean) -> text {
+  out = "";
+  for c in self.chunks {
+    out += c;
+    if numbered { out += "${c#count + 1}" } else { out += "?" }
+  }
+  out += self.tail;
+  return out;
+}
+
+// A bound value rendered as text, for the backends whose bind path is textual
+// (libpq sends parameters in text format). NULL has no rendering — a caller
+// must test `kind` first, which is the point.
+pub fn as_text(self: Bound) -> text {
+  if self.kind == SQL_INT { return "{self.i}" }
+  if self.kind == SQL_FLOAT { return "{self.f}" }
+  if self.kind == SQL_BOOLEAN { if self.i == 1 { return "true" } return "false" }
+  return self.t;
+}
+
+pub interface SqlDb {
+  fn db_open(self: Self, target: text) -> boolean
+  // Author-written SQL with no values in it — DDL, and the statements a
+  // backend cannot prepare. There is nothing to bind, so there is nothing to
+  // get wrong.
+  fn db_exec(self: Self, sql: text) -> boolean
+  fn db_select(self: Self, sql: text) -> boolean
+  fn db_next(self: Self) -> boolean
+  fn db_col(self: Self, i: integer) -> text?
+  fn db_width(self: Self) -> integer
+  fn db_last_error(self: Self) -> text
+  fn db_shut(self: Self)
+
+  // S4 — a statement WITH values. Prepare, bind, execute; `db_run` for effect,
+  // `db_rows` for a cursor the methods above then read.
+  fn db_run(self: Self, q: SqlText) -> boolean
+  fn db_rows(self: Self, q: SqlText) -> boolean
+}

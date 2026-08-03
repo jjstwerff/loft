@@ -103,6 +103,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_env_variables", n_env_variables),
     // @PLN10 Phase 2 — env_variable dest-passing (os_variable now owns its String).
     ("n_env_variable_dest", n_env_variable_dest),
+    // @PLN24 arc G — the optional-C-library availability query.
+    ("n_c_library_available", n_c_library_available),
     // host_input dest-passing — reads all program input as one text (stdin on
     // native/WASI; the JS host on --html).  Non-null ("" when empty).
     ("n_host_input_dest", n_host_input_dest),
@@ -930,6 +932,27 @@ fn n_write_text_raw(stores: &mut Stores, stack: &mut DbRef) {
 fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
     let new_value = { stores.os_variables() };
     stores.put(stack, new_value);
+}
+
+/// @PLN24 arc G — `c_library_available(soname)`.
+///
+/// The interpreter half of a query whose `--native` half is the `#rust` body on
+/// the same declaration; both call `c_call::library_available`, so the two
+/// backends cannot answer differently about the same library.
+///
+/// Without the `native-extensions` feature there is no `dlopen` to ask, and the
+/// honest answer is false — a build that cannot load a C library certainly
+/// cannot call into one.
+fn n_c_library_available(stores: &mut Stores, stack: &mut DbRef) {
+    let soname = *stores.get::<crate::keys::Str>(stack);
+    #[cfg(feature = "native-extensions")]
+    let ok = crate::c_call::library_available(soname.str());
+    #[cfg(not(feature = "native-extensions"))]
+    let ok = {
+        let _ = soname;
+        false
+    };
+    stores.put(stack, ok);
 }
 
 // @PLN10 Phase 2 — destination-passing variant of `n_env_variable`.

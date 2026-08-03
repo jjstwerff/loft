@@ -395,3 +395,73 @@ fn alias_and_element_assign_670_interpret() {
 fn alias_and_element_assign_670_native() {
     assert_670("--native");
 }
+
+/// A `len()` BOUND GUARD must not discharge the dead-store lint.
+///
+/// `d = self.items; if i < len(d) { d[i] = x }` is the copy-mutate footgun in full, but
+/// the lint counted `len(d)` as "the copy was read" and stayed silent — and a length
+/// observation cannot witness an element write.  Worse, the guard is the idiom the `v[i]`
+/// may-be-null warning ASKS for (skip-pattern 5), so the two lints were in tension:
+/// satisfying one silenced the other.
+///
+/// Not hypothetical.  The published `graphics` canvas is written this way, so `set_pixel`
+/// / `fill_rect` / `h_line` / `v_line` were all no-ops, every `--html` page uploaded a
+/// blank texture, and no diagnostic fired anywhere.
+///
+/// Both cures the message names must stay silent, so the fix cannot be "warn more":
+/// a live `&` reference, and a copy that is read back after the mutation.
+fn assert_len_guard(backend: &str) {
+    let (stdout, diag, code) = run_env(
+        backend,
+        &workspace("tests/data/dead_store_len_guard.loft"),
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "[{backend}] fixture did not exit 0\n{stdout}\n---\n{diag}"
+    );
+
+    // Exactly the one guarded COPY warns.
+    let ds = dead_stores(&diag);
+    assert_eq!(
+        ds, 1,
+        "[{backend}] want 1 dead store (guarded_copy's `gc_d`), got {ds}\n{diag}"
+    );
+    assert!(
+        diag.contains(&format!("'gc_d' {DEAD_STORE_MSG}")),
+        "[{backend}] a `len()`-guarded copy-mutate must warn — this is the shape the \
+         published graphics canvas shipped\n{diag}"
+    );
+    for v in ["gr_d", "rb_d"] {
+        assert!(
+            !diag.contains(&format!("'{v}' {DEAD_STORE_MSG}")),
+            "[{backend}] `{v}` is one of the two cures the message names — it must NOT \
+             warn\n{diag}"
+        );
+    }
+
+    // The values behind the verdicts: the warned copy really does lose the write, and
+    // the silent forms really do behave as the message claims.
+    for want in [
+        "guarded_copy=1",  // the write landed in the copy — source unchanged
+        "guarded_ref=8",   // `&` wrote through
+        "read_back=42",    // the copy was read back, so it was a real copy
+        "source_intact=1", // …and reading it back did not touch the source
+    ] {
+        assert!(
+            stdout.contains(want),
+            "[{backend}] expected `{want}`\n{stdout}\n---\n{diag}"
+        );
+    }
+}
+
+#[test]
+fn len_guard_does_not_silence_dead_store_interpret() {
+    assert_len_guard("--interpret");
+}
+
+#[test]
+fn len_guard_does_not_silence_dead_store_native() {
+    assert_len_guard("--native");
+}

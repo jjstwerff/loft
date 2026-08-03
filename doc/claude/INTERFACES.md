@@ -359,6 +359,54 @@ designed to avoid closing off these extensions prematurely.
 
 ---
 
+## How first-grade a library type is — measured
+
+"Can a library define a type that behaves like a built-in one?" is the question
+behind most requests for language features, and loft answers it in more places
+than it gets credit for. Measured on the current tree, not recalled:
+
+| capability | today | how |
+|---|---|---|
+| render in `"{x}"` | **yes** | `fn to_text(self: T) -> text` (@PLN99) |
+| arithmetic / comparison | **yes** | `fn OpAdd(self: T, other: U) -> V`, `OpEq`, `OpLt`, … |
+| `for x in <value>` | **yes** | a `next(self) -> τ?` on the type — a struct iterates like a collection |
+| bounded generics | **yes** | structural satisfaction, no `impl` block |
+| **receive the parts of `"{…}"`** | **yes** | `fn lit(self: T, s: text)` + `fn hole_<kind>(self: T, v: τ)` — the target type decides (@PLN124) |
+| **`x[i]` indexing** | **no** | `OpIndex` is not dispatched: *"Indexing a non vector"* |
+| **run at scope end** | **no** | no destructor / `#drop` hook |
+| **associated types** | **no** | an interface cannot say "and a cursor type that goes with it" |
+
+Three gaps are left. They are listed in the order the evidence supports, which is
+not the order of apparent size:
+
+1. **Associated types.** This one bit twice while building one library. A `sql`
+   interface cannot say "a connection, and the cursor type it produces", so the
+   cursor became state ON the connection; and an interpolation `hole` cannot be
+   generic over the value, so it needs one method per scalar kind. Both are
+   liveable and both are the same missing feature. **@PLN125 arc A.**
+
+2. **A hook at scope end.** loft already computes the fact — the ownership model
+   decides per binding whether this scope owns a value and whether it dies here,
+   which is what emits `OpFreeRef` today. So a drop is a call at an existing
+   point, not new analysis, and it inherits the early-`return` and loop-epilogue
+   cases that are easy to get wrong (loft#731 exists because of exactly those).
+   The cost to state up front: a drop **cannot fail** under C80, so anything
+   whose failure matters stays an explicit call. Designed in
+   [plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md),
+   **@PLN125 arc B** — which requires a second, unrelated consumer before it
+   lands, because a hook with one user is a hook whose invariant is untested.
+
+3. **Indexing.** The smallest and least urgent: `OpIndex` would let a matrix, a
+   bitset, a row or a ring buffer read as `x[i]` instead of `x.at(i)`. Nothing is
+   impossible without it; it is the one remaining place where a library type is
+   visibly not a built-in one. **@PLN125 arc C.**
+
+Each is independently landable, and each should land **inert first** — the
+contract declared, every existing program proved byte-identical in IR and native
+Rust, before any new behaviour is routed through it. That ordering is what keeps
+a language change from being a rewrite: the proof that nothing changed is a
+smaller and much earlier step than the feature.
+
 ## Comparison to Go interfaces
 
 | Property | Go interfaces | loft interfaces (this design) |

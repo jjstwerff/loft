@@ -61,6 +61,13 @@ fi
 HOST=$(rustc -vV | sed -n 's/^host: //p')
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOST")
 
+# Reproducibility: strip this machine's absolute paths out of the artifact, so
+# the release is one anyone can rebuild rather than one that only matches here.
+# The same file is sourced by `repro-verify.sh` — if the two ever used different
+# flags, every release would be unverifiable and it would look like a source
+# problem.  See scripts/repro-flags.sh.
+. "$(dirname "$0")/repro-flags.sh"
+
 
 
 for TRIPLE in "${TARGETS[@]}"; do
@@ -120,6 +127,12 @@ QS
     echo "version = $VERSION"
     echo "target = $TRIPLE"
     echo "rustc = $(RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-} rustc --version | sed 's/^rustc //')"
+    # Says the build erased its machine's paths.  A release without this line was
+    # built before that, so its bytes are tied to the machine that cut it and a
+    # rebuild elsewhere CANNOT match — `repro-verify.sh` reports that as "cannot
+    # verify" rather than as a difference, because calling it a difference would
+    # blame the source for the toolchain's behaviour.
+    echo "reproducible-paths = yes"
   } > "$stage/BUILD-INFO"
 
   ( cd "$stage" && find . -type f ! -name SHA256SUMS | sort | sed 's|^\./||' | xargs $SHA256 > SHA256SUMS )

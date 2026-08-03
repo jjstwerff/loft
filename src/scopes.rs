@@ -4471,6 +4471,21 @@ impl Scopes {
                 && let Some(tp) = Self::heap_call_return(&scanned, data)
             {
                 let tmp = self.new_lift_var(function, &tp);
+                // loft#735 — this lift is an ORDERING device, never an ownership
+                // transfer.  It fires exactly where `inline_struct_return` said "do
+                // NOT lift into an owned temp": the callee delivers through the
+                // caller's hidden work-ref (`__ref_N`), which the caller already
+                // frees at function exit.  `heap_call_return` hands back the type
+                // with `Deps::none()` (a caller temp cannot carry the callee's
+                // DEF-space dep), so without this mark `get_free_vars` reads
+                // `owns == true` and frees a store the caller still owns — the slot
+                // is recycled under the live value and the next write lands in it.
+                // `new_lift_var` already sets the allocate-time half of the fact
+                // (`inline_ref` — borrow, don't allocate); this is the free-time
+                // half.  The hand-correct source shape proves the target: binding
+                // the same call to a named local yields `flat:vector<integer>
+                // ["__ref_1"]` and NO `OpFreeRef`.
+                function.set_skip_free(tmp);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
                 continue;

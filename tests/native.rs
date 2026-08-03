@@ -1251,6 +1251,599 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
     Ok(())
 }
 
+/// @PLN24 arc G — `c_library_available` is symbol-granular, not file-granular.
+///
+/// The cell that matters: a library that LOADS but does not export a symbol the
+/// package declared. A file-granular answer says yes here and the call then
+/// faults — the version-skew hole that makes a naive query worse than none, and
+/// the reason the answer checks symbols at all.
+///
+/// The library is built here rather than mocked, and the control is the call
+/// that WORKS (`sk_present(41)` is 42, by hand): without it a `false` could just
+/// mean nothing loaded, which is the vacuous pass this test exists to refuse.
+#[test]
+fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the fixture library is built by `cc` here
+    }
+    let dir = std::env::temp_dir().join(format!("loft_skew_{}", std::process::id()));
+    let pkg = dir.join("pkg/skewlib/src");
+    std::fs::create_dir_all(&pkg)?;
+    let src = dir.join("old.c");
+    std::fs::write(&src, "long sk_present(long v) { return v + 1; }\n")?;
+    let so = dir.join("libskew.so");
+    let built = std::process::Command::new("cc")
+        .args(["-O2", "-fPIC", "-shared", "-o"])
+        .arg(&so)
+        .arg(&src)
+        .output()?;
+    assert!(built.status.success(), "fixture library must build");
+
+    let so_str = so.to_string_lossy().into_owned();
+    std::fs::write(
+        dir.join("pkg/skewlib/loft.toml"),
+        format!(
+            "[library]\nname = \"skewlib\"\nversion = \"0.1.0\"\n\n[c]\noptional-libs = \"{so_str}\"\n"
+        ),
+    )?;
+    std::fs::write(
+        pkg.join("skewlib.loft"),
+        format!(
+            "pub fn sk_present(v: integer) -> integer;  #c \"sk_present\" \"long(long)\"\n\
+             // Declared, and absent from this vintage of the library.\n\
+             pub fn sk_newer(v: integer) -> integer;    #c \"sk_newer\" \"long(long)\"\n\
+             pub const SKEW_SONAME = \"{so_str}\";\n\
+             pub fn skew_ok() -> boolean {{ return c_library_available(SKEW_SONAME); }}\n"
+        ),
+    )?;
+    let script = dir.join("probe.loft");
+    std::fs::write(
+        &script,
+        "use skewlib;\nfn go() {\n  println(\"ok={skew_ok()}\");\n  println(\"call={sk_present(41)}\");\n}\ngo();\n",
+    )?;
+
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(dir.join("pkg"))
+            .arg(&script)
+            .output()?;
+        let s = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {s}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            s.contains("call=42"),
+            "{backend}: the control must prove the library IS loaded and callable:\n{s}"
+        );
+        assert!(
+            s.contains("ok=false"),
+            "{backend}: a loadable library missing a declared symbol is NOT available:\n{s}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// @PLN23 — one uniform interface over four different C libraries.
+///
+/// `dump <D: SqlDb>` and `seed <D: SqlDb>` in the fixture never name a backend,
+/// and every backend runs them unchanged. That is the whole claim, and it is not
+/// a small one: sqlite STEPS a prepared statement, libpq MATERIALISES the result
+/// and indexes it by (row, col), libmariadb streams rows as `char **`, and
+/// duckdb materialises and is read by (col, row) with a caller-frees string.
+/// Four result models behind one cursor.
+///
+/// **sqlite is the cell that keeps this honest.** It needs no server, so a
+/// machine with no database still proves the interface, the bindings, the shim
+/// loft compiled, and SQL NULL staying distinct from the empty string. Only
+/// postgres and mariadb are conditional, and a skip is printed and recognised —
+/// never silently counted as a pass, which is how a dead binding would otherwise
+/// look green everywhere.
+///
+/// **duckdb is the fourth, and it is here because of @PLN24 arc G.** It was
+/// proven once before and left out of the tree: no distro packages it and its
+/// `.so` is 70 MB, so a REQUIRED declaration would have made every machine
+/// running this test fetch it. Declared `[c] optional-libs` it costs nothing —
+/// the fixture builds and runs without it, and says so — which is what makes
+/// keeping a fourth backend in the tree cheap rather than a vendoring decision.
+#[test]
+fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the sqlite backend ships a shim loft must compile
+    }
+    let has = |names: &[&str]| {
+        names.iter().any(|n| {
+            ["/lib/x86_64-linux-gnu/", "/usr/lib/", "/usr/lib64/"]
+                .iter()
+                .any(|d| std::path::Path::new(&format!("{d}{n}")).exists())
+        })
+    };
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("uniform.loft");
+    let run = |backend: &str, mode: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .env("LOFT_SQLDB_MODE", mode)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}/{mode}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+
+    // The three rows every backend is given, rendered by the SAME generic code:
+    // a value, SQL NULL, and the empty string.
+    let expect = "[ada] <null> [] ";
+
+    // @PLN23 S4 — the prepared-statement line, and every token in it is a
+    // separate claim:
+    //
+    //   p=2      two holes, and the DRIVER's own parameter count agreed with the
+    //            parser's (each backend fails `prepare` outright when they differ)
+    //   [ada] <null> []   value / SQL NULL / empty string, still three answers
+    //                     — now arriving through the BIND path rather than as
+    //                     literals in the statement text
+    //   ['); DROP TABLE loft_p; --]
+    //            the cell that matters. Spliced into SQL this closes the VALUES
+    //            list and drops the table; bound, it is stored verbatim. That the
+    //            SELECT after it returns rows at all is the proof the table
+    //            survived, so this assertion cannot pass vacuously.
+    //   hit=4    the same hostile text found its own row by EQUALITY, which it
+    //            could only do by crossing intact as data rather than as syntax.
+    //   big=1000 a value far past the 256-byte column buffer mariadb's result
+    //            binds start with, round-tripped at full length — the truncation
+    //            re-fetch is exercised, not merely written.
+    let bound = "p=2 [ada] <null> [] ['); DROP TABLE loft_p; --] hit=4 big=1000";
+
+    // sqlite — unconditional. No server, so a failure here is always real.
+    if has(&["libsqlite3.so.0"]) {
+        let s = run("--interpret", "sqlite")?;
+        assert!(
+            s.contains(&format!("sqlite {expect}")),
+            "sqlite must render value / NULL / empty distinctly:\n{s}"
+        );
+        assert!(
+            s.contains(&format!("sqlite bound {bound}")),
+            "sqlite: a bound value must reach the server as DATA, never as syntax:\n{s}"
+        );
+        assert_eq!(
+            run("--native", "sqlite")?,
+            s,
+            "both backends, one interface"
+        );
+    }
+
+    // postgres and mariadb — conditional, and a skip is recognised as a skip.
+    for (mode, lib) in [("postgres", "libpq.so.5"), ("maria", "libmariadb.so.3")] {
+        if !has(&[lib]) {
+            continue;
+        }
+        let out = run("--interpret", mode)?;
+        if out.contains("SKIP") {
+            continue; // no server reachable here
+        }
+        assert!(
+            out.contains(&format!("{mode} {expect}")),
+            "{mode} must render the same three cells as sqlite:\n{out}"
+        );
+        // Byte-identical to sqlite's, from the same generic `bound<D: SqlDb>`:
+        // three placeholder dialects, three bind APIs, three result models, one
+        // answer. A backend that quietly concatenated would differ HERE and
+        // nowhere else, which is what makes the line worth comparing whole.
+        assert!(
+            out.contains(&format!("{mode} bound {bound}")),
+            "{mode}: the bound statement must give the same answer as sqlite:\n{out}"
+        );
+        assert_eq!(
+            run("--native", mode)?,
+            out,
+            "{mode}: both backends must agree"
+        );
+    }
+
+    // @PLN24 arc G — duckdb, declared `[c] optional-libs`.
+    //
+    // This cell is unconditional ON PURPOSE, and it is the one that proves the
+    // arc: every mode above needs its C library installed to run at all, and
+    // before arc G a declared-but-absent library failed the `--native` LINK, so
+    // a program that never called into it did not build. Here the program is
+    // expected to build and run either way — the only question is which of the
+    // two answers it gives.
+    let out = run("--interpret", "duckdb")?;
+    let native = run("--native", "duckdb")?;
+    assert_eq!(
+        native, out,
+        "duckdb: both backends must agree about an optional library"
+    );
+    if out.contains("SKIP") {
+        // libduckdb absent — the interesting half. The program still ran.
+        assert!(
+            out.contains("not installed"),
+            "an absent optional library must be REPORTED, not inferred from silence:\n{out}"
+        );
+    } else {
+        assert!(
+            out.contains(&format!("duckdb {expect}")),
+            "duckdb must render the same three cells as sqlite:\n{out}"
+        );
+    }
+    Ok(())
+}
+
+/// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
+/// compiled itself, with SQL NULL kept distinct from the empty string.
+///
+/// The whole vertical slice in one test — loft → libmariadb + a loft-built
+/// ANSI-C shim → a live server → rows back — with no rustc anywhere.
+///
+/// **The `shim` mode is what keeps this honest.** The cursor needs a server, and
+/// a test that merely skips when one is absent cannot tell "no database" from "a
+/// dead binding", so it would report a broken shim as a pass on every machine
+/// without MariaDB. The `shim` mode needs no server and still exercises the
+/// pieces that can silently rot: the shim compiled, `char *` → `text?`, and a
+/// NULL pointer arriving as loft null. Only the SERVER half is conditional.
+#[test]
+fn a_sql_cursor_walks_real_rows_and_keeps_null_apart_from_empty() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let present = [
+        "/lib/x86_64-linux-gnu/libmariadb.so.3",
+        "/usr/lib/libmariadb.so.3",
+    ]
+    .iter()
+    .any(|p| std::path::Path::new(p).exists());
+    if !present
+        || std::process::Command::new("cc")
+            .arg("--version")
+            .output()
+            .is_err()
+    {
+        return Ok(());
+    }
+    let libdir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Beside the fixture it needs, NOT in tests/scripts/ — that directory is swept
+    // and every script there must run standalone, while this one needs `--lib`.
+    let script = libdir.join("mariadb").join("cursor.loft");
+    let run = |backend: &str, mode: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .env("LOFT_PLN23_MODE", mode)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}/{mode}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+
+    // Always: the shim and the null crossing, no server involved.
+    let shim = run("--interpret", "shim")?;
+    assert!(
+        shim.contains("shim null=true") && shim.contains("shim info=true"),
+        "the shim must build and a null row must cross as loft null:\n{shim}"
+    );
+    assert_eq!(
+        run("--native", "shim")?,
+        shim,
+        "both backends, one loft-built shim"
+    );
+
+    // Conditional: the cursor itself.
+    let cursor = run("--interpret", "cursor")?;
+    if cursor.contains("SKIP unreachable") {
+        return Ok(()); // no server here; the shim half above still ran
+    }
+    for want in [
+        "cols 3 rows 3",
+        "row 1 ada NULL", // SQL NULL
+        "row 2 grace [hi]",
+        "row 3 kay []", // the empty string — NOT the same thing
+        "done",
+    ] {
+        assert!(cursor.contains(want), "cursor missing `{want}`:\n{cursor}");
+    }
+    assert_eq!(
+        run("--native", "cursor")?,
+        cursor,
+        "both backends must read the same rows"
+    );
+    Ok(())
+}
+
+/// @PLN23 S2 — the opaque-handle lifecycle against a real client library.
+///
+/// `MYSQL *` crosses as a loft `integer` holding the pointer, which is the
+/// convention @PLN24 chose because loft has no type separating a handle from a
+/// number. Three things have to hold: a handle comes back, it survives being
+/// passed BACK in, and a failure carries C's own message across.
+///
+/// Deliberately **not** gated on a running server. A test that skips when the
+/// database is absent cannot tell "no server" from "the binding is broken", and
+/// would report a dead binding as a pass on every machine without MariaDB. So
+/// the cells here need no server at all: `mysql_init` and `mysql_close` are
+/// client-side, and connecting to a port nothing listens on exercises the error
+/// path — the binding is proved either way, and only the SPEED of the failure
+/// depends on the environment.
+#[test]
+fn a_c_library_handle_survives_the_round_trip_and_carries_its_error() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let present = [
+        "/lib/x86_64-linux-gnu/libmariadb.so.3",
+        "/usr/lib/libmariadb.so.3",
+    ]
+    .iter()
+    .any(|p| std::path::Path::new(p).exists());
+    if !present {
+        return Ok(());
+    }
+    let dir = std::env::temp_dir().join("loft_pln23_s2");
+    let pkg = dir.join("mariadb").join("src");
+    std::fs::create_dir_all(&pkg)?;
+    std::fs::write(
+        dir.join("mariadb").join("loft.toml"),
+        "[library]\nname = \"mariadb\"\nversion = \"0.0.1\"\n\n[c]\nlibs = \"libmariadb.so.3\"\n",
+    )?;
+    std::fs::write(
+        pkg.join("mariadb.loft"),
+        // `unix_socket` is `integer`, not `text`: it has to be able to be NULL,
+        // and loft text is non-null with no way to spell a null pointer.
+        "pub fn db_init(h: integer) -> integer;  #c \"mysql_init\" \"void*(void*)\"\n\
+         pub fn db_close(h: integer);            #c \"mysql_close\" \"void(void*)\"\n\
+         pub fn db_errno(h: integer) -> integer; #c \"mysql_errno\" \"int(void*)\"\n\
+         pub fn db_error(h: integer) -> text;    #c \"mysql_error\" \"const char*(void*)\"\n\
+         pub fn db_connect(h: integer, host: text, user: text, pass: text, db: text, port: integer, sock: integer, flags: integer) -> integer;\n\
+         #c \"mysql_real_connect\" \"void*(void*, const char*, const char*, const char*, const char*, int, const char*, long)\"\n",
+    )?;
+    let prog = dir.join("s2.loft");
+    std::fs::write(
+        &prog,
+        "use mariadb;\n\
+         fn main() {\n\
+         \x20 h = db_init(0);\n\
+         \x20 println(\"handle {h != 0}\");\n\
+         \x20 // Port 1 has no MariaDB anywhere; the point is the error crossing.\n\
+         \x20 c = db_connect(h, \"127.0.0.1\", \"nobody\", \"nothing\", \"\", 1, 0, 0);\n\
+         \x20 println(\"refused {c == 0} errno {db_errno(h) != 0} msg {db_error(h).len() > 0}\");\n\
+         \x20 db_close(h);\n\
+         \x20 println(\"closed\");\n\
+         }\n",
+    )?;
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&dir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        "handle true",                      // a pointer came back as an integer
+        "refused true errno true msg true", // and C's own diagnosis came back with it
+        "closed",                           // the handle was still usable at the end
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    assert_eq!(run("--native")?, interp, "both backends, one C library");
+    Ok(())
+}
+
+/// @PLN24 arc F / @PLN23 S1 — a `#c` binding reaches a real SYSTEM library, on
+/// both backends, with no rustc and no dev headers.
+///
+/// The fixture proved the mechanism; a system library proves the parts a fixture
+/// cannot have. `libmariadb.so.3` is a VERSIONED soname, and that is the whole
+/// point of this test: `-l dylib=mariadb` makes the linker look for
+/// `libmariadb.so`, the `-dev` symlink, while the interpreter `dlopen`s
+/// `libmariadb.so.3`, the runtime file — so one declaration resolved to two
+/// different files and the program ran interpreted and failed to LINK natively on
+/// a machine where the library is plainly installed.
+///
+/// Skips when libmariadb is absent, because a machine without it says nothing.
+#[test]
+fn a_c_binding_reaches_a_versioned_system_library_on_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    // Present only if the runtime package is installed; the `-dev` symlink is
+    // deliberately NOT required, which is the property under test.
+    let present = [
+        "/lib/x86_64-linux-gnu/libmariadb.so.3",
+        "/usr/lib/libmariadb.so.3",
+    ]
+    .iter()
+    .any(|p| std::path::Path::new(p).exists());
+    if !present {
+        return Ok(());
+    }
+    let dir = std::env::temp_dir().join("loft_pln23_s1");
+    let pkg = dir.join("mariadb").join("src");
+    std::fs::create_dir_all(&pkg)?;
+    std::fs::write(
+        dir.join("mariadb").join("loft.toml"),
+        "[library]\nname = \"mariadb\"\nversion = \"0.0.1\"\n\n[c]\nlibs = \"libmariadb.so.3\"\n",
+    )?;
+    std::fs::write(
+        pkg.join("mariadb.loft"),
+        "pub fn client_info() -> text;       #c \"mysql_get_client_info\" \"const char*(void)\"\n\
+         pub fn client_version() -> integer; #c \"mysql_get_client_version\" \"long(void)\"\n",
+    )?;
+    let prog = dir.join("s1.loft");
+    std::fs::write(
+        &prog,
+        "use mariadb;\nfn main() { println(\"{client_info()} {client_version()}\") }\n",
+    )?;
+
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&dir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    // Not an exact version — that is the machine's. What is pinned: the text came
+    // back non-empty and the integer is a real version, so both crossings worked.
+    let v: i64 = interp
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    assert!(
+        v > 10000,
+        "the client version must cross as a real number: {interp:?}"
+    );
+    assert_eq!(
+        run("--native")?,
+        interp,
+        "both backends, one system library"
+    );
+    Ok(())
+}
+
+/// @PLN24 arc D — loft compiles the ANSI-C shim itself, with `cc` and no rustc.
+///
+/// The plan's trade is that loft-core stays a generic linking tool and every
+/// signature the fixed trampolines cannot express is wrapped in a few lines of C
+/// the library ships. That trade only holds if loft can BUILD those lines —
+/// otherwise the escape hatch is a claim, and the author's alternative is the
+/// rustc toolchain `#c` exists to avoid.
+///
+/// One cell per shape that needs a shim: a `double` argument (a different
+/// register file, so it crosses as its bit pattern), an out-parameter (two
+/// answers, one return slot), and a caller-frees `char *` (loft never frees one,
+/// so the shim owns the release). The float cell is hand-computed rather than
+/// copied from a run — 2.5 × 4.0 is exactly 10.0, whose bit pattern is pinned
+/// below, so a shim that returned a plausible-but-wrong double fails.
+#[test]
+fn loft_builds_the_ansi_c_shim_a_package_ships() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    let libdir = root.join("pkg");
+    // Start from no artifact, so the build itself is what is under test.
+    let _ = std::fs::remove_dir_all(libdir.join("lcshim").join("native-auto"));
+
+    let prog = std::env::temp_dir().join("loft_pln24_shim.loft");
+    std::fs::write(
+        &prog,
+        "use lcshim;\n\
+         fn main() {\n\
+         \x20 println(\"scale {shim_scale(4612811918334230528, 4616189618054758400)}\");\n\
+         \x20 println(\"mod {shim_mod(17, 5)}\");\n\
+         \x20 println(\"owned {shim_owned(7)}\");\n\
+         }\n",
+    )?;
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        // 2.5 * 4.0 = 10.0 → 0x4024000000000000.
+        "scale 4621819117588971520",
+        "mod 2",
+        "owned shim-7",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    // The artifact is the proof loft did the compiling: nothing else put it there.
+    let built: Vec<_> = std::fs::read_dir(libdir.join("lcshim").join("native-auto"))
+        .map(|d| d.filter_map(Result::ok).map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(
+        !built.is_empty(),
+        "loft must have built the shim into native-auto/"
+    );
+
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "a shim-backed binding must answer the same on both backends"
+    );
+    Ok(())
+}
+
 /// @PLN24 arc D — the return spellings a `#c` declaration must refuse, because
 /// nothing at runtime would.
 ///
@@ -1741,4 +2334,57 @@ fn record_env_skips(suite: &str, reason: &str, skips: &[(String, String)]) {
         })
         .collect();
     let _ = std::fs::write(path, body);
+}
+
+/// loft#742 — a NESTED vector field must reference the content type the
+/// compiler recorded, not one rebuilt from the loft `Type`.
+///
+/// `type_def_nr` cannot see an element's `forced_size`, so rebuilding the
+/// nesting produced `db.vector(db.vector(<plain integer>))` for BOTH
+/// `vector<vector<integer>>` and `vector<vector<integer(-32768, 32767)>>` —
+/// the wrong element width, and a `vector<vector<integer>>` minted at an id
+/// the compiler had assigned to something else, which shifted every runtime
+/// type id after it.
+///
+/// The check is `LOFT_STRICT_SCHEMA_IDS`, which turns the `init()` schema
+/// comparison into a hard failure at the first divergence — the same gate that
+/// found this. Asserting the program's OUTPUT alone would not catch it: these
+/// programs print correct answers today, because nothing happened to bake an
+/// id at or past the shift.
+#[test]
+fn a_nested_narrow_vector_field_keeps_the_type_ids_aligned() {
+    if std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skip: rustc unavailable (--native needs it)");
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Each of these carries a differently-shaped nested narrow vector, and each
+    // drifted by a different amount before the fix.
+    for script in [
+        "tests/scripts/184-nested-narrow-int-vector.loft",
+        "tests/scripts/624-nested-narrow-width.loft",
+        "tests/scripts/432-untyped-vector-literal-arg.loft",
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--native")
+            .arg(root.join(script))
+            .env("LOFT_STRICT_SCHEMA_IDS", "1")
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("diverges from the compiler"),
+            "{script}: the generated schema drifted from the compiler's.\n{stderr}"
+        );
+        assert!(
+            out.status.success(),
+            "{script}: exited non-zero.\n{}\n{stderr}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
 }

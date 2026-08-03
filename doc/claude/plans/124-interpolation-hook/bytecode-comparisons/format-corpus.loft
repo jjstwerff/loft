@@ -1,0 +1,126 @@
+// @PLN124 H1 — the corpus that proves the interpolation hook lands INERT.
+//
+// One function per format-string path the hook's dispatch branch can reach, so
+// a byte-identical `loft introspect` diff across the change actually EXERCISES
+// each of them. A corpus that misses a path cannot catch a regression in it.
+//
+// `main` runs them all, so the file is also a clean end-to-end check on both
+// backends rather than a static artefact.
+
+struct Point { x: integer, y: integer }
+struct Money { cents: integer }
+
+// @PLN99 arc B — a type owning its own `{x:spec}` DSL takes the custom-format
+// branch, which reads the spec RAW. It is a different branch from the numeric
+// width/radix grammar and needs its own cell.
+fn to_text(self: Money, spec: text) -> text {
+  if spec == "dollars" { return "${self.cents / 100}" }
+  return "{self.cents}c";
+}
+
+// 1 — no holes at all: the literal never enters Formatting mode.
+fn plain() -> text { return "no holes here"; }
+
+// 2 — one text hole, nothing else.
+fn one_hole(name: text) -> text { return "hello {name}"; }
+
+// 3 — literal / hole / literal / hole / literal, so the alternation itself is
+//     covered rather than just its endpoints.
+fn alternating(a: text, b: integer) -> text { return "<{a}|{b}>"; }
+
+// 4 — a hole that is the WHOLE string: no leading and no trailing literal.
+fn bare_hole(v: integer) -> text { return "{v}"; }
+
+// 5 — the numeric spec grammar: width, alignment, zero-pad, radix, precision.
+fn specs(n: integer, f: float) -> text {
+  return "{n:>5}|{n:03}|{n:#x}|{f:4.2}|{f:.}";
+}
+
+// 6 — a nullable hole. `text?` renders the sentinel rather than taking the
+//     print statement out, which is its own op-swap path.
+fn null_hole(t: text?) -> text { return "[{t}]"; }
+
+// 7 — a fault-prone hole: the outermost op is a divide, so an `OpTagFault`
+//     sibling is emitted BEFORE the conversion op. Nothing else reaches that.
+fn fault_hole(a: integer, b: integer) -> text { return "q={a / b}"; }
+
+// 8 — an inner fault that must NOT tag (no renderer consumes it mid-expression).
+fn inner_fault(a: integer, b: integer, c: integer) -> text {
+  return "s={a + c / b}";
+}
+
+// 9 — a struct rendered whole, and its JSON and pretty specs.
+fn struct_holes(p: Point) -> text { return "{p}|{p:j}|{p:#}"; }
+
+// 10 — the custom `to_text` spec branch (raw spec token, not the width grammar).
+fn custom_spec(m: Money) -> text { return "{m:dollars}|{m}"; }
+
+// 11 — an expression hole, not a bare variable: field access, index, call.
+fn expression_holes(p: Point, v: vector<integer>) -> text {
+  return "{p.x}|{v[0]}|{one_hole("x")}";
+}
+
+// 12 — `for` inside a format: the `iter_for` branch with its append_value var,
+//      both bare and with a trailing spec on the comprehension.
+fn iter_hole(v: vector<integer>) -> text { return "{for n in v { n * 2 }}"; }
+fn iter_hole_spec(v: vector<integer>) -> text { return "{for n in v { n * 2 }:03}"; }
+fn iter_hole_filter(v: vector<integer>) -> text {
+  return "{for n in v if n > 10 { n }}";
+}
+
+// 13 — a backtick multiline string with holes, which strips indentation and
+//      takes the same append path.
+fn multiline(name: text) -> text {
+  return `
+    line one {name}
+    line two
+  `;
+}
+
+// 14 — escaped braces: the literal chunk carries `{` / `}` bytes that are not
+//      a hole, so the literal/hole split is the thing under test.
+fn escaped_braces(n: integer) -> text { return "{{{n}}}"; }
+
+// 15 — a format string appended into an existing text, and one built by `+=`,
+//      so the OpAppendText / OpAppendStackText choice is exercised both ways.
+fn accumulate(a: text, b: text) -> text {
+  out = "start:{a}";
+  out += " then {b}";
+  return out;
+}
+
+// 16 — a format string in ARGUMENT position, which is where the `expected`
+//      push exists at all. The hook reads that channel, so it must be inert here.
+fn argument_position(n: integer) -> text { return "v={n}".to_uppercase(); }
+
+// 17 — a format string as a CALL ARGUMENT, the position where the `expected`
+//      push exists at all. The hook reads that channel, so inertness here is
+//      the cell that says the new dispatch never fires on a `text` target.
+fn call_argument(n: integer) -> integer { return size("n={n}"); }
+
+fn main() {
+  p = Point { x: 3, y: 4 };
+  m = Money { cents: 250 };
+  nums = [10, 20, 30];
+  println(plain());
+  println(one_hole("ada"));
+  println(alternating("a", 7));
+  println(bare_hole(42));
+  println(specs(9, 3.14159));
+  println(null_hole(null as text?));
+  println(null_hole("here"));
+  println(fault_hole(6, 3));
+  println(fault_hole(6, 0));
+  println(inner_fault(1, 0, 5));
+  println(struct_holes(p));
+  println(custom_spec(m));
+  println(expression_holes(p, nums));
+  println(iter_hole(nums));
+  println(iter_hole_spec(nums));
+  println(iter_hole_filter(nums));
+  println(multiline("bee"));
+  println(escaped_braces(8));
+  println(accumulate("l", "r"));
+  println(argument_position(5));
+  println("{call_argument(5)}");
+}

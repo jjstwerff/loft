@@ -221,6 +221,14 @@ fn skip_trivia(b: &[u8], mut i: usize) -> usize {
 ///
 /// When `stmt_boundary` is false (a def/const), there is deliberately no newline boundary,
 /// so a brace-less fn body (`fn f() -> text\n  return x`) stays one item.
+///
+/// loft#736 — the depth-0 `}` does NOT end the item when an `else` follows it. `else` is
+/// the one word that can never BEGIN a statement, so seeing it after the closing brace
+/// means the statement continues; ending there split `if c { … } else { … }` into two
+/// items and the second parsed as a bare `else` ("Expect token ;"). The same split hit
+/// the expression form (`y = if c { 1 } else { 0 }`), which is why the `if` half alone
+/// appeared to work. The loop re-checks after each arm, so `else if … else …` chains
+/// stay whole.
 fn scan_item_end(src: &str, start: usize, stmt_boundary: bool) -> usize {
     let b = src.as_bytes();
     let n = b.len();
@@ -264,7 +272,7 @@ fn scan_item_end(src: &str, start: usize, stmt_boundary: bool) -> usize {
             b')' | b']' => depth -= 1,
             b'}' => {
                 depth -= 1;
-                if depth <= 0 {
+                if depth <= 0 && !continues_with_else(b, i + 1) {
                     return i + 1; // a top-level body closed
                 }
             }
@@ -272,10 +280,15 @@ fn scan_item_end(src: &str, start: usize, stmt_boundary: bool) -> usize {
             // a `;`-less loose statement ends at the first depth-0 newline where it is
             // already complete; a false guard (incomplete — trailing operator / open
             // bracket) falls through to `_` and the scan continues onto the next line.
+            // loft#736 — a following `else` is the third way it is not finished, and
+            // the only one visible AFTER the boundary rather than before it, so
+            // `statement_incomplete` (which reads what precedes) cannot see it. This
+            // is the `else`-on-its-own-line layout, comment in between included.
             b'\n'
                 if stmt_boundary
                     && depth == 0
-                    && !Parser::statement_incomplete(src[start..i].trim()) =>
+                    && !Parser::statement_incomplete(src[start..i].trim())
+                    && !continues_with_else(b, i) =>
             {
                 return i;
             }
@@ -284,6 +297,22 @@ fn scan_item_end(src: &str, start: usize, stmt_boundary: bool) -> usize {
         i += 1;
     }
     n
+}
+
+/// loft#736 — is the next significant word after offset `i` the keyword `else`?
+///
+/// Used at the depth-0 `}` boundary in [`scan_item_end`]: a statement can never START
+/// with `else`, so an `else` there continues the item rather than opening a new one.
+/// Trivia (whitespace and both comment forms) is skipped first, so a brace and its
+/// `else` may sit on separate lines with a comment between. The word-boundary check
+/// keeps an identifier that merely begins with those letters (`elsewhere`) from
+/// matching — that one really is a new statement.
+fn continues_with_else(b: &[u8], i: usize) -> bool {
+    let at = skip_trivia(b, i);
+    let end = at + 4;
+    b[at..].starts_with(b"else")
+        && b.get(end)
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_')
 }
 
 /// Skip leading `#annotation` / `#directive`s and the trivia (whitespace + comments)
@@ -479,6 +508,70 @@ mod tests {
         // native_crate_pkg.loft: a brace-less fn body.
         assert!(!is_script("pub fn hi() -> text\n    return \"hi\"\n"));
     }
+    /// loft#736 — an `else` after the depth-0 `}` CONTINUES the item.
+    ///
+    /// The split ended every item at the brace that closed it back to depth 0, so
+    /// `else { … }` came out as a second item and parsed as a bare `else`.  Both
+    /// boundaries had to learn it: the brace itself (same-line `else`) and the
+    /// `;`-less newline rule (`else` on its own line) — `statement_incomplete` reads
+    /// what PRECEDES the boundary and so can never see this continuation.
+    #[test]
+    fn else_continues_the_item() {
+        // same line
+        assert_eq!(
+            split_top_level("if x > 2 { a() } else { b() }\n"),
+            vec!["if x > 2 { a() } else { b() }"]
+        );
+        // own line, and across a comment
+        assert_eq!(
+            split_top_level("if x > 2 {\n  a()\n}\nelse {\n  b()\n}\n").len(),
+            1
+        );
+        assert_eq!(
+            split_top_level("if x > 2 { a() } // pick\nelse { b() }\n").len(),
+            1
+        );
+        // an `else if` chain is still one item
+        assert_eq!(
+            split_top_level("if x > 2 {\n a()\n}\nelse if x > 0 {\n b()\n}\nelse {\n c()\n}\n")
+                .len(),
+            1
+        );
+        // the expression form — the same boundary broke `y = if … else …`.  The item
+        // ends at the brace, so the trailing `;` is its own (empty) item, as it has
+        // always been for a brace-terminated statement; what matters is that the
+        // `else` arm stays with the `if`.
+        assert_eq!(
+            split_top_level("y = if x > 2 { 1 } else { 0 };\n")[0],
+            "y = if x > 2 { 1 } else { 0 }"
+        );
+        // …and the boundary must still SPLIT where there is no `else`: two adjacent
+        // `if`s stay two statements, and an identifier that merely starts with those
+        // letters is not a continuation.
+        assert_eq!(
+            split_top_level("if x > 2 { a() }\nif x > 1 { b() }\n").len(),
+            2
+        );
+        assert_eq!(
+            split_top_level("if x > 2 { a() }\nelsewhere = 4\n").len(),
+            2
+        );
+        // The invariant behind all of the above, stated directly: no item may BEGIN
+        // with `else` — that is the shape that reached the parser as a bare `else`.
+        for src in [
+            "if x > 2 { a() } else { b() }\n",
+            "if x > 2 {\n a()\n}\nelse {\n b()\n}\n",
+            "if x > 2 { a() } // pick\nelse { b() }\n",
+            "y = if x > 2 { 1 } else { 0 };\n",
+        ] {
+            assert!(
+                !split_top_level(src).iter().any(|it| it.starts_with("else")),
+                "an item began with `else`: {src:?} -> {:?}",
+                split_top_level(src)
+            );
+        }
+    }
+
     // ── the desugar (Step 2) ─────────────────────────────────────────────────
     #[test]
     fn desugar_none_for_non_scripts() {

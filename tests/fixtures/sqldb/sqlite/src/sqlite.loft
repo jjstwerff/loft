@@ -1,0 +1,145 @@
+use sql;
+
+// --- the C surface, bound verbatim -----------------------------------------
+fn s3_open(path: text, out: integer) -> integer;   #c "sqlite3_open" "int(const char*, void*)"
+fn s3_close(db: integer) -> integer;               #c "sqlite3_close" "int(void*)"
+fn s3_errmsg(db: integer) -> text;                 #c "sqlite3_errmsg" "const char*(void*)"
+fn s3_prepare(db: integer, sql: text, n: integer, out: integer, tail: integer) -> integer;
+#c "sqlite3_prepare_v2" "int(void*, const char*, int, void*, void*)"
+fn s3_step(st: integer) -> integer;                #c "sqlite3_step" "int(void*)"
+fn s3_finalize(st: integer) -> integer;            #c "sqlite3_finalize" "int(void*)"
+fn s3_reset(st: integer) -> integer;               #c "sqlite3_reset" "int(void*)"
+fn s3_col_count(st: integer) -> integer;           #c "sqlite3_column_count" "int(void*)"
+fn s3_col_text(st: integer, i: integer) -> text?;  #c "sqlite3_column_text" "const char*(void*, int)"
+fn s3_col_type(st: integer, i: integer) -> integer; #c "sqlite3_column_type" "int(void*, int)"
+
+// The bind surface. Parameters are 1-based here; the interface is 0-based, and
+// translating between the two is exactly what a binding is for.
+fn s3_param_count(st: integer) -> integer;         #c "sqlite3_bind_parameter_count" "int(void*)"
+fn s3_bind_text(st: integer, i: integer, v: text, n: integer, d: integer) -> integer;
+#c "sqlite3_bind_text" "int(void*, int, const char*, int, void*)"
+fn s3_bind_int(st: integer, i: integer, v: integer) -> integer;
+#c "sqlite3_bind_int64" "int(void*, int, long long)"
+fn s3_bind_null(st: integer, i: integer) -> integer; #c "sqlite3_bind_null" "int(void*, int)"
+// `sqlite3_bind_double` takes a double BY VALUE, which travels in an SSE
+// register the fixed caller does not write (@PLN24), and a shim wrapping it
+// would have to link sqlite — putting back the dependency these shims exist
+// without. So a float binds as text and the column's own affinity converts it.
+// The caveat is loft's float→text rendering, which is what then decides
+// precision; exact NUMERIC handling is a named gap in @PLN23's mapping.
+
+fn slot_a() -> integer;      #c "ls_slot_a" "void*(void)"
+fn slot_b() -> integer;      #c "ls_slot_b" "void*(void)"
+fn take_a() -> integer;      #c "ls_take_a" "void*(void)"
+fn take_b() -> integer;      #c "ls_take_b" "void*(void)"
+// SQLITE_TRANSIENT is the pointer `-1`, a value loft has no way to spell as a
+// `void*`. The shim names it, which keeps the shim free of sqlite symbols.
+fn transient() -> integer;   #c "ls_transient" "void*(void)"
+
+// --- the loft type that satisfies SqlDb ------------------------------------
+//
+// `st` is the statement the CURSOR is walking; `ps` is the prepared statement
+// that owns it when `from_ps`. Keeping both means `db_next` / `db_col` /
+// `db_width` are unchanged — they read `st` either way — while `db_next` still
+// knows whether reaching the end should FINALIZE the statement (an ad-hoc
+// select owns its own) or merely RESET it (a prepared one is reused).
+pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean }
+
+pub fn sqlite() -> Sqlite {
+  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false };
+}
+
+pub fn db_open(self: Sqlite, target: text) -> boolean {
+  if s3_open(target, slot_a()) != 0 { return false }
+  self.db = take_a();
+  return self.db != 0;
+}
+
+pub fn db_exec(self: Sqlite, sql: text) -> boolean {
+  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return false }
+  st = take_b();
+  r = s3_step(st);          // 101 = SQLITE_DONE
+  _ = s3_finalize(st);
+  return r == 101 || r == 100;
+}
+
+pub fn db_select(self: Sqlite, sql: text) -> boolean {
+  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return false }
+  self.st = take_b();
+  self.live = true;
+  self.from_ps = false;
+  return self.st != 0;
+}
+
+pub fn db_next(self: Sqlite) -> boolean {
+  if !self.live { return false }
+  if s3_step(self.st) == 100 { return true }   // 100 = SQLITE_ROW
+  // A prepared statement outlives its rows; an ad-hoc cursor does not.
+  if self.from_ps { _ = s3_reset(self.st) } else { _ = s3_finalize(self.st) }
+  self.st = 0;
+  self.live = false;
+  self.from_ps = false;
+  return false;
+}
+
+pub fn db_col(self: Sqlite, i: integer) -> text? {
+  if s3_col_type(self.st, i) == 5 { return null }   // 5 = SQLITE_NULL
+  return s3_col_text(self.st, i);
+}
+
+pub fn db_width(self: Sqlite) -> integer { return s3_col_count(self.st); }
+pub fn db_last_error(self: Sqlite) -> text { return s3_errmsg(self.db); }
+
+// --- S4: prepare, bind, execute ---------------------------------------------
+
+// Release the held statement. Preparing replaces, so this runs first there too.
+fn release(self: Sqlite) {
+  if self.from_ps { self.st = 0; self.live = false; self.from_ps = false }
+  if self.ps != 0 { _ = s3_finalize(self.ps); self.ps = 0 }
+}
+
+// Compile the statement and bind every value.
+//
+// The text comes from `q.statement(false)` — the author's chunks joined by `?`
+// — so it contains no caller data at all, and the values go down
+// `sqlite3_bind_*` beside it.
+fn bind_all(self: Sqlite, q: SqlText) -> boolean {
+  self.release();
+  if s3_prepare(self.db, q.statement(false), -1, slot_b(), 0) != 0 { return false }
+  self.ps = take_b();
+  if self.ps == 0 { return false }
+  // The driver's own count, against the one the parser produced. They can only
+  // disagree if the statement text and the value list came apart, which is the
+  // one thing that must never pass silently.
+  if s3_param_count(self.ps) != q.params() { return false }
+  for b in q.binds {
+    at = b#count + 1;
+    ok = if b.kind == SQL_NULL { s3_bind_null(self.ps, at) }
+      else if b.kind == SQL_INT { s3_bind_int(self.ps, at, b.i) }
+      else if b.kind == SQL_BOOLEAN { s3_bind_int(self.ps, at, b.i) }
+      else { s3_bind_text(self.ps, at, b.as_text(), -1, transient()) };
+    if ok != 0 { return false }
+  }
+  return true;
+}
+
+pub fn db_run(self: Sqlite, q: SqlText) -> boolean {
+  if !self.bind_all(q) { return false }
+  r = s3_step(self.ps);
+  _ = s3_reset(self.ps);
+  return r == 101 || r == 100;
+}
+
+pub fn db_rows(self: Sqlite, q: SqlText) -> boolean {
+  if !self.bind_all(q) { return false }
+  self.st = self.ps;
+  self.live = true;
+  self.from_ps = true;
+  return true;
+}
+
+pub fn db_shut(self: Sqlite) {
+  self.release();
+  if self.live { _ = s3_finalize(self.st); self.live = false; self.st = 0 }
+  if self.db != 0 { _ = s3_close(self.db); self.db = 0 }
+}

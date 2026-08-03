@@ -2471,6 +2471,38 @@ impl Parser {
         self.expected.without_deps()
     }
 
+    /// @PLN124 — the struct a format string should BUILD rather than render into
+    /// text, or `u32::MAX` when the string is ordinary text.
+    ///
+    /// The TARGET TYPE decides, which is why the hook needs no new syntax:
+    /// `q: SqlText = "… {id} …"` and `f("… {id} …")` are the same string, and only
+    /// what receives it differs.  Satisfaction is structural — the rule every loft
+    /// interface already uses — and `lit` is the whole test: a type that can accept
+    /// the author's literal bytes is a type that can be built, and the `hole_*`
+    /// methods it goes on to define say which value kinds it takes natively.
+    ///
+    /// This is a fifth SHAPE read off the one `⇐` channel, beside `lambda_hint` /
+    /// `enum_hint` / `vector_hint` / `read_target_type` — not a sixth side-channel.
+    ///
+    /// Pass-stable: method defs are collected on BOTH parser passes, so both take
+    /// the same branch — the same property the `to_text` hook relies on.  That
+    /// matters more here than it looks, because taking the branch mints an
+    /// accumulator variable, and a mint that fired on only one pass would shift
+    /// the name-keyed variable tables underneath every later work variable.
+    pub(crate) fn interpolation_target(&self, tp: &Type) -> u32 {
+        let Type::Reference(d_nr, _) = tp else {
+            return u32::MAX;
+        };
+        if self.data.def_type(*d_nr) != DefType::Struct {
+            return u32::MAX;
+        }
+        let nm = self.data.def(*d_nr).name();
+        if nm.is_empty() || self.data.def_nr(&format!("t_{}{}_lit", nm.len(), nm)) == u32::MAX {
+            return u32::MAX;
+        }
+        *d_nr
+    }
+
     /// @PLAN48 P2: true when converting `src` → `dst` narrows a loft integer to a
     /// smaller explicit width (e.g. `integer` → `i32`, or `i32` → `u8`), which
     /// loses data.  Widening (`i32` → `integer`) and same-width are not narrowing.
@@ -9032,19 +9064,7 @@ impl Parser {
         if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == &pkg_dir) {
             self.pending_native_compile.push(pkg_dir.clone());
         }
-        // @PLN24 arc D — a `[c] libs` entry is the ONLY way a `#c` binding
-        // reaches past libc and the cdylibs loft already loaded.  Carried with
-        // the package directory so a library shipping its own `.so` resolves.
-        for lib in &m.c_libs {
-            if !self
-                .data
-                .c_libraries
-                .iter()
-                .any(|(l, d)| l == lib && d == &pkg_dir)
-            {
-                self.data.c_libraries.push((lib.clone(), pkg_dir.clone()));
-            }
-        }
+        self.register_c_libraries(&m, &pkg_dir);
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self
@@ -9290,6 +9310,57 @@ impl Parser {
     /// native-symbol / native-crate bookkeeping, sibling-dependency search
     /// paths (`lib_dirs`), and queued transitive package loads
     /// (`pending_pkg_deps`).
+    /// @PLN24 arc D — register a package's C libraries: the ones it DECLARES
+    /// (`[c] libs`) and the one it SHIPS SOURCE FOR (`[c] shim`, built by `cc`).
+    ///
+    /// A `[c]` entry is the only way a `#c` binding reaches past libc and the
+    /// cdylibs loft already loaded, and both parser paths into a manifest need
+    /// it — which is exactly why it lives here once. The plan's own risk is
+    /// `N × silence`: a fact restated at several sites goes wrong quietly at
+    /// each, and this fact already had two homes before the shim would have
+    /// made it four.
+    ///
+    /// **A built shim is registered as an ordinary library**, so the
+    /// interpreter's `dlopen`, the `--native` link line and the symbol resolver
+    /// stay one code path and cannot disagree about what a shim is.
+    fn register_c_libraries(&mut self, m: &manifest::Manifest, pkg_dir: &str) {
+        let mut entries: Vec<String> = m.c_libs.clone();
+        if !m.c_shim.is_empty() {
+            match crate::c_shim::build(pkg_dir, &m.c_shim) {
+                Ok(so) => entries.push(so.to_string_lossy().into_owned()),
+                // Reported, not swallowed: without the shim its symbols are
+                // absent, and the failure the author would otherwise meet is
+                // "`#c` symbol not found" at the call — which names neither the
+                // shim nor the compiler that could not build it.
+                Err(why) => self
+                    .lexer
+                    .diagnostic(Level::Error, &format!("`[c] shim` for `{pkg_dir}`: {why}")),
+            }
+        }
+        // @PLN24 arc G — the optional list joins here, flagged. A shim is never
+        // optional: the package ships its source and loft just built it, so it
+        // is present by construction and an absent one is a build failure the
+        // author has already been told about.
+        let entries = entries
+            .into_iter()
+            .map(|l| (l, false))
+            .chain(m.c_optional_libs.iter().map(|l| (l.clone(), true)));
+        for (lib, optional) in entries {
+            if !self
+                .data
+                .c_libraries
+                .iter()
+                .any(|c| c.name == lib && c.pkg_dir == pkg_dir)
+            {
+                self.data.c_libraries.push(crate::data::CLibrary {
+                    name: lib,
+                    pkg_dir: pkg_dir.to_string(),
+                    optional,
+                });
+            }
+        }
+    }
+
     fn apply_manifest_side_effects(&mut self, dir: &str, pkg_dir: &str, m: &manifest::Manifest) {
         // register native shared library path for loading after byte_code().
         // Pre-built location first, then auto-build from source (one home:
@@ -9319,21 +9390,7 @@ impl Parser {
             self.pending_native_compile.push(pkg_dir.to_string());
         }
         // PKG.4: register native function symbols and package crate info.
-        // @PLN24 arc D — a `[c] libs` entry is the ONLY way a `#c` binding
-        // reaches past libc and the cdylibs loft already loaded.  Carried with
-        // the package directory so a library shipping its own `.so` resolves.
-        for lib in &m.c_libs {
-            if !self
-                .data
-                .c_libraries
-                .iter()
-                .any(|(l, d)| l == lib && d == pkg_dir)
-            {
-                self.data
-                    .c_libraries
-                    .push((lib.clone(), pkg_dir.to_string()));
-            }
-        }
+        self.register_c_libraries(m, pkg_dir);
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self

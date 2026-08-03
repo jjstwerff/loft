@@ -263,7 +263,12 @@ SOURCE LINE; `LOFT_TIMELINE_BT=1` adds the stack). DbRef dumps tune via `LOFT_DU
 variable table with every type dep resolved to `name(index)` plus its ownership flags —
 reach for it when a borrow points somewhere impossible, because the IR dump names variables
 without numbering them and a code/table desync then reads as one consistent story (loft#666).
-Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
+For a `--native` wrong-type fault — a sized `f#read` answering null, a keyed lookup naming a
+type the program never used — reach for **`LOFT_STRICT_SCHEMA_IDS=1`**: generated `init()`
+REPLAYS the parse-time type order, so one type created a position early renames every id
+after it, and this makes that drift fatal instead of a report (loft#739, NATIVE.md §
+Architecture). `LOFT_TRACE_MINT=1` is its companion — it names the lookup that minted the
+extra type. Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
 
 **Two diagnostic tiers.** `warning` GATES a library's CI (`LOFT_DENY_WARNINGS=1`);
 `advice` never does and has no deny switch. The rule: **a diagnostic gates if and only if
@@ -279,7 +284,11 @@ user renderer — `pretty` (default: `file:line:col` + source line + caret) vs `
 the last two which are opt-in): `LOFT_NO_WARN_RUNTIME` (undefended-fault-site warning) ·
 `LOFT_NO_HINT_NOT_NULL` (`not null` field hint) · `LOFT_FORMAT_BARE_NULL` (drop the `(reason)`
 suffix on `null`) · `LOFT_NO_DEAD_STORES` (@PLN107 dead-store lint: a copy mutated but never
-read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost) ·
+read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost — a `len(d)`
+BOUND GUARD does not count as reading it, since a length cannot witness an element write;
+that hole made the lint silent on `if i < len(d) { d[i]=x }`, the exact shape the `v[i]`
+may-be-null warning asks for, and the published `graphics` canvas shipped every drawing
+primitive as a no-op through it) ·
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·

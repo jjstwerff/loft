@@ -18,15 +18,24 @@
 # a private `RUSTUP_HOME` takes ~15s and ~600MB, and leaves the caller's default
 # toolchain untouched.
 #
-# That same private root is also the canonicalisation lever.  A build embeds absolute
-# paths (`$CARGO_HOME/registry/...`, `$RUSTUP_HOME/toolchains/...` — 192 strings for
-# loft), so two machines agree only if those paths agree.  Putting RUSTUP_HOME,
-# CARGO_HOME and the source under one FIXED root makes them agree without a container —
-# which matters, since a container is a dependency not every verifier has.
+# ## Why there is no fixed root any more
+#
+# A build embeds absolute paths (`$CARGO_HOME/registry/...`, `$RUSTUP_HOME/toolchains/...`
+# — 193 strings for loft), so two machines agree only if those paths agree.  This script
+# used to force RUSTUP_HOME, CARGO_HOME and the source under one FIXED root to make that
+# happen.  It could not work, and did not: only the VERIFIER used that root, while the
+# release was cut from the maintainer's own checkout and home directory.  Every
+# verification failed, on every platform, and the failure read as "the source does not
+# produce this binary".
+#
+# The paths are now erased on BOTH sides instead (`scripts/repro-flags.sh`, sourced by
+# `make-release.sh` and by the rebuild below), so a rebuild matches from ANY directory,
+# with no container and no magic path.
 #
 # Usage:
 #   scripts/repro-verify.sh                 # newest release, this platform's target
 #   scripts/repro-verify.sh --version 2026.7.3
+#   scripts/repro-verify.sh --target x86_64-apple-darwin
 #   scripts/repro-verify.sh --keep          # leave the work tree for inspection
 #
 # Exit: 0 identical · 1 differs · 3 cannot verify (says why; never a silent pass).
@@ -37,6 +46,7 @@ REPO="loft-lang/loft"
 # verifications side by side, which costs byte-identity and says so.
 ROOT="${LOFT_REPRO_ROOT:-/tmp/loft-repro}"
 VERSION=""
+TARGET_REQ=""
 KEEP=0
 
 die() { echo "repro-verify: $*" >&2; exit 3; }
@@ -44,6 +54,7 @@ die() { echo "repro-verify: $*" >&2; exit 3; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="${2:-}"; [ -n "$VERSION" ] || die "--version needs a value"; shift 2 ;;
+    --target)  TARGET_REQ="${2:-}"; [ -n "$TARGET_REQ" ] || die "--target needs a value"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     -h|--help) sed -n '5,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)         die "unknown option: $1" ;;
@@ -59,12 +70,27 @@ if command -v sha256sum >/dev/null; then SHA="sha256sum"; else SHA="shasum -a 25
 # cross-compiled binary is not expected to equal a natively built one.
 host=$(rustc -vV | sed -n 's/^host: //p')
 case "$host" in
-  x86_64-unknown-linux-gnu)  TARGET="x86_64-unknown-linux-musl" ;;
-  x86_64-apple-darwin)       TARGET="x86_64-apple-darwin" ;;
-  aarch64-apple-darwin)      TARGET="aarch64-apple-darwin" ;;
-  x86_64-pc-windows-msvc)    TARGET="x86_64-pc-windows-msvc" ;;
+  x86_64-unknown-linux-gnu)  NATIVE="x86_64-unknown-linux-musl" ;;
+  x86_64-apple-darwin)       NATIVE="x86_64-apple-darwin" ;;
+  aarch64-apple-darwin)      NATIVE="aarch64-apple-darwin" ;;
+  x86_64-pc-windows-msvc)    NATIVE="x86_64-pc-windows-msvc" ;;
   *) die "no published target for host $host" ;;
 esac
+
+# `--target` names WHICH published bundle to verify; without it, this host's own.
+#
+# It must be given when the caller has a target in mind, and it must be CHECKED:
+# deriving the target from the host alone let a job labelled `x86_64-apple-darwin`
+# run on an arm64 runner, download the AARCH64 bundle, rebuild aarch64, and report
+# the result under the x86_64 name.  It could only ever fail, it said nothing about
+# x86_64, and the x86_64 bundle went unverified while looking verified.  A verifier
+# that reports on a target it did not build is the exact failure this script's "never
+# a silent pass" rule exists to prevent — so a mismatch is `cannot verify` (3), not a
+# difference (1).
+TARGET="${TARGET_REQ:-$NATIVE}"
+if [ "$TARGET" != "$NATIVE" ]; then
+  die "asked to verify $TARGET, but this host ($host) natively builds $NATIVE. A cross-compiled binary is not expected to equal a natively built one, so this runner cannot verify that target — give the job a $TARGET runner"
+fi
 
 if [ -z "$VERSION" ]; then
   VERSION=$(gh release view -R "$REPO" --json tagName -q '.tagName' 2>/dev/null | sed 's/^v//')
@@ -91,6 +117,14 @@ if [ ! -f "$info" ]; then
 fi
 RUSTC_VER=$(sed -n 's/^rustc = //p' "$info" | sed 's/ .*//')
 [ -n "$RUSTC_VER" ] || die "BUILD-INFO names no rustc"
+# A release cut before the build stopped embedding its machine's absolute paths
+# cannot be reproduced anywhere else — it carried ~193 of them
+# (`/home/<user>/.cargo/registry/...`), and those strings differ, and differ in
+# LENGTH, on every other machine.  Exit 3, not 1: reporting it as a DIFFERENCE
+# would blame the source for the toolchain's behaviour, which is the same
+# dishonesty as a silent pass, pointing the other way.
+grep -q '^reproducible-paths = yes' "$info" \
+  || die "v$VERSION was built before paths were made deterministic, so its bytes are tied to the machine that cut it — nothing here can be compared"
 echo "   rustc $RUSTC_VER (from the bundle's BUILD-INFO)"
 
 # 2. The source the release was cut from.  `git archive` of the tag, taken from the
@@ -100,7 +134,14 @@ echo "   rustc $RUSTC_VER (from the bundle's BUILD-INFO)"
 unzip -q "$ROOT/src.zip" -d "$ROOT/srcroot" || die "cannot unpack the source archive"
 SRC="$ROOT/src"; mv "$ROOT/srcroot/loft-$VERSION" "$SRC" 2>/dev/null || mv "$ROOT/srcroot" "$SRC"
 
-# 3. The exact compiler, in a private root that is also the canonical path.
+# 3. The exact compiler, in a private root that leaves the caller's toolchain alone.
+#
+# The root is no longer a canonicalisation lever, and never worked as one: only
+# the VERIFIER used it, while the release was cut from the maintainer's own
+# checkout and home directory, so the paths never had a chance to agree.  The
+# build now erases them on BOTH sides (scripts/repro-flags.sh), which is why a
+# rebuild matches from any directory.  The private root stays for the reason it
+# is actually good: a throwaway toolchain that does not disturb the caller's.
 export RUSTUP_HOME="$ROOT/rustup" CARGO_HOME="$ROOT/cargo"
 echo "   installing rustc $RUSTC_VER (throwaway)"
 rustup toolchain install "$RUSTC_VER" --profile minimal --target "$TARGET" >/dev/null 2>&1 \
@@ -108,7 +149,8 @@ rustup toolchain install "$RUSTC_VER" --profile minimal --target "$TARGET" >/dev
 
 # 4. Rebuild, exactly as make-release.sh does.
 echo "   building $TARGET"
-( cd "$SRC" && CARGO_INCREMENTAL=0 rustup run "$RUSTC_VER" cargo build --release --bin loft --target "$TARGET" ) \
+( cd "$SRC" && . "$SRC/scripts/repro-flags.sh" \
+    && CARGO_INCREMENTAL=0 rustup run "$RUSTC_VER" cargo build --release --bin loft --target "$TARGET" ) \
   || die "the rebuild failed"
 
 exe="loft"; case "$TARGET" in *windows*) exe="loft.exe" ;; esac

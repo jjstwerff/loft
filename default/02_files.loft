@@ -626,6 +626,20 @@ pub fn env_variables() -> vector<EnvVariable> env#read;
 pub fn env_variable(name: text) -> text env#read;
 #rust"stores.os_variable(@name)"
 #impure(host_io)
+// --- Optional C libraries (@PLN24 arc G) ---
+// Returns whether the C library soname is usable right now: it loads, and every
+// `#c` binding declared against it resolves in it.
+//
+// Ask this before calling into a library declared with `[c] optional-libs`,
+// which is not installed on every machine and is loaded only when a binding
+// needs it. Both halves of the answer matter — a library of the wrong version
+// loads and then exports only some of the symbols, so "the file is there" would
+// say yes where the call still fails.
+//
+// A library the program never declared answers false.
+pub fn c_library_available(soname: text) -> boolean env#read;
+#rust"codegen_runtime::c_library_available(@soname, __C_LIBS, __C_LIB_SYMS)"
+#impure(host_io)
 // --- System directories (#635) ---
 // Private native: the OS temp dir, "" only where there is no filesystem.
 fn os_temp_dir() -> text env#read;

@@ -1684,6 +1684,13 @@ extern crate loft;"
             let target = crate::c_signature::CTarget::host();
             let mut declared_c: HashSet<String> = HashSet::new();
             let mut block = String::new();
+            // @PLN24 arc G — a symbol from a package that declares an OPTIONAL
+            // library cannot be declared `extern "C"`: an extern that is CALLED
+            // is an undefined reference, and with the library off the link line
+            // the program fails to build (measured — `rust-lld: unable to find
+            // library`, even for a call the program never reaches).  It gets a
+            // resolving wrapper instead, below.
+            let mut lazy = String::new();
             for d_nr in 0..data.definitions() {
                 let def = data.def(d_nr);
                 if def.c_sig.is_empty() || *def.code() != Value::Null {
@@ -1706,9 +1713,55 @@ extern crate loft;"
                     crate::c_signature::CType::Void => String::new(),
                     ref t => format!(" -> {}", t.rust_type()),
                 };
+                use std::fmt::Write as _;
+                if data.c_symbol_is_lazy(&def.position().file) {
+                    let fn_ty = format!(
+                        "unsafe extern \"C\" fn({}){ret}",
+                        sig.params
+                            .iter()
+                            .map(crate::c_signature::CType::rust_type)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    let args = (0..sig.params.len())
+                        .map(|i| format!("a{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    // An `unsafe fn` under the SAME name the call site already
+                    // writes, so nothing changes at the call: the emission of a
+                    // `#c` call stays one shape whether or not it is lazy.
+                    //
+                    // The pointer is transmuted to the DECLARED signature, never
+                    // called through a `u64` trampoline — that is arc C's whole
+                    // gain (rustc applies the C widths at the ABI), and a lazy
+                    // call that dropped it would reintroduce `atoi("-1")`
+                    // answering 4294967295.
+                    let _ = writeln!(lazy, "#[inline]");
+                    let _ = writeln!(lazy, "unsafe fn __c_{}({params}){ret} {{", sig.symbol);
+                    let _ = writeln!(
+                        lazy,
+                        "  static P: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();"
+                    );
+                    let _ = writeln!(
+                        lazy,
+                        "  match P.get_or_init(|| loft::c_call::resolve_native({:?}, __C_LIBS, __C_LIB_SYMS).map(|p| p as usize)) {{",
+                        sig.symbol
+                    );
+                    let _ = writeln!(
+                        lazy,
+                        "    Some(p) => unsafe {{ std::mem::transmute::<usize, {fn_ty}>(*p)({args}) }},"
+                    );
+                    let _ = writeln!(
+                        lazy,
+                        "    None => panic!(\"{{}}\", loft::c_call::missing_symbol_message({:?})),",
+                        sig.symbol
+                    );
+                    let _ = writeln!(lazy, "  }}");
+                    let _ = writeln!(lazy, "}}");
+                    continue;
+                }
                 // Aliased like the `#native` block, and for the same reason: a
                 // C symbol may share the wrapper fn's name (E0428).
-                use std::fmt::Write as _;
                 let _ = writeln!(block, "    #[link_name = \"{}\"]", sig.symbol);
                 let _ = writeln!(block, "    fn __c_{}({params}){ret};", sig.symbol);
             }
@@ -1716,6 +1769,44 @@ extern crate loft;"
                 writeln!(w, "unsafe extern \"C\" {{")?;
                 write!(w, "{block}")?;
                 writeln!(w, "}}")?;
+            }
+            // The tables a compiled program needs because it never runs
+            // `c_call::register`: which libraries may be opened on demand, and
+            // which `#c` symbols each is expected to provide (the availability
+            // query's symbol-granular half).
+            //
+            // EVERY declared library is listed, not just the optional ones: with
+            // its symbols resolved lazily a required library may have no
+            // undefined reference left to keep its `DT_NEEDED` entry alive, and
+            // re-opening one that is already loaded costs nothing.
+            //
+            // Emitted UNCONDITIONALLY, even empty. `c_library_available`'s
+            // `#rust` body reads them, and that body is compiled into whichever
+            // unit calls it — the main binary or an auto-built package cdylib,
+            // which links its own copy of loft and therefore has its own copy of
+            // these tables. Emitting them only "when needed" is what made the
+            // same query answer true from a program and false from inside the
+            // package that declared the library.
+            writeln!(w, "static __C_LIBS: &[(&str, &str)] = &[")?;
+            for lib in &data.c_libraries {
+                writeln!(w, "    ({:?}, {:?}),", lib.name, lib.pkg_dir)?;
+            }
+            writeln!(w, "];")?;
+            writeln!(w, "static __C_LIB_SYMS: &[(&str, &[&str])] = &[")?;
+            // The table lives in `c_call`, which exists only with
+            // `native-extensions`. Without it nothing can be `dlopen`ed, so the
+            // right table is the empty one rather than a build failure.
+            #[cfg(feature = "native-extensions")]
+            for (lib, syms) in crate::c_call::library_symbol_table(data) {
+                write!(w, "    ({lib:?}, &[")?;
+                for s in &syms {
+                    write!(w, "{s:?}, ")?;
+                }
+                writeln!(w, "]),")?;
+            }
+            writeln!(w, "];")?;
+            if !lazy.is_empty() {
+                write!(w, "{lazy}")?;
             }
         }
         Ok(())
@@ -2281,9 +2372,28 @@ extern crate loft;"
         // `content(tp)` returns u16::MAX → `set_default_value` panics on
         // `--native`.  Collect the field-referenced keyed type ids here so
         // the bare_io collection below can emit the local-only ones.
+        //
+        // loft#739 — "created inline by the container" holds only when the mint
+        // really did FOLLOW the container. `fill_all` pre-registers the keyed
+        // type of a LIBRARY-imported content struct while the library's own
+        // definitions are still being filled, which is BEFORE the user struct
+        // that carries the field is registered — so the keyed id PRECEDES its
+        // container's. Leaving it out of the bare stream then creates it inline
+        // at the container's position instead of its own, and since a keyed
+        // type is created once, every runtime id from that point on is one
+        // lower than the compile-time id baked into the emitted ops. The
+        // observed symptoms were a `f#read as u16` silently returning null (its
+        // `db_tp` const resolved to a struct) and a keyed lookup aborting with
+        // `find called on non-collection type` naming an unrelated type.
+        //
+        // So decide per keyed type, using the LOWEST-id container that
+        // references it — the one whose field emission would create it — and
+        // exclude it only when its own id comes after that container.
         let field_keyed: HashSet<u16> = {
             let mut set = HashSet::new();
-            for tp in &self.stores.types {
+            let mut decided: HashSet<u16> = HashSet::new();
+            for (idx, tp) in self.stores.types.iter().enumerate() {
+                let container = idx as u16;
                 if let crate::database::Parts::Struct(fields)
                 | crate::database::Parts::EnumValue(_, fields) = &tp.parts
                 {
@@ -2293,7 +2403,9 @@ extern crate loft;"
                             crate::database::Parts::Sorted(_, _)
                                 | crate::database::Parts::Hash(_, _)
                                 | crate::database::Parts::Index(_, _, _)
-                        ) {
+                        ) && decided.insert(f.content)
+                            && f.content > container
+                        {
                             set.insert(f.content);
                         }
                     }
@@ -2504,6 +2616,14 @@ extern crate loft;"
                 )?;
             }
         }
+        // The emission above REPLAYS the parse-time registration order rather
+        // than reading ids from it, and every type id baked into the generated
+        // ops assumes the replay lands each type at the same index. Nothing
+        // used to check that, so a type created one position early or late
+        // shifted every id after it and a `db_tp` quietly named a neighbouring
+        // type — the unattributable null reads and wrong-type abort of
+        // loft#739. Close the loop where the two orders can be compared.
+        self.write_schema_id_check(w)?;
         Ok(())
     }
 
@@ -2913,6 +3033,22 @@ extern crate loft;"
     }
 
     /// Phase 1 — emit just the type-creation call for `dnr` (no fields,
+    /// Emit the `init()`-closing call that compares the schema the generated
+    /// program just built against the compiler's own table, index by index.
+    ///
+    /// See [`Stores::verify_schema_ids`] for why this exists: the two orders
+    /// are derived independently and a single misplaced type silently renames
+    /// every id after it.  The names are emitted in compile-time index order,
+    /// which is exactly the order `init()` is supposed to reproduce.
+    fn write_schema_id_check(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        writeln!(w, "    db.verify_schema_ids(&[")?;
+        for tp in &self.stores.types {
+            writeln!(w, "        {:?},", tp.name)?;
+        }
+        writeln!(w, "    ]);")?;
+        Ok(())
+    }
+
     /// no enum values).  Captures the runtime id in a `let t{type_id}`
     /// binding so Phase 2 field/value emission can reference it.
     fn emit_type_creation(
@@ -3073,6 +3209,26 @@ extern crate loft;"
         Ok(())
     }
 
+    /// The content type id `fill_database` recorded for `host_type_id`'s field
+    /// `field_name`, if the host is a struct/enum-value with such a field.
+    ///
+    /// The compiler's own answer to "what type does this field hold", including
+    /// any element narrowing it applied. Reading it beats re-deriving one from
+    /// the loft `Type`, which cannot see a `forced_size` through
+    /// `type_def_nr` (loft#742).
+    fn recorded_field_content(&self, host_type_id: u16, field_name: &str) -> Option<u16> {
+        let (crate::database::Parts::Struct(fields) | crate::database::Parts::EnumValue(_, fields)) =
+            &self.stores.types.get(host_type_id as usize)?.parts
+        else {
+            return None;
+        };
+        fields
+            .iter()
+            .find(|f| f.name == field_name)
+            .map(|f| f.content)
+            .filter(|c| *c != u16::MAX)
+    }
+
     /// Use this to emit a single struct field into the db-builder output.
     /// Dispatches on the field's `typedef` to produce the correct `db.*` call.
     /// `s_var` is the Rust variable holding the parent struct's runtime id
@@ -3187,6 +3343,48 @@ extern crate loft;"
             // registers the nested layers in the same order, regardless of
             // which other types happened to register `vector<X>` first.
             if matches!(&**c, Type::Vector(_, _)) {
+                // loft#742 — prefer the content id `fill_database` RECORDED for
+                // this field over anything re-derived from the loft `Type`.
+                //
+                // The chain below rebuilds the nesting from `Type`, and a
+                // `Type::Integer` carries its narrowing in a `forced_size` that
+                // `type_def_nr` throws away: both `vector<vector<integer>>` and
+                // `vector<vector<integer(-32768, 32767)>>` came out as
+                // `db.vector(db.vector(<plain integer>))`. That is the wrong
+                // ELEMENT WIDTH, and it also mints `vector<vector<integer>>` —
+                // a type the compiler holds at a different id, or not at all at
+                // that point — so every runtime id after it shifted by one and
+                // `verify_schema_ids` flagged it.
+                //
+                // The recorded content is already narrowed
+                // (`vector<vector<short_raw<-32768,false>>>`) and already
+                // registered, so referencing it is both the right width and the
+                // right id. Same move as the sibling arms above and below,
+                // which read a content id rather than rebuilding one.
+                // Only when the content's `let t{N}` is ALREADY in scope — a
+                // bare type that has been flushed, or a definition type with a
+                // lower id (`type_defs` is sorted by id and emits each
+                // creation before its fields, so a lower id is already bound).
+                //
+                // Deliberately no `flush_bare_through` here to make one
+                // available. Flushing a bare VECTOR early emits
+                // `db.vector(t73)` for an element whose own binding the walk
+                // has not reached yet (E0425 in `186_nested_comprehension`),
+                // and referencing an unflushed id has the same fault one level
+                // up (E0425 in 11 scripts). A forward reference falls through
+                // to the chain below, exactly as before — no worse than it was,
+                // and the shapes this issue is about are backward references.
+                let content = self.recorded_field_content(host_type_id, field_name);
+                if let Some(content) = content
+                    && (if bare_io.iter().any(|(tid, _)| *tid == content) {
+                        bare_emitted[content as usize]
+                    } else {
+                        content < host_type_id
+                    })
+                {
+                    emit_db_field(w, s_var, field_name, "vec", &type_id_ref(content))?;
+                    return Ok(());
+                }
                 // Count nesting depth and find the innermost non-Vector type.
                 // For `vector<vector<...vector<X>>>`, emit
                 // `{ let _v0 = db.vector(<X_ref>); let _v1 = db.vector(_v0); ...

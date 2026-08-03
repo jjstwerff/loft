@@ -26,6 +26,39 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A format string can build a value, not just text
+
+`"… {x} …"` normally joins everything into one `text`. When the type it is
+assigned to says so, it now **builds that type instead**, and the type is told
+which bytes you wrote and which came from a value:
+
+```loft
+name = "ada";
+q: Query = "SELECT * FROM t WHERE name = {name}";
+// calls q.lit("SELECT * FROM t WHERE name = ") then q.hole_text(name)
+```
+
+A type opts in by defining `lit` plus a `hole_…` method per value kind it takes.
+There is no new syntax — the type you assign to (or a parameter, or a return
+type) is what decides — and plain `text` behaves exactly as before.
+
+This is what lets a library build a SQL statement, a shell command, an HTML
+fragment or a file path in which **an interpolated value can never become
+syntax**: the value has no route into the text, because the only path in is
+`lit`, and `lit` only ever receives bytes from your source file. Once a value has
+been rendered into text it is indistinguishable from text you wrote, so the fix
+is not to render it.
+
+The database clients use it, so a query is written the way you would write it
+anyway, with no placeholders to count:
+
+```loft
+q: SqlText = "SELECT id FROM users WHERE name = {name}";
+db.db_rows(q)
+```
+
+See [LOFT.md § Building a value instead of text](doc/claude/LOFT.md).
+
 ### An element taken out of a returned value stays valid
 
 Binding an element out of a struct a function just returned gave you a reference

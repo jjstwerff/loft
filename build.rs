@@ -36,6 +36,22 @@ fn main() {
         })
         .or_else(|_| std::env::var("RUSTFLAGS"))
         .unwrap_or_default();
+    // Drop `--remap-path-prefix` entries before baking (repro-flags.sh adds them
+    // to make a release reproducible).  Each names an ABSOLUTE path on the BUILD
+    // machine, so baking them would (a) put the maintainer's home directory in
+    // every released binary — the 193 embedded paths that made a release
+    // unverifiable in the first place — and (b) be useless to a consumer, whose
+    // cargo home is somewhere else entirely, so the remap would not fire and
+    // their copy of a shared dep would embed real paths while loft's embeds the
+    // mapped ones.  That is the #274 SVH mismatch, arrived at from the other
+    // side.  `extensions::local_remap_flags` recomputes them for whatever machine
+    // is doing the building, which makes both halves agree on `/cargo` and
+    // `/rustc` rather than on nothing.
+    let rustflags = rustflags
+        .split_whitespace()
+        .filter(|f| !f.starts_with("--remap-path-prefix="))
+        .collect::<Vec<_>>()
+        .join(" ");
     println!("cargo:rustc-env=LOFT_BUILD_RUSTFLAGS={}", rustflags.trim());
 
     // Stamp the rustc version this loft (and its rlib) was built with, so the

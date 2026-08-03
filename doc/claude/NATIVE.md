@@ -115,6 +115,42 @@ Each generated file contains:
 2. Rust functions for each loft function, receiving `stores: &mut Stores` as first arg
 3. A `#[test]` wrapper that calls `init()` then the test function
 
+#### The type-id correspondence (and how it is checked)
+
+`init()` **replays** the parse-time registration order; it does not read ids
+from the compiler. Every type id the generated ops carry — `OpReadFile`'s
+`db_tp`, `OpDatabase`'s type, every keyed-collection id — is a plain integer
+baked in at compile time. So the emission order is load-bearing: **the type
+created Nth by `init()` must be the compiler's type N.** One type created a
+position early or late renames every id after it.
+
+Nothing used to check this, and the failures it produced named the wrong thing.
+A `f#read as u16` returned null because its `db_tp` had come to point at a
+struct, while the other widths out of the same handle stayed right; a keyed
+lookup aborted with `find called on non-collection type` naming whatever type
+sat at the shifted id — a type in a library the program never called (loft#739).
+
+`Stores::verify_schema_ids`, emitted at the end of every `init()`, now compares
+the two tables and names a type the program placed at a different id than the
+compiler did. It **reports and continues**: some drifts predate the check and
+produce correct output today, so aborting would fail working programs. Set
+`LOFT_STRICT_SCHEMA_IDS` to make it fatal — that is what you want while hunting
+one. It deliberately stays quiet about a name the runtime table lacks entirely
+(`db.sorted` registers `sorted<Rec[id]>` for a recorded `ordered<Rec[id]>`,
+`db.vector` registers `vector<X>` for `array<X>` — different rendering, same
+slot) and about a name the compiler's table holds twice (prelude shadowing),
+since neither can witness a move.
+
+Known drifts it currently reports, all producing correct output so far and none
+yet run down: a nested narrow-int vector registers `vector<vector<integer>>`
+where the compiler recorded `main_vector<vector<integer(-32768, 32767)>>`,
+losing the narrow element type and minting an extra type; and `short<0,true>`
+lands one late behind the same nested-vector shape.
+
+`LOFT_TRACE_MINT=1` is the companion instrument: it narrates every
+collection-type lookup as `hit=<nr>` or `MINT=<nr>` with caller frames, so
+diffing a working run against a broken one shows the extra mint.
+
 ### Per-Op emitter dispatch (plan 09 phase 00)
 
 Every `#rust` template substitution AND every user-fn / Op-stub call
@@ -1370,7 +1406,7 @@ shipped state.  Each row links to its design content above.
 | Item | Section | Status |
 |---|---|---|
 | **Text branch delivery — tail + bind** (was an accept/reject divergence) | this row | **✅ FIXED 2026-07-10, both sites.**  A branch producing `text` — `if`, `match`, or a `??` value-block — must deliver PER ARM into a destination; used as an expression, each arm emits `&*(callee(…))`, a borrow of the `Str` temporary the callee returned, and that temporary dies at the arm's `}`.  The interpreter, which keeps the value on its stack, was correct throughout.  **Trigger** is a callee needing a caller-provided destination buffer (a COMPUTED text body); a literal-bodied callee returns an owned `String` and never diverged, with or without params.  **Two masks, one cause:** scalar-subject `match` → `E0716`; `if` → `E0308`.  A TEXT-subject `match` passed only *by accident* — freeing the subject copy emits an `OpFreeText` after the value, incidentally tripping `has_trailing_void` in `generation::emit`, which materialised the block; the subject's type has nothing to do with the arm temporary's lifetime.  **Fixes:** TAIL — `if_tail_yields_text` now sees through the `scalar_match` block (the `ncc`/`ncr` see-through pattern).  BIND — `Parser::try_branch_text_bind`, read from both `operators::assign_text` and `expressions::append_to_text`; the leading `Set(q, "")` is load-bearing (without it the per-arm sets live inside the branch, `q` is never introduced, and the interpreter silently reads an EMPTY text — a wrong ANSWER, worse than the reject).  **Do NOT fix this emit-side:** widening `has_trailing_void` to any branch-valued text block was tried and reverted — it materialises an inner block that is itself an if-ARM, so that arm yields `String` while its sibling yields `&str` (`tests/docs/29-match.loft`, E0308).  Guards: `tests/scripts/536-text-match-tail-buffer-callee.loft`; oracle cells `27-native-tailcall-return-heap.loft` (tail) + `30-text-branch-bind-delivery.loft` (bind). |
-| **`-> text?` branch tail with a `null` arm → native `E0308`** (interp correct) | this row | **OPEN.**  `fn g(k) -> text? { if k == 1 { c0() } else { null } }` — and the `match` twin — compile-reject on native while the interpreter is correct.  A distinct gap from the row above, **not** a `??` bug: `q = g(k) ?? "fb"` fails only when `g` itself carries the null arm, and passes once it does not.  (An earlier note here mis-attributed it to the `??` bind; the probe's helper was carrying the real fault.)  Excluded by design from the branch-delivery fixes: `arm_yields_text` returns `false` for a `null` arm so a `text?` tail keeps its `(N-Store)` reject.  Needs its own design — the destination is nullable, so per-arm delivery into a `&text` buffer cannot represent the null arm.  **No oracle cell until it is fixed** — a cell for a known divergence makes the gate born-red, and a gate that has never been green cannot tell a regression from a birth defect ([ROADMAP § top picks](ROADMAP.md)). |
+| **`-> text?` branch tail → native `E0308`** (interp correct) | this row | **FIXED (loft#741).**  `fn g(k) -> text? { match k { 0 => { c0() }, _ => { "z{n}" } } }` — and the `if` and `null`-arm twins — compile-rejected on native while the interpreter was correct.  The per-arm accumulator (`do_if_acc`) read the TAIL's nullability, which conflated two different stores and excluded both: `-> text?` with a nullable tail is a nullable value reaching a nullable destination (fine), while `-> text` with one is a nullable-into-non-null `(N-Store)`.  Excluding the first cost every `-> text?` branch tail its per-arm delivery, so the `match` compiled as ONE Rust expression whose arms must unify — a buffered call yields `Str`, a formatted string `&String`.  The condition now reads the DECLARED RETURN, and the accumulator carries that nullability rather than claiming non-null while holding a null.  An earlier note here concluded per-arm delivery *could not* represent a null arm; it can — loft carries a null text as a content sentinel, which survives the buffer write.  The `-> text` half keeps reporting its N-Store (`tests/runtime_warnings.rs`), which is the other half of the fix.  Cells: `tests/scripts/741-nullable-text-branch-tail.loft`. |
 | **@P321c** — `imaging` native ABI gap | [PROBLEMS.md @P321c](PROBLEMS.md) | Open (diagnosed, needs design, M+).  Native direct-call ABI cannot pass a `LoftStore` to a store-mutating `#native` fn (`load_png` decodes + allocates into the Image struct).  `output_native_direct_call` (`src/generation/mod.rs:2181`) has no struct-ref marshalling.  Recommended fix: route through `codegen_runtime + Abi::Cell` (crypto pattern).  16/17 library packages native-green; only `imaging` remains in `LIB_PKGS_NATIVE_SKIP`. |
 | **@PLN26 ph.1** — same-symbol cross-package `#native` collision (**full fix DEFERRED — idea parked here; [#388](https://github.com/loft-lang/loft/issues/388) closed not-planned**) | [@PLN26](https://github.com/loft-lang/plans/issues/26) (closed) + [§ Resolution](#resolution-separate-the-api-id-from-the-rust-part-link-the-cdylib-by-c-abi) | **MVP shipped (`4004424b`+`027d187b`); full fix deferred — this row IS the parked idea (reopen #388 when the trigger below fires).**  Two `[native] crate` packages exporting the SAME `#native` symbol can't be disambiguated across the flat C-ABI namespace (link = first-`.so`-wins), nor the interpreter's symbol-keyed `BRIDGE_REGISTRY` (last-loaded-wins) — a **pre-existing both-backend** hazard, not a C-ABI regression.  MVP: native codegen rejects a **reachable** call to such a symbol with a "rename one" `compile_error!` (`Data::native_symbol_collisions` → `Output.native_collisions`, reachability-scoped so two packages sharing an *unused* symbol still build); `--interpret` keeps its existing silent behavior (guard is native-only by design).  **Deferred full fix:** per-package symbol prefix so they coexist — must change the cdylib export (loft-ffi-macros / `loft generate`), the interpreter registry + dispatch, and codegen *in lockstep*; only needed to CALL a symbol two **un-renameable** packages both export.  Repro/guards: `tests/lib/collide_{a,b,main,unused}` + `native_symbol_collision_across_packages_detected`. |
 | **@PLN26 ph.2** — library-cdylib + native package (**✅ DONE → Part 2 of [#389](https://github.com/loft-lang/loft/issues/389)**) | [@PLN26](https://github.com/loft-lang/plans/issues/26) (closed) + [#389](https://github.com/loft-lang/loft/issues/389) | **Implemented + verified.**  A shared-store library cdylib that uses a `[native] crate` package now links it by C-ABI, exactly as the exec path does: `emit_program` sets `native_cabi` (the cdylib emits the package's fns as `extern "C"` `#[link_name]` decls — NOT `extern crate`), and `build_shared_cdylib` adds the `--extern loft_ffi` rlib + each package's resolved `.so` (`-L native`/`-l dylib`/RPATH via `extensions`-resolved `native_pkg_cabi_link_args`).  The sealed `.so` lifts the duplicate-`loft_register_v1` 2-package limit.  `LOFT_NATIVE_CABI=0` still refuses the combo loudly (the legacy rlib link can't take two `loft_ffi` rlibs into one cdylib).  Verified end-to-end: hex_grid's cdylib builds with graphics in the program; a library calling `graphics::save_png` links + runs the native (PNG written), `__cabi_loft_save_png` resolving via the cdylib's RUNPATH.  Regression: `shared_cdylib_with_native_package_emits_cabi_extern` (`tests/n2_cdylib.rs`).  Separately, the `viewer_markdown` collision is the cdylib's OWN raw `*mut Stores` → the `LoftStore`-handle decoupling (**Part 1 of #389 — now tracked as [STABILITY_HOTSPOTS.md § H9](STABILITY_HOTSPOTS.md#h9--raw-mut-stores-across-the-shared-store-cdylibhost-bridge); #389 closed**), NOT native-package linking. |

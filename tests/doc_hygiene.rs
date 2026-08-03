@@ -1267,4 +1267,48 @@ fn repro_matrix_covers_every_published_triple() {
              .github/workflows/repro-build.yml (on the runner release.yml builds it on)"
         );
     }
+
+    // And each row's RUNNER must natively build its target. Coverage alone let a
+    // row pass while proving nothing: `x86_64-apple-darwin` sat on `macos-14`,
+    // which is arm64, so the job rebuilt aarch64 and reported it under the x86_64
+    // name — x86_64 was never verified while looking verified. A cross-compiled
+    // binary is not expected to equal a natively built one, so a mismatched pair
+    // can only ever fail, and for a reason that says nothing about the source.
+    //
+    // Keyed on the runner image's architecture, which is the fact that went wrong:
+    // `macos-13` is the x86_64 image, `macos-14` and `macos-latest` are arm64.
+    let arch_of_runner = |os: &str| -> Option<&'static str> {
+        match os {
+            "macos-13" => Some("x86_64"),
+            "macos-14" | "macos-15" | "macos-latest" => Some("aarch64"),
+            o if o.starts_with("ubuntu") || o.starts_with("windows") => Some("x86_64"),
+            _ => None,
+        }
+    };
+    let mut pending_os: Option<String> = None;
+    for line in wf.lines() {
+        let t = line.trim();
+        if let Some(os) = t.strip_prefix("- os:") {
+            pending_os = Some(os.trim().to_string());
+        } else if let Some(target) = t.strip_prefix("target:") {
+            let target = target.trim();
+            let Some(os) = pending_os.take() else {
+                continue;
+            };
+            let Some(arch) = arch_of_runner(&os) else {
+                panic!(
+                    "repro-build.yml matrix uses runner `{os}`, whose architecture this \
+                     check does not know — add it to `arch_of_runner` so the pairing \
+                     stays checkable"
+                );
+            };
+            assert!(
+                target.starts_with(arch),
+                "repro-build.yml pairs target `{target}` with runner `{os}` ({arch}): \
+                 that job would cross-compile and could only ever report a mismatch. \
+                 Give it a {} runner",
+                target.split('-').next().unwrap_or(target)
+            );
+        }
+    }
 }

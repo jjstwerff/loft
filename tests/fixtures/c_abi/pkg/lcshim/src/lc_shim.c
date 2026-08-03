@@ -1,0 +1,54 @@
+/* Copyright (c) 2026 Jurjen Stellingwerff
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ *
+ * @PLN24 arc D — the ANSI-C shim, at its real size.
+ *
+ * One wrapper per shape the fixed integer-class trampolines cannot express.
+ * The plan's whole trade is "complexity in the shim, not in loft-core", and
+ * these are the lines that trade costs: if they were not small, the trade
+ * would not be one anyone should take.
+ */
+#include <string.h>
+#include <stdlib.h>
+
+/* A double travels in an SSE register, not the integer registers the caller
+ * uses — a different register file, so no cast reaches it.  It crosses as its
+ * bit pattern instead. */
+static double lcs_scale(double v, double by) { return v * by; }
+
+long lcs_shim_scale(long bits, long by_bits);
+long lcs_shim_scale(long bits, long by_bits) {
+  double v, by, r;
+  memcpy(&v, &bits, 8);
+  memcpy(&by, &by_bits, 8);
+  r = lcs_scale(v, by);
+  memcpy(&bits, &r, 8);
+  return bits;
+}
+
+/* An out-parameter: two answers, one return slot. */
+static long lcs_divmod(long a, long b, long *rem) {
+  if (b == 0) { *rem = 0; return 0; }
+  *rem = a % b;
+  return a / b;
+}
+
+long lcs_shim_mod(long a, long b);
+long lcs_shim_mod(long a, long b) { long r; lcs_divmod(a, b, &r); return r; }
+
+/* A caller-frees return.  loft never frees a `char *` it is handed, so this is
+ * the shape that has to go through a shim: the owned buffer is copied into
+ * storage the caller must NOT free, and released here. */
+const char *lcs_shim_owned(long n);
+const char *lcs_shim_owned(long n) {
+  static char buf[32];
+  char *owned = (char *)malloc(16);
+  if (owned == 0) { return "?"; }
+  memcpy(owned, "shim-", 6);
+  buf[0] = '\0';
+  strcat(buf, owned);
+  free(owned);
+  buf[5] = (char)('0' + (n % 10));
+  buf[6] = '\0';
+  return buf;
+}

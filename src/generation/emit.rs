@@ -549,8 +549,18 @@ impl Output<'_> {
                         // (`edit_kind_label`): a work-buffer arg exists but the
                         // fn returns a DIFFERENT local, so the `no_work_buffer`
                         // guard above doesn't catch it.
+                        //
+                        // `.base()` peels nullability for the same reason
+                        // `returns_text` above does: a `text?` local is just as
+                        // much a fn-local `String` as a `text` one, and matching
+                        // the un-peeled `Type::Optional(Text)` missed it — a
+                        // `-> text?` fn with two `return <call>` statements gave
+                        // every non-final return a `__ret_N` local and handed
+                        // back `Str::new(&var___ret_N)` into a dropped String
+                        // (loft#740).  Non-null `text` was unaffected, which is
+                        // why it stayed hidden.
                         let returns_local_text = matches!((**val).unspan(), Value::Var(v)
-                            if matches!(def.variables().tp(*v), Type::Text(_))
+                            if matches!(def.variables().tp(*v).base(), Type::Text(_))
                                 && !def.variables().is_argument(*v));
                         // @PLAN52 cluster VI (2026-05-30): closures returning text
                         // have a `__work_ret: &mut String` parameter but the

@@ -510,6 +510,8 @@ declaration: `void*` bound to `text` is either a mistake or a handle that wanted
 [c]
 libs = "libpq.so.5"            # a soname the dynamic linker knows
 # libs = "../../libmine.so"    # or a path, resolved against the package dir
+optional-libs = "libduckdb.so" # bound, but not required to be installed
+shim = "src/shim.c"            # ANSI-C loft compiles itself, with `cc`
 ```
 
 The interpreter `dlopen`s each entry and keeps it loaded (a `#c` symbol is
@@ -518,6 +520,61 @@ halves.  A binding to **libc needs no entry** — it is already in the process.
 
 Distinct from `[native] runtime-libs`, which names what a Rust cdylib needs
 present and only probes for it.
+
+#### Optional libraries — `optional-libs` (arc G)
+
+**`libs` means the package does not work without it.**  Absent, the failure is
+early and actionable: the interpreter reports it, and `--native` will not even
+link.  That is the right answer for a package's one reason to exist.
+
+**`optional-libs` means the package binds it but works without it.**  It is not
+linked and not opened at load; it is opened when a symbol from it is first
+looked up, and `--native` resolves it at that moment too instead of putting it
+on the link line.  So a program that never calls into it **builds and runs on a
+machine where the library is not installed** — which is what lets one package
+offer several backends without making a user install all of them to use one.
+
+The cost is that presence becomes a question the program must ask:
+
+```loft
+if c_library_available("libduckdb.so") { … } else { /* fall back */ }
+```
+
+Ask it *before* the first call.  A `#c` symbol that cannot be resolved **faults**
+— `#c` is the declared edge of loft's totality, not a null-returning
+computation — so this query is what keeps an optional backend inside the
+no-runtime-errors rule (C80).
+
+`c_library_available` answers true when the library loads **and** every `#c`
+symbol attributable to it resolves.  Both halves matter: a library of the wrong
+vintage loads and exports only some of its symbols, so "the file is there" would
+say yes where the call still faults.
+
+**Declare at most one optional library per package.**  A `#c` annotation never
+names the library it comes from, so symbols are attributed by package — and with
+two optional libraries in one package nothing says which one exports what.  Such
+a package still answers the load question correctly but gives up the skew half.
+Required entries do not count: a package cannot load without them, and one of
+them is usually its own `shim`, which loft just built.
+
+**`shim`** names ANSI-C sources the package ships for the signatures the fixed
+trampolines cannot express — a `double` argument, a struct by value, varargs, an
+out-parameter, a caller-frees `char *` return.  loft compiles them with **`cc`,
+never rustc** (the whole point of `#c`), and the result is then registered
+*exactly like a `libs` entry*: nothing downstream can tell a shim from any other
+C library, so the interpreter's `dlopen`, the `--native` link line and the symbol
+resolver stay one code path.
+
+The artifact lands in the package's `native-auto/` and is **content-addressed**
+by the shim sources plus the compiler's identity — editing a shim produces a
+different file rather than racing to overwrite one another process may be
+reading, and a toolchain change rebuilds rather than reusing a stale ABI.  An
+existing artifact IS the freshness check, so a warm run costs nothing.
+
+`loft install` builds it at install time, so a package needing a C compiler says
+so while the user is installing packages, not inside the first run of their
+program.  A failure there is surfaced and the install still succeeds — the
+parser reports it again, with the `use` site, if the package is actually used.
 
 **Status: it works on both backends** — `--native` compiles the declaration into
 a typed `extern "C"` and calls it directly; the interpreter resolves the symbol

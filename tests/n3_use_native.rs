@@ -621,3 +621,110 @@ fn a_foreign_context_artifact_is_rejected_not_adopted() {
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(native_auto);
 }
+
+/// loft#739 — a `hash<T[key]>` over a LIBRARY-IMPORTED struct shifted the
+/// native program's type-id table, so every id baked into the emitted ops from
+/// that point on named a different type than the compiler meant.
+///
+/// The generated `init()` REPLAYS the parse-time registration order; the type
+/// ids it operates on are plain integers baked in at compile time. A keyed
+/// collection that a struct field references is normally created inline right
+/// after its container, so the emitter deliberately keeps it out of the
+/// standalone stream. That assumption breaks when the library's own API takes
+/// the keyed collection as a parameter: `fill_all` then pre-registers
+/// `hash<KTile[tkey]>` while the LIBRARY is being filled — before the importing
+/// program's struct exists — so its id PRECEDES its container's. Emitting it
+/// inline dropped one position from the sequence and every later id came out
+/// one low.
+///
+/// The visible damage was silent: `f#read as u16` returned null because its
+/// `db_tp` const now resolved to a struct, while `as u8`, `as i16` and `as i32`
+/// out of the same handle stayed correct. Which width breaks depends on where
+/// the shift lands, so the test asserts all four widths and pins each value —
+/// a fix that merely stops the null while reading the wrong width still fails.
+///
+/// `tile_count`'s parameter in `tests/lib/keyedlib.loft` is the trigger and must
+/// stay; a library that only exports `KTile` does not reproduce this.
+#[test]
+fn keyed_collection_over_imported_struct_keeps_type_ids_aligned() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (--native needs it)");
+        return;
+    }
+
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_i739_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prog = tmp.join("main.loft");
+    let bin = tmp.join("probe.bin");
+    let bin_path = bin.to_string_lossy().replace('\\', "/");
+
+    // `Blk` is never constructed and no store is ever bound — declaring the
+    // field is the whole trigger. The four reads then prove the baked `db_tp`
+    // consts still name the types the compiler chose.
+    std::fs::write(
+        &prog,
+        format!(
+            "use keyedlib::(KTile);\n\
+             \n\
+             struct Blk {{ tiles: hash<KTile[tkey]> }}\n\
+             \n\
+             fn main() {{\n\
+             \x20   p = \"{bin_path}\";\n\
+             \x20   _ = delete(p);\n\
+             \x20   {{ w = file(p); w#format = LittleEndian;\n\
+             \x20     w += (65 as u8);\n\
+             \x20     w += (258 as i16? ?? (0 as i16));\n\
+             \x20     w += (66051 as i32? ?? (0 as i32));\n\
+             \x20     w += (515 as u16? ?? (0 as u16)); }}\n\
+             \x20   f = file(p); f#format = LittleEndian;\n\
+             \x20   a = f#read as u8;\n\
+             \x20   b = f#read as i16;\n\
+             \x20   c = f#read as i32;\n\
+             \x20   d = f#read as u16;\n\
+             \x20   println(\"{{a}} {{b}} {{c}} {{d}}\");\n\
+             }}\n"
+        ),
+    )
+    .unwrap();
+
+    let mut outputs = Vec::new();
+    for mode in ["--interpret", "--native"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(mode)
+            .arg("--lib")
+            .arg("tests/lib")
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "{mode} exited non-zero.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        // A drift is reported by `Stores::verify_schema_ids`, which names the
+        // first id where the generated schema and the compiler's disagree.
+        assert!(
+            !stderr.contains("diverges from the compiler"),
+            "{mode}: the generated schema drifted from the compiler's.\n{stderr}"
+        );
+        assert!(
+            stdout.trim() == "65 258 66051 515",
+            "{mode}: a sized read resolved its `db_tp` to the wrong type — \
+             expected `65 258 66051 515`, got `{}`",
+            stdout.trim()
+        );
+        outputs.push(stdout);
+    }
+    // The interpreter was correct throughout, so equality is the standing
+    // guarantee this regression broke — assert it rather than only the values.
+    assert_eq!(
+        outputs[0], outputs[1],
+        "the two backends disagree on the sized reads"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

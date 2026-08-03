@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Fixture for loft#739 — a library whose own API takes a KEYED COLLECTION over
+// its own struct. That parameter is what makes `fill_all` pre-register
+// `hash<KTile[tkey]>` while this library is being filled, which is BEFORE any
+// importing program's struct that carries such a field exists. A library that
+// merely exports the struct does not reproduce the bug: without this parameter
+// the keyed type is first minted by the importing struct's own field, in the
+// order the native `init()` emitter assumes.
+
+pub struct KTile { tkey: integer, name: text }
+
+pub fn tile_count(store: hash<KTile[tkey]>) -> integer {
+  n = 0;
+  for t in store { n += 1; }
+  n
+}

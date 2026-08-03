@@ -1,0 +1,173 @@
+use sql;
+
+fn pq_connect(conninfo: text) -> integer;      #c "PQconnectdb" "void*(const char*)"
+fn pq_status(c: integer) -> integer;           #c "PQstatus" "int(void*)"
+fn pq_finish(c: integer);                      #c "PQfinish" "void(void*)"
+fn pq_errmsg(c: integer) -> text;              #c "PQerrorMessage" "char*(void*)"
+fn pq_exec(c: integer, sql: text) -> integer;  #c "PQexec" "void*(void*, const char*)"
+fn pq_res_status(r: integer) -> integer;       #c "PQresultStatus" "int(void*)"
+fn pq_ntuples(r: integer) -> integer;          #c "PQntuples" "int(void*)"
+fn pq_nfields(r: integer) -> integer;          #c "PQnfields" "int(void*)"
+fn pq_getvalue(r: integer, row: integer, col: integer) -> text; #c "PQgetvalue" "char*(void*, int, int)"
+fn pq_getisnull(r: integer, row: integer, col: integer) -> integer; #c "PQgetisnull" "int(void*, int, int)"
+fn pq_clear(r: integer);                       #c "PQclear" "void(void*)"
+
+// --- S4: server-side prepared statements ------------------------------------
+fn pq_prepare(c: integer, name: text, sql: text, n: integer, types: integer) -> integer;
+#c "PQprepare" "void*(void*, const char*, const char*, int, void*)"
+fn pq_exec_prepared(c: integer, name: text, n: integer, vals: integer,
+                    lens: integer, fmts: integer, rf: integer) -> integer;
+#c "PQexecPrepared" "void*(void*, const char*, int, void*, void*, void*, int)"
+fn pq_describe_prepared(c: integer, name: text) -> integer;
+#c "PQdescribePrepared" "void*(void*, const char*)"
+fn pq_nparams(r: integer) -> integer;          #c "PQnparams" "int(void*)"
+
+// The shim owns the `char *` array libpq reads parameters out of.
+fn lp_reset(n: integer) -> integer;            #c "lp_reset" "int(int)"
+fn lp_set(i: integer, s: text) -> integer;     #c "lp_set" "int(int, const char*)"
+fn lp_set_null(i: integer) -> integer;         #c "lp_set_null" "int(int)"
+fn lp_vals() -> integer;                       #c "lp_vals" "void*(void)"
+
+// The same interface over a different result model: sqlite STEPS a statement,
+// libpq materialises the whole result and indexes it by (row, col). The cursor
+// the interface promises is kept here, in `at`, rather than by the library.
+pub struct Postgres {
+  conn: integer,
+  res: integer,
+  at: integer,
+  n: integer,
+  // A server-side prepared statement is NAMED, so the name is the handle. The
+  // counter makes each one distinct, which is cheaper than asking the server
+  // whether a name is already taken.
+  seq: integer,
+  ps: text,
+  err: text,
+}
+
+pub fn postgres() -> Postgres {
+  return Postgres { conn: 0, res: 0, at: -1, n: 0, seq: 0, ps: "", err: "" };
+}
+
+pub fn db_open(self: Postgres, target: text) -> boolean {
+  self.conn = pq_connect(target);
+  return self.conn != 0 && pq_status(self.conn) == 0;   // 0 = CONNECTION_OK
+}
+
+pub fn db_exec(self: Postgres, sql: text) -> boolean {
+  r = pq_exec(self.conn, sql);
+  if r == 0 { return false }
+  s = pq_res_status(r);
+  pq_clear(r);
+  return s == 1 || s == 2;                              // COMMAND_OK / TUPLES_OK
+}
+
+pub fn db_select(self: Postgres, sql: text) -> boolean {
+  if self.res != 0 { pq_clear(self.res); self.res = 0; }
+  self.res = pq_exec(self.conn, sql);
+  if self.res == 0 || pq_res_status(self.res) != 2 { return false }
+  self.n = pq_ntuples(self.res);
+  self.at = -1;
+  return true;
+}
+
+pub fn db_next(self: Postgres) -> boolean {
+  if self.res == 0 { return false }
+  self.at += 1;
+  if self.at < self.n { return true }
+  pq_clear(self.res);
+  self.res = 0;
+  return false;
+}
+
+pub fn db_col(self: Postgres, i: integer) -> text? {
+  if pq_getisnull(self.res, self.at, i) == 1 { return null }
+  return pq_getvalue(self.res, self.at, i);
+}
+
+pub fn db_width(self: Postgres) -> integer { return pq_nfields(self.res); }
+
+pub fn db_last_error(self: Postgres) -> text {
+  if self.err != "" { return self.err }
+  return pq_errmsg(self.conn);
+}
+
+// --- S4: prepare, bind, execute ---------------------------------------------
+
+// Compile the statement server-side and fill the parameter array.
+//
+// The text is `q.statement(true)` — the author's chunks joined by `$1 $2 …`,
+// because postgres numbers its placeholders. Nothing rewrites a caller's SQL:
+// the numbering is generated from the chunk list, so a `?` or a `$1` INSIDE a
+// literal the author wrote is just bytes, and there is no SQL to re-parse.
+fn prepare_bind(self: Postgres, q: SqlText) -> boolean {
+  self.err = "";
+  // A named statement lives until it is deallocated, so releasing the previous
+  // one is what stops a long-lived connection accumulating them.
+  if self.ps != "" {
+    _ = self.db_exec("DEALLOCATE {self.ps}");
+    self.ps = "";
+  }
+  self.seq += 1;
+  name = "loft_ps_{self.seq}";
+  r = pq_prepare(self.conn, name, q.statement(true), 0, 0);
+  if r == 0 { self.err = "prepare failed"; return false }
+  s = pq_res_status(r);
+  pq_clear(r);
+  if s != 1 { self.err = pq_errmsg(self.conn); return false }   // 1 = COMMAND_OK
+  self.ps = name;
+  // The SERVER's own parameter count, against the one the parser produced.
+  // Two independent derivations of the same fact: if the statement text and
+  // the value list ever came apart, this is where it stops.
+  d = pq_describe_prepared(self.conn, self.ps);
+  if d == 0 { self.err = "describe failed"; return false }
+  np = pq_nparams(d);
+  pq_clear(d);
+  if np != q.params() {
+    self.err = "statement wants {np} parameters, {q.params()} were interpolated";
+    return false
+  }
+  if lp_reset(q.params()) == 0 { self.err = "no memory for parameters"; return false }
+  for b in q.binds {
+    at = b#count;
+    ok = if b.kind == SQL_NULL { lp_set_null(at) } else { lp_set(at, b.as_text()) };
+    if ok == 0 { self.err = "binding parameter {at} failed"; return false }
+  }
+  return true;
+}
+
+// Every parameter travels in libpq's TEXT format (the trailing zeroes: no
+// explicit lengths, no per-parameter format flags, text results). The server
+// casts each one to the type it inferred for that placeholder at prepare time,
+// so a bound value is still typed by the STATEMENT rather than by its spelling.
+fn run_prepared(self: Postgres, q: SqlText) -> integer {
+  return pq_exec_prepared(self.conn, self.ps, q.params(), lp_vals(), 0, 0, 0);
+}
+
+pub fn db_run(self: Postgres, q: SqlText) -> boolean {
+  if !self.prepare_bind(q) { return false }
+  r = self.run_prepared(q);
+  if r == 0 { self.err = "execute failed"; return false }
+  s = pq_res_status(r);
+  pq_clear(r);
+  if s != 1 && s != 2 { self.err = pq_errmsg(self.conn); return false }
+  return true;
+}
+
+pub fn db_rows(self: Postgres, q: SqlText) -> boolean {
+  if !self.prepare_bind(q) { return false }
+  if self.res != 0 { pq_clear(self.res); self.res = 0; }
+  self.res = self.run_prepared(q);
+  if self.res == 0 || pq_res_status(self.res) != 2 {
+    self.err = pq_errmsg(self.conn);
+    return false
+  }
+  self.n = pq_ntuples(self.res);
+  self.at = -1;
+  return true;
+}
+
+pub fn db_shut(self: Postgres) {
+  if self.res != 0 { pq_clear(self.res); self.res = 0; }
+  if self.conn != 0 { pq_finish(self.conn); self.conn = 0; }
+  self.ps = "";
+}

@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `len()` BOUND GUARD must not discharge the dead-store lint.
+//
+// `d = self.items; if i < len(d) { d[i] = x }` is the copy-mutate footgun in full — the
+// bind COPIES (C86), so the write lands in the copy and is lost. The lint stayed silent
+// because `len(d)` counted as "the copy was read", and a length observation cannot
+// witness an element write.
+//
+// The guard is not the author's mistake either: it is the idiom the `v[i]` may-be-null
+// warning ASKS for (skip-pattern 5), so the two lints were in tension — satisfying one
+// silenced the other. That is not hypothetical: the published `graphics` canvas was
+// written exactly this way, so `set_pixel` / `fill_rect` / `h_line` / `v_line` were all
+// no-ops, every `--html` page uploaded a blank texture, and nothing anywhere said so.
+//
+// The values are asserted alongside the diagnostics: a lint that warns for the wrong
+// reason still passes a warning-only check.
+
+struct DsBox {
+  items: vector<integer>,
+}
+
+// WARNS — the shipped shape. The write is lost.
+fn guarded_copy(self: DsBox, i: integer, v: integer) {
+  gc_d = self.items;
+  if i < len(gc_d) {
+    gc_d[i] = v;
+  }
+}
+
+// SILENT — the cure the message names: a live reference. The write propagates.
+fn guarded_ref(self: DsBox, i: integer, v: integer) {
+  gr_d = &self.items;
+  if i < len(gr_d) {
+    gr_d[i] = v;
+  }
+}
+
+// SILENT — a copy that IS read after the mutation, which is the other cure the
+// message names ("If a copy was intended, read it after the mutation"). The private
+// copy is a legitimate scratch value, so this must not become a false positive.
+fn read_back(self: DsBox) -> integer {
+  rb_d = self.items;
+  if 0 < len(rb_d) {
+    rb_d[0] = 42;
+  }
+  rb_d[0] ?? 0
+}
+
+fn main() {
+  b = DsBox { items: [1, 2, 3] };
+
+  guarded_copy(b, 0, 9);
+  println("guarded_copy={b.items[0] ?? 0}");   // 1 — the write went into the copy
+
+  guarded_ref(b, 1, 8);
+  println("guarded_ref={b.items[1] ?? 0}");    // 8 — the reference wrote through
+
+  scratch = read_back(b);
+  println("read_back={scratch}");              // 42 — read out of the copy
+  println("source_intact={b.items[0] ?? 0}");  // 1 — and the source is untouched
+}

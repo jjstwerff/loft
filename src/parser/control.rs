@@ -926,12 +926,31 @@ impl Parser {
         //
         // Forward-ref-SAFE: an `if` is structurally an `If` on both passes.
         // Gated on BOTH arms YIELDING a text value (not a guard `if c { return
-        // … }` — that would suppress the missing-return diagnostic) and a
-        // NON-nullable tail (a `text?` tail must keep its `(N-Store)` reject).
+        // … }` — that would suppress the missing-return diagnostic).
+        //
+        // loft#741 — the nullability condition is about the store this rewrite
+        // PERFORMS, so it reads the DECLARED RETURN, not the tail.
+        //
+        // The accumulator writes each arm into the caller's text buffer. When
+        // the function declares `-> text?` that is a nullable value reaching a
+        // nullable destination: legitimate, and a null survives it because loft
+        // carries one as a content sentinel. When it declares `-> text` and the
+        // tail is nullable, the SAME rewrite is a nullable-into-non-null store
+        // — exactly what the `(N-Store)` teeth exist to catch — and performing
+        // it silently swallows the diagnostic.
+        //
+        // Keying on the TAIL conflated the two and excluded both. That cost
+        // every `-> text?` branch tail its per-arm delivery, so the whole
+        // `match` compiled as ONE Rust expression whose arms must unify — a
+        // buffered call yields `Str` where a formatted string yields `&String`,
+        // E0308, while the interpreter was correct. Keying on the declared
+        // return keeps `read_off() -> text { … self.w[i] … }` reporting its
+        // N-Store (the tail is nullable, the destination is not) and lets a
+        // `-> text?` tail deliver per arm.
         let do_if_acc = !do_tret_bind
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
-            && !matches!(t, Type::Optional(_))
+            && (matches!(result, Type::Optional(_)) || !matches!(t, Type::Optional(_)))
             && !self
                 .data
                 .def(self.context)
@@ -939,7 +958,18 @@ impl Parser {
                 .starts_with("replmain_")
             && l.last().is_some_and(Self::if_tail_yields_text);
         if do_if_acc {
-            let av = self.create_unique("__acc", &Type::Text(Deps::none()));
+            // The accumulator IS the return value, so it carries the declared
+            // return's nullability. Typing it non-null while a `-> text?` tail
+            // writes nullable arms through it would leave the destination
+            // lying about what it holds — and a nullable-into-non-null store
+            // that no diagnostic fires on is exactly the hole this rewrite
+            // must not open (loft#741).
+            let acc_type = if matches!(result, Type::Optional(_)) {
+                Type::Optional(Box::new(Type::Text(Deps::none())))
+            } else {
+                Type::Text(Deps::none())
+            };
+            let av = self.create_unique("__acc", &acc_type);
             if av != u16::MAX {
                 let last = l.len() - 1;
                 let mut tail = std::mem::replace(&mut l[last], Value::Null);
@@ -949,6 +979,24 @@ impl Parser {
                 }
                 Self::push_text_arms_into(&mut tail, av);
                 l[last] = tail;
+                // loft#733 — introduce `av` at THIS scope, BEFORE the branch that
+                // writes it. The per-arm `Set`s live INSIDE the branch, so without
+                // this statement nothing introduces `av` here: codegen declares it
+                // where it is first assigned — inside the `ncc` block — and the read
+                // that follows the block is out of scope.
+                //
+                // Non-generic code hid this: `text_return` promotes `av` to the
+                // hidden `&text` PARAMETER, so there is no local to misplace. A
+                // generic MONOMORPH re-runs promotion in
+                // `promote_monomorph_text_return`, which binds its own `__tret` and
+                // promotes THAT — leaving `av` a block-local read from outside. The
+                // interpreter then read an empty text (a wrong ANSWER, exit 0) and
+                // native failed to compile: the accept/reject divergence in #733.
+                //
+                // The bind-site analogue (`push_text_arms_into`'s caller) already
+                // documents this leading `Set` as load-bearing for exactly the same
+                // reason; the tail promotion was missing it.
+                l.insert(last, crate::data::v_set(av, Value::Text(String::new())));
                 l.push(if is_ret {
                     Value::Return(Box::new(Value::Var(av)))
                 } else {
@@ -11553,7 +11601,9 @@ impl Parser {
                     for a in 0..self.data.attributes(hint_d_nr) {
                         if self.data.attr_name(hint_d_nr, a) == arg_name {
                             let expected = self.data.attr_type(hint_d_nr, a);
-                            if Self::seeds_collection_hint(&expected) {
+                            if Self::seeds_collection_hint(&expected)
+                                || self.interpolation_target(&expected) != u32::MAX
+                            {
                                 self.expected = expected;
                             }
                             break;
@@ -11577,6 +11627,14 @@ impl Parser {
                     "Positional argument after named argument"
                 );
             }
+            // The `⇐` push belongs to THIS argument. Whatever is still in the
+            // channel is the ENCLOSING call's expectation, and a nested call must
+            // not inherit it: in `take(build_one("arg"))` the string is
+            // `build_one`'s `text` parameter, but the channel still held `take`'s
+            // parameter type, so the literal was checked against the wrong one.
+            // The hints below each set it when they apply; none of them cleared it
+            // when they did not.
+            self.expected = Type::Unknown(0);
             if let Some(d_nr) = fn_def_nr
                 && arg_idx < self.data.attributes(d_nr)
             {
@@ -11603,6 +11661,14 @@ impl Parser {
                         // stride instead of `vector<integer>`.  Both passes (like the
                         // enum hint): the literal's element type must agree across
                         // passes, and the callee is already registered on pass 1.
+                        self.expected = expected;
+                    } else if self.interpolation_target(&expected) != u32::MAX {
+                        // @PLN124 — seed a format-string argument's target type, so
+                        // `f("… {x} …")` BUILDS the parameter's type instead of
+                        // rendering text the call would then reject. Both passes, for
+                        // the same reason the two hints above are: taking the branch
+                        // mints an accumulator, and a one-pass mint would shift the
+                        // name-keyed variable tables.
                         self.expected = expected;
                     }
                 }
@@ -12296,9 +12362,17 @@ impl Parser {
             // attribute index of the explicit argument about to be parsed.  Seed a
             // bare vector-literal argument's element width from that parameter type,
             // matching the free-function path in `parse_call`.
+            // Same rule as the free-function path: the channel is this argument's,
+            // so a nested call does not inherit the enclosing one's expectation.
+            self.expected = Type::Unknown(0);
             if md_nr != u32::MAX && list.len() < self.data.attributes(md_nr) {
                 let expected = self.data.attr_type(md_nr, list.len());
-                if Self::seeds_collection_hint(&expected) {
+                // @PLN124 — a format-string argument to a METHOD builds the
+                // parameter's type too (`db.run("… {id} …")`), which is the shape a
+                // library API actually presents.
+                if Self::seeds_collection_hint(&expected)
+                    || self.interpolation_target(&expected) != u32::MAX
+                {
                     self.expected = expected;
                 }
             }

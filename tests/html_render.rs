@@ -93,6 +93,14 @@ fn pick_free_port() -> Option<u16> {
 /// (which `make game`s explicitly) or refreshes the artefact manually
 /// when touching `--html` / `lib/graphics`.  Stale-artefact skip
 /// matches the rest of the wasm test family.
+///
+/// **A skip here means the gate did not run.**  That is worth saying loudly,
+/// because it is how this gate went dormant: it lived in a CI job that builds a
+/// fresh wasm rlib but never rebuilds the bundle, so the bundle was always the
+/// older of the two and the gate self-skipped on every run — indistinguishable,
+/// in a green log, from a gate that passed.  It now runs in the `gallery` job
+/// immediately after `make game`.  If you are reading this message in CI, that
+/// wiring has regressed; locally it just means `make test-html-render`.
 fn locate_fresh_brick_buster(root: &Path) -> Option<PathBuf> {
     let html = root.join("doc/brick-buster.html");
     if !html.exists() {
@@ -123,8 +131,11 @@ fn locate_fresh_brick_buster(root: &Path) -> Option<PathBuf> {
             .is_some_and(|dep_mtime| html_mtime < dep_mtime)
         {
             eprintln!(
-                "SKIP: doc/brick-buster.html is older than {} — rebuild \
-                 with `make game` first",
+                "SKIP: the browser render gate DID NOT RUN — doc/brick-buster.html is \
+                 older than {}, so it would test a bundle that no longer matches its \
+                 runtime.  Rebuild with `make game` (or run `make test-html-render`, \
+                 which does both).  In CI this gate belongs in the `gallery` job, right \
+                 after its `make game` step.",
                 dep.display()
             );
             return None;

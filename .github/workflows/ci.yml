@@ -14,6 +14,33 @@ on:
   # (see that job + the `os` matrix in `changes`).
   schedule:
     - cron: '0 3 * * *'
+  # Run the FULL matrix — macOS and Windows included — on any branch, on demand:
+  #
+  #   gh workflow run ci.yml --ref <branch> -f os=macos-latest
+  #
+  # Without this, the only ways to see a macOS result were push-to-main and the
+  # daily schedule, so a macOS-only break could not be checked BEFORE merging
+  # the thing that might fix it. The `Test (macos-latest)` job a PR shows is a
+  # placeholder (macOS is off the PR matrix, as the notice it prints says), and
+  # the two real per-PR macOS jobs — Miri-macOS and the ASan-macOS sweep — run
+  # `--lib --test issues --test wrap --test strings --test frame_vars`, which
+  # excludes `tests/native.rs`. A `#c` library declaration that resolved on
+  # Linux and not on macOS therefore had no pre-merge signal at all, and sat
+  # red on `main` (loft#739 neighbours, the `.so`/`.dylib` fallback).
+  #
+  # This is the macOS twin of `windows-probe.yml`, whose own comment gives the
+  # reason: a 24-hour loop for a question you can usually answer in minutes.
+  # A dispatch takes the same path as push-to-main, so it runs the non-PR
+  # extras (stdlib round-trip, differential oracle) too — narrow it with `os`
+  # when you only need one platform's answer.
+  workflow_dispatch:
+    inputs:
+      os:
+        description: 'Which runners: all, or one of ubuntu-latest / macos-latest / windows-latest'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, ubuntu-latest, macos-latest, windows-latest]
 
 # A new push to the same PR/branch obsoletes the running matrix — cancel it
 # instead of letting both compete for runners (three stacked full runs in one
@@ -110,7 +137,12 @@ jobs:
           # The FULL macOS suite still runs on every push-to-main and on the daily
           # schedule, so a genuine macOS-only functional break surfaces within one
           # merge, never at release.  Same trade, same reasoning, as Windows.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          # A manual dispatch picks its own runners, so one platform's answer
+          # costs one platform's time (see the `workflow_dispatch` note above).
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+            && [ -n "${{ inputs.os }}" ] && [ "${{ inputs.os }}" != "all" ]; then
+            echo 'os=["${{ inputs.os }}"]' >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
           else
             echo 'os=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
@@ -571,10 +603,16 @@ jobs:
           cargo nextest run --profile ci --no-fail-fast
           -E 'test(stdlib_load_compares_equal_to_fresh) or test(stdlib_whole_data_round_trip)'
 
-      - name: Browser render (nightly — off the flaky PR path)
+      # `html_render` is NOT run here: it gates the committed
+      # `doc/brick-buster.html`, and this job never rebuilds it, so the artefact is
+      # always older than the wasm rlib built above and the test always self-skips.
+      # It ran in the `gallery` job instead, right after `make game` produces a fresh
+      # bundle (and where binaryen supplies the `wasm-opt` that build needs).
+      # `html_asyncify` builds its own artefact, so it belongs here.
+      - name: Browser asyncify (nightly — off the flaky PR path)
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         shell: bash
-        run: cargo nextest run --profile ci -E 'binary(html_render) or binary(html_asyncify)'
+        run: cargo nextest run --profile ci -E 'binary(html_asyncify)'
 
       # @PLN89 differential oracle (formal/operational.md D-op-1/2): the full
       # cross-backend agreement sweep — every `tests/oracle/*.loft` run on BOTH
@@ -1216,6 +1254,18 @@ jobs:
       # `make gallery` protects the demo grid.
       - name: make game
         run: make game
+
+      # The browser RENDER gate, here rather than in the `test` job: it asserts against
+      # `doc/brick-buster.html`, and `tests/html_render.rs` deliberately refuses to build
+      # that itself (a `cargo build` inside `cargo test` races the parallel rustc in
+      # `tests/native.rs` over `target/release/deps/`). So it can only do real work where
+      # a fresh bundle already exists — which is here, immediately after `make game`.
+      # Run anywhere else and it self-skips on staleness, which is how it went dormant:
+      # a skipping gate and a passing one are indistinguishable in a green log.
+      # Kept off the PR path, as it was before.
+      - name: Browser render (nightly — off the flaky PR path)
+        if: github.event_name != 'pull_request'
+        run: cargo nextest run --profile ci -E 'binary(html_render)'
 
       # NOTE: we deliberately do NOT byte-compare the CI rebuild to
       # the committed doc/pkg/ + doc/brick-buster.html.  Different

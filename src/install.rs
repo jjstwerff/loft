@@ -219,13 +219,40 @@ pub fn install_one(
             r.version.semver,
             prebuilt_status(&host, &available, got_prebuilt)
         ));
-        if let Some(m) = crate::manifest::read_manifest(&dir.join("loft.toml").to_string_lossy())
-            && !m.runtime_libs.is_empty()
-        {
-            report.surface.push(format!(
-                "  runtime libraries: {}",
-                m.runtime_libs.join(", ")
-            ));
+        if let Some(m) = crate::manifest::read_manifest(&dir.join("loft.toml").to_string_lossy()) {
+            if !m.runtime_libs.is_empty() {
+                report.surface.push(format!(
+                    "  runtime libraries: {}",
+                    m.runtime_libs.join(", ")
+                ));
+            }
+            // @PLN24 arc D — build the package's ANSI-C shim now, at install.
+            //
+            // It would build on first use anyway (the parser compiles it when it
+            // registers the package's C libraries), so this is not about making
+            // it work — it is about WHEN the answer arrives. A package needing a
+            // C compiler should say so while the user is installing packages and
+            // expecting to hear about dependencies, not later inside the first
+            // run of their program. Same reasoning as the prebuilt-cdylib fetch
+            // three lines up.
+            //
+            // Best-effort, and deliberately so: a failure here is surfaced and
+            // the install still succeeds, because the parser will report it
+            // again — with the source position of the `use` — if the package is
+            // actually used. Refusing the install would make a missing `cc`
+            // block packages the user may never call into.
+            if !m.c_shim.is_empty() {
+                match crate::c_shim::build(&dir.to_string_lossy(), &m.c_shim) {
+                    Ok(so) => report.surface.push(format!(
+                        "  C shim built: {}",
+                        so.file_name().unwrap_or(so.as_os_str()).to_string_lossy()
+                    )),
+                    Err(why) => report.surface.push(format!(
+                        "  C shim NOT built — {why}; `use {}` will report it again",
+                        r.name
+                    )),
+                }
+            }
         }
         report
             .installed

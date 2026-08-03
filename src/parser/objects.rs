@@ -1672,12 +1672,25 @@ impl Parser {
     }
 
     // @F35 — string literals ({expr} interpolation + backtick multiline)
-    pub(crate) fn parse_string(&mut self, code: &mut Value, string: &str) -> Type {
+    //
+    // @PLN124 — `target` is the struct this string BUILDS (from
+    // `Parser::interpolation_target`), or `u32::MAX` for an ordinary text string.
+    // On the build path the literal/hole boundary the parser already knows is
+    // handed to the type instead of being erased into one buffer: literals reach
+    // `lit`, values reach `hole_<kind>`. That erasure is the only reason a value
+    // can become syntax, so not erasing it is the whole feature.
+    pub(crate) fn parse_string(&mut self, code: &mut Value, string: &str, target: u32) -> Type {
         let mut append_value = u16::MAX;
         *code = Value::str(string);
         let mut var = u16::MAX;
         let mut list = vec![];
-        if self.lexer.mode() == Mode::Formatting {
+        if target != u32::MAX {
+            // The accumulator is built even when the string has NO holes: a
+            // `SqlText` with no parameters is still a `SqlText`, and the target
+            // type is what the caller asked for.
+            var = self.begin_format_object(target, &mut list);
+            self.format_lit(target, var, string, &mut list);
+        } else if self.lexer.mode() == Mode::Formatting {
             // Define a new variable to append to
             var = self.vars.work_text(&mut self.lexer);
             list.push(v_set(var, code.clone()));
@@ -1754,7 +1767,8 @@ impl Parser {
             } else {
                 false
             };
-            if self.lexer.has_token(":") {
+            let had_spec = self.lexer.has_token(":");
+            if had_spec {
                 if custom_fmt {
                     if let LexResult {
                         has: LexItem::Token(t) | LexItem::Identifier(t),
@@ -1806,9 +1820,15 @@ impl Parser {
                 }
             }
             state.spec = &spec_string;
-            self.append_data(tp, &mut list, var, append_value, &format, state);
+            if target == u32::MAX {
+                self.append_data(tp, &mut list, var, append_value, &format, state);
+            } else {
+                self.format_hole(target, var, &tp, format, had_spec, &mut list);
+            }
             if let Some(text) = self.lexer.has_cstring() {
-                if !text.is_empty() {
+                if target != u32::MAX {
+                    self.format_lit(target, var, &text, &mut list);
+                } else if !text.is_empty() {
                     let call = if matches!(self.vars.tp(var), Type::RefVar(_)) {
                         "OpAppendStackText"
                     } else {
@@ -1821,6 +1841,12 @@ impl Parser {
                 return Type::Void;
             }
         }
+        if target != u32::MAX {
+            list.push(Value::Var(var));
+            let tp = Type::Reference(target, crate::data::Deps::frame1(var));
+            *code = v_block(list, tp.clone(), "Formatted object");
+            return tp;
+        }
         if var < u16::MAX {
             list.push(Value::Var(var));
             *code = v_block(
@@ -1832,6 +1858,120 @@ impl Parser {
         } else {
             Type::Text(crate::data::Deps::none())
         }
+    }
+
+    /// @PLN124 — mint the accumulator a format string builds into, and emit its
+    /// construction: an empty record of the target type, every field defaulted.
+    ///
+    /// The same prelude a `T { }` literal in value position emits, for the same
+    /// reason — this IS such a literal, the parser just wrote it instead of the
+    /// author. Reusing `object_init` is what keeps field defaults, vector headers
+    /// and constraint-free construction in ONE place rather than a second copy
+    /// that drifts.
+    fn begin_format_object(&mut self, target: u32, list: &mut Vec<Value>) -> u16 {
+        let ret = self.data.def(target).returned();
+        let var = self.vars.work_format(ret, &mut self.lexer);
+        let kt = i32::from(self.data.def(target).known_type());
+        self.data.set_referenced(target, self.context, Value::Null);
+        list.push(v_set(var, Value::Null));
+        list.push(self.cl("OpDatabase", &[Value::Var(var), Value::Int(kt)]));
+        if !self.first_pass {
+            let none = HashSet::new();
+            let code = Value::Var(var);
+            self.object_init(list, target, 0, &code, &none);
+        }
+        var
+    }
+
+    /// Emit `acc.lit("…")` for a literal chunk the AUTHOR wrote.
+    ///
+    /// An empty chunk is skipped: it carries no bytes, and a `lit("")` would only
+    /// make the emitted sequence depend on where the holes happen to sit. What a
+    /// target must NOT infer from that is chunk boundaries — those come from the
+    /// `hole_*` calls, which is the one thing `lit` cannot be asked to report.
+    fn format_lit(&mut self, target: u32, var: u16, text: &str, list: &mut Vec<Value>) {
+        if text.is_empty() {
+            return;
+        }
+        let nm = self.data.def(target).name();
+        let d_nr = self.data.def_nr(&format!("t_{}{}_lit", nm.len(), nm));
+        if d_nr == u32::MAX || self.data.attributes(d_nr) != 2 {
+            return;
+        }
+        list.push(Value::Call(d_nr, vec![Value::Var(var), Value::str(text)]));
+    }
+
+    /// Emit `acc.hole_<kind>(value)` for an interpolated VALUE.
+    ///
+    /// The kind is read off the expression's own type, so the target receives the
+    /// value rather than a rendering of it — which is the property that makes a
+    /// hole unable to become syntax. A kind the target does not accept is REFUSED
+    /// naming the method to add, and never quietly rendered to text: silently
+    /// falling back to `hole_text` would put a value back on the text path, i.e.
+    /// exactly the hole this design exists to close.
+    fn format_hole(
+        &mut self,
+        target: u32,
+        var: u16,
+        tp: &Type,
+        value: Value,
+        had_spec: bool,
+        list: &mut Vec<Value>,
+    ) {
+        // @PLN25 — nullability is not a KIND. A `text?` hole is a text hole whose
+        // value may be absent, and whether that is acceptable is decided by the
+        // target's own `hole_text` parameter type (`v: text?` takes both, `v: text`
+        // takes only the non-null one). Peeling here is what lets a type make SQL
+        // NULL a distinct bound value rather than the text "null".
+        let (tp, _) = tp.peel_optional();
+        let kind = match tp {
+            Type::Text(_) => "text",
+            Type::Integer(_) => "int",
+            Type::Float => "float",
+            Type::Single => "single",
+            Type::Boolean => "boolean",
+            Type::Character => "character",
+            // `Never` is a poisoned hole whose own diagnostic already fired
+            // (@P376); adding a second one would bury the root error.
+            Type::Never | Type::Unknown(_) => return,
+            _ => {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a {} cannot be interpolated into a {} — it takes scalar holes, and a \
+                         value is passed to the type rather than rendered into it",
+                        tp.name(&self.data),
+                        self.data.def(target).name()
+                    );
+                }
+                return;
+            }
+        };
+        if had_spec && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a format spec has no meaning on a {} hole — the value is handed to the type, \
+                 not rendered, so there is nothing for the spec to format",
+                self.data.def(target).name()
+            );
+        }
+        let nm = self.data.def(target).name().to_string();
+        let d_nr = self.data.def_nr(&format!("t_{}{nm}_hole_{kind}", nm.len()));
+        if d_nr == u32::MAX || self.data.attributes(d_nr) != 2 {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "{nm} has no `fn hole_{kind}(self: {nm}, v: {})` — declare one to accept \
+                     this hole",
+                    tp.name(&self.data)
+                );
+            }
+            return;
+        }
+        list.push(Value::Call(d_nr, vec![Value::Var(var), value]));
     }
 
     pub(crate) fn string_states(&mut self, state: &mut OutputState) {

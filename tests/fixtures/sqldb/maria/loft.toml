@@ -1,0 +1,10 @@
+[library]
+name = "maria"
+version = "0.0.1"
+
+[c]
+optional-libs = "libmariadb.so.3"
+# `row.c` indexes the text protocol's `char **`; `stmt.c` owns the MYSQL_BIND
+# arrays the prepared-statement protocol reads. Neither references a mysql
+# symbol, so both compile where the library is absent.
+shim = "src/row.c, src/stmt.c"

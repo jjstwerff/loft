@@ -1469,7 +1469,33 @@ pub(crate) fn native_cabi_enabled() -> bool {
 ///
 /// A binding to libc needs no entry and gets no flag: it is already linked.
 pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate::data::Data) {
-    for (name, dir) in &data.c_libraries {
+    for lib in data.c_libraries.iter().filter(|c| !c.optional) {
+        // @PLN24 arc G — an OPTIONAL library gets no flag at all. On the link
+        // line it would be a BUILD dependency: measured, a declared-absent
+        // soname fails `rust-lld: unable to find library -l:libfoo.so.9` on a
+        // program that never calls into it. The emission resolves it at first
+        // call instead (`output_c_direct_call`).
+        let (name, dir) = (&lib.name, &lib.pkg_dir);
+        // Resolve the declared name to what THIS host actually calls the
+        // library, exactly as the interpreter's `dlopen` does — one home for
+        // the spelling rules (`platform::host_lib_variants`), because a
+        // declaration that loads under `--interpret` and fails to link under
+        // `--native` is the divergence @PLN24 keeps refusing to ship.
+        //
+        // A package that ships its own library declares a PATH
+        // (`../../liblc_types.so`), and on macOS its Makefile builds
+        // `liblc_types.dylib`. Reading only the declared spelling, the
+        // `beside.exists()` test below answered false, so no `-L` and no rpath
+        // were emitted and `-l dylib=lc_types` went to the system search path,
+        // where the library is not. Prefer the first variant that is really
+        // there; fall back to the declared name so a bare soname (nothing
+        // beside the package) behaves exactly as before.
+        let name = &crate::platform::existing_lib_beside(
+            std::path::Path::new(dir),
+            name,
+            crate::platform::host_lib_os(),
+        )
+        .unwrap_or_else(|| name.clone());
         let beside = std::path::Path::new(dir).join(name);
         // `libfoo.so.5` -> `foo`: strip the prefix the linker adds back and
         // every version suffix, because `-l` names the library, not the file.
@@ -1498,7 +1524,26 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
             cmd.arg("-C")
                 .arg(format!("link-arg=-Wl,-rpath,{}", parent.display()));
         }
-        cmd.arg("-l").arg(format!("dylib={stem}"));
+        // A VERSIONED soname links by exact filename, not by stem.
+        //
+        // `-l dylib=mariadb` makes the linker look for `libmariadb.so`, which is
+        // the `-dev` package's symlink — while the interpreter `dlopen`s
+        // `libmariadb.so.3`, the runtime file, which is all a user has.  So one
+        // declaration resolved to two different facts: the program ran under
+        // `--interpret` and failed to LINK under `--native` with "unable to find
+        // library -lmariadb", on a machine where the library is plainly present.
+        // That is the backend divergence this plan keeps refusing to ship, and it
+        // would have made every `#c` binding to a system library need dev headers
+        // that `#c` exists to avoid.
+        //
+        // `-l:<file>` names the file itself, so both backends resolve exactly the
+        // library the declaration named.  Passed as a link-arg because rustc's own
+        // `-l` takes a library NAME and would reject the `:file` form.
+        if file.contains(".so.") {
+            cmd.arg("-C").arg(format!("link-arg=-l:{file}"));
+        } else {
+            cmd.arg("-l").arg(format!("dylib={stem}"));
+        }
     }
 }
 

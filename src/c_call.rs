@@ -197,13 +197,311 @@ pub fn narrow_return(raw: u64, ret: &CType) -> i64 {
     }
 }
 
+/// Every C library this program declared, each with the outcome of opening it:
+/// `None` until it has been tried, then whether it opened.
+///
+/// Keeping the outcome (rather than draining the list) is what makes a MISSING
+/// library cost one `dlopen` for the whole run instead of one per call — a
+/// symbol that is genuinely absent is looked up on every iteration of whatever
+/// loop calls it.
+///
+/// REQUIRED entries are in here too, and the miss path opens them like any
+/// other. One rule for both backends is the point: the interpreter has already
+/// opened them ([`register`]), where re-opening is a no-op that `load_one`
+/// dedups by canonical path; a `--native` binary has opened nothing, and a
+/// required library whose symbols are all resolved lazily may have lost its
+/// `DT_NEEDED` entry to `--as-needed`. A flag consulted here would be a fourth
+/// place to get the same fact wrong.
+static DECLARED_LIBS: std::sync::Mutex<Vec<(crate::data::CLibrary, Option<bool>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Soname → the `#c` symbols declared by the package that declared it. Read by
+/// [`library_available`], which is symbol-granular because a library that is
+/// PRESENT but of the wrong vintage exports a subset — a file-granular answer
+/// would say yes where the call still faults.
+static LIB_SYMBOLS: std::sync::Mutex<Vec<(String, Vec<String>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Record the C libraries the program declared, for `resolve` to open on
+/// demand. Called by [`register`] with the whole list, so a re-registration
+/// (the REPL, the test runner) replaces it rather than appending.
+pub fn set_declared_libraries(libs: Vec<crate::data::CLibrary>) {
+    *DECLARED_LIBS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        libs.into_iter().map(|l| (l, None)).collect();
+}
+
+/// Record which `#c` symbols each declared library is expected to provide.
+pub fn set_library_symbols(table: Vec<(String, Vec<String>)>) {
+    *LIB_SYMBOLS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = table;
+}
+
+/// Build the soname → declared-symbols table from a parsed program.
+///
+/// One home, called by both backends — the interpreter from [`register`] and
+/// the `--native` generator, which bakes the result into the binary. Derived
+/// from the same `Data` either way, so the two cannot answer differently.
+///
+/// **A symbol is attributable to a library only when that library is the only
+/// one its package declares.** A `#c` annotation never names its library
+/// (`Data::c_owner_pkg` is the finest attribution the source supports), so for a
+/// package declaring several libraries there is no fact saying which one exports
+/// a given symbol — and guessing produces the worst possible answer: a package
+/// binding sqlite AND duckdb would report sqlite unavailable because a duckdb
+/// symbol is missing, which is precisely the case optional libraries exist for.
+///
+/// So a multi-library package gets an empty symbol list, and its libraries are
+/// available when they LOAD. Skew detection is the thing given up, and the way
+/// to keep it is the arrangement libraries should have anyway: one package per
+/// optional library, which is how the `sqldb` fixture is built.
+#[must_use]
+pub fn library_symbol_table(data: &crate::data::Data) -> Vec<(String, Vec<String>)> {
+    let target = crate::c_signature::CTarget::host();
+    let mut by_pkg: std::collections::HashMap<&str, Vec<String>> = std::collections::HashMap::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if def.c_sig.is_empty() || *def.code() != crate::data::Value::Null {
+            continue;
+        }
+        let Some(Ok(sig)) = crate::c_signature::of(data, d_nr, target) else {
+            continue;
+        };
+        if let Some(pkg) = data.c_owner_pkg(&def.position().file) {
+            by_pkg.entry(pkg).or_default().push(sig.symbol);
+        }
+    }
+    data.c_libraries
+        .iter()
+        .map(|lib| {
+            // Only OTHER OPTIONAL libraries make attribution ambiguous. A
+            // required entry cannot be the reason a symbol is missing — the
+            // package does not load at all without it — and one of them is
+            // almost always the package's own `[c] shim`, which loft just
+            // built and which is therefore present by construction. Counting
+            // those would switch skew detection off for nearly every real
+            // package, since nearly every `#c` package ships a shim.
+            let alone = data
+                .c_libraries
+                .iter()
+                .filter(|c| c.pkg_dir == lib.pkg_dir && c.optional)
+                .count()
+                <= 1;
+            let mut syms = if alone {
+                by_pkg
+                    .get(lib.pkg_dir.as_str())
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            syms.sort_unstable();
+            syms.dedup();
+            (lib.name.clone(), syms)
+        })
+        .collect()
+}
+
+/// Open any declared library not yet tried. Returns whether this call opened
+/// one — i.e. whether the set of resolvable symbols just grew, which is the
+/// only reason for the caller to look again.
+fn open_pending_optional() -> bool {
+    // The entries are cloned out and the guard dropped before any `dlopen`: an
+    // optional library's initialisers run arbitrary C, and holding the lock
+    // across that would serialise every parallel arm resolving a symbol (the
+    // shape P245 fixed in `native_auto_dispatch`).
+    let pending: Vec<crate::data::CLibrary> = {
+        let mut guard = DECLARED_LIBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard
+            .iter_mut()
+            .filter(|(_, tried)| tried.is_none())
+            .map(|(lib, _)| lib.clone())
+            .collect()
+    };
+    if pending.is_empty() {
+        return false;
+    }
+    let mut opened_any = false;
+    for lib in pending {
+        let ok = crate::extensions::load_c_library(&lib.name, &lib.pkg_dir);
+        opened_any |= ok;
+        let mut guard = DECLARED_LIBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (entry, tried) in guard.iter_mut() {
+            if entry.name == lib.name && entry.pkg_dir == lib.pkg_dir {
+                *tried = Some(ok);
+            }
+        }
+    }
+    opened_any
+}
+
 /// Resolve a C symbol for the running process.
 ///
 /// Searches the cdylibs loft has already loaded, then the process itself —
 /// which is what makes a libc binding work with nothing declared and nothing
-/// installed. A library that must be `dlopen`ed first is arc D's manifest work.
+/// installed. A declared REQUIRED library is already open by the time this runs
+/// ([`register`]); an OPTIONAL one is opened here, on the miss, which is the
+/// whole of arc G's interpreter half.
+///
+/// One resolver, so a symbol cannot mean two different things depending on
+/// which caller asked for it — arc B's rule, and the lazy path keeps it by
+/// widening the search rather than adding a second search.
 #[must_use]
 pub fn resolve(symbol: &str) -> Option<*const ()> {
+    if let Some(p) = resolve_in_loaded(symbol) {
+        return Some(p);
+    }
+    // Miss: an optional library that has not been opened yet may export it.
+    if open_pending_optional() {
+        return resolve_in_loaded(symbol);
+    }
+    None
+}
+
+/// @PLN24 arc G — [`resolve`], for a `--native` binary.
+///
+/// A compiled program never runs [`register`], so nothing has told it which
+/// libraries may be opened on demand; the generated crate carries the list as a
+/// static and hands it here on the first lazy call. After that this IS
+/// [`resolve`] — the two backends share the resolver, which is the only way
+/// they can agree about what a symbol means.
+///
+/// The list carries EVERY declared library, not just the optional ones: a
+/// required library is normally a `DT_NEEDED` entry and already in the process,
+/// but with its symbols resolved lazily there may be no undefined reference
+/// left for the linker to keep it alive (`--as-needed`), and re-opening it by
+/// name costs nothing when it is already there.
+#[must_use]
+pub fn resolve_native(
+    symbol: &str,
+    libs: &[(&str, &str)],
+    syms: &[(&str, &[&str])],
+) -> Option<*const ()> {
+    register_native(libs, syms);
+    resolve(symbol)
+}
+
+/// Hand a `--native` binary's baked-in C-library tables to the runtime.
+///
+/// Idempotent, and called from two places for one reason each: the generated
+/// `main` calls it so [`library_available`] can answer in a program that never
+/// makes a lazy call at all, and [`resolve_native`] calls it so a `#c` call
+/// reaching the runtime BEFORE `main`'s prelude still resolves.
+pub fn register_native(libs: &[(&str, &str)], syms: &[(&str, &[&str])]) {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        set_declared_libraries(
+            libs.iter()
+                .map(|(name, pkg_dir)| crate::data::CLibrary {
+                    name: (*name).to_string(),
+                    pkg_dir: (*pkg_dir).to_string(),
+                    // The flag decides eager loading and the link line, both of
+                    // which are already settled by the time a binary exists.
+                    // Nothing downstream of here reads it.
+                    optional: true,
+                })
+                .collect(),
+        );
+        set_library_symbols(
+            syms.iter()
+                .map(|(lib, s)| {
+                    (
+                        (*lib).to_string(),
+                        s.iter().map(|x| (*x).to_string()).collect(),
+                    )
+                })
+                .collect(),
+        );
+    });
+}
+
+/// @PLN24 arc G — is this C library usable RIGHT NOW?
+///
+/// True when the library opens **and** every `#c` symbol declared against it
+/// resolves. Both halves are load-bearing: a library of the wrong vintage opens
+/// and exports a subset, so a file-granular answer would say yes where the call
+/// still faults — the version-skew hole that makes a naive query worse than no
+/// query at all.
+///
+/// A library the program never declared answers false rather than probing the
+/// dynamic linker for it. Asking about one is a program bug, and false is the
+/// answer that keeps a caller on its fallback path instead of into a fault
+/// (C80: no runtime errors, ever).
+/// [`library_available`], for generated Rust — the main binary AND every
+/// auto-built package cdylib.
+///
+/// A cdylib links its own copy of loft, so the tables [`register`] filled in
+/// the interpreter's process are NOT the tables a function compiled into a
+/// package can see: measured, `duckdb_available()` answered false from inside
+/// the package while the identical call from the program answered true. The
+/// generated source carries the tables, so passing them is what makes one
+/// question have one answer wherever it is asked from.
+#[must_use]
+pub fn library_available_native(
+    name: &str,
+    libs: &[(&str, &str)],
+    syms: &[(&str, &[&str])],
+) -> bool {
+    register_native(libs, syms);
+    library_available(name)
+}
+
+#[must_use]
+pub fn library_available(name: &str) -> bool {
+    open_pending_optional();
+    let opened = {
+        let guard = DECLARED_LIBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard
+            .iter()
+            .filter(|(lib, _)| lib.name == name)
+            .map(|(_, tried)| tried.unwrap_or(false))
+            .fold(None, |acc: Option<bool>, ok| {
+                Some(acc.unwrap_or(false) || ok)
+            })
+    };
+    if opened != Some(true) {
+        return false;
+    }
+    let symbols = {
+        let guard = LIB_SYMBOLS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard
+            .iter()
+            .find(|(lib, _)| lib == name)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default()
+    };
+    symbols.iter().all(|s| resolve(s).is_some())
+}
+
+/// What a `#c` call says when its symbol cannot be resolved.
+///
+/// One text for both backends: the interpreter panics with it from `dispatch`,
+/// and the `--native` emission writes a call to this same function into the
+/// generated crate. A message that differed between them would be a divergence
+/// in the one place a user is already having a bad day.
+#[must_use]
+pub fn missing_symbol_message(symbol: &str) -> String {
+    format!(
+        "`#c` symbol '{symbol}' not found — it is not in this process and no loaded \
+         library exports it. If it comes from an `[c] optional-libs` library, that \
+         library is not installed: ask `c_library_available(\"<soname>\")` before \
+         calling. Otherwise declare the library it comes from, or check the spelling"
+    )
+}
+
+/// The search itself, over what is already open. Split out so the miss path can
+/// re-run exactly the same search after widening it, rather than a similar one.
+fn resolve_in_loaded(symbol: &str) -> Option<*const ()> {
     if let Some((p, _)) = crate::extensions::try_dlsym_pub(symbol) {
         return Some(p);
     }
@@ -217,6 +515,44 @@ pub fn resolve(symbol: &str) -> Option<*const ()> {
         name.push('\0');
         if let Ok(sym) = unsafe { this.get::<*const ()>(name.as_bytes()) } {
             return Some(*sym);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::Library;
+        // There is no process-wide symbol table on Windows: `GetProcAddress`
+        // answers per MODULE, and the C runtime is its own DLL rather than
+        // something linked into the executable's export table. So the Unix
+        // `Library::this()` step has no direct twin — searching only the
+        // executable finds nothing, which is why `strlen` and `atoi` were
+        // unresolvable and the whole `#c`-against-libc surface was Linux/macOS
+        // only.
+        //
+        // Ask the modules the process ALREADY has open, in the order a C
+        // symbol is most likely to live: the executable itself (its own
+        // exports), then the UCRT, then the legacy CRT shim, then the Win32
+        // base DLLs. `open_already_loaded` is `GetModuleHandle` — it never
+        // loads anything, so this widens the search without changing what the
+        // process has mapped.
+        if let Ok(this) = Library::this()
+            && let Ok(sym) = unsafe { this.get::<*const ()>(symbol.as_bytes()) }
+        {
+            return Some(*sym);
+        }
+        for module in [
+            "ucrtbase.dll",
+            "api-ms-win-crt-string-l1-1-0.dll",
+            "api-ms-win-crt-convert-l1-1-0.dll",
+            "api-ms-win-crt-stdio-l1-1-0.dll",
+            "api-ms-win-crt-heap-l1-1-0.dll",
+            "msvcrt.dll",
+            "kernel32.dll",
+        ] {
+            if let Ok(lib) = Library::open_already_loaded(module)
+                && let Ok(sym) = unsafe { lib.get::<*const ()>(symbol.as_bytes()) }
+            {
+                return Some(*sym);
+            }
         }
     }
     None
@@ -256,9 +592,18 @@ pub fn register(state: &mut crate::state::State, data: &crate::data::Data) {
     // library has to be loaded by the time a call happens. A failure is left
     // for the call site to report, where the binding that needed it can be
     // named.
-    for (lib, dir) in &data.c_libraries {
-        crate::extensions::load_c_library(lib, dir);
+    // @PLN24 arc G — an OPTIONAL library is deliberately not opened here. It is
+    // opened by `resolve`'s miss path, when a symbol that needs it is first
+    // looked up, so a program that never calls into it runs on a machine where
+    // it is not installed.
+    for lib in data.c_libraries.iter().filter(|c| !c.optional) {
+        crate::extensions::load_c_library(&lib.name, &lib.pkg_dir);
     }
+    // The miss path and the availability query both work off the WHOLE list:
+    // re-opening an already-open required library is a no-op, and the query has
+    // to be able to answer about any declared library, not only optional ones.
+    set_declared_libraries(data.c_libraries.clone());
+    set_library_symbols(library_symbol_table(data));
     let mut table = std::collections::HashMap::new();
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
@@ -358,11 +703,7 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     slots.reverse();
 
     let Some(f) = resolve(&binding.sig.symbol) else {
-        panic!(
-            "`#c` symbol '{}' not found — it is not in this process and no loaded library \
-             exports it. Declare the library it comes from, or check the spelling",
-            binding.sig.symbol
-        );
+        panic!("{}", missing_symbol_message(&binding.sig.symbol));
     };
     let Some(raw) = (unsafe { call_at_arity(f, &slots) }) else {
         panic!(
@@ -545,5 +886,71 @@ mod tests {
         let too_many = vec![0u64; crate::c_signature::MAX_C_ARITY + 1];
         assert!(unsafe { call_at_arity(f, &too_many) }.is_none());
         assert!(unsafe { call_at_arity(f, &[0u64; crate::c_signature::MAX_C_ARITY]) }.is_some());
+    }
+
+    /// @PLN24 arc G — the construct `--native` emits for an optional library's
+    /// symbol, proven here before the generator was taught to write it.
+    ///
+    /// A lazily resolved pointer must keep the one thing arc C bought: the
+    /// DECLARED width, applied by rustc at the ABI. Transmuted to the typed
+    /// signature, `atoi("-1")` is -1 — the cell arc C used, now reached through
+    /// a pointer resolved at run time rather than a linked `extern "C"`.
+    ///
+    /// The width-blind alternative is not asserted here, because it has no
+    /// hand-computable value to assert: a C `int` return leaves the upper half
+    /// of `rax` UNSPECIFIED (measured on this host: `u64::MAX`, not the
+    /// zero-extended 4294967295 the interpreter's trampoline reads). That is a
+    /// stronger reason to transmute to the declared signature than a wrong
+    /// constant would be, and the deterministic half of the claim is
+    /// `a_narrow_return_is_recovered_by_its_declared_width`, which builds the
+    /// raw register value by hand.
+    #[test]
+    fn a_lazily_resolved_pointer_keeps_its_declared_width() {
+        let p = resolve("atoi").expect("atoi is in the process");
+        let typed: unsafe extern "C" fn(*const std::ffi::c_char) -> i32 =
+            unsafe { std::mem::transmute::<*const (), _>(p) };
+        assert_eq!(unsafe { typed(c"-1".as_ptr()) }, -1);
+        assert_eq!(unsafe { typed(c"2147483647".as_ptr()) }, i32::MAX);
+    }
+
+    /// The miss path, end to end: a symbol that is in NO loaded library and NOT
+    /// in the process resolves only once its library has been opened on demand.
+    ///
+    /// The control is what makes it a measurement rather than an agreement with
+    /// itself — the same symbol is unresolvable BEFORE the optional library is
+    /// declared, so a harness that always answered `Some` would fail here.
+    #[test]
+    fn an_optional_library_opens_on_the_miss_that_needs_it() {
+        let so = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/c_abi/liblc_types.so"
+        );
+        if !std::path::Path::new(so).exists() {
+            // The fixture is built by `make` in that directory; without it this
+            // test has nothing to measure and must not read as a pass.
+            eprintln!("SKIP: {so} not built");
+            return;
+        }
+
+        set_declared_libraries(Vec::new());
+        assert!(
+            resolve("lc_strlen").is_none(),
+            "control: the fixture's symbol is not in the process"
+        );
+
+        set_declared_libraries(vec![crate::data::CLibrary {
+            name: so.to_string(),
+            pkg_dir: String::new(),
+            optional: true,
+        }]);
+        let p = resolve("lc_strlen").expect("resolved after the miss opened the library");
+
+        let f: unsafe extern "C" fn(*const std::ffi::c_char) -> i64 =
+            unsafe { std::mem::transmute::<*const (), _>(p) };
+        assert_eq!(
+            unsafe { f(c"hello".as_ptr()) },
+            5,
+            "and the call through it is right"
+        );
     }
 }

@@ -89,6 +89,83 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       Space:32, Enter:13, Escape:27, Tab:9 };
     return s[code] || 0;
   }
+  // ── text (loft#737) ────────────────────────────────────────────────────────
+  // The browser already HAS a rasteriser, so the text bridge is a 2D canvas:
+  // `measureText` for the metrics and `fillText` for the coverage bitmap.  The
+  // desktop backend uses fontdue and returns an 8-bit alpha bitmap whose height is
+  // the line height and whose baseline sits `ascent` from the top; drawing white on
+  // transparent reproduces exactly that — the alpha channel IS the coverage.
+  //
+  // A font PATH resolves to a CSS family rather than a file: there is no synchronous
+  // way to load font bytes here, and an async load would change the metrics between
+  // the measure and the rasterise of the same string.  A page that wants its real
+  // font declares it with `@font-face` under the file's base name (in the `[wasm.bridge]
+  // host_js` or the page's own CSS); `document.fonts.check` then finds it and it is
+  // used exactly. Otherwise the base name picks a generic family, so text still draws.
+  let fonts = [], textCv = null, textCx = null;
+  function text2d() {
+    if (!textCx) {
+      textCv = document.createElement('canvas');
+      textCx = textCv.getContext('2d', { willReadFrequently: true });
+    }
+    return textCx;
+  }
+  function familyFor(base) {
+    const quoted = '"' + base.replace(/"/g, '') + '"';
+    try {
+      // A family the page registered itself wins — this is the exact-font path.
+      if (document.fonts && document.fonts.check('16px ' + quoted)) return quoted + ', sans-serif';
+    } catch (e) { /* check() throws on a malformed family — fall through */ }
+    const b = base.toLowerCase();
+    if (/mono|courier|consol|code/.test(b)) return 'monospace';
+    if (/serif/.test(b) && !/sans/.test(b)) return 'serif';
+    return 'sans-serif';
+  }
+  // Metrics for font `fi` at `sz`, in the same terms the desktop backend reports:
+  // `asc`/`desc` from the font's own box, `line` the height a bitmap gets.
+  function fontMetrics(fi, sz) {
+    const f = fonts[fi];
+    const cx = text2d();
+    cx.font = sz + 'px ' + (f ? f.family : 'sans-serif');
+    const m = cx.measureText('Mg');
+    const asc = m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || sz * 0.8;
+    const desc = m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || sz * 0.2;
+    return { cx: cx, asc: asc, line: Math.max(1, Math.ceil(asc + desc)) };
+  }
+  // Draw `s` white-on-transparent and hand back its RGBA pixels + size, or null when
+  // there is nothing to draw.  The single place the bitmap's geometry is decided, so
+  // `rasterize_text_into`, `text_texture` and `measure_text` cannot disagree about it.
+  function rasterText(fi, s, sz) {
+    if (!fonts[fi] || !s) return null;
+    const mt = fontMetrics(fi, sz);
+    const w = Math.ceil(mt.cx.measureText(s).width);
+    const h = mt.line;
+    if (w <= 0 || h <= 0) return null;
+    textCv.width = w; textCv.height = h;
+    // Resizing the canvas resets its context state, so re-apply the font.
+    mt.cx.font = sz + 'px ' + fonts[fi].family;
+    mt.cx.clearRect(0, 0, w, h);
+    mt.cx.fillStyle = '#fff';
+    mt.cx.textBaseline = 'alphabetic';
+    mt.cx.fillText(s, 0, mt.asc);
+    return { w: w, h: h, px: mt.cx.getImageData(0, 0, w, h).data };
+  }
+  // An 8-bit coverage bitmap as a GL texture. WebGL2 has no TEXTURE_SWIZZLE, which is
+  // how the desktop backend makes a RED texture sample as (1,1,1,r), so expand to RGBA
+  // here — same sampling result, and the shaders stay identical across targets.
+  function alphaTexture(alphaAt, w, h) {
+    const px = new Uint8Array(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+      px[i * 4] = 255; px[i * 4 + 1] = 255; px[i * 4 + 2] = 255; px[i * 4 + 3] = alphaAt(i);
+    }
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return hold(textures, t);
+  }
   function glCap(c) { return [0, gl.DEPTH_TEST, gl.BLEND, gl.CULL_FACE][c] || c; }
   function glBF(f) { return [gl.ZERO, gl.ONE, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.DST_ALPHA, gl.ONE_MINUS_DST_ALPHA][f] || f; }
   function glMode(m) { return [gl.TRIANGLES, gl.LINES, gl.POINTS][m] || gl.TRIANGLES; }
@@ -403,14 +480,45 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         return hold(textures, t);
       },
-      // 0 = failure, the same sentinel every other handle here uses (loft#669).
-      loft_gl_load_texture(pp, pl) { return 0; /* TODO: async asset loading */ },
+      // 0 = failure, the same sentinel every other handle here uses (loft#669) — and
+      // never a valid handle, since `hold` is 1-based, so a caller CAN tell the two
+      // apart.  loft#738: a BUNDLED asset works here. `--html` embeds every `.png`
+      // sibling of the entry file and `decodeLoftAssets` decodes them to raw pixels
+      // BEFORE `loft_start`, so the lookup is synchronous and no fetch is involved.
+      // Only a path with no bundled asset — a runtime URL — is still unsupported;
+      // that one genuinely needs async, and it reports failure rather than pretending.
+      loft_gl_load_texture(pp, pl) {
+        const name = readStr(pp, pl).split(/[\\/]/).pop();
+        const a = (ctrl && ctrl.assets) ? ctrl.assets[name] : null;
+        if (!a || !a.bytes || a.width <= 0 || a.height <= 0) return 0;
+        // The asset table holds RGB; GL wants RGBA. C58: no upload-side Y flip.
+        const n = a.width * a.height;
+        const px = new Uint8Array(n * 4);
+        for (let i = 0; i < n; i++) {
+          px[i * 4] = a.bytes[i * 3]; px[i * 4 + 1] = a.bytes[i * 3 + 1];
+          px[i * 4 + 2] = a.bytes[i * 3 + 2]; px[i * 4 + 3] = 255;
+        }
+        const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, a.width, a.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        return hold(textures, t);
+      },
       loft_gl_upload_canvas(ptr, count, w, h) {
         // C58: no upload-side Y flip; canvas-top = GL TC.y=0.
-        const data = new Int32Array(getMem().buffer, ptr, count);
+        //
+        // A `vector<integer>` marshals to this import as `*const i64` — codegen picks the
+        // element width from the vector's STORAGE STRIDE (`vector_elem_rust_type`, @P310),
+        // and a plain `integer` vector strides 8 bytes with the packed 0xAARRGGBB colour in
+        // the LOW half.  Reading it at i32 stride took every other 4-byte word, so half the
+        // "pixels" were a neighbour's zero high-half — transparent black.  The native
+        // backend documents fixing exactly this at the 2c migration ("moiré on textured
+        // surfaces, missing pixels on rasterised text"); this bridge still had the old read.
+        // `count` is the ELEMENT count, so the word view is twice as long.
+        const data = new Int32Array(getMem().buffer, ptr, count * 2);
         const px = new Uint8Array(w * h * 4);
         for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) { const c = data[y * w + x], di = (y * w + x) * 4;
+          for (let x = 0; x < w; x++) { const c = data[(y * w + x) * 2], di = (y * w + x) * 4;
             px[di] = (c>>>16)&0xff; px[di+1] = (c>>>8)&0xff; px[di+2] = c&0xff; px[di+3] = (c>>>24)&0xff;
           }
         }
@@ -445,10 +553,46 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
           else if (document.fullscreenElement) { const p = document.exitFullscreen?.(); if (p) p.catch(() => {}); }
         } catch (e) { /* no gesture / not permitted — non-fatal by contract */ }
       },
-      loft_gl_load_font(pp, pl) { return -2147483648; /* i32::MIN = null sentinel */ },
-      loft_gl_measure_text(fi, tp, tl, sz) { return 0.0; },
-      loft_text_height(fi, sz) { return Math.ceil(sz * 1.2); },
-      loft_rasterize_text_into(fi, tp, tl, sz, bp, bc) { return 0; },
+      // loft#737 — the text bridge. A font PATH becomes a CSS family (see `familyFor`);
+      // the handle is a 0-BASED index, matching the desktop backend, so 0 is a valid
+      // font and the null sentinel is i32::MIN.
+      loft_gl_load_font(pp, pl) {
+        const path = readStr(pp, pl);
+        if (!path) return -2147483648;
+        const base = path.split(/[\\/]/).pop().replace(/\.[^.]*$/, '');
+        fonts.push({ family: familyFor(base), base: base });
+        return fonts.length - 1;
+      },
+      loft_gl_measure_text(fi, tp, tl, sz) {
+        if (!fonts[fi]) return 0.0;
+        return fontMetrics(fi, sz).cx.measureText(readStr(tp, tl)).width;
+      },
+      // The line height a rasterised bitmap gets. The `sz * 1.2` fallback is what the
+      // desktop backend also falls back to when a font exposes no usable metrics.
+      loft_text_height(fi, sz) {
+        if (!fonts[fi]) return Math.ceil(sz * 1.2);
+        return fontMetrics(fi, sz).line;
+      },
+      // @P340 — baseline → top of glyphs, so callers can baseline-align mixed sizes.
+      loft_gl_font_ascent(fi, sz) {
+        if (!fonts[fi]) return sz * 0.8;
+        return fontMetrics(fi, sz).asc;
+      },
+      // Writes alpha (0-255) into a loft `vector<integer>` and returns the bitmap
+      // WIDTH — the caller sized its buffer from `measure_text` + `text_height` and
+      // indexes rows by this width. `integer` is i64 storage, so each element is two
+      // 32-bit words (little-endian: low word first, high word 0 for 0-255).
+      loft_rasterize_text_into(fi, tp, tl, sz, bp, bc) {
+        const r = rasterText(fi, readStr(tp, tl), sz);
+        if (!r) return 0;
+        const words = new Int32Array(getMem().buffer, bp, bc * 2);
+        const n = Math.min(r.w * r.h, bc);
+        for (let i = 0; i < n; i++) {
+          words[i * 2] = r.px[i * 4 + 3];
+          words[i * 2 + 1] = 0;
+        }
+        return r.w;
+      },
       loft_save_png(pp, pl, w, h, dp, dc) { return 0; },
       // @lib_plan-29 W1d — generic asset-table existence check; used
       // by `database::io::get_file` so file().png() (and any future
@@ -462,8 +606,29 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         const name = readStr(pp, pl).split(/[\\/]/).pop();
         return (ctrl.assets && ctrl.assets[name]) ? 1 : 0;
       },
-      loft_gl_upload_alpha_texture(dp, w, h) { return 0; },
-      loft_gl_text_texture(fi, tp, tl, sz, wp, hp) { return 0; },
+      // loft#738 — an 8-bit coverage buffer the PROGRAM computed, uploaded as a
+      // texture. The data is already in wasm memory, so this needs no fetch and no
+      // asset pipeline; it is the route for any CPU-rasterised overlay (a glyph atlas,
+      // a mask, a generated ramp) and the one that was missing entirely.
+      loft_gl_upload_alpha_texture(dp, w, h) {
+        if (w <= 0 || h <= 0) return 0;
+        const a = new Uint8Array(getMem().buffer, dp, w * h);
+        return alphaTexture(i => a[i], w, h);
+      },
+      // Rasterise + upload in one step, reporting the size through the two out-params
+      // (i32, as the desktop backend writes them).
+      loft_gl_text_texture(fi, tp, tl, sz, wp, hp) {
+        const r = rasterText(fi, readStr(tp, tl), sz);
+        const out = new Int32Array(getMem().buffer);
+        if (!r) {
+          if (wp) out[wp >> 2] = 0;
+          if (hp) out[hp >> 2] = 0;
+          return 0;
+        }
+        if (wp) out[wp >> 2] = r.w;
+        if (hp) out[hp >> 2] = r.h;
+        return alphaTexture(i => r.px[i * 4 + 3], r.w, r.h);
+      },
       // G5: Audio via Web Audio API
       loft_audio_load(pp, pl) {
         return -2147483648; // i32::MIN — file-based audio not yet supported in WASM

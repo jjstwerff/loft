@@ -1,0 +1,11 @@
+[library]
+name = "mariadb"
+version = "0.0.1"
+
+# @PLN23 — the system MariaDB client, bound directly. No rustc, no Rust crate,
+# and no dev headers: the `#c` declarations are the header.
+[c]
+libs = "libmariadb.so.3"
+# `MYSQL_ROW` is a `char **`, which loft can hold but cannot index — the one
+# thing that cannot cross directly, wrapped in three lines of C.
+shim = "src/row.c"

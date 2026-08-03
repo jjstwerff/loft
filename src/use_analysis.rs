@@ -145,6 +145,31 @@ fn first_arg_write_ops(data: &Data) -> HashSet<u32> {
     s
 }
 
+/// LENGTH ops — the collection `len` methods (`t_6vector_len`, `t_6sorted_len`, …).
+///
+/// They observe how MANY elements a collection has, never what any of them is, so a
+/// `len` read cannot witness an element write.  The dead-store lint therefore does not
+/// let one discharge its signal: `d = self.data; if i < len(d) { d[i] = x }` is the
+/// copy-mutate footgun in full, and counting `len(d)` as "the copy was read" made the
+/// lint silent on exactly the shape it exists to catch.  Not hypothetical — the shipped
+/// `graphics` canvas is written this way, so every `set_pixel` was a no-op and a
+/// `--html` page rendered a blank texture with no diagnostic anywhere.
+///
+/// The bound guard is not the author's mistake, either: it is the idiom the `v[i]`
+/// may-be-null warning ASKS for (skip-pattern 5), so the two lints were in tension —
+/// satisfying one silenced the other.
+fn length_ops(data: &Data) -> HashSet<u32> {
+    let mut s = HashSet::new();
+    for d in 0..data.definitions() {
+        let n = data.def(d).name();
+        // Method naming is `t_<LEN><Type>_<method>` (CODE.md), so match the suffix.
+        if n.starts_with("t_") && n.ends_with("_len") {
+            s.insert(d);
+        }
+    }
+    s
+}
+
 /// VALUE-READER ops return a fresh value, not a reference into a container — their
 /// arguments are pure reads regardless of the surrounding context.
 fn value_reader_ops(data: &Data) -> HashSet<u32> {
@@ -198,10 +223,12 @@ pub(crate) fn dead_store_accesses(body: &Value, n_vars: usize, data: &Data) -> V
     let projs = projection_ops(data);
     let writes = first_arg_write_ops(data);
     let mut acc = vec![(0u16, 0u16); n_vars];
+    let lens = length_ops(data);
     let cx = AccessCx {
         data,
         projs: &projs,
         writes: &writes,
+        lens: &lens,
         copy_record: data.def_nr("OpCopyRecord"),
     };
     classify_access(body, &cx, &mut acc);
@@ -218,6 +245,9 @@ struct AccessCx<'a> {
     /// write-DESTINATION, never a read (this is what makes the `d = s.f` copy-fill append
     /// stop counting `d` as read).
     writes: &'a HashSet<u32>,
+    /// Collection `len` methods ([`length_ops`]): the subject is observed for its COUNT,
+    /// which no element write can change, so it is not a value read.
+    lens: &'a HashSet<u32>,
     /// `OpCopyRecord` — the one write op whose destination is arg **1**, not arg 0
     /// (`OpCopyRecord(source, dest, type)`).  `w[i] = Row{…}` lowers to it, so without
     /// this the whole-element assign was invisible to the dead-store lint (loft#670).
@@ -259,6 +289,16 @@ fn classify_access(node: &Value, cx: &AccessCx, acc: &mut [(u16, u16)]) {
                 classify_access(a, cx, acc);
             }
         }
+        // A collection `len`: its subject is observed for COUNT only, so it is not a value
+        // read and cannot discharge the dead-store signal.  Index/projection args on the way
+        // down are ordinary reads; a var reached any OTHER way still counts normally, so a
+        // copy that is genuinely used stays silent.
+        Value::Call(op, args) if cx.lens.contains(op) && !args.is_empty() => {
+            classify_length_subject(&args[0], cx, acc);
+            for a in &args[1..] {
+                classify_access(a, cx, acc);
+            }
+        }
         // Any op that writes through arg 0: arg-0 base is a write-DESTINATION (not a read).
         // Count it as a copy-mutate WRITE-TARGET only for the `OpSet*` family — append/insert/
         // clear are definitional/bulk fills (the `d = s.f` copy-fill lands here) and are neither
@@ -284,6 +324,22 @@ fn classify_access(node: &Value, cx: &AccessCx, acc: &mut [(u16, u16)]) {
             }
         }
         other => other.for_each_child(&mut |c| classify_access(c, cx, acc)),
+    }
+}
+
+/// Descend a `len` subject to its root var WITHOUT counting a read there, mirroring
+/// [`classify_write_base`]'s walk.  `len(d)` and `len(d.f)` both observe only a count;
+/// any index expression along the chain is a real read and is classified normally.
+fn classify_length_subject(node: &Value, cx: &AccessCx, acc: &mut [(u16, u16)]) {
+    match node.unspan() {
+        Value::Var(_) => {}
+        Value::Call(op, args) if cx.projs.contains(op) && !args.is_empty() => {
+            classify_length_subject(&args[0], cx, acc);
+            for a in &args[1..] {
+                classify_access(a, cx, acc);
+            }
+        }
+        other => classify_access(other, cx, acc),
     }
 }
 

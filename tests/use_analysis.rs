@@ -8,20 +8,39 @@
 // iterate the analysis without wiring it into emission. Design:
 // doc/claude/plans/25-nullable-sequences/{use-analysis-prework,materialization-algorithm}-design.md.
 
-use std::io::Write;
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Write `src` to a probe path no concurrent test can also produce, and return it.
+///
+/// Every helper here spawns the loft binary on a source it first writes to a temp
+/// file. They used to name that file after a HASH OF THE SOURCE, so two tests
+/// sharing one `const …_SRC` — `OWN_SRC` backs three — resolved to the same path.
+/// Both write identical bytes, which is why it read as safe, but writing
+/// TRUNCATES first: under nextest each test is its own process, so one test's
+/// `loft` could open the file while another was rewriting it and analyse a
+/// truncated program. It surfaced as `ownership_resolves_the_borrow_base`
+/// reporting a borrow base derived from nothing on a fraction of runs, and
+/// passing every time it was run alone.
+///
+/// Uniqueness comes from the pid (distinct per test process under nextest) plus
+/// a per-process counter (distinct per call, which is what `cargo test`'s
+/// threads need). `stem` only makes the file recognisable while debugging.
+/// Callers delete the file once the run is done — with a unique name per call,
+/// nothing else ever reclaims it.
+fn write_probe(dir_name: &str, stem: &str, src: &str) -> std::path::PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(dir_name);
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("{}_{n}_{stem}.loft", std::process::id()));
+    std::fs::write(&path, src).expect("write probe");
+    path
+}
 
 /// Run the loft binary on a source string with the verdict dump on; return stderr.
 fn dump(src: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let dir = std::env::temp_dir().join("loft_use_analysis");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    // Key the file on the source so parallel tests don't clobber each other's probe.
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
-    let mut f = std::fs::File::create(&path).expect("write probe");
-    f.write_all(src.as_bytes()).expect("write probe body");
+    let path = write_probe("loft_use_analysis", "probe", src);
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
         .args(["--interpret", "--check"])
         .arg(&path)
@@ -35,6 +54,7 @@ fn dump(src: &str) -> String {
         .env("LOFT_NO_JOIN_OWN", "1")
         .output()
         .expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
@@ -190,15 +210,7 @@ fn verdicts_per_boundary_cell() {
 
 /// Run with the verdict dump on at an explicit elision tier (env-selected).
 fn dump_at_tier(src: &str, tier: u8) -> String {
-    use std::hash::{Hash, Hasher};
-    let dir = std::env::temp_dir().join("loft_use_analysis_t1");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    // Key the file on (src, tier) so parallel tests don't clobber each other.
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    let path = dir.join(format!("probe_t{tier}_{:016x}.loft", h.finish()));
-    let mut f = std::fs::File::create(&path).expect("write probe");
-    f.write_all(src.as_bytes()).expect("write probe body");
+    let path = write_probe("loft_use_analysis_t1", &format!("probe_t{tier}"), src);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.args(["--interpret", "--check"])
         .arg(&path)
@@ -210,6 +222,7 @@ fn dump_at_tier(src: &str, tier: u8) -> String {
         cmd.env("LOFT_ELIDE_T1", "1");
     }
     let out = cmd.output().expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
@@ -613,15 +626,7 @@ fn main() {
 
 /// Run a source on a backend, optionally with `LOFT_JOIN_OWN`; return (stdout, stderr).
 fn run_backend(src: &str, backend: &str, join_own: bool) -> (String, String) {
-    use std::hash::{Hash, Hasher};
-    let dir = std::env::temp_dir().join("loft_join_own");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    backend.hash(&mut h);
-    join_own.hash(&mut h);
-    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
-    std::fs::write(&path, src).expect("write probe");
+    let path = write_probe("loft_join_own", "probe", src);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.args([backend])
         .arg(&path)
@@ -638,6 +643,7 @@ fn run_backend(src: &str, backend: &str, join_own: bool) -> (String, String) {
         cmd.env("LOFT_NO_JOIN_OWN", "1");
     }
     let out = cmd.output().expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -751,15 +757,7 @@ fn main() {
 /// Run `loft introspect` on a source, optionally with `LOFT_JOIN_OWN`; return stdout
 /// (the IR dump, used to read the emitted return-type dependency).
 fn introspect(src: &str, join_own: bool) -> String {
-    use std::hash::{Hash, Hasher};
-    let dir = std::env::temp_dir().join("loft_join_own");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    "introspect".hash(&mut h);
-    join_own.hash(&mut h);
-    let path = dir.join(format!("introspect_{:016x}.loft", h.finish()));
-    std::fs::write(&path, src).expect("write probe");
+    let path = write_probe("loft_join_own", "introspect", src);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.arg("introspect").arg(&path).env("LOFT_NO_CACHE", "1");
     if join_own {
@@ -768,6 +766,7 @@ fn introspect(src: &str, join_own: bool) -> String {
         cmd.env("LOFT_NO_JOIN_OWN", "1");
     }
     let out = cmd.output().expect("spawn loft introspect");
+    let _ = std::fs::remove_file(&path);
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
@@ -954,14 +953,7 @@ fn main() { cmove(); csurv(); cmut(); loop_outside(); loop_local(); recset(); }
 
 /// Like `dump`, but with the survival split flag on.
 fn dump_survival(src: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let dir = std::env::temp_dir().join("loft_use_analysis");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    "survival".hash(&mut h);
-    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
-    std::fs::write(&path, src).expect("write probe");
+    let path = write_probe("loft_use_analysis", "survival", src);
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
         .args(["--interpret", "--check"])
         .arg(&path)
@@ -971,6 +963,7 @@ fn dump_survival(src: &str) -> String {
         .env("LOFT_NO_JOIN_OWN", "1")
         .output()
         .expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
@@ -1069,10 +1062,7 @@ fn run_move_elide_src(
     native: bool,
     move_on: bool,
 ) -> (String, String, bool) {
-    let dir = std::env::temp_dir().join("loft_use_analysis");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    let path = dir.join(format!("{stem}.loft"));
-    std::fs::write(&path, src).expect("write probe");
+    let path = write_probe("loft_use_analysis", stem, src);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.arg(if native { "--native" } else { "--interpret" })
         .arg(&path)
@@ -1084,6 +1074,7 @@ fn run_move_elide_src(
         cmd.env("LOFT_NO_MOVE_ELIDE", "1");
     }
     let out = cmd.output().expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -1145,10 +1136,7 @@ fn op_count(introspect: &str, name: &str, op: &str) -> usize {
 }
 
 fn introspect_move_elide_src(src: &str, stem: &str, move_on: bool) -> String {
-    let dir = std::env::temp_dir().join("loft_use_analysis");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    let path = dir.join(format!("{stem}.loft"));
-    std::fs::write(&path, src).expect("write probe");
+    let path = write_probe("loft_use_analysis", stem, src);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.args(["introspect"])
         .arg(&path)
@@ -1158,6 +1146,7 @@ fn introspect_move_elide_src(src: &str, stem: &str, move_on: bool) -> String {
         cmd.env("LOFT_NO_MOVE_ELIDE", "1");
     }
     let out = cmd.output().expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
@@ -1574,20 +1563,14 @@ fn main() {
 
 /// Spawn `loft --report-copies --check` and return its stderr (the report).
 fn report(src: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let dir = std::env::temp_dir().join("loft_use_analysis");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    "report".hash(&mut h);
-    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
-    std::fs::write(&path, src).expect("write probe");
+    let path = write_probe("loft_use_analysis", "report", src);
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
         .args(["--report-copies", "--interpret", "--check"])
         .arg(&path)
         .env("LOFT_NO_CACHE", "1")
         .output()
         .expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
@@ -1620,15 +1603,7 @@ fn report_copies_is_user_facing_and_prints_once() {
 
 /// Spawn `loft --check` with (or without) `LOFT_WARN_COPIES` and return its stderr.
 fn warn(src: &str, gated_on: bool) -> String {
-    use std::hash::{Hash, Hasher};
-    let dir = std::env::temp_dir().join("loft_use_analysis");
-    std::fs::create_dir_all(&dir).expect("probe dir");
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    "warn".hash(&mut h);
-    gated_on.hash(&mut h);
-    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
-    std::fs::write(&path, src).expect("write probe");
+    let path = write_probe("loft_use_analysis", "warn", src);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.args(["--interpret", "--check"])
         .arg(&path)
@@ -1637,6 +1612,7 @@ fn warn(src: &str, gated_on: bool) -> String {
         cmd.env("LOFT_WARN_COPIES", "1");
     }
     let out = cmd.output().expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 

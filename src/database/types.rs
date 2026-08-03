@@ -1619,6 +1619,82 @@ impl Stores {
         self.types.len() as u16
     }
 
+    /// Report a type this generated program placed at a different id than the
+    /// compiler did — the drift that silently renames every id after it.
+    ///
+    /// A `--native` program builds its schema by REPLAYING registration calls
+    /// from `init()`, while the type ids it operates on (`OpReadFile`'s
+    /// `db_tp`, every keyed-collection id) were baked in as plain integers at
+    /// compile time. That only works while both orders agree, and nothing used
+    /// to check that they did: a single type created one position early or late
+    /// shifted every id after it, so a `db_tp` silently resolved to a
+    /// neighbouring type. The failures that produced were unattributable —
+    /// `f#read as u16` returning null with no error, and a keyed lookup
+    /// aborting with `find called on non-collection type` naming whichever type
+    /// happened to sit at the shifted id, in code the program never called
+    /// (loft#739).
+    ///
+    /// `expected` is the compile-time table's names in index order.
+    ///
+    /// What counts as a divergence is deliberately narrow: a type the compiler
+    /// placed at `i` that this table holds at some **other** index `j`. That is
+    /// a genuine shift — the type exists in both, at two different ids, so
+    /// every id baked from that point on is off.
+    ///
+    /// A name the runtime table does not hold ANYWHERE is not reported. Several
+    /// registration calls render a slot under a different name than the
+    /// compiler's table did — `db.sorted` registers `sorted<Rec[id]>` where the
+    /// compiler recorded `ordered<Rec[id]>`, `db.vector` registers
+    /// `vector<Definition>` for `array<Definition>` — without moving anything.
+    /// Comparing names position-by-position flags all of those, and they are not
+    /// what corrupts an id. (It does mean this check cannot see a type the
+    /// generated program fails to create at all; that would need a shape
+    /// comparison rather than a name one.) A name the COMPILER's table holds
+    /// twice — `Format` under prelude shadowing — is skipped as well: the
+    /// name→id map keeps only the last, so such a name cannot say where it sits.
+    ///
+    /// Reports and CONTINUES. A shift means some ids are wrong, but not
+    /// necessarily any the program actually uses — several drifts predate this
+    /// check and produce correct output today — so aborting would fail programs
+    /// that work. Set `LOFT_STRICT_SCHEMA_IDS` to make it fatal instead, which
+    /// is what you want while hunting one of these.
+    ///
+    /// # Panics
+    /// Only under `LOFT_STRICT_SCHEMA_IDS`, on the first shifted type.
+    pub fn verify_schema_ids(&self, expected: &[&str]) {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut twice: HashSet<&str> = HashSet::new();
+        for want in expected {
+            if !seen.insert(want) {
+                twice.insert(want);
+            }
+        }
+        for (i, want) in expected.iter().enumerate() {
+            let Some(&at) = self.names.get(*want) else {
+                continue;
+            };
+            if usize::from(at) == i || twice.contains(want) {
+                continue;
+            }
+            let held = self.types.get(i).map_or("<missing>", |t| t.name.as_str());
+            let msg = format!(
+                "generated schema diverges from the compiler's: {want:?} is type \
+                 id {at} here but {i} in the compiler, so ids baked at or past {} \
+                 can name the wrong type — that one currently reads as {held:?} \
+                 (loft#739). This is a codegen bug in the `init()` emission order.",
+                i.min(usize::from(at)),
+            );
+            assert!(
+                std::env::var_os("LOFT_STRICT_SCHEMA_IDS").is_none(),
+                "{msg}"
+            );
+            eprintln!("loft: {msg}");
+            // One report is the diagnosis; the rest of the table is downstream
+            // of the same shift and would only bury it.
+            return;
+        }
+    }
+
     /// A cheap total summary of the registered schema — `(type count, name
     /// count, order-independent hash of every `name → nr` pair)`.
     ///

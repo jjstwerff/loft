@@ -71,6 +71,28 @@ fn semicolon_less_script_runs_on_both_backends() {
     assert!(nok && nout.contains("total=15"), "native ;-less: {nout:?}");
 }
 
+#[test]
+fn if_else_is_one_statement_at_script_scope() {
+    let fixture = workspace_root().join("tests/data/script_if_else.loft");
+    // loft#736 — the splitter ended a top-level item at the `}` that closed it back to
+    // depth 0, so `else { … }` became its own item and parsed as a bare `else`.  The
+    // fixture spells out one expected letter per layout, so a boundary that splits (or
+    // one that over-merges two adjacent `if`s) changes the string rather than the exit
+    // code: A=same-line, b=own-line else, C=else after a comment, d=`else if` chain,
+    // 7=the expression form, f=nested, HI=two `if`s that must stay separate, small=a
+    // hoisted def called from an `elsewhere` identifier (which must not read as `else`).
+    let (out, ok) = run(&["--interpret"], &fixture);
+    assert!(
+        ok && out.contains("seen=AbCd7fHIsmall"),
+        "interp if/else script: {out:?}"
+    );
+    let (nout, nok) = run(&["--native"], &fixture);
+    assert!(
+        nok && nout.contains("seen=AbCd7fHIsmall"),
+        "native if/else script: {nout:?}"
+    );
+}
+
 // ── T0.2 — a script's diagnostics use the USER's line numbers ────────────────
 //
 // The desugar hoists defs and inserts lines (the `fn main() {` prologue, a

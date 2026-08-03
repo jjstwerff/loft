@@ -979,8 +979,15 @@ Functions for interacting with the host operating system.
 
 | Function | Description |
 |----------|-------------|
-| `env_variable(name: text) -> text` | Returns the value of the environment variable `name`, or null if it is not set. |
+| `env_variable(name: text) -> text` | Returns the value of the environment variable `name`, or **`""` if it is not set** — measured on both backends. |
 | `env_variables() -> vector<EnvVariable>` | Returns all environment variables as a vector of `EnvVariable` records (fields: `name`, `value`). |
+
+> **An unset variable answers `""`, not null**, so `env_variable("X") ?? "default"`
+> **never fires** — the `??` is dead code and a test written on it passes whatever
+> the program does. Treating empty as absent is the caller's job:
+> `v = env_variable("X"); if v == "" { v = "default" }`. (The return type is `text`,
+> not `text?`, which is why this is consistent rather than a bug — but it reads as
+> one, and it silently voided a real test in @PLN23.)
 
 ### Paths
 

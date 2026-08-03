@@ -603,7 +603,16 @@ impl Parser {
             *val = Value::Single(nr);
             Type::Single
         } else if let Some(s) = self.lexer.has_cstring() {
-            self.parse_string(val, &s)
+            // @PLN124 — does this string BUILD a value rather than render text?
+            // `var_tp` carries the target for a typed-local decl, a typed
+            // reassignment and a struct-field init; `expected` carries it for a
+            // call argument and a return body — the same two-source rule the
+            // bare-variant branch above uses, for the same reason.
+            let mut target = self.interpolation_target(var_tp);
+            if target == u32::MAX {
+                target = self.interpolation_target(&self.expected);
+            }
+            self.parse_string(val, &s, target)
         } else if let Some(nr) = self.lexer.has_char() {
             *val = self.cl("OpConvCharacterFromInt", &[Value::Int(nr as i32)]);
             Type::Character

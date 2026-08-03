@@ -396,3 +396,101 @@ mod reclaim_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Which naming convention [`lib_variants`] should translate into.
+///
+/// A parameter rather than a `cfg!` inside the translation, so the macOS and
+/// Windows spellings are checkable from any machine. Left implicit, each one is
+/// only ever exercised on its own platform — and this whole fallback exists
+/// because a platform nobody could run locally had been broken for a while.
+#[derive(Clone, Copy, PartialEq)]
+pub enum LibOs {
+    Linux,
+    Macos,
+    Windows,
+}
+
+/// The declared `[c]` library name, then the same library spelled for THIS host.
+///
+/// A `[c] libs` entry is one string in a manifest, so it cannot say `.so` on
+/// Linux and `.dylib` on macOS. Rather than invent a per-platform manifest key,
+/// translate at use time: the declared spelling is authoritative and always
+/// tried first, and these are what to try when the host does not use it.
+///
+/// Shared by the two places that resolve such a name — the interpreter's
+/// `dlopen` (`extensions::load_c_library`) and the `--native` LINK line
+/// (`native_utils::add_c_library_flags`). They must agree: a declaration that
+/// loads under `--interpret` and fails to link under `--native` is the backend
+/// divergence @PLN24 keeps refusing to ship, and giving each its own copy of
+/// the spelling rules is how that happens.
+pub fn host_lib_variants(name: &str) -> Vec<String> {
+    lib_variants(name, host_lib_os())
+}
+
+/// Which naming convention THIS host uses. The single `cfg!` read, so the
+/// translation itself stays a pure function of its argument.
+#[must_use]
+pub fn host_lib_os() -> LibOs {
+    if cfg!(target_os = "macos") {
+        LibOs::Macos
+    } else if cfg!(windows) {
+        LibOs::Windows
+    } else {
+        LibOs::Linux
+    }
+}
+
+/// The `[c]` library that is really present beside `dir`, under whichever
+/// spelling this host uses. `None` when nothing is there — a bare soname the
+/// dynamic linker resolves, or a library that is simply missing.
+///
+/// The link line needs this as much as the loader does: a package that ships
+/// its own library is declared as a PATH, and reading only the declared
+/// spelling meant macOS found nothing beside the package, emitted no `-L` and
+/// no rpath, and sent `-l dylib=<stem>` to the system search path where the
+/// library is not.
+#[must_use]
+pub fn existing_lib_beside(dir: &std::path::Path, name: &str, os: LibOs) -> Option<String> {
+    lib_variants(name, os)
+        .into_iter()
+        .find(|cand| dir.join(cand).exists())
+}
+
+/// [`host_lib_variants`], with the target convention passed in.
+///
+/// The versioned forms matter as much as the bare one — a real declaration is
+/// `libmariadb.so.3`, whose macOS twin is `libmariadb.3.dylib` (the soversion
+/// moves BEFORE the extension) and whose Windows twin drops both the `lib`
+/// prefix and the version. Returns just the declared name on Linux, where the
+/// spelling already is the host's.
+pub fn lib_variants(name: &str, os: LibOs) -> Vec<String> {
+    let mut out = vec![name.to_string()];
+    if os == LibOs::Linux {
+        return out; // the declared spelling already is this host's
+    }
+    // Split a trailing directory off so the translation only rewrites the file
+    // name — `../../liblc_types.so` must stay relative to the same place.
+    let (dir, file) = match name.rfind(['/', '\\']) {
+        Some(i) => (&name[..=i], &name[i + 1..]),
+        None => ("", name),
+    };
+    // `libfoo.so.3` → stem `libfoo`, version `3`; `libfoo.so` → no version.
+    let Some((stem, rest)) = file.split_once(".so") else {
+        return out; // not a Linux spelling — nothing to translate
+    };
+    let version = rest.strip_prefix('.').filter(|v| !v.is_empty());
+    let mut push = |f: String| out.push(format!("{dir}{f}"));
+    if os == LibOs::Macos {
+        if let Some(v) = version {
+            push(format!("{stem}.{v}.dylib"));
+        }
+        push(format!("{stem}.dylib"));
+    } else {
+        // No `lib` prefix and no soversion in a DLL name; try both spellings
+        // because a MinGW-built library keeps the prefix.
+        let bare = stem.strip_prefix("lib").unwrap_or(stem);
+        push(format!("{bare}.dll"));
+        push(format!("{stem}.dll"));
+    }
+    out
+}

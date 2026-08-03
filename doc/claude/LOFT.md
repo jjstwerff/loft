@@ -1062,6 +1062,67 @@ For-expressions can be used inside strings to produce formatted lists:
 "values: {for x in 1..7 {x*2}:02}"   // produces [02,04,06,08,10,12]
 ```
 
+### Building a value instead of text
+
+A format string normally joins everything into one `text`. When the type it is
+assigned to says so, it **builds that type instead** — and the type is told which
+bytes the author wrote and which came from a value.
+
+A type opts in by defining `lit` plus one `hole_…` method per value kind it
+accepts:
+
+```loft
+struct Query {
+  const parts: vector<text>,      // the literal chunks
+  const values: vector<text>,     // what was interpolated
+}
+
+fn lit(self: Query, s: text) { self.parts += [s] }        // author bytes
+fn hole_text(self: Query, v: text?) { self.values += [v ?? ""] }
+fn hole_int(self: Query, v: integer) { self.values += ["{v}"] }
+```
+
+Then a format string with that target type calls them, in source order:
+
+```loft
+name = "ada";
+q: Query = "SELECT * FROM t WHERE name = {name}";
+// calls q.lit("SELECT * FROM t WHERE name = ") then q.hole_text(name)
+```
+
+The target comes from the type you assign to, a function parameter, or a return
+type — there is no new syntax, and `text` behaves exactly as before.
+
+Why this exists: a value that has been rendered into text cannot be told apart
+from text the author wrote. Keeping them separate is what lets a library build a
+SQL statement, a shell command, an HTML fragment or a file path in which **an
+interpolated value can never become syntax** — the value simply has no route into
+the text, because the only path in is `lit`.
+
+The method names, and which kind each hole uses:
+
+| hole type | method |
+|---|---|
+| `text` (and `text?`) | `hole_text` |
+| `integer` | `hole_int` |
+| `float` | `hole_float` |
+| `single` | `hole_single` |
+| `boolean` | `hole_boolean` |
+| `character` | `hole_character` |
+
+Rules worth knowing:
+
+- **A missing `hole_…` is a compile error** naming the method to add. A value is
+  never quietly rendered to text instead — that would undo the point.
+- **`text?` is allowed** for `hole_text`, so an absent value stays distinct from
+  the empty string. This is how a SQL builder tells NULL from `''`.
+- **A format spec is refused** on a hole (`"{x:>8}"`), because the value is handed
+  over rather than rendered, so there is nothing to format.
+- **A string with no holes still builds the type** — an empty statement is still a
+  statement.
+
+`tests/scripts/interpolation-hook.loft` is a complete worked example.
+
 ---
 
 ## Control flow

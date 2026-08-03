@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN23 S1-S3 — the MariaDB C API, bound directly.
+//
+// This is a faithful binding of what libmariadb exports, NOT the API a loft
+// program should see. loft's own advice says so at the declaration below
+// ("8 required parameters"), and it is right: the uniform `sql` interface is
+// designed on top of this, not in place of it.
+
+pub fn client_info() -> text;              #c "mysql_get_client_info" "const char*(void)"
+pub fn db_init(h: integer) -> integer;     #c "mysql_init" "void*(void*)"
+pub fn db_close(h: integer);               #c "mysql_close" "void(void*)"
+pub fn db_errno(h: integer) -> integer;    #c "mysql_errno" "int(void*)"
+pub fn db_error(h: integer) -> text;       #c "mysql_error" "const char*(void*)"
+
+// `unix_socket` is `integer`, not `text`: it must be able to be NULL, and loft
+// text is non-null with no way to spell a null pointer. 0 is C's NULL.
+pub fn db_connect(h: integer, host: text, user: text, pass: text, db: text,
+                  port: integer, sock: integer, flags: integer) -> integer;
+#c "mysql_real_connect" "void*(void*, const char*, const char*, const char*, const char*, int, const char*, long)"
+
+pub fn db_query(h: integer, sql: text) -> integer;   #c "mysql_query" "int(void*, const char*)"
+pub fn db_store(h: integer) -> integer;              #c "mysql_store_result" "void*(void*)"
+pub fn db_next_row(res: integer) -> integer;         #c "mysql_fetch_row" "void*(void*)"
+pub fn db_cols(res: integer) -> integer;             #c "mysql_num_fields" "int(void*)"
+pub fn db_rows(res: integer) -> integer;             #c "mysql_num_rows" "long(void*)"
+pub fn db_free(res: integer);                        #c "mysql_free_result" "void(void*)"
+
+// A column is `text?`: SQL NULL arrives as a NULL pointer, which is loft's null.
+// The `?` is what makes null-flow demand a discharge rather than letting a null
+// arrive unannounced — and it keeps SQL NULL distinct from the empty string.
+pub fn db_col(row: integer, i: integer) -> text?;    #c "lm_row_col" "const char*(void*, long)"
