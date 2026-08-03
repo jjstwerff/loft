@@ -103,6 +103,20 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: found_via
+    attributes:
+      label: Filed as a direct result of another ticket?
+      description: >-
+        If this was found BECAUSE of another ticket — a follow-on of that investigation, a
+        sibling the matrix turned up, a defect in the fix — put `Found-via: #N` here.  It sets
+        this issue's `hit-by:*` to the SAME source as #N, because the consumer that pointed us
+        at that area is why this one was found too.  Leave blank if nothing prompted it (a
+        nightly gate, a sanitizer, an unprompted sweep) — that is `hit-by:loft`.
+      placeholder: "Found-via: #747"
+    validations:
+      required: false
+
   - type: dropdown
     id: severity
     attributes:
