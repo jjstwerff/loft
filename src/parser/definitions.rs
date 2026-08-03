@@ -3044,6 +3044,52 @@ impl Parser {
             if self.lexer.peek().has == crate::lexer::LexItem::None {
                 break;
             }
+            // @PLN125 arc A step A1 — an ASSOCIATED TYPE declaration, accepted and
+            // ignored.
+            //
+            //   interface SqlDb {
+            //     type Rows: SqlRows          // <- here
+            //     fn select(self: Self, sql: text) -> Self.Rows
+            //   }
+            //
+            // Inert on purpose: A1's whole claim is that the contract can be
+            // WRITTEN before anything reads it, so every existing program stays
+            // byte-identical in IR and native Rust. A2 resolves `Self.Rows` to the
+            // concrete companion; until then this only reserves the syntax, and a
+            // program that declares one gets exactly the behaviour it has today.
+            //
+            // The bound is parsed and discarded rather than rejected: writing
+            // `type Rows: SqlRows` and having it mean less than it says is the
+            // point of an inert step, and refusing the bound would force the
+            // consumer to edit the line again at A2.
+            // `type` is a reserved token (the typedef keyword), so it arrives as
+            // `Token`, not `Identifier` — `has_token`, like `parse_typedef`.
+            if self.lexer.has_token("type") {
+                if self.lexer.has_identifier().is_none() && !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect an associated type name after 'type' in interface body"
+                    );
+                }
+                // `: Bound [+ Bound]*` — the same shape a bounded generic uses.
+                if self.lexer.has_token(":") {
+                    loop {
+                        if self.lexer.has_identifier().is_none() && !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Expect an interface name after ':' in an associated type bound"
+                            );
+                        }
+                        if !self.lexer.has_token("+") {
+                            break;
+                        }
+                    }
+                }
+                self.lexer.has_token(";");
+                continue;
+            }
             // I3.1: `op <token> (params) -> type` desugars to an `OpCamelCase` method stub.
             let method_name = if self.lexer.has_keyword("op") {
                 if let crate::lexer::LexItem::Token(tok) = self.lexer.peek().has.clone() {
