@@ -122,34 +122,21 @@ pub fn db_next(self: Maria) -> boolean {
   return false;
 }
 
-// ONE return, with the branches ASSIGNING, because this is the only backend
-// whose `db_col` has two sources and loft#740 corrupts that shape: a `text?`
-// function with two `return <call>` statements frees the returned buffer before
-// returning it, so `--native` hands back garbage for the early branch while
-// `--interpret` is correct. Two returns of LITERALS are fine, and so is a
-// non-null `text` — it is the nullable-plus-call-result combination that breaks.
-// This form is the verified one; revert it when #740 closes.
+// Two sources: a plain result row reads the column directly, a prepared
+// statement reads it out of the bound result buffer.
 pub fn db_col(self: Maria, i: integer) -> text? {
-  out: text? = null;
-  if !self.from_ps {
-    out = my_col(self.row, i);
-  } else if lm_result_is_null(i) == 0 {
-    // The library reports the value's TRUE length even when it did not fit, so
-    // a longer-than-buffer column is re-fetched at exactly its own size rather
-    // than silently returning a prefix.
-    need = lm_result_len(i);
-    ok = true;
-    if need > lm_result_cap(i) {
-      b = lm_result_grow(i, need);
-      if b == 0 {
-        ok = false;
-      } else if my_stmt_fetch_column(self.ps, b, i, 0) != 0 {
-        ok = false;
-      }
-    }
-    if ok { out = lm_result_text(i) }
+  if !self.from_ps { return my_col(self.row, i) }
+  if lm_result_is_null(i) != 0 { return null }
+  // The library reports the value's TRUE length even when it did not fit, so
+  // a longer-than-buffer column is re-fetched at exactly its own size rather
+  // than silently returning a prefix.
+  need = lm_result_len(i);
+  if need > lm_result_cap(i) {
+    b = lm_result_grow(i, need);
+    if b == 0 { return null }
+    if my_stmt_fetch_column(self.ps, b, i, 0) != 0 { return null }
   }
-  return out;
+  return lm_result_text(i);
 }
 
 pub fn db_width(self: Maria) -> integer {
