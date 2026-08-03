@@ -10,5 +10,5 @@ version = "0.0.1"
 # parameters out of a `const char *const *`, and loft can pass one string but
 # not an array of them. The shim owns that array and calls no libpq symbol.
 [c]
-libs = "libpq.so.5"
+optional-libs = "libpq.so.5"
 shim = "src/shim.c"

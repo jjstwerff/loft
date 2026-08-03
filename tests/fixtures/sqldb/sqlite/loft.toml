@@ -3,5 +3,5 @@ name = "sqlite"
 version = "0.0.1"
 
 [c]
-libs = "libsqlite3.so.0"
+optional-libs = "libsqlite3.so.0"
 shim = "src/shim.c"
