@@ -386,10 +386,18 @@ pub fn store_durable_seal(path: text) -> boolean fs#update;
 //   pw = PaintedWorld { painted: [] }   // painted's declared type is hash<PaintedHex[q, r]>
 //   store_persist_bind(pw.painted, "dryopea_world.store")
 //   // …mutations to pw.painted now hit mmap'd bytes…
-// `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial`
-// (each keyed local/field is its own dedicated Store).  A bare `reference`
-// parameter accepts them all; `bind_path` is collection-agnostic (it
-// snapshots the whole Store's bytes).  `hash` carries its bucket seed in its
+// `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial`.
+// A bare `reference` parameter accepts them all.
+//
+// It snapshots the whole STORE `r` lives in, which is not always a store of
+// just `r` (loft#757).  A keyed LOCAL owns its store, so binding it writes a
+// file for that collection.  A keyed FIELD shares its container's store, so
+// binding `pw.painted` above writes a file for `PaintedWorld` — carrying the
+// container and every sibling collection — and that file will NOT load back
+// into a bare `hash<PaintedHex[q, r]>`.  Both are usable; they are just
+// different files.  Bind through the container consistently, or bind a local
+// of the collection's own type when another program has to read the file.
+// The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its
 // own record and the comparison-based kinds hold no per-process state, so
 // every persisted image is portable across processes.
 pub fn store_persist_bind(r: reference, path: text) -> boolean fs#update;
@@ -472,10 +480,19 @@ pub fn store_verify(r: reference) -> boolean;
 // collection that shrinks and grows again would just pay to re-grow. Read
 // `store_memory()` first — its `tail%` is exactly what this call returns, and
 // its `inner%` is the space BETWEEN records, which this does not touch.
+//
+// You do NOT need this to right-size a file at the END of a run. A bound store
+// keeps its file AS the live arena, and the arena's capacity grows by 7/3 and
+// never shrinks by itself — so mid-run the file is a rung on a ladder, not a
+// measure of content, and can sit 57% above what it holds. Releasing the
+// collection hands that tail back on its own, so the file a program leaves
+// behind follows its content whether or not this was ever called (loft#752).
+// Call it MID-RUN, when a live set has dropped for good and the memory (or the
+// disk) is wanted back before the end.
 //   world: hash<Hex[q, r]> = []
 //   store_persist_bind(world, "world.store")
 //   // …a region is unloaded for good…
-//   store_reclaim(world)          // the file follows what the world holds
+//   store_reclaim(world)          // the file follows what the world holds NOW
 // Returns 0, changing nothing, for a store that is read-only, shares another
 // store's memory, or carries a `store_durable_seal` sidecar — truncating behind
 // that sidecar's back would report a healthy store as corrupt.

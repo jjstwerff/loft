@@ -1,0 +1,10 @@
+LOFT-DSCHEMA v1
+hash=9964989820216314247
+--
+@endian	little
+Oth	size=8	struct{j@0:integer}
+Rec	size=16	struct{k@0:integer, v@8:integer}
+Wrap	size=8	struct{recs@0:hash<Rec[k]>, other@4:hash<Oth[j]>}
+hash<Oth[j]>	size=4	hash<Oth>(keys=[0],elem_size=8)
+hash<Rec[k]>	size=4	hash<Rec>(keys=[0],elem_size=16)
+integer	size=8	base

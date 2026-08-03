@@ -1264,6 +1264,48 @@ fn satisfaction_check_fails_missing_method() {
     .error("'Thing' does not satisfy interface 'Ordered': missing OpLt at satisfaction_check_fails_missing_method:3:57");
 }
 
+/// @PLN125 A2a: an implementor whose method returns a DIFFERENT named type than
+/// the interface declares does not satisfy it, and the message names both.
+///
+/// Before this, satisfaction checked only that a method of the right NAME
+/// existed. What saved most programs was not a check but a coincidence: the
+/// generic body is typed from the INTERFACE's return, so a field the interface's
+/// type lacks fails later as `Unknown field Rows.m` — a message about the wrong
+/// type, at the use site, blaming the caller. Give both structs the same field
+/// name and even that went quiet while the call returned from the concrete
+/// record.
+#[test]
+fn satisfaction_check_fails_on_a_different_return_type() {
+    code!(
+        "struct Rows { n: integer }
+         struct ConnRows { pad: text, n: integer }
+         interface Db { fn sel(self: Self) -> Rows }
+         struct Conn { k: integer }
+         fn sel(self: Conn) -> ConnRows { ConnRows { pad: \"p\", n: self.k } }
+         fn go<D: Db>(d: D) -> integer { r = d.sel(); r.n }
+         fn test() { go(Conn{k:1}) }"
+    )
+    .error(
+        "'Conn' does not satisfy interface 'Db': 'sel' returns 'ConnRows' but the \
+         interface declares 'Rows' at satisfaction_check_fails_on_a_different_return_type:7:36",
+    );
+}
+
+/// @PLN125 A2a, the other side: `Self` in the interface's return substitutes to
+/// the concrete type, so an implementor returning ITSELF satisfies `-> Self`.
+/// A check that compared the two types literally would reject every such
+/// interface, which is most of them.
+#[test]
+fn satisfaction_accepts_self_as_the_return_type() {
+    code!(
+        "interface Maker { fn mk(self: Self) -> Self }
+         struct A { v: integer }
+         fn mk(self: A) -> A { A { v: self.v + 1 } }
+         fn bump<M: Maker>(m: M) -> M { m.mk() }
+         fn test() { assert(bump(A{v:1}).v == 2, \"-> Self resolves per implementor\"); }"
+    );
+}
+
 // ── fix-tvscope — Type variable namespace ────────────────────────────────────
 
 /// fix-tvscope: defining a struct whose name clashes with a generic type variable

@@ -459,3 +459,68 @@ fn resolution_section_is_available_as_json() {
         "only the requested section, under the documented key"
     );
 }
+
+/// loft#750 — compiling one file TWICE with one binary must produce the same
+/// bytecode and the same stack slots.
+///
+/// It did not: `store_confinement` answered a `HashMap`, and its caller
+/// relocates each confined `__vdb`'s null-init — a relocation that cannot reach
+/// its block puts the init back at body position 0, so visiting several
+/// confined stores in Rust's per-process hash order PERMUTED the null-inits at
+/// the head of the body, which moved the slots under them.
+///
+/// Program OUTPUT was stable throughout (the reordered declarations are
+/// independent), so nothing computed a wrong answer. The cost was elsewhere: a
+/// `--native` artifact whose source varies per process cannot be bit
+/// reproducible (#711), and "prove this change emits byte-identical IR" — the
+/// standing gate for every inert-first plan step — cannot tell "my change did
+/// nothing" from "the hash seed moved". Over the script corpus, 23 of 599 files
+/// differed from THEMSELVES; the native-emitter half fixed 20, these three are
+/// the parser/`scopes` half.
+///
+/// Each file is compiled in TWO SEPARATE PROCESSES, which is what varies the
+/// hash seed — two compilations inside one process would share it and pass
+/// while the bug was live.
+#[test]
+fn compiling_the_same_file_twice_gives_the_same_bytecode_and_slots() {
+    // All three are lambda / closure-capture shaped, which is where a confined
+    // block sits inside a `map`/`filter` body or a short-lambda capture — the
+    // shape whose relocation cannot reach its block and so puts the null-init
+    // back, which is what makes the visit order observable.
+    for name in [
+        "tests/scripts/35p-iterator-match.loft",
+        "tests/scripts/501-map-filter-literal-receiver.loft",
+        "tests/scripts/85-short-lambda-capture.loft",
+    ] {
+        let run = || -> String {
+            let out = Command::new(loft_bin())
+                .arg("introspect")
+                .arg(workspace_root().join(name))
+                .current_dir(workspace_root())
+                .output()
+                .expect("failed to invoke loft binary");
+            assert!(out.status.success(), "introspect {name} failed");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let first = run();
+        let second = run();
+        assert!(
+            !first.is_empty(),
+            "{name}: empty introspect output — the comparison below would be vacuous"
+        );
+        if first != second {
+            let diff: Vec<String> = first
+                .lines()
+                .zip(second.lines())
+                .filter(|(a, b)| a != b)
+                .take(6)
+                .map(|(a, b)| format!("  - {a}\n  + {b}"))
+                .collect();
+            panic!(
+                "{name}: two compilations with one binary disagree — compilation \
+                 is not reproducible (loft#750). First differing lines:\n{}",
+                diff.join("\n")
+            );
+        }
+    }
+}

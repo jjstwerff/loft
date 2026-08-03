@@ -21,6 +21,36 @@ fn is_capturing_fnref(v: &Value) -> bool {
     }
 }
 
+/// The text a text-iteration driver actually reads its characters from — the
+/// first argument of the `OpTextCharacterNullable` call [`Parser::iter_text`]
+/// buried in `iter_next`.
+///
+/// The loop's bound must be read from THIS expression, not from the collection
+/// expression the source was written as: the two differ once a substitution has
+/// rewritten the source, and a bound taken from the other one would answer for
+/// a different text than the character read walks (loft#755).
+pub(crate) fn find_text_coll(v: &Value, target: u32) -> Option<Value> {
+    match v {
+        Value::Call(op, args) if *op == target => args.first().cloned(),
+        Value::Call(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
+            args.iter().find_map(|a| find_text_coll(a, target))
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter().find_map(|o| find_text_coll(o, target))
+        }
+        Value::If(c, t, e) => find_text_coll(c, target)
+            .or_else(|| find_text_coll(t, target))
+            .or_else(|| find_text_coll(e, target)),
+        Value::Set(_, x)
+        | Value::Return(x)
+        | Value::Drop(x)
+        | Value::Yield(x)
+        | Value::BreakWith(_, x) => find_text_coll(x, target),
+        Value::Span(b) => find_text_coll(&b.1, target),
+        _ => None,
+    }
+}
+
 /// True when a par worker's body returns a capturing closure in a `return` or
 /// tail position.  Conservative — only flags closures found directly in return
 /// position, so a non-capturing fn-ref return and any closure used only
@@ -163,29 +193,75 @@ impl Parser {
             .vars
             .unique("for_result", &Type::Character, &mut self.lexer);
         let l = self.cl("OpLengthCharacter", &[Value::Var(res_var)]);
+        let read = self.cl(
+            // Plan-07 phase 4 step 4.8 — for-loop iteration over text uses
+            // the *Nullable* peer of OpTextCharacter.  User-facing `text[i]`
+            // (parser/fields.rs:750) keeps the raising OpTextCharacter.
+            "OpTextCharacterNullable",
+            &[code.clone(), Value::Var(iter_var)],
+        );
+        let advance = self.cl("OpAddInt", &[Value::Var(iter_var), l]);
+        // loft#755 — a character read at an in-bounds position always spans at
+        // least one byte, but `OpLengthCharacter` answers 0 for code point 0:
+        // `character`'s null IS 0, so a NUL and "no character" share one value.
+        // Termination is decided by the POSITION alone (`text_loop_break`), so
+        // the only 0 reaching here is a real NUL — whose UTF-8 encoding is
+        // exactly one byte.  Stepping over it keeps the walk moving; without
+        // this the position stands still on a NUL and the loop never ends.
+        let stalled = self.cl("OpLeInt", &[Value::Var(iter_var), Value::Var(index_var)]);
+        let step_one = self.cl("OpAddInt", &[Value::Var(index_var), Value::Int(1)]);
         let next = vec![
             // Save current position as #index before advancing.
             v_set(index_var, Value::Var(iter_var)),
-            v_set(
-                res_var,
-                // Plan-07 phase 4 step 4.8 — for-loop iteration over
-                // text uses the *Nullable* peer of OpTextCharacter;
-                // OOB returns char(0) which the for-loop driver uses
-                // as its end-of-iteration signal.  User-facing `text[i]`
-                // (parser/fields.rs:750) keeps the raising
-                // OpTextCharacter.
-                self.cl(
-                    "OpTextCharacterNullable",
-                    &[code.clone(), Value::Var(iter_var)],
-                ),
-            ),
-            v_set(iter_var, self.cl("OpAddInt", &[Value::Var(iter_var), l])),
+            v_set(res_var, read),
+            v_set(iter_var, advance),
+            v_if(stalled, v_set(iter_var, step_one), Value::Null),
             Value::Var(res_var),
         ];
         // Initialise the loop driver at the outer scope.
         // The caller must separately initialise index_var at the same scope level.
         *code = v_set(iter_var, Value::Int(0));
         v_block(next, Type::Character, "for text next")
+    }
+
+    /// The ONE home for "has text iteration passed the last character?" — the
+    /// break steps every loop driven by [`iter_text`] pushes into its body.
+    ///
+    /// Text iteration cannot terminate on the yielded CHARACTER, the way it did
+    /// before loft#755: `character`'s null is code point 0, so a NUL that the
+    /// text really holds is the same value as the out-of-bounds read that ends
+    /// the walk.  `text_from_bytes` builds such a text from valid UTF-8, and
+    /// `len`, `size`, `byte_at`, `find` and slicing all read straight past the
+    /// NUL — only the loop stopped there, silently dropping the rest.  So
+    /// terminate on the POSITION instead, exactly as the vector arm yields
+    /// `len(coll)` elements whatever the elements are.
+    ///
+    /// Two facts end the walk, and they are genuinely different:
+    ///
+    /// * the text is null — loft's null text IS the one-byte NUL string
+    ///   (`STRING_NULL`), for which `size` still answers 1.  A null text holds
+    ///   no characters, so it must yield none.
+    /// * the saved position (`index_var`, where the character just read
+    ///   started) has reached the byte length.
+    ///
+    /// `coll` is re-read each iteration rather than hoisted, matching the
+    /// vector arm; pass the SAME expression the character read uses, so reader
+    /// and bound cannot drift.
+    pub(crate) fn text_loop_break(&mut self, coll: &Value, index_var: u16) -> Vec<Value> {
+        let live = self.cl("OpConvBoolFromText", std::slice::from_ref(coll));
+        let is_null = self.cl("OpNot", &[live]);
+        let size = self.cl("OpSizeText", std::slice::from_ref(coll));
+        let past_end = self.cl("OpLeInt", &[size, Value::Var(index_var)]);
+        vec![is_null, past_end]
+            .into_iter()
+            .map(|test| {
+                v_if(
+                    test,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                )
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_lines)] // sorted/index/spatial iterator setup — splitting would lose context
@@ -2158,6 +2234,15 @@ use #count instead"
             } else {
                 None
             };
+            // loft#755 — the text the character read actually walks, captured
+            // before `iter_next` is consumed, so the loop's bound and its
+            // reader answer for the same text.
+            let text_fetch_coll = if matches!(in_type, Type::Text(_)) {
+                let tcn = self.data.def_nr("OpTextCharacterNullable");
+                find_text_coll(&iter_next, tcn)
+            } else {
+                None
+            };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -2288,6 +2373,18 @@ use #count instead"
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
                     Value::Null,
                 ));
+            } else if matches!(in_type, Type::Text(_))
+                && let Some(idx) = pre_var
+            {
+                // loft#755 — position-based termination: yield exactly the
+                // text's characters, whatever they are, so an embedded NUL no
+                // longer reads as end-of-text.  See `text_loop_break`.
+                let coll = text_fetch_coll
+                    .clone()
+                    .unwrap_or_else(|| orig_coll_expr.clone());
+                for step in self.text_loop_break(&coll, idx) {
+                    lp.push(step);
+                }
             } else if !matches!(in_type, Type::Iterator(_, _)) || is_coroutine_loop {
                 let mut test_for = Value::Var(for_var);
                 self.convert(&mut test_for, &var_tp, &Type::Boolean);

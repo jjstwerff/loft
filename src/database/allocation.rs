@@ -698,6 +698,35 @@ impl Stores {
                 }
             }
         }
+        // loft#752 — a BOUND store's file IS the live arena, so give the tail
+        // back at the moment the binding ends.  The arena grows by 7/3 and
+        // never shrinks on its own, so the file left behind is a rung on a
+        // ladder rather than a measure of its content: it can sit 57% above
+        // what it holds, two builds a rung apart differ by 133% with identical
+        // records, and 40 000 and 60 000 features produced byte-identical
+        // files.  loft#710 decided a persisted store's size must follow its
+        // content and fixed the IMAGE-write path; this is the same decision on
+        // the path that fix never reached, and the reported cost of not making
+        // it was a consumer concluding that key ORDER cost them 2.3x when both
+        // of their numbers were rungs.
+        //
+        // `store_reclaim`'s rule — the runtime cannot tell a permanent drop
+        // from a lull, so the PROGRAM says when (@PLN123 A3) — is about the
+        // middle of a run, where a reclaim can be paid back at 7/3 by the next
+        // claim.  Here there is no next claim: the store is being released.
+        // That is the one moment the runtime does know, so a generator's output
+        // file is content-sized whether or not its author has heard of
+        // `store_reclaim`.
+        //
+        // It must run BEFORE `free = true`, which is what `usage()` reads to
+        // early-out — after it, the chain walk reports mark 0 / incomplete and
+        // `shrink_to` (rightly) refuses.  `shrink_to` also declines a read-only
+        // store, an incomplete walk, and one carrying a durable `.dmeta`
+        // sidecar whose recorded length and CRC must not be truncated behind
+        // its back, so every case this must not touch says no inside that call.
+        if store.is_file_backed() && !store.read_only {
+            store.reclaim_tail();
+        }
         store.free = true;
         // LOFT_UAF: record the freed slot so the dispatch loop can scan, after
         // this op, for live variables that still read it (a premature free).

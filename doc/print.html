@@ -3189,6 +3189,18 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <pre><code>pub fn join(self: vector&lt;text&gt;, sep: text) -&gt; text</code></pre>
 <p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.</p>
 </div>
+<div class="item">
+<pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
+<p>These two are TEXT functions that happen to sit after the Environment marker. Re-opening the section files them under Text in the generated reference, which is where a reader looks for them — `text_from_bytes` existed for two releases and was reported as missing (loft#748) because `doc/stdlib-text.html` did not list it.  Declaring the section rather than MOVING the definitions is deliberate: definition order is the order types are minted, and the native `init()` replays that order, so relocating `vector&lt;u8&gt;`'s first mention shifts every type id after it (loft#739 / #742).  A comment cannot. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
+</div>
+<div class="item">
+<pre><code>pub fn text_from_bytes(bytes: vector&lt;u8&gt;) -&gt; text</code></pre>
+<p>Build a text from the raw UTF-8 bytes of a vector&lt;u8&gt; — the inverse of byte_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell &quot;empty input&quot; from &quot;invalid bytes&quot; apart.</p>
+</div>
+<div class="item">
+<pre><code>pub fn chr(cp: integer) -&gt; text</code></pre>
+<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one.</p>
+</div>
 <h2 id="stdlib-collections">Collections</h2>
 <p class="section-desc">Operations on vector&lt;T&gt; — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index. All structures are passed by reference instead of by value</p>
 <div class="item">
@@ -3468,7 +3480,8 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn store_reclaim(r: reference) -&gt; integer fs#update</code></pre>
 <p>Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store_persist_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.</p>
-<p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
+<p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch.</p>
+<p>You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_key(local: reference, path: text, key: integer) -&gt; boolean fs#read</code></pre>
@@ -3525,14 +3538,6 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p class="section-desc">Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.</p>
 <div class="item">
 <pre><code>pub fn arguments() -&gt; vector&lt;text&gt;</code></pre>
-</div>
-<div class="item">
-<pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
-<p>Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
-</div>
-<div class="item">
-<pre><code>pub fn text_from_bytes(bytes: vector&lt;u8&gt;) -&gt; text</code></pre>
-<p>Build a text from the raw UTF-8 bytes of a vector&lt;u8&gt; — the inverse of byte_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell &quot;empty input&quot; from &quot;invalid bytes&quot; apart.</p>
 </div>
 <div class="item">
 <pre><code>pub fn ymd_days_ago(days: integer) -&gt; text</code></pre>

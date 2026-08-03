@@ -1,0 +1,81 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#753) — `&File` was accepted as a parameter type and then
+// NOTHING you can do with a `File` worked through it.  Every diagnostic it
+// produced was wrong, and one of them described a construct that was not there:
+//
+//   f#format = LittleEndian   ->  "Unknown loop attribute '#f'; use #index, …"
+//   f += (v as i32)           ->  "No matching operator 'Add' on '&File' and '&File'"
+//   f#read                    ->  "Variable 'f' cannot change type from &File to integer"
+//
+// `+=` through a `&`-parameter works for `&text`, `&vector<integer>` and
+// `&integer`, so `File` was the one type whose `&` form was special — which is
+// why the wall read as "I wrote it wrong" and was walked around (a consumer
+// changed `&File` back to `File` and filed nothing).
+//
+// A `&File` is `RefVar(Reference(File))`.  `is_file_var` / `is_file_var_type`
+// both matched a BARE `Reference(File)`, so every File path fell through to the
+// generic operator / attribute code and reported what THAT code saw.  Codegen
+// had always dereferenced such a slot (`OpVarRef` + `OpGetStackRef`); only the
+// two predicates disagreed, and the peel now lives in the one predicate both
+// share (the loft#740 shape: two guards, one question, one peel).
+//
+// `&` on a parameter is only for REASSIGNING the whole binding, so both
+// functions below do exactly that — which also makes the rebind observable and
+// turns it into the test's own oracle: after `read_one`, the caller's handle is
+// the FRESH one, and the format it carries is the one that function set.
+
+// @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
+#cwd
+
+// --- `f#read` and `f#format =` through a `&File` ---
+fn read_one(f: &File, p: text) -> integer {
+  x = f#read as i32;
+  f = file(p);
+  f#format = LittleEndian;
+  return x;
+}
+
+// --- `f += …` and `f#exists` through a `&File` ---
+fn append_one(f: &File, p: text, v: integer) -> boolean {
+  f += (v as i32);
+  e = f#exists;
+  f = file(p);
+  f#format = LittleEndian;
+  return e;
+}
+
+fn main() {
+  p = "test_loft_753_amp_file.bin";
+  delete(p);
+
+  w = file(p);
+  w#format = LittleEndian;
+  assert(append_one(w, p, 4242), "append_one: #exists through &File");
+  assert(append_one(w, p, 7), "append_one: #exists through &File, second record");
+
+  // Both appends landed, in order, at the declared width — read WITHOUT any
+  // `&` so this side of the check cannot share the fix's code path.
+  d = file(p);
+  d#format = LittleEndian;
+  a = d#read as i32;
+  b = d#read as i32;
+  assert(a == 4242, "direct read: first {a}, want 4242");
+  assert(b == 7, "direct read: second {b}, want 7");
+
+  // The same first record read back THROUGH a `&File`.
+  r = file(p);
+  r#format = LittleEndian;
+  c = read_one(r, p);
+  assert(c == 4242, "read through &File: {c}, want 4242");
+
+  // The rebind inside `read_one` reached the caller — `r` is the fresh handle
+  // it opened, positioned at the start, so this reads record ONE again rather
+  // than continuing at record two.
+  again = r#read as i32;
+  assert(again == 4242, "& rebound the caller's handle: {again}, want 4242");
+
+  delete(p);
+  println("753 ok");
+}

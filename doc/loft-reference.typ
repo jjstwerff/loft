@@ -6344,6 +6344,24 @@ pub fn join(self: vector<text>, sep: text) -> text
 
 Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.
 
+```rust
+pub fn byte_at(self: text, i: integer) -> integer
+```
+
+These two are TEXT functions that happen to sit after the Environment marker. Re-opening the section files them under Text in the generated reference, which is where a reader looks for them — `text\_from\_bytes` existed for two releases and was reported as missing (loft\#748) because `doc/stdlib-text.html` did not list it.  Declaring the section rather than MOVING the definitions is deliberate: definition order is the order types are minted, and the native `init()` replays that order, so relocating `vector\<u8\>`'s first mention shifts every type id after it (loft\#739 / \#742).  A comment cannot. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text\[i\]` for pure-ASCII checks.
+
+```rust
+pub fn text_from_bytes(bytes: vector<u8>) -> text
+```
+
+Build a text from the raw UTF-8 bytes of a vector\<u8\> — the inverse of byte\_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell "empty input" from "invalid bytes" apart.
+
+```rust
+pub fn chr(cp: integer) -> text
+```
+
+Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text\_from\_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      "A"     chr(233)    "é" chr(20013)   "中"    chr(128512) "😀" A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text\_from\_bytes(\[0\])` carries one.
+
 == Collections
 
 Operations on vector\<T\> — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index. All structures are passed by reference instead of by value
@@ -6736,7 +6754,8 @@ pub fn store_reclaim(r: reference) -> integer fs#update
 ```
 
 Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store\_persist\_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.
-You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store\_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
+You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store\_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch.
+You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft\#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
 
 ```rust
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read
@@ -6818,18 +6837,6 @@ Functions for interacting with the host operating system. Returns the script-lev
 ```rust
 pub fn arguments() -> vector<text>
 ```
-
-```rust
-pub fn byte_at(self: text, i: integer) -> integer
-```
-
-Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text\[i\]` for pure-ASCII checks.
-
-```rust
-pub fn text_from_bytes(bytes: vector<u8>) -> text
-```
-
-Build a text from the raw UTF-8 bytes of a vector\<u8\> — the inverse of byte\_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell "empty input" from "invalid bytes" apart.
 
 ```rust
 pub fn ymd_days_ago(days: integer) -> text

@@ -86,6 +86,16 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
     // to see when they compile it, not a reason for a consumer's build to look
     // broken. Errors still fail the build below.
     cmd.arg("-o").arg(&tmp);
+    // macOS bakes the `-o` path into the library as its INSTALL NAME, and the
+    // rename below moves the file without touching it — so consumers linked
+    // against the `.tmp` and `dyld` refused a library that was sitting right
+    // there under its real name. Name it for where it will END UP.
+    let final_name = so
+        .file_name()
+        .map_or_else(|| stem.clone(), |f| f.to_string_lossy().into_owned());
+    for arg in crate::platform::shim_name_args(&final_name, crate::platform::host_lib_os()) {
+        cmd.arg(arg);
+    }
     for p in &paths {
         cmd.arg(p);
     }

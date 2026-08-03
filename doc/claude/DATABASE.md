@@ -161,6 +161,74 @@ and rewriting every `DbRef` — compaction, which @PLN123 arc B remains open for
 the size now follows the content, but two construction orders can still differ by
 the fragmentation each genuinely leaves.
 
+**The bind-first path reaches the same answer at RELEASE (loft#752).** That #710
+fix is on the IMAGE WRITE, so it covers `store_persist_bind` LAST and nothing
+else. Bind a store FIRST and its file IS the live arena: while the program runs,
+the size is the arena's **capacity**, which grows by 7/3 and never shrinks on its
+own. So the file used to be quantized to a ladder and could sit up to **57%**
+(`1 − 3/7`) above its content. Measured on one generator shape, varying only the
+feature count:
+
+| features | file (bytes), before | after |
+|---|---|---|
+| 150 000 | 39,179,744 | content-sized |
+| 200 000 – 400 000 | **91,419,400** (unchanged across a 2× data increase) | one size per count |
+| 500 000 – 700 000 | 213,311,928 | content-sized |
+
+Freeing the collection's store now hands the tail back before the slot is marked
+free — the same `reclaim_tail` `store_reclaim` calls, at the one moment the
+runtime can tell a permanent drop from a lull, because there is no next claim to
+pay 7/3 for. `store_reclaim` at the end of a build is therefore no longer needed
+and finds nothing left: measured over 40 000 and 60 000 features, with and
+without it, the files are byte-identical per count and differ between counts.
+
+⚠ **MID-RUN, a bound store's file size still compares nothing.** Between the bind
+and the release it is capacity: two points a rung apart differ by 133% with
+byte-identical content. Call `store_reclaim(collection)` before reading a size in
+the middle of a run, or do not read it.
+
+This is not a footnote: a consumer measured two insertion orders, saw 2.3×, and
+concluded that feeding keys in order — the thing that bounds a generator's working
+set — was the worse strategy on every axis. Both numbers were rungs (loft#747).
+Right-sized, the same shape leaves a 1.30× spread, which IS the fragmentation the
+two orders genuinely differ by.
+
+### Binding FIRST is the low-memory choice, and its pages are reclaimable
+
+**`store_persist_bind` FIRST uses far LESS memory than binding last**, which is the
+opposite of what a reader expects and of what loft#747 was filed claiming. Measured
+across two generator shapes and two boxes:
+
+| features / tiles | RSS, bind FIRST | RSS, bind LAST |
+|---|---|---|
+| 400 000 / 40 000 | **12 MB** | 29 MB |
+| 1 600 000 / 160 000 | **31 MB** | 125 MB |
+| 4 000 000 / 400 000 | **65 MB** | 289 MB |
+
+4.4× lower here, 2.8–5.3× lower on a heavier consumer shape. Bind LAST builds in
+anonymous heap and then writes an image; bind FIRST makes the file the arena, and
+**file-backed pages are reclaimable while anonymous heap is not**. So the dataset
+size does not set a hard memory requirement — it sets a working-set/throughput
+tradeoff. Under a hard cgroup cap with swap disabled:
+
+| | result |
+|---|---|
+| 4 M features, `MemoryMax=32M` | **completes**, 34 MB peak, 271 s, correct read-back |
+| 1.6 M, cap 96 MB, bind FIRST | **completes**, 88 MB peak, 27.6 s (12.7 s uncapped) |
+| 1.6 M, cap 96 MB, bind LAST | **OOM-killed** |
+
+⚠ **`MemoryMax` alone proves nothing on a box with swap.** A first attempt at the
+table above had BOTH orders passing under 96 MB, because the unbound heap simply
+paged out to 8 GB of swap. `MemorySwapMax=0` is what makes a cap a cap; without it
+the measurement is vacuous in the direction that looks like success.
+
+The cost of capping is that the kernel's LRU only learns the working set by evicting
+the wrong pages first — ~2× wall at a modest cap, 271 s at an aggressive one. Letting
+a program say "this record is finished" would turn that cliff into a curve; that is
+**@PLN126**, and it opens on a measurement (does ordered insertion leave a finished
+record contiguous?) rather than on an API, because `MADV_DONTNEED` is per PAGE and a
+per-record hint cannot drop a record interleaved with live ones.
+
 **A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
 happens when the image is WRITTEN; after that `resize_store` returns early on any
 request at or below the current size, so a bound store that grew ten-fold and

@@ -17,7 +17,19 @@ UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
   LIB := liblc_types.dylib
-  SOFLAGS := -dynamiclib
+  # `-install_name @rpath/…` is load-bearing, not decoration.  macOS records an
+  # install name INSIDE the library, and every binary that links it copies that
+  # string in as the thing to ask `dyld` for.  Built plain, the name is the bare
+  # `liblc_types.dylib`, which `dyld` looks for on the system paths only — the
+  # `-Wl,-rpath` loft emits for a library shipped beside its package is not
+  # consulted, because a bare name is not rpath-relative.  The link then
+  # succeeds and the program dies at startup:
+  #
+  #   dyld: Library not loaded: liblc_types.dylib
+  #     tried: 'liblc_types.dylib' (no such file), …
+  #
+  # This is what a library MEANT to ship beside a package has to declare.
+  SOFLAGS := -dynamiclib -Wl,-install_name,@rpath/liblc_types.dylib
 else
   LIB := liblc_types.so
   SOFLAGS := -shared

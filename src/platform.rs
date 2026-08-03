@@ -456,6 +456,32 @@ pub fn existing_lib_beside(dir: &std::path::Path, name: &str, os: LibOs) -> Opti
         .find(|cand| dir.join(cand).exists())
 }
 
+/// Linker flags that pin a freshly built shared library's own name.
+///
+/// macOS records an INSTALL NAME inside the Mach-O — whatever `-o` said — and
+/// every binary that links the library copies that string in as the thing to ask
+/// `dyld` for. loft builds a shim to `<stem>.<pid>.tmp` and renames it over the
+/// final name so the publish is atomic; the rename moves the FILE and leaves the
+/// recorded name alone, so consumers went looking for a `.tmp` that no longer
+/// existed:
+///
+/// ```text
+/// dyld: Library not loaded: …/native-auto/lcshim_shim_<key>.71616.tmp
+/// ```
+///
+/// `@rpath/<final name>` rather than the absolute path: loft already emits
+/// `-Wl,-rpath,<dir>` for the shim directory, and a relocatable name keeps a
+/// built binary working if the package moves. ELF has no equivalent problem —
+/// its `SONAME` is only set when asked — so this is empty off macOS.
+#[must_use]
+pub fn shim_name_args(final_file_name: &str, os: LibOs) -> Vec<String> {
+    if os == LibOs::Macos {
+        vec![format!("-Wl,-install_name,@rpath/{final_file_name}")]
+    } else {
+        Vec::new()
+    }
+}
+
 /// [`host_lib_variants`], with the target convention passed in.
 ///
 /// The versioned forms matter as much as the bare one — a real declaration is
@@ -493,4 +519,40 @@ pub fn lib_variants(name: &str, os: LibOs) -> Vec<String> {
         push(format!("{stem}.dll"));
     }
     out
+}
+
+#[cfg(test)]
+mod shim_name_tests {
+    use super::{LibOs, shim_name_args};
+
+    /// macOS bakes the `-o` path into a dylib as its install name, so a library
+    /// published by rename must be told the name it will END UP with. Checked
+    /// from any host by passing the convention in — left implicit this could
+    /// only ever run on a Mac, which is how the `.tmp` install name shipped.
+    #[test]
+    fn macos_pins_the_final_name_and_other_hosts_add_nothing() {
+        assert_eq!(
+            shim_name_args("lcshim_shim_bda315af5ea4cb63.dylib", LibOs::Macos),
+            ["-Wl,-install_name,@rpath/lcshim_shim_bda315af5ea4cb63.dylib"],
+            "the FINAL file name, and @rpath so the emitted -rpath resolves it"
+        );
+        for os in [LibOs::Linux, LibOs::Windows] {
+            assert!(
+                shim_name_args("libfoo.so", os).is_empty(),
+                "ELF sets a SONAME only when asked, and a DLL has no such record"
+            );
+        }
+    }
+
+    /// The name must carry no directory: an install name is what `dyld` is
+    /// ASKED for, and `@rpath/` already supplies the search.
+    #[test]
+    fn the_install_name_is_relative_to_rpath() {
+        let a = shim_name_args("x.dylib", LibOs::Macos);
+        assert!(a[0].starts_with("-Wl,-install_name,@rpath/"), "{a:?}");
+        assert!(
+            !a[0].contains("/native-auto/") && !a[0].contains(".tmp"),
+            "neither the staging path nor an absolute directory may survive: {a:?}"
+        );
+    }
 }

@@ -2195,12 +2195,14 @@ pub fn check(data: &mut Data) {
             store_lifetime_guard(&d.code, &d.variables, free_ref_nr, gf_nr, &d.name);
         }
         let code_ref = data.definitions[d_nr as usize].code.clone();
+        let create_stack_nr = data.def_nr("OpCreateStack");
         let mut seq = 0u32;
         compute_intervals(
             &code_ref,
             &mut data.definitions[d_nr as usize].variables,
             free_text_nr,
             free_ref_nr,
+            create_stack_nr,
             &mut seq,
             0,
         );
@@ -3747,6 +3749,51 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return
+            && !expr_is_terminal
+            && ret_var == u16::MAX
+            && is_heap_return_type(tp)
+            && !matches!(expr, Value::Var(_))
+            && expr.is_place_read(data)
+        {
+            // loft#754 — the B5-L3 rule for a HEAP return (`vector` / record /
+            // struct-enum) whose tail is a PLACE read.  `is_value_return_type`
+            // names only the scalars and the text branch below only text, so
+            // such a tail with pending frees reached the fall-through and was
+            // emitted as a DISCARDED statement plus a fabricated
+            // `Return(Null)`.  The interpreter read the value off eval-stack
+            // top and answered correctly; native emitted
+            // `let _ = expr; …; return DbRef::NULL`, so
+            // `fn f(w) -> vector<u8> { if … { return []; } w.items[0].bytes }`
+            // handed back an EMPTY vector — silently, and on one backend only.
+            // (rustc even flagged it as `unused_must_use` on the dropped
+            // element read.)
+            //
+            // The hoist states the interpreter's own order in the IR: evaluate
+            // the tail, run the frees, return the captured value.
+            //
+            // A PLACE read is the whole class, and the bound is load-bearing in
+            // both directions.  Only a place leaves its value on the eval stack
+            // alone — it allocates nothing and writes no return buffer — so
+            // only a place can be dropped by a `Return(Null)`; and `Set(tmp,
+            // place)` is a bare `DbRef` copy, which is why the hoist adds no
+            // ownership.  A CALL tail already delivers through its hidden
+            // buffer, and hoisting one instead engaged the store-transfer
+            // machinery (`protect_store_frees` + `CopyRefOrNull`) around a
+            // borrowed argument, which over-froze the caller's store
+            // ("Delete on locked store", `return-borrow-of-mutated-arg`).  A
+            // bare `Var` is excluded because the fast path above already
+            // returns it directly.
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let mut result = Vec::with_capacity(ls.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
         } else if is_return && matches!(tp.base(), Type::Text(_)) && !expr_is_terminal {
             // B5-L3 extension for text returns: save the expression's text
             // to a `__ret_N` temp, run free ops, then return the temp.  The
@@ -4512,10 +4559,19 @@ impl Scopes {
                 // hoisting it stays as the arg value, while the Set moves
                 // into the enclosing statement list so the work-ref lives
                 // at function scope (its slot must survive the call).
+                //
+                // loft#745 — a work-ref that ALREADY holds a value carries its
+                // overwrite-free, so the parser's `Set` arrives wrapped as
+                // `Insert([OpFreeRef(__ref_N), Set(__ref_N, …)])`.  Matching only the
+                // bare `Set` left that shape unhoisted, so the materialisation stayed
+                // INSIDE the argument: native then had no `OpCreateStack(Var(_))` to
+                // recognise, hoisted the whole argument into a `let _pre_N = …`
+                // binding whose value is the assignment's `()`, and rustc rejected the
+                // call with E0308 (expected `&mut DbRef`, found `()`).
                 let is_p179_hoisted = n >= 2
-                    && ops[..n - 1].iter().all(|v| {
-                        matches!(v, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__ref_"))
-                    })
+                    && ops[..n - 1]
+                        .iter()
+                        .all(|v| Self::is_ref_materialisation(v, function, data))
                     && matches!(&ops[n - 1], Value::Call(d_nr, _)
                         if data.def(*d_nr).name == "OpCreateStack");
                 if is_a56_hoisted || is_p135_hoisted || is_p179_hoisted {
@@ -4572,6 +4628,30 @@ impl Scopes {
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// True when `v` writes the work-ref that a `&`-argument's `OpCreateStack` then
+    /// borrows — the `Set(__ref_N, …)` the parser emits for a non-`Var` `&`-source,
+    /// either bare or wrapped with the overwrite-`OpFreeRef` a re-assigned work-ref
+    /// carries (loft#745).  `scan_args` hoists these out of the argument so the
+    /// work-ref lives at function scope and its slot survives the call.
+    fn is_ref_materialisation(v: &Value, function: &Function, data: &Data) -> bool {
+        let writes_work_ref = |op: &Value| matches!(op, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__ref_"));
+        match v {
+            Value::Set(_, _) => writes_work_ref(v),
+            // The free targets the work-ref's PREVIOUS value and belongs with the write,
+            // so the pair hoists as one unit.  A wrapper holding anything else is not a
+            // materialisation and stays inside the argument.
+            Value::Insert(inner) => {
+                inner.iter().any(writes_work_ref)
+                    && inner.iter().all(|op| {
+                        writes_work_ref(op)
+                            || matches!(op, Value::Call(d_nr, _)
+                                if data.def(*d_nr).name == "OpFreeRef")
+                    })
+            }
+            _ => false,
+        }
     }
 
     /// @PLN90 / loft#506 — a computed-lvalue `&`-WRITE-BACK argument.  The arg is
@@ -5407,6 +5487,19 @@ fn is_value_return_type(tp: &Type) -> bool {
             | Type::Character
             | Type::Enum(_, false, _)
     )
+}
+
+/// loft#754 — a return type delivered as a store POINTER (`DbRef`): a vector, a
+/// record, or a struct-enum, including one reached through a `&`-parameter
+/// place ref.  Names the half of the return space that neither
+/// `is_value_return_type` nor the text branch covers, so a tail expression of
+/// this shape is hoisted before the scope frees instead of being dropped.
+fn is_heap_return_type(tp: &Type) -> bool {
+    match tp.base() {
+        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => true,
+        Type::RefVar(inner) => is_heap_return_type(inner),
+        _ => false,
+    }
 }
 
 /// A branch whose TAIL is literally null — `Value::Null` or the
@@ -7481,16 +7574,27 @@ fn block_result_type(code: &Value) -> String {
     }
 }
 
+/// loft#750 — the result is a `BTreeMap`, and the ORDER is load-bearing.  Its
+/// caller relocates each confined `__vdb`'s null-init, and a relocation that
+/// cannot reach its block puts the init back at body position 0; run over
+/// several confined stores, the visit order therefore PERMUTES the null-inits
+/// at the head of the body — which moves the stack slots under them.  A
+/// `HashMap` gave that order Rust's per-process hash seed, so compiling one
+/// file twice with one binary produced different bytecode and different slots
+/// (same answers, but no reproducible `--native` build, and a byte-identical-IR
+/// inertness gate that could not tell "my change did nothing" from "the seed
+/// moved").  Keyed by variable number, the visit order is now the declaration
+/// order.
 fn store_confinement(
     code: &Value,
     vars: &Function,
     free_ref_nr: u32,
     gf_nr: u32,
-) -> HashMap<u16, (u16, u16)> {
+) -> BTreeMap<u16, (u16, u16)> {
     // Plan-57 cluster-III Route 2 (gated, experimental): recover the backer of an
     // orphaned (overwritten) store so its per-block store can confine.
     let recover = std::env::var("LOFT_CONF_RECOVER").is_ok();
-    let mut out: HashMap<u16, (u16, u16)> = HashMap::new();
+    let mut out: BTreeMap<u16, (u16, u16)> = BTreeMap::new();
     for vdb in 0..vars.count() {
         if !vars.name(vdb).starts_with("__vdb") {
             continue;

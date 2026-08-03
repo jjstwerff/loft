@@ -11745,6 +11745,53 @@ impl Parser {
         ret
     }
 
+    /// loft#757 — `store_persist_bind(x, path)` persists the whole STORE `x` lives
+    /// in, not `x`.  A keyed collection reached through a struct FIELD shares its
+    /// struct's store, so binding it writes a file rooted at that struct, holding
+    /// the struct and every sibling collection — and the file then refuses to load
+    /// into a bare collection of the same type, which is how every other tool in a
+    /// pipeline reads it.
+    ///
+    /// Measured: `struct Wrap { recs: hash<Rec[k]>, other: hash<Oth[j]> }` bound via
+    /// `w.recs` writes a sidecar naming `Rec`, `Oth` AND `Wrap`; binding a bare
+    /// `hash<Rec[k]>` local names only `Rec`.  The records are never damaged and the
+    /// binding program reads its own output perfectly, so nothing surfaces until a
+    /// DIFFERENT program loads the file — in the report, three pipeline steps later.
+    ///
+    /// ADVICE, not a warning: binding a field is CORRECT as written for a program
+    /// that also loads through that container — loft's own `store_persist_bind` doc
+    /// shows exactly that (`store_persist_bind(pw.painted, …)`), and dryopea reads
+    /// its own store back through `pw` perfectly.  What goes wrong is a SECOND
+    /// program binding the same collection type as a bare local, and no compile-time
+    /// check can see that program.  Gating here would fail the CI of libraries whose
+    /// use is self-consistent, which is precisely the split the two tiers exist for.
+    fn check_persist_bind_root(&mut self, name: &str, list: &[Value], arg_pos: &[Position]) {
+        if self.first_pass || name != "store_persist_bind" {
+            return;
+        }
+        // A root local reads as `Var`; anything reached THROUGH something else — a
+        // field read, an index — is a call to a getter op, and that is exactly the
+        // shape whose store belongs to the container rather than to the collection.
+        let Some(arg) = list.first() else { return };
+        if matches!(arg.unspan(), Value::Var(_)) {
+            return;
+        }
+        let Some(pos) = arg_pos.first().cloned() else {
+            return;
+        };
+        diagnostic_at!(
+            self.lexer,
+            &pos,
+            Level::Advice,
+            "store_persist_bind persists the whole store this collection lives in, and a \
+             collection reached through a field shares its container's store — so the file \
+             is written for the container (with every sibling collection in it) and will \
+             not load back into a bare collection of this type.  That is fine when the same \
+             container reads it back; bind a local of the collection's own type if \
+             another program loads this file"
+        );
+    }
+
     /// Dispatch a parsed call to the appropriate handler: diagnostics, special
     /// forms (`map/filter/reduce/sort/parallel_for`), fn-ref calls, or normal calls.
     #[allow(clippy::too_many_arguments)]
@@ -11766,6 +11813,7 @@ impl Parser {
         ) {
             return self.parse_call_diagnostic(val, name, list, types, call_pos);
         }
+        self.check_persist_bind_root(name, list, arg_pos);
         match name {
             // @PLN105 Phase 1 — deliver(tag, value): hand the value's descriptor
             // handle to the host. Lower to OpDeliver(tag, value, db_tp), filling

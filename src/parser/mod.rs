@@ -151,6 +151,12 @@ pub struct Parser {
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
+    /// True while parsing the LHS of a tuple destructuring — `(a, b) = expr`.
+    /// The names there are BINDINGS, exactly like the `x` in `x = expr`, so a
+    /// name that also belongs to a definition must still mint a variable
+    /// rather than resolve to that definition (loft#756).  See
+    /// `Parser::at_binding_name`.
+    pub(crate) in_tuple_lhs: bool,
     /// @PLN86 — the host-supplied sandbox policy (profiles + designations).
     /// Empty by default; set by the embedder before parsing.  A script cannot
     /// designate itself — the designation is read from here, not the source.
@@ -759,6 +765,7 @@ impl Parser {
             cc_deepest: HashMap::new(),
             cc_nest: 0,
             in_format_expr: false,
+            in_tuple_lhs: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
             sandbox_unbounded_loops: HashMap::new(),
@@ -4447,6 +4454,19 @@ impl Parser {
             let children: Vec<u32> = self.data.children_of(iface_nr).collect();
             for child_nr in children {
                 let child_name = self.data.def(child_nr).name().to_string();
+                // @PLN125 arc A step A2b — an interface's children are its method stubs
+                // AND, since A2b, its associated-type placeholders.  Only the methods are
+                // structural satisfaction; a companion type is matched by A2c against the
+                // implementor's own, not by looking for a method of that name.  Without
+                // this skip, `type Rows` would demand a `rows()` method of every
+                // implementor and no type could satisfy the interface at all.
+                //
+                // Told apart by `DefType`, not by the name: a method stub is registered as
+                // a `Function` and a placeholder as a `Struct`, so this stays right if the
+                // placeholder is ever renamed.
+                if !matches!(self.data.def_type(child_nr), DefType::Function) {
+                    continue;
+                }
                 // Extract method name from "__iface_{d_nr}_{method}" or legacy "t_4Self_{method}"
                 let self_prefix = format!("t_{}Self_", "Self".len());
                 let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_") {
@@ -4487,10 +4507,97 @@ impl Parser {
                     let peek_pos = self.lexer.peek().position.clone();
                     self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
                     satisfied = false;
+                } else if let Some(msg) =
+                    self.return_type_mismatch(child_nr, found, concrete_nr, &method_suffix)
+                {
+                    let msg = crate::diagnostics::diagnostic_format(
+                        Level::Error,
+                        format_args!(
+                            "'{concrete_name}' does not satisfy interface '{iface_name}': {msg}",
+                        ),
+                    );
+                    let peek_pos = self.lexer.peek().position.clone();
+                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
+                    satisfied = false;
                 }
             }
         }
         satisfied
+    }
+
+    /// @PLN125 A2a — does the implementor's method return a DIFFERENT named type
+    /// than the interface declares?  The message, or `None` when they agree.
+    ///
+    /// Satisfaction checked only that a method of the right name existed, so an
+    /// implementor returning something else was accepted in silence. What saved
+    /// most programs is not the check but a coincidence: the generic body is
+    /// typed from the INTERFACE's return, so a field the interface's type lacks
+    /// fails later with `Unknown field Rows.m` — a message about the wrong type,
+    /// at the use site, blaming the caller. Give both structs the same field name
+    /// and even that goes quiet.
+    ///
+    /// Deliberately narrow: it reports only when both sides name a struct or enum
+    /// and the definitions DIFFER. That is the unambiguous case and it cannot
+    /// false-positive on the two things that legitimately vary — dependency sets
+    /// (`text["b"]` vs `text`) and integer ranges. A2c widens this to the
+    /// associated-type bound, which is where the remaining shapes belong.
+    ///
+    /// `Self` in the interface's return substitutes to the concrete type first,
+    /// so `fn mk(self: Self) -> Self` against `fn mk(self: A) -> A` agrees.
+    fn return_type_mismatch(
+        &self,
+        iface_method: u32,
+        concrete_method: u32,
+        concrete_nr: u32,
+        method: &str,
+    ) -> Option<String> {
+        let self_nr = self.data.def_nr("Self");
+        if self_nr == u32::MAX {
+            return None;
+        }
+        let concrete_type = self.data.def(concrete_nr).returned().clone();
+        let want = Self::substitute_type(
+            self.data.def(iface_method).returned().clone(),
+            self_nr,
+            &concrete_type,
+        );
+        let got = self.data.def(concrete_method).returned().clone();
+        let named = |t: &Type| match t.base() {
+            Type::Reference(d, _) | Type::Enum(d, _, _) => Some(*d),
+            _ => None,
+        };
+        let (Some(w), Some(g)) = (named(&want), named(&got)) else {
+            return None;
+        };
+        if w == g {
+            return None;
+        }
+        // @PLN125 arc A step A2b — the interface declares `Self.X`, an ASSOCIATED type.
+        // Its placeholder stands for whatever companion the implementor supplies, so at
+        // this step any concrete return satisfies it: there is nothing yet that says which
+        // type the companion is.  A2c is what binds the placeholder per monomorph and
+        // checks the declared bound; until then the alternative is worse than unchecked —
+        // every implementor would be rejected for returning something other than the
+        // placeholder itself, which no type can be, so `Self.X` would be unwritable in the
+        // very step that introduces it.
+        //
+        // This widens NOTHING that A2a narrowed: it applies only where the interface's
+        // declared return is one of its own associated-type placeholders, which could not
+        // be spelled before A2b.
+        // The placeholder and the method stub are both children of the interface, so
+        // "declared by the interface this method belongs to" is a parent comparison.
+        let iface = self.data.def(iface_method).parent;
+        if iface != u32::MAX
+            && self.data.def(w).parent == iface
+            && matches!(self.data.def_type(w), DefType::Struct)
+        {
+            return None;
+        }
+        Some(format!(
+            "'{method}' returns '{}' but the interface declares '{}'",
+            self.data.def(g).name(),
+            self.data.def(w).name(),
+        ))
     }
 
     /// Extract the type variable `def_nr` from a type tree.
@@ -9685,16 +9792,7 @@ impl Parser {
         // Plan-07 phase 1: unspan() so wraps on `[` / `.` (steps 1.11
         // / 1.12) don't hide an addressable shape from the `&` arg
         // check.
-        match val.unspan() {
-            Value::Var(_) => true,
-            Value::Call(d_nr, args) => {
-                let name = data.def(*d_nr).name();
-                (name == "OpGetField" || name == "OpGetVector" || name == "OpVectorRef")
-                    && !args.is_empty()
-                    && Self::is_addressable(&args[0], data)
-            }
-            _ => false,
-        }
+        val.is_place_read(data)
     }
 
     /// @PLN87 #1 — is `val` a PLACE (an addressable lvalue: a variable, struct field,

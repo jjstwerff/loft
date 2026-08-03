@@ -2605,6 +2605,105 @@ fn reading_a_collection_leaks_nothing_into_its_store() {
     }
 }
 
+/// loft#752 — a BOUND store's file must be sized by its CONTENT once the
+/// binding is released, not by the rung of the 7/3 growth ladder the build
+/// happened to stop on.
+///
+/// `store_persist_bind` FIRST makes the FILE the live arena, and the arena grows
+/// by 7/3 and never shrinks by itself, so the file left behind was quantized to
+/// a ladder — up to 57% (`1 - 3/7`) above its content, and two builds one rung
+/// apart differing by 133% with identical records. loft#710 decided a persisted
+/// store's size must follow its content and fixed the IMAGE-write path; the
+/// bind-first path never went through it.
+///
+/// Two invariants, and each is vacuous without the other:
+///
+/// * **an explicit `store_reclaim` must find nothing left** — the release
+///   already handed the tail back, so the two runs land on the same size. On its
+///   own this passes trivially if the release reclaimed nothing and the explicit
+///   call reclaimed nothing either;
+///
+/// * **more data must produce a bigger file** — the ladder's signature is two
+///   different data sets agreeing to the byte. Measured before the fix, 40 000
+///   and 60 000 features both wrote exactly 7,196,280 bytes.
+///
+/// The record counts and the payload digest are compared too: a file that
+/// stopped growing by LOSING records would otherwise satisfy both.
+#[test]
+fn bound_store_file_is_content_sized_when_the_binding_is_released() {
+    let script = workspace_root().join("tests/scripts/store_bind_release_size.loft");
+    let run = |backend: &str, dir: &Path, n: u32, reclaim: bool| -> (u64, String) {
+        let path = dir.join(format!("s{n}_{}.store", u8::from(reclaim)));
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("N", n.to_string())
+            .env("RECLAIM", if reclaim { "1" } else { "0" })
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && !stdout.contains("FAIL"),
+            "{backend} n={n} reclaim={reclaim}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let report = stdout
+            .lines()
+            .find(|l| l.starts_with("reclaim"))
+            .unwrap_or_else(|| panic!("no report in:\n{stdout}"))
+            .to_string();
+        assert!(
+            report.contains("verify true"),
+            "{backend} n={n} reclaim={reclaim}: store_verify failed — {report}"
+        );
+        // Everything after the `reclaim <bool>` prefix is the CONTENT digest:
+        // tile / road counts and the checksum of every stored point.
+        let content = report
+            .split_once(" tiles ")
+            .expect("report shape")
+            .1
+            .to_string();
+        let size = fs::metadata(&path)
+            .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))
+            .len();
+        (size, content)
+    };
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let dir = scratch(&format!("release_size_{tag}"));
+
+        let (plain_40k, content_40k) = run(backend, &dir, 40_000, false);
+        let (tidy_40k, tidy_content_40k) = run(backend, &dir, 40_000, true);
+        let (plain_60k, content_60k) = run(backend, &dir, 60_000, false);
+
+        assert_eq!(
+            content_40k, tidy_content_40k,
+            "{backend}: the two 40k runs must store the same data, else their \
+             sizes compare nothing"
+        );
+        assert_eq!(
+            plain_40k, tidy_40k,
+            "{backend}: releasing a bound store must hand its tail back, so an \
+             explicit `store_reclaim` finds nothing left to give — without \
+             reclaim {plain_40k} bytes, with it {tidy_40k} (loft#752)"
+        );
+        assert_ne!(
+            content_40k, content_60k,
+            "{backend}: the 40k and 60k runs must differ in content, else the \
+             size comparison below is vacuous"
+        );
+        assert!(
+            plain_60k > plain_40k,
+            "{backend}: 50% more data must produce a bigger file — both counts \
+             wrote {plain_40k} bytes, which is the 7/3 ladder answering instead \
+             of the content (loft#752)"
+        );
+    }
+}
+
 /// `scratch` wipes the directory; this returns the same path without wiping, so
 /// a caller can read back what a just-finished run wrote there.
 fn scratch_existing(test_name: &str) -> PathBuf {

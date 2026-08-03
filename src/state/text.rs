@@ -466,11 +466,19 @@ impl State {
         if len + from > v1.len as i32 {
             len = v1.len as i32 - from;
         } else if till < v1.len as i32 {
-            let mut t = till;
-            let mut b = v1.str().as_bytes()[t as usize];
-            while b & 0xC0 == 0x80 && t < v1.len as i32 {
+            // Snap `till` FORWARD past continuation bytes so the slice ends on a
+            // character boundary.  loft#749 — the bound must be tested against the
+            // index about to be READ: the old loop checked `t < len` before the
+            // increment and then read `t + 1`, so a slice ending one byte into the
+            // string's LAST character walked off the end and panicked
+            // ("index out of bounds: the len is 5 but the index is 5").  That is
+            // `s[i..s.len()]` on any text whose tail is multi-byte, and it is
+            // also what took `split_text` down when a multi-byte character
+            // followed the final separator.
+            let bytes = v1.str().as_bytes();
+            let mut t = till as usize;
+            while t < bytes.len() && bytes[t] & 0xC0 == 0x80 {
                 t += 1;
-                b = v1.str().as_bytes()[t as usize];
                 len += 1;
             }
         }

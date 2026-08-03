@@ -3870,7 +3870,15 @@ extern crate loft;"
             // NULL once r holds a borrow); the in-loop displaced-free and the
             // scope-exit `OpFreeRef` (ops/ref_ops.rs) free THIS, never r's view.
             self.witness_vars = collect_witness_vars(self.data, def_nr);
-            for &wv in &self.witness_vars {
+            // Emit in variable order, not hash order.  `witness_vars` is a `HashSet`,
+            // whose iteration order Rust randomises PER PROCESS, so emitting straight
+            // from it made the generated Rust differ between two runs of the same binary
+            // on the same input — the declarations are independent, so the program was
+            // always correct, but a `--native` build was not reproducible and any
+            // before/after diff of generated source was unusable as an instrument.
+            let mut witnesses: Vec<u16> = self.witness_vars.iter().copied().collect();
+            witnesses.sort_unstable();
+            for wv in witnesses {
                 use std::fmt::Write as _;
                 let nm = sanitize(vars.name(wv));
                 let _ = write!(
@@ -3893,7 +3901,12 @@ extern crate loft;"
             // and hoisting them re-init'd a fresh store per call that the
             // matched free no longer covered (a store leak — crawler's
             // hex/sim libs exhausted the 65535-store table).
-            for v in collect_scope_hoists(def.code()) {
+            // Sorted for the same reason as the witness prologue above: the collector
+            // answers a `HashSet`, and emitting in its iteration order made two runs of
+            // one binary produce different Rust.
+            let mut hoists: Vec<u16> = collect_scope_hoists(def.code()).into_iter().collect();
+            hoists.sort_unstable();
+            for v in hoists {
                 if self.declared.contains(&v) || vars.is_argument(v) || v >= vars.count() {
                     continue;
                 }

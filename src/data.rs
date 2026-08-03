@@ -1023,6 +1023,24 @@ impl Value {
         }
     }
 
+    /// Is this a PLACE that produces a heap `DbRef` — a variable, or an
+    /// accessor chain (`OpGetField` / `OpGetVector` / `OpVectorRef`) rooted at
+    /// one?  Such an expression is pure address arithmetic over a store
+    /// somebody else owns: it allocates nothing and delivers into no return
+    /// buffer, so its value lives only on the evaluation stack.  The `&`
+    /// argument check and the loft#754 tail hoist both ask this question.
+    pub fn is_place_read(&self, data: &Data) -> bool {
+        match self.unspan() {
+            Value::Var(_) => true,
+            Value::Call(d_nr, args) => {
+                let name = data.def(*d_nr).name();
+                (name == "OpGetField" || name == "OpGetVector" || name == "OpVectorRef")
+                    && args.first().is_some_and(|a| a.is_place_read(data))
+            }
+            _ => false,
+        }
+    }
+
     /// @PLN87 P2.2 — the terminal/result variable of a value expression: a bare
     /// `Var`, the target of a tail `Set`, or the last non-`Line` operator of a
     /// `Block`/`Insert` (recursively, unspanning at each level).  Used to
@@ -1895,7 +1913,9 @@ impl Type {
             (Type::RefVar(s), Type::RefVar(o)) => return s.is_equal(o),
             (Type::Enum(s, s_tp, _), Type::Enum(o, o_tp, _)) => return *s == *o && *s_tp == *o_tp,
             (Type::Reference(r, _), Type::Reference(o, _)) => return r == o,
-            (Type::Vector(r, _), Type::Vector(o, _)) => return r.is_equal(o),
+            (Type::Vector(r, _), Type::Vector(o, _)) => {
+                return r.is_equal(o) && r.same_element_storage(o);
+            }
             (Type::Hash(r, rf, _), Type::Hash(o, of, _))
             | (Type::Radix(r, rf, _), Type::Radix(o, of, _)) => return r == o && rf == of,
             (Type::Sorted(r, rf, _), Type::Sorted(o, of, _))
@@ -1915,6 +1935,28 @@ impl Type {
         self == other
             || (matches!(self, Type::Integer(_)) && matches!(other, Type::Integer(_)))
             || (matches!(self, Type::Text(_)) && matches!(other, Type::Text(_)))
+    }
+
+    /// loft#751 — do two types occupy the SAME bytes when they are the ELEMENT
+    /// of a vector?  In a register an `integer` and a `u8` are one type, which
+    /// is why [`Self::is_equal`] compares two scalar integers by kind alone.
+    /// In a vector they are not: the element width IS the stride, so handing a
+    /// `vector<integer>` to a `vector<u8>` parameter re-reads each 8-byte
+    /// element as eight 1-byte ones — silently, since the element COUNT is
+    /// stored and still agrees.  Width comes from the canonical
+    /// [`IntegerSpec::byte_width`] (so a range-typed element and its alias —
+    /// `integer(0,100)` and `u8` — are correctly the same layout), and the sign
+    /// of the lower bound separates `i8` from `u8`, which share a width but not
+    /// a reading.
+    #[must_use]
+    pub fn same_element_storage(&self, other: &Type) -> bool {
+        match (self.base(), other.base()) {
+            (Type::Integer(a), Type::Integer(b)) => {
+                a.byte_width(!a.not_null) == b.byte_width(!b.not_null) && (a.min < 0) == (b.min < 0)
+            }
+            (Type::Vector(a, _), Type::Vector(b, _)) => a.same_element_storage(b),
+            _ => true,
+        }
     }
 
     #[must_use]
