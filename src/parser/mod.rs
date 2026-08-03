@@ -4487,10 +4487,76 @@ impl Parser {
                     let peek_pos = self.lexer.peek().position.clone();
                     self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
                     satisfied = false;
+                } else if let Some(msg) =
+                    self.return_type_mismatch(child_nr, found, concrete_nr, &method_suffix)
+                {
+                    let msg = crate::diagnostics::diagnostic_format(
+                        Level::Error,
+                        format_args!(
+                            "'{concrete_name}' does not satisfy interface '{iface_name}': {msg}",
+                        ),
+                    );
+                    let peek_pos = self.lexer.peek().position.clone();
+                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
+                    satisfied = false;
                 }
             }
         }
         satisfied
+    }
+
+    /// @PLN125 A2a — does the implementor's method return a DIFFERENT named type
+    /// than the interface declares?  The message, or `None` when they agree.
+    ///
+    /// Satisfaction checked only that a method of the right name existed, so an
+    /// implementor returning something else was accepted in silence. What saved
+    /// most programs is not the check but a coincidence: the generic body is
+    /// typed from the INTERFACE's return, so a field the interface's type lacks
+    /// fails later with `Unknown field Rows.m` — a message about the wrong type,
+    /// at the use site, blaming the caller. Give both structs the same field name
+    /// and even that goes quiet.
+    ///
+    /// Deliberately narrow: it reports only when both sides name a struct or enum
+    /// and the definitions DIFFER. That is the unambiguous case and it cannot
+    /// false-positive on the two things that legitimately vary — dependency sets
+    /// (`text["b"]` vs `text`) and integer ranges. A2c widens this to the
+    /// associated-type bound, which is where the remaining shapes belong.
+    ///
+    /// `Self` in the interface's return substitutes to the concrete type first,
+    /// so `fn mk(self: Self) -> Self` against `fn mk(self: A) -> A` agrees.
+    fn return_type_mismatch(
+        &self,
+        iface_method: u32,
+        concrete_method: u32,
+        concrete_nr: u32,
+        method: &str,
+    ) -> Option<String> {
+        let self_nr = self.data.def_nr("Self");
+        if self_nr == u32::MAX {
+            return None;
+        }
+        let concrete_type = self.data.def(concrete_nr).returned().clone();
+        let want = Self::substitute_type(
+            self.data.def(iface_method).returned().clone(),
+            self_nr,
+            &concrete_type,
+        );
+        let got = self.data.def(concrete_method).returned().clone();
+        let named = |t: &Type| match t.base() {
+            Type::Reference(d, _) | Type::Enum(d, _, _) => Some(*d),
+            _ => None,
+        };
+        let (Some(w), Some(g)) = (named(&want), named(&got)) else {
+            return None;
+        };
+        if w == g {
+            return None;
+        }
+        Some(format!(
+            "'{method}' returns '{}' but the interface declares '{}'",
+            self.data.def(g).name(),
+            self.data.def(w).name(),
+        ))
     }
 
     /// Extract the type variable `def_nr` from a type tree.
