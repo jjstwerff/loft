@@ -156,9 +156,29 @@ fn main() {
   assert(k.seq() == "lit(<)>level>lit(>)", "an enum hole routes by its type name");
   assert(k.vals() == "[High]", "and the variant crosses as a value");
 
+  // The intersection with loft#767 — a string literal written INSIDE a hole. It
+  // is ordinary TEXT, not a second accumulator (a hole is not the destination,
+  // so it does not inherit the destination's type), AND it expands its own hole.
+  // Both facts at once, which is the only place either could be got wrong
+  // without the other noticing.
+  l: Trace = "a{"[{n}]"}b";
+  assert(l.seq() == "lit(a)>text>lit(b)", "a literal inside a hole is a text hole");
+  assert(l.vals() == "[[7]]", "and it expands its own hole first");
+
+  // A backtick literal in a hole is the same nested literal, into the same target.
+  m: Trace = "p{`b{n}`}q";
+  assert(m.vals() == "[b7]", "a backtick literal in a hole is a text hole too");
+
+  // Depth two: a literal inside a hole inside a literal inside a hole.
+  o: Trace = "{"<{"{n}"}>"}";
+  assert(o.seq() == "text", "nesting two deep is still one hole");
+  assert(o.vals() == "[<7>]", "and every level expands");
+
   // text is untouched — the same string with no target is ordinary formatting.
   plain = "WHERE name = {attack}";
   assert(plain == "WHERE name = '); DROP TABLE t; --", "text keeps today's behaviour");
+  nested = "a{"[{n}]"}b";
+  assert(nested == "a[7]b", "a nested literal into text is unchanged");
 
   println("interpolation hook ok");
 }
