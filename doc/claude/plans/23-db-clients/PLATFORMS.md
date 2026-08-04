@@ -26,13 +26,22 @@ names itself.
 | platform | the shim links | the C library resolves | the four backends | state |
 |---|---|---|---|---|
 | Linux x86-64 | yes | yes | proven, both loft backends | **green** |
-| macOS | unproven | untested — the probe never asks | **not exercised** | **unknown** |
-| Windows | **no** — `LNK1181` | untested — the probe never asks | **not exercised** | **red** |
+| macOS | yes | **never asked** | **not exercised** | **green, and the green is empty** |
+| Windows | **no** — `LNK1181` | never asked | **not exercised** | **red** |
 | wasm / browser | n/a | n/a | impossible by capability | **owed a clear refusal** |
 
-Only the Linux row is a measurement of the thing the plan claims. The other three
-are the subject of this document, and two of them are *worse than red* — they are
-cells that pass without testing anything.
+Only the Linux row is a measurement of the thing the plan claims.
+
+The macOS row is the one to look at twice. On `main`,
+`one_sql_interface_drives_four_different_c_libraries` **passes on macOS** — 11.9 s,
+and it has been passing. What it exercises there is that the duckdb shim compiles
+and links and that the absent-optional-library SKIP path works. It exercises no
+database, because of the second failure mode below. A passing macOS cell is
+currently evidence about `#c`, not about this plan.
+
+The Windows row is red **on `main` too**, not only on the branch carrying the
+partial fix. It is a pre-existing platform gap being closed incrementally, not a
+regression.
 
 ## Two ways a green here means nothing
 
@@ -44,7 +53,9 @@ echo a notice. The real matrix job renders under the *same display name* when it
 runs, so a placeholder and a real run are indistinguishable in `gh pr checks` —
 read the runner OS or the log, never the name. Per-PR macOS coverage is real but
 narrow (Miri-macOS, ASan-macOS) and **excludes `tests/native.rs`**, which is
-where every fixture in this plan lives. For a real answer, dispatch one:
+where every fixture in this plan lives. The full suite does run on push-to-main
+and daily, so the answer exists — it just arrives after the merge. For a
+pre-merge answer, dispatch one:
 
 ```bash
 gh workflow run ci.yml --ref <branch> -f os=macos-latest
@@ -59,15 +70,19 @@ gates each backend on
     .iter().any(|d| Path::new(&format!("{d}{n}")).exists())   // n = "libsqlite3.so.0"
 ```
 
-Both the directories and the spelling are Linux's. On macOS and Windows this is
-**always false**, so the sqlite, postgres and maria cells are skipped in silence
-— including sqlite, the cell whose entire job is to be the one that always runs.
+Both the directories and the spelling are Linux's, and it is the **spelling** that
+does the damage: `/usr/lib` exists on macOS, but what lives there is
+`libsqlite3.dylib`, so a search for `libsqlite3.so.0` finds nothing. On Windows
+not even the directories exist. Either way the answer is **always false**, so the
+sqlite, postgres and maria cells are skipped in silence — including sqlite, the
+cell whose entire job is to be the one that always runs.
 What remains is the unconditional duckdb cell, and that is exactly the one the
 Windows run died in (`--native/duckdb`).
 
 So on a non-Linux host the test today proves *the duckdb shim compiles and links*
-and nothing else about this plan. Fixing the link without fixing the probe buys a
-green that still tests no database.
+and nothing else about this plan. That is not a prediction — it is what the green
+macOS cell on `main` is made of. Fixing the link without fixing the probe buys
+Windows the same empty green.
 
 ## Windows
 
@@ -120,8 +135,13 @@ sqlite answers it.
 
 ## macOS
 
-Nothing is known to be broken, and nothing is known to work — `tests/native.rs`
-has never run there for this fixture. The pieces that must line up:
+Nothing is broken; nothing is proven either. The full suite **does** run on
+push-to-main and daily, and passes — so the shim compiles, links and loads under
+`-Wl,-install_name,@rpath/…`, on both loft backends. What it never does is open a
+database, because the probe does not ask macOS a question macOS can answer. P2 is
+the entire macOS story, and P3 is then a re-run rather than a repair.
+
+The pieces that must line up when it does ask:
 
 - **The library name.** `platform::lib_variants` translates the declared Linux
   spelling at use time. macOS system sqlite is `/usr/lib/libsqlite3.dylib`, which
