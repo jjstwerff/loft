@@ -65,3 +65,38 @@ When the IR (`src/data.rs`) changes, update `ir.loft` to match, regenerate
 `generated.rs`, re-run `extract.py`, and refresh the hand layer's field
 accessors.  The round-trip test (native `Data` → store → read back) is the
 guard that the transcription stayed faithful.
+
+```
+loft --introspect --show-rust --rust-out tools/ir_schema/generated.rs tools/ir_schema/ir.loft
+python3 tools/ir_schema/extract.py tools/ir_schema/generated.rs > src/ir_schema_gen.rs
+```
+
+A regen is **byte-identical** to the committed file when `ir.loft` has not
+changed — including from a binary with a different stdlib.  If it is not, one of
+the two invariants below has been broken; do not hand-edit `src/ir_schema_gen.rs`
+to paper over it, because that is how the file went stale before.
+
+### What keeps regeneration reproducible (2026-08-04)
+
+Regeneration had been unusable, so schema edits were hand-added to the generated
+file instead — which let it drift out of sync with `ir.loft` unnoticed.  Two
+defects, and one rule:
+
+1. **`tN` labels were absolute.**  `generated.rs` numbers types after the whole
+   stdlib, and the extractor copied those names verbatim, so adding ONE stdlib
+   type renumbered every label and a regen differed in ~1300 lines.  The
+   extractor now relabels our types in declaration order starting at `t7`, after
+   the `t0..t6` base prelude, so the output depends on `ir.loft` alone.
+2. **Named locals were dropped.**  Only `byte_enum` and `vec_*` were kept, so a
+   field whose storage local was `dbref_*` referenced a name nothing bound and
+   the regenerated file did not compile.  Every `let <name> = db.…` is kept now;
+   an unused one is harmless (the file head allows it and the database dedupes).
+
+**The rule: `ir.loft` describes the STORE, not `src/data.rs`.**  It had drifted
+to `NdBlock { block: reference<Block> }` because `data.rs` boxes it — but the
+store INLINES the block and the hand layer reads it that way
+(`NDBLOCK_BLOCK + BLOCK_SCOPE`).  Regenerating from that declaration produced a
+schema nothing could read: SIGSEGV in every IR round-trip test.  Making a field
+by-reference is a real store migration — schema, `ir_store`, `ir_read`, the baked
+offsets in `data_store.rs`, and `CACHE_FORMAT_VERSION` — not a transcription
+change.

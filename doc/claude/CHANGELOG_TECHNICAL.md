@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `ir_schema_gen.rs` regenerates byte-identically again (2026-08-04)
+
+The IR store-schema generator had been unusable, so schema edits were HAND-ADDED
+to the generated file — which is how it drifted out of sync with `ir.loft`
+without anyone seeing. Two independent defects and one wrong declaration:
+
+- **`tN` labels were absolute type ids.** `generated.rs` numbers types after the
+  whole stdlib and `extract.py` copied those names verbatim, so adding ONE stdlib
+  type renumbered every label and a fresh regen differed in ~1300 lines. They are
+  only Rust locals, so the extractor now relabels ours in declaration order from
+  `t7` (after the `t0..t6` base prelude). Proven: a binary WITHOUT
+  `default/07_reflect.loft` and one with it now produce byte-identical output.
+- **Named locals were dropped.** The keep-rule listed `byte_enum` and `vec_*`
+  only, so a field whose storage local was `dbref_*` referenced a name nothing
+  bound and the regenerated file did not compile — which is what forced the
+  hand-adds. Every `let <name> = db.…` is kept now.
+- **`ir.loft` described `src/data.rs` instead of the STORE.** It had drifted to
+  `NdBlock { block: reference<Block> }` because `data.rs` boxes it; the store
+  INLINES the block and the hand layer reads it that way
+  (`NDBLOCK_BLOCK + BLOCK_SCOPE`). Regenerating from that produced a schema
+  nothing could read — SIGSEGV in five IR round-trip tests. `ir.loft` says
+  `Block` again, with the reason written beside it: making that field
+  by-reference is a real store migration (schema, `ir_store`, `ir_read`, the
+  baked offsets, `CACHE_FORMAT_VERSION`), not a transcription change.
+
+The committed schema's CONTENT is unchanged — the regenerated file matches the
+previous one registration for registration. What changed is that it is
+reproducible, so the next schema edit is a regen rather than a hand-edit.
+
 ### @PLN127 arc D: reflection reports field nullability (2026-08-04)
 
 `FieldInfo.nullable` — and the line it draws is the contract decision the plan
