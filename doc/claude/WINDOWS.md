@@ -267,6 +267,37 @@ branches for LNK1181 and "required to be available in rlib format" are removed;
 
 ## Previously fixed Windows-only issues (for context)
 
+- **A `[c]` shim published by rename imported a name nobody published
+  (fixed 2026-08-04, probed via the windows-probe loop).**  A program using a
+  package with a `[c] shim` died with `STATUS_DLL_NOT_FOUND` (`0xC0000135`)
+  before `main`, both streams empty.  The class: **a linker records the name it
+  was GIVEN, not the name you rename to.**  loft builds the shim to
+  `<stem>.<pid>.tmp` and renames it over the final name so the publish is
+  atomic; `--out-implib` writes the import library during that build and records
+  the DLL name from `-o`, so the `.lib` said `.tmp`.  The rename moved the file
+  and left the recorded name behind, and every binary linking that `.lib` copied
+  the temporary in as the thing to ask the loader for.  Read straight off the
+  program's PE import table on the runner: it asked for
+  `lcshim_shim_<key>.8496.tmp` while `lcshim_shim_<key>.dll` sat in the same
+  directory.  **The fix is a staging DIRECTORY with the artifacts already
+  carrying their FINAL names**, then a rename into place: the recorded name
+  follows the BASENAME (a staging path does not leak into it), and the rename
+  still lands in the same directory, so it stays atomic.
+  This is the same class as the macOS install-name bug, which is why
+  `platform.rs` already says *every artifact loft publishes by rename needs
+  this* — but the Windows arm is not an install name at all, so
+  `install_name_args` returning empty off macOS left it open.  macOS keeps its
+  explicit `-install_name` regardless: it bakes in the whole `-o` PATH, so the
+  staging directory would otherwise leak into it.
+  **Two hypotheses died on the way, both cheaply**: the shim imports only
+  `KERNEL32` and the UCRT, so the MinGW runtime (`libgcc_s_seh-1`,
+  `libwinpthread-1`) was never involved and `-static-libgcc` had already done
+  its job; and `-Wl,--soname,<final>` fixes nothing because **PE ignores it** —
+  verified side by side with the staging shape (`.tmp`+rename → imports `.tmp`,
+  exit 127 · `--soname` → imports `.tmp`, exit 127 · built under the final name
+  → imports the real DLL and runs).  The lesson worth keeping: **a missing
+  import names no name**, so guessing is unbounded and reading the import table
+  is the only instrument that converges.
 - **#460 skip missed on Windows — verbatim vs plain path representation
   (fixed 2026-07-02, probed via the windows-probe loop).**  The class: on
   Windows `fs::canonicalize` returns an extended-length `\\?\D:\…` verbatim
