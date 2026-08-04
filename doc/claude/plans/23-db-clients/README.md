@@ -11,8 +11,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 mapping) is designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
 is its first consumer; @PLN125 is not. Depends on @PLN24 (`#c`), also active.
 
-Everything below is proven on **Linux x86-64 only**. macOS has never run these tests,
-Windows fails to link the shim, and wasm cannot host a database client at all —
+**Linux x86-64, macOS and Windows all run these tests** — macOS and Windows prove the
+sqlite cell on both loft backends (`@PLN23 backends exercised: ["sqlite"]`), with the
+other three reported as correct skips. wasm cannot host a database client at all.
 [PLATFORMS.md](PLATFORMS.md) measures each cell and gives the ladder that closes it.
 
 ## Goal

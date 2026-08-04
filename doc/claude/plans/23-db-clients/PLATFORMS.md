@@ -27,7 +27,7 @@ names itself.
 |---|---|---|---|---|
 | Linux x86-64 | yes | yes | proven, both loft backends | **green** |
 | macOS (Apple silicon) | yes, `@rpath` install name verified | yes — sqlite; the other three correctly skip | **sqlite proven, both loft backends** | **green** |
-| Windows | **yes — P1 verified, `LNK1181` gone** | asked since P2 — answer unmeasured | blocked on X1 below, not on linking | **red, one layer deeper** |
+| Windows | yes — P1 verified, `LNK1181` gone; and it now LOADS (X7) | **yes — `winsqlite3.dll`, named by the package (X8)** | **sqlite proven, both loft backends** | **green** |
 | wasm / browser | n/a | n/a | impossible by capability | **owed a clear refusal** |
 
 The macOS row is now a measurement, not a hope —
@@ -37,9 +37,15 @@ strings Linux matches, with `--interpret` and `--native` agreeing. postgres,
 maria and duckdb are absent from that list as *correct reported skips*, for the
 reasons in the install table below — not as failures.
 
-Windows is red **on `main` too**, not only on the branch carrying the partial
-fix. It is a pre-existing platform gap being closed incrementally, not a
-regression.
+**The Windows row is now a measurement too** (2026-08-04): `--test native` on
+`windows-latest` is **22 passed, 0 failed**, reporting `@PLN23 backends
+exercised: ["sqlite"]` — the same list macOS reports, against the same
+hard-coded assertion strings Linux matches. postgres, maria and duckdb are
+absent as *correct reported skips*. Two defects stood between X5 and that line,
+both found by reading artefacts rather than guessing (X7, X8 below).
+
+Windows was red **on `main` too**, not only on the branch carrying the partial
+fix. It was a pre-existing platform gap closed incrementally, not a regression.
 
 **What that row used to say, and why it is worth remembering.** Before P2 the
 same test *also* passed on macOS — 11.9 s on `main` — while exercising no
@@ -228,6 +234,50 @@ that return on both platforms** — POSIX `write` gives `ssize_t` (64-bit on LP6
 blanket `long` → `int64_t` sweep would have broken this binding. That is the
 whole reason X1 was scoped to loft-*authored* shims instead of applied
 everywhere, and it is why the audit had to be per-declaration.
+
+**X7 — FIXED. A linker records the name it was GIVEN, not the name you rename
+to.** `STATUS_DLL_NOT_FOUND` (`0xC0000135`) before `main`, both streams empty.
+loft builds the shim to `<stem>.<pid>.tmp` and renames it over the final name so
+the publish is atomic; `--out-implib` writes the import library *during that
+build* and records the DLL name from `-o`, so the `.lib` said `.tmp`. The rename
+moved the file and left the recorded name behind, and every binary linking that
+`.lib` asked the loader for a temporary nobody published. Read straight off the
+PE import table: it wanted `lcshim_shim_<key>.8496.tmp` while
+`lcshim_shim_<key>.dll` sat in the same directory. Fix: stage in a temp
+**DIRECTORY** with the artifacts already carrying their **FINAL** names — the
+recorded name follows the BASENAME and the rename still lands in the same
+directory, so it stays atomic. Same class as the macOS install-name bug, which
+is why `platform.rs` already said *every artifact loft publishes by rename needs
+this*; the Windows arm is not an install name, so `install_name_args` returning
+empty off macOS left it open.
+
+Two hypotheses died first, both cheaply, and both are worth recording because
+each *looked* right: the shim imports only `KERNEL32` and the UCRT, so no MinGW
+runtime was ever involved (`-static-libgcc` had already done its job); and
+`-Wl,--soname,<final>` changes nothing because **PE ignores it** — verified side
+by side (`.tmp`+rename → imports `.tmp`, exit 127 · `--soname` → identical ·
+built under the final name → runs). **A missing import names no name**, so
+guessing is unbounded; the import table is the only instrument that converges.
+
+**X8 — FIXED. A translated library name is not an identity, and the gate asked
+the weaker question.** With the shim loading, sqlite faulted with `0xC0000005`.
+`libsqlite3.so.0` translates to `sqlite3.dll`, and the first one on a runner's
+PATH belongs to the AWS CLI: it loads, it exports `sqlite3_open` at a real
+address so every cheap check passes, and it faults when called — reproduced in
+~20 lines of plain C, so nothing in loft's `#c` path was implicated. Windows'
+own SQLite is `winsqlite3.dll`, which no stem rule can derive from a Linux
+soname, so the package names it (`optional-libs` is already a list, which is the
+right shape for "SQLite, however this platform spells it").
+
+The second half was ours: the harness asked `host_library_loadable` — a bare
+`Library::new(name).is_ok()` — while `c_library_available` is true only when the
+library opens **and every declared symbol resolves**. Its own doc says why: *a
+file-granular answer would say yes where the call still faults*. So an unusable
+library got CALLED where the fixture's contract promised a SKIP. `duckdb`
+already had this right here; sqlite had no guard at all (serverless does not
+mean the LIBRARY is present), and postgres/maria were only saved by the harness
+gate. All three now answer for themselves and the harness asks nothing — it runs
+every mode and reads the verdict off stdout. One home for the fact.
 
 None of these is a regression from W1/W2 — they were unreachable while nothing
 linked, which is the ordinary shape of fixing a bottom layer.
