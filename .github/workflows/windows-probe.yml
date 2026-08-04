@@ -21,6 +21,16 @@ on:
         description: 'cargo test args (e.g. `--test self_update_swap`). Empty = standing probes.'
         required: false
         default: ''
+      # Some Windows questions are not a test result but an ARTEFACT: which DLLs a
+      # binary imports, what got staged next to it, what the loader was actually
+      # given.  `STATUS_DLL_NOT_FOUND` names no name, so a test can only report that
+      # the process died — the answer is in the PE import table, and reading it
+      # needs a shell rather than a test filter.  Without this lever every such
+      # question cost its own workflow edit and push.
+      run:
+        description: 'bash to run on the Windows runner (e.g. dump a PE import table). Runs INSTEAD of the standing probes.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -56,8 +66,23 @@ jobs:
           echo "cargo test --release $TESTS"
           cargo test --release $TESTS -- --nocapture
 
+      - name: Run the requested shell
+        if: inputs.run != ''
+        shell: bash
+        env:
+          PROBE: ${{ inputs.run }}
+        run: |
+          echo "--- probe ---"
+          echo "$PROBE"
+          echo "-------------"
+          # Never let one dead command end the run: a probe is usually several
+          # questions, and the later answers are the interesting ones.
+          set +e
+          bash -c "$PROBE"
+          echo "probe exit: $?"
+
       - name: Run the probes
-        if: inputs.tests == ''
+        if: inputs.tests == '' && inputs.run == ''
         run: cargo test --release --test windows_probe -- --nocapture
 
       # Verify the platform-agnostic file://-URI abstraction on Windows: the
@@ -65,10 +90,10 @@ jobs:
       # lsp_transport tests now reply instead of timing out. A short per-test
       # terminate turns a regression (a hang) into a ~45s failure, not 600s.
       - name: Install cargo-nextest
-        if: inputs.tests == ''
+        if: inputs.tests == '' && inputs.run == ''
         uses: taiki-e/install-action@nextest
       - name: URI/path abstraction unit tests (Windows cfg)
-        if: inputs.tests == ''
+        if: inputs.tests == '' && inputs.run == ''
         run: cargo test --release --lib uri_path_tests -- --nocapture
 
       # Path SEPARATORS in user-facing output, the same class as the URI work above
@@ -78,10 +103,10 @@ jobs:
       # says `src/pos.loft`, reddening main's Windows leg for a day with no PR able to
       # catch it (the real Windows leg runs on push-to-main and nightly only).
       - name: Report paths read the same on every platform
-        if: inputs.tests == ''
+        if: inputs.tests == '' && inputs.run == ''
         run: cargo test --release --test function_coverage -- --nocapture
       - name: LSP transport (was hanging on Windows) — must reply, not time out
-        if: inputs.tests == ''
+        if: inputs.tests == '' && inputs.run == ''
         shell: bash
         run: |
           mkdir -p .config
