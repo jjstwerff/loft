@@ -1809,6 +1809,40 @@ pub(crate) fn add_native_extern_flags(
     }
 }
 
+/// @PLN24 — the `[c]` half of [`stage_native_dlls`]: a C library that ships
+/// BESIDE its package has the same run-time problem as a native-package cdylib,
+/// and had none of the answer.
+///
+/// The link succeeds (the import library is right there), and then the binary
+/// dies before `main` with `STATUS_DLL_NOT_FOUND` — writing nothing at all, so
+/// the failure presents as an empty stdout and an empty stderr. Windows has no
+/// RPATH to fall back on, which is exactly why `add_c_library_flags` stopped
+/// emitting one there.
+///
+/// Only libraries that are really PRESENT beside the package are copied:
+/// `existing_lib_beside` answers `None` for a bare soname like
+/// `libsqlite3.so.0`, and that is the correct answer — a system library is the
+/// system's to find, and copying one next to the binary would be wrong.
+/// Best-effort, like its sibling: a failed copy leaves the loader's normal
+/// search to do what it can.
+fn stage_c_library_dlls(exe_dir: &std::path::Path, data: &crate::data::Data) {
+    for lib in &data.c_libraries {
+        let dir = std::path::Path::new(&lib.pkg_dir);
+        let Some(found) =
+            crate::platform::existing_lib_beside(dir, &lib.name, crate::platform::host_lib_os())
+        else {
+            continue; // a bare soname — the system's to resolve, not ours to copy
+        };
+        let src = dir.join(&found);
+        if let Some(name) = src.file_name() {
+            let dest = exe_dir.join(name);
+            if dest != src {
+                let _ = std::fs::copy(&src, &dest);
+            }
+        }
+    }
+}
+
 /// @PLN26 phase 4 — stage every native-package DLL beside a just-built Windows
 /// binary so it loads at run time.  Windows has no RPATH, so the loader finds a
 /// linked DLL beside the `.exe` / on `PATH`; copying it next to the binary is the
@@ -1818,7 +1852,11 @@ pub(crate) fn add_native_extern_flags(
 /// same `resolve_native_lib` the link used, so run-time and link-time agree on the
 /// file.  Best-effort: a failed copy leaves the loader's normal search to find it.
 pub(crate) fn stage_native_dlls(exe_dir: &std::path::Path, data: &crate::data::Data) {
-    if !cfg!(windows) || !native_cabi_enabled() {
+    if !cfg!(windows) {
+        return;
+    }
+    stage_c_library_dlls(exe_dir, data);
+    if !native_cabi_enabled() {
         return;
     }
     for (crate_name, pkg_dir) in &data.native_packages {

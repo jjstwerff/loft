@@ -1007,7 +1007,10 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
     assert!(stdout.contains("abs 7"), "abs: {stdout}");
     assert!(
         stdout.contains("hi\n") && stdout.contains("wrote 3"),
-        "a vector must cross as pointer + count: {stdout}"
+        // `{stdout:?}` deliberately: this fired on Windows against output that
+        // LOOKED right in the log, and a rendered log cannot show whether the
+        // separator is `\n` or `\r\n`. Debug-escaping is what tells them apart.
+        "a vector must cross as pointer + count: {stdout:?}"
     );
     Ok(())
 }
@@ -1177,9 +1180,15 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1260,9 +1269,15 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
             .arg(&path)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         // Not an exact string: `strerror(2)` is locale-dependent (it is "No such
@@ -1775,9 +1790,15 @@ fn a_c_library_handle_survives_the_round_trip_and_carries_its_error() -> std::io
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1851,9 +1872,15 @@ fn a_c_binding_reaches_a_versioned_system_library_on_both_backends() -> std::io:
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1927,9 +1954,15 @@ fn loft_builds_the_ansi_c_shim_a_package_ships() -> std::io::Result<()> {
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
