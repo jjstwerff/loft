@@ -74,6 +74,17 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F92](F92.md) | Direct C binding — `#c "symbol" "signature"`, no rustc and no glue crate |
 | [@F93](F93.md) | Paged & remote store loading — read part of a dataset over HTTP range |
 | [@F94](F94.md) | Type-directed interpolation — a type receives the literal/hole boundary |
+| [@F95](F95.md) | Value structs (`value struct`) — copy semantics, stored inline |
+| [@F96](F96.md) | `x?` default-fallback operator — discharge a nullable to its type default |
+| [@F97](F97.md) | `len` vs `size` — logical count vs bytes occupied |
+| [@F98](F98.md) | `spatial<T[x,y]>` — position-keyed collection for proximity queries |
+| [@F99](F99.md) | Sequence match patterns — alternation, optionals, repetition, capture |
+| [@F100](F100.md) | Dead-code lint — a local never read, and a write whose value is lost |
+| [@F101](F101.md) | The build phase — `loft build`, declared targets, zero-config defaults |
+| [@F102](F102.md) | Android target — `--native-android`, APK packaging, GL surface and touch input |
+| [@F103](F103.md) | `deliver` / `expose` — hand a loft value to JavaScript with no copy |
+| [@F104](F104.md) | `store_reclaim()` — give a store's unused file space back |
+| [@F105](F105.md) | Custom `to_text` format hook — a type owns how it prints |
 
 ## Infrastructure (`@I`)
 
