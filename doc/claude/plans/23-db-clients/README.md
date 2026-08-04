@@ -147,6 +147,9 @@ attack cell loudly.
   **without testing anything**; the P1–P6 ladder fixes that before it chases greens.
 - **[MACOS_HANDOFF.md](MACOS_HANDOFF.md)** — the tasks that can only be answered on
   Apple hardware, each with what it unblocks and what would change our minds.
+- **[MACOS_RESULTS.md](MACOS_RESULTS.md)** — the answers, measured on Apple silicon.
+  P2 confirmed; the dyld shared cache and Homebrew's keg-only layout both confirmed,
+  and two guesses in PLATFORMS.md corrected.
 - **[mysql-bind-layout-check.c](mysql-bind-layout-check.c)** — the check that keeps the
   hand-declared `MYSQL_BIND` in `maria/src/stmt.c` honest against the real header.
 

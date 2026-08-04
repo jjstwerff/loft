@@ -129,8 +129,27 @@ cannot reintroduce a filename that some later step has to parse.
 Checked against the code rather than asserted, because an invariant nobody has
 tested is a wish.
 
+First, the claim the whole invariant rests on, **measured** rather than read off
+the parity table: with `rustc` removed from `PATH` entirely and only `cc` present,
+the four-library `#c` fixture runs to completion under `--interpret` with
+byte-identical output. loft reports once that it has no Rust toolchain, falls back
+to interpreting the package, and the C binding is untouched. The rustc invocation
+normally seen is loft's package-cdylib optimisation (@PLN26) — the pure-loft `sql`
+package in the same fixture gets one too, and it contains no `#c` at all. **So the
+toolchain a new `#c` library actually requires is `cc`, and only if it ships a
+shim.**
+
+That also answers why `#c` needs no macro while `#native` does. The Rust path's
+`build.rs` + macro exist to manufacture two things C already provides: a uniform
+calling convention (Rust's ABI is unstable, so the macro generates an
+`extern "C"` bridge) and a name→pointer registration table. `#c` gets the first
+from the C ABI and the second from `dlsym`, and the declaration's signature string
+IS the schema — so nothing is generated per library, and nothing needs compiling.
+
 | what a new C library might need | needs a loft patch? | the declarative answer |
 |---|---|---|
+| rustc, to build the binding at all | **no** — measured with rustc off `PATH` | nothing; `cc` builds the shim, and only if there is one |
+| a generated registration table or bridge macro | **no** | `dlsym` by name plus the fixed trampolines; the `#c` signature string is the schema |
 | a scalar type in a signature | **no** | `c_signature.rs` already takes `char` / `short` / `int` / `long` / `long long` / `float` / `double`, the `size_t` / `ssize_t` / `intptr_t` / `ptrdiff_t` family and the `int*_t` / `uint*_t` family |
 | an opaque handle (`sqlite3 *`, `MYSQL *`) | **no** | spelled `void*` by convention; loft has no type that distinguishes a handle from an integer, and the signature string is what says which is which |
 | a `double` / `float` argument by value | **no** | a 3-line ANSI-C shim; the SSE register the fixed trampolines do not write is exactly what the shim exists for |

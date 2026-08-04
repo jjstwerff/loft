@@ -26,26 +26,27 @@ names itself.
 | platform | the shim links | the C library resolves | the four backends | state |
 |---|---|---|---|---|
 | Linux x86-64 | yes | yes | proven, both loft backends | **green** |
-| macOS | yes | asked since P2 — answer unmeasured | pending a re-run | **was green and empty** |
+| macOS (Apple silicon) | yes, `@rpath` install name verified | yes — sqlite; the other three correctly skip | **sqlite proven, both loft backends** | **green** |
 | Windows | P1 written, unverified there | asked since P2 — answer unmeasured | pending a link | **red** |
 | wasm / browser | n/a | n/a | impossible by capability | **owed a clear refusal** |
 
-Only the Linux row is a measurement of the thing the plan claims. P1 and P2 are
-built (see the ladder), so the macOS and Windows rows are now waiting on runs
-rather than on code — but neither has reported yet, and until one does they stay
-written down as unmeasured.
+The macOS row is now a measurement, not a hope —
+[MACOS_RESULTS.md](MACOS_RESULTS.md) has the numbers. P2 is confirmed there:
+`@PLN23 backends exercised: ["sqlite"]`, matching the SAME hard-coded assertion
+strings Linux matches, with `--interpret` and `--native` agreeing. postgres,
+maria and duckdb are absent from that list as *correct reported skips*, for the
+reasons in the install table below — not as failures.
 
-The macOS row is the one to look at twice. On `main`,
-`one_sql_interface_drives_four_different_c_libraries` **passes on macOS** — 11.9 s,
-and it had been passing. What it exercised there is that the duckdb shim compiles
-and links and that the absent-optional-library SKIP path works. It exercised no
-database, because of the second failure mode below. A macOS green before P2 is
-evidence about `#c`, not about this plan — and the guard added with P2 is what
-stops that reading being available again.
-
-The Windows row is red **on `main` too**, not only on the branch carrying the
-partial fix. It is a pre-existing platform gap being closed incrementally, not a
+Windows is red **on `main` too**, not only on the branch carrying the partial
+fix. It is a pre-existing platform gap being closed incrementally, not a
 regression.
+
+**What that row used to say, and why it is worth remembering.** Before P2 the
+same test *also* passed on macOS — 11.9 s on `main` — while exercising no
+database at all: only that the duckdb shim compiles and links and that the
+absent-library SKIP path works. Two greens, one meaning nothing and one meaning
+what it says, and no way to tell them apart from the check name. That is the
+whole argument for the guard P2 added.
 
 ## Two ways a green here means nothing
 
@@ -151,9 +152,30 @@ The pieces that must line up when it does ask:
 - **The library name.** `platform::lib_variants` translates the declared Linux
   spelling at use time. macOS system sqlite is `/usr/lib/libsqlite3.dylib`, which
   the translation already produces.
-- **The shim's install name.** `shim_name_args` already passes
-  `-Wl,-install_name,@rpath/<final name>` on macOS, and already accounts for the
+- **The shim's install name.** `shim_name_args` passes
+  `-Wl,-install_name,@rpath/<final name>`, accounting for the
   build-to-`.tmp`-then-rename publish that once shipped a `.tmp` install name.
+  **Verified**: `otool -D` on all four shims gives
+  `@rpath/lib<x>_shim_<key>.dylib` — the final name, no `.tmp`, no build
+  directory — and the sqlite shim depends only on `libSystem.B.dylib`.
+
+**One latent defect found while checking that**, and it is worth writing down
+before it costs someone a day. The *other* artifact in each `native-auto/` — the
+program cdylib `libloft_auto_<mode>_<hash>.dylib`, built by `native_lib.rs` rather
+than `c_shim.rs` — carries an install name of
+
+```
+/Users/…/native-auto/loft_auto_<mode>_<hash>.building
+```
+
+the temporary stem with the absolute build directory baked in. That is precisely
+the shape `shim_name_args` exists to prevent, on the artifact that never got the
+treatment. It breaks nothing today because these cdylibs are loaded **by path**,
+and `dlopen`-by-path ignores the recorded install name — so the suite is green and
+stays green. It becomes real the moment anything consumes one via `@rpath`, or
+moves it. The fix is the one already proven for shims: name it for where it will
+end up. Not applied here, because a blind macOS change is how the original `.tmp`
+install name shipped.
 
 | declared | macOS is asked for | Windows is asked for |
 |---|---|---|
@@ -175,15 +197,27 @@ beyond the `cc` that builds the shims. That is the whole point of binding throug
 | | sqlite | libpq | libmariadb | duckdb |
 |---|---|---|---|---|
 | Debian / Ubuntu | `libsqlite3-0` | `libpq5` | `libmariadb3` | not packaged — release tarball |
-| macOS | in the base system | `brew install libpq` | `brew install mariadb-connector-c` | `brew install duckdb` |
+| macOS | in the base system, **in the dyld cache and not on disk** | `brew install libpq` — **keg-only** | `brew install mariadb-connector-c` — **keg-only** | **release tarball; brew ships the CLI only** |
 | Windows | not shipped — vcpkg or the official binaries | same | same | same |
 
-Homebrew keeps kegs out of the default search path (`/opt/homebrew/opt/libpq/lib`),
-and duckdb is a ~70 MB download nobody installs by default, which is why every
-one of these is declared `[c] optional-libs` and why the fixture reaches its own
-copy through `LD_LIBRARY_PATH` rather than a system install. Provisioning them on
-a CI runner is P5, and a declared skip there is an acceptable answer; an untested
-green is not.
+Every cell in the macOS row is measured ([MACOS_RESULTS.md](MACOS_RESULTS.md)),
+and two of them corrected a guess this document previously made:
+
+- **`brew install duckdb` gives you no library.** It installs the CLI binary and
+  nothing else — there is no `libduckdb.dylib` anywhere under `/opt/homebrew`. The
+  shared library needs the release tarball, exactly as the Debian cell says.
+- **libpq and the MariaDB connector install keg-only.** Both are present under
+  `/opt/homebrew/opt/<name>/lib`, and a bare `dlopen("libpq.5.dylib")` still fails
+  with *"not in dyld cache"*; adding `DYLD_LIBRARY_PATH=$(brew --prefix libpq)/lib`
+  makes it succeed. So `host_library_loadable` answers **false** on a Mac that has
+  libpq installed, and **P5 on macOS is a search-path question, not a
+  `brew install` one** — either loft learns the `/opt/homebrew/opt/<x>/lib` layout,
+  or the environment supplies it.
+
+That is why all four are declared `[c] optional-libs` and why the fixture reaches
+its own copy through `LD_LIBRARY_PATH` rather than a system install. Provisioning
+them on a CI runner is P5, and a declared skip there is an acceptable answer; an
+untested green is not.
 
 ## wasm and the browser — a defined NO
 
@@ -225,7 +259,7 @@ produce a green that means nothing.
 |---|---|---|
 | **P1** — built | the Windows shim links | W1 + W2; the duckdb cell builds and reports its SKIP instead of dying in `link.exe` |
 | **P2** — built | the probe asks the HOST's question | `platform::host_library_loadable` translates the declared soname to the host's spellings and `dlopen`s them; sqlite stops being skipped on macOS and Windows |
-| **P3** | macOS runs what Linux runs | `gh workflow run ci.yml -f os=macos-latest`; the `sqlite` / `sqlite bound` / `sqlite tx` lines byte-identical to Linux's, on both loft backends. **Count the tests in the log** — a filtered dispatch can pass vacuously |
+| **P3** — done for sqlite | macOS runs what Linux runs | **confirmed on Apple silicon**: `["sqlite"]` exercised, matching the same hard-coded `sqlite` / `sqlite bound` / `sqlite tx` constants Linux matches, `--interpret` == `--native`. postgres / maria / duckdb remain correct skips until P5 answers the search path |
 | **P4** | Windows runs what Linux runs | the same three lines, from a Windows runner with sqlite present |
 | **P5** | the servers, or a declared skip | postgres + maria on macOS/Windows are a CI-provisioning question, not a language one; a skip is fine, an untested green is not |
 | **P6** | wasm refuses clearly | one named error before codegen, naming package and library — asserted on, so it cannot regress into a rustc dump |
@@ -247,6 +281,12 @@ a library that works. `dlopen` consults the shared cache, `LD_LIBRARY_PATH` /
 `DYLD_LIBRARY_PATH`, the `PATH` DLL search and the system directories — every
 route the real call takes, which is what makes a `true` here mean what a `true`
 at the call site means.
+
+That second reason was written from general knowledge and flagged as such; it is
+now **measured**. On Apple silicon `stat /usr/lib/libsqlite3.dylib` fails while
+`dlopen` succeeds — for *both* spellings `host_lib_variants` produces. So the
+`dlopen` design is required, not a preference, and a file-existence probe would
+have reported macOS's own sqlite as missing.
 
 **It deliberately does NOT use loft's own `c_library_available`,** which was the
 first design and is the more attractive one ("one home for the fact"). That
