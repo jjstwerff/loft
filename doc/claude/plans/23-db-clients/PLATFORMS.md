@@ -160,6 +160,26 @@ The pieces that must line up when it does ask:
 The declared spelling is always tried first and stays authoritative; these are
 what a host is asked for when its own convention differs.
 
+### Getting the libraries onto a machine
+
+Only the **runtime** library is needed — never the headers, and never a compiler
+beyond the `cc` that builds the shims. That is the whole point of binding through
+`#c`: `maria/src/stmt.c` hand-declares `MYSQL_BIND` precisely so a consumer needs
+`libmariadb.so.3` and not `libmariadb-dev`.
+
+| | sqlite | libpq | libmariadb | duckdb |
+|---|---|---|---|---|
+| Debian / Ubuntu | `libsqlite3-0` | `libpq5` | `libmariadb3` | not packaged — release tarball |
+| macOS | in the base system | `brew install libpq` | `brew install mariadb-connector-c` | `brew install duckdb` |
+| Windows | not shipped — vcpkg or the official binaries | same | same | same |
+
+Homebrew keeps kegs out of the default search path (`/opt/homebrew/opt/libpq/lib`),
+and duckdb is a ~70 MB download nobody installs by default, which is why every
+one of these is declared `[c] optional-libs` and why the fixture reaches its own
+copy through `LD_LIBRARY_PATH` rather than a system install. Provisioning them on
+a CI runner is P5, and a declared skip there is an acceptable answer; an untested
+green is not.
+
 ## wasm and the browser — a defined NO
 
 **This target is a known gap and stays one.** A browser cannot open a TCP socket
