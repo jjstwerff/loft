@@ -111,3 +111,85 @@ fn test_errors_nested_path() {
   err = bad#errors;
   assert(len(err) > 0, "expected error for nested: {err}");
 }
+
+// --- @PLN127 arc A — the JSON form is the only field enumeration loft has ----
+//
+// `{x:j}` + `json_parse` is what a generic serialiser, an ORM or a schema walk
+// reaches for, and two ordinary shapes did not survive it. Both were whole-
+// document failures rather than a wrong field: an enum in a struct field
+// produced text that is not JSON, so the parse of EVERYTHING returned null.
+
+enum JShape { JCircle { r: integer }, JSquare { side: integer }, JDot }
+struct JHolder { kind: JShape, n: integer }
+struct JNote { note: text?, n: integer }
+struct JShapes { items: vector<JShape> }
+
+// loft#768 — an enum-TYPED field wraps its variant exactly as an enum-VALUE
+// does. Writing the tag bare gave `{"kind":JCircle {"r":2}}`, an unquoted token
+// in value position.
+fn test_json_enum_field_is_json() {
+  h = JHolder { kind: JCircle { r: 2 }, n: 9 };
+  j = "{h:j}";
+  assert(j == `{{"kind":{{"JCircle":{{"r":2}}}},"n":9}}`, "enum field: {j}");
+}
+
+// The claim that matters is not the spelling, it is that the document PARSES.
+// A bare tag made `json_parse` reject the whole thing, so no field of the
+// struct was reachable — not the enum, not its siblings.
+fn test_json_enum_field_round_trips() {
+  h = JHolder { kind: JSquare { side: 3 }, n: 4 };
+  back = JHolder.parse("{h:j}");
+  assert(back.n == 4, "sibling field survived: {back.n}");
+  assert("{back.kind:j}" == `{{"JSquare":{{"side":3}}}}`, "variant survived: {back.kind:j}");
+}
+
+// A variant with no fields still gets a body, so every variant reads back
+// through one path rather than two.
+fn test_json_enum_fieldless_variant() {
+  // The variant goes through a LOCAL: a fieldless variant used where it is
+  // produced is never freed (loft#771, third carrier), and this file is under
+  // the leak gate.
+  dot = JShape.JDot;
+  h = JHolder { kind: dot, n: 1 };
+  j = "{h:j}";
+  assert(j == `{{"kind":{{"JDot":{{}}}},"n":1}}`, "fieldless variant: {j}");
+  back = JHolder.parse(j);
+  assert(back.n == 1, "fieldless round-trip: {back.n}");
+}
+
+// The same wrapping inside a vector — the element position is enum-TYPED too.
+fn test_json_enum_in_vector() {
+  dot = JShape.JDot;                       // loft#771, as above
+  s = JShapes { items: [JCircle { r: 1 }, dot] };
+  j = "{s:j}";
+  assert(j == `{{"items":[{{"JCircle":{{"r":1}}}},{{"JDot":{{}}}}]}}`, "enum vector: {j}");
+}
+
+// A bare enum was always right, and must stay so — it is the shape the field
+// position now agrees with.
+fn test_json_bare_enum_unchanged() {
+  j = "{JCircle { r: 5 }:j}";
+  assert(j == `{{"JCircle":{{"r":5}}}}`, "bare enum: {j}");
+}
+
+// loft#769 — an absent `text?` is stored as the sentinel `"\0"`, which reached
+// the escaper and came back as a one-character string: a present, corrupt value
+// where the program meant nothing.
+fn test_json_null_text_is_json_null() {
+  n = JNote { note: null, n: 4 };
+  j = "{n:j}";
+  assert(j == `{{"note":null,"n":4}}`, "null text: {j}");
+}
+
+// The distinction the type exists to carry: absent and empty are different
+// answers, and both survive the round trip as themselves.
+fn test_json_null_text_distinct_from_empty() {
+  absent = "{JNote { note: null, n: 1 }:j}";
+  empty = "{JNote { note: "", n: 1 }:j}";
+  assert(absent != empty, "absent and empty must differ: {absent} vs {empty}");
+  assert(empty == `{{"note":"","n":1}}`, "empty text: {empty}");
+  back = JNote.parse(absent);
+  assert(back.note == null, "absent survives as absent");
+  back2 = JNote.parse(empty);
+  assert(back2.note == "", "empty survives as empty");
+}

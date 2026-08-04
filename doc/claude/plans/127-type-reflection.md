@@ -3,9 +3,25 @@
 
 ## Status
 
-**Open — no implementation.** The substrate is built and validated; nothing projects it
-into loft.  Arc A (the two mainline defects below) is independently shippable and should
-land first, because it repairs the only field enumeration loft has today.
+**Arc A is BUILT; arcs B–E are open.** The substrate is built and validated; nothing
+projects it into loft yet.
+
+Arc A landed first because it repairs the only field enumeration loft has today, and it
+was a repair rather than a feature: both defects were WHOLE-DOCUMENT failures, so a
+struct holding either shape could not be read back at all.
+
+- **loft#768** — an enum-TYPED position (a struct field, a vector element) wrote its tag
+  bare, which is not JSON. Two writers render an enum and only one knew about JSON:
+  `Parts::EnumValue` wrapped as `{"Circle":{…}}`, `Parts::Enum` did not. The typed
+  position now wraps the same way, and `walk_parsed_into` already accepted that shape —
+  so writer and reader name ONE shape between them rather than two.
+- **loft#769** — an absent `text?` is stored as the sentinel `"\0"`, not as a null
+  pointer, so it reached the escaper and came back as a present one-character string. It
+  is the same absence the null-pointer branch beside it already rendered as `null`.
+
+Seven cells in `tests/scripts/57-json.loft`, both backends, each proven able to fail
+first. The debug form (`{x}`) is unchanged — only the re-parseable forms make a
+round-trip claim.
 
 **Issue:** [loft-lang/plans#127](https://github.com/loft-lang/plans/issues/127).
 
@@ -106,7 +122,7 @@ backends can silently disagree.  Probe it with the strict flag on.
 
 | Item | Source | Status |
 |---|---|---|
-| **A** — repair the fallback: loft#768 + loft#769 | [#768](https://github.com/loft-lang/loft/issues/768), [#769](https://github.com/loft-lang/loft/issues/769) | Open |
+| **A** — repair the fallback: loft#768 + loft#769 | [#768](https://github.com/loft-lang/loft/issues/768), [#769](https://github.com/loft-lang/loft/issues/769) | **Built** — `src/database/format.rs`, cells in `tests/scripts/57-json.loft` |
 | **B** — the type-info struct family + `type_of(value)` | this doc | Open |
 | **C** — reflection with no value: `type_named(text)` | this doc, Q1 | Open |
 | **D** — the declared-vs-storage contract | this doc, Q2/Q3 | Open |
@@ -114,8 +130,12 @@ backends can silently disagree.  Probe it with the strict flag on.
 
 ## Phase ordering
 
-1. **A** first, alone.  It is independently valuable, it is the smallest thing here, and it
-   unblocks the workaround everyone is told to use while B–E are still unbuilt.
+1. ~~**A** first, alone.~~  **Done.**  It was independently valuable, it was the smallest
+   thing here, and it unblocks the workaround everyone is told to use while B–E are still
+   unbuilt.  It also corrected the plan's own framing: the fallback was not merely
+   awkward, both defects rejected the WHOLE document, so "enumerate a value's fields with
+   `{x:j}` + `json_parse`" was not a degraded path but an unavailable one for any struct
+   holding an enum or an absent `text?`.
 2. **B** — `default/07_reflect.loft` plus a native filler over `LayoutDesc`, mirroring
    `stack_trace`.  Read-only, `type_of(value)` only.  This is where the Stage-A matrix is
    built and run.

@@ -26,6 +26,35 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `{x:j}` produces JSON for two shapes that used to break it
+
+A struct holding an **enum field** wrote the variant name bare:
+
+```
+{"kind":Circle {"r":2}}      // not JSON — `Circle` is an unquoted token
+```
+
+so `json_parse` rejected the whole document and *no* field of that struct could
+be read back, not just the enum. It now nests the same object a bare enum
+always produced:
+
+```
+{"kind":{"Circle":{"r":2}}}
+```
+
+And a **`text?` holding null** came back as a one-character string containing a
+NUL rather than as JSON `null` — an absent value arriving as a present, corrupt
+one. It is `null` now, so absent and empty stay the two different answers the
+type exists to keep apart:
+
+```loft
+"{ Note { note: null, n: 4 } :j}"   // {"note":null,"n":4}
+"{ Note { note: "",   n: 4 } :j}"   // {"note":"","n":4}
+```
+
+Both round-trip through `.parse` in both directions. `{x}` — the debug form —
+is unchanged.
+
 ### A format string can hand a value of your own type to the type it builds
 
 A format string whose target type implements the interpolation contract already
