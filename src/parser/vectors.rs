@@ -612,6 +612,15 @@ impl Parser {
             if target == u32::MAX {
                 target = self.interpolation_target(&self.expected);
             }
+            // A string literal written INSIDE a `{…}` interpolates like any
+            // other, and `parse_string` decides that from the mode — which by
+            // now describes where the LEXER is, not this string: the enclosing
+            // loop set `Code` to read its own expression after this literal was
+            // already scanned. Ask the lexer whether THIS string still has a
+            // hole open instead (loft#767).
+            if self.lexer.nested_hole_open() {
+                self.lexer.set_mode(crate::lexer::Mode::Formatting);
+            }
             self.parse_string(val, &s, target)
         } else if let Some(nr) = self.lexer.has_char() {
             *val = self.cl("OpConvCharacterFromInt", &[Value::Int(nr as i32)]);
