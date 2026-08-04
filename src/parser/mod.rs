@@ -4386,7 +4386,7 @@ impl Parser {
         // `instantiate_nested_generics` retargets this call at that monomorph while
         // building it — the same path any other call to a generic takes from inside a
         // template. Self-recursion terminates there on the `existing` check.
-        if concrete.contains_def(tv_nr) && self.data.def(g_nr).variables().count() == 0 {
+        if concrete.contains_def(tv_nr) {
             return g_nr;
         }
         if concrete.is_unknown() {
@@ -4828,9 +4828,6 @@ impl Parser {
                 targets.push(*d);
             }
         });
-        if targets.is_empty() {
-            return;
-        }
         // Create the monomorphs FIRST, before the context swap below: instantiation
         // parses against `self.vars` / `self.context`, and it must see the ordinary
         // ones, not this monomorph's.
@@ -4850,10 +4847,30 @@ impl Parser {
                 remap.insert(t, inst);
             }
         }
-        if remap.is_empty() {
+        // Repair the ARG LISTS too, and not only for the calls remapped above:
+        // `re_resolve_call` retargets a type-variable-dependent call by LOOKUP during
+        // the substitution, so a call in this body can already point at a monomorph
+        // whose ABI grew — `promote_monomorph_text_return` gives a `-> text` callee a
+        // hidden `&text` buffer — while still carrying the template's argument count.
+        // That is the "Too few parameters on t_6Sqlite_dump (got 4, need 5)" ICE, and a
+        // lookup-retargeted call reaches it without ever having been in `remap`. So the
+        // set is every call this body makes that is short of its target's arity.
+        let mut short_calls: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, args) = v {
+                let target = remap.get(d).copied().unwrap_or(*d);
+                if target != u32::MAX
+                    && (target as usize) < self.data.definitions.len()
+                    && args.len() < self.data.attributes(target)
+                {
+                    short_calls.insert(target);
+                }
+            }
+        });
+        if remap.is_empty() && short_calls.is_empty() {
             return;
         }
-        let promoted: std::collections::HashSet<u32> = remap.values().copied().collect();
+        let promoted = short_calls;
         // Swap this monomorph's parse context in — `add_defaults`, reached through
         // `patch_tret_call`, mints a work-text into `self.vars`, which must be THIS
         // function's table. Same swap `promote_monomorph_text_return` performs.

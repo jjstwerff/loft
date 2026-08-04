@@ -19,15 +19,12 @@
 // Non-generic recursion was always fine, so the trigger is recursion AND a type
 // parameter together, not either one.
 //
-// NOT covered here: MUTUAL recursion between two generics (`even` calls `odd`
-// calls `even`).  It used to corrupt the heap outright — `realloc(): invalid
-// next size`, a core dump — and now runs correctly on the interpreter, but
-// `--native` still rejects the generated Rust with E0308.  Only one direction of
-// the pair is deferred by the guard below: the partner declared LATER has an
-// unfinished table and is answered as a template, while the one declared EARLIER
-// is finished and takes the ordinary instantiation path with the type variable
-// still in hand.  Left out of this file rather than left failing; tracked on
-// loft#761.
+// MUTUAL recursion is covered too, and it was the worse half: `even` calls `odd`
+// calls `even` used to corrupt the heap outright — `realloc(): invalid next
+// size`, a core dump.  Both directions have to defer, which is why the deferral
+// keys on the concrete type still being the type VARIABLE rather than on the
+// target template being unfinished: the partner declared EARLIER is finished by
+// then, and a rule about unfinished tables answers it the old way.
 
 interface Shape {
   fn area(self: Self) -> integer
@@ -48,6 +45,18 @@ fn down <S: Shape> (s: S, n: integer) -> integer {
 // Reached only THROUGH another generic — the recursion and the nesting at once.
 fn outer <S: Shape> (s: S) -> integer { return down(s, 3); }
 
+// MUTUAL recursion between two generics, neither called directly from `main`.
+// The partner declared LATER is forward-referenced; the one declared EARLIER is
+// already finished when its caller is parsed.  Both directions must defer.
+fn even <S: Shape> (s: S, n: integer) -> integer {
+  if n <= 0 { return s.area() }
+  return odd(s, n - 1);
+}
+fn odd <S: Shape> (s: S, n: integer) -> integer {
+  if n <= 0 { return 0 }
+  return even(s, n - 1) + 1;
+}
+
 // Plain recursion, no type parameter — the control that says the trigger needs
 // both halves.
 fn plain(n: integer, base: integer) -> integer {
@@ -65,6 +74,8 @@ fn main() {
   assert(down(c, 3) == 78, "second concrete type: {down(c, 3)}, want 78");
 
   assert(outer(b) == 15, "recursive generic reached via another: {outer(b)}, want 15");
+
+  assert(even(b, 4) == 14, "mutually recursive generics: {even(b, 4)}, want 14");
 
   assert(plain(3, 12) == 15, "non-generic recursion still fine: {plain(3, 12)}, want 15");
 
