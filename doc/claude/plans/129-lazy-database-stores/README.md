@@ -44,8 +44,8 @@ what is checked at COMPILE time versus at BIND time, and what loft gives up for 
 
 ## The invariant
 
-> **A record that is not yet resident is indistinguishable from one that is, except in latency —
-> because residency is decided where `(rec, fld)` becomes an address, and nowhere else.**
+> **A record is present WHOLE or not at all, and the collection is the only thing that knows
+> which — so a lookup that misses is the one place the outside world is consulted.**
 
 Everything below either tries to falsify that sentence or pays for it.
 
@@ -71,34 +71,41 @@ It also corrects the obvious-but-wrong move of replacing the lookup with a query
 So there is one hook, and it is narrow: **the MISS path**. Not "the lookup is a query" — "a miss
 asks before answering". A hit never leaves the process.
 
-**Two fault kinds follow from that:**
+**Every fault is a collection lookup — there is no address-level fault.** An earlier draft had a
+second kind, faulting when a not-yet-resident record was dereferenced. Arc A's first read killed
+it, and the reason is worth keeping:
 
-1. **A keyed lookup that misses** — `persons[42]` not yet resident. The collection-level hook
-   above; its exposure is priced below.
-2. **A reference-field dereference** — `person.employer`. The column holds a foreign key, so
-   touching it becomes a lookup on the *companies* collection, which is fault kind 1 again one
-   level down. This is where the address-level N = 1 measurement applies.
+- **`valid()` returns `true` unconditionally in release.** Every check inside it is a
+  `debug_assert!`, so it compiles out; a release `get_int` is `if rec != 0 { *addr } else { MIN }`.
+  There is no per-read check today, and adding one would put a branch on the hottest path in the
+  language — paid by every program, lazy store or not.
+- **Nothing would ever hit it.** A reference at this boundary is a KEY, not a pointer
+  ([BINDING.md](BINDING.md)), so following `person.employer` is a LOOKUP on the companies
+  collection — fault kind 1 again — not a dereference of a dangling rec. Reading the FK itself is
+  an ordinary field read of a record that is fully present.
 
-**The one genuinely new question this raises: a miss that is a real absence.** If person 42 is not
-in the database either, every lookup re-queries forever, because "absent" and "not yet fetched"
-are the same state in a collection that only records what it HAS. That needs a negative entry, or
-an accepted re-query cost, and it must be decided rather than discovered.
+So residency is **per record, all-or-nothing**, and "not resident" needs no representation in the
+store at all: it is simply absence from the collection, which `find` already answers. Q1 — how to
+encode a third block state cheaply enough for `valid()` — is not answered but **dissolved**, and
+with it the cost on every read in every program.
+
+The granularity that buys this is the relational row: a row is the unit, so a record is fetched
+whole. The price is that a wide column (a blob) cannot be left behind — do not map one.
 
 **The traversal IS the join.** Following a reference is another indexed lookup, so no join has to
 be derived from the layout — which was this plan's sharpest open question and is now closed. The
 price is round trips: one query per hop, the N+1 pattern by construction (see failure path 8).
 
-## Where the address-level fault belongs — measured, not chosen
+## The one hook, and what it costs — measured, not chosen
 
-**At the address (N = 1).** All 14 typed getters on `Store` (`get_int`, `get_byte`, `get_str`, …)
-funnel through `self.addr(rec, fld)` behind `self.valid(rec, fld)`. One site decides residency,
-below every collection kind. **Verified on both backends**: the native `#rust` bodies call the
-same accessors (`stores.store(&db).get_int(db.rec, db.pos + fld)` and peers), so there is no
-second path.
+**The address was the candidate, and it lost on measurement.** All 14 typed getters funnel through
+`addr` behind `valid` — one site, and the native `#rust` bodies call the same accessors, so N would
+have been 1 on both backends. It is not used, for the reason above: in release `valid()` is
+`true`, so the check does not exist yet and creating it taxes every read in every program. The
+counting is kept because it is what makes the rejection a decision rather than an omission.
 
-**Not at the lookup, wherever there is a choice (N ≥ 5, and silent).** Fault kind 1 has no choice
-— the database index has to serve it — so that path must PAY for the exposure rather than dodge
-it. The cure is in the repo already: model laziness as a new `Parts` kind and follow
+**So the hook is the collection's MISS path, and that is where the exposure is.** It has no choice
+— the database index has to serve the lookup — so the path must PAY rather than dodge. The cure is in the repo already: model laziness as a new `Parts` kind and follow
 `DATABASE.md`'s own rule — *"spell the non-collection variants out; never close one of these
 matches with `_` … the verbosity is the point — it turns 'someone must remember' into a compile
 error."* That converts the five silent sites into five compile errors: the protocol's *make
@@ -116,6 +123,24 @@ Two things keep it payable. **Read-only v1** means the mutating sites (`set_keye
 `remove_owned`) do not need a lazy implementation at all — they need a loud refusal, which is one
 line each and cannot be forgotten silently. And **exhaustive matches** turn the rest into compile
 errors. What is left needing real work is `find`'s miss path and `get_keys`.
+
+## Arc A — what reading the code settled before writing any
+
+Three facts, each of which changed the build:
+
+1. **`valid()` is `true` in release** — the address-level fault was rejected on this, and the
+   second fault kind deleted with it (above).
+2. **`Stores::find` has exactly TWO call sites, and both already hold `&mut Stores`** —
+   `State::get_record` in the interpreter and `codegen_runtime`'s lookup for `--native`. `find`
+   itself is `&self`, so it cannot materialise anything, but a `&mut` sibling can be dropped in at
+   both sites without disturbing a caller. This is the chokepoint the design needs, and it exists.
+3. **A miss is already spelled `rec: 0`** — every `Parts` arm returns that on a miss, so the fault
+   point is a value the code already produces rather than a new state to invent.
+
+**The first increment**, therefore: a `&mut` find that, on a `rec: 0` from a collection carrying a
+binding, consults the source and retries — with the source being a FILE image, where
+`store_load_key` already does the fetch-and-insert. That makes arc A a wiring job over machinery
+that ships, which is exactly why the phase ordering put the file image before the database.
 
 ## What already exists — the probes that pinned this
 
