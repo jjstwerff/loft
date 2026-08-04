@@ -1809,6 +1809,69 @@ pub(crate) fn add_native_extern_flags(
     }
 }
 
+/// Say something useful when a Windows binary dies before `main`.
+///
+/// `STATUS_DLL_NOT_FOUND` (`0xC000_0135`) is the loader refusing to start a
+/// process whose imports it cannot resolve. It happens BEFORE any user code, so
+/// the program writes nothing at all: no stdout, no stderr, just an exit code
+/// most people have never seen. That silence is the worst part of the failure,
+/// and it is entirely avoidable — loft knows which libraries it staged and where.
+///
+/// Reports what IS beside the binary rather than guessing which import is
+/// missing: naming the missing DLL needs the import table, and the useful
+/// question for an author is almost always "did my library get here at all".
+/// A `[c]` library resolved from the system (a bare soname) is deliberately not
+/// listed — it was never loft's to place.
+///
+/// No-op off Windows and for any other exit code.
+pub(crate) fn explain_windows_startup_failure(
+    status: std::process::ExitStatus,
+    binary: &std::path::Path,
+    data: &crate::data::Data,
+) {
+    const STATUS_DLL_NOT_FOUND: i32 = 0xC000_0135_u32 as i32;
+    if !cfg!(windows) || status.code() != Some(STATUS_DLL_NOT_FOUND) {
+        return;
+    }
+    eprintln!(
+        "loft: the program could not start — Windows could not find a DLL it \
+         imports (STATUS_DLL_NOT_FOUND, 0x{STATUS_DLL_NOT_FOUND:08X}). This \
+         happens before any of your code runs, which is why nothing was printed."
+    );
+    if let Some(dir) = binary.parent() {
+        let mut staged: Vec<String> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.to_ascii_lowercase().ends_with(".dll"))
+            .collect();
+        staged.sort();
+        if staged.is_empty() {
+            eprintln!("loft:   no DLLs are staged beside `{}`", dir.display());
+        } else {
+            eprintln!(
+                "loft:   staged beside `{}`: {}",
+                dir.display(),
+                staged.join(", ")
+            );
+        }
+    }
+    for lib in &data.c_libraries {
+        let d = std::path::Path::new(&lib.pkg_dir);
+        if let Some(found) =
+            crate::platform::existing_lib_beside(d, &lib.name, crate::platform::host_lib_os())
+        {
+            eprintln!("loft:   `[c]` library shipped by the package: {found}");
+        }
+    }
+    eprintln!(
+        "loft:   Windows has no RPATH: a DLL is found beside the executable or \
+         on PATH. A MinGW-built library may also need its own runtime \
+         (libgcc_s_seh-1.dll, libwinpthread-1.dll) on PATH."
+    );
+}
+
 /// @PLN24 — the `[c]` half of [`stage_native_dlls`]: a C library that ships
 /// BESIDE its package has the same run-time problem as a native-package cdylib,
 /// and had none of the answer.

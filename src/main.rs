@@ -9668,6 +9668,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             let _ = std::fs::remove_file(&binary);
         }
         if !run_status.success() {
+            native_utils::explain_windows_startup_failure(run_status, &binary, &p.data);
             std::process::exit(run_status.code().unwrap_or(1));
         }
         return;

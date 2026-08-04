@@ -1005,11 +1005,16 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
          declared width is what makes that work: {stdout}"
     );
     assert!(stdout.contains("abs 7"), "abs: {stdout}");
+    // `\r\n` -> `\n` before comparing. The bytes really do differ: the C runtime
+    // opens fd 1 in TEXT mode on Windows, so the `write(1, "hi\n", 3)` this test
+    // makes arrives as `hi\r\n`. Measured with `{stdout:?}` after the CI log —
+    // which normalises line endings — showed output that looked identical to a
+    // passing run. The translation is the platform behaving as documented, not
+    // the binding losing a byte, and the claim under test is that the vector
+    // crossed as pointer + count, which `wrote 3` is what settles.
+    let stdout = stdout.replace("\r\n", "\n");
     assert!(
         stdout.contains("hi\n") && stdout.contains("wrote 3"),
-        // `{stdout:?}` deliberately: this fired on Windows against output that
-        // LOOKED right in the log, and a rendered log cannot show whether the
-        // separator is `\n` or `\r\n`. Debug-escaping is what tells them apart.
         "a vector must cross as pointer + count: {stdout:?}"
     );
     Ok(())
@@ -1452,9 +1457,13 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             .current_dir(root)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // Exit status in the message, for the same reason as the sites above: a
+        // Windows binary that cannot find a DLL dies before `main` with both
+        // streams empty, and without the code the message says nothing at all.
         assert!(
             out.status.success(),
-            "{backend}/{mode}: {stdout}\n{}",
+            "{backend}/{mode} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1679,9 +1688,13 @@ fn a_sql_cursor_walks_real_rows_and_keeps_null_apart_from_empty() -> std::io::Re
             .current_dir(root)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // Exit status in the message, for the same reason as the sites above: a
+        // Windows binary that cannot find a DLL dies before `main` with both
+        // streams empty, and without the code the message says nothing at all.
         assert!(
             out.status.success(),
-            "{backend}/{mode}: {stdout}\n{}",
+            "{backend}/{mode} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
