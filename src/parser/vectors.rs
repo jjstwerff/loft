@@ -609,8 +609,26 @@ impl Parser {
             // call argument and a return body — the same two-source rule the
             // bare-variant branch above uses, for the same reason.
             let mut target = self.interpolation_target(var_tp);
-            if target == u32::MAX {
+            // Not inside a HOLE: a hole is not the destination, so a string literal
+            // in one does not inherit the destination's type.  Without this,
+            // `q: SqlText = "{"seed"}"` checked the inner literal against `SqlText`
+            // and it took the BUILD path, so a string that was plainly the author's
+            // value came back as a second accumulator.  Only the `expected` source
+            // is gated — `var_tp` is the type of a declaration written inside the
+            // hole, which does name a destination — and only this reading of the
+            // channel, because `expected` carries facts a hole legitimately needs
+            // (a keyed lookup resolves its record type through it).
+            if target == u32::MAX && !self.in_format_expr {
                 target = self.interpolation_target(&self.expected);
+            }
+            // A string literal written INSIDE a `{…}` interpolates like any
+            // other, and `parse_string` decides that from the mode — which by
+            // now describes where the LEXER is, not this string: the enclosing
+            // loop set `Code` to read its own expression after this literal was
+            // already scanned. Ask the lexer whether THIS string still has a
+            // hole open instead (loft#767).
+            if self.lexer.nested_hole_open() {
+                self.lexer.set_mode(crate::lexer::Mode::Formatting);
             }
             self.parse_string(val, &s, target)
         } else if let Some(nr) = self.lexer.has_char() {

@@ -275,6 +275,7 @@ impl Stores {
                 content,
                 position: u16::MAX,
                 default: crate::keys::Content::Str(crate::keys::Str::new("")),
+                nullable: false,
                 other_indexes: others,
             });
             if num > 8
@@ -292,6 +293,34 @@ impl Stores {
                 "Adding field {name} to a non structure type {}",
                 self.types[structure as usize].name
             );
+        }
+    }
+
+    /// @PLN127 arc D — mark a field as DECLARED nullable.
+    ///
+    /// Separate from [`Self::field`] because only one caller knows: the parser,
+    /// which peels `Optional(τ)` before laying the field out (the storage is
+    /// identical either way) and therefore has the fact exactly where the field
+    /// is registered. Every other producer of a field — the generated IR schema,
+    /// the index bookkeeping triple — is internal and non-null, so a default of
+    /// `false` is the right answer for all of them and none needs touching.
+    ///
+    /// Keyed by NAME rather than index because `--native` REPLAYS the schema from
+    /// generated `init()` code, and the generator emits this call beside the
+    /// `db.field` it belongs to. One spelling for both backends is what keeps
+    /// them from disagreeing — they did, the first time, and the parity probe is
+    /// what caught it.
+    ///
+    /// Deposited, not derived: `text?` and `text` share a content type and spell
+    /// absence with a SENTINEL, so nothing in the store implies this.
+    pub fn set_field_nullable(&mut self, structure: u16, name: &str, nullable: bool) {
+        if structure == u16::MAX {
+            return;
+        }
+        if let Parts::Struct(s) | Parts::EnumValue(_, s) = &mut self.types[structure as usize].parts
+            && let Some(f) = s.iter_mut().find(|f| f.name == name)
+        {
+            f.nullable = nullable;
         }
     }
 
@@ -1451,6 +1480,7 @@ impl Stores {
                 content: int4,
                 position: 0,
                 default: Content::Long(0),
+                nullable: false,
                 other_indexes: Vec::new(),
             });
             fields.push(Field {
@@ -1458,6 +1488,7 @@ impl Stores {
                 content: int4,
                 position: 0,
                 default: Content::Long(0),
+                nullable: false,
                 other_indexes: Vec::new(),
             });
             fields.push(Field {
@@ -1465,6 +1496,7 @@ impl Stores {
                 content: bool_c,
                 position: 0,
                 default: Content::Long(0),
+                nullable: false,
                 other_indexes: Vec::new(),
             });
             left as u16
@@ -2996,6 +3028,7 @@ mod layout_tests {
                 content: int_c,
                 position: 0,
                 default: Content::Long(0),
+                nullable: false,
                 other_indexes: Vec::new(),
             });
         }

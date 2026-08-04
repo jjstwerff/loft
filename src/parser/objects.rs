@@ -1725,6 +1725,9 @@ impl Parser {
         while self.lexer.mode() == Mode::Formatting {
             self.lexer.set_mode(Mode::Code);
             let mut format = Value::Null;
+            // @PLN124 — `in_format_expr` also gates the interpolation TARGET (see
+            // `constant` in vectors.rs): a hole is not the destination, so a string
+            // literal inside one does not inherit the destination's type.
             let saved_in_fmt = self.in_format_expr;
             self.in_format_expr = true;
             let mut tp = if self.lexer.has_token("for") {
@@ -1952,12 +1955,24 @@ impl Parser {
         // NULL a distinct bound value rather than the text "null".
         let (tp, _) = tp.peel_optional();
         let kind = match tp {
-            Type::Text(_) => "text",
-            Type::Integer(_) => "int",
-            Type::Float => "float",
-            Type::Single => "single",
-            Type::Boolean => "boolean",
-            Type::Character => "character",
+            Type::Text(_) => "text".to_string(),
+            Type::Integer(_) => "int".to_string(),
+            Type::Float => "float".to_string(),
+            Type::Single => "single".to_string(),
+            Type::Boolean => "boolean".to_string(),
+            Type::Character => "character".to_string(),
+            // @PLN124 H6 — a hole may also be a value of the library's OWN type,
+            // and that is what lets a target hold something apart from both a
+            // literal and a bound value: a `SqlIdent` is a table name, which is
+            // genuinely syntax, so it goes in INLINE. The safety then rests on
+            // the type rather than on the parser — nothing constructs a
+            // `SqlIdent` but its validating constructor, so there is still one
+            // place to audit. The kind is the type's own name in the case a loft
+            // method is spelled in, so `SqlIdent` asks for `hole_sql_ident`.
+            Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Struct => {
+                Self::hole_kind(self.data.def(*d_nr).name())
+            }
+            Type::Enum(d_nr, _, _) => Self::hole_kind(self.data.def(*d_nr).name()),
             // `Never` is a poisoned hole whose own diagnostic already fired
             // (@P376); adding a second one would bury the root error.
             Type::Never | Type::Unknown(_) => return,
@@ -1966,8 +1981,8 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "a {} cannot be interpolated into a {} — it takes scalar holes, and a \
-                         value is passed to the type rather than rendered into it",
+                        "a {} cannot be interpolated into a {} — a hole is a scalar or a value \
+                         of a named type, handed to the type rather than rendered into it",
                         tp.name(&self.data),
                         self.data.def(target).name()
                     );
@@ -1999,6 +2014,32 @@ impl Parser {
             return;
         }
         list.push(Value::Call(d_nr, vec![Value::Var(var), value]));
+    }
+
+    /// @PLN124 H6 — the hole kind a value of type `name` asks for: the type's own
+    /// name, in the case a loft method is written in (`SqlIdent` → `sql_ident`,
+    /// so the method is `hole_sql_ident`).
+    ///
+    /// Derived rather than chosen, so a target and the parser cannot disagree
+    /// about what a type's hole is called, and the diagnostic can name the exact
+    /// method to add. An acronym run keeps its boundary at the last capital, the
+    /// place where the next word starts (`SQLIdent` → `sql_ident`).
+    fn hole_kind(name: &str) -> String {
+        let chars: Vec<char> = name.chars().collect();
+        let mut out = String::with_capacity(name.len() + 4);
+        for (i, c) in chars.iter().enumerate() {
+            if i > 0 && c.is_uppercase() {
+                let prev = chars[i - 1];
+                let starts_word = prev.is_lowercase()
+                    || prev.is_numeric()
+                    || (prev.is_uppercase() && chars.get(i + 1).is_some_and(|n| n.is_lowercase()));
+                if starts_word {
+                    out.push('_');
+                }
+            }
+            out.extend(c.to_lowercase());
+        }
+        out
     }
 
     pub(crate) fn string_states(&mut self, state: &mut OutputState) {

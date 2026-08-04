@@ -79,7 +79,14 @@ pub(crate) const NDCALL_ARGS: u32 = 4;
 pub(crate) const NDCALL_DEF_NR: u32 = 8;
 pub(crate) const NDCALLREF_ARGS: u32 = 4;
 pub(crate) const NDCALLREF_VAR: u32 = 8;
-pub(crate) const NDBLOCK_BLOCK: u32 = 8;
+/// Offset of `NdBlock`/`NdLoop`'s box-of-one `vector<Block>` HANDLE.
+///
+/// The block used to be inlined here, which cost every `Node` in the image the
+/// size of the largest variant. `BLOCK_*` below are offsets inside the `Block`
+/// record the box holds — reached via [`Node::block_rec`], never added to this.
+pub(crate) const NDBLOCK_BLOCK: u32 = 4;
+/// Element stride of that box: one `Block` record.
+pub(crate) const BLOCK_STRIDE: u32 = 28;
 pub(crate) const BLOCK_NAME: u32 = 16;
 pub(crate) const BLOCK_OPERATORS: u32 = 20;
 pub(crate) const NDINSERT_ITEMS: u32 = 4;
@@ -117,13 +124,18 @@ pub(crate) const NDSPAN_INNER: u32 = 4;
 pub(crate) const SPAN_POS_LINE: u32 = 8; // Position base (8) + Position.line (0)
 pub(crate) const SPAN_POS_POS: u32 = 16; // + Position.pos (8)
 pub(crate) const SPAN_POS_FILE: u32 = 24; // + Position.file (16)
-pub(crate) const PARFOR_X_VAR: u32 = 8; // ParForBody base (8) + x_var (0)
-pub(crate) const PARFOR_R_VAR: u32 = 16; // + r_var (8)
-pub(crate) const PARFOR_STITCH_ID: u32 = 24; // + stitch_id (16)
-pub(crate) const PARFOR_INPUT: u32 = 32; // + input (24)
-pub(crate) const PARFOR_WORKER: u32 = 36; // + worker (28)
-pub(crate) const PARFOR_THREADS: u32 = 40; // + threads (32)
-pub(crate) const PARFOR_BODY: u32 = 44; // + body (36)
+/// Offset of `NdParFor`'s box-of-one `vector<ParForBody>` HANDLE, and the
+/// offsets INSIDE the `ParForBody` record it holds (reached via
+/// [`Node::par_for_rec`]).  Same move as `NdBlock` above, for the same reason.
+pub(crate) const NDPARFOR_BODY: u32 = 4;
+pub(crate) const PARFORBODY_STRIDE: u32 = 40;
+pub(crate) const PARFOR_X_VAR: u32 = 0;
+pub(crate) const PARFOR_R_VAR: u32 = 8;
+pub(crate) const PARFOR_STITCH_ID: u32 = 16;
+pub(crate) const PARFOR_INPUT: u32 = 24;
+pub(crate) const PARFOR_WORKER: u32 = 28;
+pub(crate) const PARFOR_THREADS: u32 = 32;
+pub(crate) const PARFOR_BODY: u32 = 36;
 
 // `NdKeys` holds a `vector<Key>`; every IR vector is inline `Parts::Vector`
 // (probed — none promoted to a linked `Array`), so a stride-parameterised
@@ -354,12 +366,13 @@ pub(crate) const DCSINGLE_V: u32 = 4; // single
 pub(crate) const DCSTR_V: u32 = 4; // text
 
 /// `DbField` record (element of `Parts::Struct` / `EnumValue` field vectors).
-pub(crate) const DBFIELD_STRIDE: u32 = 28;
+pub(crate) const DBFIELD_STRIDE: u32 = 29;
 pub(crate) const DBFIELD_CONTENT: u32 = 0; // u16 known_type
 pub(crate) const DBFIELD_POSITION: u32 = 8; // u16 byte offset
 pub(crate) const DBFIELD_NAME: u32 = 16;
 pub(crate) const DBFIELD_DEFAULT: u32 = 20; // vector<DbContent> (box-of-one)
 pub(crate) const DBFIELD_OTHER_INDEXES: u32 = 24; // vector<integer>
+pub(crate) const DBFIELD_NULLABLE: u32 = 28; // @PLN127 arc D — declared nullable (1 byte)
 
 /// `EnumPair` `(u16, text)` element of `Parts::Enum`.
 pub(crate) const ENUMPAIR_STRIDE: u32 = 12;
@@ -423,7 +436,7 @@ pub(crate) const BUNDLE_TYPES: u32 = 12;
 pub(crate) const BOOL_MASK: u8 = 1;
 
 /// Element stride of a `vector<Node>` (the `Node` enum's record size).
-pub(crate) const NODE_STRIDE: u32 = 48;
+pub(crate) const NODE_STRIDE: u32 = 28;
 
 /// Which `Node` variant a [`Value`] is.  Mirrors the native `data::Value`
 /// variants 1:1; `Other(discriminant)` only on an unrecognised byte.
@@ -653,29 +666,37 @@ impl Value {
     /// `NdBlock`'s inlined `Block.name`.
     #[must_use]
     pub fn block_name<'a>(&self, stores: &'a Stores) -> &'a str {
-        let pos = self.rec.pos + NDBLOCK_BLOCK + BLOCK_NAME;
-        let store = stores.store(&self.rec);
-        store.get_str(store.get_u32_raw(self.rec.rec, pos))
+        self.block_rec(stores).field_str(stores, BLOCK_NAME)
     }
 
-    /// Set `NdBlock`'s inlined `Block.name`.
+    /// Set the referenced `Block.name`.
     pub fn block_name_set(&self, stores: &mut Stores, name: &str) {
-        let pos = self.rec.pos + NDBLOCK_BLOCK + BLOCK_NAME;
-        let store = stores.store_mut(&self.rec);
-        let idx = store.set_str(name);
-        store.set_u32_raw(self.rec.rec, pos, idx);
+        let b = self.block_rec(stores);
+        b.set_field_str(stores, BLOCK_NAME, name);
     }
 
-    /// `NdBlock`'s inlined `Block.operators`.
+    /// The `Block` record this `NdBlock`/`NdLoop` points at.
+    ///
+    /// The box holds exactly one element, pushed by [`Self::write_block`] /
+    /// [`Self::write_loop`], so every reader can take element 0 — the same
+    /// box-of-one shape `Block.result` and `DbField.default` already use.
     #[must_use]
-    pub fn block_operators(&self) -> ValuesVector {
-        ValuesVector {
-            rec: DbRef {
-                store_nr: self.rec.store_nr,
-                rec: self.rec.rec,
-                pos: self.rec.pos + NDBLOCK_BLOCK + BLOCK_OPERATORS,
-            },
-        }
+    pub fn block_rec(&self, stores: &Stores) -> Record {
+        self.field_recvec(NDBLOCK_BLOCK, BLOCK_STRIDE)
+            .get(0, stores)
+    }
+
+    /// The `ParForBody` record this `NdParFor` points at.
+    #[must_use]
+    pub fn par_for_rec(&self, stores: &Stores) -> Record {
+        self.field_recvec(NDPARFOR_BODY, PARFORBODY_STRIDE)
+            .get(0, stores)
+    }
+
+    /// The referenced `Block.operators`.
+    #[must_use]
+    pub fn block_operators(&self, stores: &Stores) -> ValuesVector {
+        self.block_rec(stores).field_vec(BLOCK_OPERATORS)
     }
 
     /// `NdInt.n` — the integer literal.
@@ -726,16 +747,33 @@ impl Value {
 
     /// Write this slot as `NdBlock` with `name` (fill `operators` via
     /// [`Value::block_operators`] + [`ValuesVector::push`]).
-    pub fn write_block(&self, stores: &mut Stores, name: &str) {
+    /// Returns the freshly pushed `Block` record so the caller can fill the
+    /// rest of it without looking it up again.
+    pub fn write_block(&self, stores: &mut Stores, name: &str) -> Record {
         self.set_discriminant(stores, DISC_BLOCK);
-        self.block_name_set(stores, name);
+        self.push_block(stores, name)
+    }
+
+    /// Push the box-of-one `Block` and set its name.  Shared by
+    /// [`Self::write_block`] and [`Self::write_loop`], which differ only in the
+    /// discriminant.
+    fn push_block(&self, stores: &mut Stores, name: &str) -> Record {
+        let b = self.field_recvec(NDBLOCK_BLOCK, BLOCK_STRIDE).push(stores);
+        b.set_field_str(stores, BLOCK_NAME, name);
+        b
+    }
+
+    /// Push `NdParFor`'s box-of-one `ParForBody` and return it.
+    pub fn write_par_for(&self, stores: &mut Stores) -> Record {
+        self.field_recvec(NDPARFOR_BODY, PARFORBODY_STRIDE)
+            .push(stores)
     }
 
     /// Write this slot as `NdLoop` with `name` — same inlined `Block` layout as
     /// `NdBlock`, so `block_name`/`block_operators` apply unchanged.
-    pub fn write_loop(&self, stores: &mut Stores, name: &str) {
+    pub fn write_loop(&self, stores: &mut Stores, name: &str) -> Record {
         self.set_discriminant(stores, DISC_LOOP);
-        self.block_name_set(stores, name);
+        self.push_block(stores, name)
     }
 
     // ─── Generic typed field access at a baked offset ────────────────────────
@@ -1118,15 +1156,19 @@ mod tests {
         let mut stores = Stores::new();
         let _ids = register_ir_schema(&mut stores);
 
+        // `write_block` pushes the box-of-one `Block`; every reader then takes
+        // element 0, so a bare `new_node` + name-set would have nothing to write
+        // into.
         let block = Value::new(new_node(&mut stores, DISC_BLOCK));
-        block.block_name_set(&mut stores, "loop_body");
+        block.write_block(&mut stores, "loop_body");
 
-        let slot = push(&mut stores, block.block_operators().rec);
+        let ops_vec = block.block_operators(&stores);
+        let slot = push(&mut stores, ops_vec.rec);
         write_int(&mut stores, slot, 42);
 
         assert_eq!(block.value_type(&stores), ValueType::Block);
         assert_eq!(block.block_name(&stores), "loop_body");
-        let ops = block.block_operators();
+        let ops = block.block_operators(&stores);
         assert_eq!(ops.len(&stores), 1);
         assert_eq!(ops.get(0, &stores).value_type(&stores), ValueType::Int);
 
@@ -1266,17 +1308,18 @@ mod tests {
         assert_eq!(span_base + pos(ids.position, "line"), SPAN_POS_LINE);
         assert_eq!(span_base + pos(ids.position, "pos"), SPAN_POS_POS);
         assert_eq!(span_base + pos(ids.position, "file"), SPAN_POS_FILE);
-        let pf_base = pos(ids.nd_par_for, "body"); // inlined ParForBody base
-        assert_eq!(pf_base + pos(ids.par_for_body, "x_var"), PARFOR_X_VAR);
-        assert_eq!(pf_base + pos(ids.par_for_body, "r_var"), PARFOR_R_VAR);
-        assert_eq!(
-            pf_base + pos(ids.par_for_body, "stitch_id"),
-            PARFOR_STITCH_ID
-        );
-        assert_eq!(pf_base + pos(ids.par_for_body, "input"), PARFOR_INPUT);
-        assert_eq!(pf_base + pos(ids.par_for_body, "worker"), PARFOR_WORKER);
-        assert_eq!(pf_base + pos(ids.par_for_body, "threads"), PARFOR_THREADS);
-        assert_eq!(pf_base + pos(ids.par_for_body, "body"), PARFOR_BODY);
+        // `NdParFor.body` and `NdBlock.block` are box-of-one HANDLES now, so the
+        // sub-struct offsets are its own — not a base plus a relative.
+        assert_eq!(pos(ids.nd_par_for, "body"), NDPARFOR_BODY);
+        assert_eq!(u32::from(stores.size(ids.par_for_body)), PARFORBODY_STRIDE);
+        assert_eq!(pos(ids.par_for_body, "x_var"), PARFOR_X_VAR);
+        assert_eq!(pos(ids.par_for_body, "r_var"), PARFOR_R_VAR);
+        assert_eq!(pos(ids.par_for_body, "stitch_id"), PARFOR_STITCH_ID);
+        assert_eq!(pos(ids.par_for_body, "input"), PARFOR_INPUT);
+        assert_eq!(pos(ids.par_for_body, "worker"), PARFOR_WORKER);
+        assert_eq!(pos(ids.par_for_body, "threads"), PARFOR_THREADS);
+        assert_eq!(pos(ids.par_for_body, "body"), PARFOR_BODY);
+        assert_eq!(u32::from(stores.size(ids.block)), BLOCK_STRIDE);
 
         // `vector<Key>` element layout (the generic RecVector stride + fields).
         assert_eq!(pos(ids.nd_keys, "keys"), NDKEYS_KEYS);
@@ -1470,6 +1513,7 @@ mod tests {
         assert_eq!(pos(ids.db_field, "name"), DBFIELD_NAME);
         assert_eq!(pos(ids.db_field, "default"), DBFIELD_DEFAULT);
         assert_eq!(pos(ids.db_field, "other_indexes"), DBFIELD_OTHER_INDEXES);
+        assert_eq!(pos(ids.db_field, "nullable"), DBFIELD_NULLABLE);
 
         assert_eq!(u32::from(stores.size(ids.enum_pair)), ENUMPAIR_STRIDE);
         assert_eq!(pos(ids.enum_pair, "nr"), ENUMPAIR_NR);

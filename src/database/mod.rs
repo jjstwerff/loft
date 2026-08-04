@@ -120,6 +120,15 @@ pub struct Field {
     pub content: u16,
     pub position: u16,
     pub default: Content,
+    /// @PLN127 arc D — was this field DECLARED nullable?
+    ///
+    /// Not derivable from anything else here: a narrow scalar registers a
+    /// distinct content type per nullability, but `text?` and `integer?` share
+    /// their non-null type and spell an absent value with a SENTINEL. So the
+    /// fact reaches the store only because the parser deposits it, and it is
+    /// carried rather than RENDERED — `layout_dump` and `LayoutDesc::render_dump`
+    /// are untouched, so the @PLN97 layout identity is too.
+    pub nullable: bool,
     pub(self) other_indexes: Vec<u16>, // For now only fields on the same record
 }
 
@@ -140,6 +149,7 @@ impl Field {
         content: u16,
         position: u16,
         default: Content,
+        nullable: bool,
         other_indexes: Vec<u16>,
     ) -> Field {
         Field {
@@ -147,6 +157,7 @@ impl Field {
             content,
             position,
             default,
+            nullable,
             other_indexes,
         }
     }

@@ -97,4 +97,42 @@ fn main() {
   // --- Variable use after assignment in format (not before) ---
   late = 5;
   assert("{late}" == "5", "variable used after assignment in format");
+
+  // --- loft#767: a string literal written INSIDE a hole interpolates too ---
+  //
+  // Its own `{…}` used to be copied out as text: `"{"{y}"}"` produced `{y}`.
+  // No error and no warning — a plausible wrong VALUE that survived being
+  // consumed, which is how it was found (a probe read `{x}` back as
+  // unparseable text and reported that a float does NOT round-trip).
+  y = 5;
+  assert("{"{y}"}" == "5", "nested literal interpolates: {"{y}"}");
+  assert("{"n={y}"}" == "n=5", "nested literal, text around the hole");
+  assert("{"lit"}" == "lit", "nested literal with NO hole is unchanged");
+  assert("{"a" + "b"}" == "ab", "two nested literals in one hole");
+  // Opened with `\"`, which is then also what closes it — the same string,
+  // reached by the other spelling, must give the same answer.
+  assert("{\"{y}\"}" == "5", "escaped-delimiter nested literal interpolates");
+  // A brace escape inside a nested literal now collapses like any other:
+  // it was emitted doubled, so there was no way to write a literal brace.
+  // (the expected value needs its own escaping — `"{y}"` would interpolate)
+  assert("{"{{y}}"}" == "{{y}}", "escape collapses inside a nested literal");
+  // Depth two: a flag can answer "resume which string?" one level down and
+  // can only be wrong deeper, silently — so the answer is a stack.
+  assert("{"{"{y}"}"}" == "5", "nested literal inside a nested literal");
+  // The shape that made the bug expensive: the wrong text reaches a consumer
+  // that correctly refuses it, and the default hides the loss.
+  f = 5.0;
+  round = ("{"{f}"}" as float?) ?? 0.0;
+  assert(round == 5.0, "nested literal survives being consumed: {round}");
+
+  // A backtick literal inside a hole is a nested literal in exactly the same
+  // way, and was unusable there at all — even with no hole of its own.
+  assert("{`abc`}" == "abc", "backtick literal inside a hole, no hole of its own");
+  assert("{`{y}`}" == "5", "backtick literal inside a hole interpolates");
+  assert("{`n={y}`}" == "n=5", "backtick literal, text around the hole");
+  // Mixed, both directions, and a backtick inside a backtick's own hole: the
+  // resume decision is a stack, so the kinds can interleave to any depth.
+  assert(`plain {"{y}"} done` == "plain 5 done", "plain literal inside a backtick hole");
+  assert(`outer {`{y}`} done` == "outer 5 done", "backtick inside a backtick hole");
+  assert("{"a" + `b{y}`}" == "ab5", "the two spellings mix in one hole");
 }
