@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc F — the GATE: a real graph, traversed lazily, with the fetch
+// count the design predicts.
+//
+// persons -> employer -> companies is the shape the whole plan was built for,
+// and two properties decide whether it is a design or a hypothesis:
+//
+//   IDENTITY  two persons at the SAME company must reach ONE company record,
+//             because identity falls out of the collection rather than a map.
+//   COUNT     fetches == records TOUCHED, never records reachable. A lazy read
+//             that pulls the transitive closure is an eager read with extra
+//             steps, and every value assertion here would pass under one.
+//
+// Driven from tests/store_persist_loft.rs with scratch paths (@PLN9: a relative
+// path resolves against the PROGRAM's directory, so a suite script must not
+// write beside itself). No paths, nothing to do.
+
+struct GCompany { id: integer, name: text }
+struct GPerson  { id: integer, name: text, employer: integer }
+
+fn main() {
+  pp = env_variable("LOFT_GRAPH_PERSONS") ?? "";
+  cp = env_variable("LOFT_GRAPH_COMPANIES") ?? "";
+  if pp == "" || cp == "" { return }
+
+  if (env_variable("LOFT_LAZY_MODE") ?? "") == "write" {
+    cs: hash<GCompany[id]> = [];
+    if !store_persist_bind(cs, cp) { println("FAIL company-bind"); return }
+    cs += [GCompany { id: 7,  name: "Acme" }];
+    cs += [GCompany { id: 9,  name: "Globex" }];
+    cs += [GCompany { id: 11, name: "Initech" }];
+
+    ps: hash<GPerson[id]> = [];
+    if !store_persist_bind(ps, pp) { println("FAIL person-bind"); return }
+    ps += [GPerson { id: 1, name: "ada",    employer: 7 }];
+    ps += [GPerson { id: 2, name: "grace",  employer: 7 }];   // SAME company
+    ps += [GPerson { id: 3, name: "alan",   employer: 9 }];
+    ps += [GPerson { id: 4, name: "edsger", employer: 11 }];
+    println("seeded companies={cs.len()} persons={ps.len()}");
+    return
+  }
+
+  persons:   hash<GPerson[id]>  = [];
+  companies: hash<GCompany[id]> = [];
+  store_bind_lazy(persons, pp);
+  store_bind_lazy(companies, cp);
+  println("start p={persons.len()} c={companies.len()}");
+
+  ada = persons[1];
+  c1 = companies[ada.employer];
+  println("hop1 {ada.name}@{c1.name} p={persons.len()} c={companies.len()}");
+
+  // The second person is at the SAME company: the company hop must HIT.
+  grace = persons[2];
+  c2 = companies[grace.employer];
+  println("hop2 {grace.name}@{c2.name} p={persons.len()} c={companies.len()}");
+  println("identity={c1 == c2}");
+
+  alan = persons[3];
+  c3 = companies[alan.employer];
+  println("hop3 {alan.name}@{c3.name} p={persons.len()} c={companies.len()}");
+
+  // Nothing that was never asked for may be resident.
+  println("touched={persons.len() + companies.len()}");
+  println("sound={store_verify(persons)},{store_verify(companies)}");
+}

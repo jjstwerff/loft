@@ -311,7 +311,7 @@ an eager read with extra steps.
 | **C** — the C80-compatible failure channel (`store_lazy_error` / `_faults` / `_clear`), and `len`/iteration honesty | **shipped** — unreachable told from absent, faults STICKY across a later success, both backends; `len` settled as the resident count |
 | **D** — a pinned source, so a traversal sees one consistent world | **shipped** for a file source: pinned at bind, drift REFUSED and reported through arc C. A database source pins a transaction instead — the one case where consistency can be provided rather than checked |
 | **E** — eviction / a bounded working set | **partly shipped** — the blunt form (`= []`) reclaims, keeps the binding and preserves held refs, all now pinned by test. Selective/bounded eviction deferred to arc F, where a real access pattern can choose the policy |
-| **F** — a real consumer: the persons / companies / positions graph | Open |
+| **F** — a real consumer: the persons / companies graph | **shipped against a FILE source** — identity across the graph and fetches == records touched, both backends. The DATABASE consumer waits on arc B's implementation |
 
 ## Phase ordering
 
@@ -325,6 +325,17 @@ an eager read with extra steps.
 4. **D**, then **E**.
 5. **F last, and it is the gate.** Until a real graph traverses lazily with the query count the
    matrix predicts, this is a hypothesis.
+
+   **Passed, against a file source.** `persons -> employer -> companies`, both backends:
+   one hop fetches one person and one company; a SECOND person at the same company leaves the
+   company count at 1 (the hop hit the working set) and `c1 == c2` — **one record, two paths**,
+   which is the identity the whole design rests on; a different company does fetch. Three hops
+   cost 3 persons + 2 companies = 5 fetches, and the person and company nobody asked for stay
+   out. Falsified by making every lookup re-fetch: the counts went red, the values did not — which
+   is exactly why the counts are the assertions that matter.
+
+   What this does NOT yet prove is the same traversal over SQL, which is arc B's implementation.
+   The shape is proven; the source is not.
 
 ## Open design questions
 

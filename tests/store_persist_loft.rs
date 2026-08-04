@@ -2851,3 +2851,94 @@ fn run_lazy(backend: &str, script: &Path, path: &Path, mode: &str) -> (String, i
     }
     (stdout, out.status.code().unwrap_or(-1))
 }
+
+/// @PLN129 arc F — the gate: a real graph traversed lazily, with the fetch count
+/// the design predicts.
+///
+/// Two assertions carry this test, and neither is about a value. **Identity**:
+/// two persons at the same company must reach ONE company record, because
+/// identity falls out of the collection rather than a side map — if that fails
+/// the whole design is wrong. **Count**: `c=1` after the second hop is what
+/// proves the hop HIT the working set; every value assertion here would pass
+/// under an eager whole-image load, and only the counts would not.
+#[test]
+fn lazy_graph_traversal_fetches_only_what_it_touches_both_backends() {
+    let dir = scratch("lazy_graph_129");
+    let persons = dir.join("persons.store");
+    let companies = dir.join("companies.store");
+    let script = workspace_root().join("tests/scripts/129-lazy-graph.loft");
+
+    let (out_w, code_w) = run_graph("--interpret", &script, &persons, &companies, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(
+        out_w.contains("seeded companies=3 persons=4"),
+        "seed: {out_w:?}"
+    );
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_graph(backend, &script, &persons, &companies, "read");
+        assert_eq!(code, 0, "{backend} read exit: {out:?}");
+
+        // The control: both collections start empty, so the counts below mean
+        // something.
+        assert!(out.contains("start p=0 c=0"), "{backend}: {out:?}");
+        assert!(
+            out.contains("hop1 ada@Acme p=1 c=1"),
+            "{backend}: one hop fetches one person and one company: {out:?}"
+        );
+        // The second person shares Acme: the company hop must HIT, so c stays 1.
+        assert!(
+            out.contains("hop2 grace@Acme p=2 c=1"),
+            "{backend}: a second person at the SAME company must NOT re-fetch it \
+             — c must stay 1: {out:?}"
+        );
+        assert!(
+            out.contains("identity=true"),
+            "{backend}: two paths to one company must give ONE record — identity \
+             falls out of the collection, and if this fails the design is wrong: {out:?}"
+        );
+        assert!(
+            out.contains("hop3 alan@Globex p=3 c=2"),
+            "{backend}: a different company IS fetched: {out:?}"
+        );
+        // 3 persons + 2 companies for 3 hops — not 6, and edsger/Initech were
+        // never asked for and must not be resident.
+        assert!(
+            out.contains("touched=5"),
+            "{backend}: fetches must equal records TOUCHED, not reachable — a \
+             lazy read that pulls the closure is an eager read with extra steps: {out:?}"
+        );
+        assert!(
+            out.contains("sound=true,true"),
+            "{backend}: both partially-loaded heaps must be structurally sound: {out:?}"
+        );
+    }
+}
+
+/// The @PLN129 graph script takes TWO scratch paths, one per collection —
+/// per-collection binding is the point, so one path would not exercise it.
+fn run_graph(
+    backend: &str,
+    script: &Path,
+    persons: &Path,
+    companies: &Path,
+    mode: &str,
+) -> (String, i32) {
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(script)
+        .env("LOFT_GRAPH_PERSONS", persons)
+        .env("LOFT_GRAPH_COMPANIES", companies)
+        .env("LOFT_LAZY_MODE", mode)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.status.success() {
+        eprintln!(
+            "{backend} {mode} stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    (stdout, out.status.code().unwrap_or(-1))
+}
