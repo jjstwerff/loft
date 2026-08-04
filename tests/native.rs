@@ -1518,9 +1518,22 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             "an absent optional library must be REPORTED, not inferred from silence:\n{out}"
         );
     } else {
+        // libduckdb present — then it is held to exactly the bar the other three meet,
+        // and the arc-G property costs it no leniency. Proven on 1.5.5 with the library
+        // reachable via `LD_LIBRARY_PATH`; no system install is needed, and none is
+        // assumed here, which is why this stays conditional.
         assert!(
             out.contains(&format!("duckdb {expect}")),
             "duckdb must render the same three cells as sqlite:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("duckdb bound {bound}")),
+            "duckdb: a bound value must reach the server as DATA, never as syntax:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("duckdb tx {tx}")),
+            "duckdb: rollback must discard, commit must persist, and a nested begin \
+             must be REFUSED — `BEGIN TRANSACTION` is its own spelling:\n{out}"
         );
     }
     Ok(())

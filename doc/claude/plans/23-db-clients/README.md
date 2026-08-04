@@ -112,9 +112,6 @@ attack cell loudly.
 
 ### Named gaps
 
-- **duckdb is unproven here.** libduckdb is not installed on the machine this was
-  built on, so its cells were read and never run, and the fixture prints SKIP.
-  Said plainly rather than left to look covered.
 - **A float binds as TEXT** on every backend. `sqlite3_bind_double` takes a double
   by value, which travels in an SSE register the fixed caller does not write
   (@PLN24), and a shim wrapping it would have to link the library. Precision is
@@ -122,9 +119,12 @@ attack cell loudly.
   answer is still an open item above.
 - **One statement per connection**, and one parameter array per process: the
   shims' slots are static. The same single-slot limit S1–S3 already carried.
-- **duckdb's transactions are unproven** for the same reason its S4 cells are —
-  libduckdb is not installed here, and it is the one backend of the four whose
-  keyword differs (`BEGIN TRANSACTION`).
+- **duckdb is now PROVEN**, on 1.5.5 with the library reachable via
+  `LD_LIBRARY_PATH` — no system install, which is the point of `[c] optional-libs`.
+  All three lines (cells, bound, transactions) are byte-identical to the other
+  backends on BOTH loft backends, including its own `BEGIN TRANSACTION` spelling.
+  The fixture still SKIPs cleanly when the library is absent, and the test now
+  holds duckdb to the full bar whenever it is present.
 
 ## The documents
 
