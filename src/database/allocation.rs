@@ -1470,6 +1470,12 @@ impl Stores {
             stores_allocated: self.stores_allocated,
             alloc_pc: self.alloc_pc,
             stack_store_at_zero: self.stack_store_at_zero,
+            // @PLN129 arc A — a worker inherits NO lazy binding, deliberately. A
+            // miss inside a `par` arm answers absent rather than reaching for a
+            // source: fetching would put I/O on every parallel arm at once,
+            // against one file or one connection, and would insert into a store
+            // the parent later reconciles. Fault before the `par`, not inside it.
+            lazy_sources: std::collections::HashMap::new(),
             files: Vec::new(),
             max: (self.allocations.len() + scratch_stores) as u16,
             peak: (self.allocations.len() + scratch_stores) as u16,
@@ -3784,6 +3790,88 @@ impl Stores {
     #[cfg(paged_store)]
     pub fn load_key(&mut self, local: &DbRef, path: &str, key: i64) -> bool {
         self.load_keys(local, path, std::slice::from_ref(&key)) > 0
+    }
+
+    /// @PLN129 arc A — bind a COLLECTION to a lazy source, so a lookup that
+    /// misses consults it instead of answering "absent".
+    ///
+    /// Per collection (`persons` and `companies` are different tables), so the
+    /// key is the collection's root ref. Rebinding replaces; binding is
+    /// configuration and may be set before the collection holds anything.
+    pub fn bind_lazy(&mut self, coll: &DbRef, source: &str) {
+        self.lazy_sources
+            .insert((coll.store_nr, coll.rec, coll.pos), source.to_string());
+    }
+
+    /// The lazy source bound to this collection, if any.
+    #[must_use]
+    pub fn lazy_source(&self, coll: &DbRef) -> Option<String> {
+        self.lazy_sources
+            .get(&(coll.store_nr, coll.rec, coll.pos))
+            .cloned()
+    }
+
+    /// @PLN129 arc A — the MISS path: the one place the outside world is
+    /// consulted.
+    ///
+    /// `find` already answers a miss with `rec: 0`, so this changes nothing for
+    /// an unbound collection — it re-answers exactly what `find` said. For a
+    /// bound one it fetches that single entry, which INSERTS it into the
+    /// collection (`load_one` ends in `hash::add`), and re-runs the lookup so
+    /// the answer comes from the collection either way.
+    ///
+    /// Re-running rather than returning the fetched ref is deliberate: the
+    /// collection stays the single source of truth for what is resident, which
+    /// is what makes identity fall out of it (README § the resident set IS the
+    /// cache). A path that answered from the fetch directly could hand back a
+    /// record the collection does not hold.
+    pub fn find_or_fetch(&mut self, data: &DbRef, db: u16, key: &[crate::keys::Content]) -> DbRef {
+        let found = self.find(data, db, key);
+        if found.rec != 0 {
+            return found; // resident: no query, no source, ordinary loft speed
+        }
+        self.fetch_missing(data, db, key)
+    }
+
+    /// The fetch half of [`find_or_fetch`], split out so the resident path stays
+    /// a plain `find` with one comparison after it.
+    #[cfg(paged_store)]
+    fn fetch_missing(&mut self, data: &DbRef, db: u16, key: &[crate::keys::Content]) -> DbRef {
+        let Some(source) = self.lazy_source(data) else {
+            return DbRef {
+                store_nr: data.store_nr,
+                rec: 0,
+                pos: 0,
+            };
+        };
+        // One key, whichever spelling it arrived in. A composite key is not
+        // fetchable yet — @PLN125's associated types are what would carry it —
+        // so it is left to answer absent rather than fetching the wrong row.
+        let fetched = match key {
+            [crate::keys::Content::Long(k)] => self.load_key(data, &source, *k),
+            [crate::keys::Content::Str(s)] => self.load_key_text(data, &source, s.str()),
+            _ => false,
+        };
+        if fetched {
+            self.find(data, db, key)
+        } else {
+            DbRef {
+                store_nr: data.store_nr,
+                rec: 0,
+                pos: 0,
+            }
+        }
+    }
+
+    /// Without the paged reader there is no source to consult, so a miss stays a
+    /// miss — the binding is inert rather than a build error.
+    #[cfg(not(paged_store))]
+    fn fetch_missing(&mut self, data: &DbRef, _db: u16, _key: &[crate::keys::Content]) -> DbRef {
+        DbRef {
+            store_nr: data.store_nr,
+            rec: 0,
+            pos: 0,
+        }
     }
 
     /// @PLN97 arc G Phase 3b.6 — load ONE TEXT-keyed entry from a persisted

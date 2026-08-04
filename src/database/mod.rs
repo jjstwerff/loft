@@ -230,6 +230,19 @@ pub struct Stores {
     /// (#490/#491).  Always test via [`Stores::is_stack_store`], never a
     /// bare `store_nr == 0`.
     pub stack_store_at_zero: bool,
+    /// @PLN129 arc A — a collection bound to a LAZY source, keyed by the
+    /// collection's root `(store_nr, rec, pos)`.
+    ///
+    /// Per COLLECTION, not per store and not per type: `persons` and `companies`
+    /// are different tables, and two collections of one type can be bound
+    /// differently. A runtime-only field — configuration, not data — so `clone`
+    /// resets it alongside `allocations`, and it never reaches a store image.
+    ///
+    /// Empty for every program that binds nothing, which is the common case: a
+    /// miss consults this map only after the ordinary lookup has already failed,
+    /// so an unbound collection pays one hash probe on a path that was about to
+    /// return "absent" anyway.
+    pub lazy_sources: HashMap<(u16, u32, u32), String>,
     #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
     #[cfg(feature = "wasm")]
@@ -521,6 +534,7 @@ impl Clone for Stores {
             names: self.names.clone(),
             allocations: Vec::new(),
             stack_store_at_zero: self.stack_store_at_zero,
+            lazy_sources: HashMap::new(),
             files: Vec::new(),
             max: self.max,
             peak: 0,
@@ -1258,6 +1272,7 @@ impl Stores {
             names: HashMap::new(),
             allocations: Vec::new(),
             stack_store_at_zero: false,
+            lazy_sources: HashMap::new(),
             files: Vec::new(),
             max: 0,
             peak: 0,

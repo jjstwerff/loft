@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc A — a collection bound to a lazy source fetches on a MISS.
+//
+// The load-bearing cells are the resident COUNTS: a three-entry image must
+// leave the collection holding 1, then 2. Equal VALUES would pass every other
+// assertion here even under an eager load, so the counts are what make this a
+// test of laziness rather than of correctness.
+//
+// Driven by tests/store_persist_loft.rs with a scratch path, because a relative
+// path resolves against the PROGRAM's directory (@PLN9) and a suite script must
+// not write beside itself. No path, nothing to do — so loft_suite runs this
+// clean and the driver is what exercises it.
+
+struct LzPerson { id: integer, name: text }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  if path == "" { return }
+  mode = env_variable("LOFT_LAZY_MODE") ?? "";
+
+  if mode == "write" {
+    src: hash<LzPerson[id]> = [];
+    if !store_persist_bind(src, path) { println("FAIL write-bind"); return }
+    src += [LzPerson { id: 1, name: "ada" }];
+    src += [LzPerson { id: 42, name: "grace" }];
+    src += [LzPerson { id: 7, name: "alan" }];
+    println("seeded={src.len()}");
+    return
+  }
+
+  people: hash<LzPerson[id]> = [];
+  // UNBOUND control: without it this could pass on a collection that was never
+  // empty, and the whole test would assert nothing about laziness.
+  println("unbound_miss={people[42] == null} unbound_len={people.len()}");
+
+  println("bound={store_bind_lazy(people, path)}");
+
+  p = people[42];
+  println("fetched={p != null} name={p.name} resident={people.len()}");
+
+  // The same key twice is one record, and a HIT fetches nothing.
+  q = people[42];
+  println("same={p == q} after_hit={people.len()}");
+
+  r = people[7];
+  println("second={r.name} resident2={people.len()}");
+
+  // Absent in the SOURCE is absent — not an error, and it must not grow the
+  // resident set.
+  println("absent={people[999] == null} resident3={people.len()}");
+  println("verify={store_verify(people)}");
+}

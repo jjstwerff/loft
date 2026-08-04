@@ -171,6 +171,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_verify", n_store_verify),
     ("n_store_reclaim", n_store_reclaim),
     #[cfg(paged_store)]
+    ("n_store_bind_lazy", n_store_bind_lazy),
     ("n_store_load_key", n_store_load_key),
     #[cfg(paged_store)]
     ("n_store_load_key_text", n_store_load_key_text),
@@ -1280,6 +1281,19 @@ fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.load_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_bind_lazy` — @PLN129 arc A.  Bind a COLLECTION
+/// to a lazy source, so a lookup that misses fetches that one entry instead of
+/// answering absent.  Args pop in reverse: source, local.
+fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
+    let v_source = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = v_ref.rec != 0;
+    if ok {
+        stores.bind_lazy(&v_ref, v_source.str());
+    }
     stores.put(stack, ok);
 }
 

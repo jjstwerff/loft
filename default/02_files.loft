@@ -516,6 +516,23 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 // says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522).
 //   tiles: hash<Tile[id]> = []
 //   store_load_key(tiles, "block.store", 42)   // tiles now holds entry 42 only
+// @PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that
+// MISSES fetches that one entry and inserts it, so the next lookup is an ordinary
+// resident hit; a lookup that hits never leaves the process. The collection is
+// therefore automatically the cached data set — there is no separate cache.
+//
+// Per COLLECTION, not per store: `persons` and `companies` are different sources,
+// and two collections of one type can bind differently. Binding replaces, and may
+// be done before the collection holds anything.
+//
+// `source` is what `store_load_key` accepts — a local `.store` image or an
+// `http(s)://` URL served with Range. Returns false for a null collection.
+//   persons: hash<Person[id]> = []
+//   store_bind_lazy(persons, "people.store")
+//   p = persons[42]        // fetches exactly entry 42, then holds it
+pub fn store_bind_lazy(local: reference, source: text) -> boolean;
+#rust"{{ let r = @local; let ok = r.rec != 0; if ok {{ stores.bind_lazy(&r, @source); }} ok }}"
+
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
 #rust"stores.load_key(&(@local), @path, @key)"
 #impure(io)

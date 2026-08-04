@@ -2712,3 +2712,80 @@ fn scratch_existing(test_name: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     base.join("loft-store-persist-loft").join(test_name)
 }
+
+/// @PLN129 arc A — a collection BOUND to a lazy source fetches on a MISS, and
+/// fetches only what was asked for.
+///
+/// The load-bearing assertions are the resident COUNTS. Every value assertion
+/// here would also pass under an eager whole-image load; `resident=1` then
+/// `resident2=2` against a THREE-entry image is what proves the read was lazy.
+/// The unbound control at the top is what proves the collection started empty,
+/// without which the counts could be measuring nothing.
+#[test]
+fn lazy_bound_collection_fetches_only_the_touched_entry_both_backends() {
+    let dir = scratch("lazy_bind_129");
+    let path = dir.join("lz.store");
+    let script = workspace_root().join("tests/scripts/129-lazy-bind.loft");
+
+    let (out_w, code_w) = run_lazy("--interpret", &script, &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("seeded=3"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_lazy(backend, &script, &path, "read");
+        assert_eq!(code, 0, "{backend} read exit: {out:?}");
+
+        // The control: nothing is resident, and an unbound miss stays a miss.
+        assert!(
+            out.contains("unbound_miss=true unbound_len=0"),
+            "{backend}: an UNBOUND collection must answer absent and hold nothing — \
+             without this the counts below prove nothing: {out:?}"
+        );
+        assert!(out.contains("bound=true"), "{backend}: bind: {out:?}");
+
+        // The fault itself, and the count that makes it lazy.
+        assert!(
+            out.contains("fetched=true name=grace resident=1"),
+            "{backend}: a miss must fetch exactly ONE entry from a 3-entry image: {out:?}"
+        );
+        // One record per key, and a hit costs nothing.
+        assert!(
+            out.contains("same=true after_hit=1"),
+            "{backend}: the same key twice is one record, and a hit fetches nothing: {out:?}"
+        );
+        assert!(
+            out.contains("second=alan resident2=2"),
+            "{backend}: a second fault adds exactly one: {out:?}"
+        );
+        // Absent stays absent, and does not grow the working set.
+        assert!(
+            out.contains("absent=true resident3=2"),
+            "{backend}: a key absent from the SOURCE must not materialise anything: {out:?}"
+        );
+        assert!(
+            out.contains("verify=true"),
+            "{backend}: the partially-loaded heap must be structurally sound: {out:?}"
+        );
+    }
+}
+
+/// `run_mode_backend`'s sibling for the @PLN129 script, which reads its mode
+/// from `LOFT_LAZY_MODE` so it cannot be confused with the persist scripts'.
+fn run_lazy(backend: &str, script: &Path, path: &Path, mode: &str) -> (String, i32) {
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(script)
+        .env("LOFT_PERSIST_TEST_PATH", path)
+        .env("LOFT_LAZY_MODE", mode)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.status.success() {
+        eprintln!(
+            "{backend} {mode} stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    (stdout, out.status.code().unwrap_or(-1))
+}
