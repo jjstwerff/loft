@@ -124,4 +124,15 @@ fn main() {
   f = 5.0;
   round = ("{"{f}"}" as float?) ?? 0.0;
   assert(round == 5.0, "nested literal survives being consumed: {round}");
+
+  // A backtick literal inside a hole is a nested literal in exactly the same
+  // way, and was unusable there at all — even with no hole of its own.
+  assert("{`abc`}" == "abc", "backtick literal inside a hole, no hole of its own");
+  assert("{`{y}`}" == "5", "backtick literal inside a hole interpolates");
+  assert("{`n={y}`}" == "n=5", "backtick literal, text around the hole");
+  // Mixed, both directions, and a backtick inside a backtick's own hole: the
+  // resume decision is a stack, so the kinds can interleave to any depth.
+  assert(`plain {"{y}"} done` == "plain 5 done", "plain literal inside a backtick hole");
+  assert(`outer {`{y}`} done` == "outer 5 done", "backtick inside a backtick hole");
+  assert("{"a" + `b{y}`}" == "ab5", "the two spellings mix in one hole");
 }

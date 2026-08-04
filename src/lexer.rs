@@ -167,8 +167,10 @@ pub struct Lexer {
 enum StrKind {
     /// `"…"` at statement level.
     Plain,
-    /// `` `…` `` — multi-line, resumed by `backtick_string_resume`.
-    Backtick,
+    /// `` `…` `` — multi-line, resumed by `backtick_string_resume`. The flag is
+    /// true when the literal itself sits inside a format expression, which is
+    /// what decides whether closing it returns to code or to that expression.
+    Backtick(bool),
     /// A string literal written INSIDE a format expression. The flag is true
     /// when it was opened with `\"`, which is then also what closes it.
     Nested(bool),
@@ -539,7 +541,8 @@ impl Lexer {
                 }
                 '`' => {
                     self.next_char();
-                    self.backtick_string()
+                    let nested = self.in_format_expr;
+                    self.backtick_string(nested)
                 }
                 '\'' => {
                     self.next_char();
@@ -708,7 +711,7 @@ impl Lexer {
     fn resume_string(&mut self) -> LexResult {
         self.in_format_expr = false;
         match self.open_strings.pop() {
-            Some(StrKind::Backtick) => self.backtick_string_resume(),
+            Some(StrKind::Backtick(nested)) => self.backtick_string_resume(nested),
             Some(StrKind::Nested(escaped_delim)) => self.string_nested(escaped_delim, true),
             _ => self.string(),
         }
@@ -725,7 +728,10 @@ impl Lexer {
     /// anyway is what made `"{"{y}"}"` come out as `{y}` (loft#767).
     #[must_use]
     pub fn nested_hole_open(&self) -> bool {
-        matches!(self.open_strings.last(), Some(StrKind::Nested(_)))
+        matches!(
+            self.open_strings.last(),
+            Some(StrKind::Nested(_) | StrKind::Backtick(true))
+        )
     }
 
     pub fn set_mode(&mut self, mode: Mode) {
@@ -1075,6 +1081,27 @@ impl Lexer {
     /// is still open, so a following `"` opens another nested string rather than
     /// closing the outer one. On the resumed path a `}` has just cleared it, and
     /// that is exactly the case this restores.
+    /// Finish a backtick literal. Same rule as [`close_nested`], because a
+    /// `` `…` `` written inside a `{…}` is a nested literal in exactly the way a
+    /// `"…"` is: the enclosing format expression is still open, so the mode must
+    /// keep describing THAT string and a following `"` or `` ` `` must still open
+    /// a nested literal rather than close something. Resetting to `Code`
+    /// unconditionally is what made a backtick unusable inside an interpolation
+    /// at all — even `` "{`abc`}" ``, with no hole of its own (loft#767).
+    fn close_backtick(
+        &mut self,
+        res: String,
+        pos: Position,
+        nested: bool,
+        resumed: bool,
+    ) -> LexResult {
+        if nested {
+            return self.close_nested(res, pos, resumed);
+        }
+        self.mode = Mode::Code;
+        LexResult::new(LexItem::CString(res), pos)
+    }
+
     fn close_nested(&mut self, res: String, pos: Position, resumed: bool) -> LexResult {
         if resumed {
             self.mode = Mode::Code;
@@ -1173,7 +1200,7 @@ impl Lexer {
     /// content.  The first line (on the same line as the opening `` ` ``) and the
     /// last line (on the same line as the closing `` ` ``) are trimmed if they
     /// contain only whitespace.
-    fn backtick_string(&mut self) -> LexResult {
+    fn backtick_string(&mut self, nested: bool) -> LexResult {
         let pos = self.position.clone();
         let mut lines: Vec<String> = Vec::new();
         let mut cur = String::new();
@@ -1216,8 +1243,7 @@ impl Lexer {
                         };
                         result += stripped;
                     }
-                    self.mode = Mode::Code;
-                    return LexResult::new(LexItem::CString(result), pos);
+                    return self.close_backtick(result, pos, nested, false);
                 }
                 Some(&'{') => {
                     self.next_char();
@@ -1238,7 +1264,7 @@ impl Lexer {
                         }
                         self.mode = Mode::Formatting;
                         self.in_format_expr = true;
-                        self.open_strings.push(StrKind::Backtick);
+                        self.open_strings.push(StrKind::Backtick(nested));
                         return LexResult::new(LexItem::CString(result), pos);
                     }
                 }
@@ -1292,15 +1318,14 @@ impl Lexer {
     /// Resume a backtick string after a `}` closes a format expression.
     /// Called from the `}` token handler when the backtick string owns the
     /// format context.
-    fn backtick_string_resume(&mut self) -> LexResult {
+    fn backtick_string_resume(&mut self, nested: bool) -> LexResult {
         let pos = self.position.clone();
         let mut cur = String::new();
         loop {
             match self.iter.peek() {
                 Some(&'`') => {
                     self.next_char();
-                    self.mode = Mode::Code;
-                    return LexResult::new(LexItem::CString(cur), pos);
+                    return self.close_backtick(cur, pos, nested, true);
                 }
                 Some(&'{') => {
                     self.next_char();
@@ -1309,7 +1334,7 @@ impl Lexer {
                     } else {
                         self.mode = Mode::Formatting;
                         self.in_format_expr = true;
-                        self.open_strings.push(StrKind::Backtick);
+                        self.open_strings.push(StrKind::Backtick(nested));
                         return LexResult::new(LexItem::CString(cur), pos);
                     }
                 }
