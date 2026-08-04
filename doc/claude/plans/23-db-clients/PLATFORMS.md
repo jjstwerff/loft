@@ -26,18 +26,22 @@ names itself.
 | platform | the shim links | the C library resolves | the four backends | state |
 |---|---|---|---|---|
 | Linux x86-64 | yes | yes | proven, both loft backends | **green** |
-| macOS | yes | **never asked** | **not exercised** | **green, and the green is empty** |
-| Windows | **no** — `LNK1181` | never asked | **not exercised** | **red** |
+| macOS | yes | asked since P2 — answer unmeasured | pending a re-run | **was green and empty** |
+| Windows | P1 written, unverified there | asked since P2 — answer unmeasured | pending a link | **red** |
 | wasm / browser | n/a | n/a | impossible by capability | **owed a clear refusal** |
 
-Only the Linux row is a measurement of the thing the plan claims.
+Only the Linux row is a measurement of the thing the plan claims. P1 and P2 are
+built (see the ladder), so the macOS and Windows rows are now waiting on runs
+rather than on code — but neither has reported yet, and until one does they stay
+written down as unmeasured.
 
 The macOS row is the one to look at twice. On `main`,
 `one_sql_interface_drives_four_different_c_libraries` **passes on macOS** — 11.9 s,
-and it has been passing. What it exercises there is that the duckdb shim compiles
-and links and that the absent-optional-library SKIP path works. It exercises no
-database, because of the second failure mode below. A passing macOS cell is
-currently evidence about `#c`, not about this plan.
+and it had been passing. What it exercised there is that the duckdb shim compiles
+and links and that the absent-optional-library SKIP path works. It exercised no
+database, because of the second failure mode below. A macOS green before P2 is
+evidence about `#c`, not about this plan — and the guard added with P2 is what
+stops that reading being available again.
 
 The Windows row is red **on `main` too**, not only on the branch carrying the
 partial fix. It is a pre-existing platform gap being closed incrementally, not a
@@ -62,8 +66,9 @@ gh workflow run ci.yml --ref <branch> -f os=macos-latest
 gh workflow run ci.yml --ref <branch> -f os=windows-latest
 ```
 
-**2. The availability probe is Linux-shaped.** `one_sql_interface_drives_four_different_c_libraries`
-gates each backend on
+**2. The availability probe was Linux-shaped.** *(Fixed by P2 — kept here because
+it is the shape of the mistake, not a one-off.)*
+`one_sql_interface_drives_four_different_c_libraries` gated each backend on
 
 ```rust
 ["/lib/x86_64-linux-gnu/", "/usr/lib/", "/usr/lib64/"]   // Linux dirs
@@ -218,8 +223,8 @@ produce a green that means nothing.
 
 | step | what it proves | how it is proved |
 |---|---|---|
-| **P1** | the Windows shim links | W1 + W2; the duckdb cell builds and reports its SKIP instead of dying in `link.exe` |
-| **P2** | the probe asks the HOST's question | `has()` takes the host spelling from `lib_variants` and searches the host's directories; sqlite stops being skipped on macOS and Windows |
+| **P1** — built | the Windows shim links | W1 + W2; the duckdb cell builds and reports its SKIP instead of dying in `link.exe` |
+| **P2** — built | the probe asks the HOST's question | `platform::host_library_loadable` translates the declared soname to the host's spellings and `dlopen`s them; sqlite stops being skipped on macOS and Windows |
 | **P3** | macOS runs what Linux runs | `gh workflow run ci.yml -f os=macos-latest`; the `sqlite` / `sqlite bound` / `sqlite tx` lines byte-identical to Linux's, on both loft backends. **Count the tests in the log** — a filtered dispatch can pass vacuously |
 | **P4** | Windows runs what Linux runs | the same three lines, from a Windows runner with sqlite present |
 | **P5** | the servers, or a declared skip | postgres + maria on macOS/Windows are a CI-provisioning question, not a language one; a skip is fine, an untested green is not |
@@ -228,6 +233,57 @@ produce a green that means nothing.
 P1 and P6 are independent of everything else and can land in either order. **P2
 is the one that decides whether P3 and P4 are worth running**, so it comes before
 both.
+
+### What P1 and P2 changed
+
+**P2 asks the question the way the dynamic linker asks it.** The probe is now
+`platform::host_library_loadable`, beside `host_lib_variants` where the spelling
+rules already live: it takes the declared `libsqlite3.so.0`, expands it to this
+host's spellings, and **`dlopen`s** them. Two reasons it opens rather than stats.
+The spelling is the host's, not the declaration's — the original bug. And on
+macOS 11+ system libraries live in the dyld shared cache and are **absent from
+the filesystem**, so anything built on `Path::exists` reports "not installed" for
+a library that works. `dlopen` consults the shared cache, `LD_LIBRARY_PATH` /
+`DYLD_LIBRARY_PATH`, the `PATH` DLL search and the system directories — every
+route the real call takes, which is what makes a `true` here mean what a `true`
+at the call site means.
+
+**It deliberately does NOT use loft's own `c_library_available`,** which was the
+first design and is the more attractive one ("one home for the fact"). That
+function additionally requires every `#c` symbol attributed to the library to
+resolve — and **a `#c` annotation never names the library it came from**, so a
+package that declares a library *and* builds a shim has both symbol sets
+attributed to the one soname. Measured on this box: `c_library_available(
+"libsqlite3.so.0")` answers **false** with `/lib/x86_64-linux-gnu/libsqlite3.so.0`
+present and every sqlite call working. Adding an `eprintln` inside the function
+flips it to true — the signature of loft's known duplicate-statics hazard, where
+a package cdylib links its own copy of loft and `DECLARED_LIBS` / `LIB_SYMBOLS`
+therefore exist twice (the same effect the code comments already record for
+`duckdb_available()`). **That is a real pre-existing defect, tracked separately.**
+It is named here because it is the reason the tidier design was abandoned, and
+because anything else built on that function will inherit the same flakiness.
+
+The test keeps a list of which backends actually ran, prints it
+(`@PLN23 backends exercised: ["sqlite", "postgres", "maria"]`), and **requires
+sqlite on Linux** — the cell with no server to be unreachable, so a skip there
+can only mean the library vanished or the availability question broke. Proven to
+FIRE by pointing the probe at a library that does not exist: the list drops to
+`["postgres", "maria"]` and the test fails on the guard instead of passing. That
+is the assertion the old shape could not make, and the reason macOS was green for
+months.
+
+**P1 gave the shim an import library.** `platform::shim_implib_name` /
+`shim_implib_args` are the Windows counterpart to the macOS `-Wl,-install_name`
+arm, and like it they are pure functions of a passed-in `LibOs` so both spellings
+are checkable from a Linux box. `c_shim.rs` builds the `.lib` to a temporary
+beside the DLL's own and renames both, because the DLL's rename is what publishes
+the shim to the cache check — a consumer that found the `.dll` without the `.lib`
+would fail exactly as if the flag had never been added. W2 (the MSVC guard on
+`-Wl,--allow-multiple-definition`) landed with it.
+
+**P1 is not verified on Windows** and cannot be from here. The assumption it
+tests is that a MinGW-produced COFF import library satisfies MSVC `link.exe`; if
+that fails, the fallbacks are named under W1 above.
 
 ## What this does not cover
 

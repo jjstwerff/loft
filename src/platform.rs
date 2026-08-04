@@ -427,6 +427,42 @@ pub fn host_lib_variants(name: &str) -> Vec<String> {
     lib_variants(name, host_lib_os())
 }
 
+/// Can a `[c]` library declared as `name` actually be LOADED on this host?
+///
+/// The question a conditional test has to ask before it decides to skip, and it
+/// has to be asked the way the dynamic linker would ask it. Two things make the
+/// obvious alternative — look for the file — wrong:
+///
+/// - **The spelling is the host's, not the declaration's.** A manifest carries
+///   one string, `libsqlite3.so.0`, so a search for that name finds nothing on a
+///   macOS box holding `libsqlite3.dylib` or a Windows one holding `sqlite3.dll`
+///   — and a conditional cell then skips in SILENCE on every platform but the
+///   one the string was written for.
+/// - **On macOS the file need not exist at all.** System libraries live in the
+///   dyld shared cache, so `/usr/lib/libsqlite3.dylib` is absent from the
+///   filesystem while `dlopen` of that exact name succeeds. Anything built on
+///   `Path::exists` reports "not installed" for a library that works.
+///
+/// So this opens it. `dlopen` consults the shared cache, `LD_LIBRARY_PATH` /
+/// `DYLD_LIBRARY_PATH`, the `PATH` DLL search and the system directories — every
+/// route the real call will take — which is what makes a `true` here mean the
+/// same thing as a `true` at the call site.
+///
+/// Deliberately NOT `c_call::library_available`: that additionally requires every
+/// `#c` symbol attributed to the library to resolve, and a `#c` annotation never
+/// names the library it came from, so a package that declares a library AND
+/// builds a shim has both sets attributed to the one name. This answers only the
+/// question it is asked.
+#[cfg(feature = "native-extensions")]
+#[must_use]
+pub fn host_library_loadable(name: &str) -> bool {
+    host_lib_variants(name)
+        .iter()
+        // SAFETY: loading a library runs its initialisers, which is exactly what
+        // asking "can this be loaded" means. The handle drops immediately.
+        .any(|n| unsafe { libloading::Library::new(n) }.is_ok())
+}
+
 /// Which naming convention THIS host uses. The single `cfg!` read, so the
 /// translation itself stays a pure function of its argument.
 #[must_use]
@@ -482,6 +518,47 @@ pub fn shim_name_args(final_file_name: &str, os: LibOs) -> Vec<String> {
     }
 }
 
+/// Windows only: also emit an IMPORT LIBRARY, at `implib_path`.
+///
+/// A `.dll` is not linkable by itself. MSVC `link.exe` links against the `.lib`
+/// that describes it, and a MinGW `cc` given `-shared` produces the DLL and
+/// nothing else unless asked — so the Windows leg died on
+///
+/// ```text
+/// LINK : fatal error LNK1181: cannot open input file 'sqlite_shim_<key>.lib'
+/// ```
+///
+/// asking for a file that was never going to exist. The name it asks for is
+/// fixed by `native_utils::add_c_library_flags`, which passes `-l <stem>` for
+/// the shim, so the import library must be `<stem>.lib` beside the DLL.
+///
+/// Separate from [`shim_name_args`] because the two do different things: that
+/// one records a name INSIDE the artifact, this one produces a SECOND artifact.
+/// A path rather than a bare name, because the compiler's working directory is
+/// not the output directory — and the caller passes a temporary, since the
+/// import library has to be published by the same atomic rename as the DLL.
+#[must_use]
+pub fn shim_implib_args(implib_path: &str, os: LibOs) -> Vec<String> {
+    if os == LibOs::Windows {
+        vec![format!("-Wl,--out-implib,{implib_path}")]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The import library that goes with a shim named `final_file_name`, or `None`
+/// off Windows. `sqlite_shim_<key>.dll` → `sqlite_shim_<key>.lib`.
+#[must_use]
+pub fn shim_implib_name(final_file_name: &str, os: LibOs) -> Option<String> {
+    if os != LibOs::Windows {
+        return None;
+    }
+    let stem = final_file_name
+        .strip_suffix(".dll")
+        .unwrap_or(final_file_name);
+    Some(format!("{stem}.lib"))
+}
+
 /// [`host_lib_variants`], with the target convention passed in.
 ///
 /// The versioned forms matter as much as the bare one — a real declaration is
@@ -523,7 +600,36 @@ pub fn lib_variants(name: &str, os: LibOs) -> Vec<String> {
 
 #[cfg(test)]
 mod shim_name_tests {
-    use super::{LibOs, shim_name_args};
+    use super::{LibOs, shim_implib_args, shim_implib_name, shim_name_args};
+
+    /// A `.dll` is not linkable on its own — MSVC links the `.lib` beside it,
+    /// and `cc -shared` writes one only when asked. The name is not free to
+    /// choose: `add_c_library_flags` passes `-l <stem>` for the shim, so the
+    /// import library must be exactly `<stem>.lib`, which is what this pins.
+    ///
+    /// Checked from any host by passing the convention in, for the same reason
+    /// the install-name test is: left implicit it could only ever run on
+    /// Windows, and a `#c` package had been unlinkable there the whole time.
+    #[test]
+    fn windows_asks_for_an_import_library_and_other_hosts_do_not() {
+        assert_eq!(
+            shim_implib_name("sqlite_shim_5aed31d6bafbf9f8.dll", LibOs::Windows)
+                .expect("Windows needs an import library"),
+            "sqlite_shim_5aed31d6bafbf9f8.lib",
+            "the DLL's stem — the exact name `-l sqlite_shim_<key>` makes link.exe open"
+        );
+        assert_eq!(
+            shim_implib_args("out/foo.lib", LibOs::Windows),
+            ["-Wl,--out-implib,out/foo.lib"]
+        );
+        for os in [LibOs::Linux, LibOs::Macos] {
+            assert!(
+                shim_implib_name("libfoo.so", os).is_none(),
+                "an ELF/Mach-O shared object is linked directly; there is no second file"
+            );
+            assert!(shim_implib_args("out/foo.lib", os).is_empty());
+        }
+    }
 
     /// macOS bakes the `-o` path into a dylib as its install name, so a library
     /// published by rename must be told the name it will END UP with. Checked
@@ -539,7 +645,9 @@ mod shim_name_tests {
         for os in [LibOs::Linux, LibOs::Windows] {
             assert!(
                 shim_name_args("libfoo.so", os).is_empty(),
-                "ELF sets a SONAME only when asked, and a DLL has no such record"
+                "ELF sets a SONAME only when asked, and a DLL has no such record — \
+                 what Windows needs instead is an import library, which is \
+                 `shim_implib_args`, not a name recorded inside the artifact"
             );
         }
     }

@@ -96,6 +96,26 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
     for arg in crate::platform::shim_name_args(&final_name, crate::platform::host_lib_os()) {
         cmd.arg(arg);
     }
+    // Windows links against an IMPORT LIBRARY, not the DLL, and `cc -shared`
+    // writes one only when asked. Built to a temporary beside the DLL's own and
+    // renamed with it below, so the pair is published together — a consumer that
+    // found the `.dll` and not yet the `.lib` would fail exactly as if the flag
+    // had never been added.
+    let implib = crate::platform::shim_implib_name(&final_name, crate::platform::host_lib_os())
+        .map(|name| {
+            (
+                out_dir.join(format!("{name}.{}.tmp", std::process::id())),
+                out_dir.join(name),
+            )
+        });
+    if let Some((tmp_lib, _)) = &implib {
+        for arg in crate::platform::shim_implib_args(
+            &tmp_lib.to_string_lossy(),
+            crate::platform::host_lib_os(),
+        ) {
+            cmd.arg(arg);
+        }
+    }
     for p in &paths {
         cmd.arg(p);
     }
@@ -108,6 +128,9 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
     })?;
     if !out.status.success() {
         let _ = std::fs::remove_file(&tmp);
+        if let Some((tmp_lib, _)) = &implib {
+            let _ = std::fs::remove_file(tmp_lib);
+        }
         // The caller already names the package; repeating it here only pushed
         // cc's own diagnostics further down the line, and those are what the
         // author needs to read first.
@@ -115,6 +138,19 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
             "did not compile.\n{}",
             String::from_utf8_lossy(&out.stderr).trim_end()
         ));
+    }
+    // The import library first: the DLL's rename is what makes the shim visible
+    // to the cache check at the top, so anything that must accompany it has to
+    // already be in place when that happens.
+    if let Some((tmp_lib, final_lib)) = &implib {
+        std::fs::rename(tmp_lib, final_lib).map_err(|e| {
+            let _ = std::fs::remove_file(tmp_lib);
+            let _ = std::fs::remove_file(&tmp);
+            format!(
+                "the shim built but its import library `{}` could not be published: {e}",
+                final_lib.display()
+            )
+        })?;
     }
     // A rename onto an existing file is fine — same content-addressed name means
     // the same bytes, so whoever wins publishes an identical library.

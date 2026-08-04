@@ -9300,7 +9300,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             // (e.g. weak-link the symbol or dedup the macro emission)
             // rather than re-add a flag the host linker doesn't
             // support.
-            #[cfg(not(target_os = "macos"))]
+            //
+            // MSVC `link.exe` does not understand it either, and unlike ld64 it
+            // does not fail — it prints `LNK4044: unrecognized option …; ignored`
+            // once per occurrence, which on the `#c` shim path was three lines of
+            // noise directly above the real error. Same reason as macOS: a flag
+            // the host linker has no equivalent for is not passed to it.
+            #[cfg(not(any(target_os = "macos", windows)))]
             cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")

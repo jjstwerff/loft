@@ -143,8 +143,10 @@ attack cell loudly.
   safe builder possible at all. Built as **@PLN124**; what shipped is in
   [plans/124-interpolation-hook.md](../124-interpolation-hook.md).
 - **[PLATFORMS.md](PLATFORMS.md)** — building the client on Linux, macOS, Windows and
-  wasm. The state is measured per platform, and two of the four cells currently pass
+  wasm. The state is measured per platform, and two of the four cells passed
   **without testing anything**; the P1–P6 ladder fixes that before it chases greens.
+- **[MACOS_HANDOFF.md](MACOS_HANDOFF.md)** — the tasks that can only be answered on
+  Apple hardware, each with what it unblocks and what would change our minds.
 - **[mysql-bind-layout-check.c](mysql-bind-layout-check.c)** — the check that keeps the
   hand-declared `MYSQL_BIND` in `maria/src/stmt.c` honest against the real header.
 

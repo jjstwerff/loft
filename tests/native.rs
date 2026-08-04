@@ -1370,13 +1370,21 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     {
         return Ok(()); // the sqlite backend ships a shim loft must compile
     }
-    let has = |names: &[&str]| {
-        names.iter().any(|n| {
-            ["/lib/x86_64-linux-gnu/", "/usr/lib/", "/usr/lib64/"]
-                .iter()
-                .any(|d| std::path::Path::new(&format!("{d}{n}")).exists())
-        })
-    };
+    // Which backends actually ran their assertions. A skip and a pass are the
+    // same colour, so the count is checked at the end: this test used to gate
+    // each backend on `libsqlite3.so.0` existing under `/lib/x86_64-linux-gnu`
+    // | `/usr/lib` | `/usr/lib64`, and BOTH the spelling and the directories are
+    // Linux's. On macOS `/usr/lib` exists but holds `libsqlite3.dylib`, so every
+    // conditional cell — including sqlite, written to be the unconditional one —
+    // skipped in silence and the test passed on macOS for months having opened
+    // no database. The availability question now has ONE home, loft's own
+    // `c_library_available`, which translates the declared soname to the host's
+    // spelling; a mode that cannot run says `SKIP` and is counted here.
+    let mut ran: Vec<&str> = Vec::new();
+    // The availability question, asked the way the dynamic linker asks it —
+    // `dlopen`, over the spellings THIS host uses. The declaration is Linux's,
+    // and a search for it finds nothing on macOS or Windows.
+    let has = |declared: &str| loft::platform::host_library_loadable(declared);
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let libdir = root.join("tests/fixtures/sqldb");
     let script = libdir.join("uniform.loft");
@@ -1440,9 +1448,19 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     // that reports transactions it never opens): `nested=true rows=1/2 stray=true/true`.
     let tx = "begin=true/true nested=false rollback=true commit=true rows=0/1 stray=false/false";
 
-    // sqlite — unconditional. No server, so a failure here is always real.
-    if has(&["libsqlite3.so.0"]) {
-        let s = run("--interpret", "sqlite")?;
+    // sqlite — no server, so whenever the library is here a failure is real.
+    let s = if has("libsqlite3.so.0") {
+        run("--interpret", "sqlite")?
+    } else {
+        String::from("SKIP sqlite not installed")
+    };
+    if s.contains("SKIP") {
+        assert!(
+            s.contains("not installed"),
+            "an absent library must be REPORTED, not inferred from silence:\n{s}"
+        );
+    } else {
+        ran.push("sqlite");
         assert!(
             s.contains(&format!("sqlite {expect}")),
             "sqlite must render value / NULL / empty distinctly:\n{s}"
@@ -1464,14 +1482,17 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     }
 
     // postgres and mariadb — conditional, and a skip is recognised as a skip.
+    // The condition is the library's own answer plus a reachable server; both
+    // arrive as `SKIP` on stdout rather than being guessed at from out here.
     for (mode, lib) in [("postgres", "libpq.so.5"), ("maria", "libmariadb.so.3")] {
-        if !has(&[lib]) {
+        if !has(lib) {
             continue;
         }
         let out = run("--interpret", mode)?;
         if out.contains("SKIP") {
             continue; // no server reachable here
         }
+        ran.push(mode);
         assert!(
             out.contains(&format!("{mode} {expect}")),
             "{mode} must render the same three cells as sqlite:\n{out}"
@@ -1522,6 +1543,7 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
         // and the arc-G property costs it no leniency. Proven on 1.5.5 with the library
         // reachable via `LD_LIBRARY_PATH`; no system install is needed, and none is
         // assumed here, which is why this stays conditional.
+        ran.push("duckdb");
         assert!(
             out.contains(&format!("duckdb {expect}")),
             "duckdb must render the same three cells as sqlite:\n{out}"
@@ -1534,6 +1556,24 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             out.contains(&format!("duckdb tx {tx}")),
             "duckdb: rollback must discard, commit must persist, and a nested begin \
              must be REFUSED — `BEGIN TRANSACTION` is its own spelling:\n{out}"
+        );
+    }
+
+    // The guard that would have caught the Linux-shaped probe.
+    //
+    // Everything above is conditional, so with no cell running this test is a
+    // green that asserted nothing — which is exactly what it was on macOS.
+    // Naming the backends that ran turns a silent evaporation into a readable
+    // one, and requiring sqlite on Linux pins the reference platform: it is the
+    // cell with no server to be unreachable, so there it can only be missing if
+    // something upstream broke.
+    println!("@PLN23 backends exercised: {ran:?}");
+    if cfg!(target_os = "linux") {
+        assert!(
+            ran.contains(&"sqlite"),
+            "sqlite must run on Linux — it needs no server, so a skip here means \
+             the library went missing or the availability question broke, and a \
+             pass with it skipped asserts nothing. Exercised: {ran:?}"
         );
     }
     Ok(())
