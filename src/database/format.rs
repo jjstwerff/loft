@@ -934,7 +934,15 @@ impl ShowDb<'_> {
                 }
             } else {
                 let text_val = self.store().get_str(text_nr);
-                if self.json || self.loft {
+                if (self.json || self.loft) && text_val == crate::state::STRING_NULL {
+                    // A `text?` holding null is stored as the STRING_NULL ("\0")
+                    // sentinel — the same absence the `text_nr == 0` branch above
+                    // renders, reached by a different route, so it renders the
+                    // same way. Escaping it instead published the sentinel as
+                    // data: `{"note":" "}` turned an absent value into a
+                    // present one-character string (loft#769).
+                    s.push_str("null");
+                } else if self.json || self.loft {
                     // loft string literals accept the same escapes as JSON
                     // (`\"`, `\n`, `\\`, …), so the JSON escaper produces a
                     // re-parseable loft text literal too.
@@ -1014,6 +1022,39 @@ impl ShowDb<'_> {
                     } else {
                         "?"
                     };
+                    let tp_nr = if v <= 0 || (v as usize - 1) >= vals.len() {
+                        u16::MAX
+                    } else {
+                        vals[v as usize - 1].0
+                    };
+                    let payload = match tp_nr {
+                        u16::MAX => None,
+                        _ => match &self.stores.types[tp_nr as usize].parts {
+                            Parts::EnumValue(_, st) => Some(st),
+                            _ => None,
+                        },
+                    };
+                    if self.json {
+                        // Reached when the value is typed as the ENUM (a field, a
+                        // vector element, a nested record); the `Parts::EnumValue`
+                        // arm below is reached when it is typed as the VARIANT
+                        // (a bare construction). Both are the same value, so both
+                        // emit the same JSON: a quoted variant name, or a
+                        // single-key object keyed by it when the variant carries
+                        // fields. Rendering the name bare — `{"kind":Circle {…}}` —
+                        // is not JSON at all, and `json_parse` rejected the whole
+                        // document rather than just that field (loft#768).
+                        if v <= 0 {
+                            s.push_str("null"); // already valid JSON
+                        } else if let Some(st) = payload {
+                            write!(s, "{{\"{enum_val}\":").unwrap();
+                            self.write_struct(s, st, indent);
+                            s.push('}');
+                        } else {
+                            write!(s, "\"{enum_val}\"").unwrap();
+                        }
+                        return;
+                    }
                     // loft qualifies a real variant as `Enum.Variant` so it
                     // re-parses unambiguously (a bare `Variant` can't infer its
                     // enum type in the language parser).
@@ -1021,14 +1062,7 @@ impl ShowDb<'_> {
                         write!(s, "{}.", self.stores.types[self.known_type as usize].name).unwrap();
                     }
                     s.push_str(enum_val);
-                    let tp_nr = if v <= 0 || (v as usize - 1) >= vals.len() {
-                        u16::MAX
-                    } else {
-                        vals[v as usize - 1].0
-                    };
-                    if tp_nr != u16::MAX
-                        && let Parts::EnumValue(_, st) = &self.stores.types[tp_nr as usize].parts
-                    {
+                    if let Some(st) = payload {
                         s.push(' ');
                         self.write_struct(s, st, indent);
                     }

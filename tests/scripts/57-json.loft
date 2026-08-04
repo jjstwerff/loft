@@ -111,3 +111,97 @@ fn test_errors_nested_path() {
   err = bad#errors;
   assert(len(err) > 0, "expected error for nested: {err}");
 }
+
+// loft#768 — an enum reached through a RECORD (a field, a vector element, a
+// nested struct) used to render its variant name bare and unquoted:
+// `{"kind":Circle {"r":2}}`.  That is not JSON, and `json_parse` rejected the
+// whole document rather than just that field, so a struct containing an enum
+// could not be serialised or reflected over at all.  A variant renders as a
+// quoted name, or as a single-key object keyed by it when it carries fields —
+// the shape a BARE variant already produced, so both routes agree.
+
+enum JShape { JCircle { r: float }, JSquare { side: integer } }
+enum JColor { JRed, JGreen }
+
+struct JEnumField { kind: JShape }
+struct JSimpleField { c: JColor }
+struct JEnumVec { items: vector<JColor> }
+struct JPayloadVec { items: vector<JShape> }
+struct JEnumNest { inner: JEnumField }
+
+fn test_json_enum_payload_in_field() {
+  o = JEnumField { kind: JCircle { r: 2.0 } };
+  json = "{o:j}";
+  assert(json == `{{"kind":{{"JCircle":{{"r":2}}}}}}`, "payload field: {json}");
+}
+
+fn test_json_enum_payload_bare_agrees_with_field() {
+  // The bare variant was already correct; it is asserted here so the two
+  // routes to the same value can never drift apart again.
+  bare = "{JCircle{r: 2.0}:j}";
+  assert(bare == `{{"JCircle":{{"r":2}}}}`, "bare payload: {bare}");
+}
+
+fn test_json_enum_without_payload_in_field() {
+  o = JSimpleField { c: JRed };
+  json = "{o:j}";
+  assert(json == `{{"c":"JRed"}}`, "simple field: {json}");
+}
+
+fn test_json_enum_in_vector() {
+  v: vector<JColor> = [JRed, JGreen];
+  o = JEnumVec { items: v };
+  json = "{o:j}";
+  assert(json == `{{"items":["JRed","JGreen"]}}`, "enum vector: {json}");
+
+  w: vector<JShape> = [JCircle { r: 1.0 }, JSquare { side: 3 }];
+  p = JPayloadVec { items: w };
+  pj = "{p:j}";
+  assert(pj == `{{"items":[{{"JCircle":{{"r":1}}}},{{"JSquare":{{"side":3}}}}]}}`,
+         "payload vector: {pj}");
+}
+
+fn test_json_enum_nested_record() {
+  o = JEnumNest { inner: JEnumField { kind: JSquare { side: 5 } } };
+  json = "{o:j}";
+  assert(json == `{{"inner":{{"kind":{{"JSquare":{{"side":5}}}}}}}}`, "nested: {json}");
+}
+
+fn test_json_enum_document_reparses() {
+  // The regression that motivated the fix: the emitted document has to be
+  // acceptable to json_parse, not merely look close to JSON.
+  o = JEnumField { kind: JSquare { side: 9 } };
+  match json_parse("{o:j}") {
+    JObject { fields } => assert(len(fields) == 1, "field count: {len(fields)}"),
+    _ => assert(false, "json_parse rejected an enum-bearing document"),
+  }
+}
+
+// loft#769 — a `text?` holding null is stored as the STRING_NULL ("\0")
+// sentinel.  The renderer escaped it as data, so an ABSENT value came back as a
+// present one-character string (`{"note":"\u0000"}`), losing exactly the
+// null-vs-empty distinction `text?` exists to carry.
+
+struct JNullText { note: text?, n: integer }
+
+fn test_json_null_text_is_json_null() {
+  o = JNullText { note: null, n: 7 };
+  json = "{o:j}";
+  assert(json == `{{"note":null,"n":7}}`, "null text: {json}");
+}
+
+fn test_json_present_text_still_renders() {
+  o = JNullText { note: "ok", n: 7 };
+  json = "{o:j}";
+  assert(json == `{{"note":"ok","n":7}}`, "present text: {json}");
+}
+
+fn test_json_empty_text_stays_distinct_from_null() {
+  // The whole point of the distinction: "" and null must not collapse.
+  e = JNullText { note: "", n: 1 };
+  n = JNullText { note: null, n: 1 };
+  ej = "{e:j}";
+  nj = "{n:j}";
+  assert(ej == `{{"note":"","n":1}}`, "empty text: {ej}");
+  assert(ej != nj, "empty and null must render differently: {ej} vs {nj}");
+}
