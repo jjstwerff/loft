@@ -231,25 +231,9 @@ pub fn db_rows(self: Duck, q: SqlText) -> boolean {
 //
 // UNPROVEN like the rest of this backend: libduckdb is not installed on the
 // machine this was built on, so these three were read and never run.
-//
-// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
-// not leave the connection believing it holds a transaction it never opened.
-pub fn db_begin(self: Duck) -> boolean {
-  if !self.tx.tx_enter() { return false }
-  if self.db_exec("BEGIN TRANSACTION") { return true }
-  _ = self.tx.tx_leave();
-  return false;
-}
-
-pub fn db_commit(self: Duck) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("COMMIT");
-}
-
-pub fn db_rollback(self: Duck) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("ROLLBACK");
-}
+pub fn db_begin(self: Duck) -> boolean { return tx_begin(self, self.tx, "BEGIN TRANSACTION"); }
+pub fn db_commit(self: Duck) -> boolean { return tx_commit(self, self.tx); }
+pub fn db_rollback(self: Duck) -> boolean { return tx_rollback(self, self.tx); }
 
 pub fn db_shut(self: Duck) {
   self.release();

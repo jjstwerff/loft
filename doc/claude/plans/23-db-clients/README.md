@@ -122,12 +122,6 @@ attack cell loudly.
   answer is still an open item above.
 - **One statement per connection**, and one parameter array per process: the
   shims' slots are static. The same single-slot limit S1–S3 already carried.
-- **A `db_begin` inside a transaction is refused, and the SEQUENCING is repeated**
-  per backend. The state machine has one home (`Tx` + `tx_enter` / `tx_leave` in
-  `sql`), but the helper that would also RUN the statement cannot exist: it would
-  be a generic bounded by `SqlDb`, called from a `SqlDb` method, and that cycle
-  aborts the compiler with an H5 cross-pass divergence (loft#763). Four copies of
-  a three-line sequence is the cost until that closes.
 - **duckdb's transactions are unproven** for the same reason its S4 cells are —
   libduckdb is not installed here, and it is the one backend of the four whose
   keyword differs (`BEGIN TRANSACTION`).

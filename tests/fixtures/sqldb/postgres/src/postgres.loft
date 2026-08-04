@@ -169,26 +169,11 @@ pub fn db_rows(self: Postgres, q: SqlText) -> boolean {
 
 // --- T1–T3: transactions ----------------------------------------------------
 //
-// PostgreSQL spells all three as plain statements.
-//
-// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
-// not leave the connection believing it holds a transaction it never opened.
-pub fn db_begin(self: Postgres) -> boolean {
-  if !self.tx.tx_enter() { return false }
-  if self.db_exec("BEGIN") { return true }
-  _ = self.tx.tx_leave();
-  return false;
-}
-
-pub fn db_commit(self: Postgres) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("COMMIT");
-}
-
-pub fn db_rollback(self: Postgres) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("ROLLBACK");
-}
+// Postgres spells all three as plain statements, so each of these is the
+// shared rule plus a keyword. The state lives here; the logic does not.
+pub fn db_begin(self: Postgres) -> boolean { return tx_begin(self, self.tx, "BEGIN"); }
+pub fn db_commit(self: Postgres) -> boolean { return tx_commit(self, self.tx); }
+pub fn db_rollback(self: Postgres) -> boolean { return tx_rollback(self, self.tx); }
 
 pub fn db_shut(self: Postgres) {
   if self.res != 0 { pq_clear(self.res); self.res = 0; }

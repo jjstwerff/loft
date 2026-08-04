@@ -140,28 +140,11 @@ pub fn db_rows(self: Sqlite, q: SqlText) -> boolean {
 
 // --- T1–T3: transactions ----------------------------------------------------
 //
-// sqlite spells all three as plain statements, so each of these is the shared
-// state machine plus a keyword.
-//
-// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
-// not leave the connection believing it holds a transaction it never opened —
-// the next `db_begin` would then be refused for no reason.
-pub fn db_begin(self: Sqlite) -> boolean {
-  if !self.tx.tx_enter() { return false }
-  if self.db_exec("BEGIN") { return true }
-  _ = self.tx.tx_leave();
-  return false;
-}
-
-pub fn db_commit(self: Sqlite) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("COMMIT");
-}
-
-pub fn db_rollback(self: Sqlite) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("ROLLBACK");
-}
+// Sqlite spells all three as plain statements, so each of these is the
+// shared rule plus a keyword. The state lives here; the logic does not.
+pub fn db_begin(self: Sqlite) -> boolean { return tx_begin(self, self.tx, "BEGIN"); }
+pub fn db_commit(self: Sqlite) -> boolean { return tx_commit(self, self.tx); }
+pub fn db_rollback(self: Sqlite) -> boolean { return tx_rollback(self, self.tx); }
 
 pub fn db_shut(self: Sqlite) {
   self.release();

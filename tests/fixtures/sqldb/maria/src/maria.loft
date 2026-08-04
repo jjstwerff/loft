@@ -219,32 +219,11 @@ pub fn db_rows(self: Maria, q: SqlText) -> boolean {
 
 // --- T1–T3: transactions ----------------------------------------------------
 //
-// MariaDB spells all three as plain statements — `BEGIN`, not postgres's
-// optional `TRANSACTION` word, and not `START TRANSACTION`, which is MariaDB's
-// own longer spelling of the same thing.
-//
-// DDL commits implicitly here and does NOT on the other backends, so a migration
-// mixing DDL and data in one transaction is atomic on two backends and not on
-// this one. That is refused at the mapping layer rather than papered over.
-//
-// `db_begin` leaves again when the statement fails, so a refused `BEGIN` does
-// not leave the connection believing it holds a transaction it never opened.
-pub fn db_begin(self: Maria) -> boolean {
-  if !self.tx.tx_enter() { return false }
-  if self.db_exec("BEGIN") { return true }
-  _ = self.tx.tx_leave();
-  return false;
-}
-
-pub fn db_commit(self: Maria) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("COMMIT");
-}
-
-pub fn db_rollback(self: Maria) -> boolean {
-  if !self.tx.tx_leave() { return false }
-  return self.db_exec("ROLLBACK");
-}
+// Maria spells all three as plain statements, so each of these is the
+// shared rule plus a keyword. The state lives here; the logic does not.
+pub fn db_begin(self: Maria) -> boolean { return tx_begin(self, self.tx, "BEGIN"); }
+pub fn db_commit(self: Maria) -> boolean { return tx_commit(self, self.tx); }
+pub fn db_rollback(self: Maria) -> boolean { return tx_rollback(self, self.tx); }
 
 pub fn db_shut(self: Maria) {
   self.release();

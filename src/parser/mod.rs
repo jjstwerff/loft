@@ -1638,8 +1638,14 @@ impl Parser {
                 || (matches!(dt, DefType::Struct) && name.starts_with("main_vector<"));
             let lazy_instantiation =
                 matches!(dt, DefType::Function) && self.h5_names_a_generic_template(name);
+            // loft#763 — the third legal append: a parametric BOUND STUB. A generic's
+            // body calling a bound method (`d.db_exec(…)`) mints `t_<LEN><T>_<m>` for
+            // the TYPE VARIABLE rather than for a concrete type, and like an
+            // instantiation that is pass-2-only by design — pass 1 only predicts.
+            let lazy_bound_stub =
+                matches!(dt, DefType::Function) && self.h5_names_a_bound_stub(name);
             assert!(
-                lazy_wrapper || lazy_instantiation,
+                lazy_wrapper || lazy_instantiation || lazy_bound_stub,
                 "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
                  wrapper or generic instantiation — a real cross-pass divergence \
                  (pass1={}, pass2={})",
@@ -1740,22 +1746,50 @@ impl Parser {
     /// legal pass-2-only appends of the Function kind — a source-declared
     /// method parses in pass 1 and can never appear as a trailing pass-2 def.
     fn h5_names_a_generic_template(&self, name: &str) -> bool {
-        let Some(rest) = name.strip_prefix("t_") else {
-            return false;
-        };
-        let digits = rest.chars().take_while(char::is_ascii_digit).count();
-        let Ok(type_len) = rest[..digits].parse::<usize>() else {
-            return false;
-        };
-        let after = &rest[digits..];
-        if after.len() <= type_len || !after.is_char_boundary(type_len) {
-            return false;
-        }
-        let Some(fn_name) = after[type_len..].strip_prefix('_') else {
+        let Some((_, fn_name)) = Self::h5_split_mangled(name) else {
             return false;
         };
         let g_nr = self.data.def_nr(&format!("n_{fn_name}"));
         g_nr != u32::MAX && matches!(self.data.def_type(g_nr), DefType::Generic)
+    }
+
+    /// Split `t_<LEN><Type>_<fn>` into its type name and function name.
+    fn h5_split_mangled(name: &str) -> Option<(&str, &str)> {
+        let rest = name.strip_prefix("t_")?;
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        let type_len = rest[..digits].parse::<usize>().ok()?;
+        let after = &rest[digits..];
+        if after.len() <= type_len || !after.is_char_boundary(type_len) {
+            return None;
+        }
+        let fn_name = after[type_len..].strip_prefix('_')?;
+        Some((&after[..type_len], fn_name))
+    }
+
+    /// loft#763 — does `name` mangle a method on a generic's TYPE VARIABLE?
+    ///
+    /// `fn helper <D: SqlDb> (d: D, …) { d.db_exec(…) }` resolves `db_exec` against the
+    /// bound and mints `t_1D_db_exec` — a stub keyed on the type PARAMETER, not on any
+    /// concrete type, so `h5_names_a_generic_template` does not know it (there is no
+    /// `n_db_exec` template; `db_exec` is an interface method). It is minted in pass 2
+    /// for the same reason an instantiation is: pass 1 only predicts.
+    ///
+    /// Recognised precisely — the type part has to be the type variable of some generic
+    /// template in THIS program, so an ordinary `t_<Type>_<fn>` appearing only in pass 2
+    /// stays the fatal divergence the guard was built for.
+    fn h5_names_a_bound_stub(&self, name: &str) -> bool {
+        let Some((type_name, _)) = Self::h5_split_mangled(name) else {
+            return false;
+        };
+        let type_nr = self.data.def_nr(type_name);
+        if type_nr == u32::MAX {
+            return false;
+        }
+        (0..self.data.definitions()).any(|g| {
+            matches!(self.data.def_type(g), DefType::Generic)
+                && !self.data.def(g).attributes().is_empty()
+                && Self::extract_type_var(&self.data.def(g).attributes()[0].typedef) == type_nr
+        })
     }
 
     /// Plan-07 phase 4h — walk user struct definitions and emit

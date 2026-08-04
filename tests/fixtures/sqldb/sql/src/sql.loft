@@ -127,14 +127,15 @@ pub fn as_text(self: Bound) -> text {
 // `BEGIN` / `COMMIT` / `ROLLBACK` are ordinary statements on every backend here,
 // which makes the uniform part free — the rare place where it is.
 //
-// The STATE MACHINE has one home: a connection carries a `Tx`, and `tx_enter` /
-// `tx_leave` are the only things that read or write it, so what "already in a
-// transaction" means is decided once. What each backend repeats is the
-// sequencing and its own keyword. That split is not the one this would have
-// picked: a helper that ran the statement itself would be a generic bounded by
-// `SqlDb`, called from a `SqlDb` method — the cycle that aborts the compiler
-// with an H5 cross-pass divergence (loft#763). When that closes, the sequencing
-// belongs here too.
+// The whole rule has ONE home. A connection carries a `Tx`, and the three
+// functions below are the only things that read or write it OR decide what a
+// begin, a commit and a rollback do. Each backend supplies two things and no
+// logic: the state, and its own keyword (duckdb's is `BEGIN TRANSACTION`, the
+// one of four that differs).
+//
+// This shape needed loft#763 fixed first: a helper that runs the statement is a
+// generic bounded by `SqlDb`, called FROM a `SqlDb` method, and across a library
+// boundary that cycle aborted the compiler with an H5 cross-pass divergence.
 pub struct Tx { open: boolean }
 
 pub fn tx_new() -> Tx { return Tx { open: false }; }
@@ -142,33 +143,45 @@ pub fn tx_new() -> Tx { return Tx { open: false }; }
 // Is a transaction open on this connection?
 pub fn tx_open(self: Tx) -> boolean { return self.open; }
 
-// Claim the transaction, or REFUSE because one is already open.
+// Begin, or REFUSE because one is already open.
 //
 // Nesting is refused rather than emulated. None of these backends nest `BEGIN`
 // — `SAVEPOINT` is the real mechanism and is spelled differently enough to be
 // its own design — and a silent no-op is the dangerous version, because the
 // inner "rollback" would then discard the OUTER transaction's work, which no
 // reader can detect afterwards.
-pub fn tx_enter(self: Tx) -> boolean {
-  if self.open { return false }
-  self.open = true;
+//
+// A `BEGIN` that fails leaves again, so a refused statement does not leave the
+// connection believing it holds a transaction it never opened.
+pub fn tx_begin <D: SqlDb> (d: D, t: Tx, sql: text) -> boolean {
+  if t.open { return false }
+  if !d.db_exec(sql) { return false }
+  t.open = true;
   return true;
 }
 
-// Release it, or REFUSE because none is open. Committing or rolling back
-// outside a transaction is a caller error, not a no-op: it means the caller
-// believes it has work to keep or discard, and it has none.
+// Commit, or REFUSE because nothing is open — that caller believes it has work
+// to keep, and it has none.
 //
-// A commit that FAILS still leaves, and still reports the failure. A commit can
-// fail for real — a constraint, a deadlock, a lost connection — and that is
-// exactly when a caller must find out. But no backend here leaves the
+// A commit that FAILS still ends the transaction, and still reports the failure.
+// A commit can fail for real — a constraint, a deadlock, a lost connection — and
+// that is exactly when a caller must find out. But no backend here leaves the
 // transaction open after a failed `COMMIT` (postgres aborts it), so staying
-// `open` would strand the connection in a state it is not in and refuse the
-// next `db_begin` for no reason.
-pub fn tx_leave(self: Tx) -> boolean {
-  if !self.open { return false }
-  self.open = false;
-  return true;
+// `open` would strand the connection in a state it is not in and refuse the next
+// `db_begin` for no reason.
+pub fn tx_commit <D: SqlDb> (d: D, t: Tx) -> boolean {
+  if !t.open { return false }
+  ok = d.db_exec("COMMIT");
+  t.open = false;
+  return ok;
+}
+
+// Roll back, or REFUSE because nothing is open — the mirror of the above.
+pub fn tx_rollback <D: SqlDb> (d: D, t: Tx) -> boolean {
+  if !t.open { return false }
+  ok = d.db_exec("ROLLBACK");
+  t.open = false;
+  return ok;
 }
 
 pub interface SqlDb {
