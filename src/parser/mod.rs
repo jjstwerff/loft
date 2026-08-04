@@ -4286,6 +4286,29 @@ impl Parser {
 
     /// Try to instantiate a generic function template for the given call-site types.
     /// Returns the `def_nr` of the instantiated function, or `u32::MAX` if no generic matches.
+    /// May a call target this definition?
+    ///
+    /// Ordinarily only a `Function` — a `Generic` is a template and a call must name a
+    /// monomorph. The exception is loft#761: a template calling ANOTHER generic (itself,
+    /// a mutual partner, a helper declared later). Inside a template the argument is the
+    /// type VARIABLE, so no monomorph can exist yet and `try_generic_instantiation`
+    /// answers the template; `instantiate_nested_generics` retargets the call at the real
+    /// monomorph while building one, for whatever concrete type a caller finally names.
+    ///
+    /// Gated on the CALLER being a template too, so a call to a generic from ordinary
+    /// code stays the error it was — there the concrete type is known and an
+    /// instantiation must happen.
+    fn callable_target(&self, d_nr: u32) -> bool {
+        match self.data.def_type(d_nr) {
+            DefType::Function => true,
+            DefType::Generic => {
+                self.context != u32::MAX
+                    && matches!(self.data.def_type(self.context), DefType::Generic)
+            }
+            _ => false,
+        }
+    }
+
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
@@ -4315,6 +4338,23 @@ impl Parser {
             tv_nr,
             &types[0],
         );
+        // loft#761 — a SELF-recursive generic arrives here while its own template is
+        // still being parsed, and the argument type is the type VARIABLE, so `concrete`
+        // resolves to that variable rather than to any type. Instantiating against it
+        // built a def by cloning the template's variable table — which the parser has
+        // not written back yet, so the clone was EMPTY. That def is a plain `Function`,
+        // so codegen emitted it and indexed a table of length 0: "index out of bounds:
+        // the len is 0 but the index is 1", before any of the program ran.
+        //
+        // There is nothing to instantiate at this point, and nothing to diagnose
+        // either: the call is perfectly good, it just has no concrete type YET. Answer
+        // the TEMPLATE. A real caller then instantiates for its own concrete type, and
+        // `instantiate_nested_generics` retargets this call at that monomorph while
+        // building it — the same path any other call to a generic takes from inside a
+        // template. Self-recursion terminates there on the `existing` check.
+        if concrete.contains_def(tv_nr) && self.data.def(g_nr).variables().count() == 0 {
+            return g_nr;
+        }
         if concrete.is_unknown() {
             if !self.first_pass {
                 diagnostic!(
@@ -7134,7 +7174,7 @@ impl Parser {
                 "No matching function {}",
                 self.data.def(d_nr).name()
             );
-        } else if !matches!(self.data.def_type(d_nr), DefType::Function) {
+        } else if !self.callable_target(d_nr) {
             if report {
                 diagnostic!(
                     self.lexer,
