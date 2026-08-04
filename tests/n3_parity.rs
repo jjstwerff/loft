@@ -370,7 +370,12 @@ fn editing_a_library_interprets_then_rebuilds_when_stable() {
     )
     .unwrap();
     let src = pkg.join("src").join("edlib.loft");
-    std::fs::write(&src, "pub fn greet() -> text { \"v1\" }\n").unwrap();
+    // The body BUILDS its text rather than returning a literal: a text-returning
+    // function that hands back a text it does not own is bufferless, and the shared
+    // bridge has nowhere to put those bytes, so the gate keeps it interpreted
+    // (loft#773).  This test is about the cdylib lifecycle, so its fixture has to be
+    // a function that actually reaches the cdylib.
+    std::fs::write(&src, "pub fn greet() -> text { n = 1; return \"v{n}\"; }\n").unwrap();
     let prog = root.join("main.loft");
     std::fs::write(&prog, "use edlib;\nfn main() { println(greet()); }\n").unwrap();
     let native_auto = pkg.join("native-auto");
@@ -401,7 +406,7 @@ fn editing_a_library_interprets_then_rebuilds_when_stable() {
     // Edit the library (sleep first so the new source mtime is unambiguously newer
     // than the just-built cdylib, even on a coarse-granularity filesystem).
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    std::fs::write(&src, "pub fn greet() -> text { \"v2\" }\n").unwrap();
+    std::fs::write(&src, "pub fn greet() -> text { n = 2; return \"v{n}\"; }\n").unwrap();
 
     // 2. Edit run → interpret the NEW code, NO rebuild.
     let r2 = run_edit();

@@ -2087,6 +2087,9 @@ use a separate collection or add after the loop"
         if self.assign_refvar_vector(code, f_type, &s_type, op, var_nr) {
             return Type::Void;
         }
+        // Rewrites `code` into an owned copy and returns false, so the general path
+        // still emits the `Set(out, …)` that transfers it (loft#775).
+        self.assign_refvar_reference(code, f_type, op, var_nr);
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
@@ -3906,6 +3909,66 @@ use a separate collection or add after the loop"
         }
         self.append_to_text(code, op, var_nr, s_type);
         true
+    }
+
+    /// Handle `out = <struct field>` where `out: &T` and `T` is a struct; returns true
+    /// if handled.
+    ///
+    /// A `&` parameter is the callee's second way to hand a value back (the first is
+    /// `return`), and a whole-binding write TRANSFERS a store to the caller, who then
+    /// owns and frees it (@PLN87 P2.2).  A FIELD READ is not a store — it is a VIEW
+    /// into the record that holds the field, so `out = ld.wl_world` published a pointer
+    /// into a local the frame frees on the way out.  The caller kept reading it, and the
+    /// next allocation landed on top: a four-chunk world became a one-chunk world with
+    /// its edit clock running BACKWARDS, across a call that never touched its argument
+    /// (loft#775).  `--interpret` reported the store as unfreed and faulted under
+    /// `LOFT_POISON=1`; `--native` silently answered with whatever was allocated next.
+    ///
+    /// Publish an owned COPY instead — the same materialise-the-view move
+    /// `materialize_view_return` makes for `return ld.wl_world`, which is why that
+    /// direction was already safe and this one was not.  The copy is marked
+    /// `skip_free`: the caller owns it now, exactly as it owns a fresh record built in
+    /// place (`o = Obj{…}`), so freeing it here would orphan the caller's binding.
+    pub(crate) fn assign_refvar_reference(
+        &mut self,
+        code: &mut Value,
+        f_type: &Type,
+        op: &str,
+        var_nr: u16,
+    ) -> bool {
+        let Type::RefVar(inner) = f_type else {
+            return false;
+        };
+        let Type::Reference(td, _) = inner.as_ref() else {
+            return false;
+        };
+        if op != "=" || !self.is_field(code) {
+            return false;
+        }
+        // Keyed on the IR SHAPE, not on the right-hand side's deps: deps accumulate
+        // while a body parses, so a deps test would mint the work-ref on pass 2 only
+        // and shift every later `__ref_N` — the cross-pass divergence the H5 contract
+        // catches.  A field read is a field read on both passes.
+        let td = *td;
+        let kt = self.data.def(td).known_type();
+        let w = self.vars.work_refs(&Type::Reference(td, Deps::none()), &mut self.lexer);
+        self.vars.set_skip_free(w);
+        if self.first_pass {
+            return false;
+        }
+        let copy_d = self.data.def_nr("OpCopyRecord");
+        let view = std::mem::replace(code, Value::Null);
+        *code = v_block(
+            vec![
+                v_set(w, Value::Null),
+                self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
+                Value::Call(copy_d, vec![view, Value::Var(w), Value::Int(i32::from(kt))]),
+                Value::Var(w),
+            ],
+            Type::Reference(td, Deps::frame1(w)),
+            "materialized_amp_field",
+        );
+        false
     }
 
     /// Handle `v += expr` and `v = expr` where `v: &vector<T>`; returns true if handled.
