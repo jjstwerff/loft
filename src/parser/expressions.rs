@@ -2089,7 +2089,7 @@ use a separate collection or add after the loop"
         }
         // Rewrites `code` into an owned copy and returns false, so the general path
         // still emits the `Set(out, …)` that transfers it (loft#775).
-        self.assign_refvar_reference(code, f_type, op, var_nr);
+        self.assign_refvar_reference(code, f_type, op);
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
@@ -3934,7 +3934,6 @@ use a separate collection or add after the loop"
         code: &mut Value,
         f_type: &Type,
         op: &str,
-        var_nr: u16,
     ) -> bool {
         let Type::RefVar(inner) = f_type else {
             return false;
@@ -3951,7 +3950,9 @@ use a separate collection or add after the loop"
         // catches.  A field read is a field read on both passes.
         let td = *td;
         let kt = self.data.def(td).known_type();
-        let w = self.vars.work_refs(&Type::Reference(td, Deps::none()), &mut self.lexer);
+        let w = self
+            .vars
+            .work_refs(&Type::Reference(td, Deps::none()), &mut self.lexer);
         self.vars.set_skip_free(w);
         if self.first_pass {
             return false;

@@ -8227,9 +8227,7 @@ impl Parser {
                                 .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                         }
                     }
-                    TextDep::SkipCaptured
-                    | TextDep::SkipTupleLocal
-                    | TextDep::SkipOwnedLocal => {
+                    TextDep::SkipCaptured | TextDep::SkipTupleLocal | TextDep::SkipOwnedLocal => {
                         // SkipTupleLocal (@P330): the dep drops on purpose — the
                         // return type loses this local, which lets scopes'
                         // B5-L3 single-text branch deep-copy the tail into a
