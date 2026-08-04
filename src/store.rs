@@ -525,6 +525,7 @@ impl Store {
             #[cfg(debug_assertions)]
             store.validate(0);
             store.fl_rebuild();
+            store.claims_rebuild();
         }
         store
     }
@@ -588,6 +589,7 @@ impl Store {
         #[cfg(debug_assertions)]
         store.validate(0);
         store.fl_rebuild();
+        store.claims_rebuild();
         store
     }
 
@@ -1907,6 +1909,36 @@ impl Store {
             debug_assert!(block_size > 0, "zero-size block at {pos}");
             if header < 0 && -header >= MIN_FREE_TREE {
                 self.fl_insert(pos);
+            }
+            pos += block_size as u32;
+        }
+    }
+
+    /// Rebuild `claims` from the arena, for a store whose records arrived as an IMAGE
+    /// rather than through `claim`.
+    ///
+    /// `claims` is in-memory bookkeeping and is not persisted, so a store built by
+    /// `from_bytes` came back with LIVE records and an EMPTY claims set — and every
+    /// check phrased against claims then read those records as unknown. `store_load`
+    /// into a heap-backed hash hit it on the first iteration: `Unknown record 1` out of
+    /// `hash::records`, under debug assertions only, so ordinary runs and the release
+    /// suite never saw it.
+    ///
+    /// A reopened mmap store has the same empty set and is exempted at the check
+    /// instead. This rebuilds rather than exempts because the information is right
+    /// there in the block chain — the same walk `fl_rebuild` does — so claims can
+    /// describe reality instead of being a set the reader has to know to distrust.
+    fn claims_rebuild(&mut self) {
+        self.claims.clear();
+        let mut pos = PRIMARY;
+        while pos < self.size {
+            let header = *self.addr::<i32>(pos, 0);
+            let block_size = i32::abs(header);
+            if block_size <= 0 {
+                break; // a malformed image; `validate_structure` is what refuses it
+            }
+            if header > 0 {
+                self.claims.insert(pos);
             }
             pos += block_size as u32;
         }
