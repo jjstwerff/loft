@@ -87,7 +87,25 @@ pub fn maria() -> Maria {
   return Maria { conn: 0, res: 0, row: 0, ps: 0, cols: 0, from_ps: false, err: "", tx: tx_new() };
 }
 
+// The soname exactly as `[c] optional-libs` spells it — the availability query
+// is keyed on the declaration, not on a guess about the file name.
+pub const MARIA_SONAME = "libmariadb.so.3";
+
+// `c_library_available` and not "does a file with this name load": the strong
+// question is true only when every declared symbol resolves, and the weak one
+// says yes for an unrelated library that happens to share the translated name
+// and then faults on the call (loft#770). The backend answers this itself so
+// the availability fact has ONE home — the harness reads the verdict off
+// stdout rather than asking a second, weaker question from outside.
+pub fn maria_available() -> boolean {
+  return c_library_available(MARIA_SONAME);
+}
+
 pub fn db_open(self: Maria, target: text) -> boolean {
+  if !maria_available() {
+    self.err = "libmariadb.so.3 is not installed";
+    return false
+  }
   self.conn = my_init(0);
   if self.conn == 0 { return false }
   h = opt(target, "host", "127.0.0.1");

@@ -167,7 +167,13 @@ fn main() {
 
   if mode == "sqlite" {
     ds = sqlite();
-    if !ds.db_open(":memory:") { println("FAIL open"); return }
+    if !ds.db_open(":memory:") {
+      // Serverless, so a genuine open failure IS a real bug and stays a FAIL —
+      // but the library still has to be present, and on a host without a usable
+      // one this is a skip like any other (loft#770).
+      if !sqlite_available() { println("SKIP sqlite not installed"); return }
+      println("FAIL open {ds.db_last_error()}"); return
+    }
     if !seed(ds, "CREATE TABLE loft_u (id INTEGER PRIMARY KEY, name TEXT)") {
       println("FAIL seed {ds.db_last_error()}"); ds.db_shut(); return
     }

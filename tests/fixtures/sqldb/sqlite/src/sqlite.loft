@@ -43,13 +43,34 @@ fn transient() -> integer;   #c "ls_transient" "void*(void)"
 // `db_width` are unchanged — they read `st` either way — while `db_next` still
 // knows whether reaching the end should FINALIZE the statement (an ad-hoc
 // select owns its own) or merely RESET it (a prepared one is reused).
-pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean, tx: Tx }
+pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean, err: text, tx: Tx }
 
 pub fn sqlite() -> Sqlite {
-  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false, tx: tx_new() };
+  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false, err: "", tx: tx_new() };
+}
+
+// The sonames exactly as `[c] optional-libs` spells them — the availability
+// query is keyed on the DECLARATION, not on a guess about the file name. Two,
+// because Windows ships SQLite under its own name (loft#770).
+pub const SQLITE_SONAME = "libsqlite3.so.0";
+pub const SQLITE_SONAME_WIN = "winsqlite3.dll";
+
+// **Serverless does not mean always present.** sqlite needs no server, which is
+// why it is the cell that keeps this suite honest — but the LIBRARY still has to
+// be there, and "a file with that name loads" is not enough to know it is:
+// `c_library_available` answers true only when every declared symbol resolves,
+// which is exactly what catches a name-alike DLL that opens, exports a subset,
+// and faults on the call. Asking the weaker question is what let a hostile
+// `sqlite3.dll` on PATH turn a skip into an access violation (loft#770).
+pub fn sqlite_available() -> boolean {
+  return c_library_available(SQLITE_SONAME_WIN) || c_library_available(SQLITE_SONAME);
 }
 
 pub fn db_open(self: Sqlite, target: text) -> boolean {
+  if !sqlite_available() {
+    self.err = "sqlite is not installed";
+    return false
+  }
   if s3_open(target, slot_a()) != 0 { return false }
   self.db = take_a();
   return self.db != 0;
@@ -88,7 +109,12 @@ pub fn db_col(self: Sqlite, i: integer) -> text? {
 }
 
 pub fn db_width(self: Sqlite) -> integer { return s3_col_count(self.st); }
-pub fn db_last_error(self: Sqlite) -> text { return s3_errmsg(self.db); }
+// The stored reason wins: when the library is absent there is no connection to
+// ask, and `s3_errmsg` is itself a `#c` call into the library that is not there.
+pub fn db_last_error(self: Sqlite) -> text {
+  if self.err != "" { return self.err }
+  return s3_errmsg(self.db);
+}
 
 // --- S4: prepare, bind, execute ---------------------------------------------
 

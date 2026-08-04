@@ -1439,10 +1439,11 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     // `c_library_available`, which translates the declared soname to the host's
     // spelling; a mode that cannot run says `SKIP` and is counted here.
     let mut ran: Vec<&str> = Vec::new();
-    // The availability question, asked the way the dynamic linker asks it —
-    // `dlopen`, over the spellings THIS host uses. The declaration is Linux's,
-    // and a search for it finds nothing on macOS or Windows.
-    let has = |declared: &str| loft::platform::host_library_loadable(declared);
+    // No availability question is asked from out here. Every backend answers it
+    // with `c_library_available` — true only when the library opens AND every
+    // declared symbol resolves — and prints `SKIP`. A second question asked from
+    // the harness could only be the weaker, file-granular one, and two answers
+    // to one question is how an unusable library got called (loft#770).
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let libdir = root.join("tests/fixtures/sqldb");
     let script = libdir.join("uniform.loft");
@@ -1511,11 +1512,16 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     let tx = "begin=true/true nested=false rollback=true commit=true rows=0/1 stray=false/false";
 
     // sqlite — no server, so whenever the library is here a failure is real.
-    let s = if has("libsqlite3.so.0") {
-        run("--interpret", "sqlite")?
-    } else {
-        String::from("SKIP sqlite not installed")
-    };
+    //
+    // The availability question is the PROGRAM's to answer, exactly as it is for
+    // postgres and maria below. Asking it from out here needs a second, WEAKER
+    // question — "does a file with this name load" — and that one says yes for
+    // an unrelated library sharing the translated name, which is how a hostile
+    // `sqlite3.dll` on PATH turned a skip into an access violation on Windows
+    // (loft#770). `c_library_available`, which the backend uses, is true only
+    // when every declared symbol resolves. One home for the fact; the harness
+    // reads the verdict off stdout.
+    let s = run("--interpret", "sqlite")?;
     if s.contains("SKIP") {
         assert!(
             s.contains("not installed"),
@@ -1546,13 +1552,10 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     // postgres and mariadb — conditional, and a skip is recognised as a skip.
     // The condition is the library's own answer plus a reachable server; both
     // arrive as `SKIP` on stdout rather than being guessed at from out here.
-    for (mode, lib) in [("postgres", "libpq.so.5"), ("maria", "libmariadb.so.3")] {
-        if !has(lib) {
-            continue;
-        }
+    for mode in ["postgres", "maria"] {
         let out = run("--interpret", mode)?;
         if out.contains("SKIP") {
-            continue; // no server reachable here
+            continue; // library absent, or no server reachable here
         }
         ran.push(mode);
         assert!(
