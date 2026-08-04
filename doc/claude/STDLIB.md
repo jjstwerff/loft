@@ -14,6 +14,7 @@ This document describes all public functions, constants, and types available in 
 - [Logging](#logging)
 - [File System](#file-system)
 - [Parallel](#parallel)
+- [Reflection](#reflection)
 - [Environment](#environment)
 - [Random](#random)
 
@@ -997,6 +998,47 @@ fn main() {
 **Limitations:**
 - Float/integer result accumulation in the loop body: if `b` is float/integer, using it in arithmetic with a pre-declared float/integer variable can trigger a first-pass type-inference conflict. Workaround: use `b` only in boolean comparisons or cast (`sum += b as integer`).
 - Implementation: `src/parallel.rs`; see [THREADING.md](THREADING.md) for internals.
+
+---
+
+## Reflection
+
+The declared shape of a type, as data — what a generic serialiser, an ORM mapping
+or a schema check needs.  Declared in `default/07_reflect.loft`.
+
+| Function | Description |
+|----------|-------------|
+| `type_of(x) -> TypeInfo` | The declared shape of `x`'s type. **The argument is read for its TYPE and is not evaluated** (the contract C's `sizeof` has), so pass a variable, a field or a parameter rather than an expression with a side effect. |
+
+`TypeInfo` carries `name`, `kind`, `size` (bytes per record), `fields`,
+`variants` and `element`.  Match on `kind` first: only a record and a
+struct-enum variant have `fields`, only an enum has `variants`, and only a
+vector or a keyed collection names an `element`.  Empty is the honest answer for
+a kind that has no such thing.
+
+```loft
+t = type_of(row);
+println("{t.name} ({t.size} bytes)");
+for f in t.fields { println("  {f.name}: {f.type_name} @{f.position}") }
+```
+
+`TypeKind` is `IntegerKind` · `LongKind` · `SingleKind` · `FloatKind` ·
+`BooleanKind` · `TextKind` · `CharacterKind` · `RecordKind` · `EnumKind` ·
+`VariantKind` · `VectorKind` · `KeyedKind` · `RefKind` · `OtherKind`.  A kind
+this loft version has no name for is reported as `OtherKind`, never guessed at.
+
+Two limits worth knowing before you reach for it:
+
+- **Not inside a generic.**  A generic body is parsed once against its type
+  variable, so `type_of(v)` there answers `__typevar_T` — the same reason
+  `"{v:j}"` in a generic body renders `{}`.  Call it where the concrete type is
+  known.
+- **Storage where the declaration cannot be recovered.**  A narrow `i32` field
+  reports `IntegerKind`; its width is in `size`, not in a separate kind.
+  `boolean` and `character` report what was declared.
+
+Read-only.  Constructing or mutating a value by field name is deliberately out
+of scope (@PLN127).
 
 ---
 

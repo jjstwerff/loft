@@ -1,0 +1,104 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN127 arc B — `type_of(x)` gives the declared shape of x's type as data.
+//
+// loft had value reflection (`{x:j}`) and frame reflection (`stack_trace`), and
+// a schema level that only Rust and a foreign JavaScript reader could see. This
+// is the third level reaching loft code: the fields of a type, with their names,
+// types and byte offsets.
+//
+// The answer comes from @PLN105's `LayoutDesc` — the descriptor the browser
+// bridge already reads, pinned byte-for-byte against the @PLN97 layout dump — so
+// reflection cannot become a second, drifting description of the same layout.
+// Every expectation below is therefore also a statement about that descriptor.
+
+struct Point { x: integer, y: integer, label: text }
+enum Shape { Circle { r: float }, Square { side: integer }, Dot }
+struct Holder { p: Point, shapes: vector<Point>, flag: boolean }
+
+fn main() {
+  // --- a record: name, size, and every field with its offset ----------------
+  //
+  // The offsets are the store's own, hand-checked: two 8-byte integers then a
+  // 4-byte text handle, so 0 / 8 / 16 and a 20-byte record.
+  p = Point { x: 1, y: 2, label: "a" };
+  tp = type_of(p);
+  assert(tp.name == "Point", "record name: {tp.name}");
+  assert(tp.kind == RecordKind, "record kind");
+  assert(tp.size == 20, "record size: {tp.size}");
+  assert(len(tp.fields) == 3, "field count: {len(tp.fields)}");
+  assert(len(tp.variants) == 0, "a record has no variants");
+  assert(tp.element == "", "a record holds no element type");
+
+  f0 = tp.fields[0] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind };
+  assert(f0.name == "x" && f0.type_name == "integer", "field 0: {f0.name}:{f0.type_name}");
+  assert(f0.position == 0 && f0.kind == IntegerKind, "field 0 at {f0.position}");
+  f2 = tp.fields[2] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind };
+  assert(f2.name == "label" && f2.type_name == "text", "field 2: {f2.name}:{f2.type_name}");
+  assert(f2.position == 16 && f2.kind == TextKind, "field 2 at {f2.position}");
+
+  // --- an enum: variants, and a tag that is never 0 -------------------------
+  //
+  // 0 is how the store spells ABSENT, so a real variant starts at 1 and a
+  // caller can tell the two apart. That is the fact worth pinning.
+  d = Shape.Dot;
+  ts = type_of(d);
+  assert(ts.name == "Shape" && ts.kind == EnumKind, "enum: {ts.name}/{ts.kind}");
+  assert(len(ts.variants) == 3, "variant count: {len(ts.variants)}");
+  assert(len(ts.fields) == 0, "an enum's own fields are its variants'");
+  v0 = ts.variants[0] ?? VariantInfo { name: "", tag: 0 };
+  v2 = ts.variants[2] ?? VariantInfo { name: "", tag: 0 };
+  assert(v0.name == "Circle" && v0.tag == 1, "variant 0: {v0.name}={v0.tag}");
+  assert(v2.name == "Dot" && v2.tag == 3, "variant 2: {v2.name}={v2.tag}");
+
+  // A struct-enum VARIANT is its own type, with fields and no variants.
+  c = Circle { r: 1.5 };
+  tc = type_of(c);
+  assert(tc.name == "Circle" && tc.kind == VariantKind, "variant type: {tc.name}/{tc.kind}");
+  assert(len(tc.variants) == 0, "a variant has no variants of its own");
+
+  // --- a nested record: a field's type_name names the nested TYPE ------------
+  h = Holder { p: p, shapes: [], flag: true };
+  th = type_of(h);
+  assert(len(th.fields) == 3, "holder fields: {len(th.fields)}");
+  hf0 = th.fields[0] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind };
+  hf1 = th.fields[1] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind };
+  hf2 = th.fields[2] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind };
+  assert(hf0.type_name == "Point" && hf0.kind == RecordKind, "nested record: {hf0.type_name}");
+  assert(hf1.kind == VectorKind, "nested vector: {hf1.type_name}");
+  assert(hf2.kind == BooleanKind, "nested boolean: {hf2.type_name}");
+
+  // A vector reports what it HOLDS, which a record does not have.
+  vs: vector<Point> = [];
+  tv = type_of(vs);
+  assert(tv.kind == VectorKind && tv.element == "Point", "vector elem: {tv.element}");
+
+  // --- every scalar answers with its DECLARED type ---------------------------
+  //
+  // The two that had to be named rather than derived: a character is STORED as
+  // an integer and a boolean has no storage entry at all, so routing both
+  // through the storage derivation reported `integer` and `#65535`. Reflection
+  // answers what the author wrote wherever the descriptor can express it.
+  ti = type_of(1);
+  tt = type_of("s");
+  tb = type_of(true);
+  tf = type_of(1.5);
+  tch = type_of('c');
+  assert(ti.name == "integer" && ti.kind == IntegerKind, "integer: {ti.name}");
+  assert(tt.name == "text" && tt.kind == TextKind, "text: {tt.name}");
+  assert(tb.name == "boolean" && tb.kind == BooleanKind, "boolean: {tb.name}");
+  assert(tf.name == "float" && tf.kind == FloatKind, "float: {tf.name}");
+  assert(tch.name == "character" && tch.kind == CharacterKind, "character: {tch.name}");
+
+  // --- the answer is a value, so it serialises like one ----------------------
+  //
+  // This is the whole point of arc A landing first: a `TypeInfo` holds an enum
+  // in a struct field, which is exactly the shape that used to make `json_parse`
+  // reject the entire document.
+  j = "{ti:j}";
+  assert(j == `{{"name":"integer","kind":{{"IntegerKind":{{}}}},"size":8,"fields":[],"variants":[],"element":""}}`,
+         "TypeInfo serialises: {j}");
+
+  println("reflect ok");
+}

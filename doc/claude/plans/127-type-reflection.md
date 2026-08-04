@@ -3,8 +3,35 @@
 
 ## Status
 
-**Arc A is BUILT; arcs B–E are open.** The substrate is built and validated; nothing
-projects it into loft yet.
+**Arcs A and B are BUILT; C–E are open.**
+
+Arc B projects `LayoutDesc` into loft: `default/07_reflect.loft` declares `TypeInfo` /
+`FieldInfo` / `VariantInfo` / `TypeKind`, `type_of(x)` is intercepted in
+`src/parser/control.rs` and lowered to `n_reflect_type(<type-id>)`, and one filler
+(`native::reflect_type_into`) serves both backends — the interpreter through
+`src/native.rs`, `--native` through a `codegen_runtime` wrapper onto the SAME function.
+A second implementation there would be exactly the drift this plan exists to avoid.
+
+Four things the build settled that the design had not:
+
+- **Q1 dissolves for `type_of`.** The type id is resolved where the call is WRITTEN, so
+  it is a parse-time constant — the mechanism `to_json` already uses. `--native` replays
+  the type table rather than minting it, and a parse-time id is replayed with it. Q1 is
+  only load-bearing for a name given at RUNTIME, which is arc C's real question.
+- **Q3 answers itself for two scalars, and only two.** `get_type` — the one existing
+  storage derivation — reports `integer` for a `character` (which is how it is stored)
+  and has no entry at all for a `boolean` (`#65535`). Reflection names those two
+  directly and keeps the single derivation for everything else, because a second
+  derivation is a second thing to drift. Narrow ints still report storage, and `size`
+  is where that shows.
+- **Reflection inside a generic is NOT reachable this way.** A generic body is parsed
+  ONCE against its type variable, so `type_of(v)` there answers `__typevar_T`. The same
+  mechanism makes `"{v:j}"` in a generic body render `{}`. It needs the body parsed per
+  instantiation, which is a different plan; the doc comment says so rather than
+  implying otherwise.
+- **Arc A was a prerequisite in fact, not just in order.** A `TypeInfo` holds an enum in
+  a struct field, which is precisely the shape that made `json_parse` reject a whole
+  document. `"{t:j}"` on a `TypeInfo` renders complete JSON only because arc A landed.
 
 Arc A landed first because it repairs the only field enumeration loft has today, and it
 was a repair rather than a feature: both defects were WHOLE-DOCUMENT failures, so a
@@ -123,7 +150,7 @@ backends can silently disagree.  Probe it with the strict flag on.
 | Item | Source | Status |
 |---|---|---|
 | **A** — repair the fallback: loft#768 + loft#769 | [#768](https://github.com/loft-lang/loft/issues/768), [#769](https://github.com/loft-lang/loft/issues/769) | **Built** — `src/database/format.rs`, cells in `tests/scripts/57-json.loft` |
-| **B** — the type-info struct family + `type_of(value)` | this doc | Open |
+| **B** — the type-info struct family + `type_of(value)` | this doc | **Built** — `default/07_reflect.loft`, `native::reflect_type_into`, `tests/scripts/pln127-reflect.loft` |
 | **C** — reflection with no value: `type_named(text)` | this doc, Q1 | Open |
 | **D** — the declared-vs-storage contract | this doc, Q2/Q3 | Open |
 | **E** — a real consumer built only through the API | this doc | Open |
@@ -136,11 +163,17 @@ backends can silently disagree.  Probe it with the strict flag on.
    awkward, both defects rejected the WHOLE document, so "enumerate a value's fields with
    `{x:j}` + `json_parse`" was not a degraded path but an unavailable one for any struct
    holding an enum or an absent `text?`.
-2. **B** — `default/07_reflect.loft` plus a native filler over `LayoutDesc`, mirroring
-   `stack_trace`.  Read-only, `type_of(value)` only.  This is where the Stage-A matrix is
-   built and run.
+2. ~~**B** — `default/07_reflect.loft` plus a native filler over `LayoutDesc`, mirroring
+   `stack_trace`.~~  **Done**, read-only and `type_of(value)` only.  The matrix is
+   `tests/scripts/pln127-reflect.loft`: a record with hand-checked byte offsets, an enum
+   whose tags start at 1 (0 is how the store spells ABSENT), a struct-enum variant, a
+   nested record, a vector's element, all five scalars, and the `TypeInfo` itself
+   serialising.
 3. **D** before **C**: what the API *answers* (declared or storage type) has to be settled
    before adding a second way to ask the question, or the two entry points will disagree.
+   Arc B settled the part it could not avoid — declared for `boolean` and `character`,
+   storage for narrow ints — so D is now about `const`-ness and non-narrow nullability,
+   the two facts `LayoutDesc` verifiably does not carry.
 4. **C** — the name→id lookup, with the identity row of the matrix as its gate.
 5. **E** — a generic serialiser or a small ORM mapping written *only* through the
    reflection API.  This is the dogfood gate that decides whether the API is sufficient;

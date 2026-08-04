@@ -102,6 +102,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_parallel_buf_drop_fn_native", abi: Abi::Cell },
     RuntimeFn { name: "n_path_sep",                   abi: Abi::None },
     RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
+    RuntimeFn { name: "n_reflect_type",               abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
     RuntimeFn { name: "n_radix_sorted",               abi: Abi::Cell },
@@ -2195,6 +2196,17 @@ pub fn par_read_text_input(cell: &std::cell::UnsafeCell<Stores>, elm: DbRef) -> 
 
 /// P268 — JSON parser native runtime stub.  Wraps the shared
 /// `crate::native::json_parse_into_stores` helper (extracted from the
+/// @PLN127 arc B — `type_of(x)` on the native backend.
+///
+/// The same `reflect_type_into` the interpreter calls, so both backends read ONE
+/// descriptor walk: a second implementation here is exactly the drift the plan
+/// exists to avoid, and the type id is a parse-time constant on both, so there is
+/// nothing backend-specific left to do.
+pub fn n_reflect_type(cell: &std::cell::UnsafeCell<Stores>, kt: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    crate::native::reflect_type_into(stores, kt as u16)
+}
+
 /// interp `n_json_parse` body) so `--native`-compiled programs can
 /// call `json_parse(text) -> JsonValue` instead of hitting the
 /// per-package `todo!()` stub.  Returns a `DbRef` to the freshly

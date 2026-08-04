@@ -1,0 +1,113 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN127 arc B — type reflection: the declared shape of a type, as data.
+//
+// loft already had two levels of reflection reachable from loft code — VALUE
+// (`{x:j}`, `Type.parse`) and FRAME (`stack_trace`) — and a third, the SCHEMA,
+// that only Rust and a foreign JavaScript reader could see. A generic
+// serialiser, an ORM or a schema migration needs the third one: the fields of a
+// type, with their names, types and offsets, without holding a value.
+//
+// The shape of the answer follows `stack_trace` (`04_stacktrace.loft`), which is
+// the shipped precedent for surfacing a Rust-side fact as an ordinary loft
+// struct family filled by a native. The SOURCE follows @PLN105's `LayoutDesc` —
+// the same descriptor the browser bridge reads, pinned byte-for-byte against the
+// @PLN97 layout dump. Reading it rather than the type table is what stops
+// reflection becoming a second, drifting description of the same layout.
+
+/// What a type IS — the discriminant a caller matches on before reading the
+/// fields that only some kinds have.
+///
+/// These are STORAGE kinds, because storage is what the descriptor records. A
+/// narrow `i32` field reports `IntegerKind`; the declared width is visible in
+/// `size`, not in a separate kind.
+pub enum TypeKind {
+  IntegerKind,
+  LongKind,
+  SingleKind,
+  FloatKind,
+  BooleanKind,
+  TextKind,
+  CharacterKind,
+  /// A struct — its fields are in `fields`.
+  RecordKind,
+  /// An enum — its variants are in `variants`.
+  EnumKind,
+  /// One variant of a struct-enum; it has fields of its own.
+  VariantKind,
+  /// A vector — `element` names what it holds.
+  VectorKind,
+  /// A keyed collection (hash / index / sorted / ordered / radix) — walked by
+  /// cursor rather than by layout, so it reports its element and nothing more.
+  KeyedKind,
+  /// A stored reference to another record.
+  RefKind,
+  /// A kind this loft version has no name for. Never guessed at.
+  OtherKind,
+}
+
+/// One field of a record or of a struct-enum variant.
+pub struct FieldInfo {
+  name: text,
+  /// The field type's name, as the store records it.
+  type_name: text,
+  /// Byte offset of the field within its record.
+  position: integer,
+  kind: TypeKind,
+}
+
+/// One variant of an enum.
+pub struct VariantInfo {
+  name: text,
+  /// The discriminant this variant is stored as. Never 0 — 0 means absent.
+  tag: integer,
+}
+
+/// The declared shape of one type.
+///
+/// `fields` is empty for everything but a record and a struct-enum variant;
+/// `variants` for everything but an enum; `element` is `""` unless the type
+/// holds one. Empty is the honest answer for a kind that has no such thing —
+/// a caller matches `kind` first.
+pub struct TypeInfo {
+  name: text,
+  kind: TypeKind,
+  /// Bytes one record of this type occupies; 0 for a type with no record.
+  size: integer,
+  const fields: vector<FieldInfo>,
+  const variants: vector<VariantInfo>,
+  /// For a vector or a keyed collection, the element type's name.
+  element: text,
+}
+
+/// The declared shape of `value`'s type.
+///
+/// **The argument is read for its TYPE and is not evaluated** — the same
+/// contract C's `sizeof` has, and for the same reason: nothing about the answer
+/// depends on the value. Pass a variable, a field or a parameter; an expression
+/// with a side effect will not have it.
+///
+/// ```loft
+/// t = type_of(row);
+/// println("{t.name}:");
+/// for f in t.fields { println("  {f.name}: {f.type_name} @{f.position}") }
+/// ```
+///
+/// **Not inside a generic.** A generic body is parsed ONCE against its type
+/// variable, so `type_of(v)` there answers `__typevar_T` — the same reason
+/// `"{v:j}"` in a generic body renders `{}`. Call it where the concrete type is
+/// known. Making it work inside a generic needs the body parsed per
+/// instantiation, which is a different plan.
+///
+/// Read-only. Constructing or mutating a value by field NAME is a separate and
+/// larger question, deliberately out of scope until reading has shipped.
+//
+// `type_of(x)` is intercepted in `src/parser/control.rs` and lowered to
+// `n_reflect_type(<type-id>)`, so the id is a parse-time constant on both
+// backends — the same mechanism `to_json` uses, and the reason the answer does
+// not depend on a runtime name lookup.
+pub fn reflect_type(kt: integer) -> TypeInfo;
+// Reads the store's type table through `Stores::layout_descriptor` and
+// allocates the answer into the caller's own stores → par-safe.
+#impure(host_io)

@@ -26,6 +26,30 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `type_of(x)` tells you the shape of a type
+
+A program can now ask what a type IS — its fields, their types, their byte
+offsets, an enum's variants — without a JSON round-trip and without writing the
+shape down a second time:
+
+```loft
+t = type_of(row);
+println("{t.name} ({t.size} bytes)");
+for f in t.fields { println("  {f.name}: {f.type_name} @{f.position}") }
+```
+
+`t.kind` says which of the rest to read: a record has `fields`, an enum has
+`variants`, a vector has an `element`. Empty is the honest answer for a kind that
+has no such thing.
+
+The argument is read for its **type** and is not evaluated — the same contract
+C's `sizeof` has — so pass a variable, a field or a parameter rather than an
+expression with a side effect. It also does not work inside a generic, where the
+type parameter has no concrete type yet.
+
+This is what a generic serialiser, an ORM mapping or a schema check needs, and
+until now only a JavaScript reader of a loft value could see it.
+
 ### `{x:j}` produces JSON for two shapes that used to break it
 
 A struct holding an **enum field** wrote the variant name bare:
