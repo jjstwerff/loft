@@ -151,11 +151,27 @@ pub struct Lexer {
     /// True while the lexer is inside a `{...}` format expression of a string literal.
     /// Allows `"` (and `\"`) to open a nested string literal instead of closing the outer one.
     in_format_expr: bool,
-    /// True when the current format expression belongs to a backtick string.
-    /// After `}` closes the expression, resume with `backtick_string_resume()`
-    /// instead of `string()`.
-    in_backtick: bool,
+    /// Which string each OPEN format expression belongs to, innermost last —
+    /// what `}` must resume. One entry per open hole rather than a flag,
+    /// because a hole can be opened from inside a string literal that is itself
+    /// inside a hole (`"{"{y}"}"`). A flag can answer "resume which?" at depth
+    /// one and can only be wrong deeper, silently: loft#767 emitted the inner
+    /// string's own `{y}` verbatim and the program printed a plausible wrong
+    /// value.
+    open_strings: Vec<StrKind>,
     diagnostics: Diagnostics,
+}
+
+/// The string a `}` returns to when it closes a format expression.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StrKind {
+    /// `"…"` at statement level.
+    Plain,
+    /// `` `…` `` — multi-line, resumed by `backtick_string_resume`.
+    Backtick,
+    /// A string literal written INSIDE a format expression. The flag is true
+    /// when it was opened with `\"`, which is then also what closes it.
+    Nested(bool),
 }
 
 impl Debug for Lexer {
@@ -386,7 +402,7 @@ impl Default for Lexer {
             json_over_read: false,
             mode: Mode::Code,
             in_format_expr: false,
-            in_backtick: false,
+            open_strings: Vec::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -450,7 +466,7 @@ impl Lexer {
             json_over_read: false,
             mode: Mode::Code,
             in_format_expr: false,
-            in_backtick: false,
+            open_strings: Vec::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -516,7 +532,7 @@ impl Lexer {
                 '"' => {
                     self.next_char();
                     if self.in_format_expr {
-                        self.string_nested(false)
+                        self.string_nested(false, false)
                     } else {
                         self.string()
                     }
@@ -543,13 +559,7 @@ impl Lexer {
                                 self.next_char();
                                 LexResult::new(LexItem::Token(double), pos)
                             } else if self.mode == Mode::Formatting && single == "}" {
-                                self.in_format_expr = false;
-                                if self.in_backtick {
-                                    self.in_backtick = false;
-                                    self.backtick_string_resume()
-                                } else {
-                                    self.string()
-                                }
+                                self.resume_string()
                             } else {
                                 LexResult::new(LexItem::Token(single), pos)
                             }
@@ -562,7 +572,7 @@ impl Lexer {
                         if let Some(&nc) = self.iter.peek() {
                             if nc == '"' {
                                 self.next_char(); // consume '"'
-                                self.string_nested(true)
+                                self.string_nested(true, false)
                             } else {
                                 self.err(
                                     Level::Error,
@@ -688,16 +698,40 @@ impl Lexer {
         self.mode.clone()
     }
 
+    /// Resume the string whose `{` opened the format expression a `}` just
+    /// closed. One home for that decision: it is asked from two places, and
+    /// answering it differently in either is how a nested string stopped being
+    /// resumed at all (loft#767).
+    ///
+    /// An empty stack means the `}` closed a hole nothing recorded — a plain
+    /// string is the pre-existing behaviour and the safe answer.
+    fn resume_string(&mut self) -> LexResult {
+        self.in_format_expr = false;
+        match self.open_strings.pop() {
+            Some(StrKind::Backtick) => self.backtick_string_resume(),
+            Some(StrKind::Nested(escaped_delim)) => self.string_nested(escaped_delim, true),
+            _ => self.string(),
+        }
+    }
+
+    /// Does the string literal just returned as a `CString` have a `{…}` of its
+    /// own still open?
+    ///
+    /// `mode` cannot answer this. The lexer runs one token ahead, so a nested
+    /// literal is scanned — and its hole opened — BEFORE the enclosing
+    /// `parse_string` starts; that loop then sets `Mode::Code` to read its own
+    /// expression, and by the time the parser reaches the nested literal the
+    /// mode records where the LEXER is, not what this string is. Reading it
+    /// anyway is what made `"{"{y}"}"` come out as `{y}` (loft#767).
+    #[must_use]
+    pub fn nested_hole_open(&self) -> bool {
+        matches!(self.open_strings.last(), Some(StrKind::Nested(_)))
+    }
+
     pub fn set_mode(&mut self, mode: Mode) {
         if mode == Mode::Formatting && self.peek_token("}") {
-            self.in_format_expr = false;
             self.mode = mode;
-            self.peek = if self.in_backtick {
-                self.in_backtick = false;
-                self.backtick_string_resume()
-            } else {
-                self.string()
-            };
+            self.peek = self.resume_string();
         } else {
             self.mode = mode;
         }
@@ -994,6 +1028,7 @@ impl Lexer {
                 } else {
                     self.mode = Mode::Formatting;
                     self.in_format_expr = true;
+                    self.open_strings.push(StrKind::Plain);
                     return LexResult::new(LexItem::CString(res), pos);
                 }
             } else if c == '}' && self.interpolate_strings {
@@ -1028,21 +1063,41 @@ impl Lexer {
     /// as well as bare `"`.  This preserves backward compatibility with Rust
     /// test macros where the source already has the outer quotes escaped:
     /// `"text {\"inner\"}"`.
-    fn string_nested(&mut self, escaped_delim: bool) -> LexResult {
+    /// Finish a nested string literal.
+    ///
+    /// `Mode::Code` because the STRING is complete: its own `parse_string` loops
+    /// while the mode is `Formatting`, so leaving it there would make it hunt
+    /// for a hole that belongs to the string outside it. The parser puts the
+    /// mode back to `Formatting` when it is done with the expression, and that
+    /// is what lets the outer `}` resume the outer string.
+    ///
+    /// `in_format_expr` stays TRUE: the format expression this literal sits in
+    /// is still open, so a following `"` opens another nested string rather than
+    /// closing the outer one. On the resumed path a `}` has just cleared it, and
+    /// that is exactly the case this restores.
+    fn close_nested(&mut self, res: String, pos: Position, resumed: bool) -> LexResult {
+        if resumed {
+            self.mode = Mode::Code;
+        }
+        self.in_format_expr = true;
+        LexResult::new(LexItem::CString(res), pos)
+    }
+
+    fn string_nested(&mut self, escaped_delim: bool, resumed: bool) -> LexResult {
         let pos = self.position.clone();
         let mut res = String::new();
         while let Some(&c) = self.iter.peek() {
             if c == '"' {
                 // Bare " always closes the nested string literal.
                 self.next_char();
-                return LexResult::new(LexItem::CString(res), pos);
+                return self.close_nested(res, pos, resumed);
             }
             if c == '\\' {
                 self.next_char(); // consume '\'
                 if escaped_delim && let Some(&'"') = self.iter.peek() {
                     // Opened by \" → \" also closes.
                     self.next_char();
-                    return LexResult::new(LexItem::CString(res), pos);
+                    return self.close_nested(res, pos, resumed);
                 }
                 // Normal escape sequence (including \" when !escaped_delim).
                 if !self.escape_seq(&mut res) {
@@ -1050,6 +1105,33 @@ impl Lexer {
                 }
             } else if c == '\n' {
                 break;
+            } else if c == '{' && self.interpolate_strings {
+                // A nested string interpolates like any other. Without this its
+                // `{…}` was copied out as text, so `"{"{y}"}"` printed `{y}` —
+                // no error, no warning, a plausible wrong VALUE that survived
+                // being consumed (loft#767).
+                self.next_char();
+                if let Some('{') = self.iter.peek() {
+                    res.push(c);
+                } else {
+                    self.mode = Mode::Formatting;
+                    self.in_format_expr = true;
+                    self.open_strings.push(StrKind::Nested(escaped_delim));
+                    return LexResult::new(LexItem::CString(res), pos);
+                }
+            } else if c == '}' && self.interpolate_strings {
+                self.next_char();
+                if let Some('}') = self.iter.peek() {
+                    res.push(c);
+                } else {
+                    // Reached only with no hole open in THIS string — the outer
+                    // `}` is consumed by the token path, never here.
+                    self.err_coded(
+                        Level::Error,
+                        "format-unescaped-brace",
+                        "a literal `}` in a format string must be written `}}`",
+                    );
+                }
             } else {
                 res.push(c);
             }
@@ -1156,7 +1238,7 @@ impl Lexer {
                         }
                         self.mode = Mode::Formatting;
                         self.in_format_expr = true;
-                        self.in_backtick = true;
+                        self.open_strings.push(StrKind::Backtick);
                         return LexResult::new(LexItem::CString(result), pos);
                     }
                 }
@@ -1227,7 +1309,7 @@ impl Lexer {
                     } else {
                         self.mode = Mode::Formatting;
                         self.in_format_expr = true;
-                        self.in_backtick = true;
+                        self.open_strings.push(StrKind::Backtick);
                         return LexResult::new(LexItem::CString(cur), pos);
                     }
                 }
