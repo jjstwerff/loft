@@ -140,7 +140,7 @@ What it uncovered underneath is a different layer, and it is worth having in one
 place because it is the actual Windows worklist now. Six tests fail, in **three
 classes, none of them about linking**:
 
-**X1 — `long` is 32 bits on Windows, and loft is right about that.** `CTarget::host()`
+**X1 — FIXED. `long` is 32 bits on Windows, and loft is right about that.** `CTarget::host()`
 already models LLP64 (`long_bits: if cfg!(windows) { 32 } else { 64 }`), so loft
 faithfully truncates. The bug is in the FIXTURES, which use C `long` to carry a
 64-bit loft `integer`:
@@ -155,12 +155,32 @@ loft_builds_…shim   want `scale 4621819117588971520`  got `scale 0`
 The `scale` case is worse than truncation: `lcs_shim_scale(long bits, …)` does
 `memcpy(&v, &bits, 8)`, which on Windows **reads four bytes past the argument**.
 
-The fix is `long long` (64-bit on all three platforms) wherever a *loft-authored
-shim* carries a loft `integer` — `lcabi`'s `lc_i64` / `lc_arity7` / `lc_shim_f64`,
-`lcshim`'s three, maria's `lm_*` helpers. It is deliberately NOT a blanket
-substitution: where `long` is what the real library's header says
-(`mysql_real_connect`'s `unsigned long flags`, `mysql_stmt_prepare`'s length),
-`long` is correct and libmariadb's own is 32-bit on Windows too.
+The cure is the rule `CTarget`'s own doc comment already states — **write the
+signature the header shows you** — and the declarations were not doing that.
+`lc_types.c` has always said `int64_t`; only the `#c` declarations said `long`,
+and on LP64 the two coincide, so Linux and macOS never noticed. Every fixed site
+now names a width that means one thing on every platform:
+
+| where | was | now | why |
+|---|---|---|---|
+| `lcabi` (11 decls) | `long` | `int64_t` | the C already said `int64_t`; only the declaration disagreed |
+| `lcshim` (3 decls + `lc_shim.c`) | `long` both sides | `int64_t` | the only site where the C itself was wrong — and where `memcpy(…, 8)` read past the argument |
+| maria `lm_*` (12 decls + `row.c`, `stmt.c`) | `long` | `int64_t` | loft-authored shim carrying a loft `integer` |
+| duckdb (7 decls) | `unsigned long` | `uint64_t` | duckdb.h says `idx_t`, which is `uint64_t` — never `unsigned long` |
+| `mysql_num_rows` | `long` | `uint64_t` | MariaDB declares `my_ulonglong`, 64-bit everywhere |
+
+It is deliberately **not** a blanket substitution. Four declarations keep `long`,
+because that is what libmariadb's own header says — `mysql_real_connect`'s flags,
+`mysql_stmt_prepare`'s length, `mysql_stmt_param_count`, `mysql_stmt_fetch_column`'s
+offset. Their `unsigned long` is 32-bit on Windows *in the library too*, so
+matching it is the correct binding and widening it would be the new bug. Likewise
+the `MYSQL_BIND` struct in `stmt.c` keeps every `unsigned long` field: that layout
+is libmariadb's ABI, verified field-by-field against the real header, and it is
+not ours to change.
+
+Linux is unaffected — `long`, `long long` and `int64_t` are all 64-bit there, so
+the seven `#c` tests pass unchanged. **Windows is unverified until the next
+dispatch.**
 
 **X2 — a Windows path becomes an escape sequence.** `an_available_library_must_export_what_was_declared`
 generates a `.loft` file under `C:\Users\runneradmin\AppData\Local\Temp\loft_skew_2244\…`
@@ -306,7 +326,7 @@ produce a green that means nothing.
 | step | what it proves | how it is proved |
 |---|---|---|
 | **P1** — done | the Windows shim links | W1 + W2; **verified** — zero `LNK1181` / `LNK4044`, the `#c` tests run and compare values |
-| **X1** | 64-bit values survive Windows | `long long` in every loft-authored shim that carries a loft `integer`; leave `long` where the real header says `long` |
+| **X1** — built | 64-bit values survive Windows | exact-width spellings (`int64_t` / `uint64_t`) wherever a 64-bit value crosses; `long` kept only where the real header says `long`. Linux unchanged; needs a Windows dispatch to confirm |
 | **P2** — built | the probe asks the HOST's question | `platform::host_library_loadable` translates the declared soname to the host's spellings and `dlopen`s them; sqlite stops being skipped on macOS and Windows |
 | **P3** — done for sqlite | macOS runs what Linux runs | **confirmed on Apple silicon**: `["sqlite"]` exercised, matching the same hard-coded `sqlite` / `sqlite bound` / `sqlite tx` constants Linux matches, `--interpret` == `--native`. postgres / maria / duckdb remain correct skips until P5 answers the search path |
 | **P4** | Windows runs what Linux runs | the same three lines, from a Windows runner with sqlite present |

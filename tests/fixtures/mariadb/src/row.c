@@ -10,8 +10,12 @@
  *
  * A defensive `row == 0` is not paranoia here: it is the no-server path the test
  * uses to exercise this shim and the `text?` crossing with no database at all. */
-const char *lm_row_col(const char *const *row, long i);
-const char *lm_row_col(const char *const *row, long i) {
+
+/* `int64_t` for the index, not `long`: loft passes a 64-bit `integer` and C
+ * `long` is 32 bits on Windows (LLP64). */
+#include <stdint.h>
+const char *lm_row_col(const char *const *row, int64_t i);
+const char *lm_row_col(const char *const *row, int64_t i) {
   if (row == 0 || i < 0) { return 0; }
   return row[i];
 }
