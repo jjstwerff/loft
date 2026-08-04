@@ -354,12 +354,13 @@ pub(crate) const DCSINGLE_V: u32 = 4; // single
 pub(crate) const DCSTR_V: u32 = 4; // text
 
 /// `DbField` record (element of `Parts::Struct` / `EnumValue` field vectors).
-pub(crate) const DBFIELD_STRIDE: u32 = 28;
+pub(crate) const DBFIELD_STRIDE: u32 = 29;
 pub(crate) const DBFIELD_CONTENT: u32 = 0; // u16 known_type
 pub(crate) const DBFIELD_POSITION: u32 = 8; // u16 byte offset
 pub(crate) const DBFIELD_NAME: u32 = 16;
 pub(crate) const DBFIELD_DEFAULT: u32 = 20; // vector<DbContent> (box-of-one)
 pub(crate) const DBFIELD_OTHER_INDEXES: u32 = 24; // vector<integer>
+pub(crate) const DBFIELD_NULLABLE: u32 = 28; // @PLN127 arc D — declared nullable (1 byte)
 
 /// `EnumPair` `(u16, text)` element of `Parts::Enum`.
 pub(crate) const ENUMPAIR_STRIDE: u32 = 12;
@@ -1470,6 +1471,7 @@ mod tests {
         assert_eq!(pos(ids.db_field, "name"), DBFIELD_NAME);
         assert_eq!(pos(ids.db_field, "default"), DBFIELD_DEFAULT);
         assert_eq!(pos(ids.db_field, "other_indexes"), DBFIELD_OTHER_INDEXES);
+        assert_eq!(pos(ids.db_field, "nullable"), DBFIELD_NULLABLE);
 
         assert_eq!(u32::from(stores.size(ids.enum_pair)), ENUMPAIR_STRIDE);
         assert_eq!(pos(ids.enum_pair, "nr"), ENUMPAIR_NR);

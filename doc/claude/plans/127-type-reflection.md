@@ -3,7 +3,8 @@
 
 ## Status
 
-**Arcs A, B, C and E are BUILT. D is open, and the build changed its question.**
+**Arcs A, B, C, D and E are BUILT.** Arc D shipped the nullability half; `const` is
+deliberately left out.
 
 Arc B projects `LayoutDesc` into loft: `default/07_reflect.loft` declares `TypeInfo` /
 `FieldInfo` / `VariantInfo` / `TypeKind`, `type_of(x)` is intercepted in
@@ -53,21 +54,41 @@ a runtime value. It passes on both backends, and being used as a gate it found t
   describes a TYPE; there is no way to read a VALUE's field by name, and a serialiser needs
   both. That is the write-access question the plan deferred, arriving from the read side.
 
-### Arc D's question changed
+### Arc D — nullability yes, `const` no
 
 The plan asked whether `LayoutDesc` should grow `const`-ness and non-narrow nullability, or
-whether reflection should read them from a second source. Measuring says neither option is
-the real choice, because **neither fact is a storage fact at all** — both live only in the
-parser. So D is not "grow the descriptor by two fields"; it is:
+read them from a second source. Measuring found neither was the real choice, because
+**neither is a storage fact**: `text?` and `text` share a content type and spell absence with
+a SENTINEL, so nothing in the stored bytes implies either. (A NARROW int is the exception —
+it registers a distinct content type per nullability, which is why the descriptor already
+reported nullable for those and only those.) So D was really: *does reflection report facts
+that exist only in the source?*
 
-> Does reflection report facts that exist only in the SOURCE?
+**The line drawn: what a VALUE can be, yes; what CODE may do to it, no.** Nullability is the
+first kind and is load-bearing — arc E's generator was complete, correct, and could not emit
+`NOT NULL`, which does not make a DDL less detailed, it makes it accept rows the loft type
+would refuse. `const` is the second kind: it constrains loft code, not data, so an ORM has no
+use for it and admitting it would make reflection a mirror of the source text.
 
-Yes makes the descriptor a mixed source/storage record and needs the parser to deposit them
-at registration. No means an ORM takes its column TYPES from loft and its nullability from
-somewhere else. One measurement bears on the cost either way: `layout_hash` hashes
-`render_dump()`, so a fact the descriptor carries but does not RENDER leaves the @PLN97
-layout identity untouched — growing the descriptor is cheap, and it is the depositing, not
-the carrying, that is the decision.
+Built as a deposit at the one parse-time site that knows (`typedef.rs`, where `Optional(τ)`
+is peeled), **replayed by the native generator**, carried by `LayoutField` and *not* rendered.
+
+Two things this cost that reading the code would not have shown:
+
+- **`--native` reported `nullable=false` for every field** until the generator emitted the
+  deposit too, because it rebuilds the schema by REPLAYING `init()`. The parity probe caught
+  it; the fix wraps `emit_field` rather than sitting in either caller, because there are two
+  call sites and the one that mattered was not the obvious one.
+- **The IR-store round trip had to carry it too**, or a schema read back from a store
+  answered "not nullable" for every field. That grew `DbField` by a byte, which needed
+  `CACHE_FORMAT_VERSION` bumped — the stdlib cache key does not fold in the binary's mtime,
+  so a cache written at the old stride was read at the new one and panicked. 25 LSP tests
+  failed on that one cause.
+- **The @PLN97 layout identity is unchanged, and that is measured rather than argued.** A
+  store written by the pre-arc-D binary loads under the arc-D binary through both the
+  whole-image and keyed paths with `ok=true`, and the same gate still REFUSES a genuinely
+  reshaped layout. `layout_hash` hashes `render_dump()`, and nullability is carried there
+  but never rendered.
 
 Also settled, and it removes the plan's stated reason for ordering D before C: the two entry
 points cannot disagree, because `type_of` and `type_named` are two ways to reach ONE filler.
@@ -191,7 +212,7 @@ backends can silently disagree.  Probe it with the strict flag on.
 | **A** — repair the fallback: loft#768 + loft#769 | [#768](https://github.com/loft-lang/loft/issues/768), [#769](https://github.com/loft-lang/loft/issues/769) | **Built** — `src/database/format.rs`, cells in `tests/scripts/57-json.loft` |
 | **B** — the type-info struct family + `type_of(value)` | this doc | **Built** — `default/07_reflect.loft`, `native::reflect_type_into`, `tests/scripts/pln127-reflect.loft` |
 | **C** — reflection with no value: `type_named(text)` | this doc, Q1 | **Built** — `native::type_named_in`, both backends, runtime-valued names |
-| **D** — the declared-vs-storage contract | this doc, Q2/Q3 | **Open, restated** — neither fact is a storage fact; see Arc D's question changed |
+| **D** — the declared-vs-storage contract | this doc, Q2/Q3 | **Built** — nullability reported, `const` deliberately not; cross-version store load proves the layout identity is untouched |
 | **E** — a real consumer built only through the API | this doc | **Built** — `tests/scripts/pln127-reflect-consumer.loft` (CREATE TABLE from a struct) |
 
 ## Phase ordering

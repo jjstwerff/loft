@@ -55,6 +55,13 @@ pub struct FieldInfo {
   /// Byte offset of the field within its record.
   position: integer,
   kind: TypeKind,
+  /// Was the field DECLARED nullable (`text?` rather than `text`)?
+  ///
+  /// Not a layout fact — a nullable field occupies the same bytes and spells an
+  /// absent value with a sentinel — so nothing in the stored bytes implies it,
+  /// and it reaches you only because the compiler records it. It is what a
+  /// generated `CREATE TABLE` needs for `NOT NULL`.
+  nullable: boolean,
 }
 
 /// One variant of an enum.

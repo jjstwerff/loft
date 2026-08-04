@@ -26,6 +26,23 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Reflection knows which fields can be null
+
+`type_of` and `type_named` now report `nullable` on every field, so a generated
+schema can carry the constraint:
+
+```loft
+for f in t.fields {
+  col = "{f.name} {sql_type(f.kind)}";
+  if !f.nullable { col += " NOT NULL" }
+}
+```
+
+It is not something the stored bytes could tell you — a `text?` occupies exactly
+the same space as a `text` — so it reaches you only because the compiler records
+it. Whether a field is `const` is deliberately not reported: that constrains loft
+code rather than the data.
+
 ### `type_named("Row")` when you only have the name
 
 `type_of` needs a value. When the type name arrives from a config file, a

@@ -2568,6 +2568,7 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     let fi_type = lookup(stores, fi_tp, "FieldInfo", "type_name");
     let fi_pos = lookup(stores, fi_tp, "FieldInfo", "position");
     let fi_kind = lookup(stores, fi_tp, "FieldInfo", "kind");
+    let fi_null = lookup(stores, fi_tp, "FieldInfo", "nullable");
     let vi_name = lookup(stores, vi_tp, "VariantInfo", "name");
     let vi_tag = lookup(stores, vi_tp, "VariantInfo", "tag");
 
@@ -2648,6 +2649,9 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
                 .set_int(vec_rec, at + fi_pos, i64::from(f.position));
             let k = reflect_kind(desc.nodes.get(&f.content));
             stores.store_mut(&out).set_byte(vec_rec, at + fi_kind, 0, k);
+            stores
+                .store_mut(&out)
+                .set_byte(vec_rec, at + fi_null, 0, i32::from(f.nullable));
         }
     }
 

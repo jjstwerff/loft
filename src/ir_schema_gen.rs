@@ -751,6 +751,11 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t154, "default", vec_default);
     let vec_other_indexes = db.vector(t0);
     db.field(t154, "other_indexes", vec_other_indexes);
+    // @PLN127 arc D — declared nullability. HAND-ADDED, like `ty_optional`
+    // above: a clean `extract.py` regen reorders this whole file (it drifts from
+    // the committed one), so the field is added surgically here and `ir.loft`
+    // — the source of truth — carries it too.
+    db.field(t154, "nullable", t4);
     let t155 = db.vector(t66);
     let _ = t155; // may be unused
     db.field(t156, "nr", 0);

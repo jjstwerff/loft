@@ -263,6 +263,7 @@ struct DbField {
   position: integer, // u16 byte offset
   default: vector<DbContent>, // Content (box-of-one)
   other_indexes: vector<integer>,
+  nullable: boolean, // @PLN127 arc D — declared nullable; not a layout fact
 }
 
 struct EnumPair {

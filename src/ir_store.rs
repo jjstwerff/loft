@@ -587,6 +587,9 @@ fn write_db_fields(stores: &mut Stores, parent: &Record, off: u32, fields: &[Sch
         r.set_field_str(stores, ds::DBFIELD_NAME, &f.name);
         r.set_field_int(stores, ds::DBFIELD_CONTENT, i64::from(f.content));
         r.set_field_int(stores, ds::DBFIELD_POSITION, i64::from(f.position));
+        // @PLN127 arc D — carried through the round trip, or a schema read back
+        // from a store would answer "not nullable" for every field.
+        r.set_field_bool(stores, ds::DBFIELD_NULLABLE, f.nullable);
         // default: single Content -> one-element vector<DbContent> (box-of-one).
         let dr = r
             .field_recvec(ds::DBFIELD_DEFAULT, ds::DBCONTENT_STRIDE)

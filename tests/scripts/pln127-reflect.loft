@@ -14,6 +14,7 @@
 // Every expectation below is therefore also a statement about that descriptor.
 
 struct Point { x: integer, y: integer, label: text }
+struct Nulls { a: text, b: text?, c: integer, d: integer?, e: i32, f: i32? }
 enum Shape { Circle { r: float }, Square { side: integer }, Dot }
 struct Holder { p: Point, shapes: vector<Point>, flag: boolean }
 
@@ -90,6 +91,32 @@ fn main() {
   assert(tb.name == "boolean" && tb.kind == BooleanKind, "boolean: {tb.name}");
   assert(tf.name == "float" && tf.kind == FloatKind, "float: {tf.name}");
   assert(tch.name == "character" && tch.kind == CharacterKind, "character: {tch.name}");
+
+  // --- @PLN127 arc D: nullability, which is NOT a layout fact ----------------
+  //
+  // A nullable field occupies the same bytes as a non-null one and spells an
+  // absent value with a sentinel, so nothing in the stored bytes implies this —
+  // it reaches the answer only because the parser deposits it and the native
+  // generator replays the deposit. The pair on each row is what makes the cell
+  // non-vacuous: same type, same storage, different declaration.
+  tn = type_named("Nulls");
+  if tn == null { assert(false, "Nulls must exist") } else {
+    n_a = tn.fields[0] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind, nullable: true };
+    n_b = tn.fields[1] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind, nullable: false };
+    n_c = tn.fields[2] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind, nullable: true };
+    n_d = tn.fields[3] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind, nullable: false };
+    n_e = tn.fields[4] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind, nullable: true };
+    n_f = tn.fields[5] ?? FieldInfo { name: "", type_name: "", position: -1, kind: OtherKind, nullable: false };
+    assert(!n_a.nullable && n_b.nullable, "text vs text?: {n_a.nullable}/{n_b.nullable}");
+    assert(!n_c.nullable && n_d.nullable, "integer vs integer?: {n_c.nullable}/{n_d.nullable}");
+    // A NARROW int is the one kind that registers a distinct content type per
+    // nullability, so this row would pass without the deposit — it is here to
+    // pin that the two routes agree rather than to prove the deposit.
+    assert(!n_e.nullable && n_f.nullable, "i32 vs i32?: {n_e.nullable}/{n_f.nullable}");
+    // The declaration does not move the STORAGE: the nullable twin sits at the
+    // stride its non-null sibling would, which is why this is not a layout fact.
+    assert(n_b.position > n_a.position, "a nullable field still lays out normally");
+  }
 
   // --- the answer is a value, so it serialises like one ----------------------
   //

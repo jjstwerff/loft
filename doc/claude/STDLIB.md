@@ -1012,7 +1012,8 @@ or a schema check needs.  Declared in `default/07_reflect.loft`.
 | `type_named(name: text) -> TypeInfo?` | The declared shape of the type called `name`, or **null** when this program has no such type. Use when the name is a runtime value — a config file, a database catalogue, a command line — so there is nothing to call `type_of` on. |
 
 `TypeInfo` carries `name`, `kind`, `size` (bytes per record), `fields`,
-`variants` and `element`.  Match on `kind` first: only a record and a
+`variants` and `element`; each `FieldInfo` carries `name`, `type_name`,
+`position`, `kind` and `nullable`.  Match on `kind` first: only a record and a
 struct-enum variant have `fields`, only an enum has `variants`, and only a
 vector or a keyed collection names an `element`.  Empty is the honest answer for
 a kind that has no such thing.
@@ -1041,10 +1042,11 @@ Two limits worth knowing before you reach for it:
 Read-only, and it describes a TYPE: there is no way to read a VALUE's field by
 name, so a generic serialiser needs more than this.  What it is sufficient for is
 the schema half — `tests/scripts/pln127-reflect-consumer.loft` generates
-`CREATE TABLE` from a loft struct through this API alone.  Two facts are NOT
-reported, because the store does not hold them: whether a field is `const`, and
-whether a non-narrow field is nullable (`text?` spells absent with a sentinel
-value rather than a schema flag).  Constructing or mutating a value by field name
+`CREATE TABLE` from a loft struct through this API alone.  `nullable` is reported even though it is not a
+layout fact — a nullable field occupies the same bytes and spells absence with a
+sentinel — because the compiler records it for you; it is what a generated
+`CREATE TABLE` needs for `NOT NULL`.  Whether a field is `const` is NOT reported:
+it constrains loft code rather than data.  Constructing or mutating a value by field name
 is deliberately out of scope (@PLN127).
 
 ---

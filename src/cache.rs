@@ -37,7 +37,14 @@ use sha2::{Digest, Sha256};
 
 /// Format-version byte.  Bump whenever the on-disk snapshot layout
 /// changes so old caches are rejected rather than misread.
-const CACHE_FORMAT_VERSION: u8 = 1;
+///
+/// 2 — @PLN127 arc D grew `DbField` by a `nullable` byte (stride 28 → 29). The
+/// stdlib key does NOT fold in the binary's mtime the way a program bundle does
+/// (`BUILD_ID` is the git HEAD hash, unchanged across uncommitted edits), so a
+/// cache written at the old stride was read at the new one and panicked in
+/// `ir_read` on a shifted discriminant. A layout change is exactly what this
+/// byte is for.
+const CACHE_FORMAT_VERSION: u8 = 2;
 
 /// Loft crate version — a release bump invalidates every cache.
 const LOFT_VERSION: &str = env!("CARGO_PKG_VERSION");

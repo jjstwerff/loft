@@ -13,7 +13,7 @@
 // What it found is recorded at the bottom, because a gate that only passes has
 // not been used as a gate.
 
-struct Person { id: integer, name: text, height: float, active: boolean }
+struct Person { id: integer, name: text?, height: float, active: boolean }
 struct Note { id: integer, body: text }
 
 // The SQL type for a loft field. Every branch is decided by `kind` — the
@@ -41,6 +41,10 @@ fn create_table(name: text) -> text {
     ty = sql_type(f.kind);
     if ty == "" { return "" }          // a kind this generator has no column for
     out += "{f.name} {ty}";
+    // @PLN127 arc D — the column constraint the generator could not emit until
+    // nullability was reported. A DDL without it is not merely less detailed: it
+    // accepts rows the loft type would refuse.
+    if !f.nullable { out += " NOT NULL" }
   }
   out += ")";
   return out;
@@ -51,13 +55,13 @@ fn main() {
   // config file or a catalogue, so there is no value to call `type_of` on.
   wanted = "Person";
   ddl = create_table(wanted);
-  assert(ddl == "CREATE TABLE Person (id BIGINT, name TEXT, height DOUBLE PRECISION, active BOOLEAN)",
+  assert(ddl == "CREATE TABLE Person (id BIGINT NOT NULL, name TEXT, height DOUBLE PRECISION NOT NULL, active BOOLEAN NOT NULL)",
          "ddl: {ddl}");
 
   // A second type through the same generic code, so the generator is not one
   // type's shape written out by hand.
   ddl2 = create_table("Note");
-  assert(ddl2 == "CREATE TABLE Note (id BIGINT, body TEXT)", "ddl2: {ddl2}");
+  assert(ddl2 == "CREATE TABLE Note (id BIGINT NOT NULL, body TEXT NOT NULL)", "ddl2: {ddl2}");
 
   // A name this program has no type for is refused, not guessed at.
   assert(create_table("NoSuchTable") == "", "an unknown type has no table");
@@ -84,22 +88,19 @@ fn main() {
 
 // --- What the gate found ------------------------------------------------------
 //
-// The generator above is complete and correct, and it CANNOT emit `NOT NULL`.
+// Written first, this generator was complete and correct and could NOT emit
+// `NOT NULL` — and a DDL without it is not merely less detailed, it accepts rows
+// the loft type would refuse. That is what made @PLN127 arc D concrete rather
+// than theoretical, and arc D was then built: nullability is deposited by the
+// parser, replayed by the native generator, carried by the descriptor WITHOUT
+// being rendered, and read back here. `name: text?` is the cell that proves it —
+// every other column carries the constraint and that one does not.
 //
-// Nullability is not in the answer because it is not in the store: `Field`
-// carries name, content type-id, position and a default, and nothing else. For a
-// narrow scalar the descriptor does record a nullable flag, but for `text` and
-// for a record reference an absent value is a SENTINEL — `text?` is stored as
-// "\0", which is exactly the fact @PLN127 arc A had to repair in the JSON writer.
-// So "is this field nullable" is a fact the PARSER holds and the store does not.
+// `const` is deliberately still absent. It constrains loft CODE, not the data,
+// so an ORM has no use for it, and admitting it would make reflection a mirror of
+// the source text rather than of what a value can be.
 //
-// The same is true of `const`. That makes @PLN127 arc D's question sharper than
-// the plan put it: it is not "should the descriptor grow two fields", it is
-// whether reflection reports facts that exist only in the SOURCE. Answering yes
-// makes the descriptor a mixed source/storage record; answering no means an ORM
-// gets its column types from loft and its nullability from somewhere else.
-//
-// A second limit, and the reason this consumer is a schema generator rather than
-// the plan's "generic serialiser": reflection describes a TYPE, and there is no
-// way to read a VALUE's field by name. A serialiser needs both. That is the
+// The remaining limit, and the reason this consumer is a schema generator rather
+// than the plan's "generic serialiser": reflection describes a TYPE, and there is
+// no way to read a VALUE's field by name. A serialiser needs both. That is the
 // write-access question the plan already deferred, arriving from the read side.
