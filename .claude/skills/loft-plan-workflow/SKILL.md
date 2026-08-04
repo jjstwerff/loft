@@ -205,6 +205,47 @@ commit having reached the trunk — the code lands on main later, on its own clo
    embedded in a finished plan gets linked to from other docs; those links rot when
    the content moves.  Grep every doc for the plan's path, rewrite the links to the
    new home, then run the repo's drift checker to catch what grep missed.
+6. **Check the feature catalogue against what actually shipped** — see the next
+   section.  A plan that shipped, changed, renamed or removed a feature is not closed
+   until that feature's own issue and labels describe the built thing.
+
+---
+
+## Check the catalogue against what shipped
+
+Where a tracker issue is the **canonical** description of a feature — and the
+reference docs and example tests are GENERATED from it — shipping the code is only
+half the change.  **The issue *is* the documentation.**  Code that lands without its
+issue being updated publishes a wrong description, and the generated shadow gives
+that wrong description the authority of a checked-in file.
+
+Do this whenever work **adds, changes, renames, or removes a feature** — not only at
+close.  The likeliest thing to drift is a feature whose behaviour moved *during* the
+plan: the issue was written from the design, and then the design changed.
+
+Verify three things, in this order:
+
+1. **Existence** — every feature the work shipped has an issue.  Something built with
+   no catalogue entry is invisible to everyone who reads the catalogue instead of the
+   code.  Something *removed* still has one, and shouldn't.
+2. **Accuracy** — the prose and the example describe what the code does **now**:
+   the real name, signature, defaults, and behaviour, not what was proposed.  **Run
+   the example** — do not eyeball it.  If the generator turns an example into a test,
+   a stale example is a test asserting the old contract.
+3. **Tags** — the labels match reality.  A label is a query surface: the wrong one
+   hides the feature from everyone who filters by it, which is indistinguishable from
+   the feature not existing.  Check the kind/subject partition and any status or tier
+   the catalogue sorts on.
+
+Then **regenerate the shadow and run the drift guard**.  Never hand-edit a generated
+file — edit the issue and regenerate.  A drift guard that fails on hand-edits is
+protecting the one-home rule, not obstructing you.
+
+**Two traps worth naming.**  A generator that promotes the FIRST fenced example into
+a runnable test means a teaching snippet placed above the real example silently
+becomes the test — put the runnable example first.  And a feature issue closed or
+labelled by hand skips whatever automation the merge path would have run, so its tags
+drift exactly like a hand-closed plan's do.
 
 ---
 
@@ -270,6 +311,11 @@ Hard-won and tree-independent:
     on sibling branches (a `15-debugger/` on a feature branch invisible from `main`),
     so you mint a duplicate that collides on merge — and GitHub issue numbers are
     immutable, so it cannot be cleanly reassigned afterward.
+14. **Shipping a feature is not done until its catalogue entry describes the built
+    thing.**  Where the issue is canonical and the docs are generated from it, stale
+    prose, a stale example, or a wrong label ships as authoritative documentation.
+    Verify existence → accuracy → tags, run the example, regenerate, let the drift
+    guard confirm.  Behaviour that moved mid-plan is the likeliest to have drifted.
 
 ---
 
@@ -303,6 +349,11 @@ Everything above is tree-agnostic.  This section is the **only** loft-specific p
 | Docs-vs-plans rule, three workflows, lifecycle, value categories | [`doc/claude/plans/README.md`](../../../doc/claude/plans/README.md) |
 | Reference-doc `## Open work` homes | `NATIVE.md` / `PERFORMANCE.md` / `PACKAGES.md` / `QUALITY.md` |
 | Value-category labels | `S/R/G/F/U/C/Q/N` (issue labels — definitions in `plans/README.md § Value categories`) |
+| Feature catalogue (canonical) | [`loft-lang/features`](https://github.com/loft-lang/features/issues) issues; id = `@F<N>` (`kind:feature`) / `@I<N>` (`kind:infra`).  The ISSUE is the source; @PLN92 is the catalogue's own plan |
+| Feature catalogue tags | `kind:feature` \| `kind:infra` — exactly one.  The wrong one files a language feature under infrastructure, where nobody looking for it will filter |
+| Feature generated shadow (never hand-edit) | `index/features.json` + `doc/features/` + `tests/docs/features/*.loft` |
+| Feature regenerate + drift guard | `make features-fetch && make features-gen`, then `make features-check` (fails on hand-edits or a stale shadow) |
+| Feature example → test | the generator promotes the **first** ` ```loft ` fence in the issue body into a RUN test — put the runnable example first, never a teaching snippet |
 | Drift checker | `scripts/check_doc_drift.sh` |
 | Incoming-link grep (close/promote) | `grep -rn "plans/<NN>-<slug>" CLAUDE.md doc/claude/ --include="*.md"` |
 | Investigation regression suite | `tests/scripts/NN-<slug>.loft` |
