@@ -93,7 +93,7 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
     let final_name = so
         .file_name()
         .map_or_else(|| stem.clone(), |f| f.to_string_lossy().into_owned());
-    for arg in crate::platform::shim_name_args(&final_name, crate::platform::host_lib_os()) {
+    for arg in crate::platform::install_name_args(&final_name, crate::platform::host_lib_os()) {
         cmd.arg(arg);
     }
     // Windows links against an IMPORT LIBRARY, not the DLL, and `cc -shared`

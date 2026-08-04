@@ -107,6 +107,27 @@ otool -L tests/fixtures/sqldb/sqlite/native-auto/*.dylib
 name, with no `.tmp` and no build directory in it. A `.tmp` there is the bug that
 already shipped once.
 
+## Task 6 — the fix for the `.building` install name you found
+
+You reported the package cdylib `libloft_auto_<mode>_<hash>.dylib` recording an
+install name of `/Users/…/native-auto/loft_auto_<…>.building` — the temp stem with
+the absolute build directory in it. That is now fixed: `native_lib.rs` passes
+`-C link-arg=-Wl,-install_name,@rpath/<final name>` through the same helper the
+shim path uses (renamed `platform::install_name_args`, since it was never really
+shim-specific).
+
+**It cannot be verified from Linux** — the helper returns an empty list off macOS,
+so the change is a no-op there by construction.
+
+```bash
+cargo nextest run --release --test native -E 'test(one_sql_interface)'
+otool -D tests/fixtures/sqldb/*/native-auto/libloft_auto_*.dylib
+```
+
+**Expected:** `@rpath/libloft_auto_<mode>_<hash>.dylib` — the final name, no
+`.building`, no `/Users/…` path. If any still shows the old form, say which
+artifact: it means a third builder publishes by rename and has not been found yet.
+
 ## Task 5 — the full suite, because nobody has read a macOS failure list
 
 ```bash

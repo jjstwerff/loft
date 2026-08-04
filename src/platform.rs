@@ -509,8 +509,17 @@ pub fn existing_lib_beside(dir: &std::path::Path, name: &str, os: LibOs) -> Opti
 /// `-Wl,-rpath,<dir>` for the shim directory, and a relocatable name keeps a
 /// built binary working if the package moves. ELF has no equivalent problem —
 /// its `SONAME` is only set when asked — so this is empty off macOS.
+///
+/// **Every artifact loft publishes by rename needs this**, not only the `cc`-built
+/// shim: `native_lib` compiles a package cdylib to `<stem>.building` and renames
+/// it the same way. That one went years recording
+/// `/Users/…/native-auto/loft_auto_<hash>.building` — the temp stem with an
+/// absolute build directory in it — which stayed invisible because those cdylibs
+/// are `dlopen`ed BY PATH, and a path load ignores the install name. It would have
+/// surfaced the first time one was resolved through `@rpath` or simply moved. The
+/// flag is cheap and the failure is silent, so it goes on both.
 #[must_use]
-pub fn shim_name_args(final_file_name: &str, os: LibOs) -> Vec<String> {
+pub fn install_name_args(final_file_name: &str, os: LibOs) -> Vec<String> {
     if os == LibOs::Macos {
         vec![format!("-Wl,-install_name,@rpath/{final_file_name}")]
     } else {
@@ -532,7 +541,7 @@ pub fn shim_name_args(final_file_name: &str, os: LibOs) -> Vec<String> {
 /// fixed by `native_utils::add_c_library_flags`, which passes `-l <stem>` for
 /// the shim, so the import library must be `<stem>.lib` beside the DLL.
 ///
-/// Separate from [`shim_name_args`] because the two do different things: that
+/// Separate from [`install_name_args`] because the two do different things: that
 /// one records a name INSIDE the artifact, this one produces a SECOND artifact.
 /// A path rather than a bare name, because the compiler's working directory is
 /// not the output directory — and the caller passes a temporary, since the
@@ -600,7 +609,7 @@ pub fn lib_variants(name: &str, os: LibOs) -> Vec<String> {
 
 #[cfg(test)]
 mod shim_name_tests {
-    use super::{LibOs, shim_implib_args, shim_implib_name, shim_name_args};
+    use super::{LibOs, install_name_args, shim_implib_args, shim_implib_name};
 
     /// A `.dll` is not linkable on its own — MSVC links the `.lib` beside it,
     /// and `cc -shared` writes one only when asked. The name is not free to
@@ -638,13 +647,13 @@ mod shim_name_tests {
     #[test]
     fn macos_pins_the_final_name_and_other_hosts_add_nothing() {
         assert_eq!(
-            shim_name_args("lcshim_shim_bda315af5ea4cb63.dylib", LibOs::Macos),
+            install_name_args("lcshim_shim_bda315af5ea4cb63.dylib", LibOs::Macos),
             ["-Wl,-install_name,@rpath/lcshim_shim_bda315af5ea4cb63.dylib"],
             "the FINAL file name, and @rpath so the emitted -rpath resolves it"
         );
         for os in [LibOs::Linux, LibOs::Windows] {
             assert!(
-                shim_name_args("libfoo.so", os).is_empty(),
+                install_name_args("libfoo.so", os).is_empty(),
                 "ELF sets a SONAME only when asked, and a DLL has no such record — \
                  what Windows needs instead is an import library, which is \
                  `shim_implib_args`, not a name recorded inside the artifact"
@@ -656,7 +665,7 @@ mod shim_name_tests {
     /// ASKED for, and `@rpath/` already supplies the search.
     #[test]
     fn the_install_name_is_relative_to_rpath() {
-        let a = shim_name_args("x.dylib", LibOs::Macos);
+        let a = install_name_args("x.dylib", LibOs::Macos);
         assert!(a[0].starts_with("-Wl,-install_name,@rpath/"), "{a:?}");
         assert!(
             !a[0].contains("/native-auto/") && !a[0].contains(".tmp"),

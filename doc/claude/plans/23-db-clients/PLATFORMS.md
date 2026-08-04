@@ -27,7 +27,7 @@ names itself.
 |---|---|---|---|---|
 | Linux x86-64 | yes | yes | proven, both loft backends | **green** |
 | macOS (Apple silicon) | yes, `@rpath` install name verified | yes — sqlite; the other three correctly skip | **sqlite proven, both loft backends** | **green** |
-| Windows | P1 written, unverified there | asked since P2 — answer unmeasured | pending a link | **red** |
+| Windows | **yes — P1 verified, `LNK1181` gone** | asked since P2 — answer unmeasured | blocked on X1 below, not on linking | **red, one layer deeper** |
 | wasm / browser | n/a | n/a | impossible by capability | **owed a clear refusal** |
 
 The macOS row is now a measurement, not a hope —
@@ -130,6 +130,49 @@ directly above the real error. The guard needs Windows for the same reason macOS
 has it. This fixes no link by itself; it stops the log lying about where the
 failure is.
 
+### W1 + W2 landed, and the link is FIXED — measured
+
+The dispatched Windows run has **zero `LNK1181` and zero `LNK4044`** in its whole
+log. The shim now compiles, links and *runs*: the `#c` tests get as far as
+executing and comparing values. That is the naming-and-linking layer closed.
+
+What it uncovered underneath is a different layer, and it is worth having in one
+place because it is the actual Windows worklist now. Six tests fail, in **three
+classes, none of them about linking**:
+
+**X1 — `long` is 32 bits on Windows, and loft is right about that.** `CTarget::host()`
+already models LLP64 (`long_bits: if cfg!(windows) { 32 } else { 64 }`), so loft
+faithfully truncates. The bug is in the FIXTURES, which use C `long` to carry a
+64-bit loft `integer`:
+
+```
+c_binding_matrix…   want `i64 1234567890123`   got `i64 1912276171`
+                    1234567890123 & 0xFFFFFFFF  = 1912276171   — exactly the low half
+loft_builds_…shim   want `scale 4621819117588971520`  got `scale 0`
+                    10.0's bit pattern is 0x4024000000000000; its low 32 bits ARE 0
+```
+
+The `scale` case is worse than truncation: `lcs_shim_scale(long bits, …)` does
+`memcpy(&v, &bits, 8)`, which on Windows **reads four bytes past the argument**.
+
+The fix is `long long` (64-bit on all three platforms) wherever a *loft-authored
+shim* carries a loft `integer` — `lcabi`'s `lc_i64` / `lc_arity7` / `lc_shim_f64`,
+`lcshim`'s three, maria's `lm_*` helpers. It is deliberately NOT a blanket
+substitution: where `long` is what the real library's header says
+(`mysql_real_connect`'s `unsigned long flags`, `mysql_stmt_prepare`'s length),
+`long` is correct and libmariadb's own is 32-bit on Windows too.
+
+**X2 — a Windows path becomes an escape sequence.** `an_available_library_must_export_what_was_declared`
+generates a `.loft` file under `C:\Users\runneradmin\AppData\Local\Temp\loft_skew_2244\…`
+and embeds that path in source, where loft's lexer reads `\U` and `\A` as escapes:
+`error: Unknown escape sequence`. A test-harness bug, not a `#c` one.
+
+**X3 — `interpreted_and_native_c_bindings_agree`** reports `interpret failed` after
+`len 5 / neg -1 / abs 7`; probably X1 again, not separately diagnosed.
+
+None of these is a regression from W1/W2 — they were unreachable while nothing
+linked, which is the ordinary shape of fixing a bottom layer.
+
 ### After that, the databases themselves
 
 A Windows runner ships none of these libraries. All four are declared
@@ -159,23 +202,28 @@ The pieces that must line up when it does ask:
   `@rpath/lib<x>_shim_<key>.dylib` — the final name, no `.tmp`, no build
   directory — and the sqlite shim depends only on `libSystem.B.dylib`.
 
-**One latent defect found while checking that**, and it is worth writing down
-before it costs someone a day. The *other* artifact in each `native-auto/` — the
-program cdylib `libloft_auto_<mode>_<hash>.dylib`, built by `native_lib.rs` rather
-than `c_shim.rs` — carries an install name of
+**One latent defect found while checking that — now FIXED.** The *other* artifact
+in each `native-auto/` — the package cdylib `libloft_auto_<mode>_<hash>.dylib`,
+built by `native_lib.rs` rather than `c_shim.rs` — carried an install name of
 
 ```
 /Users/…/native-auto/loft_auto_<mode>_<hash>.building
 ```
 
-the temporary stem with the absolute build directory baked in. That is precisely
-the shape `shim_name_args` exists to prevent, on the artifact that never got the
-treatment. It breaks nothing today because these cdylibs are loaded **by path**,
-and `dlopen`-by-path ignores the recorded install name — so the suite is green and
-stays green. It becomes real the moment anything consumes one via `@rpath`, or
-moves it. The fix is the one already proven for shims: name it for where it will
-end up. Not applied here, because a blind macOS change is how the original `.tmp`
-install name shipped.
+the temporary stem with the absolute build directory baked in: precisely the shape
+the install-name flag exists to prevent, on the artifact that never got it. It
+broke nothing, because those cdylibs are loaded **by path** and `dlopen`-by-path
+ignores the recorded name — which is exactly why it survived. It would have become
+real the first time one was resolved through `@rpath` or simply moved.
+
+`native_lib.rs` now passes the same flag, through the same helper, which is
+renamed `platform::install_name_args` because it is no longer shim-specific: it
+belongs to **every artifact loft publishes by rename**, and the bug was that one
+of the two builders knew that and the other did not. Linux is unaffected by
+construction — the helper returns an empty list off macOS, so the rustc argument
+list there is byte-identical. **Needs an `otool -D` on a Mac to confirm** (see
+[MACOS_HANDOFF.md](MACOS_HANDOFF.md) task 6); it is not verifiable from Linux, and
+a blind macOS change is how the original `.tmp` install name shipped.
 
 | declared | macOS is asked for | Windows is asked for |
 |---|---|---|
@@ -257,7 +305,8 @@ produce a green that means nothing.
 
 | step | what it proves | how it is proved |
 |---|---|---|
-| **P1** — built | the Windows shim links | W1 + W2; the duckdb cell builds and reports its SKIP instead of dying in `link.exe` |
+| **P1** — done | the Windows shim links | W1 + W2; **verified** — zero `LNK1181` / `LNK4044`, the `#c` tests run and compare values |
+| **X1** | 64-bit values survive Windows | `long long` in every loft-authored shim that carries a loft `integer`; leave `long` where the real header says `long` |
 | **P2** — built | the probe asks the HOST's question | `platform::host_library_loadable` translates the declared soname to the host's spellings and `dlopen`s them; sqlite stops being skipped on macOS and Windows |
 | **P3** — done for sqlite | macOS runs what Linux runs | **confirmed on Apple silicon**: `["sqlite"]` exercised, matching the same hard-coded `sqlite` / `sqlite bound` / `sqlite tx` constants Linux matches, `--interpret` == `--native`. postgres / maria / duckdb remain correct skips until P5 answers the search path |
 | **P4** | Windows runs what Linux runs | the same three lines, from a Windows runner with sqlite present |

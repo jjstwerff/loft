@@ -1130,6 +1130,19 @@ pub fn build_shared_cdylib(
         "-L".to_string(),
         deps.display().to_string(),
     ];
+    // macOS records the `-o` path inside the Mach-O as its INSTALL NAME, and the
+    // rename below moves the file without touching it — so this cdylib claimed to
+    // live at `<stem>.building`, in an absolute build directory. Harmless only for
+    // as long as every consumer `dlopen`s it BY PATH (a path load ignores the
+    // recorded name); it breaks the moment one is resolved through `@rpath` or the
+    // package is moved. Same flag, same reason, as the `cc`-built shim.
+    let final_name = so
+        .file_name()
+        .map_or_else(|| stem.to_string(), |f| f.to_string_lossy().into_owned());
+    for flag in crate::platform::install_name_args(&final_name, crate::platform::host_lib_os()) {
+        args.push("-C".to_string());
+        args.push(format!("link-arg={flag}"));
+    }
     for (name, path) in extra_externs(&deps) {
         args.push("--extern".to_string());
         args.push(format!("{name}={}", path.display()));
