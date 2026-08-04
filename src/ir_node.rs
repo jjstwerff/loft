@@ -684,7 +684,7 @@ impl<'a> IrBlock<'a> {
     pub fn operators(&self) -> IrNodeList<'a> {
         match *self {
             IrBlock::Native(b) => IrNodeList::Native(&b.operators),
-            IrBlock::Store(s, n) => IrNodeList::Store(s, n.block_operators()),
+            IrBlock::Store(s, n) => IrNodeList::Store(s, n.block_operators(s)),
         }
     }
 
@@ -696,7 +696,7 @@ impl<'a> IrBlock<'a> {
     pub fn scope(&self) -> u16 {
         match *self {
             IrBlock::Native(b) => b.scope,
-            IrBlock::Store(s, n) => n.field_int(s, ds::NDBLOCK_BLOCK + ds::BLOCK_SCOPE) as u16,
+            IrBlock::Store(s, n) => n.block_rec(s).field_int(s, ds::BLOCK_SCOPE) as u16,
         }
     }
 
@@ -707,7 +707,9 @@ impl<'a> IrBlock<'a> {
         match *self {
             IrBlock::Native(b) => b.result.clone(),
             IrBlock::Store(s, n) => {
-                let rv = n.field_recvec(ds::NDBLOCK_BLOCK + ds::BLOCK_RESULT, ds::TYPET_STRIDE);
+                let rv = n
+                    .block_rec(s)
+                    .field_recvec(ds::BLOCK_RESULT, ds::TYPET_STRIDE);
                 crate::ir_read::read_type(s, rv.get(0, s))
             }
         }

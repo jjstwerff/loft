@@ -44,7 +44,11 @@ use sha2::{Digest, Sha256};
 /// cache written at the old stride was read at the new one and panicked in
 /// `ir_read` on a shifted discriminant. A layout change is exactly what this
 /// byte is for.
-const CACHE_FORMAT_VERSION: u8 = 2;
+///
+/// 3 — `NdBlock` / `NdLoop` / `NdParFor` hold their sub-record BY REFERENCE (a
+/// box-of-one vector) instead of inlining it, which moved every offset in a
+/// `Node` and shrank its stride from 48 to 28.
+const CACHE_FORMAT_VERSION: u8 = 3;
 
 /// Loft crate version — a release bump invalidates every cache.
 const LOFT_VERSION: &str = env!("CARGO_PKG_VERSION");

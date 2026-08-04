@@ -93,10 +93,17 @@ defects, and one rule:
    an unused one is harmless (the file head allows it and the database dedupes).
 
 **The rule: `ir.loft` describes the STORE, not `src/data.rs`.**  It had drifted
-to `NdBlock { block: reference<Block> }` because `data.rs` boxes it — but the
-store INLINES the block and the hand layer reads it that way
+to `NdBlock { block: reference<Block> }` because `data.rs` boxes it, while the
+store still INLINED the block and the hand layer read it that way
 (`NDBLOCK_BLOCK + BLOCK_SCOPE`).  Regenerating from that declaration produced a
-schema nothing could read: SIGSEGV in every IR round-trip test.  Making a field
-by-reference is a real store migration — schema, `ir_store`, `ir_read`, the baked
+schema nothing could read: SIGSEGV in every IR round-trip test.  Changing how a
+field is STORED is a real migration — schema, `ir_store`, `ir_read`, the baked
 offsets in `data_store.rs`, and `CACHE_FORMAT_VERSION` — not a transcription
-change.
+change, so make it deliberately.
+
+That migration has since been done: `NdBlock` / `NdLoop` / `NdParFor` hold their
+sub-record as a **box-of-one vector**, the idiom this schema already uses for
+`Block.result` and `DbField.default`.  A box is a 4-byte handle where
+`reference<T>` would be a 12-byte `Parts::DbRef` — same indirection, a third of
+the width, and every helper (`field_recvec` / `push` / `get`) already exists.
+`Node`'s stride went from 48 to 28, which every node in the image pays.

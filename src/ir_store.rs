@@ -206,27 +206,20 @@ fn node_child(stores: &mut Stores, slot: &Record, off: u32, v: &Value) {
 /// `NdLoop` — identical inlined-`Block` layout).  Fields are at the `Block`
 /// base (`NDBLOCK_BLOCK`) plus their relative offsets.
 fn write_block(stores: &mut Stores, slot: &Node, disc: u8, b: &Block) {
-    if disc == ds::DISC_LOOP {
-        slot.write_loop(stores, b.name);
+    // The block is a box-of-one sub-record now, so the write pushes it once and
+    // fills it directly — the fields are its own, not the Node's plus a base.
+    let rec = if disc == ds::DISC_LOOP {
+        slot.write_loop(stores, b.name)
     } else {
-        slot.write_block(stores, b.name);
-    }
-    let ops = slot.block_operators();
-    push_all(stores, ops, &b.operators);
-    slot.set_field_int(
-        stores,
-        ds::NDBLOCK_BLOCK + ds::BLOCK_SCOPE,
-        i64::from(b.scope),
-    );
-    slot.set_field_int(
-        stores,
-        ds::NDBLOCK_BLOCK + ds::BLOCK_VAR_SIZE,
-        i64::from(b.var_size),
-    );
+        slot.write_block(stores, b.name)
+    };
+    push_all(stores, rec.field_vec(ds::BLOCK_OPERATORS), &b.operators);
+    rec.set_field_int(stores, ds::BLOCK_SCOPE, i64::from(b.scope));
+    rec.set_field_int(stores, ds::BLOCK_VAR_SIZE, i64::from(b.var_size));
     // result: single Type -> one-element vector<TypeT> (box-of-one).
     materialize_type(
         stores,
-        slot.field_recvec(ds::NDBLOCK_BLOCK + ds::BLOCK_RESULT, ds::TYPET_STRIDE),
+        rec.field_recvec(ds::BLOCK_RESULT, ds::TYPET_STRIDE),
         &b.result,
     );
 }
@@ -868,13 +861,14 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
         }
         Value::ParFor(b) => {
             slot.set_discriminant(stores, ds::DISC_PAR_FOR);
-            slot.set_field_int(stores, ds::PARFOR_X_VAR, i64::from(b.x_var));
-            slot.set_field_int(stores, ds::PARFOR_R_VAR, i64::from(b.r_var));
-            slot.set_field_int(stores, ds::PARFOR_STITCH_ID, i64::from(b.stitch_id));
-            materialize_node(stores, slot.field_vec(ds::PARFOR_INPUT), &b.input);
-            materialize_node(stores, slot.field_vec(ds::PARFOR_WORKER), &b.worker);
-            materialize_node(stores, slot.field_vec(ds::PARFOR_THREADS), &b.threads);
-            materialize_node(stores, slot.field_vec(ds::PARFOR_BODY), &b.body);
+            let pf = slot.write_par_for(stores);
+            pf.set_field_int(stores, ds::PARFOR_X_VAR, i64::from(b.x_var));
+            pf.set_field_int(stores, ds::PARFOR_R_VAR, i64::from(b.r_var));
+            pf.set_field_int(stores, ds::PARFOR_STITCH_ID, i64::from(b.stitch_id));
+            materialize_node(stores, pf.field_vec(ds::PARFOR_INPUT), &b.input);
+            materialize_node(stores, pf.field_vec(ds::PARFOR_WORKER), &b.worker);
+            materialize_node(stores, pf.field_vec(ds::PARFOR_THREADS), &b.threads);
+            materialize_node(stores, pf.field_vec(ds::PARFOR_BODY), &b.body);
         }
         // ── vector of a non-Node struct ───────────────────────────────────────
         Value::Keys(keys) => {
@@ -959,7 +953,7 @@ mod tests {
         assert_eq!(got.value_type(&stores), ValueType::Block);
         assert_eq!(got.block_name(&stores), "loop_body");
 
-        let ops = got.block_operators();
+        let ops = got.block_operators(&stores);
         assert_eq!(ops.len(&stores), 2);
 
         let call = ops.get(0, &stores);
@@ -970,15 +964,12 @@ mod tests {
         assert_eq!(ops.get(1, &stores).value_type(&stores), ValueType::Null);
 
         // Block tail: scope, var_size, and result (box-of-one vector<TypeT>).
-        assert_eq!(
-            got.field_int(&stores, ds::NDBLOCK_BLOCK + ds::BLOCK_SCOPE),
-            3
-        );
-        assert_eq!(
-            got.field_int(&stores, ds::NDBLOCK_BLOCK + ds::BLOCK_VAR_SIZE),
-            16
-        );
-        let result = got.field_recvec(ds::NDBLOCK_BLOCK + ds::BLOCK_RESULT, ds::TYPET_STRIDE);
+        // Read off the referenced `Block` record — the fields are its own now,
+        // not the Node's plus an inline base.
+        let blk = got.block_rec(&stores);
+        assert_eq!(blk.field_int(&stores, ds::BLOCK_SCOPE), 3);
+        assert_eq!(blk.field_int(&stores, ds::BLOCK_VAR_SIZE), 16);
+        let result = blk.field_recvec(ds::BLOCK_RESULT, ds::TYPET_STRIDE);
         assert_eq!(result.len(&stores), 1);
         assert_eq!(
             ds::type_kind(result.get(0, &stores).discriminant(&stores)),
@@ -1166,7 +1157,7 @@ mod tests {
         let lp = root.get(0, &stores);
         assert_eq!(lp.value_type(&stores), ValueType::Loop);
         assert_eq!(lp.block_name(&stores), "spin");
-        let ops = lp.block_operators();
+        let ops = lp.block_operators(&stores);
         assert_eq!(ops.len(&stores), 1);
         assert_eq!(ops.get(0, &stores).value_type(&stores), ValueType::Break);
     }
@@ -1219,8 +1210,10 @@ mod tests {
         let root = root_vector(&mut stores);
         materialize_node(&mut stores, root, &native);
 
-        let pf = root.get(0, &stores);
-        assert_eq!(pf.value_type(&stores), ValueType::ParFor);
+        let node = root.get(0, &stores);
+        assert_eq!(node.value_type(&stores), ValueType::ParFor);
+        // The body is a referenced record now, so the offsets are its own.
+        let pf = node.par_for_rec(&stores);
         assert_eq!(pf.field_int(&stores, ds::PARFOR_X_VAR), 2);
         assert_eq!(pf.field_int(&stores, ds::PARFOR_R_VAR), 3);
         assert_eq!(pf.field_int(&stores, ds::PARFOR_STITCH_ID), 1);

@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The IR store holds a block BY REFERENCE — `Node` shrinks 48 → 28 bytes (2026-08-04)
+
+`NdBlock` / `NdLoop` inlined a whole `Block`, and `NdParFor` a whole
+`ParForBody`, so a `Node` record was as wide as its largest variant: 48 bytes,
+paid by every node in the image including a 12-byte `NdVar`. They hold a
+**box-of-one vector** now — the idiom the schema already uses for `Block.result`
+and `DbField.default` — and the stride is 28.
+
+A box is a 4-byte handle. `reference<Block>`, which `ir.loft` had drifted to,
+generates a 12-byte `Parts::DbRef`: the same indirection for three times the
+width, with no other reader of one in this store and no existing helpers. The box
+reuses `field_recvec` / `push` / `get` unchanged.
+
+What moved together, because a half-done version of this is a store that reads
+its own records at the wrong offsets:
+
+- `ir.loft` → regenerated `ir_schema_gen.rs` (the field is a vector handle now).
+- `data_store.rs`: `NDBLOCK_BLOCK` / `NDPARFOR_BODY` are the HANDLE offsets, and
+  the sub-struct constants became the sub-record's own — `PARFOR_X_VAR` is 0, not
+  `body_base + 0`. New `Node::block_rec` / `Node::par_for_rec` reach the record,
+  and `write_block` / `write_loop` / `write_par_for` push the box and hand it
+  back so a caller fills it without a second lookup.
+- `ir_store` / `ir_read` / `ir_node` read and write through those records.
+- `CACHE_FORMAT_VERSION` → 3: every offset in a `Node` moved.
+
+The layout guard in `data_store.rs` is what made this safe to do — it asserts
+each baked constant against the registered schema, so the migration was a
+conversation with a failing assertion rather than a hunt for silent corruption.
+
 ### `ir_schema_gen.rs` regenerates byte-identically again (2026-08-04)
 
 The IR store-schema generator had been unusable, so schema edits were HAND-ADDED
