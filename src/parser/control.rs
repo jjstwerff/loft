@@ -209,6 +209,9 @@ enum TextDep {
     SkipCaptured,
     /// A tuple LOCAL (@P330) — no hoist; the B5-L3 temp covers the copy.
     SkipTupleLocal,
+    /// A non-argument LOCAL (loft#771) — no hoist; promoting it would hand the
+    /// free obligation to a caller that never receives the store.
+    SkipOwnedLocal,
     /// A text local — promote to a hidden `RefVar(Text)` work-buffer param.
     PromoteHidden,
     /// Any other dep type — promote as a plain (visible) parameter.
@@ -8151,6 +8154,27 @@ impl Parser {
             // text element, corrupting the callee frame.  The dep drops; the
             // B5-L3 `__ret_N` deep-copy temp (scopes.rs) covers the value.
             TextDep::SkipTupleLocal
+        } else if !self.vars.is_argument(v) {
+            // A LOCAL must not be promoted.  Promotion makes it an ARGUMENT, and an
+            // argument is the caller's to free — but the caller was never handed this
+            // store: `add_defaults` fills a promoted slot with `null` unless the callee
+            // writes into it (NRVO), which a freshly-allocated record does not.  So the
+            // record the function itself allocated is orphaned, once per call, for as
+            // long as the program runs (loft#771: 5000 calls retained 5000 records).
+            // Dropping the dep leaves it a local, so `get_free_vars` frees it — and the
+            // returned text does not need it, because a text return is delivered by
+            // COPY into the caller's `&text` buffer.  Routing the same field read
+            // through a local first (`x = v.nm; return x;`) always did exactly this and
+            // freed, which is what says the promotion was never load-bearing.
+            //
+            // The verdict must read only PASS-STABLE facts.  Keying it on ownership
+            // (`deps.is_empty()`) looked sharper and was not: deps accumulate while a
+            // body parses, so a var could read as owned on pass 1 and borrowed on
+            // pass 2 — the attribute then appeared on pass 2 only, which is the
+            // cross-pass divergence the H5 two-pass contract exists to catch.
+            // `is_argument` is stable, because a var promoted on an earlier pass is
+            // an attribute and takes the `Attr` branch above.
+            TextDep::SkipOwnedLocal
         } else {
             // Any other dep type promotes as a plain (visible) parameter.
             TextDep::PromotePlain
@@ -8203,7 +8227,9 @@ impl Parser {
                                 .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                         }
                     }
-                    TextDep::SkipCaptured | TextDep::SkipTupleLocal => {
+                    TextDep::SkipCaptured
+                    | TextDep::SkipTupleLocal
+                    | TextDep::SkipOwnedLocal => {
                         // SkipTupleLocal (@P330): the dep drops on purpose — the
                         // return type loses this local, which lets scopes'
                         // B5-L3 single-text branch deep-copy the tail into a

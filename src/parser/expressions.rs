@@ -1960,6 +1960,30 @@ use a separate collection or add after the loop"
         } else {
             Vec::new()
         };
+        // `&τ` is a PARAMETER-PASSING MODE, not a value type: it says the callee shares
+        // the caller's store in place, which only the argument slot can express.  Reading
+        // a `&` parameter as a value (`w = v`) yields `τ` BORROWED FROM that parameter,
+        // so the peel names the parameter as the dep — the declared `&τ` carries none of
+        // its own, and dropping the mode without recording the borrow would make `w` an
+        // owner, silently turning the shared store into a copy.  Without the peel the
+        // local inherited `&τ` itself, and a variable read as an argument gets no stack
+        // slot: `w` came out at slot 65535, which surfaced as a wrong answer (`w += […]`
+        // appended into nothing), an ICE, or a SIGSEGV depending on what the body did
+        // with it next (loft#772's sibling).
+        //
+        // Only a bare read of a `&` PARAMETER peels.  An explicit `&`-binding (`d = &c`,
+        // @PLN87 L1/L2) runs the other way — the source is an ordinary local and the `&`
+        // is what MAKES the reference — so it keeps `RefVar` and stays a live link.
+        let s_type = match (&s_type, code.unspan()) {
+            (Type::RefVar(inner), Value::Var(src))
+                if self.vars.is_argument(*src)
+                    && matches!(self.vars.tp(*src), Type::RefVar(_))
+                    && !matches!(to.unspan(), Value::Var(d) if self.vars.is_argument(*d)) =>
+            {
+                inner.depending(*src)
+            }
+            _ => s_type,
+        };
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
@@ -2060,7 +2084,7 @@ use a separate collection or add after the loop"
         if self.assign_refvar_text(code, f_type, &s_type, op, var_nr) {
             return Type::Void;
         }
-        if self.assign_refvar_vector(code, f_type, op, var_nr) {
+        if self.assign_refvar_vector(code, f_type, &s_type, op, var_nr) {
             return Type::Void;
         }
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
@@ -3884,13 +3908,27 @@ use a separate collection or add after the loop"
         true
     }
 
-    /// Handle `v += expr` where `v: &vector<T>`; returns true if handled.
-    /// NOTE: does NOT intercept `Value::Insert` — bracket-form `[elem]` literals are already
-    /// handled by the Insert-expansion in `parse_block` → `OpFinishRecord`.
+    /// Handle `v += expr` and `v = expr` where `v: &vector<T>`; returns true if handled.
+    ///
+    /// A `&` vector parameter shares the CALLER's store in place (`OpCreateStack` /
+    /// `OpGetStackRef`), so there is no op that re-points it at a different store.
+    /// `=` therefore means *replace what the caller sees*: clear the shared store and
+    /// deep-copy the right-hand side back into it, which is exactly what the literal
+    /// form (`v = [1, 2, 3]`, lowered by `create_vector`) already emits.  Every other
+    /// right-hand side used to fall through to a plain `Set(v, …)` that codegen
+    /// discarded — the write vanished with no diagnostic when some *other* statement
+    /// kept the `&` alive, and was reported as "never modified" when it did not
+    /// (loft#772).
+    ///
+    /// NOTE: does NOT intercept `Value::Insert` / `Value::Block` — bracket-form
+    /// literals and comprehensions are already handled by the Insert-expansion in
+    /// `parse_block` → `OpFinishRecord`, and `create_vector` puts the `=` clear in
+    /// front of them.
     pub(crate) fn assign_refvar_vector(
         &mut self,
         code: &mut Value,
         f_type: &Type,
+        s_type: &Type,
         op: &str,
         var_nr: u16,
     ) -> bool {
@@ -3900,12 +3938,17 @@ use a separate collection or add after the loop"
         let Type::Vector(elm_tp, _) = inner.as_ref() else {
             return false;
         };
-        if op != "+=" {
+        if op != "+=" && op != "=" {
             return false;
         }
         // Bracket-form [elem] and vector comprehensions produce Insert/Block; leave those
         // to the existing parse_block expansion path which uses OpFinishRecord.
         if matches!(code, Value::Insert(_) | Value::Block(_)) {
+            return false;
+        }
+        // A non-vector right-hand side is a type error the general path reports; do not
+        // lower it to a shape-mismatched `OpAppendVector` here.
+        if op == "=" && !matches!(s_type, Type::Vector(_, _) | Type::RefVar(_)) {
             return false;
         }
         if self.first_pass {
@@ -3914,10 +3957,52 @@ use a separate collection or add after the loop"
         // @P314 — narrow-aware element type (see `append_elem_tp`).
         let elm = (**elm_tp).clone();
         let rec_tp = self.append_elem_tp(&elm);
-        *code = self.cl(
-            "OpAppendVector",
-            &[Value::Var(var_nr), code.clone(), Value::Int(rec_tp)],
+        if op == "+=" {
+            *code = self.cl(
+                "OpAppendVector",
+                &[Value::Var(var_nr), code.clone(), Value::Int(rec_tp)],
+            );
+            return true;
+        }
+        // `v = v` replaces the store with itself: a no-op.  Emitting the clear would
+        // wipe it and the append would then read an empty source.
+        if matches!(code.unspan(), Value::Var(r) if *r == var_nr) {
+            *code = Value::Insert(Vec::new());
+            return true;
+        }
+        let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
+        // The clear runs BEFORE the copy, so a right-hand side that reads `v` must be
+        // materialised into its own store first.  Only a dep-free (owned) variable is
+        // provably independent of `v`; a borrow (`w = v; v = w`) and any expression
+        // (`v = tail(v)`) are not.  Same three-way split as the struct-field vector
+        // replacement above, which is the same invariant one level down.
+        let owned_var_rhs = matches!(
+            code.unspan(),
+            Value::Var(rv) if self.vars.tp(*rv).depend().is_empty()
         );
+        if owned_var_rhs {
+            let append = self.cl(
+                "OpAppendVector",
+                &[Value::Var(var_nr), code.clone(), Value::Int(rec_tp)],
+            );
+            *code = Value::Insert(vec![clear, append]);
+            return true;
+        }
+        let rhs_saved = code.clone();
+        let dep_free_tp = Type::Vector(Box::new(elm), Deps::none());
+        let tmp = self.create_unique("_refvec_rhs", &dep_free_tp);
+        self.vars.defined(tmp);
+        let mut ls = self.vector_db(&dep_free_tp.content(), tmp);
+        ls.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(tmp), rhs_saved, Value::Int(rec_tp)],
+        ));
+        ls.push(clear);
+        ls.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(var_nr), Value::Var(tmp), Value::Int(rec_tp)],
+        ));
+        *code = Value::Insert(ls);
         true
     }
 
