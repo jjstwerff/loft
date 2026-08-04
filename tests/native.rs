@@ -938,6 +938,33 @@ fn native_binary_script() -> std::io::Result<()> {
 ///
 /// `write(1, ptr, count)` covers the other half: a loft `vector` crosses as a
 /// pointer AND a count, because C carries no length.
+/// The POSIX `write(2)` binding as the generated sources below spell it.
+const POSIX_WRITE: &str = r#"#c "write" "long(int, const void*, size_t)""#;
+
+/// Spell a generated `#c` source for THIS host. A no-op off Windows.
+///
+/// Windows has `write(2)`'s behaviour but not its NAME: the CRT exports it as
+/// `_write`, so a declaration naming `write` resolves to nothing there and the
+/// call faults — measured, `` `#c` symbol 'write' not found ``.
+///
+/// Only the symbol is branched, because only the symbol differs. `long` is
+/// genuinely right for the return on both: POSIX `write` gives `ssize_t`
+/// (64-bit on LP64) and `_write` gives `int` (32-bit), which is exactly what C
+/// `long` means on each — one of the places where naming the platform's own
+/// width is the correct binding rather than a portability bug. The count
+/// narrows to `unsigned int` for the same reason: that is `_write`'s third
+/// parameter, where POSIX takes `size_t`.
+fn for_host(src: &str) -> String {
+    if cfg!(windows) {
+        src.replace(
+            POSIX_WRITE,
+            r#"#c "_write" "long(int, const void*, unsigned int)""#,
+        )
+    } else {
+        src.to_string()
+    }
+}
+
 #[test]
 fn native_c_binding_calls_libc() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -947,7 +974,8 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
     let path = std::env::temp_dir().join("loft_pln24_c_binding.loft");
     std::fs::write(
         &path,
-        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+        for_host(
+            "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
          pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
          pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
          pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
@@ -959,6 +987,7 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
          \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
          \x20 println(\"wrote {c_write(1, b)}\");\n\
          }\n",
+        ),
     )?;
     let job = prepare_native_test(&path)?;
     // Ok(false) = skipped (rustc absent / low space) — not a failure.
@@ -1004,7 +1033,8 @@ fn interpreted_and_native_c_bindings_agree() -> std::io::Result<()> {
     let path = std::env::temp_dir().join("loft_pln24_c_parity.loft");
     std::fs::write(
         &path,
-        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+        for_host(
+            "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
          pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
          pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
          pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
@@ -1016,6 +1046,7 @@ fn interpreted_and_native_c_bindings_agree() -> std::io::Result<()> {
          \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
          \x20 println(\"wrote {c_write(1, b)}\");\n\
          }\n",
+        ),
     )?;
     let interp = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
         .arg("--interpret")

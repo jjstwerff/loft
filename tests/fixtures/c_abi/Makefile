@@ -30,6 +30,21 @@ ifeq ($(UNAME_S),Darwin)
   #
   # This is what a library MEANT to ship beside a package has to declare.
   SOFLAGS := -dynamiclib -Wl,-install_name,@rpath/liblc_types.dylib
+else ifneq (,$(findstring NT,$(UNAME_S)))
+  # Windows (MSYS/MinGW `uname -s` is MINGW64_NT-… / MSYS_NT-…).  A DLL is not
+  # linkable on its own: MSVC `link.exe` links the IMPORT LIBRARY that describes
+  # it, and `cc -shared` writes one only when asked.  Without this the Windows
+  # leg died at
+  #
+  #   LINK : fatal error LNK1181: cannot open input file 'lc_types.lib'
+  #
+  # The `.lib` name is not free to choose — loft passes `-l lc_types` for this
+  # package, having taken the stem from the declared `liblc_types.so`, so the
+  # import library has to be exactly that stem.  The DLL keeps the `lib` prefix
+  # because `platform::lib_variants` tries `liblc_types.dll` alongside
+  # `lc_types.dll`, and a MinGW-built library conventionally keeps it.
+  LIB := liblc_types.dll
+  SOFLAGS := -shared -Wl,--out-implib,lc_types.lib
 else
   LIB := liblc_types.so
   SOFLAGS := -shared
@@ -66,4 +81,4 @@ strict:
 	@echo "lc_types: builds as ANSI C"
 
 clean:
-	rm -f $(LIB) lc_selftest probe_trampoline
+	rm -f $(LIB) lc_types.lib lc_selftest probe_trampoline
