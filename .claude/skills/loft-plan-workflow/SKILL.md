@@ -241,6 +241,13 @@ Then **regenerate the shadow and run the drift guard**.  Never hand-edit a gener
 file — edit the issue and regenerate.  A drift guard that fails on hand-edits is
 protecting the one-home rule, not obstructing you.
 
+**A green coverage gate is not evidence the catalogue is complete.**  Know what yours
+actually measures before trusting it.  Coverage gates typically attribute *source
+regions* to catalogue entries — so a capability implemented inside a region that is
+already attributed to some other entry never trips them.  New file, no entry → caught;
+new feature in an old file → invisible.  That is the normal case for a mature codebase,
+which makes this section a **human** step the gate cannot replace.
+
 **Two traps worth naming.**  A generator that promotes the FIRST fenced example into
 a runnable test means a teaching snippet placed above the real example silently
 becomes the test — put the runnable example first.  And a feature issue closed or
@@ -354,6 +361,7 @@ Everything above is tree-agnostic.  This section is the **only** loft-specific p
 | Feature generated shadow (never hand-edit) | `index/features.json` + `doc/features/` + `tests/docs/features/*.loft` |
 | Feature regenerate + drift guard | `make features-fetch && make features-gen`, then `make features-check` (fails on hand-edits or a stale shadow) |
 | Feature example → test | the generator promotes the **first** ` ```loft ` fence in the issue body into a RUN test — put the runnable example first, never a teaching snippet |
+| Feature coverage gate — and its blind spot | `scripts/feature_coverage.sh --check` + `scripts/feature_hygiene.sh --check` (CI), baselined in `.feature_coverage_baseline`.  It counts **uncataloged FILES**, so a new capability landing in an already-tagged file passes at baseline 0.  Measured 2026-08-04: gate green while ~12 shipped capabilities had no entry.  Green here means "no new untagged file", never "the catalogue is complete" |
 | Drift checker | `scripts/check_doc_drift.sh` |
 | Incoming-link grep (close/promote) | `grep -rn "plans/<NN>-<slug>" CLAUDE.md doc/claude/ --include="*.md"` |
 | Investigation regression suite | `tests/scripts/NN-<slug>.loft` |
