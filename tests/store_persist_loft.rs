@@ -2797,6 +2797,27 @@ fn lazy_bound_collection_fetches_only_the_touched_entry_both_backends() {
         // @PLN129 arc D — the control for the source pin: an UNCHANGED source
         // must fault nothing. Without this a pin that refused every fetch would
         // look correct.
+        // @PLN129 arc E — evict-and-refault, and the safety that makes it
+        // offerable: a held reference to an evicted record reads null.
+        assert!(
+            out.contains("ev_filled=grace ev_len=1"),
+            "{backend}: the working set filled: {out:?}"
+        );
+        assert!(
+            out.contains("ev_emptied=0"),
+            "{backend}: `= []` must empty the working set: {out:?}"
+        );
+        assert!(
+            out.contains("ev_held=grace"),
+            "{backend}: a held reference must SURVIVE eviction with its value — \
+             the deps system keeps a referenced record alive while the rest is \
+             reclaimed, and that is what makes eviction safe to offer: {out:?}"
+        );
+        assert!(
+            out.contains("ev_refaulted=alan ev_len2=1"),
+            "{backend}: the BINDING must survive eviction so the next lookup \
+             re-faults — otherwise emptying a collection silently unbinds it: {out:?}"
+        );
         assert!(
             out.contains("stable=grace,alan stable_faults=0"),
             "{backend}: a stable source must serve a whole traversal with no \

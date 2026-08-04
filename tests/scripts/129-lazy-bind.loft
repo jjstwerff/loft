@@ -85,4 +85,25 @@ fn main() {
   s1 = stable[42];
   s2 = stable[7];
   println("stable={s1.name},{s2.name} stable_faults={store_lazy_faults(stable)}");
+
+  // @PLN129 arc E — the working set is bounded by DISCARDING it, and the blunt
+  // form already exists: `= []` empties the collection and the binding SURVIVES
+  // (it is keyed by the collection root, which the assignment reuses), so the
+  // next lookup re-faults. Nothing asserted this before, and it is exactly the
+  // kind of behaviour that regresses silently.
+  ev: hash<LzPerson[id]> = [];
+  store_bind_lazy(ev, path);
+  e1 = ev[42];
+  held = e1;
+  println("ev_filled={e1.name} ev_len={ev.len()}");
+  ev = [];
+  println("ev_emptied={ev.len()}");
+  // A held reference SURVIVES the eviction with its value intact: loft's
+  // dependency tracking keeps a referenced record alive while everything else is
+  // reclaimed. Measured, not assumed -- allocating 500 fresh records over the
+  // freed space left the held value unchanged, so this is a live record and not
+  // a stale read. That is what makes eviction safe to offer at all.
+  println("ev_held={held.name ?? "<null>"}");
+  e2 = ev[7];
+  println("ev_refaulted={e2.name ?? "<null>"} ev_len2={ev.len()}");
 }

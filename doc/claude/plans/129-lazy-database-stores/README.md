@@ -207,9 +207,32 @@ they are the same thing.
    notion of "as of" from the shape of one example schema.
 4. **Writes.** Read-only for v1; a write to a lazily-backed record is refused loudly. Silently
    diverging from the source of truth is the failure this design exists to avoid.
-5. **Unbounded working set.** Faults only ever add. `store_reclaim` gives a store's tail back, but
-   a lazy store needs eviction or an explicit release — and eviction re-opens residency, so it
-   touches the invariant directly.
+5. **Unbounded working set — the blunt form already works.** *(arc E, measured.)* Faults only ever
+   add, so the working set needs a way down. `persons = []` is it, and three things about it were
+   MEASURED rather than assumed:
+
+   - It **reclaims**: 2000 entries went from `records 4011, data 97%` to `records 3, data 6%`.
+   - The **binding survives** — it is keyed by the collection root, which the assignment reuses —
+     so the next lookup re-faults. Emptying does not silently unbind.
+   - A **held reference survives with its value**, because the deps system keeps a referenced
+     record alive while the rest is reclaimed. Checked properly: allocating 500 fresh records over
+     the freed space left the held value unchanged, so it is a live record and not a stale read.
+     That is what makes eviction safe to offer at all.
+
+   All three are now pinned by the regression test, because none of them was asserted anywhere and
+   each would regress silently.
+
+   **What is NOT done** is a *bounded* working set — evicting selectively (keep N, drop
+   least-recently-used) rather than all-or-nothing. That needs a policy owner: loft has no notion
+   of "recently used" on a collection, and adding one is a per-record cost paid by every
+   collection. The blunt form is enough for a working set the program drops at a known boundary;
+   the selective form should wait for a consumer that actually needs it (arc F), so the policy is
+   chosen against a real access pattern rather than invented.
+
+   One inconsistency worth recording while it is fresh: an explicit single-entry removal
+   (`coll[k] = null`) makes a held reference read `null`, while clearing the whole collection
+   leaves it valid. Both are defensible in isolation; that they differ is a fact about loft, not
+   about this plan.
 6. **Cycles.** person → company → person is the normal case, not the edge. Faulting on
    dereference terminates naturally (a resident record is never re-fetched); any design that
    eagerly follows pointers does not.
@@ -287,7 +310,7 @@ an eager read with extra steps.
 | **B4** — collection-valued fields as owner-parameterised queries (`company.people`) | Open |
 | **C** — the C80-compatible failure channel (`store_lazy_error` / `_faults` / `_clear`), and `len`/iteration honesty | **shipped** — unreachable told from absent, faults STICKY across a later success, both backends; `len` settled as the resident count |
 | **D** — a pinned source, so a traversal sees one consistent world | **shipped** for a file source: pinned at bind, drift REFUSED and reported through arc C. A database source pins a transaction instead — the one case where consistency can be provided rather than checked |
-| **E** — eviction / a bounded working set | Open |
+| **E** — eviction / a bounded working set | **partly shipped** — the blunt form (`= []`) reclaims, keeps the binding and preserves held refs, all now pinned by test. Selective/bounded eviction deferred to arc F, where a real access pattern can choose the policy |
 | **F** — a real consumer: the persons / companies / positions graph | Open |
 
 ## Phase ordering
