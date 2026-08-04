@@ -216,6 +216,37 @@ impl Debug for Content {
 }
 
 #[allow(clippy::struct_excessive_bools)]
+/// @PLN129 arc D — a collection's lazy source, plus the identity it was PINNED
+/// to at bind time.
+///
+/// A store is a consistent image; a live source is not. Two faults in one
+/// traversal reading different worlds breaks that silently — measured: swapping
+/// the file between two lookups returned `grace` then `ALAN-v2`, with nothing
+/// reporting it.
+///
+/// A local file cannot be snapshotted cheaply (copying it defeats the point), so
+/// the pin is its identity — length and modification time — and drift is
+/// DETECTED rather than prevented. Detection is the honest half: the traversal
+/// either sees one world or is told it did not, which is the same contract arc C
+/// set for unreachability. An `http(s)` source carries no pin (there is nothing
+/// cheap to stat), and a database source will pin a transaction instead, which is
+/// the one case where consistency can actually be provided rather than checked.
+#[derive(Clone, Debug)]
+pub struct LazyBinding {
+    /// Where to fetch from — a local path or an `http(s)://` URL.
+    pub source: String,
+    /// `(len, mtime_nanos, inode)` for a local file at bind time; `None` when the
+    /// source cannot be stat'ed cheaply.
+    ///
+    /// All three, because each alone is too coarse and that was MEASURED, not
+    /// guessed: the first version pinned `(len, mtime_secs)` and failed to notice
+    /// a swap between two images that were both 8192 bytes and written in the
+    /// same second. Nanoseconds catch an in-place rewrite; the inode catches a
+    /// rename-replace, which does not touch the new file's mtime at all.
+    pub pin: Option<(u64, u64, u64)>,
+}
+
+#[allow(clippy::struct_excessive_bools)]
 pub struct Stores {
     pub types: Vec<Type>,
     pub names: HashMap<String, u16>,
@@ -242,7 +273,7 @@ pub struct Stores {
     /// miss consults this map only after the ordinary lookup has already failed,
     /// so an unbound collection pays one hash probe on a path that was about to
     /// return "absent" anyway.
-    pub lazy_sources: HashMap<(u16, u32, u32), String>,
+    pub lazy_sources: HashMap<(u16, u32, u32), LazyBinding>,
     /// @PLN129 arc C — why the last fetch for this collection could not reach its
     /// source. Absent means healthy.
     ///
@@ -253,9 +284,17 @@ pub struct Stores {
     /// asked deliberately (`store_lazy_error`), the way `#errors` and
     /// `store_verify` already work.
     ///
-    /// A genuine absence CLEARS it: reaching the source and not finding the key
-    /// proves the source was reachable, so a stale error must not survive it.
-    pub lazy_errors: HashMap<(u16, u32, u32), String>,
+    /// STICKY, and cleared only by `store_lazy_clear`. A later success must NOT
+    /// clear it: a traversal whose first lookup could not reach the source and
+    /// whose second could is MISSING data, and reporting "healthy" afterwards is
+    /// the silent-wrong-answer this channel exists to prevent. Reachability now
+    /// says nothing about what an earlier failure already lost — which is why an
+    /// absence does not clear it either.
+    ///
+    /// `(count, first reason)`: the count answers "how incomplete am I", and the
+    /// FIRST reason is kept because it names the original cause; later ones are
+    /// usually the same failure repeating.
+    pub lazy_errors: HashMap<(u16, u32, u32), (u64, String)>,
     #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
     #[cfg(feature = "wasm")]

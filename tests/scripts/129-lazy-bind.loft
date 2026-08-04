@@ -60,4 +60,29 @@ fn main() {
   gone: hash<LzPerson[id]> = [];
   println("gone_bound={store_bind_lazy(gone, "129-no-such-source.store")}");
   println("gone_null={gone[42] == null} gone_err_empty={store_lazy_error(gone) == ""}");
+
+  // A fault is STICKY. The shape this guards is a traversal that fails once and
+  // then succeeds: the working set is missing data, so answering "healthy"
+  // afterwards would be the silent wrong answer the channel exists to prevent.
+  // Only an explicit acknowledgement clears it — never a later success.
+  println("gone_faults={store_lazy_faults(gone)}");
+  mixed: hash<LzPerson[id]> = [];
+  store_bind_lazy(mixed, "129-no-such-source.store");
+  m1 = mixed[1];
+  store_bind_lazy(mixed, path);
+  m2 = mixed[42];
+  println("mixed_ok={m2 != null} mixed_still_faulted={store_lazy_faults(mixed) > 0}");
+  println("cleared={store_lazy_clear(mixed)} after_clear={store_lazy_faults(mixed)}");
+  println("clear_again={store_lazy_clear(mixed)}");
+
+  // @PLN129 arc D — a traversal must see ONE world. The source is pinned at
+  // bind, and a source that changed underneath is REFUSED rather than served:
+  // mixing two versions inside one collection is worse than an absence. The
+  // control matters as much as the drift case — a check that refuses everything
+  // would pass the drift assertion and be useless.
+  stable: hash<LzPerson[id]> = [];
+  store_bind_lazy(stable, path);
+  s1 = stable[42];
+  s2 = stable[7];
+  println("stable={s1.name},{s2.name} stable_faults={store_lazy_faults(stable)}");
 }

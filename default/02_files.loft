@@ -552,6 +552,23 @@ pub fn store_bind_lazy(local: reference, source: text) -> boolean;
 pub fn store_lazy_error(local: reference) -> text;
 #rust"stores.lazy_error(&(@local))"
 
+// @PLN129 arc C — how many fetches could not REACH this collection's source.
+// 0 is healthy. The magnitude behind `store_lazy_error`: after a traversal it
+// answers "how incomplete am I".
+pub fn store_lazy_faults(local: reference) -> integer;
+#rust"stores.lazy_faults(&(@local))"
+
+// @PLN129 arc C — acknowledge this collection's fetch failures, returning
+// whether there was anything to acknowledge.
+//
+// The ONLY thing that clears them. A later fetch happening to succeed does NOT:
+// a traversal whose first lookup could not reach the source and whose second
+// could is MISSING data, and answering "healthy" afterwards would be exactly the
+// silent wrong answer this channel exists to prevent. Clearing is a caller
+// saying "I have seen this", which is a different event entirely.
+pub fn store_lazy_clear(local: reference) -> boolean;
+#rust"stores.lazy_clear(&(@local))"
+
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
 #rust"stores.load_key(&(@local), @path, @key)"
 #impure(io)

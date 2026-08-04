@@ -173,6 +173,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(paged_store)]
     ("n_store_bind_lazy", n_store_bind_lazy),
     ("n_store_lazy_error_dest", n_store_lazy_error_dest),
+    ("n_store_lazy_faults", n_store_lazy_faults),
+    ("n_store_lazy_clear", n_store_lazy_clear),
     ("n_store_load_key", n_store_load_key),
     #[cfg(paged_store)]
     ("n_store_load_key_text", n_store_load_key_text),
@@ -1308,6 +1310,22 @@ fn n_store_lazy_error_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&msg);
+}
+
+/// Interpreter handler for `store_lazy_faults` — @PLN129 arc C.  How many
+/// fetches could not reach the source; 0 is healthy.
+fn n_store_lazy_faults(stores: &mut Stores, stack: &mut DbRef) {
+    let coll = *stores.get::<DbRef>(stack);
+    let n = stores.lazy_faults(&coll);
+    stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_lazy_clear` — @PLN129 arc C.  Acknowledge the
+/// failures; the ONLY thing that clears them.
+fn n_store_lazy_clear(stores: &mut Stores, stack: &mut DbRef) {
+    let coll = *stores.get::<DbRef>(stack);
+    let had = stores.lazy_clear(&coll);
+    stores.put(stack, had);
 }
 
 /// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from

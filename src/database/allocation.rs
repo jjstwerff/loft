@@ -3800,8 +3800,47 @@ impl Stores {
     /// key is the collection's root ref. Rebinding replaces; binding is
     /// configuration and may be set before the collection holds anything.
     pub fn bind_lazy(&mut self, coll: &DbRef, source: &str) {
-        self.lazy_sources
-            .insert((coll.store_nr, coll.rec, coll.pos), source.to_string());
+        // @PLN129 arc D — pin the source's identity at bind. Rebinding RE-pins,
+        // which is how a caller says "I accept the new world" after drift.
+        let pin = Self::source_pin(source);
+        self.lazy_sources.insert(
+            (coll.store_nr, coll.rec, coll.pos),
+            crate::database::LazyBinding {
+                source: source.to_string(),
+                pin,
+            },
+        );
+    }
+
+    /// The identity a local source is pinned to: `(len, mtime_secs)`.
+    ///
+    /// `None` for anything that cannot be stat'ed cheaply — an `http(s)` URL, or
+    /// a path that does not exist yet. No pin means no drift check, never a
+    /// silent pass: an unreachable source is already arc C's business.
+    fn source_pin(source: &str) -> Option<(u64, u64, u64)> {
+        if source.starts_with("http://") || source.starts_with("https://") {
+            return None;
+        }
+        let md = std::fs::metadata(source).ok()?;
+        let mtime = u64::try_from(
+            md.modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos(),
+        )
+        .unwrap_or(u64::MAX);
+        // The inode is what catches a rename-replace: the replacement keeps its
+        // own mtime, which can predate the bind, so a time comparison alone reads
+        // as "unchanged".
+        #[cfg(unix)]
+        let ino = {
+            use std::os::unix::fs::MetadataExt;
+            md.ino()
+        };
+        #[cfg(not(unix))]
+        let ino = 0u64;
+        Some((md.len(), mtime, ino))
     }
 
     /// @PLN129 arc C — why the last fetch could not reach this collection's
@@ -3814,8 +3853,31 @@ impl Stores {
     pub fn lazy_error(&self, coll: &DbRef) -> String {
         self.lazy_errors
             .get(&(coll.store_nr, coll.rec, coll.pos))
-            .cloned()
+            .map(|(_, reason)| reason.clone())
             .unwrap_or_default()
+    }
+
+    /// @PLN129 arc C — how many fetches for this collection could not reach its
+    /// source. `0` is healthy.
+    ///
+    /// The magnitude behind [`lazy_error`]: it answers "how incomplete am I",
+    /// which is the question stickiness exists to make answerable.
+    #[must_use]
+    pub fn lazy_faults(&self, coll: &DbRef) -> i64 {
+        self.lazy_errors
+            .get(&(coll.store_nr, coll.rec, coll.pos))
+            .map_or(0, |(n, _)| i64::try_from(*n).unwrap_or(i64::MAX))
+    }
+
+    /// @PLN129 arc C — acknowledge this collection's fetch failures. True when
+    /// there was something to clear.
+    ///
+    /// The ONLY thing that clears them, deliberately: a caller saying "I have
+    /// seen this" is a different event from a later fetch happening to succeed.
+    pub fn lazy_clear(&mut self, coll: &DbRef) -> bool {
+        self.lazy_errors
+            .remove(&(coll.store_nr, coll.rec, coll.pos))
+            .is_some()
     }
 
     /// The lazy source bound to this collection, if any.
@@ -3823,7 +3885,18 @@ impl Stores {
     pub fn lazy_source(&self, coll: &DbRef) -> Option<String> {
         self.lazy_sources
             .get(&(coll.store_nr, coll.rec, coll.pos))
-            .cloned()
+            .map(|b| b.source.clone())
+    }
+
+    /// @PLN129 arc D — has the source moved under this binding since it was
+    /// pinned? `false` when there is no pin (nothing to compare).
+    #[must_use]
+    fn lazy_drifted(&self, coll: &DbRef) -> bool {
+        let Some(b) = self.lazy_sources.get(&(coll.store_nr, coll.rec, coll.pos)) else {
+            return false;
+        };
+        let Some(pinned) = b.pin else { return false };
+        Self::source_pin(&b.source).is_none_or(|now| now != pinned)
     }
 
     /// @PLN129 arc A — the MISS path: the one place the outside world is
@@ -3859,6 +3932,28 @@ impl Stores {
                 pos: 0,
             };
         };
+        // @PLN129 arc D — the source must be the one this collection was pinned
+        // to. A store is a consistent image; a live file is not, and two faults
+        // in one traversal reading different worlds is a silent lie about what
+        // was read. Measured before the check existed: swapping the file between
+        // two lookups returned `grace` then `ALAN-v2` with nothing reporting it.
+        //
+        // Refuse rather than serve the new world: continuing would MIX two
+        // versions inside one collection, which is worse than an absence. Rebind
+        // to accept the new world deliberately.
+        if self.lazy_drifted(data) {
+            let slot = (data.store_nr, data.rec, data.pos);
+            let entry = self.lazy_errors.entry(slot).or_insert((
+                0,
+                format!("`{source}` changed since it was bound — rebind to accept the new version"),
+            ));
+            entry.0 += 1;
+            return DbRef {
+                store_nr: data.store_nr,
+                rec: 0,
+                pos: 0,
+            };
+        }
         // One key, whichever spelling it arrived in. A composite key is not
         // fetchable yet — @PLN125's associated types are what would carry it —
         // so it is left to answer absent rather than fetching the wrong row.
@@ -3869,7 +3964,9 @@ impl Stores {
         };
         let slot = (data.store_nr, data.rec, data.pos);
         if fetched {
-            self.lazy_errors.remove(&slot);
+            // NOT cleared. A success says nothing about what an earlier failure
+            // already lost, and reporting "healthy" after a partial traversal is
+            // exactly the silent-wrong-answer this channel exists to prevent.
             return self.find(data, db, key);
         }
         // @PLN129 arc C — a failed fetch is TWO different facts, and answering
@@ -3877,16 +3974,13 @@ impl Stores {
         // person" is stable and true, "the source is unreachable" is neither. The
         // check runs only HERE, on the miss-and-fail path, so a healthy program
         // never pays for it.
-        match crate::paged_reader::PageSource::open(&source) {
-            Ok(_) => {
-                // Reached it and the key was not there. That PROVES the source was
-                // reachable, so a stale error must not outlive it.
-                self.lazy_errors.remove(&slot);
-            }
-            Err(reason) => {
-                self.lazy_errors.insert(slot, reason);
-            }
+        if let Err(reason) = crate::paged_reader::PageSource::open(&source) {
+            // Sticky: count every failure, keep the FIRST reason as the cause.
+            let entry = self.lazy_errors.entry(slot).or_insert((0, reason));
+            entry.0 += 1;
         }
+        // Reached it and the key was not there — a genuine absence. It leaves the
+        // record untouched: reachability NOW does not undo an earlier loss.
         DbRef {
             store_nr: data.store_nr,
             rec: 0,

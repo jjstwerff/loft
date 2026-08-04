@@ -2776,6 +2776,33 @@ fn lazy_bound_collection_fetches_only_the_touched_entry_both_backends() {
         );
         assert!(out.contains("gone_bound=true"), "{backend}: bind: {out:?}");
         assert!(
+            out.contains("gone_faults=1"),
+            "{backend}: a failed fetch must be COUNTED: {out:?}"
+        );
+        // The shape that was silently wrong before stickiness: fail once, then
+        // succeed. The collection is missing data, so it must NOT read healthy.
+        assert!(
+            out.contains("mixed_ok=true mixed_still_faulted=true"),
+            "{backend}: a later success must NOT clear an earlier failure — that \
+             traversal is missing data and 'healthy' would be a lie: {out:?}"
+        );
+        assert!(
+            out.contains("cleared=true after_clear=0"),
+            "{backend}: an explicit acknowledgement is what clears: {out:?}"
+        );
+        assert!(
+            out.contains("clear_again=false"),
+            "{backend}: clearing twice reports nothing left to clear: {out:?}"
+        );
+        // @PLN129 arc D — the control for the source pin: an UNCHANGED source
+        // must fault nothing. Without this a pin that refused every fetch would
+        // look correct.
+        assert!(
+            out.contains("stable=grace,alan stable_faults=0"),
+            "{backend}: a stable source must serve a whole traversal with no \
+             drift fault — otherwise the pin is refusing everything: {out:?}"
+        );
+        assert!(
             out.contains("gone_null=true gone_err_empty=false"),
             "{backend}: an UNREACHABLE source must answer null AND leave a reason — \
              the whole point is that these two nulls are told apart: {out:?}"

@@ -170,11 +170,18 @@ they are the same thing.
 
 ## Failure paths — written before the code, because this is where the rest of the invariant lives
 
-1. **A failed fetch cannot raise.** C80: no runtime errors, ever. If an unreachable database
+1. **A failed fetch cannot raise, and a later success must not erase it.** C80: no runtime errors, ever. If an unreachable database
    answers `null`, then "no such person" and "the network is down" become indistinguishable **and
    unstable across runs** — the worst class, because it looks like data. The value channel cannot
    carry this; the failure belongs on a store-level channel a program can ask (the `store_verify`
-   / `#errors` shape).
+   / `#errors` shape) — **shipped as `store_lazy_error`**.
+
+   And it must be **STICKY**. The first version cleared on a later success, which recreated the
+   very bug in a subtler place: a traversal whose first lookup could not reach the source and
+   whose second could is MISSING data, and it reported healthy. Reachability now says nothing
+   about what an earlier failure already lost. So a fault survives until `store_lazy_clear`
+   acknowledges it, `store_lazy_faults` says how many (how incomplete), and a genuine absence does
+   not clear it either.
 2. **`len()` and iteration answer "what have I got", never "what exists" — and that is now
    SETTLED rather than a hazard.** An earlier draft of this line said the collection root "must
    carry the true length" and that iteration must stream or be refused. That was written before
@@ -189,7 +196,8 @@ they are the same thing.
    is documentation, not machinery: a lazily-bound collection is a working set, and anyone reading
    `len` as a population count is asking the wrong object.
 
-3. **Snapshot.** A store *is* a consistent image; a live database moves. Two faults at different
+3. **Snapshot — a traversal sees ONE world, or is told it did not.** *(arc D, shipped for a file
+   source.)* A store *is* a consistent image; a live source moves. Two faults at different
    points in a traversal seeing different worlds breaks the invariant directly, so the binding has
    to pin a read snapshot (a transaction, an MVCC point, or a source that is simply immutable).
    **This is about the database mutating under a reader — nothing to do with time-modelling in the
@@ -277,8 +285,8 @@ an eager read with extra steps.
 | **B2** — the explicit escape hatch: run a query, materialise rows INTO the collection (what the keys cannot express) | Open |
 | **B3** — the declared mapping + the `T: DbKeyed` bound + the bind-time schema/index check ([BINDING.md](BINDING.md)) | Open |
 | **B4** — collection-valued fields as owner-parameterised queries (`company.people`) | Open |
-| **C** — the C80-compatible failure channel (`store_lazy_error`), and `len`/iteration honesty | **shipped** — the channel distinguishes unreachable from absent on both backends; `len` settled as the resident count |
-| **D** — a pinned read snapshot, so a traversal sees one consistent world | Open |
+| **C** — the C80-compatible failure channel (`store_lazy_error` / `_faults` / `_clear`), and `len`/iteration honesty | **shipped** — unreachable told from absent, faults STICKY across a later success, both backends; `len` settled as the resident count |
+| **D** — a pinned source, so a traversal sees one consistent world | **shipped** for a file source: pinned at bind, drift REFUSED and reported through arc C. A database source pins a transaction instead — the one case where consistency can be provided rather than checked |
 | **E** — eviction / a bounded working set | Open |
 | **F** — a real consumer: the persons / companies / positions graph | Open |
 
