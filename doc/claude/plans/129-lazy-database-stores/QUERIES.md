@@ -66,3 +66,72 @@ stored vector — it is `WHERE company_id = <this company's key>`, a collection-
 query is fixed by the FK and the owning record. That needs the FK direction declared (the mapping
 above), an index on the referencing column (the bind-time check above), and it is where a
 `hash`/`index` kind on the *referencing* side earns its keep.
+
+## Arc B — who EXECUTES the derived query
+
+Deriving the SQL is the easy half. The hard half is who runs it, and one measurement settles it.
+
+**The interpreter cannot make a synchronous loft call from inside a lookup.** `State::fn_call`
+pushes a `CallFrame` and REDIRECTS the instruction pointer (`self.code_pos = to`); the opcode
+handler then returns and execution continues into the callee. So `get_record` cannot do "call a
+loft fetch function, take its result, carry on" — there is no nested interpreter. Making it
+possible means re-running the lookup after a callback returns, which is a bytecode-level control
+change and far larger than this arc. (The `to_text` hook is not a counter-example: the PARSER
+resolves it and emits an ordinary `Call`, so it is compile-time dispatch, not re-entrancy.)
+
+That rules out the shape most people reach for first — *the binding names a loft function, and a
+miss calls it* — and it rules it out on a fact rather than a preference.
+
+**So the source stays a RUST-side interface, and a SQL driver sits behind loft's existing `#c`
+machinery, called from Rust.** `c_call::resolve` and the per-arity trampolines are already Rust
+APIs: core can drive a C library with no crate, no rustc and no re-entrancy, which is exactly
+what @PLN24 exists to provide. Arc A's file source is the same interface with a different
+implementation.
+
+This does NOT put general SQL knowledge in core. Core needs to send a derived string and read
+back a row — a handful of C entry points — and WHICH library provides them is configuration, the
+same shape `[c] optional-libs` already uses. The dialect differences that matter
+(`BEGIN TRANSACTION` vs `BEGIN`, placeholder spelling) live where they already live: in the
+sqldb libraries, which @PLN23 built and proved uniform across four backends.
+
+**The cost, stated:** two implementations of "a source" (file, database) rather than one, and a
+narrow C surface owned by core. The alternative — teaching the bytecode to resume a lookup after
+a callback — buys a loft-implementable source and costs a control-flow change to the interpreter.
+That trade should be re-opened only if a third source appears, because two is not yet a pattern.
+
+## The derivation, concretely
+
+Everything the query needs is in the descriptor, and the pieces join exactly:
+
+| SQL part | descriptor source |
+|---|---|
+| table | `LayoutDesc.names[elem]` — the element type's name |
+| columns | the elem's `LayoutNode::Record(fields)` → each `LayoutField.name` |
+| `WHERE` | `Iterated::Hash { keys }` → each `Key`, matched to its column |
+| `ORDER BY` | `Iterated::Sorted`/`Index` keys carry `(u16, bool)` — the bool IS the direction |
+
+**A key maps to a column by POSITION.** `Key { type_nr, position }` and
+`LayoutField { name, position, content }` both carry a byte offset into the record, so the key
+field's name is the field whose `position` matches. Nothing has to be declared twice, and nothing
+is matched by name-guessing.
+
+So for `persons: hash<Person[id]>` where `Person { const id: integer, name: text }`:
+
+```sql
+SELECT id, name FROM person WHERE id = ?
+```
+
+and for `positions: index<Position[person_id, from]>` walked as a range:
+
+```sql
+SELECT person_id, company_id, from, to FROM position
+ WHERE person_id = ? AND from BETWEEN ? AND ?
+ ORDER BY from ASC
+```
+
+— the `ASC` from the key's own direction bit, not from a convention.
+
+**What the descriptor cannot give**, and what therefore has to be declared ([BINDING.md](BINDING.md)):
+the table when it is not the type's name (`persoon` for `Person`), a column when it is not the
+field's name, and a SQL identifier when a loft field name is not a legal one. The derivation is
+the DEFAULT; the mapping is the override, and both feed one query builder rather than two paths.
