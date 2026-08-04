@@ -106,6 +106,54 @@ fn bound <D: SqlDb> (d: D, create: text) -> text {
   return "p={n} {rows}hit={hit} big={got}";
 }
 
+// --- T1–T3 ---------------------------------------------------------------
+//
+// Atomicity, over the same interface and with no backend named. This lands
+// before the object mapping because writing a collection non-atomically is not
+// a smaller step, it is a wrong one: a crash mid-write leaves rows that read
+// back as a whole collection, and nothing afterwards can tell.
+//
+// Every claim in the returned line is separately checkable:
+//
+//   begin=true/true   two transactions opened, one after the other
+//   nested=false      a `db_begin` INSIDE one is REFUSED, not silently ignored.
+//                     The silent version is the dangerous one — the inner
+//                     "rollback" would discard the OUTER transaction's work.
+//   rows=0/1          rollback DISCARDED the row, commit KEPT it. The pair is
+//                     what makes this non-vacuous: a backend whose `db_begin`
+//                     quietly did nothing would answer 1/1, and one that
+//                     discarded everything 0/0.
+//   stray=false/false a commit or rollback with no transaction open is refused
+//                     — the caller believes it has work, and it has none.
+fn count_x <D: SqlDb> (d: D) -> integer {
+  n = 0;
+  if !d.db_select("SELECT id FROM loft_x") { return -1 }
+  while d.db_next() { n += 1 }
+  return n;
+}
+
+fn transact <D: SqlDb> (d: D, create: text) -> text {
+  _ = d.db_exec("DROP TABLE IF EXISTS loft_x");
+  if !d.db_exec(create) { return "FAIL create {d.db_last_error()}" }
+
+  b1 = d.db_begin();
+  _ = d.db_exec("INSERT INTO loft_x VALUES (1)");
+  nested = d.db_begin();
+  r1 = d.db_rollback();
+  after_rollback = count_x(d);
+
+  b2 = d.db_begin();
+  _ = d.db_exec("INSERT INTO loft_x VALUES (2)");
+  c1 = d.db_commit();
+  after_commit = count_x(d);
+
+  stray_c = d.db_commit();
+  stray_r = d.db_rollback();
+
+  _ = d.db_exec("DROP TABLE loft_x");
+  return "begin={b1}/{b2} nested={nested} rollback={r1} commit={c1} rows={after_rollback}/{after_commit} stray={stray_c}/{stray_r}";
+}
+
 fn env_or(name: text, fallback: text) -> text {
   // `env_variable` answers "" for an unset variable, not null, so `??` never
   // fires on it — treating "" as absent is the caller's job.
@@ -125,6 +173,7 @@ fn main() {
     }
     println("sqlite {dump(ds, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("sqlite bound {bound(ds, "CREATE TABLE loft_p (id INTEGER PRIMARY KEY, name TEXT)")}");
+    println("sqlite tx {transact(ds, "CREATE TABLE loft_x (id INTEGER PRIMARY KEY)")}");
     ds.db_shut();
     return
   }
@@ -139,6 +188,7 @@ fn main() {
     }
     println("postgres {dump(dp, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("postgres bound {bound(dp, "CREATE TABLE loft_p (id INT PRIMARY KEY, name TEXT)")}");
+    println("postgres tx {transact(dp, "CREATE TABLE loft_x (id INT PRIMARY KEY)")}");
     _ = dp.db_exec("DROP TABLE loft_u");
     dp.db_shut();
     return
@@ -154,6 +204,7 @@ fn main() {
     }
     println("maria {dump(dm, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("maria bound {bound(dm, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR(2000))")}");
+    println("maria tx {transact(dm, "CREATE TABLE loft_x (id BIGINT PRIMARY KEY) ENGINE=InnoDB")}");
     _ = dm.db_exec("DROP TABLE loft_u");
     dm.db_shut();
     return
@@ -175,6 +226,7 @@ fn main() {
     }
     println("duckdb {dump(dd, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("duckdb bound {bound(dd, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR)")}");
+    println("duckdb tx {transact(dd, "CREATE TABLE loft_x (id BIGINT PRIMARY KEY)")}");
     dd.db_shut();
     return
   }

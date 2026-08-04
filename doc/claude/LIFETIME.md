@@ -74,6 +74,34 @@ Three conditions must ALL be true to emit `OpFreeRef`:
    after use (A14), and by `set_skip_free` for borrowed references like par-loop
    result variables.
 
+##### The two escape routes
+
+Condition 2 covers the route the type system can see, and it is not the only one.
+A callee hands a heap value to its caller two ways: a **`return`**, and a **write
+through a `&` parameter** — a `&T` is a place in the caller's frame, so assigning
+it publishes into storage the caller owns and goes on using.
+
+The second route is invisible to a dep check, because the escaping store is not
+named by the return type at all.  It is settled at runtime instead: `scan_set`
+pairs the `__ref_N` work-ref buffer with the `&` parameter it was published
+through (`paired_witness`), and the scope exit emits
+`OpFreeRefIfDistinct(__ref_N, *f)` rather than a plain free.  A runtime store-nr
+comparison is what makes it path-local — a publish inside an `if` frees the
+buffer on the branch that did not publish, with no per-path set to thread.
+
+Why runtime rather than static: the callee decides.  One that returns the buffer
+it was handed (`fn mk(n) -> Box { b = Box{..}; return b }`, and `file()` itself)
+makes the buffer the caller's record; one that builds fresh in the return
+expression leaves the buffer orphaned and this frame's to free.  A local target
+never faces the question — `gen_set_first_ref_call_copy` deep-copies, so the two
+stores are always distinct — which is why the fault was specific to `&`
+parameters (loft#759).
+
+Both routes have a static checker: `use_analysis::return_source_freed` for the
+return, `ref_param_publish_freed` for the `&` write.  Both surface through
+`loft introspect --show-ownership`, and both flag the same shape — a delivered
+store killed by a plain `OpFreeRef`.
+
 #### Function (`Type::Function`) — freed at scope exit (verified 2026-05-12)
 
 `Type::Function` does not appear in the `get_free_vars` match by name, but the

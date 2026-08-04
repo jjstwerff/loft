@@ -232,6 +232,28 @@ pub fn set_declared_libraries(libs: Vec<crate::data::CLibrary>) {
         libs.into_iter().map(|l| (l, None)).collect();
 }
 
+/// Which declared libraries are EXPECTED to export `symbol`, when the source says so.
+///
+/// `library_symbol_table` attributes symbols per PACKAGE, and gives a multi-library
+/// package an empty list rather than guessing — so this answers EMPTY exactly when the
+/// source cannot attribute the symbol, and the caller must widen.
+///
+/// A package contributes one entry per artefact it owns — its `cc`-built shim AND its
+/// declared soname — with the same symbol list on each, so more than one name can claim
+/// a symbol. All of them are returned and the caller matches any; picking the first
+/// selected the shim path, which no declared library is named after, and the narrowing
+/// then never fired.
+fn sonames_for_symbol(symbol: &str) -> Vec<String> {
+    let guard = LIB_SYMBOLS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard
+        .iter()
+        .filter(|(_, syms)| syms.iter().any(|s| s == symbol))
+        .map(|(lib, _)| lib.clone())
+        .collect()
+}
+
 /// Record which `#c` symbols each declared library is expected to provide.
 pub fn set_library_symbols(table: Vec<(String, Vec<String>)>) {
     *LIB_SYMBOLS
@@ -307,7 +329,15 @@ pub fn library_symbol_table(data: &crate::data::Data) -> Vec<(String, Vec<String
 /// Open any declared library not yet tried. Returns whether this call opened
 /// one — i.e. whether the set of resolvable symbols just grew, which is the
 /// only reason for the caller to look again.
-fn open_pending_optional() -> bool {
+///
+/// `only` narrows it to one library by name. A symbol MISS has no name to give —
+/// a `#c` annotation never says which library it comes from, so the miss path
+/// widens the search across all of them (arc B: one resolver, one meaning per
+/// symbol). An availability QUESTION does have one, and answering it by opening
+/// every optional library made `c_library_available("libsqlite3.so.0")` dlopen
+/// libduckdb as a side effect — 70 MB mapped by a program that never mentions
+/// duckdb, which is the cost arc G exists to avoid.
+fn open_pending_optional_named(only: Option<&[String]>) -> bool {
     // The entries are cloned out and the guard dropped before any `dlopen`: an
     // optional library's initialisers run arbitrary C, and holding the lock
     // across that would serialise every parallel arm resolving a symbol (the
@@ -318,7 +348,7 @@ fn open_pending_optional() -> bool {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard
             .iter_mut()
-            .filter(|(_, tried)| tried.is_none())
+            .filter(|(lib, tried)| tried.is_none() && only.is_none_or(|ns| ns.contains(&lib.name)))
             .map(|(lib, _)| lib.clone())
             .collect()
     };
@@ -358,7 +388,21 @@ pub fn resolve(symbol: &str) -> Option<*const ()> {
         return Some(p);
     }
     // Miss: an optional library that has not been opened yet may export it.
-    if open_pending_optional() {
+    //
+    // Try the library the SOURCE attributes this symbol to first. Widening to every
+    // declared library still happens below when that does not answer — the arc B rule
+    // is unchanged, a symbol still means one thing — but it is no longer the first
+    // move, because it dlopens libraries the program never mentions. With four
+    // one-library packages declared, resolving `sqlite3_open` mapped libduckdb's 70 MB
+    // as a side effect, which is the cost `[c] optional-libs` exists to avoid.
+    let attributed = sonames_for_symbol(symbol);
+    if !attributed.is_empty()
+        && open_pending_optional_named(Some(&attributed))
+        && let Some(p) = resolve_in_loaded(symbol)
+    {
+        return Some(p);
+    }
+    if open_pending_optional_named(None) {
         return resolve_in_loaded(symbol);
     }
     None
@@ -454,7 +498,7 @@ pub fn library_available_native(
 
 #[must_use]
 pub fn library_available(name: &str) -> bool {
-    open_pending_optional();
+    open_pending_optional_named(Some(std::slice::from_ref(&name.to_string())));
     let opened = {
         let guard = DECLARED_LIBS
             .lock()

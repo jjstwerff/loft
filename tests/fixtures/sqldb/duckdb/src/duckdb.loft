@@ -70,10 +70,11 @@ pub struct Duck {
   live: boolean,
   stmt: integer,
   err: text,
+  tx: Tx,
 }
 
 pub fn duck() -> Duck {
-  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "" };
+  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "", tx: tx_new() };
 }
 
 // Is this backend usable on this machine?
@@ -222,6 +223,17 @@ pub fn db_rows(self: Duck, q: SqlText) -> boolean {
   self.live = true;
   return true;
 }
+
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// duckdb wants the `TRANSACTION` word — the one backend of the four whose
+// keyword differs, which is why the keyword is the backend's to supply.
+//
+// UNPROVEN like the rest of this backend: libduckdb is not installed on the
+// machine this was built on, so these three were read and never run.
+pub fn db_begin(self: Duck) -> boolean { return tx_begin(self, self.tx, "BEGIN TRANSACTION"); }
+pub fn db_commit(self: Duck) -> boolean { return tx_commit(self, self.tx); }
+pub fn db_rollback(self: Duck) -> boolean { return tx_rollback(self, self.tx); }
 
 pub fn db_shut(self: Duck) {
   self.release();

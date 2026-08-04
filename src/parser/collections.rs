@@ -1698,7 +1698,26 @@ use #count instead"
                 );
             }
         }
-        let for_var = self.create_var(id, &var_tp);
+        // loft#762 — `_` gets its OWN slot per loop.
+        //
+        // `_` is the universal discard, so `change_var_type` retypes it silently and
+        // the C61 shadow guards exempt it — both deliberate, because one function may
+        // discard several types. But there was still only ONE `_` slot, so a loop
+        // binding SHARED it with any earlier `_ = call()`. The interpreter retypes and
+        // copes; native declares `let mut var__: <whichever came first>` once and then
+        // assigns the other, which is E0308 — a program that runs interpreted and does
+        // not compile. The ASSIGNMENT form has no such hole: `_ = f(); _ = mk()` with
+        // two types is rejected at parse time. It is the loop path, exempt from that
+        // check, that retyped without complaint.
+        //
+        // The name stays bound to this slot for the body (the caller rebinds it around
+        // `parse_block` and restores the outer one after), because `_` IS readable —
+        // `for _ in 0..4 { r = r + _ }` is pinned in `anon-loop-counters.loft`.
+        let for_var = if id == "_" {
+            self.create_unique("_", &var_tp)
+        } else {
+            self.create_var(id, &var_tp)
+        };
         self.vars.defined(for_var);
         let if_step = if self.lexer.has_token("if") {
             let mut if_expr = Value::Null;
@@ -1988,6 +2007,14 @@ use #count instead"
                 && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned(), Type::Iterator(_, _)));
             let (iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
+            // loft#762 — `_` names THIS loop's binding while its body is parsed, and
+            // the outer one again afterwards, so a later `_ = call()` keeps its own
+            // slot instead of retyping the loop's.
+            let outer_discard: Option<u16> = if id == "_" && for_var != u16::MAX {
+                self.vars.set_name("_", for_var)
+            } else {
+                None
+            };
             // @PLN115 tail — record the loop binder's DECLARATION (pass 2, recording
             // on): `Local{fn_def, for_var}` at the binder name, so a `for i` binder's
             // references/rename take S4's precise path instead of the F-v1 fallback.
@@ -2251,6 +2278,11 @@ use #count instead"
             let loop_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             self.parse_block("for", &mut block, &Type::Void);
+            if id == "_"
+                && let Some(prev) = outer_discard
+            {
+                self.vars.set_name("_", prev);
+            }
             // P235 step 3: prepend the destructure Set ops so each
             // iteration unpacks the loop var into the user-named binders
             // before the user's body runs.

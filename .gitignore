@@ -124,3 +124,10 @@ doc/pkg-mt/
 
 # Scratch build trees (e.g. a feature-variant build used while debugging).
 target-*/
+
+# Store files a test leaves behind.  `persist-bind-field-store-757.loft` writes its
+# two under `temp_dir()` so the tree stays clean even when an assertion fails before
+# the cleanup — but a cwd-relative name is the easy mistake, and last time it put
+# four files in the repository root that then churned on every suite run.
+/*.store
+/*.store.dschema

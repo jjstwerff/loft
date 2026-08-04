@@ -23,7 +23,7 @@
 //! lifetime gives the rest of ¬D3). Anything not proven is `Copy`. An unrecognised use
 //! can only *lose* an elision, never produce a wrong borrow.
 
-use crate::data::{Data, DefType, Value};
+use crate::data::{Data, DefType, Type, Value};
 use crate::lexer::Position;
 use crate::variables::Function;
 use std::collections::{HashMap, HashSet};
@@ -3101,6 +3101,125 @@ pub fn return_source_freed(data: &Data, d_nr: u32) -> Vec<u16> {
     out
 }
 
+/// loft#759 — the `&`-parameter twin of [`return_source_freed`].
+///
+/// A callee has exactly two ways to hand a heap value to its caller: a `return`, and a
+/// write through a `&` parameter. `return_source_freed` covers the first; without this
+/// the second was asserted nowhere, which is how a `&File` rebind shipped freeing the
+/// record its caller went on writing through.
+///
+/// The shape: a work-ref buffer `__ref_N` is passed to a call whose result is published
+/// through a `&` parameter. No deep copy stands between the two — codegen writes the
+/// returned `DbRef` straight into the caller's slot — so whenever the callee returns the
+/// buffer it was handed, `__ref_N` IS what the caller now holds, and a plain
+/// `OpFreeRef(__ref_N)` after that publish frees the caller's record.
+///
+/// `OpFreeRefIfDistinct(__ref_N, f)` is the safe form (`scan_set` pairs it) and is not
+/// flagged, nor is a store re-allocated by `OpDatabase` after the publish.
+///
+/// The publish set is a MAY-alias union across branches: a buffer published on only one
+/// arm of an `if` is still the caller's record on that arm, so a plain free after the
+/// join is a real fault there. That is the mirror of `scan_rsf`'s intersection, which
+/// tracks "definitely freed" rather than "may have escaped".
+///
+/// Returns the offending work-ref vars, sorted + deduped. Empty = clean.
+pub fn ref_param_publish_freed(data: &Data, d_nr: u32) -> Vec<u16> {
+    let def = data.def(d_nr);
+    let ops = FreeOps {
+        fr: data.def_nr("OpFreeRef"),
+        ft: data.def_nr("OpFreeText"),
+        fif: data.def_nr("OpFreeRefIfDistinct"),
+        db: data.def_nr("OpDatabase"),
+    };
+    let mut out: Vec<u16> = Vec::new();
+    let mut published: HashSet<u16> = HashSet::new();
+    scan_rpf(&def.code, def.variables(), &ops, &mut published, &mut out);
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Is `v` a `&` parameter — a place a set writes THROUGH, into storage the caller owns?
+fn is_ref_param(vars: &Function, v: u16) -> bool {
+    v < vars.count() && matches!(vars.tp(v), Type::RefVar(_))
+}
+
+/// The work-ref buffers a call's argument list hands to the callee. Named by convention
+/// (`__ref_N` / `__rref_N`), the same key `scan_set` pairs its witness off.
+fn work_ref_args(rhs: &Value, vars: &Function, out: &mut Vec<u16>) {
+    let Value::Call(_, args) = rhs.unspan() else {
+        return;
+    };
+    for arg in args {
+        let av = match arg.unspan() {
+            Value::Var(av) | Value::Set(av, _) => *av,
+            _ => continue,
+        };
+        if av < vars.count() {
+            let n = vars.name(av);
+            if n.starts_with("__ref_") || n.starts_with("__rref_") {
+                out.push(av);
+            }
+        }
+    }
+}
+
+/// Path-sensitive walk: track the work-ref buffers PUBLISHED through a `&` parameter on
+/// the current path, and flag each one a plain `OpFreeRef` then frees.
+fn scan_rpf(
+    node: &Value,
+    vars: &Function,
+    ops: &FreeOps,
+    published: &mut HashSet<u16>,
+    out: &mut Vec<u16>,
+) {
+    match node.unspan() {
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                scan_rpf(op, vars, ops, published, out);
+            }
+        }
+        Value::Insert(items) => {
+            for op in items {
+                scan_rpf(op, vars, ops, published, out);
+            }
+        }
+        Value::Set(v, rhs) => {
+            scan_rpf(rhs, vars, ops, published, out);
+            if is_ref_param(vars, *v) {
+                let mut buffers = Vec::new();
+                work_ref_args(rhs, vars, &mut buffers);
+                published.extend(buffers);
+            }
+        }
+        Value::If(c, t, e) => {
+            scan_rpf(c, vars, ops, published, out);
+            let mut pt = published.clone();
+            scan_rpf(t, vars, ops, &mut pt, out);
+            let mut pe = published.clone();
+            scan_rpf(e, vars, ops, &mut pe, out);
+            // MAY-alias: published on either arm is published for the free that follows.
+            *published = pt.union(&pe).copied().collect();
+        }
+        Value::Call(d, args) if *d == ops.fr => {
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan)
+                && published.contains(s)
+            {
+                out.push(*s);
+            }
+        }
+        Value::Call(d, args) if *d == ops.fif || *d == ops.db => {
+            // IfDistinct is the SAFE free; OpDatabase re-allocates — both end the alias.
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
+                published.remove(s);
+            }
+        }
+        Value::Return(r) | Value::Drop(r) => scan_rpf(r, vars, ops, published, out),
+        Value::Span(b) => scan_rpf(&b.1, vars, ops, published, out),
+        _ => {}
+    }
+}
+
 /// The scope-free / alloc op numbers the return-source walk keys off.
 struct FreeOps {
     fr: u32,  // OpFreeRef (plain)
@@ -3385,6 +3504,104 @@ mod return_source_tests {
             Type::Void,
             "body",
         );
+        assert!(run(&code).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod ref_param_publish_tests {
+    //! Injected-fault controls for the `&`-publish walk (`scan_rpf`, loft#759). The
+    //! compiler no longer emits the bug, so the positive control is synthetic — without
+    //! one, "no findings" would read the same whether the walk is clean or blind.
+    use super::{FreeOps, scan_rpf};
+    use crate::data::{Deps, Type, Value, v_block, v_if, v_set};
+    use crate::variables::Function;
+    use std::collections::HashSet;
+
+    const FR: u32 = 100;
+    const FT: u32 = 101;
+    const FIF: u32 = 102;
+    const DB: u32 = 103;
+    const CALLEE: u32 = 200;
+
+    fn ops() -> FreeOps {
+        FreeOps {
+            fr: FR,
+            ft: FT,
+            fif: FIF,
+            db: DB,
+        }
+    }
+
+    /// `f` (var 0) is a `&Rec` parameter, `__ref_1` (var 1) the work-ref buffer, and
+    /// `loc` (var 2) a plain local of the same record type — the a1-vs-a2 contrast.
+    fn vars() -> Function {
+        let rec = Type::Reference(1, Deps::none());
+        let mut f = Function::new("reb", "t.loft");
+        f.add_temp_var("f", &Type::RefVar(Box::new(rec.clone())));
+        f.add_temp_var("__ref_1", &rec);
+        f.add_temp_var("loc", &rec);
+        f
+    }
+
+    fn run(code: &Value) -> Vec<u16> {
+        let mut out = Vec::new();
+        let mut published = HashSet::new();
+        scan_rpf(code, &vars(), &ops(), &mut published, &mut out);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// `<target> = callee(__ref_1)` — the publish.
+    fn publish(target: u16) -> Value {
+        v_set(target, Value::Call(CALLEE, vec![Value::Var(1)]))
+    }
+    fn free(s: u16) -> Value {
+        Value::Call(FR, vec![Value::Var(s)])
+    }
+    fn free_if(s: u16, w: u16) -> Value {
+        Value::Call(FIF, vec![Value::Var(s), Value::Var(w)])
+    }
+
+    /// POSITIVE — published through the `&`, then plain-freed: the loft#759 shape.
+    #[test]
+    fn flags_plain_free_after_ref_param_publish() {
+        let code = v_block(vec![publish(0), free(1)], Type::Void, "body");
+        assert_eq!(run(&code), vec![1]);
+    }
+
+    /// NEGATIVE — `OpFreeRefIfDistinct` is the safe form the fix emits.
+    #[test]
+    fn silent_on_free_if_distinct() {
+        let code = v_block(vec![publish(0), free_if(1, 0)], Type::Void, "body");
+        assert!(run(&code).is_empty());
+    }
+
+    /// NEGATIVE — the same call assigned to a LOCAL deep-copies into a store the local
+    /// owns, so the buffer is genuinely this frame's to free (matrix cell a1).
+    #[test]
+    fn silent_when_target_is_a_local() {
+        let code = v_block(vec![publish(2), free(1)], Type::Void, "body");
+        assert!(run(&code).is_empty());
+    }
+
+    /// POSITIVE — published on ONE arm only. MAY-alias: the free after the join still
+    /// hits the caller's record on the arm that published (matrix cell c1).
+    #[test]
+    fn flags_free_after_conditional_publish() {
+        let code = v_block(
+            vec![v_if(Value::Var(9), publish(0), Value::Null), free(1)],
+            Type::Void,
+            "body",
+        );
+        assert_eq!(run(&code), vec![1]);
+    }
+
+    /// NEGATIVE — nothing published at all; a bare buffer free is the normal shape.
+    #[test]
+    fn silent_without_a_publish() {
+        let code = v_block(vec![free(1)], Type::Void, "body");
         assert!(run(&code).is_empty());
     }
 }

@@ -7,8 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S4 built and in the repo; S5+ (the object mapping) is
-designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
+**@PLN23 `status:active`** — S1–S4 and T1–T3 built and in the repo; S5+ (the object
+mapping) is designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
 is its first consumer; @PLN125 is not. Depends on @PLN24 (`#c`), also active.
 
 ## Goal
@@ -40,6 +40,7 @@ exists at all.
 | S2 the handle round-trips, C's own error comes back with it | done |
 | S3 a real cursor, and NULL is not the empty string | done |
 | S4 prepared statements, on all four backends | done |
+| T1–T3 begin / commit / rollback, and nesting REFUSED | done |
 | S5+ the object mapping | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
 
 ## S4 — a value cannot become syntax
@@ -111,9 +112,6 @@ attack cell loudly.
 
 ### Named gaps
 
-- **duckdb is unproven here.** libduckdb is not installed on the machine this was
-  built on, so its cells were read and never run, and the fixture prints SKIP.
-  Said plainly rather than left to look covered.
 - **A float binds as TEXT** on every backend. `sqlite3_bind_double` takes a double
   by value, which travels in an SSE register the fixed caller does not write
   (@PLN24), and a shim wrapping it would have to link the library. Precision is
@@ -121,10 +119,12 @@ attack cell loudly.
   answer is still an open item above.
 - **One statement per connection**, and one parameter array per process: the
   shims' slots are static. The same single-slot limit S1–S3 already carried.
-- **loft#740 is worked around, not fixed** — a `text?` function with two
-  `return <call>` statements frees the returned buffer on `--native`. Only
-  mariadb's `db_col` has that shape (two column sources behind one nullable
-  accessor); it uses the verified single-return form until #740 closes.
+- **duckdb is now PROVEN**, on 1.5.5 with the library reachable via
+  `LD_LIBRARY_PATH` — no system install, which is the point of `[c] optional-libs`.
+  All three lines (cells, bound, transactions) are byte-identical to the other
+  backends on BOTH loft backends, including its own `BEGIN TRANSACTION` spelling.
+  The fixture still SKIPs cleanly when the library is absent, and the test now
+  holds duckdb to the full bar whenever it is present.
 
 ## The documents
 

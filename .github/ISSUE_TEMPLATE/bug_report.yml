@@ -103,6 +103,20 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: found_via
+    attributes:
+      label: Filed as a direct result of another ticket?
+      description: >-
+        If this was found BECAUSE of another ticket — a follow-on of that investigation, a
+        sibling the matrix turned up, a defect in the fix — put `Found-via: #N` here.  It does
+        NOT change `hit-by:*`, which stays a direct pointer to whoever ran into THIS one; it
+        records the chain, so "what set us looking" can be derived by walking it.  Leave blank
+        if nothing prompted it.
+      placeholder: "Found-via: #747"
+    validations:
+      required: false
+
   - type: dropdown
     id: severity
     attributes:

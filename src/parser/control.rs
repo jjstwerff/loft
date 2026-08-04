@@ -8649,7 +8649,15 @@ impl Parser {
     }
 
     /// Recurse `node`, appending the retbuf arg to every `Call(d, …)` with `d ∈ force`.
-    fn patch_tret_call(&mut self, node: &mut Value, force: &std::collections::HashSet<u32>) {
+    ///
+    /// Also used by `instantiate_nested_generics`: a call retargeted at a freshly created
+    /// monomorph faces the same mismatch this solves — the promoted callee takes a hidden
+    /// `&text` buffer the already-built call does not pass.
+    pub(crate) fn patch_tret_call(
+        &mut self,
+        node: &mut Value,
+        force: &std::collections::HashSet<u32>,
+    ) {
         match node {
             Value::Call(d, args) => {
                 for a in args.iter_mut() {

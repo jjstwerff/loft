@@ -42,10 +42,11 @@ pub struct Postgres {
   seq: integer,
   ps: text,
   err: text,
+  tx: Tx,
 }
 
 pub fn postgres() -> Postgres {
-  return Postgres { conn: 0, res: 0, at: -1, n: 0, seq: 0, ps: "", err: "" };
+  return Postgres { conn: 0, res: 0, at: -1, n: 0, seq: 0, ps: "", err: "", tx: tx_new() };
 }
 
 pub fn db_open(self: Postgres, target: text) -> boolean {
@@ -165,6 +166,14 @@ pub fn db_rows(self: Postgres, q: SqlText) -> boolean {
   self.at = -1;
   return true;
 }
+
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// Postgres spells all three as plain statements, so each of these is the
+// shared rule plus a keyword. The state lives here; the logic does not.
+pub fn db_begin(self: Postgres) -> boolean { return tx_begin(self, self.tx, "BEGIN"); }
+pub fn db_commit(self: Postgres) -> boolean { return tx_commit(self, self.tx); }
+pub fn db_rollback(self: Postgres) -> boolean { return tx_rollback(self, self.tx); }
 
 pub fn db_shut(self: Postgres) {
   if self.res != 0 { pq_clear(self.res); self.res = 0; }

@@ -11,15 +11,24 @@
 // perfectly, which is why this stayed invisible until a different program in the
 // same pipeline tried to load the file.  Pinned here so the two shapes stay
 // distinguishable, and so the advice at the call site keeps firing.
-#cwd
+//
+// The two stores are written under `temp_dir()`, not beside the source.  A
+// cwd-relative name put them in the repository root, where they were committed
+// by accident and then rewritten by every suite run — so `git status` was dirty
+// after each one and the churn kept riding along in unrelated commits.  Deleting
+// them at the end is not enough on its own: a run that fails an assertion above
+// never reaches the cleanup, and a regression test is exactly the thing that is
+// expected to fail one day.  Writing outside the tree makes that harmless.
 
 struct Rec  { const k: integer, v: integer }
 struct Oth  { const j: integer }
 struct Wrap { recs: hash<Rec[k]>, other: hash<Oth[j]> }
 
 fn main() {
-  bare = "bind757_bare.store";
-  held = "bind757_held.store";
+  tmp = temp_dir();
+  assert(tmp != null, "temp_dir is where this test's stores go");
+  bare = "{tmp ?? ""}/loft_bind757_bare.store";
+  held = "{tmp ?? ""}/loft_bind757_held.store";
   _ = delete(bare); _ = delete("{bare}.dschema");
   _ = delete(held); _ = delete("{held}.dschema");
 
@@ -55,4 +64,7 @@ fn main() {
   for o in w2.other { no += 1; jo += o.j; }
   assert(no == 1, "the SIBLING collection travelled with it, got {no}");
   assert(jo == 9, "intact, got {jo}");
+
+  _ = delete(bare); _ = delete("{bare}.dschema");
+  _ = delete(held); _ = delete("{held}.dschema");
 }

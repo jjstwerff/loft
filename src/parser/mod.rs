@@ -1638,8 +1638,14 @@ impl Parser {
                 || (matches!(dt, DefType::Struct) && name.starts_with("main_vector<"));
             let lazy_instantiation =
                 matches!(dt, DefType::Function) && self.h5_names_a_generic_template(name);
+            // loft#763 — the third legal append: a parametric BOUND STUB. A generic's
+            // body calling a bound method (`d.db_exec(…)`) mints `t_<LEN><T>_<m>` for
+            // the TYPE VARIABLE rather than for a concrete type, and like an
+            // instantiation that is pass-2-only by design — pass 1 only predicts.
+            let lazy_bound_stub =
+                matches!(dt, DefType::Function) && self.h5_names_a_bound_stub(name);
             assert!(
-                lazy_wrapper || lazy_instantiation,
+                lazy_wrapper || lazy_instantiation || lazy_bound_stub,
                 "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
                  wrapper or generic instantiation — a real cross-pass divergence \
                  (pass1={}, pass2={})",
@@ -1740,22 +1746,50 @@ impl Parser {
     /// legal pass-2-only appends of the Function kind — a source-declared
     /// method parses in pass 1 and can never appear as a trailing pass-2 def.
     fn h5_names_a_generic_template(&self, name: &str) -> bool {
-        let Some(rest) = name.strip_prefix("t_") else {
-            return false;
-        };
-        let digits = rest.chars().take_while(char::is_ascii_digit).count();
-        let Ok(type_len) = rest[..digits].parse::<usize>() else {
-            return false;
-        };
-        let after = &rest[digits..];
-        if after.len() <= type_len || !after.is_char_boundary(type_len) {
-            return false;
-        }
-        let Some(fn_name) = after[type_len..].strip_prefix('_') else {
+        let Some((_, fn_name)) = Self::h5_split_mangled(name) else {
             return false;
         };
         let g_nr = self.data.def_nr(&format!("n_{fn_name}"));
         g_nr != u32::MAX && matches!(self.data.def_type(g_nr), DefType::Generic)
+    }
+
+    /// Split `t_<LEN><Type>_<fn>` into its type name and function name.
+    fn h5_split_mangled(name: &str) -> Option<(&str, &str)> {
+        let rest = name.strip_prefix("t_")?;
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        let type_len = rest[..digits].parse::<usize>().ok()?;
+        let after = &rest[digits..];
+        if after.len() <= type_len || !after.is_char_boundary(type_len) {
+            return None;
+        }
+        let fn_name = after[type_len..].strip_prefix('_')?;
+        Some((&after[..type_len], fn_name))
+    }
+
+    /// loft#763 — does `name` mangle a method on a generic's TYPE VARIABLE?
+    ///
+    /// `fn helper <D: SqlDb> (d: D, …) { d.db_exec(…) }` resolves `db_exec` against the
+    /// bound and mints `t_1D_db_exec` — a stub keyed on the type PARAMETER, not on any
+    /// concrete type, so `h5_names_a_generic_template` does not know it (there is no
+    /// `n_db_exec` template; `db_exec` is an interface method). It is minted in pass 2
+    /// for the same reason an instantiation is: pass 1 only predicts.
+    ///
+    /// Recognised precisely — the type part has to be the type variable of some generic
+    /// template in THIS program, so an ordinary `t_<Type>_<fn>` appearing only in pass 2
+    /// stays the fatal divergence the guard was built for.
+    fn h5_names_a_bound_stub(&self, name: &str) -> bool {
+        let Some((type_name, _)) = Self::h5_split_mangled(name) else {
+            return false;
+        };
+        let type_nr = self.data.def_nr(type_name);
+        if type_nr == u32::MAX {
+            return false;
+        }
+        (0..self.data.definitions()).any(|g| {
+            matches!(self.data.def_type(g), DefType::Generic)
+                && !self.data.def(g).attributes().is_empty()
+                && Self::extract_type_var(&self.data.def(g).attributes()[0].typedef) == type_nr
+        })
     }
 
     /// Plan-07 phase 4h — walk user struct definitions and emit
@@ -4286,6 +4320,29 @@ impl Parser {
 
     /// Try to instantiate a generic function template for the given call-site types.
     /// Returns the `def_nr` of the instantiated function, or `u32::MAX` if no generic matches.
+    /// May a call target this definition?
+    ///
+    /// Ordinarily only a `Function` — a `Generic` is a template and a call must name a
+    /// monomorph. The exception is loft#761: a template calling ANOTHER generic (itself,
+    /// a mutual partner, a helper declared later). Inside a template the argument is the
+    /// type VARIABLE, so no monomorph can exist yet and `try_generic_instantiation`
+    /// answers the template; `instantiate_nested_generics` retargets the call at the real
+    /// monomorph while building one, for whatever concrete type a caller finally names.
+    ///
+    /// Gated on the CALLER being a template too, so a call to a generic from ordinary
+    /// code stays the error it was — there the concrete type is known and an
+    /// instantiation must happen.
+    fn callable_target(&self, d_nr: u32) -> bool {
+        match self.data.def_type(d_nr) {
+            DefType::Function => true,
+            DefType::Generic => {
+                self.context != u32::MAX
+                    && matches!(self.data.def_type(self.context), DefType::Generic)
+            }
+            _ => false,
+        }
+    }
+
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
@@ -4315,6 +4372,23 @@ impl Parser {
             tv_nr,
             &types[0],
         );
+        // loft#761 — a SELF-recursive generic arrives here while its own template is
+        // still being parsed, and the argument type is the type VARIABLE, so `concrete`
+        // resolves to that variable rather than to any type. Instantiating against it
+        // built a def by cloning the template's variable table — which the parser has
+        // not written back yet, so the clone was EMPTY. That def is a plain `Function`,
+        // so codegen emitted it and indexed a table of length 0: "index out of bounds:
+        // the len is 0 but the index is 1", before any of the program ran.
+        //
+        // There is nothing to instantiate at this point, and nothing to diagnose
+        // either: the call is perfectly good, it just has no concrete type YET. Answer
+        // the TEMPLATE. A real caller then instantiates for its own concrete type, and
+        // `instantiate_nested_generics` retargets this call at that monomorph while
+        // building it — the same path any other call to a generic takes from inside a
+        // template. Self-recursion terminates there on the `existing` check.
+        if concrete.contains_def(tv_nr) {
+            return g_nr;
+        }
         if concrete.is_unknown() {
             if !self.first_pass {
                 diagnostic!(
@@ -4426,6 +4500,7 @@ impl Parser {
         // delivers through a hidden `&text` buffer (no orphaned owned String).
         // Runs BEFORE returning `d_nr` so the call site sees the promoted ABI.
         self.promote_monomorph_text_return(d_nr);
+        self.instantiate_nested_generics(d_nr, &concrete);
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
         if !self.check_satisfaction(g_nr, type_nr) {
@@ -4715,6 +4790,135 @@ impl Parser {
         } else {
             d_nr
         }
+    }
+
+    /// The half of [`re_resolve_call`] that has to CREATE rather than look up.
+    ///
+    /// `re_resolve_call` re-points a call whose target depends on the type variable at the
+    /// concrete function, with `find_fn`. That is enough when the concrete function already
+    /// exists — a user's `area(self: Box)` does. It cannot be enough when the target is
+    /// another GENERIC, because that one's monomorph does not exist until somebody makes it,
+    /// and a lookup only finds. So the lookup fell back to the template itself and the
+    /// monomorph shipped a call to a definition nothing ever emits: native cannot find
+    /// `n_inner`, and the interpreter enters a template whose frame does not match the call,
+    /// losing it whole — no output, exit 0.
+    ///
+    /// A generic reached ONLY through another generic gets no other chance. Instantiation
+    /// happens at a call site with a concrete argument type, and inside a template that
+    /// argument is the type variable — so `fn outer<S>(s: S) { inner(s) }` is the one shape
+    /// where nobody ever names `inner`'s concrete form. Adding any direct `inner(box)` call
+    /// elsewhere in the program hid the bug, which is why it survived: the fixtures that
+    /// exercise nested generics happen to call the inner one directly as well.
+    ///
+    /// The substitution has already replaced the type variable throughout, so the argument
+    /// that was `S` is now `concrete` — which is exactly the instantiation to ask for.
+    ///
+    /// Called after `add_def` has registered THIS monomorph, so a self-recursive generic
+    /// (`fn f<T>(t: T) { f(t) }`) finds itself in the `existing` check and stops, rather
+    /// than instantiating forever.
+    fn instantiate_nested_generics(&mut self, d_nr: u32, concrete: &Type) {
+        let mut targets: Vec<u32> = Vec::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, _) = v
+                && *d != u32::MAX
+                && (*d as usize) < self.data.definitions.len()
+                && self.data.def(*d).def_type() == DefType::Generic
+                && !targets.contains(d)
+            {
+                targets.push(*d);
+            }
+        });
+        // Create the monomorphs FIRST, before the context swap below: instantiation
+        // parses against `self.vars` / `self.context`, and it must see the ordinary
+        // ones, not this monomorph's.
+        let mut remap: HashMap<u32, u32> = HashMap::new();
+        for t in targets {
+            let Some(name) = self
+                .data
+                .def(t)
+                .name()
+                .strip_prefix("n_")
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let inst = self.try_generic_instantiation(&name, std::slice::from_ref(concrete));
+            if inst != u32::MAX && inst != t {
+                remap.insert(t, inst);
+            }
+        }
+        // Repair the ARG LISTS too, and not only for the calls remapped above:
+        // `re_resolve_call` retargets a type-variable-dependent call by LOOKUP during
+        // the substitution, so a call in this body can already point at a monomorph
+        // whose ABI grew — `promote_monomorph_text_return` gives a `-> text` callee a
+        // hidden `&text` buffer — while still carrying the template's argument count.
+        // That is the "Too few parameters on t_6Sqlite_dump (got 4, need 5)" ICE, and a
+        // lookup-retargeted call reaches it without ever having been in `remap`. So the
+        // set is every call this body makes that is short of its target's arity.
+        let mut short_calls: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, args) = v {
+                let target = remap.get(d).copied().unwrap_or(*d);
+                if target != u32::MAX
+                    && (target as usize) < self.data.definitions.len()
+                    && args.len() < self.data.attributes(target)
+                {
+                    short_calls.insert(target);
+                }
+            }
+        });
+        if remap.is_empty() && short_calls.is_empty() {
+            return;
+        }
+        let promoted = short_calls;
+        // Swap this monomorph's parse context in — `add_defaults`, reached through
+        // `patch_tret_call`, mints a work-text into `self.vars`, which must be THIS
+        // function's table. Same swap `promote_monomorph_text_return` performs.
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let before: std::collections::HashSet<u16> = self.vars.work_texts().into_iter().collect();
+        self.vars.sync_work_counters();
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        Self::retarget_calls(&mut code, &remap);
+        // A `-> text` callee was promoted to deliver through a hidden `&text` buffer
+        // (`promote_monomorph_text_return`, inside the instantiation above), so the call
+        // this body already carries is one argument short of the ABI it now targets —
+        // the "Too few parameters on t_6Sqlite_inner (got 3, need 4)" ICE. This is the
+        // same mismatch `patch_tret_callers` fixes for a directly-parsed caller, so it is
+        // the same repair.
+        self.patch_tret_call(&mut code, &promoted);
+        // A minted retbuf is not declared at the top level, so `scopes::check` would
+        // scope it to the arg block and free it there — before the callee fills it.
+        // Replay the hoist `patch_tret_callers` does for exactly this reason.
+        if let Value::Block(bl) = &mut code {
+            for wt in self.vars.work_texts() {
+                if !before.contains(&wt) {
+                    bl.operators
+                        .insert(0, v_set(wt, Value::Text(String::new())));
+                }
+            }
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+
+    /// Re-point every `Call` in the tree whose target appears in `remap`.
+    fn retarget_calls(v: &mut Value, remap: &HashMap<u32, u32>) {
+        if let Value::Call(d, _) = v
+            && let Some(&to) = remap.get(d)
+        {
+            *d = to;
+        }
+        v.for_each_child_mut(&mut |c| Self::retarget_calls(c, remap));
     }
 
     /// Substitute all occurrences of `Type::Reference(tv_nr, _)` with `concrete` in a type.
@@ -7021,7 +7225,7 @@ impl Parser {
                 "No matching function {}",
                 self.data.def(d_nr).name()
             );
-        } else if !matches!(self.data.def_type(d_nr), DefType::Function) {
+        } else if !self.callable_target(d_nr) {
             if report {
                 diagnostic!(
                     self.lexer,

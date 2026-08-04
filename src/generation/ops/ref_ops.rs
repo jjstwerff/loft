@@ -211,11 +211,15 @@ impl OpEmitter for OpFreeRefIfDistinctEmitter {
             } else {
                 String::new()
             };
-            write!(ctx.w, "if ")?;
+            // Parenthesise both operands: a witness that is a `&` PARAMETER
+            // (loft#759) emits as `*var_b`, and `*var_b.store_nr` binds as
+            // `*(var_b.store_nr)` — a deref of the `u16` field, which is
+            // E0614, not a comparison.
+            write!(ctx.w, "if (")?;
             ctx.emit(ph_val)?;
-            write!(ctx.w, ".store_nr != ")?;
+            write!(ctx.w, ").store_nr != (")?;
             ctx.emit(wit_val)?;
-            write!(ctx.w, ".store_nr {{ OpFreeRef(cell,")?;
+            write!(ctx.w, ").store_nr {{ OpFreeRef(cell,")?;
             ctx.emit(ph_val)?;
             write!(ctx.w, ", \"{ph_name}\")")?;
             if let Value::Var(_) = ph_val {

@@ -3003,8 +3003,30 @@ impl Scopes {
         // freshly-allocated store and Database N leaks at scope exit
         // (e.g. tests/scripts/95-alias-copy.loft Database 3 leak).
         let unspanned_value = value.unspan();
+        // loft#759 — a `&` parameter is `RefVar(Reference|Enum)`, so the bare
+        // `matches!` above read it as "not a record" and skipped this whole
+        // block.  Peel the `&` for the record-KIND question (the loft#753 /
+        // loft#740 shape: one question, one peel) and carry the `&`-ness
+        // separately, because the two halves below want opposite answers:
+        //
+        // - the deep-copy dep-strips are LOCAL-only.  They exist because
+        //   `gen_set_first_ref_call_copy` copies the callee's buffer into a
+        //   fresh store `v` owns — but a set THROUGH a `&` never reaches that
+        //   path (codegen writes the returned DbRef straight into the caller's
+        //   slot with `SetStackRef`), and `v` is a parameter the caller owns,
+        //   so stripping its deps would only make the callee free it.
+        // - the witness pairing is exactly what the `&` case needs, and needs
+        //   it whatever `adopts_fresh_store` says.  With no copy in between,
+        //   the buffer the callee filled IS what the caller now holds, so the
+        //   scope-exit `OpFreeRef(__ref_N)` freed the record the caller went
+        //   on reading and writing through.
+        let publishes_through_ref = matches!(function.tp(v), Type::RefVar(_));
+        let mut record_target = function.tp(v);
+        while let Type::RefVar(inner) = record_target {
+            record_target = inner.base();
+        }
         if matches!(
-            function.tp(v),
+            record_target,
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && let Value::Call(fn_nr, _) = unspanned_value
             // A user-defined callee: an `n_` global OR a `t_` method / generic
@@ -3023,13 +3045,16 @@ impl Scopes {
             // owned path then deep-copies the borrow into `v`'s store and frees it at
             // scope exit; without this the displaced owned store is orphaned (it was
             // bound to `v`, not to the source retbuf the cleanup guards) and leaks.
-            if self.displaced_owned.contains(&ov) && !function.tp(v).depend().is_empty() {
+            if !publishes_through_ref
+                && self.displaced_owned.contains(&ov)
+                && !function.tp(v).depend().is_empty()
+            {
                 let deps: Vec<u16> = function.tp(v).depend().clone();
                 for d in deps {
                     function.make_independent(v, d);
                 }
             }
-            if !adopts_fresh_store {
+            if !adopts_fresh_store && !publishes_through_ref {
                 // codegen will take gen_set_first_ref_call_copy —
                 // OpConvRefFromNull +
                 // OpDatabase + lock-args + OpCopyRecord deep-copy into a
@@ -3069,7 +3094,18 @@ impl Scopes {
             // v)` instead of `OpFreeRef(__ref_N)`: the runtime
             // store-nr comparison settles the two cases per execution
             // path (match → skip; differ → free).
-            if adopts_fresh_store && let Value::Call(_, args) = unspanned_value {
+            //
+            // loft#759 — a set THROUGH a `&` parameter needs the same pairing
+            // whatever `adopts_fresh_store` says.  For a LOCAL target the flag
+            // decides whether a deep copy stands between the buffer and `v`
+            // (`!adopts_fresh_store` copies, so the two are always distinct and
+            // the pairing would be a no-op).  No copy stands in the `&` case,
+            // so the buffer and the caller's slot alias whenever the callee
+            // returned the buffer it was handed — the majority shape, and the
+            // one `file()` has (`result = File{..}; result`).
+            if (adopts_fresh_store || publishes_through_ref)
+                && let Value::Call(_, args) = unspanned_value
+            {
                 for arg in args {
                     let arg_var = match arg {
                         Value::Var(av) => Some(*av),
@@ -3090,9 +3126,19 @@ impl Scopes {
                             // fires, and the emitted `var_f.store_nr`
                             // references a dead name (e.g. `f = file(…,
                             // __ref_1)` inside a nested `{}` block).
+                            //
+                            // loft#759 — a PARAMETER has no such block to fall
+                            // out of: its `let` is the function signature, so
+                            // it outlives every local including `av`, on both
+                            // backends.  Its `var_scope` entry is written when
+                            // the body first assigns it, which for a set inside
+                            // an `if` reads as INNER-scoped and would route a
+                            // valid witness into the @P378(a) branch below.
                             let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
                             let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
-                            if v_scope <= av_scope && v_scope != u16::MAX {
+                            if (publishes_through_ref && function.is_argument(v))
+                                || (v_scope <= av_scope && v_scope != u16::MAX)
+                            {
                                 self.paired_witness.entry(av).or_insert(v);
                             } else if v_scope != u16::MAX
                                 && av_scope != u16::MAX

@@ -43,10 +43,10 @@ fn transient() -> integer;   #c "ls_transient" "void*(void)"
 // `db_width` are unchanged — they read `st` either way — while `db_next` still
 // knows whether reaching the end should FINALIZE the statement (an ad-hoc
 // select owns its own) or merely RESET it (a prepared one is reused).
-pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean }
+pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean, tx: Tx }
 
 pub fn sqlite() -> Sqlite {
-  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false };
+  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false, tx: tx_new() };
 }
 
 pub fn db_open(self: Sqlite, target: text) -> boolean {
@@ -137,6 +137,14 @@ pub fn db_rows(self: Sqlite, q: SqlText) -> boolean {
   self.from_ps = true;
   return true;
 }
+
+// --- T1–T3: transactions ----------------------------------------------------
+//
+// Sqlite spells all three as plain statements, so each of these is the
+// shared rule plus a keyword. The state lives here; the logic does not.
+pub fn db_begin(self: Sqlite) -> boolean { return tx_begin(self, self.tx, "BEGIN"); }
+pub fn db_commit(self: Sqlite) -> boolean { return tx_commit(self, self.tx); }
+pub fn db_rollback(self: Sqlite) -> boolean { return tx_rollback(self, self.tx); }
 
 pub fn db_shut(self: Sqlite) {
   self.release();
