@@ -1505,6 +1505,11 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
         let file = std::path::Path::new(name)
             .file_name()
             .map_or(name.as_str(), |f| f.to_str().unwrap_or(name));
+        // `.dll` belongs in this chain beside `.so` / `.dylib`: `-l` names the
+        // LIBRARY, not the file, and MSVC appends `.lib` to whatever it is given.
+        // Leaving the extension on made `-l dylib=sqlite_shim_<hash>.dll` open
+        // `sqlite_shim_<hash>.dll.lib` — the exact `LNK1181` the Windows leg died
+        // on, for a shim whose import library is `sqlite_shim_<hash>.lib`.
         let stem = file
             .strip_prefix("lib")
             .unwrap_or(file)
@@ -1514,6 +1519,9 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
             .split(".dylib")
             .next()
             .unwrap_or(file)
+            .split(".dll")
+            .next()
+            .unwrap_or(file)
             .to_string();
         if beside.exists()
             && let Some(parent) = beside.parent()
@@ -1521,8 +1529,16 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
             cmd.arg("-L").arg(format!("native={}", parent.display()));
             // The built binary has to find it at RUN time too, and a library
             // that ships beside its package is not on the system search path.
-            cmd.arg("-C")
-                .arg(format!("link-arg=-Wl,-rpath,{}", parent.display()));
+            //
+            // Windows has no RPATH — MSVC `link.exe` does not understand
+            // `-Wl,-rpath` and said so (`LNK4044: unrecognized option`, ignored),
+            // so passing it was noise that hid the real error below it. The DLL is
+            // found beside the `.exe` / on `PATH` instead, the same arrangement
+            // `stage_native_dlls` already makes for a package cdylib (@PLN26 ph.4).
+            if !cfg!(windows) {
+                cmd.arg("-C")
+                    .arg(format!("link-arg=-Wl,-rpath,{}", parent.display()));
+            }
         }
         // A VERSIONED soname links by exact filename, not by stem.
         //
