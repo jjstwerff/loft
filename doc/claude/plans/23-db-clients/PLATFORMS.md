@@ -182,10 +182,24 @@ Linux is unaffected — `long`, `long long` and `int64_t` are all 64-bit there, 
 the seven `#c` tests pass unchanged. **Windows is unverified until the next
 dispatch.**
 
-**X2 — a Windows path becomes an escape sequence.** `an_available_library_must_export_what_was_declared`
-generates a `.loft` file under `C:\Users\runneradmin\AppData\Local\Temp\loft_skew_2244\…`
-and embeds that path in source, where loft's lexer reads `\U` and `\A` as escapes:
-`error: Unknown escape sequence`. A test-harness bug, not a `#c` one.
+**X2 — FIXED. A Windows path becomes an escape sequence.**
+`an_available_library_must_export_what_was_declared` builds a fixture library in a
+temp directory and pastes its absolute path into **two** string literals: a TOML
+basic string (`optional-libs = "…"`) and a loft one
+(`pub const SKEW_SONAME = "…"`). Backslashes are escapes in both, so
+`C:\Users\runneradmin\AppData\Local\Temp\loft_skew_2244\…` failed to lex at the
+`\U`: `error: Unknown escape sequence`, at exactly line 4 column 29 of the
+generated file.
+
+Fixed by writing the path with forward slashes. Escaping for each syntax
+separately would also work, but that is two escapers to keep right in two
+different parsers; a separator neither treats as special has no such failure mode,
+and Windows accepts `/` everywhere loft passes this on — `lib_variants` already
+splits a directory off on either separator. Audited: this is the only place in
+the suite that interpolates a path into generated `.loft` or `.toml` source.
+
+A test-harness bug, not a `#c` one — but it would have failed the Windows leg on
+its own regardless of X1.
 
 **X3 — `interpreted_and_native_c_bindings_agree`** reports `interpret failed` after
 `len 5 / neg -1 / abs 7`; probably X1 again, not separately diagnosed.

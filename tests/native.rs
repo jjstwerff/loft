@@ -1286,7 +1286,14 @@ fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
         .output()?;
     assert!(built.status.success(), "fixture library must build");
 
-    let so_str = so.to_string_lossy().into_owned();
+    // Forward slashes, because this path is about to be pasted into two string
+    // literals — a TOML basic string and a loft one — and a Windows path is full
+    // of escape sequences to both. `C:\Users\…` made the generated library fail
+    // to lex at all: `error: Unknown escape sequence` at the `\U`. Escaping for
+    // each syntax separately would work; using a separator neither treats as
+    // special is simpler, and Windows accepts `/` everywhere loft passes this on
+    // (`lib_variants` already splits a directory off on either separator).
+    let so_str = so.to_string_lossy().replace('\\', "/");
     std::fs::write(
         dir.join("pkg/skewlib/loft.toml"),
         format!(
