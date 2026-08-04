@@ -103,6 +103,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_path_sep",                   abi: Abi::None },
     RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
     RuntimeFn { name: "n_reflect_type",               abi: Abi::Cell },
+    RuntimeFn { name: "n_type_named",                 abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
     RuntimeFn { name: "n_radix_sorted",               abi: Abi::Cell },
@@ -2205,6 +2206,13 @@ pub fn par_read_text_input(cell: &std::cell::UnsafeCell<Stores>, elm: DbRef) -> 
 pub fn n_reflect_type(cell: &std::cell::UnsafeCell<Stores>, kt: i64) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     crate::native::reflect_type_into(stores, kt as u16)
+}
+
+/// @PLN127 arc C — `type_named(name)` on the native backend, onto the same
+/// lookup the interpreter uses.
+pub fn n_type_named(cell: &std::cell::UnsafeCell<Stores>, name: &str) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    crate::native::type_named_in(stores, name)
 }
 
 /// interp `n_json_parse` body) so `--native`-compiled programs can

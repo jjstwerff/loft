@@ -26,6 +26,19 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `type_named("Row")` when you only have the name
+
+`type_of` needs a value. When the type name arrives from a config file, a
+database catalogue or a command line, there is nothing to pass it:
+
+```loft
+t = type_named(wanted);
+if t == null { println("no such type") } else { println("{t.name} has {len(t.fields)} fields") }
+```
+
+`TypeInfo?` — a name this program has no type for answers null rather than an
+empty-looking shape, so a typo cannot read as a type with no fields.
+
 ### `type_of(x)` tells you the shape of a type
 
 A program can now ask what a type IS — its fields, their types, their byte

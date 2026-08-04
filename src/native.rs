@@ -425,6 +425,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ),
     ("n_stack_trace", n_stack_trace),
     ("n_reflect_type", n_reflect_type),
+    ("n_type_named", n_type_named),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("n_hash_sorted", n_hash_sorted),
@@ -2468,6 +2469,28 @@ fn n_reflect_type(stores: &mut Stores, stack: &mut DbRef) {
     let kt = *stores.get::<i64>(stack) as u16;
     let result = reflect_type_into(stores, kt);
     stores.put(stack, result);
+}
+
+/// @PLN127 arc C: `type_named(name)` — reflection with no value in hand.
+///
+/// `Stores::name` is a total lookup that answers `u16::MAX` for a name this
+/// program has no type for, so a typo reads back as ABSENT rather than minting a
+/// type. `--native` replays the type registrations in `init()`, names included,
+/// which is why a runtime name works there too — the question the plan expected
+/// to be load-bearing.
+fn n_type_named(stores: &mut Stores, stack: &mut DbRef) {
+    let raw = *stores.get::<Str>(stack);
+    let result = type_named_in(stores, raw.str());
+    stores.put(stack, result);
+}
+
+/// Shared by both backends: the named type's shape, or a null `DbRef`.
+pub fn type_named_in(stores: &mut Stores, name: &str) -> DbRef {
+    let kt = stores.name(name);
+    if kt == u16::MAX {
+        return DbRef::NULL;
+    }
+    reflect_type_into(stores, kt)
 }
 
 /// The `TypeKind` discriminant for a descriptor node — 1-indexed, matching the

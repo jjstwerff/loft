@@ -1009,6 +1009,7 @@ or a schema check needs.  Declared in `default/07_reflect.loft`.
 | Function | Description |
 |----------|-------------|
 | `type_of(x) -> TypeInfo` | The declared shape of `x`'s type. **The argument is read for its TYPE and is not evaluated** (the contract C's `sizeof` has), so pass a variable, a field or a parameter rather than an expression with a side effect. |
+| `type_named(name: text) -> TypeInfo?` | The declared shape of the type called `name`, or **null** when this program has no such type. Use when the name is a runtime value — a config file, a database catalogue, a command line — so there is nothing to call `type_of` on. |
 
 `TypeInfo` carries `name`, `kind`, `size` (bytes per record), `fields`,
 `variants` and `element`.  Match on `kind` first: only a record and a
@@ -1037,8 +1038,14 @@ Two limits worth knowing before you reach for it:
   reports `IntegerKind`; its width is in `size`, not in a separate kind.
   `boolean` and `character` report what was declared.
 
-Read-only.  Constructing or mutating a value by field name is deliberately out
-of scope (@PLN127).
+Read-only, and it describes a TYPE: there is no way to read a VALUE's field by
+name, so a generic serialiser needs more than this.  What it is sufficient for is
+the schema half — `tests/scripts/pln127-reflect-consumer.loft` generates
+`CREATE TABLE` from a loft struct through this API alone.  Two facts are NOT
+reported, because the store does not hold them: whether a field is `const`, and
+whether a non-narrow field is nullable (`text?` spells absent with a sentinel
+value rather than a schema flag).  Constructing or mutating a value by field name
+is deliberately out of scope (@PLN127).
 
 ---
 

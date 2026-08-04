@@ -3,7 +3,7 @@
 
 ## Status
 
-**Arcs A and B are BUILT; C–E are open.**
+**Arcs A, B, C and E are BUILT. D is open, and the build changed its question.**
 
 Arc B projects `LayoutDesc` into loft: `default/07_reflect.loft` declares `TypeInfo` /
 `FieldInfo` / `VariantInfo` / `TypeKind`, `type_of(x)` is intercepted in
@@ -32,6 +32,45 @@ Four things the build settled that the design had not:
 - **Arc A was a prerequisite in fact, not just in order.** A `TypeInfo` holds an enum in
   a struct field, which is precisely the shape that made `json_parse` reject a whole
   document. `"{t:j}"` on a `TypeInfo` renders complete JSON only because arc A landed.
+
+Arc C is `type_named(name) -> TypeInfo?` — reflection with no value in hand, the shape an
+ORM needs when the name arrives from a config file or a catalogue. No parser intercept: the
+name is a RUNTIME value, and the lookup works on `--native` because the generated `init()`
+replays the type registrations, names included, and `Stores::name` is a TOTAL lookup that
+answers absent rather than minting a type for a typo. Measured on both backends, including
+a name held in a variable. **That is Q1, answered rather than worked around.**
+
+Arc E is `tests/scripts/pln127-reflect-consumer.loft`: an ORM's schema half — `CREATE TABLE`
+generated from a loft struct, written only through the API, with the table name arriving as
+a runtime value. It passes on both backends, and being used as a gate it found two things:
+
+- **It cannot emit `NOT NULL`.** Nullability is not in the answer because it is not in the
+  STORE: `Field` carries a name, a content type-id, a position and a default, and nothing
+  else. A narrow scalar does record a nullable flag; `text` and a record reference spell an
+  absent value with a SENTINEL instead — `text?` is stored as `"\0"`, which is precisely
+  what arc A had to repair in the JSON writer. The same holds for `const`.
+- **It had to be a schema generator, not the plan's "generic serialiser".** Reflection
+  describes a TYPE; there is no way to read a VALUE's field by name, and a serialiser needs
+  both. That is the write-access question the plan deferred, arriving from the read side.
+
+### Arc D's question changed
+
+The plan asked whether `LayoutDesc` should grow `const`-ness and non-narrow nullability, or
+whether reflection should read them from a second source. Measuring says neither option is
+the real choice, because **neither fact is a storage fact at all** — both live only in the
+parser. So D is not "grow the descriptor by two fields"; it is:
+
+> Does reflection report facts that exist only in the SOURCE?
+
+Yes makes the descriptor a mixed source/storage record and needs the parser to deposit them
+at registration. No means an ORM takes its column TYPES from loft and its nullability from
+somewhere else. One measurement bears on the cost either way: `layout_hash` hashes
+`render_dump()`, so a fact the descriptor carries but does not RENDER leaves the @PLN97
+layout identity untouched — growing the descriptor is cheap, and it is the depositing, not
+the carrying, that is the decision.
+
+Also settled, and it removes the plan's stated reason for ordering D before C: the two entry
+points cannot disagree, because `type_of` and `type_named` are two ways to reach ONE filler.
 
 Arc A landed first because it repairs the only field enumeration loft has today, and it
 was a repair rather than a feature: both defects were WHOLE-DOCUMENT failures, so a
@@ -151,9 +190,9 @@ backends can silently disagree.  Probe it with the strict flag on.
 |---|---|---|
 | **A** — repair the fallback: loft#768 + loft#769 | [#768](https://github.com/loft-lang/loft/issues/768), [#769](https://github.com/loft-lang/loft/issues/769) | **Built** — `src/database/format.rs`, cells in `tests/scripts/57-json.loft` |
 | **B** — the type-info struct family + `type_of(value)` | this doc | **Built** — `default/07_reflect.loft`, `native::reflect_type_into`, `tests/scripts/pln127-reflect.loft` |
-| **C** — reflection with no value: `type_named(text)` | this doc, Q1 | Open |
-| **D** — the declared-vs-storage contract | this doc, Q2/Q3 | Open |
-| **E** — a real consumer built only through the API | this doc | Open |
+| **C** — reflection with no value: `type_named(text)` | this doc, Q1 | **Built** — `native::type_named_in`, both backends, runtime-valued names |
+| **D** — the declared-vs-storage contract | this doc, Q2/Q3 | **Open, restated** — neither fact is a storage fact; see Arc D's question changed |
+| **E** — a real consumer built only through the API | this doc | **Built** — `tests/scripts/pln127-reflect-consumer.loft` (CREATE TABLE from a struct) |
 
 ## Phase ordering
 

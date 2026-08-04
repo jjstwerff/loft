@@ -111,3 +111,29 @@ pub fn reflect_type(kt: integer) -> TypeInfo;
 // Reads the store's type table through `Stores::layout_descriptor` and
 // allocates the answer into the caller's own stores → par-safe.
 #impure(host_io)
+
+/// The declared shape of the type called `name`, or `null` if this program has
+/// no such type — reflection with no value in hand.
+///
+/// This is what an ORM or a schema check needs: the name arrives from a config
+/// file, a database catalogue or a command line, so there is nothing to call
+/// `type_of` on.
+///
+/// ```loft
+/// t = type_named("Row");
+/// if t == null { println("no such type") } else { println("{t.name}") }
+/// ```
+///
+/// **`TypeInfo?`, and null means the name is not a type here.** A type that does
+/// not exist has no shape, and saying so in the type is what makes a caller
+/// handle it rather than read a plausible-looking empty answer.
+///
+/// A name is matched exactly as the store records it, which is the loft type
+/// name — `Point`, `text`, `vector<Point>`.
+//
+// Unlike `type_of`, no parser intercept: the name is a RUNTIME value, so the
+// lookup is a runtime one. It works on `--native` because the generated `init()`
+// replays the type registrations — names included — and `Stores::name` is a
+// total lookup that answers "absent" rather than minting a type for a typo.
+pub fn type_named(name: text) -> TypeInfo?;
+#impure(host_io)
