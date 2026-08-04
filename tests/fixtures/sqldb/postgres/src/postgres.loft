@@ -96,11 +96,22 @@ pub fn db_last_error(self: Postgres) -> text {
 
 // Compile the statement server-side and fill the parameter array.
 //
-// The text is `q.statement(true)` — the author's chunks joined by `$1 $2 …`,
+// The text is `q.statement(true, …)` — the author's chunks joined by `$1 $2 …`,
 // because postgres numbers its placeholders. Nothing rewrites a caller's SQL:
 // the numbering is generated from the chunk list, so a `?` or a `$1` INSIDE a
 // literal the author wrote is just bytes, and there is no SQL to re-parse.
+// Identifiers take ANSI double quotes, which is postgres's own spelling.
 fn prepare_bind(self: Postgres, q: SqlText) -> boolean {
+  // A refused identifier has no statement (H6) — nothing to prepare, nothing sent.
+  sql = q.statement(SQL_DOLLAR, "\"");
+  if sql == null { self.err = "an identifier was refused"; return false }
+  return self.prepare_text(sql, q);
+}
+
+// The same prepare-and-bind, given the statement TEXT rather than deriving it —
+// which is what a CALL has: its name and arity come from the procedure, and its
+// values arrive beside them.
+fn prepare_text(self: Postgres, sql: text, q: SqlText) -> boolean {
   self.err = "";
   // A named statement lives until it is deallocated, so releasing the previous
   // one is what stops a long-lived connection accumulating them.
@@ -110,7 +121,7 @@ fn prepare_bind(self: Postgres, q: SqlText) -> boolean {
   }
   self.seq += 1;
   name = "loft_ps_{self.seq}";
-  r = pq_prepare(self.conn, name, q.statement(true), 0, 0);
+  r = pq_prepare(self.conn, name, sql, 0, 0);
   if r == 0 { self.err = "prepare failed"; return false }
   s = pq_res_status(r);
   pq_clear(r);
@@ -146,12 +157,23 @@ fn run_prepared(self: Postgres, q: SqlText) -> integer {
 
 pub fn db_run(self: Postgres, q: SqlText) -> boolean {
   if !self.prepare_bind(q) { return false }
+  return self.execute(q);
+}
+
+// Run the statement already prepared and bound.
+fn execute(self: Postgres, q: SqlText) -> boolean {
   r = self.run_prepared(q);
   if r == 0 { self.err = "execute failed"; return false }
   s = pq_res_status(r);
   pq_clear(r);
   if s != 1 && s != 2 { self.err = pq_errmsg(self.conn); return false }
   return true;
+}
+
+// `db_run` for a statement whose TEXT is given rather than derived.
+fn db_run_text(self: Postgres, sql: text, q: SqlText) -> boolean {
+  if !self.prepare_text(sql, q) { return false }
+  return self.execute(q);
 }
 
 pub fn db_rows(self: Postgres, q: SqlText) -> boolean {
@@ -165,6 +187,40 @@ pub fn db_rows(self: Postgres, q: SqlText) -> boolean {
   self.n = pq_ntuples(self.res);
   self.at = -1;
   return true;
+}
+
+// --- H7: procedures, in the server's catalogue --------------------------------
+//
+// The definition goes where postgres keeps them. A `LANGUAGE SQL` body reads its
+// own parameters as `$1 $2 …`, which is the SAME spelling a caller-side
+// statement uses here — so the body needs no second rendering, and `SQL_DOLLAR`
+// covers both.
+//
+// `$lp$ … $lp$` is dollar-quoting with a tag no author-written body can contain
+// (`ident` admits no `$`, and a literal `$lp$` in an author's SQL would be
+// deliberate). It is what lets the body carry quotes of its own.
+pub fn db_deploy(self: Postgres, p: SqlProc) -> boolean {
+  self.err = "";
+  sig = p.proc_signature("\"", "", ["text", "bigint", "double precision", "boolean"]);
+  if sig == null { self.err = "a parameter has no type"; return false }
+  body = p.proc_body(SQL_DOLLAR, "\"");
+  if body == null { self.err = "an identifier was refused"; return false }
+  // One statement per procedure, here too — postgres and mariadb do not share a
+  // procedural language either, so a body beyond one statement has no uniform
+  // meaning to accept. `procedural` holds that rule for all four.
+  if procedural(body) { self.err = "a procedure body is one statement"; return false }
+  return self.db_exec("CREATE OR REPLACE PROCEDURE {sig} LANGUAGE SQL AS $lp${body}$lp$");
+}
+
+// Calling one is an ordinary prepared statement — `CALL "name"($1, …)` — so the
+// values still travel down the bind path and nothing new is trusted.
+pub fn db_call(self: Postgres, p: SqlProc, args: SqlText) -> boolean {
+  if !p.proc_ok() { self.err = "no procedure"; return false }
+  if args.params() != p.proc_arity() { self.err = "wrong number of arguments"; return false }
+  // Through a LOCAL: a text returned across a package boundary is empty if it is
+  // consumed where it is produced (loft#773).
+  call = p.proc_call_sql(SQL_DOLLAR, "\"");
+  return self.db_run_text(call, args);
 }
 
 // --- T1–T3: transactions ----------------------------------------------------

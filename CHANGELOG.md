@@ -26,6 +26,34 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A format string can hand a value of your own type to the type it builds
+
+A format string whose target type implements the interpolation contract already
+handed over its parts — the bytes you wrote go to `lit`, an interpolated value to
+`hole_<kind>`. Holes had to be scalars. Now a hole can be a value of your own
+struct or enum, and its method is named after the type:
+
+```loft
+fn hole_sql_ident(self: SqlText, v: SqlIdent?)    // SqlIdent -> hole_sql_ident
+```
+
+That is what lets a builder treat one hole differently from the rest. A SQL table
+name cannot be a bound parameter — no placeholder stands for it — so a safe query
+builder has to put it in the statement itself. Making it a *type* is what keeps
+that safe: nothing constructs a `SqlIdent` but a constructor that refuses anything
+which is not a name, so there is one place to check rather than a rule to remember.
+
+```loft
+tbl = ident("orders");                              // null if it is not a name
+q: SqlText = "SELECT id FROM {tbl} WHERE name = {n}";
+```
+
+`tbl` becomes syntax; `n` becomes a bound value; and a refused `tbl` leaves the
+statement with no text to send at all.
+
+A hole kind your type does not accept is still a compile error naming the method
+to add, and never a quiet fall back to rendering the value into the text.
+
 ### `chr(65)` gives you `"A"`
 
 There was no way to turn a code point back into text — `ch as integer` took a

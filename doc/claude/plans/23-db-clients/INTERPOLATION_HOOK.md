@@ -163,7 +163,7 @@ change comes first and lands **inert**: nothing existing may change behaviour.
 | **H4** | the remaining scalar kinds | `integer` / `float` / `boolean` / `character` holes, one per step, each with a spec (`{x:>8}`) so formatting options still reach the hole |
 | **H5** | **a value cannot become syntax** | `SqlText` builds placeholders + bindings. The cell that matters: interpolate `'; DROP TABLE t; --` and assert the table still exists and the value came back as DATA. Non-vacuous by construction — it fails loudly if the hole ever reaches the text |
 | **H6** | the deliberate exception | `SqlIdent`: validated, quoted, inline. Assert a non-identifier is REFUSED at construction, not at deploy |
-| **H7** | procedures | `deploy` / `call` on mariadb + postgres; the sqlite registry emulation; a body with procedural control flow REFUSED by sqlite at deploy rather than degraded |
+| **H7** | procedures | `deploy` / `call` on mariadb + postgres; the sqlite registry emulation; a body with procedural control flow REFUSED at deploy rather than degraded (and by every backend — see Status) |
 
 `text` keeps its behaviour throughout — H1 is the step that proves it, and every
 later step re-runs that corpus.
@@ -185,9 +185,9 @@ writing a collection non-atomically is not a smaller step, it is a wrong one.
 
 ## Status
 
-**H1–H5 are BUILT** — see [plans/124-interpolation-hook.md](../124-interpolation-hook.md)
-for what shipped, what the build corrected, and the proof. The design below stands
-as written; two details changed on contact:
+**H1–H7 are BUILT** — see [plans/124-interpolation-hook.md](../124-interpolation-hook.md)
+for what shipped, what the build corrected, and the proof. The design above stands
+as written; three details changed on contact:
 
 - **The hole methods take the value, and an unsupported kind is a compile error**
   rather than a fall back to `hole_text`. Falling back would put a value onto the
@@ -195,10 +195,18 @@ as written; two details changed on contact:
 - **A format spec on a hole is refused.** `"{x:>8}"` has nothing to format when
   the value is handed over rather than rendered, so H4's "each with a spec" became
   "each kind, no spec".
+- **Procedural control flow is refused on ALL FOUR backends**, not only on the two
+  that emulate procedures. The table above expected the line to fall between
+  sqlite and the servers; measuring moved it. MariaDB writes procedural bodies in
+  SQL/PSM and PostgreSQL in plpgsql or a `BEGIN ATOMIC` body, and neither reads
+  the other's — a `BEGIN … END` MariaDB accepts is a syntax error to PostgreSQL.
+  There is therefore no procedural body a uniform API could carry across even the
+  two backends that HAVE one, so the contract is one statement per procedure. The
+  reasoning is unchanged (refuse rather than degrade); only its reach grew.
 
-H6 (`SqlIdent`) and H7 (procedures) are **not built**. The companion
-constraint — `hole` needing one method per scalar kind — is **@PLN125 arc A**
-(associated types; arc B is the scope-end hook, arc C indexing). The hook is a **language feature** and belongs to loft rather
-than to @PLN23 — the DB library is its first consumer and its motivating case, not its
+The companion constraint — `hole` needing one method per scalar kind — is
+**@PLN125 arc A** (associated types; arc B is the scope-end hook, arc C
+indexing). The hook is a **language feature** and belongs to loft rather than to
+@PLN23 — the DB library is its first consumer and its motivating case, not its
 owner. The measurement above (neither types nor `const` can carry the
 distinction) is the argument for building it rather than working around it.

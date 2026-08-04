@@ -43,10 +43,17 @@ fn transient() -> integer;   #c "ls_transient" "void*(void)"
 // `db_width` are unchanged — they read `st` either way — while `db_next` still
 // knows whether reaching the end should FINALIZE the statement (an ad-hoc
 // select owns its own) or merely RESET it (a prepared one is reused).
-pub struct Sqlite { db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean, tx: Tx }
+pub struct Sqlite {
+  db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean,
+  tx: Tx,
+  // H7 — sqlite has no catalogue to put a procedure in, so this connection is
+  // where the definitions live.
+  procs: Procs,
+}
 
 pub fn sqlite() -> Sqlite {
-  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false, tx: tx_new() };
+  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false,
+                  tx: tx_new(), procs: procs_new() };
 }
 
 pub fn db_open(self: Sqlite, target: text) -> boolean {
@@ -100,12 +107,24 @@ fn release(self: Sqlite) {
 
 // Compile the statement and bind every value.
 //
-// The text comes from `q.statement(false)` — the author's chunks joined by `?`
-// — so it contains no caller data at all, and the values go down
-// `sqlite3_bind_*` beside it.
+// The text comes from `q.statement` — the author's chunks joined by `?`, with
+// any identifier quoted — so it contains no caller data at all, and the values
+// go down `sqlite3_bind_*` beside it.
+//
+// A refused identifier has no statement (H6), and the `text?` says so: there is
+// nothing to prepare, and nothing is sent.
 fn bind_all(self: Sqlite, q: SqlText) -> boolean {
+  sql = q.statement(SQL_QMARK, "\"");
+  if sql == null { return false }
+  return self.bind_text(sql, q);
+}
+
+// The same bind, given the statement TEXT rather than deriving it — which is
+// what a registered procedure has: its body was assembled at deploy, and its
+// values arrive later.
+fn bind_text(self: Sqlite, sql: text, q: SqlText) -> boolean {
   self.release();
-  if s3_prepare(self.db, q.statement(false), -1, slot_b(), 0) != 0 { return false }
+  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return false }
   self.ps = take_b();
   if self.ps == 0 { return false }
   // The driver's own count, against the one the parser produced. They can only
@@ -145,6 +164,38 @@ pub fn db_rows(self: Sqlite, q: SqlText) -> boolean {
 pub fn db_begin(self: Sqlite) -> boolean { return tx_begin(self, self.tx, "BEGIN"); }
 pub fn db_commit(self: Sqlite) -> boolean { return tx_commit(self, self.tx); }
 pub fn db_rollback(self: Sqlite) -> boolean { return tx_rollback(self, self.tx); }
+
+// --- H7: procedures, kept in the process --------------------------------------
+//
+// sqlite has no `CREATE PROCEDURE`, so the definition lives on this connection
+// instead of in a server catalogue. Nothing about the SAFETY changes with it:
+// the body is still author bytes plus validated identifiers, and the values
+// still arrive down `sqlite3_bind_*`.
+//
+// What genuinely differs is refused rather than degraded — a body needing a
+// procedural language is rejected HERE, at deploy, so a program never silently
+// gets different semantics on a different backend. `proc_register` holds that
+// rule, shared, so sqlite and duckdb cannot drift apart on what "procedural"
+// means. The other real difference is atomicity: a server-side procedure is one
+// round trip and this is not, so anything relying on that must wrap itself in a
+// transaction — which `db_begin` already provides.
+pub fn db_deploy(self: Sqlite, p: SqlProc) -> boolean {
+  return proc_register(self.procs, p, "\"");
+}
+
+pub fn db_call(self: Sqlite, p: SqlProc, args: SqlText) -> boolean {
+  if !p.proc_ok() { return false }
+  // The name goes through a LOCAL: a text returned across a package boundary is
+  // empty if it is consumed where it is produced (loft#773).
+  nm = p.proc_name();
+  sql = self.procs.proc_lookup(nm);
+  if sql == null { return false }
+  if args.params() != p.proc_arity() { return false }
+  if !self.bind_text(sql, args) { return false }
+  r = s3_step(self.ps);
+  _ = s3_reset(self.ps);
+  return r == 101 || r == 100;
+}
 
 pub fn db_shut(self: Sqlite) {
   self.release();

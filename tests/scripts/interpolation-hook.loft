@@ -14,6 +14,13 @@
 // doc/claude/plans/124-interpolation-hook/ pins that separately as a
 // byte-identical IR diff.
 
+// @PLN124 H6 — a hole may also be a value of a NAMED type. That is what lets a
+// target hold something apart from both a literal and a bound value: a SQL table
+// name is genuinely syntax, so it goes in inline, and the safety then rests on
+// the type — nothing builds one but its validating constructor.
+struct Ident { nm: text }
+enum Level { Low, High }
+
 struct Trace {
   const calls: vector<text>,
   const holes: vector<text>,
@@ -44,6 +51,20 @@ fn hole_boolean(self: Trace, v: boolean) {
 
 fn hole_character(self: Trace, v: character) {
   self.calls += ["character"];
+  self.holes += ["{v}"];
+}
+
+// H6 — the kind of a named type is its own name in the case a loft method is
+// spelled in, so `Ident` asks for `hole_ident` and `Level` for `hole_level`.
+// Derived rather than chosen, so a target and the parser cannot disagree about
+// what a type's hole is called.
+fn hole_ident(self: Trace, v: Ident) {
+  self.calls += ["ident"];
+  self.holes += [v.nm];
+}
+
+fn hole_level(self: Trace, v: Level) {
+  self.calls += ["level"];
   self.holes += ["{v}"];
 }
 
@@ -116,6 +137,24 @@ fn main() {
   h: Trace = "WHERE name = {attack}";
   assert(h.seq() == "lit(WHERE name = )>text", "a hostile value is still one hole");
   assert(h.vals() == "['); DROP TABLE t; --]", "and arrives verbatim as a VALUE");
+
+  // H6 — a hole of a NAMED type routes to that type's own method, and the value
+  // crosses whole rather than rendered. `Ident` is the shape a validated SQL
+  // identifier has: the target receives the value and decides that this one
+  // becomes syntax, which is a decision only the type can make.
+  tbl = Ident { nm: "orders" };
+  i: Trace = "FROM {tbl} WHERE";
+  assert(i.seq() == "lit(FROM )>ident>lit( WHERE)", "a named type routes to its own hole method");
+  assert(i.vals() == "[orders]", "and the value crosses whole");
+
+  // Beside a scalar hole, so the interleaving is measured rather than assumed.
+  j: Trace = "{tbl}={n}";
+  assert(j.seq() == "ident>lit(=)>int", "a named-type hole and a scalar hole keep their order");
+
+  // An enum is a named type too — the same one rule, not a second one.
+  k: Trace = "<{Level.High}>";
+  assert(k.seq() == "lit(<)>level>lit(>)", "an enum hole routes by its type name");
+  assert(k.vals() == "[High]", "and the variant crosses as a value");
 
   // text is untouched — the same string with no target is ordinary formatting.
   plain = "WHERE name = {attack}";

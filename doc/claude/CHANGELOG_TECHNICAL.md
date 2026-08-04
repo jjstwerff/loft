@@ -9,6 +9,55 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN124 H6/H7: an interpolation hole may be a value of a NAMED type (2026-08-04)
+
+`format_hole` read a hole's kind off the value's type and accepted six scalars; a
+struct or enum was a compile error. It now derives the kind from the type's own
+NAME in the case a loft method is spelled in — `SqlIdent` asks for
+`hole_sql_ident`, `Level` for `hole_level`, and an acronym run breaks at the last
+capital (`SQLIdent` → `sql_ident`). Derived rather than chosen, so a target and
+the parser cannot disagree about what a type's hole is called and the diagnostic
+names the exact method to add. The refusals are unchanged: a kind the target does
+not define, and a spec on any hole, are both errors.
+
+That is what lets a target hold something apart from BOTH a literal and a bound
+value. The motivating case is @PLN23 H6: a SQL table name is genuinely syntax, so
+`SqlText` puts it in inline — and the safety rests on the TYPE, because nothing
+builds a `SqlIdent` but its validating constructor.
+
+**A second leak of the expected-type channel, into the HOLE.** A hole is not the
+destination, so a string literal inside one must not inherit the destination's
+type; without that, `q: SqlText = "{"seed"}"` checked the inner literal against
+`SqlText` and it took the BUILD path. The same leak the arc closed per call
+argument, one level in, and found only once a consumer wrote a text hole inside a
+built statement.
+
+The fix is narrower than the call-argument one deliberately. Clearing `expected`
+for the whole hole broke `store_load_layout_gate` on `--native`: the hole
+`"{(h[42] ?? Tile { … }).name}"` is a KEYED LOOKUP, and a keyed lookup resolves
+its record type through that same channel, so blanking it silently changed the
+schema the generated `init()` replays. Only the TARGET derivation is gated now
+(`in_format_expr` in `constant`), and only its `expected` source — `var_tp` still
+applies, since a declaration written inside a hole does name a destination. Cost:
+a format string in argument position inside a hole is plain text, which is a
+visible type error at the call rather than a silent difference.
+
+Inertness re-proved after both changes: the 104-site corpus is byte-identical in
+IR and in generated Rust.
+
+@PLN23 H6/H7 rest on it — `SqlIdent`, and procedures as named parameterised
+statements (`CREATE OR REPLACE PROCEDURE` + `CALL` on postgres/mariadb, a shared
+process-side registry for sqlite/duckdb). Two findings from that build:
+
+- **Identifier quoting is chosen at ASSEMBLY time**, not when the hole is filled:
+  mariadb reads `"loft_p"` as a string literal and wants a backtick, measured as
+  a syntax error when given the ANSI quote the other three use.
+- **A procedural body is refused on all four backends**, not just the two with no
+  procedural language. mariadb writes them in SQL/PSM and postgres in plpgsql or
+  `BEGIN ATOMIC`, and neither reads the other's, so there is no such body a
+  uniform API could carry. One statement per procedure, refused where the author
+  can see it.
+
 ### `chr(cp)` names the code-point constructor that already worked (loft#748) (2026-08-03)
 
 `cp as character` already produced the right character and interpolating it
