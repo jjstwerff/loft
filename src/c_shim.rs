@@ -82,6 +82,21 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
     let tmp = out_dir.join(format!("{stem}.{}.tmp", std::process::id()));
     let mut cmd = std::process::Command::new(cc_program());
     cmd.arg("-O2").arg("-fPIC").arg("-shared");
+    // A shim must not drag its COMPILER's runtime along. A MinGW `cc` links
+    // `libgcc_s_seh-1.dll` (and `libwinpthread-1.dll`) by default, so the shim
+    // loads only where MinGW's `bin` is on PATH — which the build machine has and
+    // a consumer does not. Measured: the shim was staged correctly beside the
+    // binary and Windows still refused to start the process
+    // (`STATUS_DLL_NOT_FOUND`), because the missing import was the runtime and
+    // not the shim.
+    //
+    // Static-linking it is the fix rather than staging two more DLLs: the shims
+    // are three-line trampolines, the runtime they actually use is a rounding
+    // error, and a self-contained artifact is one fewer thing to ship. Harmless
+    // where it does not apply — a non-MinGW `cc` has nothing to statically link.
+    if cfg!(windows) {
+        cmd.arg("-static-libgcc");
+    }
     // `-Wall -Wextra` deliberately absent: a warning in the AUTHOR's C is theirs
     // to see when they compile it, not a reason for a consumer's build to look
     // broken. Errors still fail the build below.

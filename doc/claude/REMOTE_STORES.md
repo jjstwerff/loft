@@ -9,14 +9,52 @@ How a loft program reads **part** of a large file that lives on a web server,
 fetching only the bytes a lookup touches instead of downloading the whole thing.
 
 The shape this is for is ordinary and not map-specific: **one big immutable
-dataset, many small reads, no server-side code.** A product catalogue, a
-gazetteer, a dictionary, a parts list, a sensor archive, a map block — anything
-you can build once, upload as a static file, and then query. The dataset sits on
-whatever serves static files (a CDN, S3, GitHub Pages, nginx), and the client
-pulls pages of it on demand.
+dataset, many small reads, no server-side code.** A game's world chunks, meshes
+and sounds; a product catalogue; a gazetteer; a dictionary; a parts list; a
+sensor archive; a map block — anything you can build once, upload as a static
+file, and then query. The dataset sits on whatever serves static files (a CDN,
+S3, GitHub Pages, nginx), and the client pulls pages of it on demand.
 
 **No database server and no API.** The file is the API; HTTP range is the
 protocol; the server is a dumb file host. That is the whole trade this buys.
+
+## Games: asset streaming without an asset server
+
+This is the shape a game already has, and loft is games-first, so read the rest
+of this document with that case in mind. **World chunks, meshes, textures,
+sounds, animations, dialogue, level data** — built once by a tool, packed into a
+store, uploaded as a static file, and pulled in as the player moves.
+
+```loft
+// The world is one 2 GB pack on a CDN. Load the chunks around the player.
+chunks: hash<Chunk[cell]> = [];
+_ = store_load_keys(chunks, "https://cdn.example/world.store", ring_around(here));
+```
+
+What it replaces is an asset server, a streaming service, and the deployment that
+goes with them. A browser game built with `--html` gets the same call: the world
+streams from static hosting, and the program is written as though the pack were
+on local disk.
+
+Three things follow from the cost model below, and they are the ones that decide
+whether a game feels good:
+
+- **Pack by locality, because a page is shared.** Neighbouring chunks in the same
+  64 KiB page arrive for the price of one; an animation's frames, a mesh and its
+  LODs, a sound and its variants all want to be adjacent in the file. This is a
+  property of how the pack is BUILT, and it is worth more than any runtime knob.
+- **Prefetch ahead of the player, never on demand at the point of use.** A round
+  trip is ~40 ms and you cannot take one inside a frame. Load the ring around the
+  player, not the cell under them.
+- **Batch the ring.** `store_load_keys` opens the reader once and reuses its page
+  cache, so a ring is one traversal rather than N; `store_load_range` does the
+  same for a contiguous span of spatial keys.
+
+Split the pack the way the reads split: assets needed on **every** frame from the
+first (the UI atlas, the player mesh, core sounds) are small and universal, so
+load them **whole** at boot with `store_load_url_trusted`. The world is large and
+read sparsely, so page it. Mixing those two in one file makes the boot load pay
+for the world.
 
 ## The two ways to read a remote store
 
