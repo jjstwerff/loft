@@ -11,6 +11,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 mapping) is designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
 is its first consumer; @PLN125 is not. Depends on @PLN24 (`#c`), also active.
 
+Everything below is proven on **Linux x86-64 only**. macOS has never run these tests,
+Windows fails to link the shim, and wasm cannot host a database client at all —
+[PLATFORMS.md](PLATFORMS.md) measures each cell and gives the ladder that closes it.
+
 ## Goal
 
 A MariaDB, PostgreSQL and sqlite client that calls the
@@ -42,6 +46,7 @@ exists at all.
 | S4 prepared statements, on all four backends | done |
 | T1–T3 begin / commit / rollback, and nesting REFUSED | done |
 | S5+ the object mapping | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
+| P1–P6 the other three platforms | see [PLATFORMS.md](PLATFORMS.md) — Linux only today |
 
 ## S4 — a value cannot become syntax
 
@@ -137,6 +142,9 @@ attack cell loudly.
 - **[INTERPOLATION_HOOK.md](INTERPOLATION_HOOK.md)** — the language change that makes a
   safe builder possible at all. Built as **@PLN124**; what shipped is in
   [plans/124-interpolation-hook.md](../124-interpolation-hook.md).
+- **[PLATFORMS.md](PLATFORMS.md)** — building the client on Linux, macOS, Windows and
+  wasm. The state is measured per platform, and two of the four cells currently pass
+  **without testing anything**; the P1–P6 ladder fixes that before it chases greens.
 - **[mysql-bind-layout-check.c](mysql-bind-layout-check.c)** — the check that keeps the
   hand-declared `MYSQL_BIND` in `maria/src/stmt.c` honest against the real header.
 
