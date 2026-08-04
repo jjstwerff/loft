@@ -71,6 +71,9 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F56](F56.md) | Live code reload — patch a running program |
 | [@F88](F88.md) | Stack traces (stack_trace) |
 | [@F89](F89.md) | Test runner (fn test_*, loft --tests / loft test) |
+| [@F92](F92.md) | Direct C binding — `#c "symbol" "signature"`, no rustc and no glue crate |
+| [@F93](F93.md) | Paged & remote store loading — read part of a dataset over HTTP range |
+| [@F94](F94.md) | Type-directed interpolation — a type receives the literal/hole boundary |
 
 ## Infrastructure (`@I`)
 
