@@ -533,6 +533,25 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 pub fn store_bind_lazy(local: reference, source: text) -> boolean;
 #rust"{{ let r = @local; let ok = r.rec != 0; if ok {{ stores.bind_lazy(&r, @source); }} ok }}"
 
+// @PLN129 arc C — why the last lazy fetch could not REACH this collection's
+// source, or "" when it is healthy.
+//
+// A lookup cannot tell you this. C80 says a value read never raises, so a miss
+// answers `null` whether the key is genuinely absent or the source is
+// unreachable — and those are different facts, one stable and one not. Ask this
+// after a null to tell them apart:
+//
+//   p = persons[42];
+//   if p == null {
+//     why = store_lazy_error(persons);
+//     if why == "" { /* really no such person */ } else { /* could not reach: {why} */ }
+//   }
+//
+// A genuine absence CLEARS it: reaching the source and not finding the key
+// proves the source was reachable, so a stale error never outlives it.
+pub fn store_lazy_error(local: reference) -> text;
+#rust"stores.lazy_error(&(@local))"
+
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
 #rust"stores.load_key(&(@local), @path, @key)"
 #impure(io)

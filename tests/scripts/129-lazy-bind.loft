@@ -50,4 +50,14 @@ fn main() {
   // resident set.
   println("absent={people[999] == null} resident3={people.len()}");
   println("verify={store_verify(people)}");
+
+  // @PLN129 arc C — the two failure modes must be distinguishable from the same
+  // null. A reachable source that lacks the key leaves NO error; a source that
+  // cannot be reached leaves one. Without this the lookup would report "absent"
+  // for a database that is simply down — and unstably, since it changes with the
+  // network.
+  println("err_after_absent=[{store_lazy_error(people)}]");
+  gone: hash<LzPerson[id]> = [];
+  println("gone_bound={store_bind_lazy(gone, "129-no-such-source.store")}");
+  println("gone_null={gone[42] == null} gone_err_empty={store_lazy_error(gone) == ""}");
 }

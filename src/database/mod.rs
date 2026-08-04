@@ -243,6 +243,19 @@ pub struct Stores {
     /// so an unbound collection pays one hash probe on a path that was about to
     /// return "absent" anyway.
     pub lazy_sources: HashMap<(u16, u32, u32), String>,
+    /// @PLN129 arc C — why the last fetch for this collection could not reach its
+    /// source. Absent means healthy.
+    ///
+    /// A lookup cannot report this: C80 says a value read never raises, and
+    /// answering `null` would make "no such person" and "the database is
+    /// unreachable" the same answer — and an UNSTABLE one, since it changes with
+    /// the network. So the failure lives on a channel the value cannot carry,
+    /// asked deliberately (`store_lazy_error`), the way `#errors` and
+    /// `store_verify` already work.
+    ///
+    /// A genuine absence CLEARS it: reaching the source and not finding the key
+    /// proves the source was reachable, so a stale error must not survive it.
+    pub lazy_errors: HashMap<(u16, u32, u32), String>,
     #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
     #[cfg(feature = "wasm")]
@@ -535,6 +548,7 @@ impl Clone for Stores {
             allocations: Vec::new(),
             stack_store_at_zero: self.stack_store_at_zero,
             lazy_sources: HashMap::new(),
+            lazy_errors: HashMap::new(),
             files: Vec::new(),
             max: self.max,
             peak: 0,
@@ -1273,6 +1287,7 @@ impl Stores {
             allocations: Vec::new(),
             stack_store_at_zero: false,
             lazy_sources: HashMap::new(),
+            lazy_errors: HashMap::new(),
             files: Vec::new(),
             max: 0,
             peak: 0,

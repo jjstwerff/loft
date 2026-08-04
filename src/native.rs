@@ -172,6 +172,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_reclaim", n_store_reclaim),
     #[cfg(paged_store)]
     ("n_store_bind_lazy", n_store_bind_lazy),
+    ("n_store_lazy_error_dest", n_store_lazy_error_dest),
     ("n_store_load_key", n_store_load_key),
     #[cfg(paged_store)]
     ("n_store_load_key_text", n_store_load_key_text),
@@ -1295,6 +1296,18 @@ fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
         stores.bind_lazy(&v_ref, v_source.str());
     }
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_lazy_error` — @PLN129 arc C.  Why the last
+/// fetch could not reach the collection's source, or "" when healthy.
+fn n_store_lazy_error_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    let msg = stores.lazy_error(&coll);
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&msg);
 }
 
 /// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from

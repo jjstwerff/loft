@@ -1476,6 +1476,7 @@ impl Stores {
             // against one file or one connection, and would insert into a store
             // the parent later reconciles. Fault before the `par`, not inside it.
             lazy_sources: std::collections::HashMap::new(),
+            lazy_errors: std::collections::HashMap::new(),
             files: Vec::new(),
             max: (self.allocations.len() + scratch_stores) as u16,
             peak: (self.allocations.len() + scratch_stores) as u16,
@@ -3803,6 +3804,20 @@ impl Stores {
             .insert((coll.store_nr, coll.rec, coll.pos), source.to_string());
     }
 
+    /// @PLN129 arc C — why the last fetch could not reach this collection's
+    /// source, or `""` when it is healthy.
+    ///
+    /// Empty is the honest answer for a collection that was never bound: nothing
+    /// has failed. A caller distinguishing "absent" from "unreachable" asks this
+    /// AFTER a lookup answered null — the lookup itself cannot say (C80).
+    #[must_use]
+    pub fn lazy_error(&self, coll: &DbRef) -> String {
+        self.lazy_errors
+            .get(&(coll.store_nr, coll.rec, coll.pos))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// The lazy source bound to this collection, if any.
     #[must_use]
     pub fn lazy_source(&self, coll: &DbRef) -> Option<String> {
@@ -3852,14 +3867,30 @@ impl Stores {
             [crate::keys::Content::Str(s)] => self.load_key_text(data, &source, s.str()),
             _ => false,
         };
+        let slot = (data.store_nr, data.rec, data.pos);
         if fetched {
-            self.find(data, db, key)
-        } else {
-            DbRef {
-                store_nr: data.store_nr,
-                rec: 0,
-                pos: 0,
+            self.lazy_errors.remove(&slot);
+            return self.find(data, db, key);
+        }
+        // @PLN129 arc C — a failed fetch is TWO different facts, and answering
+        // `null` for both is the failure this channel exists to prevent: "no such
+        // person" is stable and true, "the source is unreachable" is neither. The
+        // check runs only HERE, on the miss-and-fail path, so a healthy program
+        // never pays for it.
+        match crate::paged_reader::PageSource::open(&source) {
+            Ok(_) => {
+                // Reached it and the key was not there. That PROVES the source was
+                // reachable, so a stale error must not outlive it.
+                self.lazy_errors.remove(&slot);
             }
+            Err(reason) => {
+                self.lazy_errors.insert(slot, reason);
+            }
+        }
+        DbRef {
+            store_nr: data.store_nr,
+            rec: 0,
+            pos: 0,
         }
     }
 

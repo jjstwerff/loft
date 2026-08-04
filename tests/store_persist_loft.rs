@@ -2766,6 +2766,20 @@ fn lazy_bound_collection_fetches_only_the_touched_entry_both_backends() {
             out.contains("verify=true"),
             "{backend}: the partially-loaded heap must be structurally sound: {out:?}"
         );
+
+        // @PLN129 arc C — the failure channel. A reachable source that simply
+        // lacks the key must leave NO error, or "absent" and "unreachable" are
+        // the same answer and the channel is useless.
+        assert!(
+            out.contains("err_after_absent=[]"),
+            "{backend}: a genuine absence must leave the collection healthy: {out:?}"
+        );
+        assert!(out.contains("gone_bound=true"), "{backend}: bind: {out:?}");
+        assert!(
+            out.contains("gone_null=true gone_err_empty=false"),
+            "{backend}: an UNREACHABLE source must answer null AND leave a reason — \
+             the whole point is that these two nulls are told apart: {out:?}"
+        );
     }
 }
 

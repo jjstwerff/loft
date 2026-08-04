@@ -175,10 +175,20 @@ they are the same thing.
    unstable across runs** — the worst class, because it looks like data. The value channel cannot
    carry this; the failure belongs on a store-level channel a program can ask (the `store_verify`
    / `#errors` shape).
-2. **`len()` and iteration.** `for p in persons` over a lazily-bound hash is a full table scan,
-   and `len(persons)` is either the resident count or the real one. Both are silently defensible
-   and wrong half the time. The collection root must carry the true length, and iteration must
-   stream or be refused on a lazy root — never answer from the working set.
+2. **`len()` and iteration answer "what have I got", never "what exists" — and that is now
+   SETTLED rather than a hazard.** An earlier draft of this line said the collection root "must
+   carry the true length" and that iteration must stream or be refused. That was written before
+   the cache insight and it contradicts it: once the collection IS the working set, the resident
+   count is the honest answer and there is no "true length" for it to carry. The source's row
+   count is a DIFFERENT question, and a program that wants it should ask the source (an explicit
+   query), not a collection pretending to know.
+
+   So `len(persons)` is the resident count and `for p in persons` walks what has been touched —
+   history-dependent, on purpose, because the history is the working set. Arc A ships this and its
+   test asserts it (`resident=1` then `2` from a three-entry image). The rule that keeps it honest
+   is documentation, not machinery: a lazily-bound collection is a working set, and anyone reading
+   `len` as a population count is asking the wrong object.
+
 3. **Snapshot.** A store *is* a consistent image; a live database moves. Two faults at different
    points in a traversal seeing different worlds breaks the invariant directly, so the binding has
    to pin a read snapshot (a transaction, an MVCC point, or a source that is simply immutable).
@@ -262,12 +272,12 @@ an eager read with extra steps.
 
 | Item | Status |
 |---|---|
-| **A** — residency at `addr`/`valid`: represent "not resident", fault, fill via `claim_at` | Open |
+| **A** — the miss path: a bound collection fetches on a miss (`store_bind_lazy`) | **shipped** — file source, both backends |
 | **B** — schema→query from `LayoutDesc`: equality from `hash`, ranges from `sorted`, composite+ordered from `index`; nothing enumerated ahead of time | Open |
 | **B2** — the explicit escape hatch: run a query, materialise rows INTO the collection (what the keys cannot express) | Open |
 | **B3** — the declared mapping + the `T: DbKeyed` bound + the bind-time schema/index check ([BINDING.md](BINDING.md)) | Open |
 | **B4** — collection-valued fields as owner-parameterised queries (`company.people`) | Open |
-| **C** — the C80-compatible failure channel, and `len`/iteration honesty | Open |
+| **C** — the C80-compatible failure channel (`store_lazy_error`), and `len`/iteration honesty | **shipped** — the channel distinguishes unreachable from absent on both backends; `len` settled as the resident count |
 | **D** — a pinned read snapshot, so a traversal sees one consistent world | Open |
 | **E** — eviction / a bounded working set | Open |
 | **F** — a real consumer: the persons / companies / positions graph | Open |
