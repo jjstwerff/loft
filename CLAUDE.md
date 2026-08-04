@@ -206,7 +206,9 @@ the bug-filing policy above). It never blocks.
 [SLOTS.md](doc/claude/SLOTS.md) stack slots · [NATIVE.md](doc/claude/NATIVE.md) `--native` codegen ·
 [THREADING.md](doc/claude/THREADING.md) par · [CODEGEN_METHOD.md](doc/claude/CODEGEN_METHOD.md) how to do compiler work.
 
-**Runtime / memory:** [DATABASE.md](doc/claude/DATABASE.md) stores/DbRef · [LIFETIME.md](doc/claude/LIFETIME.md) deps/freeing ·
+**Runtime / memory:** [DATABASE.md](doc/claude/DATABASE.md) stores/DbRef ·
+[REMOTE_STORES.md](doc/claude/REMOTE_STORES.md) serving static data over HTTP range (paged
+`store_load_key*`, no server-side code) · [LIFETIME.md](doc/claude/LIFETIME.md) deps/freeing ·
 [OWNERSHIP_MODEL.md](doc/claude/OWNERSHIP_MODEL.md) the deps north-star (borrow system) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
 [BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).

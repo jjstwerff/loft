@@ -975,6 +975,8 @@ loft runtime value
 ---
 
 ## See also
+- [REMOTE_STORES.md](REMOTE_STORES.md) — reading a store image over HTTP range: serving a large
+  immutable dataset as a static file and fetching only the pages a lookup touches
 - [INTERMEDIATE.md](INTERMEDIATE.md) — Value/Type enums in detail; 233 bytecode operators; State layout
 - [INTERNALS.md](INTERNALS.md) — calc.rs, stack.rs, create.rs, native.rs, ops.rs, parallel.rs, radix_tree.rs
 - [DESIGN.md](DESIGN.md) — Algorithm catalog with complexity analysis for hash, index, sorted, store
