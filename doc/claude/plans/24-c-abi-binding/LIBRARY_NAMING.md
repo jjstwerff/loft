@@ -50,7 +50,22 @@ The common cause: **the filename is treated as the primary fact and the identity
 is recovered from it.** Every consumer re-derives, and each derivation is a place
 to be wrong in silence.
 
-## The invariant
+## The invariant that outranks the rest
+
+> **Binding a new C library requires NO new Rust in loft.** A library author
+> writes a manifest declaration, `#c` annotations, and — where the C ABI needs
+> shapes the trampolines cannot express — a few lines of ANSI C. Nothing else.
+
+This is the whole point of `#c` and it is what "a generic linking tool" means: a
+mechanism that needs a core patch per library is not a mechanism, it is a list.
+Every proposal below is measured against it first, and the naming design exists
+largely because naming is the one place the rule is currently broken.
+
+It constrains loft's own development too, in the useful direction: a gap gets
+closed by making the DECLARATION able to say the thing, never by adding a branch
+that knows about one library.
+
+## The naming invariant
 
 > **A `[c]` library is named once, by IDENTITY. Every filename, link flag,
 > search path and staged artifact is DERIVED from that identity and the target —
@@ -108,6 +123,43 @@ windows  = "libcrypto-3-x64"     # stem only; the .dll is still derived
 
 An override replaces the *stem*, never the extension or the search — so it
 cannot reintroduce a filename that some later step has to parse.
+
+## Audit: where "no new Rust" holds today, and where it does not
+
+Checked against the code rather than asserted, because an invariant nobody has
+tested is a wish.
+
+| what a new C library might need | needs a loft patch? | the declarative answer |
+|---|---|---|
+| a scalar type in a signature | **no** | `c_signature.rs` already takes `char` / `short` / `int` / `long` / `long long` / `float` / `double`, the `size_t` / `ssize_t` / `intptr_t` / `ptrdiff_t` family and the `int*_t` / `uint*_t` family |
+| an opaque handle (`sqlite3 *`, `MYSQL *`) | **no** | spelled `void*` by convention; loft has no type that distinguishes a handle from an integer, and the signature string is what says which is which |
+| a `double` / `float` argument by value | **no** | a 3-line ANSI-C shim; the SSE register the fixed trampolines do not write is exactly what the shim exists for |
+| a struct by value, varargs, an out-parameter, an array of structs | **no** | the same — `maria/src/stmt.c` owns `MYSQL_BIND` arrays and references not one mysql symbol |
+| arity above 12 | **no**, but it is REFUSED | trampolines cover 0..=12 and a wider one is rejected rather than truncated; a shim collapsing the tail into one pointer is the answer, and the refusal says so |
+| a library present under an unusual filename | **YES — today** | none. `platform::lib_variants` hardcodes three conventions, so `libcrypto-3-x64.dll` needs a core patch |
+| a library whose symbols must be told apart from a shim's | **YES — today** | none. A `#c` annotation names no library |
+
+**Two rows are red, and both are naming-or-attribution — neither is about the C
+ABI.** The per-target stem override closes the first: the manifest gains the
+ability to SAY the odd spelling, so no branch has to know it. The third row from
+the bottom is why the symbol-attribution section below is part of this design
+rather than a separate concern.
+
+The rows that are green are green for one reason worth stating: **the shim is the
+general escape.** Anything the fixed trampolines cannot express becomes C the
+author ships, compiled by `cc`, never rustc. That trade is what keeps loft-core
+free of per-library knowledge, and every new gap should be pushed toward it
+before anything else is considered.
+
+### The conformance test for the invariant itself
+
+A fixture package that binds a deliberately awkward C library — struct by value,
+a `double` argument, an out-parameter, arity 13, an odd filename — and builds
+with **zero changes under `src/`**. The check is mechanical: the ladder step that
+adds it must touch no Rust outside the fixture. `tests/fixtures/c_abi/` is
+already most of this; what it does not currently assert is the *absence* of a
+core change, which is the only thing that can catch the invariant eroding one
+convenient branch at a time.
 
 ## Backwards compatibility, which is absolute
 
@@ -183,6 +235,10 @@ needs no IR change. The third string is the only one that makes the attribution 
 FACT the compiler holds rather than a pattern it guesses, and availability is a
 question whose wrong answer is silent.
 
+All three satisfy the no-new-Rust invariant for the *author* — each is something
+written in a manifest or an annotation. The cost differences are loft's own,
+which is the right place for them to fall.
+
 ## Finding it, and finding it again at run time
 
 Two different questions that currently share code by accident.
@@ -229,6 +285,7 @@ Each step lands green alone, and the order puts the falsifiable test first.
 | **N5** | overrides | per-target stem override, with a test that it replaces the stem and not the search |
 | **N6** | wasm refuses by name | the resolver's empty answer becomes one message before codegen (this is @PLN23 P6) |
 | **N7** | symbol attribution | the manifest glob, then the third string once `ir_schema_gen` is regenerable |
+| **N8** | **no new Rust for a new library** | the awkward-library fixture above builds with zero changes under `src/` — the standing guard on the invariant that outranks the rest |
 
 N1 before N2 is not ceremony: a resolver written first would be measured against
 the spellings it produced, and the Windows bug is invisible that way.
