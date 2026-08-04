@@ -1511,6 +1511,15 @@ use #count instead"
                 let fmt = format.clone();
                 let e_tp = self.data.def(d_nr).known_type();
                 if e_tp == u16::MAX || !is_ref {
+                    // A scalar enum is a byte, not a record, so it never reaches
+                    // the record walker below: it is cast to text HERE, before
+                    // the format spec is applied, which is why `:j` on a bare
+                    // scalar enum still renders the unquoted name (loft#768's
+                    // residual).  Carrying the JSON-ness into the cast is not
+                    // enough — `Str` is a borrowed view, and the quoted form has
+                    // nowhere to live now that @PLN10 retired the Str-lifetime
+                    // scratch buffer.  The fix is a destination-passing op that
+                    // appends into the work buffer, as `OpFormatDatabase` does.
                     let e_val = self.cl("OpCastTextFromEnum", &[fmt, Value::Int(i32::from(e_tp))]);
                     self.append_data_text(list, start, var, e_val, state);
                 } else {

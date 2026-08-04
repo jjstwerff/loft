@@ -1044,14 +1044,17 @@ impl ShowDb<'_> {
                         // fields. Rendering the name bare — `{"kind":Circle {…}}` —
                         // is not JSON at all, and `json_parse` rejected the whole
                         // document rather than just that field (loft#768).
-                        if v <= 0 {
-                            s.push_str("null"); // already valid JSON
-                        } else if let Some(st) = payload {
+                        if let Some(st) = payload {
                             write!(s, "{{\"{enum_val}\":").unwrap();
                             self.write_struct(s, st, indent);
                             s.push('}');
                         } else {
-                            write!(s, "\"{enum_val}\"").unwrap();
+                            // Payload-less (and the absent discriminant): the
+                            // same rule the SCALAR route uses, asked in one place.
+                            // A discriminant outside a byte is already corrupt;
+                            // 0 is the absent case, which renders as `null`.
+                            let discr = u8::try_from(v).unwrap_or(0);
+                            s.push_str(&self.stores.enum_val_json(self.known_type, discr));
                         }
                         return;
                     }
