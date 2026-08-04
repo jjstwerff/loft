@@ -201,11 +201,57 @@ the suite that interpolates a path into generated `.loft` or `.toml` source.
 A test-harness bug, not a `#c` one — but it would have failed the Windows leg on
 its own regardless of X1.
 
-**X3 — `interpreted_and_native_c_bindings_agree`** reports `interpret failed` after
-`len 5 / neg -1 / abs 7`; probably X1 again, not separately diagnosed.
+**X3 — was not a thing.** I guessed `interpreted_and_native_c_bindings_agree` was
+"probably X1 again" without diagnosing it. It was not; it was X5 below. Two
+lessons, both cheap: an undiagnosed failure attributed to a known cause is a
+guess wearing a label, and the reason it went unread was an interleaved
+`--nocapture` log — the fix for which is fewer concurrent failures, not more
+squinting.
+
+**X4 — FIXED. A second import library, with a different builder.**
+`LNK1181: cannot open input file 'lc_types.lib'`. W1 gave `c_shim.rs` its
+`--out-implib`, but `tests/fixtures/c_abi/Makefile` builds `liblc_types` *itself*
+and had only a Darwin arm and a Linux `else`; on MSYS/MinGW it fell through to
+`else`, produced a `.so`, and left MSVC nothing to link. The Windows arm now
+emits `liblc_types.dll` plus `-Wl,--out-implib,lc_types.lib`. The `.lib` stem is
+fixed by loft passing `-l lc_types` (taken from the declared `liblc_types.so`),
+and the DLL keeps its `lib` prefix because `lib_variants` tries
+`liblc_types.dll` beside `lc_types.dll`.
+
+**X5 — FIXED. Windows has `write(2)`'s behaviour but not its name.**
+`` `#c` symbol 'write' not found ``: the CRT exports it as `_write`. The parity
+fixtures now spell that declaration per host.
+
+X5 is worth keeping as a check on X1's rule. **`long` is genuinely correct for
+that return on both platforms** — POSIX `write` gives `ssize_t` (64-bit on LP64),
+`_write` gives `int` (32-bit), which is exactly what C `long` means on each. A
+blanket `long` → `int64_t` sweep would have broken this binding. That is the
+whole reason X1 was scoped to loft-*authored* shims instead of applied
+everywhere, and it is why the audit had to be per-declaration.
 
 None of these is a regression from W1/W2 — they were unreachable while nothing
 linked, which is the ordinary shape of fixing a bottom layer.
+
+### How big the Windows gap actually is
+
+A full `ci.yml` matrix run on Windows: **3690 tests, 3685 passed, 5 failed — and
+all five are the `#c` tests in `tests/native.rs`.** Nothing else on the platform
+is broken. That bounds the problem and it also says the cheap loop is sufficient:
+`windows-probe.yml` running one test binary found exactly the same five.
+
+**Iterate on the probe, not the matrix.**
+
+```bash
+gh workflow run windows-probe.yml --ref <branch> -f tests="--test native"
+```
+
+Six minutes against the matrix's forty-five, because it builds one test binary
+instead of everything and skips ~3670 tests that were never going to fail. The
+workflow was built for this and says so in its own header — *"a 24-hour loop for
+a question you can usually answer in minutes"*. Reach for the full matrix once at
+the end, to confirm nothing else moved. Note `cargo test` takes ONE test-name
+filter; passing several is `error: unexpected argument`, so filter by test BINARY
+and accept the extra tests.
 
 ### After that, the databases themselves
 
@@ -340,7 +386,9 @@ produce a green that means nothing.
 | step | what it proves | how it is proved |
 |---|---|---|
 | **P1** — done | the Windows shim links | W1 + W2; **verified** — zero `LNK1181` / `LNK4044`, the `#c` tests run and compare values |
-| **X1** — built | 64-bit values survive Windows | exact-width spellings (`int64_t` / `uint64_t`) wherever a 64-bit value crosses; `long` kept only where the real header says `long`. Linux unchanged; needs a Windows dispatch to confirm |
+| **X1** — built | 64-bit values survive Windows | exact-width spellings (`int64_t` / `uint64_t`) wherever a 64-bit value crosses; `long` kept only where the real header says `long`. Linux unchanged; **still unconfirmed** — the tests that would show it were failing earlier, at the link |
+| **X4** — built | the fixture library links too | the c_abi `Makefile` gains a Windows arm emitting `lc_types.lib` |
+| **X5** — built | a POSIX name that Windows spells differently | `write` → `_write`, branched per host in the generated fixtures |
 | **P2** — built | the probe asks the HOST's question | `platform::host_library_loadable` translates the declared soname to the host's spellings and `dlopen`s them; sqlite stops being skipped on macOS and Windows |
 | **P3** — done for sqlite | macOS runs what Linux runs | **confirmed on Apple silicon**: `["sqlite"]` exercised, matching the same hard-coded `sqlite` / `sqlite bound` / `sqlite tx` constants Linux matches, `--interpret` == `--native`. postgres / maria / duckdb remain correct skips until P5 answers the search path |
 | **P4** | Windows runs what Linux runs | the same three lines, from a Windows runner with sqlite present |
