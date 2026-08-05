@@ -15,7 +15,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
 | C — Fix design | ✅ closed — F1+F2 one analysis; F4 reuses it; F3 settled by two decisions rather than machinery |
-| D — Implementation | ✅ F1, F2, F4, F5, F6 shipped; F3 decided; **F7 RETRACTED** — the boundary it called a defect is C86 / `binding.md`, measured conformant on 30 cells and now pinned by `tests/scripts/201` |
+| D — Implementation | 🟡 F1, F2, F4, F5, F6 shipped; F3 decided; **F7 RETRACTED** (the boundary it called a defect is C86, measured conformant on 30 cells, pinned by `tests/scripts/201`). **F8 OPEN** — the real defect behind loft#774: a view whose CONTAINER is reassigned. Detector for it BUILT (`LOFT_STRICT_STORES`) |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -363,7 +363,8 @@ finding resolves exactly one of:
 | F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
 | F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |
-| F7 | Claimed `c = v[i]` aliasing was a defect and every bind must copy (§ F7) | 30-cell boundary sweep, both backends | **RETRACTED** — no defect: every cell conforms to C86 / `binding.md` B-Copy·B-View·B-Ref-Alias. loft#774 is a **doc** defect | **DONE** — boundary pinned by `tests/scripts/201`; doc corrected |
+| F7 | Claimed `c = v[i]` aliasing was a defect and every bind must copy (§ F7) | 30-cell boundary sweep, both backends | **RETRACTED** — no defect: every cell conforms to C86 / `binding.md` B-Copy·B-View·B-Ref-Alias. The DOC was wrong | **DONE** — boundary pinned by `tests/scripts/201`; doc corrected |
+| **F8** | **A view whose CONTAINER is reassigned reads the replacement** — `c = bx.v[0]; bx = …;` answers 22 where it was bound to 11 | probes 35, 36 | **FIXED** required — `--native` is a genuine use-after-free (poison-confirmed), `--interpret` reuses the store in place | **OPEN — the real defect behind loft#774** |
 
 **loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
 tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
@@ -657,6 +658,99 @@ overturned was correct, recorded, and reasoned. The check that would have cost t
 was grepping `C86` before writing the section, and the check that settled it was widening one
 cell to a boundary. Both are the plan's own § Method rules (calibrate against known answers;
 count the axes you held fixed), applied to everything in this plan except its last section.
+
+## F8 — the third invalidator: the CONTAINER is reassigned under a live view
+
+F7's retraction cleared the ground and left the ticket's real complaint standing. loft#774
+was **not filed out of ignorance** — the reporter derived B-Copy/B-View correctly from
+measurement. Their objection was that the split is unlearnable at the use site, and their use
+case (`held = current; current = other;` over a `World`) is a shape neither shipped fix covers.
+
+Measuring that shape found a live defect. Probes 35 and 36:
+
+```loft
+bx = WithVec { v: [Box { n: 11 }], m: 1 };
+c  = bx.v[0];                 // a VIEW into bx's store — correct (B-View)
+bx = WithVec { v: [Box { n: 22 }], m: 2 };   // bx is REASSIGNED
+c.n                           // -> 22.  Bound to 11.
+```
+
+This is the **third invalidator**, and it is why the plan's earlier two did not catch it:
+
+| invalidator | what changes | covered by |
+|---|---|---|
+| the VIEW variable is reassigned | `k = a[0]; … k = x` | F1 (probe 30) |
+| the container is RESHAPED | `a.remove(0)` | F2 (probes 03–07) |
+| **the CONTAINER VARIABLE is reassigned** | `bx = …` | **nothing — F8** |
+
+**The container's kind decides, which is what hid it.** A plain vector local is covered
+(`a = [Box{n:11}]; c = a[0]; a = [Box{n:22}]` answers 11 on both backends, with churn, in a
+loop, and with no leak). A view into a struct's interior is not. `container_element_base`
+already finds `bx` for `bx.v[0]`; nothing treats a whole-container *reassignment* as an
+invalidation the way `collect_reshaped_containers` treats a removal.
+
+### One wrong answer, two different mechanisms
+
+`LOFT_NO_SLOT_REUSE=1 LOFT_POISON=1` separates them, and they are not the same bug:
+
+- **`--native`: a genuine use-after-free.** With poison on, the view reads the poison pattern;
+  without it, 700 under churn — a `Wide.a` from the seventh loop iteration. The store is freed
+  and the reference outlives it.
+- **`--interpret`: an aliasing defect, not a lifetime one.** Poison changes nothing and the
+  store is never freed — the reassignment REUSES it in place, so the view is a live alias of a
+  location that now holds someone else's value. A write through it lands in the replacement
+  (`bx.v[0].n` becomes 999).
+
+Reading only the default output merges these and sends a fix at the wrong layer. This is the
+owner's read — *"we made an alias where a copy was better"* — confirmed, and it is the F7
+direction applied to the ONE case that earns it rather than to every bind.
+
+### Why the detector built for this missed it
+
+`LOFT_UAF_GEN` reports **zero** on both backends here, on a case poison proves is dangling. It
+stamps DbRefs as they are pushed on the OPERAND STACK; this view lives in a VARIABLE SLOT,
+which it never stamps. And `store()`'s existing freed-access check is `#[cfg(debug_assertions)]`
+and print-only, so the release binary every probe uses never ran it. Two guards, both aimed
+here, both blind — see § The strict store mode for what replaced them.
+
+## The strict store mode — `LOFT_STRICT_STORES=1` (built, F8)
+
+An opt-in mode that makes both store-lifetime faults **errors** instead of plausible numbers:
+
+- **use after free** — a freed store stays dead, and any read or write through a reference
+  naming it is reported AT the access;
+- **never freed** — a store still live at exit is reported too, so a probe cannot pass by
+  leaking instead of freeing;
+- non-zero exit if either fired, on **both** backends (native needed its own tail — the
+  generated binary never runs `src/main.rs`, so the reports printed and the process still
+  exited 0, which is a gate that reports and passes).
+
+**Exactness comes from implying `LOFT_NO_SLOT_REUSE`.** A slot that is never recycled cannot be
+legitimately re-occupied, so `free == true` at an access is unambiguous — no generation stamp,
+no `DbRef` widening, no false positives to explain away. That is also why it is opt-in and
+**for probes only**: never reusing a slot walks a long run off the end of the `u16` store
+space. Probes are small and each asks one lifetime question, so they can afford it.
+
+The report is deliberately **compiler-developer** detail, not a user diagnostic — the question
+it answers is *which emitter produced a reference that outlived its store*:
+
+```
+[strict-store] USE AFTER FREE (read) store #0 type=WithVec rec=4 pos=8
+  killed by the free of `var_bx(prev)`
+  created at pc=…, last legitimate op at pc=…, freed at pc=…, read now at pc=…
+```
+
+`killed by the free of \`var_bx(prev)\`` names the root cause directly: reassigning `bx` frees
+the previous value's store while `c` still points into it. Bytecode positions print only on
+`--interpret` (generated Rust has no pc), because a line of `pc=0, pc=0, pc=0` reads as data
+and is not.
+
+**Calibrated in both directions**, which is the only way a detector means anything:
+
+| direction | result |
+|---|---|
+| fires on a known fault (probe 36, `--native`) | 4 violations, exit 1 |
+| silent on clean code (40 scripts, both backends) | 0 reports, exit 0 |
 
 ## F3 — RESOLVED by two decisions, not by machinery
 

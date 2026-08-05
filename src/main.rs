@@ -9901,6 +9901,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     if runtime_err.is_none() {
         state.check_store_leaks();
     }
+    // @PLN130 F8 — LOFT_STRICT_STORES makes both store-lifetime faults fatal: a reference
+    // that outlived its store, and a store nobody freed.  Reported at every site during the
+    // run (so one run surfaces all of them), and turned into a non-zero exit here so a probe
+    // can be a GATE rather than something someone has to read the output of.
+    if loft::keys::strict_stores() {
+        let n = loft::keys::strict_store_violations();
+        if n > 0 {
+            eprintln!("[strict-store] FAILED: {n} store-lifetime violation(s)");
+            std::process::exit(1);
+        }
+    }
     if let Some(err) = runtime_err {
         let entry = err.to_diag_entry();
         let loader = loft::diagnostic_render::FileSourceLoader::new();

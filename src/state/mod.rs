@@ -4955,7 +4955,16 @@ impl State {
                 format!("{} ... and {} more", leaked[..5].join(", "), count - 5)
             };
             let msg = format!("{count} stores not freed at program exit: {preview}");
-            eprintln!("Warning: {msg}");
+            // @PLN130 F8 — under LOFT_STRICT_STORES a store that is never freed is an
+            // ERROR, not a warning. It is the other half of the same question: strict mode
+            // asks that every store be freed exactly once, so both "freed then used" and
+            // "never freed" have to fail, or a probe could pass by leaking.
+            if crate::keys::strict_stores() {
+                eprintln!("[strict-store] NEVER FREED: {msg}");
+                crate::keys::strict_store_leaks(count);
+            } else {
+                eprintln!("Warning: {msg}");
+            }
             // LOFT_LEAK_SITES — group leaked stores by ALLOCATION site (created_at →
             // source line) so the leak's where-from is named, not just its type. Gated.
             if std::env::var_os("LOFT_LEAK_SITES").is_some() {

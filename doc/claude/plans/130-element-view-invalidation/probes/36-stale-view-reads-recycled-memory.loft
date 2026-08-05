@@ -1,0 +1,80 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 36 (F8) — ONE wrong answer, TWO different mechanisms.
+//
+// Probe 35 shows the view answering the replacement's value.  That alone does not say
+// whether the store was freed under it or reused in place, and the two need different
+// fixes.  `LOFT_NO_SLOT_REUSE=1 LOFT_POISON=1` separates them, and they disagree:
+//
+//   --interpret   still answers 22 with poison on, and a write through the view lands in
+//                 the LIVE replacement (`bx.v[0].n` becomes 999).  Nothing was freed: the
+//                 reassignment REUSES the store in place, so the view is a live alias of a
+//                 storage location that now holds somebody else's value.  Wrong value, no
+//                 memory unsafety.
+//
+//   --native      answers the POISON PATTERN (-2401053088876216593) with poison on, and
+//                 without it reads whatever landed there — 700 under churn, which is a
+//                 `Wide.a` from the seventh loop iteration.  The store IS freed; this half
+//                 is a genuine use-after-free.
+//
+// So `--interpret` is an aliasing defect and `--native` is a lifetime defect, and they
+// happen to print the same number in the simple cell.  Reading only the no-poison output
+// would merge them and send a fix at the wrong layer.
+//
+// CALIBRATION — the existing detector does not see either half.  `LOFT_UAF_GEN=1` reports
+// ZERO on both backends, on a case where poison proves native is dangling.  The detector
+// stamps DbRefs as they are PUSHED ON THE OPERAND STACK; this view lives in a VARIABLE
+// SLOT, which it never stamps.  That gap is why the bug survived the detector built to
+// catch exactly this, and closing it is the guard work F8 owes.
+
+struct Box { n: integer }
+struct WithVec { v: vector<Box>, m: integer }
+struct Wide { a: integer, b: integer, c: integer, d: integer }
+struct WithWide { v: vector<Wide>, m: integer }
+
+fn mk(x: integer) -> WithVec { return WithVec { v: [Box { n: x }], m: x }; }
+fn mkwide(x: integer) -> WithWide {
+  return WithWide { v: [Wide { a: x, b: x + 1, c: x + 2, d: x + 3 }], m: x };
+}
+
+// Same shape: the view lands on the replacement's matching field.
+fn p36_same_shape() {
+  bx = mk(11);
+  c = bx.v[0];
+  bx = mk(2222);
+  print("36 same shape        c.n {c.n}      bound to 11\n");
+}
+
+// Different shape: nothing of that type is there any more.
+fn p36_other_shape() {
+  bx = mk(11);
+  c = bx.v[0];
+  wide = mkwide(7777);
+  print("36 other shape       c.n {c.n}      bound to 11  (wide.m {wide.m})\n");
+}
+
+// Churn: `--native` answered 700 here — a `Wide.a`, from recycled memory.
+fn p36_churn() {
+  bx = mk(11);
+  c = bx.v[0];
+  bx = mk(22);
+  total = 0;
+  for i in 0..8 { w = mkwide(i * 100); total += w.v[0].d; }
+  print("36 churn             c.n {c.n}      bound to 11  (total {total})\n");
+}
+
+// A write through the stale view reaches a LIVE object it was never given.
+fn p36_stale_write_corrupts() {
+  bx = mk(11);
+  c = bx.v[0];
+  bx = mk(22);
+  c.n = 999;
+  print("36 stale write       c.n {c.n}  bx.v[0].n {bx.v[0].n}   bx must stay 22\n");
+}
+
+fn main() {
+  p36_same_shape();
+  p36_other_shape();
+  p36_churn();
+  p36_stale_write_corrupts();
+}

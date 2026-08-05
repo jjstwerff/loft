@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 35 (F8) — a view whose CONTAINER is reassigned out from under it.
+//
+//   bx = WithVec { v: [Box { n: 11 }], … };
+//   c  = bx.v[0];        // c is a VIEW into bx's store (B-View — correct so far)
+//   bx = WithVec { … };  // bx is REASSIGNED; the store c points into is released
+//   c.n                  // -> 22, the REPLACEMENT's value.  Bound to 11.
+//
+// This is the third invalidator, and neither shipped fix covers it:
+//   F1 — the VIEW variable is reassigned          (probe 30)
+//   F2 — the container is RESHAPED, `remove`      (probes 03-07)
+//   F8 — the CONTAINER VARIABLE is reassigned     <- here
+//
+// Found by taking loft#774 seriously rather than closing it as a doc defect.  The ticket's
+// own use case is this shape: `held = current; current = other;` over a struct wrapping a
+// chunk store.  The reporter said the choice was "a hidden cost per mode switch or a
+// silently discarded edit"; measuring it shows a third answer nobody offered, which is that
+// the surviving spelling reads someone else's memory.
+//
+// The boundary is what makes it hard to see — the container's KIND decides:
+//
+//   container reassigned          interp   native   verdict
+//   plain vector local            11       11       COVERED (K1/K2/K5, and no leak)
+//   ... inside a loop             11       11       COVERED
+//   struct FIELD (`bx.v[0]`)      22       22       BROKEN, both backends
+//   struct field (`o.inner`)      22       22       BROKEN, both backends
+//   container out of scope        11       11       COVERED (#775's borrow-tail copy)
+//
+// The two backends agree on the WRONG ANSWER but not on how they get there — see probe 36.
+//
+// So the plain-vector case is genuinely handled and the FIELD paths were never peeled —
+// `container_element_base` finds `bx` for `bx.v[0]`, but nothing treats a whole-container
+// reassignment as an invalidation the way `collect_reshaped_containers` treats a removal.
+//
+// Severity: silent wrong value, no diagnostic, and probe 36 shows it is a genuine
+// use-after-free rather than a stale-but-harmless read.
+
+struct Box { n: integer }
+struct Outer { inner: Box, m: integer }
+struct WithVec { v: vector<Box>, m: integer }
+struct Wide { a: integer, b: integer, c: integer, d: integer }
+
+fn mkwide(x: integer) -> Wide { return Wide { a: x, b: x + 1, c: x + 2, d: x + 3 }; }
+
+fn churn() -> integer {
+  t = 0;
+  for i in 0..8 { w = mkwide(i * 100); t += w.d; }
+  return t;
+}
+
+// ---- COVERED cells: a plain vector local. Kept so a fix cannot regress them. ----
+
+fn p35_vector_no_churn() {
+  a = [Box { n: 11 }];
+  c = a[0];
+  a = [Box { n: 22 }];
+  print("35 vector plain      c.n {c.n}    want 11\n");
+}
+
+fn p35_vector_churn() {
+  a = [Box { n: 11 }];
+  c = a[0];
+  a = [Box { n: 22 }];
+  t = churn();
+  print("35 vector churn      c.n {c.n}    want 11  (t {t})\n");
+}
+
+fn p35_vector_loop_reassign() {
+  a = [Box { n: 11 }];
+  c = a[0];
+  for i in 0..4 { a = [Box { n: 100 + i }]; }
+  print("35 vector in loop    c.n {c.n}    want 11\n");
+}
+
+fn p35_container_out_of_scope() {
+  c = escaping_view();
+  t = churn();
+  print("35 out of scope      c.n {c.n}    want 11  (t {t})\n");
+}
+
+fn escaping_view() -> Box {
+  inner = [Box { n: 11 }];
+  return inner[0];
+}
+
+// ---- BROKEN cells: the container is a struct, and the view is into its interior. ----
+
+fn p35_elem_of_field() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  bx = WithVec { v: [Box { n: 22 }], m: 2 };
+  print("35 elem-of-field     c.n {c.n}    want 11   BROKEN: reads 22\n");
+}
+
+fn p35_elem_of_field_churn() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  bx = WithVec { v: [Box { n: 22 }], m: 2 };
+  t = churn();
+  print("35 elem-field churn  c.n {c.n}    want 11   BROKEN  (t {t})\n");
+}
+
+fn p35_struct_field() {
+  o = Outer { inner: Box { n: 11 }, m: 1 };
+  w = o.inner;
+  o = Outer { inner: Box { n: 22 }, m: 2 };
+  print("35 struct-field      w.n {w.n}    want 11   BROKEN: reads 22\n");
+}
+
+fn main() {
+  p35_vector_no_churn();
+  p35_vector_churn();
+  p35_vector_loop_reassign();
+  p35_container_out_of_scope();
+  p35_elem_of_field();
+  p35_elem_of_field_churn();
+  p35_struct_field();
+}
