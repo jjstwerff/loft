@@ -39,7 +39,22 @@ with the interpreter and `--native` deriving that from one shared fact.
 2. **Follow rustc's ownership model, with loft's ending.** Where rustc *errors* on a
    use-after-move, loft **copies and warns**. The program keeps working; the author is told
    it cost a copy.
-3. **Both backends, one semantics.** `--native` is the path that must be quickest, so it may
+3. **The copy diagnostic is default-ON, and there is no global off switch.** A diagnostic
+   nobody enables reports nothing — which is exactly the state Stage A measured. It is on
+   under normal conditions, always.
+
+   Suppression is an **acceptance in the source**, at **per-file and per-function**
+   granularity: the author states *"this copy is intended here"* and the notice goes quiet
+   for that scope only. This is deliberately not an env opt-out — an env flag silences a
+   whole run and leaves no record of who decided what, whereas an accept is reviewable, and
+   scoped to the code it excuses. `#superseded "…"` (@PLN102 arc C, `data_store.rs:313`)
+   is the existing per-definition annotation precedent; the per-file form has none yet and
+   needs designing.
+
+   Consequence: draining the `Avoidable` set is a **prerequisite of the plan**, not a
+   follow-up. Default-on is only livable once a clean program is quiet — otherwise the
+   accepts become noise-suppression rather than statements of intent.
+4. **Both backends, one semantics.** `--native` is the path that must be quickest, so it may
    not be the backend that always deep-copies. Backend parity is in scope here, not a
    follow-up.
 
@@ -187,8 +202,16 @@ the diagnostics change).
 - **Q2 — can cluster II be fixed without weakening the alias default?** Materialising every
   container read would close it and violate decision 1. Tombstoning, or re-pointing live
   views on shift, keeps the alias. Decide against cluster III's mechanism, not before.
-- **Q3 — does the `Avoidable` set drain to empty?** Decision 2 is only shippable if it does;
-  `keys.rs:377` says it does not today.
+- **Q3 — what does the `Avoidable` set actually contain?** Decision 3 makes draining it a
+  prerequisite, and `keys.rs:377` says it is not drained today (*"the Avoidable set is not
+  yet drained"* is the stated reason the lint is off). Stage B must size it: run the report
+  across the stdlib, the test corpus, and a real consumer, and split the set into *copies we
+  can eliminate*, *copies that should be reclassified* (`Forced`/`Implicit` mislabelled as
+  `Avoidable`), and *copies a human must accept*. Only the last group should ever reach an
+  author, and if it is large the accept mechanism is being used to hide analysis weakness.
+- **Q4 — what is the per-file accept spelled as?** `#superseded "…"` gives the per-definition
+  shape; nothing in the language currently scopes an annotation to a whole file. Needs a
+  syntax decision before cluster I can ship.
 
 ## Tool gaps
 
