@@ -1,0 +1,78 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 23 — the COUNTEREXAMPLE that kills the Q5 one-liner.
+//
+// Probes 21 and 22 measured flat, single-level calls and concluded that adopting a lone
+// hidden-attr return dep is safe.  It is not.  Reproducing it needed FOUR ingredients at
+// once, and dropping any one of them makes the probe pass even with the predicate
+// widened — which is why 21/22 missed it:
+//
+//   1. a callee returning a named local        (`alloc`: dep names its own buffer)
+//   2. a caller whose local is set from a STRUCT LITERAL first, then REASSIGNED
+//      from that call, then returned            (`mixed`)
+//   3. the callers take STRUCT parameters, not scalars
+//   4. two such callers interleaved in one loop (`mixed` and `direct` per iteration)
+//
+// With `return_adopts_fresh_store` widened to accept a hidden-attr dep, the reassignment
+// adopts `alloc`'s store into a local that is also the caller's recycled `__ref_N`, and
+// the iterations read each other's values.  Measured under the widening:
+//
+//   --interpret   assertion failed: 23 iter 1: b.data[0] 0 want 202
+//   --native      PASSED            <- the corruption is interp-only, so the widening
+//                                      also splits the backends: unlandable twice over
+//
+// The corruption lands on the OTHER caller's value (`direct`'s, not `mixed`'s), which is
+// what a shared buffer across two call sites looks like.
+//
+// This is the minimal form of `tests/scripts/143-plan51-cluster3-mixed-lit-call.loft`,
+// which fails on iteration 2.  That test is already in the suite and it is what caught
+// the regression — this probe exists so the PLAN records why the one-liner is wrong,
+// next to the measurement that says it looks right.
+//
+// PASSES on the copy behaviour.  Its job is to FAIL if the predicate is widened again;
+// verified to do so rather than assumed.
+//
+// The lesson: probes 21/22 varied the call SHAPE while holding nesting depth, the number
+// of Sets on the returned local, the parameter KIND, and the number of interleaved
+// callers all at 1.  Four composition axes pinned at once — the matrix could not see
+// this cell, and a clean result across it read as proof.
+
+struct P { tag: integer }
+struct Q { tag: integer }
+struct Box { tag: integer, data: vector<integer> = [] }
+
+// Returns a named local — its dep names its own return buffer.
+fn alloc(n: integer, fill: integer) -> Box {
+  b = Box { tag: n };
+  for _i in 0..3 {
+    b.data += [fill];
+  }
+  b
+}
+
+// The breaking shape: struct-literal Set, THEN a call reassignment, then returned.
+fn mixed(p: P) -> Box {
+  c = Box { tag: 0 };
+  c = alloc(p.tag, p.tag);
+  c
+}
+
+// The single-Set sibling, interleaved with it.
+fn direct(q: Q) -> Box {
+  c = alloc(q.tag, q.tag * 2);
+  c
+}
+
+fn main() {
+  for i in 0..6 {
+    p = P { tag: i };
+    q = Q { tag: i + 100 };
+    a = mixed(p);
+    b = direct(q);
+    assert(a.tag == i, "23 iter {i}: a.tag {a.tag} want {i}");
+    assert(len(a.data) == 3, "23 iter {i}: len(a.data) {len(a.data)} want 3");
+    assert(a.data[0] == i, "23 iter {i}: a.data[0] {a.data[0]} want {i}");
+    assert(b.data[0] == (i + 100) * 2, "23 iter {i}: b.data[0] {b.data[0]} want {(i + 100) * 2}");
+  }
+  println("probe 23 PASSED — the mixed literal/call return buffer stayed independent");
+}

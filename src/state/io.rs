@@ -958,7 +958,9 @@ impl State {
                 pos: 0,
             }
         } else {
-            self.database.find(&data, db_tp, &key)
+            // @PLN129 arc A — the miss path consults a bound source; identical to
+            // `find` for an unbound collection, which is every collection today.
+            self.database.find_or_fetch(&data, db_tp, &key)
         };
         self.put_stack(res);
     }

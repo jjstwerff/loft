@@ -31,6 +31,7 @@
  *
  * The one-statement-per-process limit of the other shims applies here too.
  */
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -84,8 +85,8 @@ static void free_param_copies(void) {
 /* Size the parameter array for `n` values and clear it.  Returns 0 on an
  * allocation failure, which the caller reports rather than proceeding with a
  * short array the library would read past. */
-int lm_param_reset(long n);
-int lm_param_reset(long n) {
+int lm_param_reset(int64_t n);
+int lm_param_reset(int64_t n) {
   long i;
   if (n < 0) {
     return 0;
@@ -122,8 +123,8 @@ int lm_param_reset(long n) {
   return 1;
 }
 
-int lm_param_text(long i, const char *s);
-int lm_param_text(long i, const char *s) {
+int lm_param_text(int64_t i, const char *s);
+int lm_param_text(int64_t i, const char *s) {
   size_t len;
   if (i < 0 || i >= g_pn || s == 0) {
     return 0;
@@ -152,8 +153,8 @@ int lm_param_text(long i, const char *s) {
 static long long *g_pint;
 static long g_pint_cap;
 
-int lm_param_int(long i, long long v);
-int lm_param_int(long i, long long v) {
+int lm_param_int(int64_t i, long long v);
+int lm_param_int(int64_t i, long long v) {
   if (i < 0 || i >= g_pn) {
     return 0;
   }
@@ -177,8 +178,8 @@ int lm_param_int(long i, long long v) {
 
 /* SQL NULL: the type says NULL and the indicator is set.  Distinct from a
  * zero-length string, which is a real value with a real buffer. */
-int lm_param_null(long i);
-int lm_param_null(long i) {
+int lm_param_null(int64_t i);
+int lm_param_null(int64_t i) {
   if (i < 0 || i >= g_pn) {
     return 0;
   }
@@ -217,8 +218,8 @@ static long g_rcap_n;
  * Every column is bound as STRING, whatever the server's type — the cursor
  * contract is `db_col -> text?`, so the conversion belongs to the library
  * rather than to a second type map here. */
-int lm_result_reset(long n);
-int lm_result_reset(long n) {
+int lm_result_reset(int64_t n);
+int lm_result_reset(int64_t n) {
   long i;
   if (n < 0) {
     return 0;
@@ -289,8 +290,8 @@ int lm_result_reset(long n) {
 void *lm_result_binds(void);
 void *lm_result_binds(void) { return g_rn > 0 ? (void *)g_rb : (void *)0; }
 
-int lm_result_is_null(long i);
-int lm_result_is_null(long i) {
+int lm_result_is_null(int64_t i);
+int lm_result_is_null(int64_t i) {
   if (i < 0 || i >= g_rn) {
     return 1;
   }
@@ -300,16 +301,16 @@ int lm_result_is_null(long i) {
 /* The TRUE length of the column's value.  The library sets it even when the
  * value did not fit, which is what makes truncation detectable without relying
  * on the fetch return code. */
-long lm_result_len(long i);
-long lm_result_len(long i) {
+int64_t lm_result_len(int64_t i);
+int64_t lm_result_len(int64_t i) {
   if (i < 0 || i >= g_rn) {
     return 0;
   }
   return (long)g_rlen[i];
 }
 
-long lm_result_cap(long i);
-long lm_result_cap(long i) {
+int64_t lm_result_cap(int64_t i);
+int64_t lm_result_cap(int64_t i) {
   if (i < 0 || i >= g_rn) {
     return 0;
   }
@@ -324,8 +325,8 @@ long lm_result_cap(long i) {
  * still holds the original pointer: reallocating that buffer would leave the
  * statement pointing at freed memory for the next row — a use-after-free that
  * only a long value would ever reach. */
-void *lm_result_grow(long i, long need);
-void *lm_result_grow(long i, long need) {
+void *lm_result_grow(int64_t i, int64_t need);
+void *lm_result_grow(int64_t i, int64_t need) {
   if (i < 0 || i >= g_rn || need < 0) {
     return 0;
   }
@@ -354,8 +355,8 @@ void *lm_result_grow(long i, long need) {
  * Which buffer holds them is DERIVED from the same fact the caller used to
  * decide whether to re-fetch — a value longer than the bound buffer is in the
  * overflow one — so there is no separate flag to keep in step. */
-const char *lm_result_text(long i);
-const char *lm_result_text(long i) {
+const char *lm_result_text(int64_t i);
+const char *lm_result_text(int64_t i) {
   unsigned long n;
   if (i < 0 || i >= g_rn) {
     return 0;

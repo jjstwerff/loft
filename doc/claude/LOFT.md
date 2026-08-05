@@ -1369,22 +1369,34 @@ match shape {
 }
 ```
 
-A destructured field is a **view of the subject**, not a copy: writing through it
-updates the value being matched, whatever the field's type.
+Whether a destructured field is a **view of the subject** or a **copy** depends on the
+field's type:
+
+| payload type | writing through the binding |
+|---|---|
+| `text`, `vector`, and other heap values | updates the value being matched — a **view** |
+| `integer`, `float`, `boolean` and other scalars | changes the binding only — a **copy** |
 
 ```
 match e {
-    Holder { items } => { items += "y"; }      // `e`'s payload is now "…y"
+    Holder { items } => { items += "y"; }      // heap: `e`'s payload is now "…y"
+    _ => { }
+}
+
+match n {
+    Num { v } => { v = 9; }                    // scalar: `n` is unchanged
     _ => { }
 }
 ```
 
-This holds for a `text` payload as well as a heap one (loft#673) and through nested
-patterns (`Wrap { inner: Holder { items } }`).  A whole-value BIND is the other rule and
-still copies — `b = e.items; b += "y"` leaves `e` alone (C86); the difference is that a
-pattern binding is not a bind, and you never wrote the copy.  A subject that is a
-temporary (`match make_e() { … }`) has nothing to write back to, so a write there
-updates only the arm's own view.
+The view rule holds for a `text` payload as well as a heap one (loft#673) and through
+nested patterns (`Wrap { inner: Holder { items } }`).  To change a scalar payload, build
+the variant again (`n = Num { v: 9 }`).
+
+A whole-value BIND is a third case and always copies — `b = e.items; b += "y"` leaves
+`e` alone (C86); the difference is that a pattern binding is not a bind, and you never
+wrote the copy.  A subject that is a temporary (`match make_e() { … }`) has nothing to
+write back to, so a write there updates only the arm's own view.
 
 **Scalar match:** the subject is an integer, text, float, boolean, or character. Arms
 are literal values, ranges, `null`, or `_`:
@@ -1574,6 +1586,79 @@ v[k] = tmp;     // writes k's record back: j's record is LOST, k's DUPLICATED
 Swap through scalar temps per field, rebuild into a fresh vector
 (selection sort instead of in-place insertion sort), or copy the record
 explicitly through a fresh struct literal before overwriting the slot.
+
+**A view lasts only as long as the place it names, and loft tells you when it
+stops.**  `tmp = v[j]` (and a struct-typed field read, `w = o.inner`) is a link
+into the container, so it stays valid only while that place does.  Where the
+compiler can see the place will not survive the binding, it gives `tmp` its own
+copy instead — taken at the bind, so it holds the value you bound — and says so:
+
+```
+advice: in `f`, `c` was copied out of `bx` because `bx` is reassigned while `c`
+  is in use — a view names a place inside `bx`, and giving `bx` a new value
+  leaves nothing for it to point at. Writes through `c` no longer reach `bx`.
+```
+
+Three things end the place: **removing** from the container (`v.remove(i)`
+renumbers the rest), **writing a key field** through the view on a keyed
+collection, and **reassigning the container itself** (`bx = T{…}`).  After the
+copy, writes through the binding no longer reach the container — which is why it
+is reported and not silent.  To keep writing through, re-read the view after the
+change (`c = bx.v[0]`).
+
+The copy happens only when you still USE the view after the change — *"while `c`
+is in use"* is meant literally.  Finish with the view first and it keeps writing
+through, so moving the last use above the removal is a second way out:
+
+```loft
+c = v[0];  c.n = 99;  v.remove(2);   // no copy — `c` is done before `v` changes
+c = v[0];  v.remove(2);  c.n = 99;   // copied — `c` is used after `v` changed
+```
+
+Overwriting a place is not ending it: `o.inner = Box{…}` writes into the place
+`o.inner` already occupies, so a view of it sees the new value and still writes
+through.
+
+**Write `&` and you get an error instead of a copy.**  `c = &v[0]` says *"I want a
+live link"* — an ownership decision, not a hint — so loft will not quietly hand you a
+copy.  Where it cannot honour the link, it refuses the program instead.  All three
+things that end a place do this: removing from the container, writing a KEY field
+through the reference, and replacing the container itself.
+
+```
+error: cannot remove from `v` while `c` references an element of it — a removal
+  renumbers the remaining elements, so a write through `c` would no longer reach
+  the element it names. Move the removal after the last use of `c`, or bind
+  without `&` to work on a copy
+```
+
+The same refusal covers a **call**: passing an element of a container and the
+container itself to a function that removes from it (`shift(v[2], v)`) is rejected,
+whether or not the parameter is spelled `&` — a struct parameter names the caller's
+element either way, so the write would be lost either way.  Pass the INDEX instead
+and read the element again after the removal:
+
+```loft
+fn shift(idx: integer, all: &vector<Box>) { all.remove(0); all[idx - 1].n = 99; }
+```
+
+For a keyed collection the remedy is to re-insert rather than to reorder, because the
+key write IS the thing that cannot be honoured — changing a key would leave the element
+reachable by no key at all:
+
+```loft
+c = &s[30];  c.key = 5;      // refused
+s[5] = s[30];  s[30] = null; // say it directly instead
+```
+
+**Why an error rather than some defined behaviour.**  loft may always drop an error
+later, but never add one after the language freezes — so refusing keeps the door open.
+If loft one day gains the machinery to honour these references properly, every program
+that compiles today still compiles and the refused ones start working.  Had it shipped
+the silent copy instead, that copy would be the contract forever.
+
+Full rule + the reasoning:
+[OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not).
 
 **Empty vectors** require a type annotation so the compiler knows the element type.
 Use `v: vector<T> = []` instead of the older `[for _ in 0..0 { default }]` pattern.

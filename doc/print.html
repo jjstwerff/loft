@@ -614,7 +614,13 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   direction: <span class="ty"><a href="stdlib-types.html">u8</a></span>
 }</code></pre>
 <h2 id="value-structs">Value structs</h2>
-<p>Prefix a struct with <code>value</code> to give it value (copy) semantics and zero heap overhead: it is stored inline inside a record or vector element, exactly like a plain integer. Reading one out of a field or element yields an independent COPY — writing to that copy never changes the original. Use a <code>value struct</code> for small wrapper types (a point, a colour, a timestamp) that should be as cheap as the number they wrap. A plain (reference) struct, by contrast, is shared: a binding is a live view onto the same record.</p>
+<p>Prefix a struct with <code>value</code> to give it value (copy) semantics and zero heap overhead: it is stored inline inside a record or vector element, exactly like a plain integer. Reading one out of a field or element yields an independent COPY — writing to that copy never changes the original. Use a <code>value struct</code> for small wrapper types (a point, a colour, a timestamp) that should be as cheap as the number they wrap.</p>
+<p>A plain (reference) struct differs only when you read one OUT of somewhere. Two spellings look alike, so it is worth keeping them apart:</p>
+<ul>
+<li>Binding a whole value COPIES it, always. After <code>b = a</code> the two names are independent, and writing <code>b</code> never changes <code>a</code>. The copy goes all the way down, including nested structs and vectors.</li>
+<li>Reading a struct-typed field or element gives you a VIEW: <code>w = o.inner</code> and <code>c = v[i]</code> name the record in place, so <code>w.n = 42</code> changes <code>o.inner</code> too. A view is not a copy — it points at the interior of what you read it from. (A vector-typed field is a whole value, so <code>av = bx.v</code> copies.)</li>
+<li>Write <code>&amp;</code> when you want a live link where a bind would copy: <code>b = &amp;a</code> and <code>av = &amp;bx.v</code> both write through to the source.</li>
+</ul>
 <pre><code>value <span class="kw">struct</span> <span class="en">Point</span> {
   x: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   y: <span class="ty"><a href="stdlib-types.html">integer</a></span>
@@ -665,6 +671,20 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  q.x = <span class="nm">99</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pts[<span class="nm">0</span>].x == <span class="nm">1</span>, <span class="st">"value struct copy does not write back"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(q.x == <span class="nm">99</span>, <span class="st">"the copy itself did change"</span>);</code></pre>
+<p>A PLAIN struct answers the same two questions differently, so here they are side by side. Reading one out of an element gives a view, and writing the view reaches the element.</p>
+<pre><code>  shelf =[<span class="en">Product</span> {name: <span class="st">"Pear"</span>, price: <span class="nm">90</span>, stock: <span class="nm">10</span> }];
+  item = shelf[<span class="nm">0</span>];
+  item.stock = <span class="nm">7</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(shelf[<span class="nm">0</span>].stock == <span class="nm">7</span>, <span class="st">"a plain struct element read is a view"</span>);</code></pre>
+<p>Binding the whole value copies it, so the original keeps its own stock.</p>
+<pre><code>  spare = item;
+  spare.stock = <span class="nm">3</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">7</span>, <span class="st">"a whole-value bind copies"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(spare.stock == <span class="nm">3</span>, <span class="st">"and the copy moves on its own"</span>);</code></pre>
+<p>Write <code>&amp;</code> to get a live link where a bind would otherwise copy.</p>
+<pre><code>  linked = &amp;item;
+  linked.stock = <span class="nm">1</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">1</span>, <span class="st">"'&amp;' binds a live link"</span>);</code></pre>
 <h2 id="sizeof">sizeof</h2>
 <p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (post-2c i64 storage)"</span>);
@@ -3455,7 +3475,8 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>First call on a path that does NOT yet exist: serialises the current in-memory Store at the reference's slot to disk (padded to a valid ≥1024-word image with a tail free block), then mmaps it back.  Caller's existing DbRefs into that slot remain valid.</p>
 <p>Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.</p>
 <p>Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).</p>
-<p>Typical dryopea-style pattern: pw = PaintedWorld { painted: [] }   // painted's declared type is hash&lt;PaintedHex[q, r]&gt; store_persist_bind(pw.painted, &quot;dryopea_world.store&quot;) // …mutations to pw.painted now hit mmap'd bytes… `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial` (each keyed local/field is its own dedicated Store).  A bare `reference` parameter accepts them all; `bind_path` is collection-agnostic (it snapshots the whole Store's bytes).  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.</p>
+<p>Typical dryopea-style pattern: pw = PaintedWorld { painted: [] }   // painted's declared type is hash&lt;PaintedHex[q, r]&gt; store_persist_bind(pw.painted, &quot;dryopea_world.store&quot;) // …mutations to pw.painted now hit mmap'd bytes… `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial`. A bare `reference` parameter accepts them all.</p>
+<p>It snapshots the whole STORE `r` lives in, which is not always a store of just `r` (loft#757).  A keyed LOCAL owns its store, so binding it writes a file for that collection.  A keyed FIELD shares its container's store, so binding `pw.painted` above writes a file for `PaintedWorld` — carrying the container and every sibling collection — and that file will NOT load back into a bare `hash&lt;PaintedHex[q, r]&gt;`.  Both are usable; they are just different files.  Bind through the container consistently, or bind a local of the collection's own type when another program has to read the file. The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load(r: reference, path: text) -&gt; boolean fs#read</code></pre>
@@ -3484,9 +3505,30 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
 </div>
 <div class="item">
-<pre><code>pub fn store_load_key(local: reference, path: text, key: integer) -&gt; boolean fs#read</code></pre>
+<pre><code>pub fn store_bind_lazy(local: reference, source: text) -&gt; boolean</code></pre>
 <p>Working-set load: fetch ONE integer-keyed entry from a persisted HASH image into the empty local hash `local`, reading only the pages the lookup touches — not the whole file. The bounded-fetch counterpart of `store_load`, for when `local` should hold only the entries actually asked for (a phone pulling the few map tiles a route needs from a large block). `path` is a local file or an `http(s)://` URL served with `Range`, on every target including the browser (`--html`), where the fetch goes through the same bridge `store_load_url_trusted` uses. Returns false when the key is absent, the file is unreadable, or the collection is not an integer-keyed hash.</p>
-<p>The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector&lt;text&gt;` or a `vector&lt;vector&gt;` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)   // tiles now holds entry 42 only</p>
+<p>The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector&lt;text&gt;` or a `vector&lt;vector&gt;` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)   // tiles now holds entry 42 only @PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.</p>
+<p>Per COLLECTION, not per store: `persons` and `companies` are different sources, and two collections of one type can bind differently. Binding replaces, and may be done before the collection holds anything.</p>
+<p>`source` is what `store_load_key` accepts — a local `.store` image or an `http(s)://` URL served with Range. Returns false for a null collection. persons: hash&lt;Person[id]&gt; = [] store_bind_lazy(persons, &quot;people.store&quot;) p = persons[42]        // fetches exactly entry 42, then holds it</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_lazy_error(local: reference) -&gt; text</code></pre>
+<p>@PLN129 arc C — why the last lazy fetch could not REACH this collection's source, or &quot;&quot; when it is healthy.</p>
+<p>A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:</p>
+<p>p = persons[42]; if p == null { why = store_lazy_error(persons); if why == &quot;&quot; { /* really no such person */ } else { /* could not reach: {why} */ } }</p>
+<p>A genuine absence CLEARS it: reaching the source and not finding the key proves the source was reachable, so a stale error never outlives it.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_lazy_faults(local: reference) -&gt; integer</code></pre>
+<p>@PLN129 arc C — how many fetches could not REACH this collection's source. 0 is healthy. The magnitude behind `store_lazy_error`: after a traversal it answers &quot;how incomplete am I&quot;.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_lazy_clear(local: reference) -&gt; boolean</code></pre>
+<p>@PLN129 arc C — acknowledge this collection's fetch failures, returning whether there was anything to acknowledge.</p>
+<p>The ONLY thing that clears them. A later fetch happening to succeed does NOT: a traversal whose first lookup could not reach the source and whose second could is MISSING data, and answering &quot;healthy&quot; afterwards would be exactly the silent wrong answer this channel exists to prevent. Clearing is a caller saying &quot;I have seen this&quot;, which is a different event entirely.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_load_key(local: reference, path: text, key: integer) -&gt; boolean fs#read</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_key_text(local: reference, path: text, key: text) -&gt; boolean fs#read</code></pre>

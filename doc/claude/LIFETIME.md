@@ -102,6 +102,34 @@ return, `ref_param_publish_freed` for the `&` write.  Both surface through
 `loft introspect --show-ownership`, and both flag the same shape — a delivered
 store killed by a plain `OpFreeRef`.
 
+###### What is published must be a store, not a view (loft#775)
+
+The pairing above settles *which* store the write publishes.  It assumes the
+right-hand side IS one.  A **field read** is not: `out = ld.wl_world` hands over a
+pointer INTO the record `ld` holds, and `ld` is a local this frame frees on the way
+out.  The caller went on reading it and the next allocation landed on top — a
+four-chunk world became a one-chunk world with its edit clock, which is monotonic,
+running BACKWARDS, across a call that never touched its argument.
+
+The return route already had the answer: `materialize_view_return` copies a viewed
+record into an owned buffer at the return, which is why `return ld.wl_world` was
+safe the whole time.  `Parser::assign_refvar_reference` makes that same move for the
+`&` write — `{ w = null; OpDatabase(w, kt); OpCopyRecord(view, w, kt); w }`, marked
+`skip_free` because the caller owns the copy now, exactly as it owns a fresh record
+built in place (`o = Obj{…}`, @PLN87 P2.2).
+
+It keys on the IR **shape** (an `OpGetField` right-hand side), not on the
+right-hand side's deps.  Deps accumulate while a body parses, so a deps test mints
+the work-ref on pass 2 only and shifts every later `__ref_N` — the cross-pass
+divergence the H5 two-pass contract exists to catch.
+
+**Reading it takes all three lenses.**  `--interpret` reported the store as unfreed
+and gave the right value; `LOFT_POISON=1` faulted; `--native` answered silently with
+whatever had been allocated since.  Only the poison lens named it, and only once the
+probe RECYCLED stores — a freed record reads correctly until something claims its
+bytes, so a probe without a churn loop produces a vacuous pass.  That is why the
+filed report could say "does not reproduce standalone" about a live corruption.
+
 #### Function (`Type::Function`) — freed at scope exit (verified 2026-05-12)
 
 `Type::Function` does not appear in the `get_free_vars` match by name, but the

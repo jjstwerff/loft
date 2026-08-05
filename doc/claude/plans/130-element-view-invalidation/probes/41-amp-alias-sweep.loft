@@ -1,0 +1,126 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 F9 probe 41 — the SWEEP that found D-bind-9.
+//
+// B-Ref-Reshape was written from the maker's sentence, which named REMOVAL, and probe 40 gave
+// that producer a 25-cell boundary.  The rule has THREE producers, and the other two had no
+// cells at all — so a `&` across a re-key or a container reassignment kept being silently
+// downgraded to a copy while the deviation it belonged to was signed off as closed.
+//
+// The generalisable point: a rule with more than one producer needs a sweep OVER THE PRODUCERS,
+// not a boundary around the one that was reported.  This is that sweep — every shape where a
+// programmer writes `&` and then something happens to the source, each asserting the single
+// thing `&` promises: the write reaches the source.  Twelve honoured it; G and H did not.
+//
+// Both are refused now, so this file no longer compiles as written.  Delete the G and H cells
+// (and their calls) to run the rest; the refusals are pinned by
+// `tests/parse_errors.rs::b_ref_reshape_{rekey,container_reassign}_*` and the survivors by
+// `tests/scripts/149-reference-survives-callee-reshape.loft`.
+//
+// Cells, and what each holds fixed:
+//   A-E  the SHAPE of the reference (whole struct / whole vector / element / field / nested)
+//        with no disturbance at all — the controls that prove the harness can pass
+//   F,G  a keyed element: a NON-key field vs the KEY itself (G was broken)
+//   H,I  a container replaced: in this frame vs in a callee through a `&` param (H was broken)
+//   J,K  a `&` PARAMETER: mutate-through vs whole-value rebind (calls.md F-ParamHeap/F-ParamRef)
+//   L-N  control flow: a loop, a branch, and overwriting a place rather than destroying it
+
+struct Box { n: integer, tag: integer = 0 }
+struct Mid { inner: Box, mtag: integer = 0 }
+struct Elm { key: integer, tag: integer = 0 }
+struct Holder { v: vector<Box>, m: integer = 0 }
+
+fn ok(name: text, got: integer, want: integer) {
+  if got == want { print("AMP {name}  {got}  ok\n"); }
+  if got != want { print("AMP {name}  {got}  want {want}  COPIED\n"); }
+}
+
+// --- controls: no disturbance at all ------------------------------------------
+fn a_whole_struct() {
+  o = Box { n: 11, tag: 111 };  p = &o;  p.n = 99;
+  ok("A whole-struct   ", o.n, 99);
+}
+fn b_whole_vector() {
+  v = [Box { n: 11 }, Box { n: 22 }];  d = &v;  d[0].n = 99;
+  ok("B whole-vector   ", v[0].n, 99);
+}
+fn c_element() {
+  v = [Box { n: 11 }, Box { n: 22 }];  c = &v[0];  c.n = 99;
+  ok("C element        ", v[0].n, 99);
+}
+fn d_field() {
+  m = Mid { inner: Box { n: 11 } };  c = &m.inner;  c.n = 99;
+  ok("D field          ", m.inner.n, 99);
+}
+fn e_nested() {
+  h = Holder { v: [Box { n: 11 }, Box { n: 22 }] };  c = &h.v[1];  c.n = 99;
+  ok("E nested         ", h.v[1].n, 99);
+}
+
+// --- disturbance: RE-KEY (D-bind-9) -------------------------------------------
+fn f_rekey_nonkey_field() {
+  s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }];
+  c = &s[30];  c.tag = 99;
+  ok("F rekey non-key  ", s[30].tag ?? -1, 99);
+}
+fn g_rekey_key_field() {
+  s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }];
+  c = &s[30];  c.key = 5;
+  ok("G rekey KEY      ", s[5].tag ?? -1, 333);
+}
+
+// --- disturbance: REASSIGNMENT (D-bind-9) -------------------------------------
+fn h_reassign_same_frame() {
+  bx = Mid { inner: Box { n: 11 }, mtag: 1 };
+  c = &bx.inner;
+  bx = Mid { inner: Box { n: 22 }, mtag: 2 };
+  c.n = 99;
+  ok("H reassign local ", bx.inner.n, 99);
+}
+fn reassigner(all: &vector<Box>) { all = [Box { n: 55 }]; }
+fn i_reassign_in_callee() {
+  v = [Box { n: 11 }, Box { n: 22 }];
+  c = &v[0];
+  reassigner(v);
+  c.n = 99;
+  ok("I reassign callee", v[0].n, 99);
+}
+
+// --- `&` parameters -----------------------------------------------------------
+fn writes(p: &Box) { p.n = 99; }
+fn j_param_mutate() {
+  o = Box { n: 11 };  writes(o);
+  ok("J param mutate   ", o.n, 99);
+}
+fn rebinds(p: &Box) { p = Box { n: 99, tag: 7 }; }
+fn k_param_rebind() {
+  o = Box { n: 11, tag: 1 };  rebinds(o);
+  ok("K param rebind   ", o.n, 99);
+}
+
+// --- `&` and control flow -----------------------------------------------------
+fn l_in_a_loop() {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  for i in 0..3 { c = &v[i]; c.n = c.n + 100; }
+  ok("L loop           ", v[2].n, 133);
+}
+fn m_in_a_branch() {
+  v = [Box { n: 11 }, Box { n: 22 }];
+  if len(v) == 2 { c = &v[0]; c.n = 99; }
+  ok("M branch         ", v[0].n, 99);
+}
+fn n_overwrite_the_place() {
+  m = Mid { inner: Box { n: 11 } };
+  c = &m.inner;
+  m.inner = Box { n: 22, tag: 2 };   // overwrite, not destroy
+  c.n = 99;
+  ok("N overwrite place", m.inner.n, 99);
+}
+
+fn main() {
+  a_whole_struct(); b_whole_vector(); c_element(); d_field(); e_nested();
+  f_rekey_nonkey_field(); g_rekey_key_field();
+  h_reassign_same_frame(); i_reassign_in_callee();
+  j_param_mutate(); k_param_rebind();
+  l_in_a_loop(); m_in_a_branch(); n_overwrite_the_place();
+}

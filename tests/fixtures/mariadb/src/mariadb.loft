@@ -24,10 +24,10 @@ pub fn db_query(h: integer, sql: text) -> integer;   #c "mysql_query" "int(void*
 pub fn db_store(h: integer) -> integer;              #c "mysql_store_result" "void*(void*)"
 pub fn db_next_row(res: integer) -> integer;         #c "mysql_fetch_row" "void*(void*)"
 pub fn db_cols(res: integer) -> integer;             #c "mysql_num_fields" "int(void*)"
-pub fn db_rows(res: integer) -> integer;             #c "mysql_num_rows" "long(void*)"
+pub fn db_rows(res: integer) -> integer;             #c "mysql_num_rows" "uint64_t(void*)"
 pub fn db_free(res: integer);                        #c "mysql_free_result" "void(void*)"
 
 // A column is `text?`: SQL NULL arrives as a NULL pointer, which is loft's null.
 // The `?` is what makes null-flow demand a discharge rather than letting a null
 // arrive unannounced — and it keeps SQL NULL distinct from the empty string.
-pub fn db_col(row: integer, i: integer) -> text?;    #c "lm_row_col" "const char*(void*, long)"
+pub fn db_col(row: integer, i: integer) -> text?;    #c "lm_row_col" "const char*(void*, int64_t)"

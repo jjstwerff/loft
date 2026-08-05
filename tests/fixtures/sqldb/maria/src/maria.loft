@@ -8,7 +8,7 @@ fn my_store(h: integer) -> integer;     #c "mysql_store_result" "void*(void*)"
 fn my_fetch(r: integer) -> integer;     #c "mysql_fetch_row" "void*(void*)"
 fn my_nfields(r: integer) -> integer;   #c "mysql_num_fields" "int(void*)"
 fn my_free(r: integer);                 #c "mysql_free_result" "void(void*)"
-fn my_col(row: integer, i: integer) -> text?;  #c "lm_row_col" "const char*(void*, long)"
+fn my_col(row: integer, i: integer) -> text?;  #c "lm_row_col" "const char*(void*, int64_t)"
 fn my_connect(h: integer, host: text, user: text, pass: text, db: text,
               port: integer, sock: integer, flags: integer) -> integer;
 #c "mysql_real_connect" "void*(void*, const char*, const char*, const char*, const char*, int, const char*, long)"
@@ -39,19 +39,19 @@ fn my_stmt_close(st: integer) -> integer;      #c "mysql_stmt_close" "char(void*
 fn my_stmt_error(st: integer) -> text;         #c "mysql_stmt_error" "const char*(void*)"
 
 // --- the shim's MYSQL_BIND arrays -------------------------------------------
-fn lm_param_reset(n: integer) -> integer;      #c "lm_param_reset" "int(long)"
-fn lm_param_text(i: integer, s: text) -> integer; #c "lm_param_text" "int(long, const char*)"
-fn lm_param_int(i: integer, v: integer) -> integer; #c "lm_param_int" "int(long, long long)"
-fn lm_param_null(i: integer) -> integer;       #c "lm_param_null" "int(long)"
+fn lm_param_reset(n: integer) -> integer;      #c "lm_param_reset" "int(int64_t)"
+fn lm_param_text(i: integer, s: text) -> integer; #c "lm_param_text" "int(int64_t, const char*)"
+fn lm_param_int(i: integer, v: integer) -> integer; #c "lm_param_int" "int(int64_t, long long)"
+fn lm_param_null(i: integer) -> integer;       #c "lm_param_null" "int(int64_t)"
 fn lm_param_binds() -> integer;                #c "lm_param_binds" "void*(void)"
-fn lm_result_reset(n: integer) -> integer;     #c "lm_result_reset" "int(long)"
+fn lm_result_reset(n: integer) -> integer;     #c "lm_result_reset" "int(int64_t)"
 fn lm_result_binds() -> integer;               #c "lm_result_binds" "void*(void)"
-fn lm_result_is_null(i: integer) -> integer;   #c "lm_result_is_null" "int(long)"
-fn lm_result_len(i: integer) -> integer;       #c "lm_result_len" "long(long)"
-fn lm_result_cap(i: integer) -> integer;       #c "lm_result_cap" "long(long)"
+fn lm_result_is_null(i: integer) -> integer;   #c "lm_result_is_null" "int(int64_t)"
+fn lm_result_len(i: integer) -> integer;       #c "lm_result_len" "int64_t(int64_t)"
+fn lm_result_cap(i: integer) -> integer;       #c "lm_result_cap" "int64_t(int64_t)"
 fn lm_result_grow(i: integer, need: integer) -> integer;
-#c "lm_result_grow" "void*(long, long)"
-fn lm_result_text(i: integer) -> text?;        #c "lm_result_text" "const char*(long)"
+#c "lm_result_grow" "void*(int64_t, int64_t)"
+fn lm_result_text(i: integer) -> text?;        #c "lm_result_text" "const char*(int64_t)"
 
 // Each backend reads `target` in its OWN dialect — sqlite a path, libpq a
 // conninfo string, and this one `key=value` pairs — which is what a uniform API
@@ -87,7 +87,25 @@ pub fn maria() -> Maria {
   return Maria { conn: 0, res: 0, row: 0, ps: 0, cols: 0, from_ps: false, err: "", tx: tx_new() };
 }
 
+// The soname exactly as `[c] optional-libs` spells it — the availability query
+// is keyed on the declaration, not on a guess about the file name.
+pub const MARIA_SONAME = "libmariadb.so.3";
+
+// `c_library_available` and not "does a file with this name load": the strong
+// question is true only when every declared symbol resolves, and the weak one
+// says yes for an unrelated library that happens to share the translated name
+// and then faults on the call (loft#770). The backend answers this itself so
+// the availability fact has ONE home — the harness reads the verdict off
+// stdout rather than asking a second, weaker question from outside.
+pub fn maria_available() -> boolean {
+  return c_library_available(MARIA_SONAME);
+}
+
 pub fn db_open(self: Maria, target: text) -> boolean {
+  if !maria_available() {
+    self.err = "libmariadb.so.3 is not installed";
+    return false
+  }
   self.conn = my_init(0);
   if self.conn == 0 { return false }
   h = opt(target, "host", "127.0.0.1");

@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 11 — SILENT COPY, mechanism 2 (never seen).
+// A call-return bind deep-copies (the guarantee tests/scripts/95-alias-copy.loft pins).
+// Proven by value below.  Reported by nothing, no `MAT` row — same root cause as probe 10:
+// the copy is minted during codegen, not present in the IR the classifier walks.
+// Both backends.
+
+struct P { x: integer, y: integer }
+
+fn ident(p: P) -> P { p }
+
+fn main() {
+  orig = P { x: 1, y: 2 };
+  cp = ident(orig);
+  cp.x = 99;
+  assert(orig.x == 1, "11 orig.x {orig.x} want 1");
+  assert(cp.x == 99, "11 cp.x {cp.x} want 99");
+  println("probe 11 PASSED — and the copy it proves was reported by nothing");
+}

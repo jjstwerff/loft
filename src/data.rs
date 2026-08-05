@@ -3324,6 +3324,27 @@ impl Definition {
     /// cases (`["??"]` and `["cv"]`) alike as "not a borrow".  The adopt-vs-copy
     /// decision must split them — `["??"]` adopts, `["cv"]` copies — so it reads
     /// THIS predicate, not `returns_borrowed_view`.
+    ///
+    /// # Do not "unify" the two hidden spellings — it has been tried and measured
+    ///
+    /// The hidden-attr dep (`["cv"]`) and the `["??"]` marker look like one fact
+    /// written two ways: `RetPromotion::Rename` (`parser/control.rs`) takes the
+    /// `__retbuf` attribute, renames it to the author's local, and pushes that
+    /// attr index as the return dep — so `{ r = Rec { … }; r }` reports `["r"]`
+    /// where `{ Rec { … } }` reports `[]`, differing only in whether the result
+    /// was named.  Accepting a lone hidden-attr dep here is a two-line change
+    /// that removes a real copy from every function written in the
+    /// build-into-a-local style — including the stdlib's `file()`, and therefore
+    /// every `exists()` call.
+    ///
+    /// It is still wrong.  Adopting is safe for a FLAT call, but not when the
+    /// adopted store becomes another function's return buffer: in
+    /// `render(p) -> Canvas { cv = alloc_canvas(…); cv }` the inner adoption
+    /// makes `cv` the outer buffer, which is the caller's recycled `__ref_N`, and
+    /// successive loop iterations then read each other's values.
+    /// `tests/scripts/143-plan51-cluster3-mixed-lit-call.loft` fails on iteration
+    /// 2 with a stale element.  @PLN130 has the measurement (probes 21/22 cover
+    /// only flat, single-level calls — which is why they said it was safe).
     #[must_use]
     pub fn return_adopts_fresh_store(&self) -> bool {
         let deps = self.returned().depend();

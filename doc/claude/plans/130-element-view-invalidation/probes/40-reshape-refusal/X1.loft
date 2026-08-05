@@ -1,0 +1,7 @@
+struct Box { n: integer, tag: integer = 0 }
+fn shift(target: &Box, all: &vector<Box>) { all.remove(0); target.n = 99; }
+fn main() {
+  v = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  shift(v[2], v);
+  print("X1 {v[1].n} {v[1].tag} {v[0].n} {len(v)}\n");
+}

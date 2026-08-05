@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 08 — REFERENCE.  A keyed collection removes WITHOUT shifting, so a view
+// into it stays valid.  This is the contrast that isolates the vector's compaction as the
+// mechanism: same "remove a different entry" story, opposite outcome.
+// Status: PASSES, both backends.
+
+struct Entry { name: text, n: integer, tag: integer = 0 }
+
+fn main() {
+  h: hash<Entry[name]> = [Entry { name: "a", n: 11, tag: 111 },
+                          Entry { name: "b", n: 22, tag: 222 },
+                          Entry { name: "c", n: 33, tag: 333 }];
+  v = h["c"];
+  h["a"] = null;
+  v.n = 99;
+  assert(v.n == 99, "08 v.n {v.n} want 99");
+  assert(h["c"].n == 99 && h["c"].tag == 333, "08 c {h[\"c\"].n}/{h[\"c\"].tag} want 99/333");
+  assert(h["b"].n == 22 && h["b"].tag == 222, "08 b {h[\"b\"].n}/{h[\"b\"].tag} want 22/222");
+  println("probe 08 PASSED");
+}

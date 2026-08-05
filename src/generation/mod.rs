@@ -33,6 +33,23 @@ type PreEvalEntry = (String, String, String, u32, bool);
 /// giving leak regressions a guard on `--native`, not just `--interpret`.
 const NATIVE_LEAK_CHECK_TAIL: &str = "    if std::env::var(\"LOFT_NATIVE_LEAK_CHECK\").is_ok() {\n        let stores: &Stores = unsafe { &*cell.get() };\n        let leaks = stores.collect_store_leaks();\n        if !leaks.is_empty() {\n            let count = leaks.len();\n            let preview = if count <= 5 { leaks.join(\", \") } else { format!(\"{} ... and {} more\", leaks[..5].join(\", \"), count - 5) };\n            eprintln!(\"Warning: {count} stores not freed at program exit: {preview}\");\n        }\n    }\n";
 
+/// @PLN130 F8 — the `LOFT_STRICT_STORES` tail for the native `main` bootstrap.
+///
+/// Native needs its own copy because the generated binary never runs `src/main.rs`, so the
+/// interpreter's exit check cannot see it. Without this the reports printed during the run
+/// but the process still exited 0 — a gate that reports and passes is not a gate.
+///
+/// It covers BOTH halves: the use-after-free count accumulated during the run, and the
+/// stores nobody freed. Native is the backend where the lifetime faults actually happen
+/// (the interpreter reuses a store in place instead of freeing it), so this is the arm that
+/// matters most.
+/// Host-only (`#[cfg(not(target_arch = "wasm32"))]`, the same gate the store-timeline tail
+/// uses). Two reasons: strict mode is a probe diagnostic run on a developer's machine, and
+/// the wasm targets link a SEPARATELY built `libloft` rlib — so a tail referencing a symbol
+/// added to `loft::keys` fails to compile there whenever that rlib is stale, which is a
+/// build break in the generated program rather than anything a probe wanted to know.
+const NATIVE_STRICT_STORE_TAIL: &str = "    #[cfg(not(target_arch = \"wasm32\"))]\n    if std::env::var(\"LOFT_STRICT_STORES\").is_ok() {\n        let stores: &Stores = unsafe { &*cell.get() };\n        let leaks = stores.collect_store_leaks();\n        if !leaks.is_empty() {\n            eprintln!(\"[strict-store] NEVER FREED: {} stores not freed at program exit: {}\", leaks.len(), leaks.join(\", \"));\n            loft::keys::strict_store_leaks(leaks.len());\n        }\n        let n = loft::keys::strict_store_violations();\n        if n > 0 {\n            eprintln!(\"[strict-store] FAILED: {n} store-lifetime violation(s)\");\n            std::process::exit(1);\n        }\n    }\n";
+
 /// Walk the Value IR tree and collect all function definition numbers
 /// referenced by `Value::Call(def_nr, _)` nodes.
 /// Detect a T-parameterized method stub: name shape
@@ -548,6 +565,10 @@ pub struct Output<'a> {
     /// `var_<name>`; `Value::Set(v, _)` emits `self.var_<name> = …;`.
     /// Empty outside coroutine bodies.
     pub coroutine_persistent_vars: HashSet<u16>,
+    /// Coroutine-persistent vars whose allocating initialiser has already been emitted inside
+    /// the current `impl LoftCoroutine`.  A second `Set(v, Null)` on the same field is the
+    /// @P302 in-place clear, which must NOT re-run `null_named` (that would orphan the store).
+    pub coroutine_allocated_vars: HashSet<u16>,
     /// When true, `Value::Int` emits a `(d_nr_u32, null_DbRef)` tuple
     /// instead of `d_nr_i32`.  Set during fn-ref variable assignment so
     /// if-else branches produce the correct tuple type.
@@ -756,6 +777,40 @@ pub(crate) fn returns_owned_string(def: &crate::data::Definition) -> bool {
             || (*def.code() == Value::Null && !def.native().is_empty())
             || (*def.code() == Value::Null && !def.c_sig.is_empty())
             || def_returns_owned_text(def))
+}
+
+/// @PLN130 — the container VARIABLE an element/field read ultimately reads out of.
+///
+/// `OpGetVector` / `OpVectorRef` are `v[i]`, `OpGetField` is `s.f`. All three yield a `DbRef`
+/// sharing `store_nr` with the container, which is what makes binding one a borrow rather
+/// than an owner. The whole chain is peeled, because a view can sit several levels down
+/// (`outs[2].inner`).
+///
+/// `None` when the chain does not bottom out in a plain variable — notably a field of a CALL
+/// result (`return mk().a.b`), whose base is a temporary rather than a container someone
+/// else owns. Materialising there is a different question and answering it here broke
+/// `tests/scripts/85-store-lifetime-return-field-of-local`, so the emitters require a real
+/// base variable. Shared by both generators and mirrored by `scopes::base_container_var`, so
+/// the three cannot disagree about the shape.
+#[must_use]
+pub fn container_element_base(data: &Data, value: &Value) -> Option<u16> {
+    let mut cur = value;
+    loop {
+        let Value::Call(d, args) = cur.unspan() else {
+            return None;
+        };
+        if !matches!(
+            data.def(*d).name(),
+            "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
+        ) {
+            return None;
+        }
+        match args.first().map(Value::unspan) {
+            Some(Value::Var(c)) => return Some(*c),
+            Some(inner) => cur = inner,
+            None => return None,
+        }
+    }
 }
 
 /// Use this to map a loft type to the Rust type used in generated code.
@@ -1119,6 +1174,7 @@ impl<'a> Output<'a> {
             yield_collect_text: false,
             yield_collect_dbref: false,
             coroutine_persistent_vars: HashSet::new(),
+            coroutine_allocated_vars: HashSet::new(),
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
@@ -2261,6 +2317,7 @@ extern crate loft;"
             )?;
             writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            w.write_all(NATIVE_STRICT_STORE_TAIL.as_bytes())?;
             writeln!(w, "    }}")?;
             // @PLN103 P3 — the store-timeline summary (no-op unless LOFT_STORES=timeline);
             // runs on the native `__run` thread where the alloc/free events were recorded.
@@ -2292,6 +2349,7 @@ extern crate loft;"
                 "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    init(&cell);\n{prelude}    n_main(&cell{args});\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
             )?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            w.write_all(NATIVE_STRICT_STORE_TAIL.as_bytes())?;
             writeln!(
                 w,
                 "    #[cfg(not(target_arch = \"wasm32\"))] if std::env::var(\"LOFT_STORES\").as_deref() == Ok(\"timeline\") {{ let stores: &Stores = unsafe {{ &*cell.get() }}; loft::database::timeline_summary(stores.collect_store_leaks().len()); }}"

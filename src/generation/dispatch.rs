@@ -149,9 +149,13 @@ impl Output<'_> {
         // value is a different store (an adopting callee returns the SAME
         // store — the free must then no-op, and a never-assigned sentinel
         // store_nr is a no-op inside OpFreeRef).  Excluded, matching the
-        // interpreter's predicate: borrowed views (non-empty dep), the
-        // fn's hidden return buffer (the CALLER owns that store), and
-        // coroutine-persistent fields (no `var_x` local exists).
+        // interpreter's predicate: borrowed views (non-empty dep) and the
+        // fn's hidden return buffer (the CALLER owns that store).
+        //
+        // A coroutine-persistent field used to be excluded too, on the reasoning that
+        // "no `var_x` local exists" — true, but the answer is to name the FIELD, not to
+        // skip the free.  Skipping it leaked one store per reassignment inside a
+        // generator (`s = mk(11); yield …; s = mk(22)` orphans the first).
         {
             let variables = self.data.def(self.def_nr).variables();
             let is_retbuf_attr =
@@ -168,7 +172,6 @@ impl Output<'_> {
                     Type::Reference(_, _) | Type::Enum(_, true, _)
                 )
                 && variables.tp(var).depend().is_empty()
-                && !self.coroutine_persistent_vars.contains(&var)
                 // A fresh-store-producing rhs: a call, an inline object `Insert`,
                 // or a `Block` that builds a new store (the `nullable_unwrap_copy`
                 // / `ncc` materialisers — `chosen = v[i] ?? d`).  A bare `Var` rhs
@@ -191,11 +194,16 @@ impl Output<'_> {
                 } else {
                     String::new()
                 };
-                write!(w, "{{ let _old_{name}: DbRef = var_{name}; ")?;
+                let place = if self.coroutine_persistent_vars.contains(&var) {
+                    format!("self.var_{name}")
+                } else {
+                    format!("var_{name}")
+                };
+                write!(w, "{{ let _old_{name}: DbRef = {place}; ")?;
                 self.output_set_inner(w, var, to)?;
                 write!(
                     w,
-                    "; if _old_{name}.store_nr != var_{name}.store_nr{witness_guard} \
+                    "; if _old_{name}.store_nr != {place}.store_nr{witness_guard} \
                      {{ OpFreeRef(cell, _old_{name}, \"var_{name}(prev)\"); }} }}"
                 )?;
                 return Ok(());
@@ -212,6 +220,26 @@ impl Output<'_> {
         // `let mut var_X = …` shadow that arm 1+ cannot see.
         if self.coroutine_persistent_vars.contains(&var) {
             let name = sanitize(variables.name(var));
+            // A heap local's DECLARATION arrives as `Set(v, Null)` — what the non-persisted
+            // path lowers to `let mut var_x: DbRef = DbRef::NULL`.  As a field it needs no
+            // declaration (the factory already initialised it), but the IR still carries the
+            // statement, and `Null` in EXPRESSION position for a DbRef emits `()` — which is
+            // the `expected DbRef, found ()` this produced for every struct-literal local.
+            // Keyed off the lowered Rust type so it cannot drift from `rust_type`'s DbRef
+            // group, which is the same list `coroutine_persistent_locals` selects on.
+            if matches!(to.unspan(), Value::Null)
+                && rust_type(variables.tp(var), &Context::Variable) == "DbRef"
+            {
+                // A keyed-collection local has NO `OpDatabase` in the IR at all — its store is
+                // allocated by the DECLARATION, so a field that merely starts at `DbRef::NULL`
+                // is inserted into with `store_nr == u16::MAX` and panics in `keys::mut_store`.
+                // Route through the same helper the ordinary local uses, which is also what
+                // keeps the @P302 in-place `s = []` clear from leaking the old store.
+                let lv = format!("self.var_{name}");
+                let first = self.coroutine_allocated_vars.insert(var);
+                write!(w, "{lv} = ")?;
+                return self.emit_null_dbref(w, var, &name, &lv, first);
+            }
             // @PLN25: a `text?` var stores as `String` like plain `text` — peel so the literal→String
             // `.to_string()` conversion fires for an Optional(Text) local.
             let needs_to_string = matches!(variables.tp(var).base(), Type::Text(_));
@@ -571,6 +599,60 @@ impl Output<'_> {
                  else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
             )?;
+            // @PLN130 — a MAY-copy site: the emitted code branches on store identity at
+            // runtime and copies on the non-adopting arm.  Recorded regardless, because the
+            // guard asks whether the diagnostic ACCOUNTS for the site, not whether this
+            // particular execution took the copying arm.
+            crate::copy_manifest::record(
+                self.def_nr,
+                var,
+                tp_nr,
+                crate::copy_manifest::Origin::NativeCallReturn,
+            );
+            return Ok(());
+        }
+        // @PLN130 F1/F2 — MATERIALISE an element/field read into a store `var` owns.
+        //
+        // Sibling of the interpreter's `gen_set_first_ref_elem_copy`.  `c = v[i]` normally
+        // keeps a dep on its container and stays a borrow (the documented alias, loft#774);
+        // reaching here with EMPTY deps means some earlier pass decided `var` is an owner —
+        // either it is reassigned later (F1) or its container is reshaped while it is live
+        // (F2, where `scopes` strips the dep and warns).  Emitting the raw interior pointer
+        // then leaves an "owner" whose store belongs to the container.
+        //
+        // Native needed its own arm: it materialises `_own_store_*` for a CALL return, but
+        // not for an element read, so the F2 strip alone left `--native` still reading the
+        // wrong element (probe 05: `c.n 44 want 33`) while the interpreter was already
+        // correct.  One fact, and until this both backends did not act on it.
+        if let Some(d_nr) = variables.tp(var).heap_def_nr()
+            && variables.tp(var).depend().is_empty()
+            && crate::generation::container_element_base(self.data, to_unspanned).is_some()
+        {
+            let tp_nr = self.data.def(d_nr).known_type();
+            if !self.declared.contains(&var) {
+                self.declared.insert(var);
+                let tp_str = rust_type(variables.tp(var), &Context::Variable);
+                writeln!(
+                    w,
+                    "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
+                )?;
+                self.indent(w)?;
+            }
+            write!(w, "{{ let _src = ")?;
+            self.output_code_inner(w, to)?;
+            writeln!(w, ";")?;
+            self.indent(w)?;
+            write!(
+                w,
+                "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
+                 OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}"
+            )?;
+            crate::copy_manifest::record(
+                self.def_nr,
+                var,
+                tp_nr,
+                crate::copy_manifest::Origin::NativeRecordBind,
+            );
             return Ok(());
         }
         // When assigning a reference to a reference variable, a pointer copy is not
@@ -604,6 +686,14 @@ impl Output<'_> {
                 w,
                 "OpCopyRecord(cell,var_{src_name}, var_{name}, {tp_nr}_i32)"
             )?;
+            // @PLN130 — native's whole-record bind deep-copies unconditionally (it has no
+            // last-use move; that asymmetry with the interpreter is @PLN130 cluster V).
+            crate::copy_manifest::record(
+                self.def_nr,
+                var,
+                tp_nr,
+                crate::copy_manifest::Origin::NativeRecordBind,
+            );
             return Ok(());
         }
         // For text/reference block assignments, pre-declare the variable so that
@@ -793,7 +883,8 @@ impl Output<'_> {
         }
         if matches!(to, Value::Null) && rust_type(variables.tp(var), &Context::Variable) == "DbRef"
         {
-            self.emit_null_dbref(w, var, &name, first_assign)?;
+            let lv = format!("var_{name}");
+            self.emit_null_dbref(w, var, &name, &lv, first_assign)?;
         } else if to == &Value::Null {
             // Emit the null sentinel for the variable's type, not bare `()`.
             let null_val = default_native_value(variables.tp(var));
@@ -1010,11 +1101,15 @@ impl Output<'_> {
     /// clear): the slot already holds a live `DbRef`, so emit `OpDatabase`
     /// ALONE (in-place clear, reuses the store, no leak) — skip `null_named`,
     /// which would reset to a sentinel and leak the old store.
+    /// `lvalue` is the Rust place being initialised — `var_x` for an ordinary local, or
+    /// `self.var_x` for a coroutine-persistent field.  `name` stays the loft variable's name,
+    /// because it is only the debug label `null_named` records.
     fn emit_null_dbref(
         &mut self,
         w: &mut dyn Write,
         var: u16,
         name: &str,
+        lvalue: &str,
         first: bool,
     ) -> std::io::Result<()> {
         let variables = self.data.def(self.def_nr).variables();
@@ -1110,14 +1205,14 @@ impl Output<'_> {
                 self.indent(w)?;
                 write!(
                     w,
-                    "var_{name} = OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)"
+                    "{lvalue} = OpDatabase(cell,{lvalue}, {ref_buf_type_id}_i32)"
                 )?;
             } else {
                 // @P302 reassignment / `s = []` clear: the slot already holds a
                 // live DbRef → OpDatabase clears that store in place (no
                 // null_named, which would reset to a sentinel and leak the
                 // old store).  The caller already wrote the `var_{name} = `.
-                write!(w, "OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)")?;
+                write!(w, "OpDatabase(cell,{lvalue}, {ref_buf_type_id}_i32)")?;
             }
         } else {
             write!(w, "DbRef::NULL")?;

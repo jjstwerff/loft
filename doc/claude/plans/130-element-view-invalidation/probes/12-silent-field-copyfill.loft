@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 12 — SILENT COPY, mechanism 1 (SEEN, classified, then dropped).
+// Distinct from probes 10/11: here the analysis DOES produce a verdict —
+//   MAT fn=n_main v=2(w) src=0 verdict=Copy bucket=AVOIDABLE
+//     [source not a parameter / not provably read-only local]
+// AVOIDABLE is exactly the bucket LOFT_WARN_COPIES is documented to warn on
+// (keys.rs:374).  The user-facing report still prints "none".  So the gap here is
+// between the internal verdict and the report, not the IR.
+// The copy is real: w stays 3 while h.v grows to 4.  Both backends.
+
+struct Holder { v: vector<integer> }
+
+fn main() {
+  h = Holder { v: [1, 2, 3] };
+  w = h.v;
+  h.v += [4];
+  assert(len(w) == 3, "12 len w {len(w)} want 3");
+  assert(len(h.v) == 4, "12 len h.v {len(h.v)} want 4");
+  println("probe 12 PASSED — AVOIDABLE verdict, zero user-facing output");
+}

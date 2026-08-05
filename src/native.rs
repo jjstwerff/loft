@@ -171,6 +171,16 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_verify", n_store_verify),
     ("n_store_reclaim", n_store_reclaim),
     #[cfg(paged_store)]
+    ("n_store_bind_lazy", n_store_bind_lazy),
+    ("n_store_lazy_error_dest", n_store_lazy_error_dest),
+    ("n_store_lazy_faults", n_store_lazy_faults),
+    ("n_store_lazy_clear", n_store_lazy_clear),
+    // Each `#[cfg]` here gates exactly ONE array element, so every paged-store entry needs
+    // its own. This one was missing it while its handler is `#[cfg(paged_store)]`, so the
+    // wasm32-wasip2 rlib could not build at all — and `find_problems.sh` rebuilds it with
+    // `-q`, which made that a SILENT failure: the wasm gate ran against a stale library, green
+    // for a reason unrelated to the code under test (@PLN130).
+    #[cfg(paged_store)]
     ("n_store_load_key", n_store_load_key),
     #[cfg(paged_store)]
     ("n_store_load_key_text", n_store_load_key_text),
@@ -1283,6 +1293,47 @@ fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.load_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_bind_lazy` — @PLN129 arc A.  Bind a COLLECTION
+/// to a lazy source, so a lookup that misses fetches that one entry instead of
+/// answering absent.  Args pop in reverse: source, local.
+fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
+    let v_source = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = v_ref.rec != 0;
+    if ok {
+        stores.bind_lazy(&v_ref, v_source.str());
+    }
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_lazy_error` — @PLN129 arc C.  Why the last
+/// fetch could not reach the collection's source, or "" when healthy.
+fn n_store_lazy_error_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    let msg = stores.lazy_error(&coll);
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&msg);
+}
+
+/// Interpreter handler for `store_lazy_faults` — @PLN129 arc C.  How many
+/// fetches could not reach the source; 0 is healthy.
+fn n_store_lazy_faults(stores: &mut Stores, stack: &mut DbRef) {
+    let coll = *stores.get::<DbRef>(stack);
+    let n = stores.lazy_faults(&coll);
+    stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_lazy_clear` — @PLN129 arc C.  Acknowledge the
+/// failures; the ONLY thing that clears them.
+fn n_store_lazy_clear(stores: &mut Stores, stack: &mut DbRef) {
+    let coll = *stores.get::<DbRef>(stack);
+    let had = stores.lazy_clear(&coll);
+    stores.put(stack, had);
 }
 
 /// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from

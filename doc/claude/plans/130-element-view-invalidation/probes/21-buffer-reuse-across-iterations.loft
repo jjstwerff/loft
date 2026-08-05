@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 21 — the Q5 safety gate, measured: does the caller REUSE the return
+// buffer across iterations?
+//
+// Answer: the buffer VARIABLE is reused, the STORE it names is not.  Traced on native
+// (LOFT_TRACE_COPY=1):
+//
+//   keep = mk_local(100)   [copy] src=#1 dst=#0 free_src=true
+//   loop i=1               [copy] src=#2 dst=#1 free_src=true
+//   loop i=2               [copy] src=#2 dst=#1 free_src=true
+//   loop i=3               [copy] src=#2 dst=#1 free_src=true
+//
+// `free_src=true` on EVERY call: OpCopyRecord frees the source right after copying it,
+// so the constant #2 is the allocator handing back the slot it just freed — not a store
+// living across iterations.  Distinct call sites get distinct buffers (`keep` uses
+// __ref_1, the loop call __ref_2), so cross-site aliasing is not a concern either.
+//
+// The emitted sequence is therefore copy-then-free: a MOVE implemented the expensive
+// way, on a source nobody else owns and which is about to be discarded.
+//
+// `keep` is here on purpose — a binding that must stay alive across the whole loop, so
+// the trace shows the loop buffer is independent of it.
+
+struct Rec { tag: integer, name: text }
+
+// A `[1]`-dep callee: binds a local, returns it — the shape that makes the caller copy.
+fn mk_local(n: integer) -> Rec {
+  r = Rec { tag: n, name: "row-{n}" };
+  r
+}
+
+fn main() {
+  keep = mk_local(100);          // a binding that must stay alive across the loop
+  sum = 0;
+  for i in 1..4 {
+    cur = mk_local(i);           // three calls through the same caller-side buffer
+    sum = sum + cur.tag;
+  }
+  assert(keep.tag == 100, "21 keep {keep.tag} want 100");
+  assert(sum == 6, "21 sum {sum} want 6");
+  println("probe 21 PASSED — buffer variable reused, store freed per call");
+}

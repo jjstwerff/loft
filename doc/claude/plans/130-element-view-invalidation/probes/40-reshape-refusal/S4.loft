@@ -1,0 +1,8 @@
+struct Box { n: integer, tag: integer = 0 }
+fn main() {
+  v = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c = v[0];
+  v.remove(2);
+  c.n = 99;
+  print("S4 {v[0].n} {len(v)}\n");
+}

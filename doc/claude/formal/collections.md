@@ -66,6 +66,29 @@ owns their *operations + order*).
 ```
 *Anchor:* tests/scripts/48-spacial-construct-free.loft (construct/append/len).
 
+### 1.2b Removal — `Col-Remove` (a vector RENUMBERS; a keyed kind does not)
+
+```
+  (Col-Remove)      v.remove(i)  ·  v#remove  ·  c[key] = null  ·  e#remove
+                    delete one element.  The two kinds differ in what happens to the OTHERS:
+  (Col-RemoveDense) a VECTOR stays DENSE.  Removing index i shifts every later element down
+                    one, so len decreases by 1 and every position after i is RENUMBERED.  There
+                    are no holes and no tombstones: index j > i now names what was at j+1.
+  (Col-RemoveKeyed) a KEYED kind (hash / index / sorted / spacial) removes BY KEY, and every
+                    other key stays reachable and unchanged — keys are not positions, so nothing
+                    is renumbered.
+```
+*Anchor:* tests/scripts/200-vector-stays-dense.loft (density); measured for the keyed kinds —
+`s[30] = null` on a `sorted<Elm[key]>` leaves `s[10]` and `s[50]` intact.
+
+**Why this rule is load-bearing beyond collections.** `Col-RemoveDense` is exactly what makes a
+held element reference go stale: a reference names a POSITION, and a removal renumbers positions,
+so a reference taken before the removal names a different element after it. That is the fact
+[binding.md](binding.md)'s `B-Disturb` / `B-Ref-Reshape` and [heap.md](heap.md)'s `H-Materialise`
+rest on, and it is why density is a *contract* rather than an implementation detail: a
+hole-punching vector would keep references valid and was decided against (@PLN130 F3) because
+every read would then pay for the check.
+
 ### 1.3 Point lookup is nullable — `Col-Lookup` (reuses [types.md](types.md) `τ?`)
 
 ```

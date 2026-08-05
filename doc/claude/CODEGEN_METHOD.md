@@ -87,6 +87,97 @@ combinatorially. Facts-in-types + translation-in-codegen is verifiable (the type
 carries the intent), stable (a new shape arrives with the right fact, not a new
 deduction branch), and the same on both backends (they translate the same facts).
 
+## The companion principle — build the instrument before the fix
+
+The principle above says where a fact should *live*. This one says how you *obtain*
+the information in the first place, before you know what to write.
+
+> **Most of engineering is information. Before writing a fix, build the instrument
+> that tells you WHERE the problem is — one more precise than an oracle — then use
+> it to find the real cases and code paths. Only then do you know what to write.**
+
+An **oracle** gives one bit about a case you already built: pass or fail. Its reach
+stops at what you thought to write down. An **instrument** reports *where*, per site,
+across code nobody wrote a case for.
+
+This matters most in codegen, because the generators are exactly where an oracle goes
+blind: a check that reads the IR cannot see a fact the emitters invent later. Writing
+more test cases against such a check never finds the gap — it is blind to a whole
+class, not to particular inputs.
+
+### When to reach for one — and when not to
+
+**Building an instrument is not a flex.** It is not evidence of rigor and not a way to
+show the work is being taken seriously. It is a purchase: someone pays to build it,
+calibrate it, extend it to every path, and maintain it afterwards. Reach for one
+deliberately, on a trigger — never as a default move or a display.
+
+**Two triggers earn it:**
+
+1. **An oracle failed.** Not "a test went red" — that is the oracle working. This is the
+   check itself returning a confident answer that was WRONG, or one that cannot see the
+   class by construction. When the thing you would normally trust is the thing that
+   misled you, more cases against it buy nothing.
+2. **A case you assumed was solved turns up broken.** The belief is the finding. One
+   such case means your *information* about the area is wrong — not that one input is
+   wrong — and every other conclusion resting on that belief is now unsupported. This is
+   the stronger of the two signals and the easier one to explain away.
+
+A weaker third: you cannot yet write the fix because the scope is genuinely unpinned,
+and the class is broad, recurring, or hides where an oracle cannot look.
+
+**Do not reach for one when:**
+
+- **The scope and root cause are already pinned.** Then there is nothing to find. Fix it,
+  with a regression test.
+- **It is one shape, one input, already understood.** That is a test case. An instrument
+  built for it is overhead with no payer.
+- **You want to demonstrate care.** An unjustified instrument is a permanent tax charged
+  to every later reader, in exchange for a feeling.
+
+Five rules, in order:
+
+1. **Put the instrument where the fact is CREATED, not where it is consumed.** If
+   copies are minted during emission, record them in the branch that emits them —
+   that is the one place that cannot be wrong about whether a copy exists.
+2. **Calibrate on cases whose answer you already know, in BOTH directions.** An
+   instrument that has never been made to fire, *and* to stay quiet, on understood
+   cases is an unread dial. Mis-installation is normal and code-reading does not
+   catch it: a dead code path can read exactly like the live one.
+3. **Survey the whole corpus — turn a bug into a distribution.** One repro tells you
+   a shape exists. A sweep tells you how often, and where the cost actually is,
+   which is rarely where the first report landed.
+4. **Write the probe that could refute you, and keep it when it does.** A probe that
+   agrees teaches almost nothing. A probe that measures the opposite of your
+   hypothesis is what moves the cause to the right place.
+5. **Let the instrument name the GATE on the fix, not just the fix.** Knowing the
+   cause is not permission to change it. An instrument that only ever argues *for*
+   your change is a worse instrument.
+6. **State the instrument's own coverage — a partial instrument that reports zero is
+   the oracle again.** Honing one to every case is real, ongoing work, and until it
+   is done "found nothing" means *"nothing on the paths I watch"*, never *"nothing"*.
+   Write down which paths those are, next to the readings.
+
+**The cost is real — this is an investment, not a free move.** Building an instrument,
+calibrating it, and extending it to every path takes effort that a one-line fix does
+not, and that effort is only repaid when the class is broad, keeps recurring, or hides
+where an oracle cannot look. For a bug whose scope and root cause are already pinned,
+skip all of this and fix it. Reach for an instrument when you cannot yet write the fix
+because you do not know what you are dealing with.
+
+Worked example, with the full evidence for each rule:
+[`plans/130-element-view-invalidation/`](plans/130-element-view-invalidation/README.md)
+§ Method — where an oracle reported *"none — every structure copy is a move, a literal,
+or already borrowed"* on a program that provably deep-copies, and the instrument that
+replaced it found the real distribution (plus two mis-installations of itself).
+
+**Both triggers fired there**, which is why it earned the cost. The oracle failed — the
+copy report did not merely stay quiet, it asserted a clean bill of health. And the area
+was *assumed solved*: the copy diagnostics had shipped, the buckets were classified, the
+Avoidable set was being managed — while `exists()` copied a whole record on every call,
+in every compile, unreported. The second signal is the one that would have been easiest
+to wave away as a one-off.
+
 ## The method — bytecode → types → code, per scale
 
 For each feature/fix, work the **smallest** case first, in three layers, then grow:
@@ -263,3 +354,4 @@ ownership — each is a type fact that should drive codegen mechanically.
 - [LIFETIME.md](LIFETIME.md) / [DEPS_INVENTORY.md](DEPS_INVENTORY.md) — the dep/ownership model the type signals build on
 - [DEBUG.md § Introspection CLI](DEBUG.md) — `loft introspect` to capture bytecode for the working-vs-broken comparison
 - First application: [plans/85-store-lifetime-retirement/](plans/85-store-lifetime-retirement/)
+- Instrument-before-fix, worked: [plans/130-element-view-invalidation/](plans/130-element-view-invalidation/README.md) § Method — the worked example (CLOSED; the rules above are what it produced)

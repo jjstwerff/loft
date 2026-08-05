@@ -318,20 +318,62 @@ data, then drive to a close. The stages (full recipe:
    the flag graduates to an **enforced** lint / library-PR gate — every remaining copy is now
    eliminated or explicitly acknowledged. Plan #90 closes here.
 
-## Open decisions (for the user)
+## The decided model (owner's decisions, 2026-08-05 — @PLN130)
 
-1. **Coverage first or report first?** The report is only as complete as the decision. Either
-   extend the copy-vs-borrow decision to all structure copies before shipping the report, or
-   ship a *scoped* report (stating its own scope). Recommendation: widen the decision (the
-   survival split covers construction/slot-set) first; a partial report that looks complete is
-   worse than none.
-2. **Flag → enforce, not warn-by-default from day one.** The stage-1 report is opt-in
-   (`--report-copies`), never a default warning — we read the data before enforcing. Promotion
-   to a default warning / library-PR gate is stage 4, gated on draining Avoidable (stage 2) and
-   the opt-out annotation (stage 3), not a day-one choice.
-3. **Explicit-copy syntax** (F5, the stage-3 opt-out) — the surface form (the inverse of `&`:
-   opt into an independent copy and silence the report at *that site*). **Sparse and per-site by
-   design — never a global `allow`** (§ escape hatch).
+@PLN130 measured this area and the owner settled the questions this doc had left open. These
+are **design constraints, not proposals**; the plan is closed and its evidence is in
+[plans/130-element-view-invalidation/](plans/130-element-view-invalidation/README.md).
+
+1. **Alias whenever it is semantically possible; copy only when needed.** The fix may never be
+   "copy on every container read" — that trades a correctness bug for a blanket cost.
+2. **Follow rustc's ownership model, with loft's ending.** Where rustc *errors* on a
+   use-after-move, loft **copies and tells you**. The program keeps working; the author learns
+   it cost a copy. (The one exception is an explicit `&`, which is refused rather than copied —
+   [formal/binding.md](formal/binding.md) B-Ref-Reshape.)
+3. **The diagnostic is default-ON, and there is no global off switch.** This REVERSES the
+   earlier "flag → enforce, opt-in first" staging: a diagnostic nobody enables reports nothing,
+   which is exactly the state @PLN130's Stage A measured. Suppression is an **acceptance in the
+   source**, per-file and per-function — the author states *"this copy is intended here"* and it
+   goes quiet for that scope only. Deliberately not an env opt-out: a flag silences a whole run
+   and leaves no record of who decided what, while an accept is reviewable and scoped to the
+   code it excuses. (`#superseded "…"` is the per-definition precedent; the per-file form is
+   still to be designed — see § What remains open.)
+4. **Both backends, one semantics.** `--native` is the path that must be quickest, so it may
+   not be the backend that always deep-copies. Backend parity is in scope, not a follow-up.
+5. **Everything is decided at COMPILE time. No runtime checks.** The diagnostic, the accept and
+   the guard are all static; a compiled program carries no copy bookkeeping, and when a copy is
+   genuinely needed loft performs it at full speed. Consequence accepted knowingly: loft can say
+   *where* a copy happens, never *how much* it moved — a deep copy's size is runtime data. The
+   same bargain rustc makes.
+
+### Default-on is livable when the notices are TRUE, not when they are absent
+
+A copy may be **allowed to stand** while it is still eliminable in principle. Three kinds, and
+only the last blocks anything — this is the acceptance criterion the three buckets above serve:
+
+- **Necessary** — the source survives and is mutated; no analysis will ever remove it. Stated
+  once, accepted at the site, quiet thereafter. (The `Forced` bucket.)
+- **Allowed for now** — eliminable with a better analysis, not yet eliminated. It stays, it is
+  **stated**, and it is tracked as a future-elimination candidate. A legitimate resting state,
+  not a debt that must be paid before anything can close. (The `Avoidable` bucket.)
+- **Unknown** — a copy no diagnostic accounts for. **Never acceptable**: the author cannot
+  decide about something they are not told. `LOFT_COPY_MANIFEST=1` exists to keep this empty.
+
+**"Allowed for now" covers COPIES ONLY — never wrong behaviour.** A copy that rests is a correct
+program paying a cost. Breakage, misinformation and silent copies are all excluded, and a
+warning does not buy any of them off.
+
+## What remains open
+
+1. **The per-file / per-function accept surface** has no syntax yet (decision 3 names the
+   requirement; `#superseded "…"` is the only per-definition precedent). Until it exists, an
+   unaccepted copy is simply reported — which is the state the model requires, so this blocks
+   nothing.
+2. **Which measured copy families should be accepted rather than eliminated** — the framing is
+   settled (an accept is written at the SITE, never a blanket env exemption, so the decision
+   stays reviewable), the selection is not.
+3. **The uncovered copy set** — sized, not drained: 29 distinct sites over a 90-script sample,
+   across four origins. A legitimate `Avoidable` resting state under decision 3.
 
 ## Probes run while writing this (the prediction-vs-reality record)
 

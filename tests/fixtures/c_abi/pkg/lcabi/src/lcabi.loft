@@ -11,28 +11,35 @@
 //
 // The library it binds to is `tests/fixtures/c_abi/liblc_types.c`, built by
 // `make` in that directory. Nothing here needs rustc.
+//
+// **`int64_t`, never `long`.** These declarations said `long`, and `lc_types.c`
+// has always said `int64_t`; on LP64 those coincide, so Linux and macOS never
+// noticed. C `long` is 32 bits on Windows, where loft dutifully truncated —
+// `lc_i64(1234567890123)` came back `1912276171`, exactly its low half. The rule
+// the CTarget doc states is the cure: write the signature the header already
+// shows you, and a width that means one thing everywhere means it on Windows too.
 
-pub fn lc_i64(v: integer) -> integer;          #c "lc_i64" "long(long)"
+pub fn lc_i64(v: integer) -> integer;          #c "lc_i64" "int64_t(int64_t)"
 pub fn lc_i32(v: integer) -> integer;          #c "lc_i32" "int(int)"
 pub fn lc_neg_i32(v: integer) -> integer;      #c "lc_neg_i32" "int(int)"
-pub fn lc_strlen(s: text) -> integer;          #c "lc_strlen" "long(const char*)"
-pub fn lc_byte_at(s: text, i: integer) -> integer;  #c "lc_byte_at" "int(const char*, long)"
-pub fn lc_i64_sum(v: vector<integer>) -> integer;   #c "lc_i64_sum" "long(const long*, long)"
-pub fn lc_open(seed: integer) -> integer;      #c "lc_open" "void*(long)"
-pub fn lc_read(h: integer) -> integer;         #c "lc_read" "long(void*)"
-pub fn lc_bump(h: integer, by: integer) -> integer; #c "lc_bump" "long(void*, long)"
+pub fn lc_strlen(s: text) -> integer;          #c "lc_strlen" "int64_t(const char*)"
+pub fn lc_byte_at(s: text, i: integer) -> integer;  #c "lc_byte_at" "int(const char*, int64_t)"
+pub fn lc_i64_sum(v: vector<integer>) -> integer;   #c "lc_i64_sum" "int64_t(const int64_t*, int64_t)"
+pub fn lc_open(seed: integer) -> integer;      #c "lc_open" "void*(int64_t)"
+pub fn lc_read(h: integer) -> integer;         #c "lc_read" "int64_t(void*)"
+pub fn lc_bump(h: integer, by: integer) -> integer; #c "lc_bump" "int64_t(void*, int64_t)"
 pub fn lc_close(h: integer);                   #c "lc_close" "void(void*)"
 // A C `char *` return, brought back as loft `text`: the bytes are copied up to
 // the first NUL and the pointer is never freed. `lc_alloc_text` is deliberately
 // NOT bound as `text` — it is the caller-frees half of the pair, which goes
 // through a shim.
 pub fn lc_static_text() -> text;               #c "lc_static_text" "const char*(void)"
-pub fn lc_maybe_text(present: integer) -> text; #c "lc_maybe_text" "const char*(long)"
+pub fn lc_maybe_text(present: integer) -> text; #c "lc_maybe_text" "const char*(int64_t)"
 // The same symbol declared `text?` — the spelling that makes C's NULL visible to
 // the null-flow analysis instead of arriving as loft's content sentinel
 // unannounced. Both bindings are legitimate, so both are exercised.
-pub fn lc_opt_text(present: integer) -> text?; #c "lc_maybe_text" "const char*(long)"
+pub fn lc_opt_text(present: integer) -> text?; #c "lc_maybe_text" "const char*(int64_t)"
 pub fn lc_latin1_text() -> text;               #c "lc_latin1_text" "const char*(void)"
 pub fn lc_arity7(a: integer, b: integer, c: integer, d: integer, e: integer, f: integer, g: integer) -> integer;
-#c "lc_arity7" "long(long, long, long, long, long, long, long)"
-pub fn lc_shim_f64(bits: integer) -> integer;  #c "lc_shim_f64" "long(long)"
+#c "lc_arity7" "int64_t(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t)"
+pub fn lc_shim_f64(bits: integer) -> integer;  #c "lc_shim_f64" "int64_t(int64_t)"

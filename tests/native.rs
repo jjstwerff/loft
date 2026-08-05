@@ -938,6 +938,33 @@ fn native_binary_script() -> std::io::Result<()> {
 ///
 /// `write(1, ptr, count)` covers the other half: a loft `vector` crosses as a
 /// pointer AND a count, because C carries no length.
+/// The POSIX `write(2)` binding as the generated sources below spell it.
+const POSIX_WRITE: &str = r#"#c "write" "long(int, const void*, size_t)""#;
+
+/// Spell a generated `#c` source for THIS host. A no-op off Windows.
+///
+/// Windows has `write(2)`'s behaviour but not its NAME: the CRT exports it as
+/// `_write`, so a declaration naming `write` resolves to nothing there and the
+/// call faults — measured, `` `#c` symbol 'write' not found ``.
+///
+/// Only the symbol is branched, because only the symbol differs. `long` is
+/// genuinely right for the return on both: POSIX `write` gives `ssize_t`
+/// (64-bit on LP64) and `_write` gives `int` (32-bit), which is exactly what C
+/// `long` means on each — one of the places where naming the platform's own
+/// width is the correct binding rather than a portability bug. The count
+/// narrows to `unsigned int` for the same reason: that is `_write`'s third
+/// parameter, where POSIX takes `size_t`.
+fn for_host(src: &str) -> String {
+    if cfg!(windows) {
+        src.replace(
+            POSIX_WRITE,
+            r#"#c "_write" "long(int, const void*, unsigned int)""#,
+        )
+    } else {
+        src.to_string()
+    }
+}
+
 #[test]
 fn native_c_binding_calls_libc() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -947,7 +974,8 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
     let path = std::env::temp_dir().join("loft_pln24_c_binding.loft");
     std::fs::write(
         &path,
-        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+        for_host(
+            "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
          pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
          pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
          pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
@@ -959,6 +987,7 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
          \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
          \x20 println(\"wrote {c_write(1, b)}\");\n\
          }\n",
+        ),
     )?;
     let job = prepare_native_test(&path)?;
     // Ok(false) = skipped (rustc absent / low space) — not a failure.
@@ -976,9 +1005,17 @@ fn native_c_binding_calls_libc() -> std::io::Result<()> {
          declared width is what makes that work: {stdout}"
     );
     assert!(stdout.contains("abs 7"), "abs: {stdout}");
+    // `\r\n` -> `\n` before comparing. The bytes really do differ: the C runtime
+    // opens fd 1 in TEXT mode on Windows, so the `write(1, "hi\n", 3)` this test
+    // makes arrives as `hi\r\n`. Measured with `{stdout:?}` after the CI log —
+    // which normalises line endings — showed output that looked identical to a
+    // passing run. The translation is the platform behaving as documented, not
+    // the binding losing a byte, and the claim under test is that the vector
+    // crossed as pointer + count, which `wrote 3` is what settles.
+    let stdout = stdout.replace("\r\n", "\n");
     assert!(
         stdout.contains("hi\n") && stdout.contains("wrote 3"),
-        "a vector must cross as pointer + count: {stdout}"
+        "a vector must cross as pointer + count: {stdout:?}"
     );
     Ok(())
 }
@@ -1004,7 +1041,8 @@ fn interpreted_and_native_c_bindings_agree() -> std::io::Result<()> {
     let path = std::env::temp_dir().join("loft_pln24_c_parity.loft");
     std::fs::write(
         &path,
-        "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
+        for_host(
+            "pub fn c_strlen(s: text) -> integer;   #c \"strlen\" \"size_t(const char*)\"\n\
          pub fn c_atoi(s: text) -> integer;     #c \"atoi\" \"int(const char*)\"\n\
          pub fn c_abs(v: integer) -> integer;   #c \"abs\" \"int(int)\"\n\
          pub fn c_write(fd: integer, v: vector<u8>) -> integer;  #c \"write\" \"long(int, const void*, size_t)\"\n\
@@ -1016,6 +1054,7 @@ fn interpreted_and_native_c_bindings_agree() -> std::io::Result<()> {
          \x20 for ch in \"hi\\n\" { b += [(ch as integer) as u8? ?? (0 as u8)] }\n\
          \x20 println(\"wrote {c_write(1, b)}\");\n\
          }\n",
+        ),
     )?;
     let interp = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
         .arg("--interpret")
@@ -1146,9 +1185,15 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1229,9 +1274,15 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
             .arg(&path)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         // Not an exact string: `strerror(2)` is locale-dependent (it is "No such
@@ -1286,7 +1337,14 @@ fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
         .output()?;
     assert!(built.status.success(), "fixture library must build");
 
-    let so_str = so.to_string_lossy().into_owned();
+    // Forward slashes, because this path is about to be pasted into two string
+    // literals — a TOML basic string and a loft one — and a Windows path is full
+    // of escape sequences to both. `C:\Users\…` made the generated library fail
+    // to lex at all: `error: Unknown escape sequence` at the `\U`. Escaping for
+    // each syntax separately would work; using a separator neither treats as
+    // special is simpler, and Windows accepts `/` everywhere loft passes this on
+    // (`lib_variants` already splits a directory off on either separator).
+    let so_str = so.to_string_lossy().replace('\\', "/");
     std::fs::write(
         dir.join("pkg/skewlib/loft.toml"),
         format!(
@@ -1370,13 +1428,22 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     {
         return Ok(()); // the sqlite backend ships a shim loft must compile
     }
-    let has = |names: &[&str]| {
-        names.iter().any(|n| {
-            ["/lib/x86_64-linux-gnu/", "/usr/lib/", "/usr/lib64/"]
-                .iter()
-                .any(|d| std::path::Path::new(&format!("{d}{n}")).exists())
-        })
-    };
+    // Which backends actually ran their assertions. A skip and a pass are the
+    // same colour, so the count is checked at the end: this test used to gate
+    // each backend on `libsqlite3.so.0` existing under `/lib/x86_64-linux-gnu`
+    // | `/usr/lib` | `/usr/lib64`, and BOTH the spelling and the directories are
+    // Linux's. On macOS `/usr/lib` exists but holds `libsqlite3.dylib`, so every
+    // conditional cell — including sqlite, written to be the unconditional one —
+    // skipped in silence and the test passed on macOS for months having opened
+    // no database. The availability question now has ONE home, loft's own
+    // `c_library_available`, which translates the declared soname to the host's
+    // spelling; a mode that cannot run says `SKIP` and is counted here.
+    let mut ran: Vec<&str> = Vec::new();
+    // No availability question is asked from out here. Every backend answers it
+    // with `c_library_available` — true only when the library opens AND every
+    // declared symbol resolves — and prints `SKIP`. A second question asked from
+    // the harness could only be the weaker, file-granular one, and two answers
+    // to one question is how an unusable library got called (loft#770).
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let libdir = root.join("tests/fixtures/sqldb");
     let script = libdir.join("uniform.loft");
@@ -1391,9 +1458,13 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             .current_dir(root)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // Exit status in the message, for the same reason as the sites above: a
+        // Windows binary that cannot find a DLL dies before `main` with both
+        // streams empty, and without the code the message says nothing at all.
         assert!(
             out.status.success(),
-            "{backend}/{mode}: {stdout}\n{}",
+            "{backend}/{mode} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1484,9 +1555,24 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     //                  Proven to fire by making `procedural` never refuse: `ctl=true`.
     let proc = "deployed=true called=true guard=false rows=1 ctl=false";
 
-    // sqlite — unconditional. No server, so a failure here is always real.
-    if has(&["libsqlite3.so.0"]) {
-        let s = run("--interpret", "sqlite")?;
+    // sqlite — no server, so whenever the library is here a failure is real.
+    //
+    // The availability question is the PROGRAM's to answer, exactly as it is for
+    // postgres and maria below. Asking it from out here needs a second, WEAKER
+    // question — "does a file with this name load" — and that one says yes for
+    // an unrelated library sharing the translated name, which is how a hostile
+    // `sqlite3.dll` on PATH turned a skip into an access violation on Windows
+    // (loft#770). `c_library_available`, which the backend uses, is true only
+    // when every declared symbol resolves. One home for the fact; the harness
+    // reads the verdict off stdout.
+    let s = run("--interpret", "sqlite")?;
+    if s.contains("SKIP") {
+        assert!(
+            s.contains("not installed"),
+            "an absent library must be REPORTED, not inferred from silence:\n{s}"
+        );
+    } else {
+        ran.push("sqlite");
         assert!(
             s.contains(&format!("sqlite {expect}")),
             "sqlite must render value / NULL / empty distinctly:\n{s}"
@@ -1513,14 +1599,14 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     }
 
     // postgres and mariadb — conditional, and a skip is recognised as a skip.
-    for (mode, lib) in [("postgres", "libpq.so.5"), ("maria", "libmariadb.so.3")] {
-        if !has(&[lib]) {
-            continue;
-        }
+    // The condition is the library's own answer plus a reachable server; both
+    // arrive as `SKIP` on stdout rather than being guessed at from out here.
+    for mode in ["postgres", "maria"] {
         let out = run("--interpret", mode)?;
         if out.contains("SKIP") {
-            continue; // no server reachable here
+            continue; // library absent, or no server reachable here
         }
+        ran.push(mode);
         assert!(
             out.contains(&format!("{mode} {expect}")),
             "{mode} must render the same three cells as sqlite:\n{out}"
@@ -1579,6 +1665,7 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
         // and the arc-G property costs it no leniency. Proven on 1.5.5 with the library
         // reachable via `LD_LIBRARY_PATH`; no system install is needed, and none is
         // assumed here, which is why this stays conditional.
+        ran.push("duckdb");
         assert!(
             out.contains(&format!("duckdb {expect}")),
             "duckdb must render the same three cells as sqlite:\n{out}"
@@ -1596,6 +1683,24 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             out.contains(&format!("duckdb proc {proc}")),
             "duckdb: the process-side procedure registry is SHARED with sqlite's, so \
              its answer must be sqlite's:\n{out}"
+        );
+    }
+
+    // The guard that would have caught the Linux-shaped probe.
+    //
+    // Everything above is conditional, so with no cell running this test is a
+    // green that asserted nothing — which is exactly what it was on macOS.
+    // Naming the backends that ran turns a silent evaporation into a readable
+    // one, and requiring sqlite on Linux pins the reference platform: it is the
+    // cell with no server to be unreachable, so there it can only be missing if
+    // something upstream broke.
+    println!("@PLN23 backends exercised: {ran:?}");
+    if cfg!(target_os = "linux") {
+        assert!(
+            ran.contains(&"sqlite"),
+            "sqlite must run on Linux — it needs no server, so a skip here means \
+             the library went missing or the availability question broke, and a \
+             pass with it skipped asserts nothing. Exercised: {ran:?}"
         );
     }
     Ok(())
@@ -1648,9 +1753,13 @@ fn a_sql_cursor_walks_real_rows_and_keeps_null_apart_from_empty() -> std::io::Re
             .current_dir(root)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // Exit status in the message, for the same reason as the sites above: a
+        // Windows binary that cannot find a DLL dies before `main` with both
+        // streams empty, and without the code the message says nothing at all.
         assert!(
             out.status.success(),
-            "{backend}/{mode}: {stdout}\n{}",
+            "{backend}/{mode} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1759,9 +1868,15 @@ fn a_c_library_handle_survives_the_round_trip_and_carries_its_error() -> std::io
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1835,9 +1950,15 @@ fn a_c_binding_reaches_a_versioned_system_library_on_both_backends() -> std::io:
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)
@@ -1911,9 +2032,15 @@ fn loft_builds_the_ansi_c_shim_a_package_ships() -> std::io::Result<()> {
             .arg(&prog)
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        // The EXIT STATUS belongs in the message, because the interesting Windows
+        // failure is a SILENT one: a binary that links but cannot find its DLL at
+        // load time dies with `STATUS_DLL_NOT_FOUND` (0xC0000135) having written
+        // nothing at all, so stdout and stderr are both empty and the assertion
+        // said nothing without this.
         assert!(
             out.status.success(),
-            "{backend}: {stdout}\n{}",
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
             String::from_utf8_lossy(&out.stderr)
         );
         Ok(stdout)

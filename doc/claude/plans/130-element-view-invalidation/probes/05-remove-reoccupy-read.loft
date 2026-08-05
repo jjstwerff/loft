@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 05 — the sharpest statement of the class.  NO WRITE ANYWHERE.
+// c names the n=33 element.  After the removal and the append, a DIFFERENT element
+// occupies the index the view was pinned to.  Status: FAILS both backends — the read
+// answers 44/444, a completely unrelated element.  LOFT_STORES=warn and LOFT_POISON=1
+// are both silent: nothing is freed, so no memory-safety detector can see it.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c = boxes[2];
+  boxes.remove(0);
+  boxes += [Box { n: 44, tag: 444 }];
+  assert(len(boxes) == 3, "05 len {len(boxes)} want 3");
+  assert(c.n == 33, "05 c.n {c.n} want 33 (reads a different element)");
+  assert(c.tag == 333, "05 c.tag {c.tag} want 333 (reads a different element)");
+  println("probe 05 PASSED");
+}

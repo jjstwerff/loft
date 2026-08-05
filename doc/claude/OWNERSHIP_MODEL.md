@@ -168,6 +168,17 @@ wants a live reference instead of the default copy/alias. That is the entire sur
 user-facing borrow checker is **declined** ([DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)) — it
 would fight loft's *fun-on-pickup* goal ([GOALS.md](GOALS.md)).
 
+**The one carve-out: loft DECLINES what it cannot implement safely** (C79, revisited
+2026-08-05). "Never rejects" is about programs loft *can* compile correctly — and that is
+nearly all of them, which is why the surface stays clean. It is not a promise to accept a
+program whose meaning loft cannot deliver. Writing `&` is an ownership decision by the author,
+not a hint: it asks for a live link. Disturb the place that link names while it is still in use
+and loft has no honest lowering left, so it reports a compile error instead of quietly handing
+back a copy — `formal/binding.md` **B-Ref-Reshape**. The distinction that keeps this from being
+a borrow checker by the back door: loft refuses only where *no* correct lowering exists, never
+because a correct one is hard to prove. Naive code is unaffected, and a plain bind never meets
+it at all — it gets the copy described below.
+
 ## The law — whole-value binds COPY, projections view; `&` binds a live REFERENCE
 
 > **CORRECTED (2026-07-03, C86 — maker's call).** The earlier text ("a binding to a heap
@@ -184,6 +195,76 @@ is exactly this analysis): an *optimization*, never an observable semantic.
 **Projection reads are VIEWS** — `a = vv[0]; a[i] = z` writes through (the #426 decided
 feature), and in-place mutation through a *path* (`o.field = x`, `o.v[i] = y`) reaches
 the source. A **scalar** binding is a by-value **copy**.
+
+### A view lasts as long as the thing it names — and loft says when it does not
+
+A projection view is only sound while the place it names still exists, so loft **materialises**
+the binding — gives it its own copy, taken at the bind — whenever it can prove the place will
+not survive the binding. Three things end a view's place, and all three are decided at COMPILE
+time (@PLN130):
+
+| what happens to the container | why the view cannot stay an alias | the copy is reported as |
+|---|---|---|
+| **RESHAPED** — `a.remove(i)` | removal renumbers the positions, so the view's pinned position starts naming a DIFFERENT element | *"`c` was copied out of `a` because `a` is modified while `c` is in use"* |
+| **RE-KEYED** — `c.key = 5` on a keyed collection | the element would be reachable by no key at all, and for a `sorted` the record MOVES, invalidating the very view doing the writing | *"… because `key` is one of `s`'s keys"* |
+| **REASSIGNED** — `bx = T{…}` | the view names a place inside `bx`, and giving `bx` a new value leaves nothing for it to point at | *"… because `bx` is reassigned while `c` is in use"* |
+
+After materialising, writes through the binding **no longer reach the container** — which is
+why every one of them is reported rather than done silently. The advice names the function, the
+binding and the container.
+
+**All three require the view to be LIVE ACROSS the event — the advice's "while `c` is in use"
+is a condition, not a figure of speech.** A view whose last use comes *before* the disturbance
+keeps its alias and writes through, and so does one bound *after* it: nothing was pointing into
+the container when it changed. This is the rustc rule — a borrow that has ended is no conflict
+— and it is not a refinement, it is required. Materialising a dead view LOSES a write the
+program used to land, which is breakage, and it makes the advice state something false about a
+binding that is not in use. Both are on @PLN130's closure bar. Pinned by
+`tests/scripts/148-view-liveness-across-reshape.loft`, which asserts each edge in both
+directions on both backends.
+
+**A `&` binding is never materialised — it is a live link and always writes through, because
+the shape that could break that does not compile.** `c = &v[0]` opts into aliasing explicitly,
+so no reshape may quietly turn it into a copy ([formal/binding.md](formal/binding.md)
+B-Ref-Alias). The three rows above are the PLAIN-bind rule: that binding copies, so losing
+write-through is consistent with what it already meant. For a `&` there is nothing consistent
+to do, so loft **refuses the removal instead** — B-Ref-Reshape, the rustc bargain in loft's
+spelling. Two rows, and they are disjoint:
+
+| binding | container reshaped while it is live | outcome |
+|---|---|---|
+| plain `c = v[0]` | yes | materialise + advice (the table above) |
+| `c = &v[0]` | yes | **compile-time error** |
+| `c = &v[0]` | no | live link, writes through |
+
+**Across a frame the `&` stops being the discriminator, and that is measured.** A struct
+PARAMETER aliases the caller's element whether or not it is spelled `&` — `fn w(t: Box) { t.n
+= 99 }` called as `w(v[2])` writes 99 into the caller's `v`, which is exactly what the
+redundant-`&` advice tells authors. So `f(v[i], v)` where `f` removes from its container
+parameter is refused for both spellings; there is no bind site inside `f` to materialise at,
+and refusing only `&` would mean taking loft's own advice trades a compile error for a silent
+lost write. Closed deviation **D-bind-8**;
+[loft#779](https://github.com/loft-lang/loft/issues/779).
+
+**Mutating the place is not ending it.** `d.mid = Mid{…}` writes the new value INTO the place
+`d.mid` already occupies, so a view of `d.mid.inner` sees the update and keeps writing through:
+that is the in-place path mutation above, not an invalidation. A view survives its place being
+overwritten and cannot survive its place being destroyed.
+
+**A vector local never needed this.** `a = [...]` allocates through a hidden compiler-owned
+backing record, so re-binding `a` mints a NEW one and the original keeps its identity — a view
+of it stays valid with no copy. A struct local IS its own owner, which is why reassigning one
+is the case that had to be handled. Contract-wise both answer the value bound at the view;
+they differ only in whether a copy was needed to get there.
+
+The reassignment case also reaches across a call: handing a container to a function that
+reassigns its `&` parameter frees the caller's store (@PLN87 P2.2), so the caller's views of it
+materialise too. A **plain** (non-`&`) parameter reassignment is local to the callee (P2.1) and
+leaves the caller's views alone.
+
+Pinned by `tests/scripts/774-view-outlives-reassigned-container.loft` (the reassignment
+boundary, with the write-through cells as controls), `tests/scripts/145-view-materialised-on-reshape.loft`
+and `tests/scripts/201-bind-copies-projection-views.loft` (the C86 copy/view boundary).
 
 **`&` binds a live REFERENCE** to its source — a variable, struct field, or vector
 element. Every operation goes *through* the reference to the source: a read sees the

@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 07 — the invalidator is the in-loop `#remove`, not the `remove(i)` call.
+//
+// CONTRACT CHANGED (F2, option 2 — signed off).  Previously identical to probe 03's failure,
+// which is what proved the defect is the positional shift itself rather than one removal
+// spelling.  `#remove` is now recognised as a reshape too (`OpRemove`, container = arg 1), so
+// `c` materialises at the bind and the author is told.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c = boxes[2];
+  for b in boxes {
+    if b.n == 11 {
+      b#remove;
+    }
+  }
+  c.n = 99;
+  assert(len(boxes) == 2, "07 len {len(boxes)} want 2");
+  assert(boxes[0].n == 22, "07 e0 {boxes[0].n} want 22");
+  assert(boxes[1].n == 33 && boxes[1].tag == 333, "07 e1 {boxes[1].n}/{boxes[1].tag} want 33/333");
+  assert(c.n == 99 && c.tag == 333, "07 c {c.n}/{c.tag} want 99/333");
+  println("probe 07 PASSED — #remove recognised as a reshape; view materialised");
+}

@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 10 — SILENT COPY, mechanism 2 (never seen).
+// `b = a` on a plain struct deep-copies: the asserts below prove it by VALUE — neither
+// name sees the other's writes.  Yet with LOFT_REPORT_COPIES=1 LOFT_WARN_COPIES=1
+// LOFT_COPY_SURVIVAL=1 the report prints "none — every structure copy is a move, a
+// literal, or already borrowed", and LOFT_MATERIALIZE_DUMP emits NO `MAT` row for n_main.
+// The copy is invented at bytecode generation (state/codegen.rs gen_set_first_ref_var_copy;
+// native generation/dispatch.rs), long after use_analysis ran over the IR — so no
+// diagnostic can reach it even in principle.  Both backends.
+
+struct Box { n: integer, v: vector<integer> = [] }
+
+fn main() {
+  a = Box { n: 11 };
+  b = a;
+  b.n = 100;
+  a.n = 55;
+  // The copy is real: if this were an alias both would read 55/100 respectively.
+  assert(a.n == 55, "10 a.n {a.n} want 55");
+  assert(b.n == 100, "10 b.n {b.n} want 100");
+  println("probe 10 PASSED — and the copy it proves was reported by nothing");
+}

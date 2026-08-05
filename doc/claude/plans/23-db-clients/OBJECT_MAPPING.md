@@ -142,6 +142,65 @@ S1–S3 are worth doing even if the mapping is never built: they are the proof
 @PLN24 has been waiting for since arc F was written, on a real library rather
 than a fixture.
 
+## S6 writes N graphs REGROUPED BY TABLE, not one graph at a time
+
+The ladder above walks one owner's collections. A real write is 500 owners at
+once — a `Doc` with five `rank` children, five hundred times — and the shape that
+takes is **all 500 parents, then all 2500 children**, not parent-children-
+parent-children.
+
+This reads as a performance note and is not one. Per-object writes acquire locks
+in **data-dependent order**, so two concurrent writers take the same rows in
+different orders and deadlock; the retries are a different performance regime,
+not a constant factor. Grouping by table gives every writer one order — parent
+table, then child table — which is the ordinary deadlock-avoidance discipline.
+On top of that, a child INSERT's foreign-key check takes a SHARED lock on the
+parent row, so interleaving holds and re-takes 2500 parent locks across the
+whole write instead of running them against a parent table that is already
+complete.
+
+The reads matter too, and they are the smaller half: a unique index cannot defer
+its maintenance (InnoDB's change buffer covers non-unique secondaries only), and
+every child table's primary key here is `(owner's key, address)` — unique by
+construction. Batched, those lookups hit a hot, fully-built parent index;
+interleaved, each one evicts what the next needs.
+
+**Client-side keys are what make it possible.** Identity comes from the loft
+value, never from the database — no `AUTO_INCREMENT`, no `RETURNING`. So all
+2500 child rows are computable before the first statement is sent, and
+parent-before-child is a foreign-key ordering requirement rather than a data
+dependency that would force a round trip into the middle of the batch.
+
+### What that means for the interface
+
+`exec_many(rows)` is not what the mapping calls. It batches ONE statement over
+many rows; the mapping needs a **write plan** that owns the grouping: collect
+every pending graph's rows, group by table, order the tables parent-before-child,
+chunk each group to the backend's parameter cap, and run the whole plan in one
+transaction. `exec_many` becomes the executor of a single chunk underneath it.
+
+Chunking is backend knowledge, like the `BEGIN TRANSACTION` keyword: PostgreSQL
+takes at most 65535 bind parameters per statement and has `COPY` for exactly
+this; MariaDB is bounded by `max_allowed_packet`. 500 parents x M columns is
+comfortable, 2500 children x M is not always.
+
+Atomicity is already in place — T1-T3 landed before this for the reason stated
+there, and the whole plan is one transaction.
+
+### Still to be measured
+
+The shape is decided; the number is not recorded. Write the 500x5 graph both
+ways — interleaved and grouped-by-table — on sqlite, postgres and mariadb, and
+record wall-clock plus statement count.
+
+Two reasons it is worth doing even though the design does not wait on it. It
+becomes a REGRESSION guard: both shapes are correct, so nothing in the suite
+would notice a later refactor quietly reverting to per-object writes. And it
+says where the cost actually falls — sqlite has no foreign-key trigger machinery
+and often runs with `PRAGMA foreign_keys` off, so if it shows little difference
+that is worth knowing too: it means the shape is for the servers and sqlite pays
+nothing for it.
+
 ## What S1 and S2 already changed
 
 **The raw C surface is not the loft API surface, and loft says so itself.**

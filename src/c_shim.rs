@@ -76,25 +76,78 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("cannot create `{}`: {e}", out_dir.display()))?;
 
-    // Build to a unique temporary and rename over: the publish is atomic, so a
-    // concurrent reader sees either no file or a complete one, never a partial
-    // library it would `dlopen`.
-    let tmp = out_dir.join(format!("{stem}.{}.tmp", std::process::id()));
+    // Build in a unique temporary DIRECTORY and rename over: the publish is
+    // atomic, so a concurrent reader sees either no file or a complete one,
+    // never a partial library it would `dlopen`.
+    //
+    // The artifacts already carry their FINAL names in there, because a linker
+    // records the name it was given. Building `<stem>.<pid>.tmp` and renaming
+    // afterwards moves the file and leaves that recorded name behind, so every
+    // consumer went looking for a temporary that no longer existed and Windows
+    // refused to start the process with `STATUS_DLL_NOT_FOUND` — naming nothing,
+    // because a missing import names no name. Measured on the runner: the
+    // program imported `lcshim_shim_<key>.8496.tmp` while
+    // `lcshim_shim_<key>.dll` sat beside it (loft#…, WINDOWS.md).
+    //
+    // A temp DIRECTORY rather than a temp FILENAME is what buys both: the
+    // recorded name follows the BASENAME (verified — a staging path does not
+    // leak into it), and the rename still lands in the same directory, so it is
+    // still atomic. `-Wl,--soname` does NOT fix this: PE ignores it, verified
+    // side by side with this shape.
+    let final_name = so
+        .file_name()
+        .map_or_else(|| stem.clone(), |f| f.to_string_lossy().into_owned());
+    let stage = out_dir.join(format!(".stage.{}", std::process::id()));
+    std::fs::create_dir_all(&stage)
+        .map_err(|e| format!("cannot create `{}`: {e}", stage.display()))?;
+    let tmp = stage.join(&final_name);
     let mut cmd = std::process::Command::new(cc_program());
     cmd.arg("-O2").arg("-fPIC").arg("-shared");
+    // A shim must not drag its COMPILER's runtime along. A MinGW `cc` links
+    // `libgcc_s_seh-1.dll` (and `libwinpthread-1.dll`) by default, so the shim
+    // loads only where MinGW's `bin` is on PATH — which the build machine has and
+    // a consumer does not. Measured: the shim was staged correctly beside the
+    // binary and Windows still refused to start the process
+    // (`STATUS_DLL_NOT_FOUND`), because the missing import was the runtime and
+    // not the shim.
+    //
+    // Static-linking it is the fix rather than staging two more DLLs: the shims
+    // are three-line trampolines, the runtime they actually use is a rounding
+    // error, and a self-contained artifact is one fewer thing to ship. Harmless
+    // where it does not apply — a non-MinGW `cc` has nothing to statically link.
+    if cfg!(windows) {
+        cmd.arg("-static-libgcc");
+    }
     // `-Wall -Wextra` deliberately absent: a warning in the AUTHOR's C is theirs
     // to see when they compile it, not a reason for a consumer's build to look
     // broken. Errors still fail the build below.
     cmd.arg("-o").arg(&tmp);
-    // macOS bakes the `-o` path into the library as its INSTALL NAME, and the
-    // rename below moves the file without touching it — so consumers linked
-    // against the `.tmp` and `dyld` refused a library that was sitting right
-    // there under its real name. Name it for where it will END UP.
-    let final_name = so
-        .file_name()
-        .map_or_else(|| stem.clone(), |f| f.to_string_lossy().into_owned());
-    for arg in crate::platform::shim_name_args(&final_name, crate::platform::host_lib_os()) {
+    // macOS bakes the `-o` PATH into the library as its INSTALL NAME — the whole
+    // path, not just the basename — so the staging directory would leak into it
+    // even though the name is now right. Pin it explicitly to where the library
+    // ends up. (Windows needs no counterpart: its recorded name follows the
+    // basename, which the staging shape above already makes correct.)
+    for arg in crate::platform::install_name_args(&final_name, crate::platform::host_lib_os()) {
         cmd.arg(arg);
+    }
+    // Windows links against an IMPORT LIBRARY, not the DLL, and `cc -shared`
+    // writes one only when asked. Built in the staging directory beside the
+    // DLL's own and renamed with it below, so the pair is published together — a
+    // consumer that found the `.dll` and not yet the `.lib` would fail exactly
+    // as if the flag had never been added.
+    //
+    // This is the file that carried the bug: the import library records the DLL
+    // name from the linker's `-o`, and every binary linking it copies that
+    // string in as the thing to ask the loader for.
+    let implib = crate::platform::shim_implib_name(&final_name, crate::platform::host_lib_os())
+        .map(|name| (stage.join(&name), out_dir.join(name)));
+    if let Some((tmp_lib, _)) = &implib {
+        for arg in crate::platform::shim_implib_args(
+            &tmp_lib.to_string_lossy(),
+            crate::platform::host_lib_os(),
+        ) {
+            cmd.arg(arg);
+        }
     }
     for p in &paths {
         cmd.arg(p);
@@ -107,7 +160,7 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
         )
     })?;
     if !out.status.success() {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_dir_all(&stage);
         // The caller already names the package; repeating it here only pushed
         // cc's own diagnostics further down the line, and those are what the
         // author needs to read first.
@@ -116,12 +169,27 @@ pub fn build(pkg_dir: &str, sources: &[String]) -> Result<std::path::PathBuf, St
             String::from_utf8_lossy(&out.stderr).trim_end()
         ));
     }
+    // The import library first: the DLL's rename is what makes the shim visible
+    // to the cache check at the top, so anything that must accompany it has to
+    // already be in place when that happens.
+    if let Some((tmp_lib, final_lib)) = &implib {
+        std::fs::rename(tmp_lib, final_lib).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&stage);
+            format!(
+                "the shim built but its import library `{}` could not be published: {e}",
+                final_lib.display()
+            )
+        })?;
+    }
     // A rename onto an existing file is fine — same content-addressed name means
     // the same bytes, so whoever wins publishes an identical library.
-    std::fs::rename(&tmp, &so).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("cannot publish the shim to `{}`: {e}", so.display())
-    })?;
+    let published = std::fs::rename(&tmp, &so)
+        .map_err(|e| format!("cannot publish the shim to `{}`: {e}", so.display()));
+    // The staging directory goes whatever happened: it is named for this process,
+    // so nothing else will ever reuse it, and a leftover would accumulate one
+    // empty directory per build.
+    let _ = std::fs::remove_dir_all(&stage);
+    published?;
     Ok(so)
 }
 

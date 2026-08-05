@@ -1127,9 +1127,11 @@ pub(crate) fn run_tests(
                             // built its own rustc command and never got it, so
                             // single-package smokes passed but any genuine
                             // two-native-package test failed at the link step.
-                            // macOS ld64 rejects `--allow-multiple-definition`,
-                            // so skip it there (matching main.rs).
-                            #[cfg(not(target_os = "macos"))]
+                            // macOS ld64 rejects `--allow-multiple-definition`
+                            // and MSVC `link.exe` ignores it with a `LNK4044`
+                            // per occurrence, so skip it on both (matching
+                            // main.rs).
+                            #[cfg(not(any(target_os = "macos", windows)))]
                             if !native_data.native_packages.is_empty() {
                                 cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
                             }

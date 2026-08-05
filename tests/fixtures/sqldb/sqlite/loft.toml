@@ -3,5 +3,14 @@ name = "sqlite"
 version = "0.0.1"
 
 [c]
-optional-libs = "libsqlite3.so.0"
+# Windows FIRST, and by the name Windows actually ships.  A `.so` soname is
+# translated to a `.dll` guess (`libsqlite3.so.0` -> `sqlite3.dll`), and on
+# Windows that guess is not SQLite: the first `sqlite3.dll` on PATH belongs to
+# whichever vendor put one there — on a GitHub runner, the AWS CLI's — which
+# loads, exports `sqlite3_open` at a real address, and then FAULTS when called
+# (loft#770; reproduced in plain C, so nothing in loft's `#c` path is at fault).
+# Windows' own SQLite is `winsqlite3.dll` in System32, which no stem rule can
+# derive from a Linux soname, so the package has to name it. Absent on Linux and
+# macOS, and an OPTIONAL library that is not there is simply skipped.
+optional-libs = "winsqlite3.dll, libsqlite3.so.0"
 shim = "src/shim.c"

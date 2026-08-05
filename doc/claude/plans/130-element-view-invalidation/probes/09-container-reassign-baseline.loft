@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 09 — REFERENCE.  Replacing the whole container under a live view does NOT
+// disturb it: the view keeps naming the element it was bound to.  Pairs with probe 03 to
+// show the invalidator is the in-place positional shift, not "the container changed".
+// Status: PASSES, both backends.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }];
+  other = [Box { n: 77, tag: 777 }];
+  c = boxes[1];
+  boxes = other;
+  assert(c.n == 22 && c.tag == 222, "09 c {c.n}/{c.tag} want 22/222");
+  assert(len(boxes) == 1, "09 len {len(boxes)} want 1");
+  assert(boxes[0].n == 77 && boxes[0].tag == 777, "09 e0 {boxes[0].n}/{boxes[0].tag} want 77/777");
+  println("probe 09 PASSED");
+}

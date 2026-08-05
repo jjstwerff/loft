@@ -1,0 +1,88 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 22 — the Q5 gate: can two results from the SAME call site be live at once?
+//
+// Adoption is only safe if they cannot.  A call site has ONE binding target, so a second
+// execution overwrites the first — unless the value escaped the binding first.  Every
+// escape route is enumerated here, and each asserts INDEPENDENCE: if the escape copied,
+// the two values cannot alias, and adopting at the bind is safe.
+//
+// E1 reassignment in a loop  — each call displaces the previous binding (probe 21)
+// E2 container insert        — `v += [f()]`
+// E3 second binding          — `b = f(); c = b;`
+// E4 struct field            — `s.inner = f()`
+// E5 recursion               — same SOURCE site, nested frames (each frame owns its buffer)
+// E6 return up the stack     — the value outlives the callee's frame
+//
+// A failure here does not mean the probe is wrong — it means adoption is UNSAFE for that
+// route, and the fix must exclude it.
+//
+// PROVISIONAL — do not cite this as proof.  Every route below is swept with four
+// composition axes pinned at 1: nesting depth, the number of Sets on the returned local,
+// parameter KIND (scalars, never structs), and interleaved-caller count.  Probe 23 later
+// showed that moving all four at once is exactly what breaks adoption, so a clean result
+// here does NOT establish that E2-E6 are safe — it establishes that they are safe in the
+// one corner this probe visits.  Re-run with struct params and two interleaved callers
+// before treating it as verified (@PLN130 § Probe gaps, item 1).
+
+struct Rec { tag: integer, name: text }
+struct Holder { inner: Rec }
+
+fn mk_local(n: integer) -> Rec {
+  r = Rec { tag: n, name: "row-{n}" };
+  r
+}
+
+// E5 — the same source call site, executing in nested frames.
+fn deep(n: integer) -> integer {
+  mine = mk_local(n);
+  if n > 1 {
+    inner = deep(n - 1);
+    // `mine` must still read its own value after the nested frame used the same site.
+    return mine.tag * 100 + inner;
+  }
+  return mine.tag;
+}
+
+// E6 — the bound value leaves the frame.
+fn escape(n: integer) -> Rec {
+  v = mk_local(n);
+  return v;
+}
+
+fn main() {
+  // E2 — container insert must copy on the way in.
+  v: vector<Rec> = [];
+  for i in 1..4 {
+    v += [mk_local(i)];
+  }
+  assert(len(v) == 3, "22 E2 len {len(v)} want 3");
+  assert(v[0].tag == 1 && v[1].tag == 2 && v[2].tag == 3,
+         "22 E2 {v[0].tag}/{v[1].tag}/{v[2].tag} want 1/2/3");
+
+  // E3 — a second binding from the first must be independent.
+  b = mk_local(7);
+  c = b;
+  c.tag = 99;
+  assert(b.tag == 7, "22 E3 b {b.tag} want 7");
+  assert(c.tag == 99, "22 E3 c {c.tag} want 99");
+
+  // E4 — a struct field must own its copy.
+  src = mk_local(5);
+  h = Holder { inner: src };
+  src.tag = 50;
+  assert(h.inner.tag == 5, "22 E4 h {h.inner.tag} want 5");
+  assert(src.tag == 50, "22 E4 src {src.tag} want 50");
+
+  // E5 — nested frames using one source site keep separate values.
+  // deep(1)=1; deep(2)=2*100+1=201; deep(3)=3*100+201=501.
+  assert(deep(3) == 501, "22 E5 {deep(3)} want 501");
+
+  // E6 — a returned value survives its callee's frame, twice over.
+  x = escape(11);
+  y = escape(22);
+  assert(x.tag == 11, "22 E6 x {x.tag} want 11");
+  assert(y.tag == 22, "22 E6 y {y.tag} want 22");
+
+  println("probe 22 PASSED — every escape route yields independent values");
+}

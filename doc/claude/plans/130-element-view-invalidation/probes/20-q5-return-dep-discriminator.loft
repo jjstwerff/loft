@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 20 — Q5 ANSWERED: what decides whether a call-return bind copies.
+//
+// Four callees that are observationally IDENTICAL apart from how the result is spelled.
+// One adopts; three deep-copy at every call site.
+//
+//   shape                                   returned deps    caller
+//   A  `Rec { … }` returned directly        []               adopts — no copy
+//   B  `r = Rec { … }; r`  (unmutated)      [1]              COPIES
+//   C  bind, mutate a field, return         [1]              COPIES
+//   D  bind, mutate via a call, return      [1]              COPIES
+//
+// `return_adopts_fresh_store()` (src/data.rs:3328) is exactly: deps empty, or the lone
+// `[u16::MAX]` one-buffer marker -> adopt; any other dep -> copy.  Dep `[1]` names the
+// callee's OWN hidden `__retbuf`.  So binding the result to a named local before returning
+// it — with no mutation and no semantic difference whatsoever — costs a full deep copy at
+// every call site.
+//
+// This is why the stdlib's `file()` copies (`result = File{…}; OpGetFile(result); result`,
+// default/02_files.loft:238) and probe 15's `make()` does not.  It is a STYLE difference,
+// not a semantic one: A and B compute the same value.
+//
+// Note both A and B have a `__retbuf` attr — the difference is not whether a hidden buffer
+// is used, only whether the return TYPE records a dep naming it.  `[u16::MAX]` and
+// `[<index of __retbuf>]` describe the same situation (returned via my own hidden buffer,
+// nobody else owns it) and get opposite verdicts.
+//
+// Expected: guard flags b, c, d — NOT a.  Runtime record copies = 3.
+
+struct Rec { tag: integer, name: text }
+
+fn mk_literal(n: integer) -> Rec {
+  Rec { tag: n, name: "a" }
+}
+
+fn mk_local(n: integer) -> Rec {
+  r = Rec { tag: n, name: "b" };
+  r
+}
+
+fn mk_mutated(n: integer) -> Rec {
+  r = Rec { tag: n, name: "c" };
+  r.tag = r.tag + 1;
+  r
+}
+
+fn bump(r: Rec) {
+  r.tag = r.tag + 1;
+}
+
+fn mk_via_call(n: integer) -> Rec {
+  r = Rec { tag: n, name: "d" };
+  bump(r);
+  r
+}
+
+fn main() {
+  a = mk_literal(1);
+  b = mk_local(2);
+  c = mk_mutated(3);
+  d = mk_via_call(4);
+  assert(a.tag == 1, "20 a {a.tag} want 1");
+  assert(b.tag == 2, "20 b {b.tag} want 2");
+  assert(c.tag == 4, "20 c {c.tag} want 4");
+  assert(d.tag == 5, "20 d {d.tag} want 5");
+  println("probe 20 PASSED — A adopts, B/C/D each deep-copied for no semantic reason");
+}

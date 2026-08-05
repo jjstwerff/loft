@@ -101,18 +101,19 @@ impl Parser {
             // find_written_vars detects the write via the OpAppendVector in the parts loop.
             // The first operand `code` must BE the accumulator (`out = out + x`,
             // in-place grow); a DIFFERENT first operand (`out = a + x`) is a
-            // REPLACEMENT, which the `&`-ref mechanism cannot express — the ref
-            // shares the caller's store in place (OpCreateStack/OpGetStackRef);
-            // there is no op that repoints it at a different store.  The old code
-            // silently dropped `code`/`a` and appended only the trailing parts (a
-            // half-wrong `out += x`).  Reject it instead — mirrors the existing
-            // `out = a` "& but is never modified" rejection.
+            // REPLACEMENT.  A whole-value replacement IS expressible — `assign_refvar_vector`
+            // lowers `out = a` to clear-and-refill of the shared store — but this path
+            // parses the CONCAT, one operand at a time, and never learns whether the
+            // statement was `=` or `+=`, so it cannot decide where the clear belongs.
+            // Reject it and name the spelling that works; the old message told the author
+            // the parameter "cannot be reassigned", which stopped being true (loft#772).
             if !self.first_pass && !matches!(code.unspan(), Value::Var(x) if *x == orig_var) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "cannot replace a `&` vector parameter; a `&` ref grows the \
-                     caller's vector in place — append with `{} += …`, it cannot be reassigned",
+                    "cannot build a concatenation directly into the `&` vector parameter \
+                     '{0}'; assign the concatenation to a local first (`t = …; {0} = t;`) \
+                     or append with `{0} += …`",
                     self.vars.name(orig_var)
                 );
             }

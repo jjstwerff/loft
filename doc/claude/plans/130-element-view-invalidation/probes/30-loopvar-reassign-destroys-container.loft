@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 30 (loft#778) — SILENT TOTAL DATA LOSS: reassigning a view from a loop var
+// destroys the whole container.  Interpreter only.
+//
+//   a = [ … ];        // 3 elements
+//   k = a[0];         // k is a VIEW of a
+//   for x in a { if … { k = x; } }
+//   len(a) == 0       // <- the container is GONE, before any removal
+//
+// Measured on `--interpret`: `len 0`, and `a[0]` reads `null(oob)`.  On `--native`: correct
+// (`len 3`).  Reproduced on the installed 2026-08-04 binary, so it is mainline and not
+// something this plan's work introduced.
+//
+// Mechanism (hypothesised, not yet pinned): `k = a[0]` gives `k` a dep on `a`'s store, and
+// the reassignment path frees `k`'s previous store before rebinding.  `k` was a VIEW, so
+// the free releases the CONTAINER, not a private record — the "a view is not a store"
+// invariant, reached through a loop-var reassignment rather than a return or a `&`
+// write-back (#775 is the same invariant, different route).
+//
+// The boundary is narrow, which is why nothing caught it — all three of these are SAFE:
+//   * no capture at all                     len 3
+//   * capture into an OWNED local           len 3   (probe 25)
+//   * reassigning a view outside a loop     len 3   (`k = a[0]; k = a[2];`)
+// Only view-init PLUS reassignment-from-a-loop-var destroys the container.
+//
+// Severity: silent, total, and it corrupts on the READ side too — `a[0]` answers
+// `null(oob)` rather than faulting, so a program keeps running on an empty container.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  a = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  k = a[0];
+  for x in a {
+    if x.n == 33 {
+      k = x;
+    }
+  }
+  assert(len(a) == 3, "30 len {len(a)} want 3 — the container was destroyed");
+  assert(a[0].n == 11, "30 a[0].n {a[0].n} want 11");
+  assert(a[2].n == 33, "30 a[2].n {a[2].n} want 33");
+  assert(k.n == 33, "30 k.n {k.n} want 33");
+  println("probe 30 PASSED — the container survived a loop-var reassignment");
+}

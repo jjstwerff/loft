@@ -126,7 +126,24 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
                     Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, _, _)
                 )
                 || ret_text;
+            // loft#773 — a text return crosses the bridge THROUGH the `text_return`
+            // work buffer, and the sentence above assumed every text-returning
+            // function has one.  A function that returns a text it does not OWN — a
+            // field read (`return self.nm`) or a literal (`return "fixed"`) — is
+            // bufferless (`generation::def_returns_owned_text`), so the bridge holds
+            // the bytes in a `String` local and has nowhere to put them: it dropped
+            // them and the caller read `""`.  Dest-passing hid it wherever the result
+            // was assigned to a local, so only using the call IN PLACE (an argument,
+            // a format hole) showed it — silently, in the default mode of every
+            // published library.  Such a function is not dispatchable; leaving it
+            // unmarked makes it interpret, which is the same answer more slowly.
+            let text_ret_has_buffer = !ret_text
+                || def
+                    .attributes()
+                    .iter()
+                    .any(|a| crate::native_lib::is_text_work_buffer(&a.typedef));
             ret_ok
+                && text_ret_has_buffer
                 && def
                     .attributes()
                     .iter()

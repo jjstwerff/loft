@@ -371,6 +371,19 @@ pub fn report_copies_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
 }
 
+/// `LOFT_COPY_MANIFEST=1` — @PLN130: the emission-manifest GUARD. Each generator records every
+/// deep copy it WRITES; this reports the ones the copy diagnostic produced no verdict for.
+///
+/// Not a user diagnostic — it reports a hole in the COMPILER (a copy no analysis accounts for),
+/// so its audience is CI and this repo, not a loft author. Compile-time only: nothing it measures
+/// reaches a compiled program. Opt-in while the uncovered set is non-empty; the intent is a CI
+/// gate once it reaches zero, not a message on a user's build.
+#[must_use]
+pub fn copy_manifest_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_COPY_MANIFEST").is_some())
+}
+
 /// `LOFT_WARN_COPIES=1` — @PLN90 W5: the ENFORCED copy lint. Routes the user-facing copy report's
 /// **Avoidable** rows (a still-live structure duplicated where a borrow/move would do) through the
 /// normal `Level::Warning` diagnostics channel, so they surface as warnings during a normal compile
@@ -769,10 +782,121 @@ pub fn uaf_gen_enabled() -> bool {
 
 /// `LOFT_NO_SLOT_REUSE=1` — @PLN118 arc D: never reclaim a freed store slot (always
 /// grow). Diagnostic stopgap to test whether a corruption is slot-reuse-while-referenced.
+///
+/// Implied by [`strict_stores`], which needs the no-reuse guarantee to make its
+/// dead-store check exact.
 #[must_use]
 pub fn no_slot_reuse() -> bool {
     static NR: OnceLock<bool> = OnceLock::new();
-    *NR.get_or_init(|| std::env::var_os("LOFT_NO_SLOT_REUSE").is_some())
+    *NR.get_or_init(|| std::env::var_os("LOFT_NO_SLOT_REUSE").is_some() || strict_stores())
+}
+
+/// `LOFT_STRICT_STORES=1` (@PLN130 F8) — strict store lifetime, for PROBES.
+///
+/// Turns the two store-lifetime faults from silent-or-advisory into hard errors:
+///
+/// * **Use after free** — a freed store stays dead for the rest of the run, and any
+///   access through a `DbRef` naming it is reported at the access.
+/// * **Never freed** — a store still live at exit is reported, by type.
+///
+/// The exactness comes from implying [`no_slot_reuse`]: a slot that is never recycled
+/// cannot be legitimately re-occupied, so `free == true` at an access is unambiguous —
+/// no generation stamp, no `DbRef` widening, and no false positives to explain away.
+///
+/// **Opt-in, and deliberately not for the normal suite.** Never reusing a slot means a
+/// long run walks off the end of the `u16` store space, so this is written for small
+/// probe programs that exercise one lifetime question each. Under it a probe that would
+/// otherwise print a plausible wrong number fails loudly instead.
+#[must_use]
+pub fn strict_stores() -> bool {
+    static SS: OnceLock<bool> = OnceLock::new();
+    *SS.get_or_init(|| std::env::var_os("LOFT_STRICT_STORES").is_some())
+}
+
+/// Violations recorded by [`strict_stores`] mode, so one run surfaces every site rather
+/// than stopping at the first — the same reasoning as `LOFT_DEV_SOFT_HALT`.
+static STRICT_VIOLATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+thread_local! {
+    /// Where each store was FREED: slot -> (pc, the variable name `free_named` was given).
+    /// A side table rather than two more `Store` fields, so the bookkeeping costs nothing
+    /// when strict mode is off.
+    static STRICT_FREE_SITE: std::cell::RefCell<std::collections::HashMap<u16, (u32, String)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record where store `slot` was freed. Call only when [`strict_stores`] is on.
+pub fn strict_note_free(slot: u16, pc: u32, name: &str) {
+    STRICT_FREE_SITE.with(|m| {
+        m.borrow_mut().insert(slot, (pc, name.to_string()));
+    });
+}
+
+/// The recorded free site for `slot`, if any.
+#[must_use]
+pub fn strict_free_site(slot: u16) -> Option<(u32, String)> {
+    STRICT_FREE_SITE.with(|m| m.borrow().get(&slot).cloned())
+}
+
+/// Report an access to a store that was freed. Call only when [`strict_stores`] is on.
+///
+/// Deliberately COMPILER-DEVELOPER detail, not a user diagnostic: it names the store slot
+/// and the three pcs that bound the store's life, because the question this answers is
+/// "which emitter produced a reference that outlived its store", and that cannot be
+/// answered from the loft source alone. Resolve a pc to a line with `LOFT_LOG=static`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one report line, one argument each"
+)]
+pub fn strict_store_violation(
+    store_nr: u16,
+    rec: u32,
+    pos: u32,
+    what: &str,
+    type_name: &str,
+    created_at: u32,
+    last_op_at: u32,
+    now_pc: u32,
+) {
+    let n = STRICT_VIOLATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Cap the output: a stale ref inside a loop reports every iteration, and the first
+    // few already name the site.
+    if n < 20 {
+        let site = strict_free_site(store_nr);
+        let who = site.as_ref().map_or("<not recorded>", |(_, nm)| {
+            if nm.is_empty() { "<anon>" } else { nm.as_str() }
+        });
+        // The pcs are BYTECODE positions, so they exist on `--interpret` and are all zero
+        // under `--native` (generated Rust has no pc). Print them only when they say
+        // something — a line of `pc=0, pc=0, pc=0` reads as data and is not.
+        let freed_pc = site.as_ref().map_or(0, |(pc, _)| *pc);
+        let spans = created_at | last_op_at | now_pc | freed_pc;
+        let where_ = if spans == 0 {
+            "  (no bytecode positions — native run; re-run with --interpret for pcs)".to_string()
+        } else {
+            format!(
+                "  created at pc={created_at}, last legitimate op at pc={last_op_at}, \
+                 freed at pc={freed_pc}, {what} now at pc={now_pc}"
+            )
+        };
+        eprintln!(
+            "[strict-store] USE AFTER FREE ({what}) store #{store_nr} type={type_name} \
+             rec={rec} pos={pos}\n  killed by the free of `{who}`\n{where_}"
+        );
+    } else if n == 20 {
+        eprintln!("[strict-store] ... further use-after-free reports suppressed");
+    }
+}
+
+/// Count `n` never-freed stores as violations, so the exit status covers both halves.
+pub fn strict_store_leaks(n: usize) {
+    STRICT_VIOLATIONS.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many strict-mode violations were recorded this run.
+#[must_use]
+pub fn strict_store_violations() -> usize {
+    STRICT_VIOLATIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// `LOFT_WATCH_STORE=<n>` — the write-watch for cluster-462's root: after each

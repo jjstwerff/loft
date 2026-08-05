@@ -548,6 +548,11 @@ involved. Arc B is done when every cell is green on both backends.
 
 ## See also
 
+- [LIBRARY_NAMING.md](LIBRARY_NAMING.md) — **design, not built.** A `[c]` library
+  named ONCE by identity (`sqlite3@0`) with every filename, link flag and search
+  path derived from it, so no step ever parses a spelling back out of a filename.
+  Written off four measured failures, including the `-l` stem that stripped
+  `.so`/`.dylib` but not `.dll`.
 - [PACKAGES.md § Direct C binding](../../PACKAGES.md) — the reference home; this
   plan's outcome lands there.
 - [NATIVE.md](../../NATIVE.md) — the Rust path this is measured against.

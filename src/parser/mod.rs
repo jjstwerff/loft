@@ -1518,6 +1518,9 @@ impl Parser {
         // counted).  Silenceable via `LOFT_NO_HINT_NOT_NULL=1`.
         if !self.first_pass && !default {
             self.emit_not_null_hints();
+            // @PLN130 F9 (loft#779) — the whole world is parsed here, so a callee's body can
+            // be asked whether it removes from a `&` parameter.
+            self.check_reshape_under_reference();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2062,6 +2065,10 @@ impl Parser {
             self.lexer.parse_string(content, filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
+            // @PLN130 F9 (loft#779) — see `parse`.
+            if !default {
+                self.check_reshape_under_reference();
+            }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2100,6 +2107,10 @@ impl Parser {
             self.lexer.parse_string(content, filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
+            // @PLN130 F9 (loft#779) — see `parse`.
+            if !default {
+                self.check_reshape_under_reference();
+            }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2216,6 +2227,8 @@ impl Parser {
         self.resolve_deferred_unknowns();
         // @PLN35 PC3 — reject a left-recursive sub-rule grammar (see `check_subrule_termination`).
         self.check_subrule_wellformedness();
+        // @PLN130 F9 (loft#779) — see `parse`.
+        self.check_reshape_under_reference();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -2256,6 +2269,8 @@ impl Parser {
         self.data.source = source;
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // @PLN130 F9 (loft#779) — see `parse`.
+        self.check_reshape_under_reference();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -6278,6 +6293,97 @@ impl Parser {
         val_code: Value,
     ) -> Value {
         self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, true)
+    }
+
+    /// @PLN130 F4 — writing a KEY field through an element view re-keys the element, and a
+    /// keyed collection does not re-index itself when a record is written behind its back.
+    /// Measured on `sorted`, `hash` AND `index` alike: after `c.key = 5` the element updates,
+    /// `s[5]` answers null, `s[30]` answers null, and iteration still yields it — reachable by
+    /// no key while still in the collection.
+    ///
+    /// Treat it as a RESHAPE of that collection, which is exactly F2's situation: the view
+    /// materialises, the author is told, `c.key = 5` changes only `c`, and the collection
+    /// keeps a consistent reachable entry. Changing a key keeps its supported spelling —
+    /// `h[k] = value`, which routes through `set_keyed` and re-indexes properly. That is how
+    /// a database treats a primary key.
+    ///
+    /// Hooked at the getter->setter conversion (`call_to_set_op`), which is where a plain
+    /// `c.key = 5` actually lands — `set_field` looked like the site and is not on this path.
+    /// That leaves only the byte OFFSET (`OpSetInt(c, 0, 5)`), so each key NAME is resolved to
+    /// its offset through `self.database.types[…].parts` and compared. The parser holds a
+    /// `Stores`; `scopes::check` does not, which is why this cannot live there.
+    ///
+    /// Deliberately narrow: only a field that IS one of the collection's keys triggers it.
+    /// Widening to any field write through an element view would take write-through away from
+    /// keyed elements generally, which is a far larger loss than F4 is worth.
+    /// Byte offset of the named field within `content`'s record, via the runtime type table.
+    ///
+    /// `None` when the type is not laid out yet or the name is not a field — a missed answer
+    /// just leaves the binding alone, which is today's behaviour rather than a new one.
+    fn key_field_offset(&self, content: u32, field: &str) -> Option<i64> {
+        let idx = self
+            .data
+            .def(content)
+            .attributes()
+            .iter()
+            .position(|a| a.name == field)?;
+        let kt = self.data.def(content).known_type();
+        let parts = &self.database.types.get(kt as usize)?.parts;
+        let fields = match parts {
+            Parts::Struct(f) | Parts::EnumValue(_, f) => f,
+            _ => return None,
+        };
+        let pos = fields.get(idx)?.position;
+        if pos == u16::MAX {
+            return None;
+        }
+        Some(i64::from(pos))
+    }
+
+    pub(crate) fn note_key_field_write(&mut self, base: u16, offset: i64) {
+        if !matches!(self.vars.tp(base), Type::Reference(_, _)) {
+            return;
+        }
+        let deps: Vec<u16> = self.vars.tp(base).depend().clone();
+        for dep in deps {
+            if dep == u16::MAX || dep == base {
+                continue;
+            }
+            let (content, key_names): (u32, Vec<String>) = match self.vars.tp(dep) {
+                Type::Sorted(c, keys, _) | Type::Index(c, keys, _) => {
+                    (*c, keys.iter().map(|(k, _)| k.clone()).collect())
+                }
+                Type::Hash(c, keys, _) | Type::Radix(c, keys, _) => (*c, keys.clone()),
+                _ => continue,
+            };
+            let Some(field) = key_names
+                .into_iter()
+                .find(|k| self.key_field_offset(content, k) == Some(offset))
+            else {
+                continue;
+            };
+            let vname = self.vars.name(base).to_string();
+            let cname = self.vars.name(dep).to_string();
+            // @PLN130 F9 — an explicit `&` is an ownership decision, so it may not be quietly
+            // downgraded to a copy: where the write cannot reach the source, REFUSE it
+            // (formal/binding.md B-Ref-Reshape, C79 revisited 2026-08-05).  Unlike the removal
+            // and reassignment causes there is no liveness question here — the key write IS the
+            // use — and no "move it later" remedy either, so the message points at re-inserting.
+            if self.vars.is_amp_link(base) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot write the key field `{field}` through `{vname}` — `{field}` is one \
+                     of `{cname}`'s keys, and changing it would leave the element reachable by \
+                     no key, so the write cannot reach `{cname}`. Re-insert with \
+                     `{cname}[key] = value`, or bind without `&` to work on a copy"
+                );
+                continue;
+            }
+            self.vars.make_independent(base, dep);
+            let fname = self.data.def(self.context).original_name();
+            crate::copy_manifest::note_rekeyed_view(&vname, &cname, &field, &fname);
+        }
     }
 
     /// Plan-06 phase 4d: emit the per-element OpSet* sequence for a

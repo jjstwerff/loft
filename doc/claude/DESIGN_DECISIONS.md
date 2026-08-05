@@ -1557,7 +1557,7 @@ prove an alias is safe.
 
 ### Decision
 
-**Closed (2026-06-24) — INTERNAL only.** No user-facing ownership errors, ever. The compiler
+**Closed (2026-06-24) — INTERNAL only.** No user-facing ownership errors. The compiler
 always produces a correct free/copy/move, copying when unsure; the one deliberate user-facing
 ownership concept is `&` (a live reference, opt-in shared mutation —
 [OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md), @PLN87). "Rust as the reference model"
@@ -1566,12 +1566,64 @@ Consequence: `O-Complete` ([formal/ownership.md](formal/ownership.md)) is the lo
 invariant — an incomplete fact is a miscompile / leak, not a recoverable compile error, so the
 failure to fear is *incompleteness*, not just unsoundness.
 
+**Revisited (2026-08-05) — loft may DECLINE what it cannot implement safely.** The revisit
+clause below fired, and the maker widened it past *"a single case"*:
+
+> "We can decline code where we cannot create a safe implementation. If a user explicitly takes
+> a reference that is an ownership decision and it has consequences."
+
+So the boundary is no longer *one named diagnostic* but a **principle with a precondition**:
+where loft cannot produce a lowering that honours what the author wrote, it REFUSES the program
+rather than silently substituting something else. The half that does not move is the important
+one — loft still never rejects a program it *can* compile correctly, there are still no lifetime
+annotations, no move-vs-borrow puzzles, no "cannot borrow" on ordinary naive code, and
+`O-Complete` is untouched: the analysis must still be total wherever a valid lowering exists.
+
+What changed is the answer when one does not. Writing `&` is not a performance hint, it is an
+**ownership decision**: it asks for a live link, and B-Ref-Alias promises that every write
+through it reaches the source. When the program then disturbs the place that reference names —
+removes from the container, re-keys the element, replaces the container — there are exactly
+three possible answers. Honour it with per-reference runtime arithmetic (declined: not worth it
+for an edge case). Silently downgrade the reference to a copy (**this is what the principle
+forbids** — it makes the author's explicit decision a lie, and it loses a write with no
+diagnostic). Or decline the program. loft declines.
+
+**Why an error and not "some defined behaviour" — the maker's reason, and it generalises.**
+2026-08-05: *"If we cannot fulfil what a programmer asks for us that should be an error instead
+of silently different semantics … otherwise we will have to support this seemingly
+undefined/strange behaviour into our future, even if we might want to introduce logic that makes
+an implementation possible for these cases."*
+
+That is a **forward-compatibility** argument, and it is the one that makes this a general method
+rather than a one-off. [COMPATIBILITY.md § The error surface is one-directional](COMPATIBILITY.md)
+says loft may always DROP an error and, after the freeze, may never ADD one. So the two options
+are not symmetric:
+
+- **ship the silent copy** → that semantics is in the contract forever. If loft later builds the
+  machinery to honour the reference properly (re-pointing the link, re-inserting the re-keyed
+  record), it cannot switch to it: programs would silently change meaning. The workaround becomes
+  permanent, and it is a workaround nobody chose;
+- **ship the error** → nothing depends on it, because nothing compiles. The day a safe
+  implementation exists, dropping the error is a pure widening — every program that compiled
+  still compiles, and the ones that did not start working.
+
+So the error is the option that **keeps the door open**. This is how loft resolves a consistency
+problem in general: where two plausible behaviours exist and neither is clearly right, refusing
+is the choice that does not commit the language to the wrong one.
+
+First application: **B-Ref-Reshape** ([formal/binding.md](formal/binding.md)), @PLN130 F9 /
+[loft#779](https://github.com/loft-lang/loft/issues/779) — all three disturbances (removal,
+re-key, container reassignment).
+
 ### Revisit when
 
 A concrete consumer hits a case where silently copying is a real, measured cost AND a narrow,
 *clearly-diagnosable* surface (e.g. "this reference would outlive its source") would be more
 natural than the copy — i.e. one named case earns a user-facing diagnostic. Even then: a
-single case, never the general Rust model.
+single case, never the general Rust model. **(Fired 2026-08-05 — see the revisit above, which
+generalised "one named case" to "wherever no safe implementation exists". The clause is kept
+because its bar is still the right one for any FURTHER widening: a measured cost and a narrow,
+clearly-diagnosable surface, never the general Rust model.)**
 
 ---
 
@@ -1962,12 +2014,17 @@ the code migrate to the written law (everything aliases), or the law to the code
 (an alias) **only when `o` is not used afterwards — the rustc rule — as an
 optimization.**  Concretely:
 
-- **Whole-value heap binds COPY** (struct, vector, and a field read bound to a local —
-  the #415 behaviour is the *correct* semantic, not a stopgap).
+- **Whole-value heap binds COPY** (struct, vector, and a **vector-typed** field read
+  bound to a local — the #415 behaviour is the *correct* semantic, not a stopgap).
+  *Read "field read" narrowly*: #415's scope is a field whose TYPE is a vector
+  (`av = bx.v`), because that is a whole value rather than an interior place. A
+  **struct**-typed field read (`w = o.inner`) is a projection and stays a view, below.
 - **The copy may be ELIDED to an alias when the source is provably dead afterwards**
   (`use_analysis::ElidePlan` — the existing last-use elision).  Elision is never
   observable: a mutated or escaping source keeps the copy.
-- **Projection reads stay VIEWS** (`a = vv[0]` — the #426 decided feature); in-place
+- **Projection reads stay VIEWS** — a **struct-typed** projection, whether an element
+  (`a = vv[0]`, the #426 decided feature; the container kind is irrelevant — vector,
+  hash, sorted and index all view) or a field (`w = o.inner`); in-place
   path mutation (`o.field = x`, `o.v[i] = y`) writes through.
 - `&` remains the explicit live-reference opt-in (@PLN87, unchanged).
 
@@ -1986,6 +2043,36 @@ carry, no spooky action at a distance.  The principle's one deliberate boundary 
 projection reads (`a = vv[0]` views, #426): an element read is understood as
 *reaching into* the container rather than *taking* from it — if that distinction ever
 proves a recurring source of user surprise, that is a #426 revisit, not a C86 one.
+
+**Guarded (2026-08-05, @PLN130 F7).** The whole boundary — B-Copy, B-View and `&` — is pinned
+cell by cell on both backends by `tests/scripts/201-bind-copies-projection-views.loft`. It was
+previously unguarded, and @PLN130 F7 proposed deleting B-View outright on a one-cell reading
+before the sweep showed all 30 cells already conforming. The decision above is what settles the
+question; the test is what stops a future change from moving a cell quietly.
+
+**A view's LIFETIME, the other half of B-View (2026-08-05, @PLN130 F2/F4/F8).** "Projection
+reads stay VIEWS" says what a binding means, not how long it may mean it. A view is sound only
+while the place it names exists, so loft materialises the binding — a copy taken at the bind,
+reported to the author — when the container is **reshaped** (`a.remove(i)` renumbers positions),
+**re-keyed** (the element would be reachable by no key), or **reassigned** (`bx = T{…}` leaves
+the view's place with nothing to point at). Reassignment was the one that shipped broken: the
+view answered the replacement's value, and on `--native` read freed memory.
+Overwriting a place is not destroying it — `d.mid = Mid{…}` writes into the place `d.mid`
+already occupies, so a view of `d.mid.inner` still sees it and still writes through.
+
+**This applies to a PLAIN bind only.** A `&` binding is a live link and writes through
+unconditionally ([formal/binding.md](formal/binding.md) B-Ref-Alias, the maker's rule
+2026-08-05: *"a reference … should allow for writing it too. In all cases"*), so it may never be
+materialised. What loft does instead is **refuse the removal**: taking a reference into a
+container and then reshaping it while the reference is still live is a compile-time error
+(B-Ref-Reshape, the maker's companion rule of the same day). That closes D-bind-8 and makes the
+pair total with no runtime machinery — a `&` always writes through, because the one shape where
+it could not does not compile. Across a frame the refusal covers a PLAIN parameter too, because
+a parameter aliases the caller's element either way (measured; there is no bind site in the
+callee to materialise at). See [loft#779](https://github.com/loft-lang/loft/issues/779).
+Full rule:
+[OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not);
+pinned by `tests/scripts/774-view-outlives-reassigned-container.loft`.
 
 ### Consequences
 

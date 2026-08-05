@@ -18,14 +18,14 @@ fn ddb_query(conn: integer, sql: text, res: integer) -> integer;
 #c "duckdb_query" "int(void*, const char*, void*)"
 fn ddb_destroy_result(res: integer);                   #c "duckdb_destroy_result" "void(void*)"
 fn ddb_result_error(res: integer) -> text?;            #c "duckdb_result_error" "const char*(void*)"
-fn ddb_column_count(res: integer) -> integer;          #c "duckdb_column_count" "unsigned long(void*)"
-fn ddb_row_count(res: integer) -> integer;             #c "duckdb_row_count" "unsigned long(void*)"
+fn ddb_column_count(res: integer) -> integer;          #c "duckdb_column_count" "uint64_t(void*)"
+fn ddb_row_count(res: integer) -> integer;             #c "duckdb_row_count" "uint64_t(void*)"
 fn ddb_value_is_null(res: integer, col: integer, row: integer) -> boolean;
-#c "duckdb_value_is_null" "bool(void*, unsigned long, unsigned long)"
+#c "duckdb_value_is_null" "bool(void*, uint64_t, uint64_t)"
 // The POINTER, not the text: this return is caller-frees, so loft takes the
 // address, copies through `ld_str`, and hands it back to `ddb_free`.
 fn ddb_value_ptr(res: integer, col: integer, row: integer) -> integer;
-#c "duckdb_value_varchar" "char*(void*, unsigned long, unsigned long)"
+#c "duckdb_value_varchar" "char*(void*, uint64_t, uint64_t)"
 fn ddb_free(p: integer);                               #c "duckdb_free" "void(void*)"
 fn ddb_disconnect(out: integer);                       #c "duckdb_disconnect" "void(void*)"
 fn ddb_close(out: integer);                            #c "duckdb_close" "void(void*)"
@@ -36,13 +36,13 @@ fn ddb_close(out: integer);                            #c "duckdb_close" "void(v
 fn ddb_prepare(conn: integer, sql: text, out: integer) -> integer;
 #c "duckdb_prepare" "int(void*, const char*, void*)"
 fn ddb_prepare_error(stmt: integer) -> text?;  #c "duckdb_prepare_error" "const char*(void*)"
-fn ddb_nparams(stmt: integer) -> integer;      #c "duckdb_nparams" "unsigned long(void*)"
+fn ddb_nparams(stmt: integer) -> integer;      #c "duckdb_nparams" "uint64_t(void*)"
 fn ddb_bind_varchar(stmt: integer, i: integer, v: text) -> integer;
-#c "duckdb_bind_varchar" "int(void*, unsigned long, const char*)"
+#c "duckdb_bind_varchar" "int(void*, uint64_t, const char*)"
 fn ddb_bind_int64(stmt: integer, i: integer, v: integer) -> integer;
-#c "duckdb_bind_int64" "int(void*, unsigned long, long long)"
+#c "duckdb_bind_int64" "int(void*, uint64_t, long long)"
 fn ddb_bind_null(stmt: integer, i: integer) -> integer;
-#c "duckdb_bind_null" "int(void*, unsigned long)"
+#c "duckdb_bind_null" "int(void*, uint64_t)"
 fn ddb_execute_prepared(stmt: integer, res: integer) -> integer;
 #c "duckdb_execute_prepared" "int(void*, void*)"
 fn ddb_destroy_prepare(out: integer);          #c "duckdb_destroy_prepare" "void(void*)"

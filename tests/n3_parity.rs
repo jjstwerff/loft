@@ -370,7 +370,12 @@ fn editing_a_library_interprets_then_rebuilds_when_stable() {
     )
     .unwrap();
     let src = pkg.join("src").join("edlib.loft");
-    std::fs::write(&src, "pub fn greet() -> text { \"v1\" }\n").unwrap();
+    // The body BUILDS its text rather than returning a literal: a text-returning
+    // function that hands back a text it does not own is bufferless, and the shared
+    // bridge has nowhere to put those bytes, so the gate keeps it interpreted
+    // (loft#773).  This test is about the cdylib lifecycle, so its fixture has to be
+    // a function that actually reaches the cdylib.
+    std::fs::write(&src, "pub fn greet() -> text { n = 1; return \"v{n}\"; }\n").unwrap();
     let prog = root.join("main.loft");
     std::fs::write(&prog, "use edlib;\nfn main() { println(greet()); }\n").unwrap();
     let native_auto = pkg.join("native-auto");
@@ -401,7 +406,7 @@ fn editing_a_library_interprets_then_rebuilds_when_stable() {
     // Edit the library (sleep first so the new source mtime is unambiguously newer
     // than the just-built cdylib, even on a coarse-granularity filesystem).
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    std::fs::write(&src, "pub fn greet() -> text { \"v2\" }\n").unwrap();
+    std::fs::write(&src, "pub fn greet() -> text { n = 2; return \"v{n}\"; }\n").unwrap();
 
     // 2. Edit run → interpret the NEW code, NO rebuild.
     let r2 = run_edit();
@@ -696,6 +701,110 @@ fn boolean_compare_of_lifted_ref_field_builds_in_cdylib_672() {
         assert!(
             stdout.contains(want),
             "[{mode}] wrong values\n  want: {want:?}\n  got:  {stdout:?}\n{stderr}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// loft#777 — a **dependency** edit must invalidate every dependent's cdylib.
+///
+/// *Invariant:* an artifact is stale when any source that CONTRIBUTES to it is
+/// newer — not just the source of the package that owns it.
+///
+/// A cdylib carries its dependencies inlined (`emit_program` emits the export set
+/// *and its transitive deps*) and EXPORTS those copies under the same
+/// `loft_shared_<name>` symbol the dependency's own cdylib exports.  Whichever
+/// library loads first wins the lookup.  So when the freshness question was asked
+/// only about the owning package, editing `base` rebuilt `base` correctly while
+/// `dep` — whose own sources never change again — kept serving its stale inlined
+/// copy of `base`'s function, and won.  Permanently: no later run could clear it,
+/// only deleting `native-auto/` by hand.
+///
+/// It was reported as a consumer-SIZE effect (a 5,900-line program stale where an
+/// 8-line one tracked the edit) because you need a second library in the graph,
+/// loaded first, before anything can shadow the fresh one — a small consumer that
+/// loads the edited library directly was always right.  So this test's shape is
+/// the real axis: `dep` is `use`d, `base` is reached only THROUGH it.
+///
+/// Non-vacuous by construction: the cold run pins the pre-edit answer, so a fix
+/// that simply never dispatched native would fail the first assert.
+#[test]
+fn a_dependency_edit_invalidates_its_dependents_cdylib() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (needs the native build)");
+        return;
+    }
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_777_dep_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let libdir = root.join("lib");
+
+    let write_pkg = |name: &str, body: &str| {
+        let pkg = libdir.join(name);
+        std::fs::create_dir_all(pkg.join("src")).unwrap();
+        std::fs::write(
+            pkg.join("loft.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+                 [library]\nentry = \"src/{name}.loft\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(pkg.join("src").join(format!("{name}.loft")), body).unwrap();
+    };
+
+    // `base` holds the rule under edit; `dep` calls it, so `dep`'s cdylib inlines it.
+    let base_src = |limit: i32| {
+        format!(
+            "pub fn deep(n: integer) -> integer {{ if n > {limit} {{ return 2 }} return 0; }}\n"
+        )
+    };
+    write_pkg("base", &base_src(2));
+    write_pkg(
+        "dep",
+        "use base;\npub fn check(n: integer) -> integer { return deep(n); }\n",
+    );
+
+    // The consumer names ONLY `dep`, so `base` is reached transitively — and `dep`
+    // is registered (and dlopened) first, which is what lets its copy shadow.
+    let prog = root.join("main.loft");
+    std::fs::write(&prog, "use dep;\nfn main() { println(\"{check(3)}\"); }\n").unwrap();
+
+    let run = || -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--interpret")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("spawn loft binary");
+        assert!(
+            out.status.success(),
+            "run failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+
+    // Cold: 3 > 2, so the rule fires.
+    assert_eq!(run(), "2", "cold run must report the pre-edit rule");
+
+    // Edit ONLY `base`. `dep`'s own sources are untouched from here on, which is
+    // exactly why its artifact used to look fresh forever.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    write_pkg("base", &base_src(9));
+
+    // Every run from here must report the edited rule: the first interprets
+    // (dev-interpret-on-edit), a later one rebuilds and dispatches native again.
+    // Run it three times so a fix that only worked while the artifact was missing,
+    // or only for one run, still fails.
+    for round in 1..=3 {
+        assert_eq!(
+            run(),
+            "0",
+            "round {round}: a `base` edit must reach a consumer that only names `dep`"
         );
     }
 

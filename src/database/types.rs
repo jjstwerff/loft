@@ -2010,6 +2010,23 @@ impl Stores {
         "null"
     }
 
+    /// The JSON rendering of a payload-less variant: the name as a quoted
+    /// string, or bare `null` for the absent discriminant (already valid JSON).
+    ///
+    /// One home for that rule. A value enum is reached two ways — as a scalar
+    /// (`OpCastTextFromEnum`, when it is a plain local) and through a record
+    /// (`ShowDb`'s enum arm, when it is a field or an element) — and the two
+    /// rendered the same value differently until both asked here (loft#768).
+    #[must_use]
+    pub fn enum_val_json(&self, known_type: u16, value: u8) -> String {
+        let name = self.enum_val(known_type, value);
+        if name == "null" {
+            name.to_string()
+        } else {
+            format!("\"{name}\"")
+        }
+    }
+
     #[must_use]
     pub fn to_enum(&self, known_type: u16, value: &str) -> u8 {
         if let Parts::Enum(values) = &self.types[known_type as usize].parts {

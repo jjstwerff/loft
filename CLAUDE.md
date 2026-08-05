@@ -156,13 +156,19 @@ read the failing test's dump (`tests/dumps/*.txt` — IR+bytecode+trace), narrow
 signal you haven't earned it:**
 1. Don't fix on the first read — a clean one-line story is a hypothesis.
 2. Build the matrix in throwaway `/tmp` probes on `--interpret` (`scripts/probe-matrix`), varying ONE
-   composition axis per probe, distinctive values everywhere.
+   composition axis per probe, distinctive values everywhere. But **count the axes you HELD FIXED** —
+   a sweep varying one while pinning four reads as proof and isn't (@PLN130's broken cell needed
+   nesting depth, Set-count, param kind and caller-count moved TOGETHER).
 3. **Hand-compute each cell's expected value** (agreement between two binaries is NOT a pass);
    prove the harness can fail (a no-output cell is vacuous); assert **value AND length AND leak**.
 4. Map pass/fail → find the REAL boundary (filed scope is usually wrong). Resisting a read twice →
    instrument with one env-gated `eprintln`, don't theorize.
 5. Fix at the chokepoint enforcing exactly the violated invariant — no narrower, no wider.
 6. Verify the full matrix on **BOTH backends**; graduate guarantee probes to `tests/scripts/`.
+7. **Propose 3+ cases to check → write them ALL down BEFORE working the first.** Detail decays
+   while you work: the headline of case three survives, its specifics (which axis, which shape,
+   why suspected) do not. Writing the list first also makes it reviewable while it's cheap.
+8. **A new case found = a new probe, always** — the suite is the only thing that remembers.
 
 Full flow: [DEBUG.md](doc/claude/DEBUG.md), [plans/_INVESTIGATION_TEMPLATE.md](doc/claude/plans/_INVESTIGATION_TEMPLATE.md).
 
@@ -206,7 +212,9 @@ the bug-filing policy above). It never blocks.
 [SLOTS.md](doc/claude/SLOTS.md) stack slots · [NATIVE.md](doc/claude/NATIVE.md) `--native` codegen ·
 [THREADING.md](doc/claude/THREADING.md) par · [CODEGEN_METHOD.md](doc/claude/CODEGEN_METHOD.md) how to do compiler work.
 
-**Runtime / memory:** [DATABASE.md](doc/claude/DATABASE.md) stores/DbRef · [LIFETIME.md](doc/claude/LIFETIME.md) deps/freeing ·
+**Runtime / memory:** [DATABASE.md](doc/claude/DATABASE.md) stores/DbRef ·
+[REMOTE_STORES.md](doc/claude/REMOTE_STORES.md) serving static data over HTTP range (paged
+`store_load_key*`, no server-side code) · [LIFETIME.md](doc/claude/LIFETIME.md) deps/freeing ·
 [OWNERSHIP_MODEL.md](doc/claude/OWNERSHIP_MODEL.md) the deps north-star (borrow system) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
 [BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
@@ -258,7 +266,10 @@ Set before `cargo test` (controls `tests/dumps/*.txt`; also works with `cargo ru
 `full` (default: IR+bytecode+exec+slots) · `static` (IR+bytecode only) · `minimal` (exec trace) ·
 `crash_tail:N` (last N lines, flushed on panic) · `fn:<name>` · `variables` · `ref_debug` ·
 `bridging` · `all_fns` · `type_timeline:<var>` (every write to a variable's type, naming the
-SOURCE LINE; `LOFT_TIMELINE_BT=1` adds the stack). DbRef dumps tune via `LOFT_DUMP_DEPTH` (2),
+SOURCE LINE; `LOFT_TIMELINE_BT=1` adds the stack). It traces deps being REMOVED
+(`make_independent`) as well as added — without that half it showed a borrow being created
+and never promoted to an owner, so a container-destroying free had to be hunted by reading
+every strip site by hand (@PLN130 F1). DbRef dumps tune via `LOFT_DUMP_DEPTH` (2),
 `LOFT_DUMP_ELEMENTS` (8). Separately, **`LOFT_VAR_TABLE=<fn>`** prints that function's
 variable table with every type dep resolved to `name(index)` plus its ownership flags —
 reach for it when a borrow points somewhere impossible, because the IR dump names variables

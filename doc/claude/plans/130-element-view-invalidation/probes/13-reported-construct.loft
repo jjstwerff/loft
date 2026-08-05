@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 13 — REFERENCE: a copy that IS reported.  Proves the instrument is live,
+// so every "none" in probes 10-12 is real blindness rather than a dead harness.
+// Under LOFT_REPORT_COPIES=1 LOFT_COPY_SURVIVAL=1:
+//   line 5  fn n_main  copies vector<integer>  [forced ]
+//     unbound: source survives AND is written after — an independent copy is required
+//   ── 1 unbound copy: 0 avoidable, 1 forced
+// Both backends, identical.
+
+struct Holder { v: vector<integer> }
+
+fn main() {
+  src = [1, 2, 3];
+  h = Holder { v: src };
+  src += [4];
+  assert(len(h.v) == 3, "13 h.v {len(h.v)} want 3");
+  assert(len(src) == 4, "13 src {len(src)} want 4");
+  println("probe 13 PASSED — and this one the report names");
+}

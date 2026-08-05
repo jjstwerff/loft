@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN130 F4 — writing a KEY field through an element view must not lose the element.
+//
+// A keyed collection does not re-index itself when a record is written behind its back, so
+// `c = s[30]; c.key = 5` used to update the record and leave the element reachable by NEITHER
+// key while iteration still yielded it. Measured identically on `sorted`, `hash` and `index`.
+//
+// A true re-index is the obvious fix and is wrong: it needs the OLD key captured before the
+// write, and for a `sorted` the record MOVES to its new position — invalidating the very view
+// doing the writing. So a key-field write is treated as a RESHAPE of the collection: the view
+// materialises, the author is told, and the collection keeps a consistent reachable entry.
+// Changing a key keeps its supported spelling, `s[key] = value`, which re-indexes properly.
+//
+// Guards all three keyed kinds, because the defect was uniform across them.
+
+struct Elm { key: integer, tag: integer = 0 }
+
+fn check_sorted() {
+  s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }];
+  c = s[30];
+  c.key = 5;
+  assert(c.key == 5 && c.tag == 333, "146 sorted c {c.key}/{c.tag} want 5/333");
+  assert(s[30].tag == 333, "146 sorted s[30] {s[30].tag ?? -1} want 333 — must stay reachable");
+  assert(s[10].tag == 111, "146 sorted s[10] {s[10].tag ?? -1} want 111");
+}
+
+fn check_hash() {
+  h: hash<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }];
+  c = h[30];
+  c.key = 5;
+  assert(c.key == 5 && c.tag == 333, "146 hash c {c.key}/{c.tag} want 5/333");
+  assert(h[30].tag == 333, "146 hash h[30] {h[30].tag ?? -1} want 333 — must stay reachable");
+  assert(h[10].tag == 111, "146 hash h[10] {h[10].tag ?? -1} want 111");
+}
+
+fn check_index() {
+  i: index<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }];
+  c = i[30];
+  c.key = 5;
+  assert(c.key == 5 && c.tag == 333, "146 index c {c.key}/{c.tag} want 5/333");
+  assert(i[30].tag == 333, "146 index i[30] {i[30].tag ?? -1} want 333 — must stay reachable");
+  assert(i[10].tag == 111, "146 index i[10] {i[10].tag ?? -1} want 111");
+}
+
+// A NON-key field written through a view must still write through — the trigger is deliberately
+// narrow, and widening it would take write-through away from keyed elements generally.
+fn check_non_key_still_aliases() {
+  s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }];
+  c = s[30];
+  c.tag = 999;
+  assert(s[30].tag == 999, "146 non-key s[30].tag {s[30].tag ?? -1} want 999 — alias must survive");
+}
+
+fn main() {
+  check_sorted();
+  check_hash();
+  check_index();
+  check_non_key_still_aliases();
+  println("146 PASSED");
+}

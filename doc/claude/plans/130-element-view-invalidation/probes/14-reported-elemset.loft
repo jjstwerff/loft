@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 14 — REFERENCE: the second copy shape that IS reported, with a full
+// file:line:col.  Together with probe 13 this fixes the boundary: the report sees exactly
+// the copies that exist as `construct_copy` / `record_copy` in the IR when use_analysis
+// runs.  Everything minted later is invisible (probes 10, 11).
+// Both backends, identical.
+
+struct P { x: integer, y: integer }
+
+fn main() {
+  v = [P { x: 1, y: 2 }];
+  src = P { x: 7, y: 8 };
+  v[0] = src;
+  src.x = 99;
+  assert(v[0].x == 7, "14 v0.x {v[0].x} want 7");
+  assert(src.x == 99, "14 src.x {src.x} want 99");
+  println("probe 14 PASSED — and this one the report names, with file:line:col");
+}

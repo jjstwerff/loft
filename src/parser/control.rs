@@ -209,6 +209,9 @@ enum TextDep {
     SkipCaptured,
     /// A tuple LOCAL (@P330) — no hoist; the B5-L3 temp covers the copy.
     SkipTupleLocal,
+    /// A non-argument LOCAL (loft#771) — no hoist; promoting it would hand the
+    /// free obligation to a caller that never receives the store.
+    SkipOwnedLocal,
     /// A text local — promote to a hidden `RefVar(Text)` work-buffer param.
     PromoteHidden,
     /// Any other dep type — promote as a plain (visible) parameter.
@@ -6760,6 +6763,29 @@ impl Parser {
         }
     }
 
+    /// @PLN130 F9 / [loft#779](https://github.com/loft-lang/loft/issues/779) — refuse the one
+    /// program shape where a `&` reference could not write through: a container reshaped while
+    /// a reference into it is still live.
+    ///
+    /// Post-parse over pass 2, like [`Self::check_subrule_wellformedness`], and for the same
+    /// reason: the question is asked of a CALLEE's body (*"does it remove from `&` parameter
+    /// k?"*), which is only complete once the whole file is parsed. Runs on the program parse
+    /// only — the stdlib's definitions are still in `Data` then, so a separate pass over the
+    /// `default` load would only report them twice.
+    ///
+    /// The analysis is [`crate::scopes::reshape_refusals`]; this only turns its findings into
+    /// diagnostics, because the collector lives on the lexer and the analysis does not.
+    pub(crate) fn check_reshape_under_reference(&mut self) {
+        for r in crate::scopes::reshape_refusals(&self.data) {
+            let pos = crate::lexer::Position {
+                file: r.file,
+                line: r.line,
+                pos: 1,
+            };
+            diagnostic_at!(self.lexer, &pos, Level::Error, "{}", r.message);
+        }
+    }
+
     /// The user-facing name of a rule fn (`n_expr` -> `expr`).
     fn rule_display_name(data: &crate::data::Data, nr: u32) -> String {
         let n = data.def(nr).name();
@@ -8151,6 +8177,27 @@ impl Parser {
             // text element, corrupting the callee frame.  The dep drops; the
             // B5-L3 `__ret_N` deep-copy temp (scopes.rs) covers the value.
             TextDep::SkipTupleLocal
+        } else if !self.vars.is_argument(v) {
+            // A LOCAL must not be promoted.  Promotion makes it an ARGUMENT, and an
+            // argument is the caller's to free — but the caller was never handed this
+            // store: `add_defaults` fills a promoted slot with `null` unless the callee
+            // writes into it (NRVO), which a freshly-allocated record does not.  So the
+            // record the function itself allocated is orphaned, once per call, for as
+            // long as the program runs (loft#771: 5000 calls retained 5000 records).
+            // Dropping the dep leaves it a local, so `get_free_vars` frees it — and the
+            // returned text does not need it, because a text return is delivered by
+            // COPY into the caller's `&text` buffer.  Routing the same field read
+            // through a local first (`x = v.nm; return x;`) always did exactly this and
+            // freed, which is what says the promotion was never load-bearing.
+            //
+            // The verdict must read only PASS-STABLE facts.  Keying it on ownership
+            // (`deps.is_empty()`) looked sharper and was not: deps accumulate while a
+            // body parses, so a var could read as owned on pass 1 and borrowed on
+            // pass 2 — the attribute then appeared on pass 2 only, which is the
+            // cross-pass divergence the H5 two-pass contract exists to catch.
+            // `is_argument` is stable, because a var promoted on an earlier pass is
+            // an attribute and takes the `Attr` branch above.
+            TextDep::SkipOwnedLocal
         } else {
             // Any other dep type promotes as a plain (visible) parameter.
             TextDep::PromotePlain
@@ -8203,7 +8250,7 @@ impl Parser {
                                 .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                         }
                     }
-                    TextDep::SkipCaptured | TextDep::SkipTupleLocal => {
+                    TextDep::SkipCaptured | TextDep::SkipTupleLocal | TextDep::SkipOwnedLocal => {
                         // SkipTupleLocal (@P330): the dep drops on purpose — the
                         // return type loses this local, which lets scopes'
                         // B5-L3 single-text branch deep-copy the tail into a
@@ -8949,6 +8996,14 @@ impl Parser {
             ],
             Type::Reference(td, Deps::frame1(w)),
             "materialized_view_return",
+        );
+        // @PLN130 — parser-emitted materialisation: `return f.field` must publish an OWNED
+        // record, not a view into a frame-local. See `ParserMaterialise`.
+        crate::copy_manifest::record(
+            self.context,
+            w,
+            kt,
+            crate::copy_manifest::Origin::ParserMaterialise,
         );
     }
 

@@ -67,12 +67,21 @@ Anything that just borrows is tracked but never frees. Crucially, *where* to fre
 **computed** from these facts, not guessed per code-site — and it's computed for **every**
 binding on **every** branch, not just the easy ones.
 
-**This is an INTERNAL system — it never rejects a program.** loft has no user-facing borrow
-checker; the user writes naively and the compiler always finds a valid lowering, copying when
-it cannot prove an alias is safe ([OWNERSHIP_MODEL.md § Internal and invisible](../OWNERSHIP_MODEL.md)).
+**This is an INTERNAL system — it never rejects a program it can compile.** loft has no
+user-facing borrow checker; the user writes naively and the compiler always finds a valid
+lowering, copying when it cannot prove an alias is safe
+([OWNERSHIP_MODEL.md § Internal and invisible](../OWNERSHIP_MODEL.md)).
 That makes **`O-Complete` the load-bearing invariant**: an incomplete fact is not a compile
 error the user fixes — it is a miscompile or a leak. So the failure mode to fear here is
 *incompleteness* (D-own-2), not just unsoundness — the analysis must be **total**.
+
+The single carve-out is not in this doc's rules at all, and stays that way: where NO correct
+lowering exists — an explicit `&` reference whose place the program then destroys — the
+*binding surface* declines the program ([binding.md](binding.md) B-Ref-Reshape, C79 revisited
+2026-08-05). That is a decision about what `&` MEANS, not a lifetime the checker failed to
+prove, so it changes nothing here: these rules still never reject, and the deps fact is still
+computed for every binding on every path. A program this doc's rules would have handled fine is
+never refused.
 
 ### The mechanism — one fact, derived everywhere
 

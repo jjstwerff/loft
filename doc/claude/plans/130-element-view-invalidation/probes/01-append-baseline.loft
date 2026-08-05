@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 01 — REFERENCE.  A view survives pure growth of its container.
+// Expect: appending never disturbs an outstanding view.  Status: PASSES, both backends.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }];
+  c = boxes[0];
+  boxes += [Box { n: 22, tag: 222 }];
+  boxes += [Box { n: 33, tag: 333 }];
+  boxes += [Box { n: 44, tag: 444 }];
+  assert(c.n == 11, "01 c.n {c.n} want 11");
+  assert(c.tag == 111, "01 c.tag {c.tag} want 111");
+  assert(len(boxes) == 4, "01 len {len(boxes)} want 4");
+  assert(boxes[0].n == 11, "01 e0 {boxes[0].n} want 11");
+  println("probe 01 PASSED");
+}

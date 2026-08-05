@@ -1,0 +1,10 @@
+struct Box { n: integer, tag: integer = 0 }
+fn main() {
+  v = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  dead = &v[0];
+  dead.n = 77;
+  live = &v[1];
+  v.remove(2);
+  live.n = 99;
+  print("S13 {v[0].n} {v[1].n} {len(v)}\n");
+}

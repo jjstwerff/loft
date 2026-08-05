@@ -8,16 +8,22 @@
  * these are the lines that trade costs: if they were not small, the trade
  * would not be one anyone should take.
  */
+#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 
 /* A double travels in an SSE register, not the integer registers the caller
  * uses — a different register file, so no cast reaches it.  It crosses as its
- * bit pattern instead. */
+ * bit pattern instead.
+ *
+ * `int64_t`, never `long`: a bit pattern is 64 bits and C `long` is 32 of them
+ * on Windows (LLP64).  With `long` the `memcpy(&v, &bits, 8)` below read FOUR
+ * BYTES PAST the argument, and the Windows leg reported `scale 0` — the low half
+ * of 10.0's pattern, which is all zeroes. */
 static double lcs_scale(double v, double by) { return v * by; }
 
-long lcs_shim_scale(long bits, long by_bits);
-long lcs_shim_scale(long bits, long by_bits) {
+int64_t lcs_shim_scale(int64_t bits, int64_t by_bits);
+int64_t lcs_shim_scale(int64_t bits, int64_t by_bits) {
   double v, by, r;
   memcpy(&v, &bits, 8);
   memcpy(&by, &by_bits, 8);
@@ -27,20 +33,20 @@ long lcs_shim_scale(long bits, long by_bits) {
 }
 
 /* An out-parameter: two answers, one return slot. */
-static long lcs_divmod(long a, long b, long *rem) {
+static int64_t lcs_divmod(int64_t a, int64_t b, int64_t *rem) {
   if (b == 0) { *rem = 0; return 0; }
   *rem = a % b;
   return a / b;
 }
 
-long lcs_shim_mod(long a, long b);
-long lcs_shim_mod(long a, long b) { long r; lcs_divmod(a, b, &r); return r; }
+int64_t lcs_shim_mod(int64_t a, int64_t b);
+int64_t lcs_shim_mod(int64_t a, int64_t b) { int64_t r; lcs_divmod(a, b, &r); return r; }
 
 /* A caller-frees return.  loft never frees a `char *` it is handed, so this is
  * the shape that has to go through a shim: the owned buffer is copied into
  * storage the caller must NOT free, and released here. */
-const char *lcs_shim_owned(long n);
-const char *lcs_shim_owned(long n) {
+const char *lcs_shim_owned(int64_t n);
+const char *lcs_shim_owned(int64_t n) {
   static char buf[32];
   char *owned = (char *)malloc(16);
   if (owned == 0) { return "?"; }

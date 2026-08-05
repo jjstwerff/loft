@@ -490,7 +490,9 @@ pub fn OpGetRecord(
             pos: 0,
         }
     } else {
-        stores.find(&data, db_tp as u16, key)
+        // @PLN129 arc A — same miss path as the interpreter, so both backends
+        // agree about what is resident.
+        stores.find_or_fetch(&data, db_tp as u16, key)
     }
 }
 

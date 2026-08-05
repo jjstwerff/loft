@@ -76,6 +76,8 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             // @PLN10 Phase 1 — always-non-null `#rust`-template producers.
             | "n_ymd_days_ago"
             | "n_store_memory"
+            // @PLN129 arc C — always-non-null: "" IS the healthy answer.
+            | "n_store_lazy_error"
             // @PLN10 Phase 1 batch 2 — always-non-null codegen_runtime producers.
             | "i_parse_errors"
             | "n_struct_to_json"
@@ -2223,6 +2225,16 @@ impl State {
                         self.code_add(free_pos);
                         stack.add_op("OpFreeRefIfDistinct", self);
                     }
+                    // @PLN130 — REASSIGNMENT from a call.  A lift temp inside an expression
+                    // (`__lift_N = file(path)`) is compiled here, not through any first-bind
+                    // path, so instrumenting only the first-bind emitters left every
+                    // reassignment copy off the manifest.
+                    crate::copy_manifest::record(
+                        stack.def_nr,
+                        v,
+                        tp_nr,
+                        crate::copy_manifest::Origin::InterpReassignCall,
+                    );
                     return;
                 }
                 // #306 — reassignment `v = src` of same-struct References must
@@ -2265,6 +2277,13 @@ impl State {
                         ],
                     );
                     self.generate(&copy_val, stack, false);
+                    // @PLN130 — reassignment `v = src`, both same-struct References (#306).
+                    crate::copy_manifest::record(
+                        stack.def_nr,
+                        v,
+                        tp_nr,
+                        crate::copy_manifest::Origin::InterpReassignVar,
+                    );
                     if stash_old_for_post_free {
                         // #330 epilogue: free the stashed old store unless
                         // the assignment kept it (witness = v's NEW DbRef;
@@ -2415,6 +2434,26 @@ impl State {
             // First assignment `d = c` where both are owned References to the same struct:
             // give d its own independent record by allocating storage and copying c's data.
             self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            && stack.function.tp(v).depend().is_empty()
+            && crate::generation::container_element_base(stack.data, value).is_some()
+        {
+            // @PLN130 F1 — MATERIALISE an element read into a store `v` owns.
+            //
+            // `c = v[i]` normally binds a VIEW and keeps its container dep, which is the
+            // documented alias (loft#774) and stays a borrow.  Reaching here means the deps
+            // are EMPTY — `scopes.rs` stripped them because `v` is reassigned later, so from
+            // this point on every consumer treats `v` as an owner.  Binding the raw interior
+            // pointer anyway left an owner whose "own" store is the CONTAINER's: the
+            // reassignment's pre-Set `OpFreeRef` then released the whole container, and
+            // `k = a[0]; for x in a { k = x }` ended with `len(a) == 0` before any removal
+            // (probe 30 / loft#778).
+            //
+            // Native already does the right thing here — the same empty deps make its
+            // generator allocate `_own_store_k` at the bind — so this makes the interpreter
+            // act on the fact both backends already read, rather than changing the fact.
+            // A binding that kept its deps is untouched and still aliases.
+            self.gen_set_first_ref_elem_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::TupleGet(_, _) = value
         {
@@ -2641,6 +2680,13 @@ impl State {
         let tp_nr = stack.data.def(d_nr).known_type();
         self.code_add(tp_nr);
         self.generate(value, stack, false);
+        // @PLN130 — past the adopt-the-fresh-store return above: this arm deep-copies.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpCallReturn,
+        );
     }
 
     /// First-assignment reference copy from another variable of the same type.
@@ -2697,6 +2743,49 @@ impl State {
             vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
         );
         self.generate(&copy_val, stack, false);
+        // @PLN130 — recorded HERE, past the last-use-move return above, so the manifest
+        // claims a copy only where one is actually written.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpRecordBind,
+        );
+    }
+
+    /// First-assignment materialisation of a container element read into a store `v` owns.
+    ///
+    /// Same emission shape as [`Self::gen_set_first_ref_tuple_copy`] — allocate at `v`'s
+    /// slot, then deep-copy the interior pointer's record into it — but reached from an
+    /// element/field read whose deps were stripped, so `v` is an owner (@PLN130 F1).
+    fn gen_set_first_ref_elem_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
+        let tp_nr = stack.data.def(d_nr).known_type();
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = stack.step(slot_end) - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRef", self);
+        self.code_add(slot_offset);
+        stack.add_op("OpDatabase", self);
+        self.code_add(slot_offset);
+        self.code_add(tp_nr);
+        let copy_nr = stack.data.def_nr("OpCopyRecord");
+        let copy_val = Value::Call(
+            copy_nr,
+            vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+        );
+        self.generate(&copy_val, stack, false);
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpRecordBind,
+        );
     }
 
     /// First-assignment reference from tuple destructuring — deep copy.
@@ -2732,6 +2821,13 @@ impl State {
             vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
         );
         self.generate(&copy_val, stack, false);
+        // @PLN130 — tuple destructuring deep-copies unconditionally.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpTupleBind,
+        );
     }
 
     /// First-assignment reference from a call whose return is a runtime `??` JOIN —
@@ -2929,6 +3025,16 @@ impl State {
             stack.add_op("OpInitRefSentinel", self);
             self.code_add(slot_offset);
         }
+        // @PLN130 — the call-return deep copy that actually fires.  Its sibling
+        // `gen_set_first_ref_copy` handles a `Call(OpCopyRecord, [Call(inner), …])` shape the
+        // corpus never produces (its own doc records zero fires), so instrumenting that one
+        // alone left every call-return copy off the manifest.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpCallReturn,
+        );
     }
 
     pub(super) fn clear_stack(&mut self, stack: &mut Stack, loop_nr: u16) {

@@ -7107,6 +7107,7 @@ fn main() {
                         &p.database,
                         &export,
                         &pkg_str,
+                        std::slice::from_ref(&pkg_str),
                     ) {
                         Ok(Some(so)) => {
                             // This cdylib `extern crate loft`s — it statically embeds
@@ -7652,6 +7653,9 @@ fn main() {
     // @PLN90 Step 5 — the user-facing copy report, emitted ONCE here (the whole program is now
     // loaded + checked) rather than per file-load. Gated on `--report-copies`; a no-op otherwise.
     loft::use_analysis::report_copies(&p.data);
+    // @PLN130 F2 — views whose alias was taken away because their container is reshaped
+    // while they are live.  The copy keeps the program correct; this keeps it honest.
+    loft::copy_manifest::report_materialised_views();
     // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
     // `[library] compile = "native"`, **build-before-mark**: build each library's
     // cdylib from the post-parse type schema FIRST, then mark its functions native
@@ -7728,7 +7732,13 @@ fn main() {
         let built = if force_build_fail {
             Err("LOFT_FORCE_NATIVE_BUILD_FAIL".to_string())
         } else {
-            loft::native_lib::cached_or_build_shared_cdylib(&p.data, &p.database, &export, pkg_dir)
+            loft::native_lib::cached_or_build_shared_cdylib(
+                &p.data,
+                &p.database,
+                &export,
+                pkg_dir,
+                &pending_native,
+            )
         };
         match built {
             Ok(Some(so)) => {
@@ -9112,6 +9122,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 }
             }
         }
+        // @PLN130 — native generation is complete, so every copy IT wrote is on the
+        // manifest.  Reported here (before the `--native-emit` return) so emitting the
+        // source is checked exactly like compiling it.  A no-op unless
+        // `LOFT_COPY_MANIFEST` is set.
+        loft::copy_manifest::report(&p.data);
         if native_emit.is_some() {
             return; // --native-emit: just write the file, don't compile
         }
@@ -9300,7 +9315,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             // (e.g. weak-link the symbol or dedup the macro emission)
             // rather than re-add a flag the host linker doesn't
             // support.
-            #[cfg(not(target_os = "macos"))]
+            //
+            // MSVC `link.exe` does not understand it either, and unlike ld64 it
+            // does not fail — it prints `LNK4044: unrecognized option …; ignored`
+            // once per occurrence, which on the `#c` shim path was three lines of
+            // noise directly above the real error. Same reason as macOS: a flag
+            // the host linker has no equivalent for is not passed to it.
+            #[cfg(not(any(target_os = "macos", windows)))]
             cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
@@ -9662,6 +9683,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             let _ = std::fs::remove_file(&binary);
         }
         if !run_status.success() {
+            native_utils::explain_windows_startup_failure(run_status, &binary, &p.data);
             std::process::exit(run_status.code().unwrap_or(1));
         }
         return;
@@ -9878,6 +9900,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     let runtime_err = state.database.runtime_error.take();
     if runtime_err.is_none() {
         state.check_store_leaks();
+    }
+    // @PLN130 F8 — LOFT_STRICT_STORES makes both store-lifetime faults fatal: a reference
+    // that outlived its store, and a store nobody freed.  Reported at every site during the
+    // run (so one run surfaces all of them), and turned into a non-zero exit here so a probe
+    // can be a GATE rather than something someone has to read the output of.
+    if loft::keys::strict_stores() {
+        let n = loft::keys::strict_store_violations();
+        if n > 0 {
+            eprintln!("[strict-store] FAILED: {n} store-lifetime violation(s)");
+            std::process::exit(1);
+        }
     }
     if let Some(err) = runtime_err {
         let entry = err.to_diag_entry();

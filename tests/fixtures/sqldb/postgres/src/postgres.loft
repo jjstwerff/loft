@@ -49,7 +49,25 @@ pub fn postgres() -> Postgres {
   return Postgres { conn: 0, res: 0, at: -1, n: 0, seq: 0, ps: "", err: "", tx: tx_new() };
 }
 
+// The soname exactly as `[c] optional-libs` spells it — the availability query
+// is keyed on the declaration, not on a guess about the file name.
+pub const PQ_SONAME = "libpq.so.5";
+
+// `c_library_available` and not "does a file with this name load": the strong
+// question is true only when every declared symbol resolves, and the weak one
+// says yes for an unrelated library that happens to share the translated name
+// and then faults on the call (loft#770). The backend answers this itself so
+// the availability fact has ONE home — the harness reads the verdict off
+// stdout rather than asking a second, weaker question from outside.
+pub fn postgres_available() -> boolean {
+  return c_library_available(PQ_SONAME);
+}
+
 pub fn db_open(self: Postgres, target: text) -> boolean {
+  if !postgres_available() {
+    self.err = "libpq.so.5 is not installed";
+    return false
+  }
   self.conn = pq_connect(target);
   return self.conn != 0 && pq_status(self.conn) == 0;   // 0 = CONNECTION_OK
 }

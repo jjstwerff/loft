@@ -295,6 +295,67 @@ db.db_rows(q)
 
 See [LOFT.md § Building a value instead of text](doc/claude/LOFT.md).
 
+### Removing from a container you hold a reference into no longer loses your write
+
+Handing a function an element of a vector *and* the vector, where the function
+removes from it, threw the write away:
+
+```loft
+fn shift_then_write(target: &Box, all: &vector<Box>) {
+  all.remove(0);        // the element `target` names moves down one
+  target.n = 99;        // went nowhere
+}
+shift_then_write(boxes[2], boxes);
+```
+
+Removing renumbers the remaining elements, so `target` kept pointing at the slot
+the element used to occupy. Nothing said so — no warning, no crash, just a value
+that never changed. The same thing happened without a call, with the removal and
+the reference in one function.
+
+loft now **refuses the program**:
+
+```
+error: cannot remove from `v` while `c` references an element of it — a removal
+  renumbers the remaining elements, so a write through `c` would no longer reach
+  the element it names. Move the removal after the last use of `c`, or bind
+  without `&` to work on a copy
+```
+
+The same applies to the other two things that can end the place a reference names:
+**writing a key field** through it (which would leave the element reachable by no key)
+and **replacing the container** it points into. Both used to hand you a copy and a
+warning; both are now errors.
+
+It only fires while the reference is still in use — finish with it before the
+removal and nothing changes:
+
+```loft
+c = &v[0];  c.n = 99;  v.remove(2);   // fine — `c` is done before `v` changes
+c = &v[0];  v.remove(2);  c.n = 99;   // refused
+```
+
+For the call version, pass the **index** instead and read the element again after
+the removal:
+
+```loft
+fn shift_then_write(idx: integer, all: &vector<Box>) {
+  all.remove(0);
+  all[idx - 1].n = 99;
+}
+```
+
+Plain (non-`&`) bindings are unaffected: `c = v[0]` still gets its own copy when
+the container changes underneath it, and still tells you it did. The difference is
+what you asked for — a plain bind already meant "give me a value", so a copy is
+consistent with it; `&` meant "give me a live link", and quietly handing back a copy
+would make that a lie.
+
+The error is also the choice that keeps the door open. loft can always *drop* an error
+later, so if it ever gains the machinery to follow a reference through these changes,
+every program that compiles today keeps compiling and the refused ones start working.
+Shipping the silent copy instead would have made that copy permanent.
+
 ### An element taken out of a returned value stays valid
 
 Binding an element out of a struct a function just returned gave you a reference

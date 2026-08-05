@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 31 — cluster II matrix: producer = a `match` arm capture.
+//
+// Whether a capture is a view depends on the PAYLOAD TYPE. Measured across five types, both
+// backends agreeing:
+//
+//   text · vector  -> view  (write-through, on a local subject and on `v[0]` alike)
+//   integer · float · boolean -> COPY (the write does not reach the subject)
+//
+// LOFT.md used to claim the view rule held "whatever the field's type", which is what this
+// probe caught (@PLN130 F6). The doc now states the split, so this probe guards a rule that
+// is written down rather than contradicting one.
+//
+// Only the heap case is a view producer worth testing against a reshape, which is what the
+// second half of this probe does.
+//
+// Hand-computed for the reshape: the subject is `es[2]`, payload "c".  The capture appends
+// "!" through the view, then `remove(0)` shifts that element to index 1, so the appended
+// value must be readable there.
+//
+// SCOPE OF THIS PROBE — it checks that the WRITE survives the removal, not that the view is
+// still usable afterwards, because it cannot be: a capture's lifetime is its arm.  Assigning
+// it out (`esc = items`) is a whole-value bind and COPIES, measured separately.  So this
+// producer cannot be invalidated by a later reshape — not because the view is robust, but
+// because it cannot be held long enough to go stale.  That is a lifetime bound, and it is
+// the reason to keep this cell green rather than a property of views in general.
+
+enum E {
+  Holder { items: text },
+  Empty { items: text },
+}
+
+enum N {
+  Num { v: integer },
+  Zero { v: integer },
+}
+
+fn items_of(e: E) -> text {
+  match e {
+    Holder { items } => items,
+    Empty { items } => items
+  }
+}
+
+fn v_of(n: N) -> integer {
+  match n {
+    Num { v } => v,
+    Zero { v } => v
+  }
+}
+
+fn main() {
+  // A scalar payload capture is a COPY — the write does not reach the subject.
+  num = Num { v: 11 };
+  match num {
+    Num { v } => { v = 99; },
+    Zero { v } => { v = 0; }
+  }
+  assert(v_of(num) == 11, "31 scalar capture {v_of(num)} want 11 (a copy, despite the doc)");
+
+  // A text payload capture IS a view, on a container element too.
+  es: vector<E> = [Holder { items: "a" }, Holder { items: "b" }, Holder { items: "c" }];
+  match es[2] {
+    Holder { items } => { items += "!"; },
+    Empty { items } => { }
+  }
+  assert(items_of(es[2]) == "c!", "31 write-through '{items_of(es[2])}' want 'c!'");
+
+  // Now reshape under the live view's element.
+  es.remove(0);                     // that element is now index 1
+  assert(len(es) == 2, "31 len {len(es)} want 2");
+  assert(items_of(es[0]) == "b", "31 e0 '{items_of(es[0])}' want 'b'");
+  assert(items_of(es[1]) == "c!", "31 e1 '{items_of(es[1])}' want 'c!'");
+  println("probe 31 PASSED");
+}

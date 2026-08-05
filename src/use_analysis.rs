@@ -956,10 +956,28 @@ fn analyze_fn(
     data: &Data,
     max_tier: u8,
 ) -> (Vec<VerdictRow>, Vec<ElidePlan>, Vec<MovePlan>) {
-    // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
-    // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
-    // (`track_pos`) and the classification below agree.
-    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some()
+    analyze_fn_survival(code, function, data, max_tier, false)
+}
+
+/// [`analyze_fn`] with the survival split forced on.
+///
+/// `force_survival` exists for the default-on copy notice (@PLN130 F5): `warn_copies` reads
+/// `r.survival` to pick the actionable rows, so it needs the split computed even with no env
+/// flag set. It must NOT be forced globally — the flag-off path keeps the phase-1
+/// classification verbatim, and turning it on for everyone reclassified rows the
+/// `use_analysis` tests pin (4 failures, measured).
+fn analyze_fn_survival(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+    max_tier: u8,
+    force_survival: bool,
+) -> (Vec<VerdictRow>, Vec<ElidePlan>, Vec<MovePlan>) {
+    // @PLN90 — the survival split + its report locations, produced under LOFT_COPY_SURVIVAL
+    // (the raw dev dump), the user-facing `--report-copies`, or `force_survival` (the
+    // default-on notice). Read once so the walk (`track_pos`) and the classification agree.
+    let survival_on = force_survival
+        || std::env::var_os("LOFT_COPY_SURVIVAL").is_some()
         || crate::keys::report_copies_enabled()
         || crate::keys::warn_copies_enabled();
     let u = collect_uses(code, data, survival_on);
@@ -2640,15 +2658,12 @@ pub fn superseded_fold_diagnostics(
 /// actionable set warns. Shares the survival-split verdict with `report_copies`; a no-op unless
 /// `warn_copies_enabled()`. Populates `diags`; the caller renders them with the other diagnostics.
 pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fallback_file: &str) {
-    if !crate::keys::warn_copies_enabled() {
-        return;
-    }
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if !matches!(def.def_type, DefType::Function) {
             continue;
         }
-        for r in analyze_fn(&def.code, &def.variables, data, env_tier()).0 {
+        for r in analyze_fn_survival(&def.code, &def.variables, data, env_tier(), true).0 {
             // Only survival-split (source-duplicating) copies are user-facing, and only the
             // Avoidable class is the actionable worklist — mirror `report_copies`'s filter.
             if !r.survival || !matches!(r.class, CopyClass::Avoidable) {
@@ -2675,11 +2690,36 @@ pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fal
             } else {
                 format!(" in `{}`", def.name)
             };
-            let msg = format!(
-                "avoidable copy of {ty}{where_} ({}) — a `&` borrow or a small restructure would remove it",
-                r.reason
-            );
-            diags.add_at(crate::diagnostics::Level::Warning, &msg, file, line, col);
+            // Name the LEVER, not the analysis. "a borrow/move would avoid this copy" is true
+            // and useless to an author: they wrote no copy and cannot write a borrow. What
+            // they CAN do is measured (@PLN130 F5) — both of these take the row to zero:
+            //
+            //   src = [1,2,3]; h = Holder { v: src }; use(src)   <- copies
+            //   src = [1,2,3]; h = Holder { v: src };            <- move, no copy
+            //   h = Holder { v: [1,2,3] };                       <- built in place, no copy
+            //
+            // So the message names the surviving variable and the two ways out. Advice, not
+            // Warning: the program is CORRECT, it just pays a copy — and the repo rule is
+            // that a diagnostic gates only when ignoring it can produce a wrong result.
+            let src_name = if r.source == u16::MAX {
+                String::new()
+            } else {
+                format!(" `{}`", def.variables.name(r.source))
+            };
+            let msg = if src_name.is_empty() {
+                format!(
+                    "copy of {ty}{where_} — the value is still in use after this point, so it \
+                     could not be moved. Build it in place, or stop using the source \
+                     afterwards, and the copy becomes a move"
+                )
+            } else {
+                format!(
+                    "copy of {ty}{where_} —{src_name} is still used after this point, so it \
+                     could not be moved. If it does not need to be, the copy becomes a move; \
+                     or build the value in place"
+                )
+            };
+            diags.add_at(crate::diagnostics::Level::Advice, &msg, file, line, col);
         }
     }
 }

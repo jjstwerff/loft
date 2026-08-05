@@ -1,0 +1,181 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 F9 step 1 — the LIVENESS boundary of F2's materialise.
+//
+// F2 shipped keyed on the CONTAINER and order-blind: `reshaped_containers` is a flat
+// per-function set, so ANY view of a container removed from ANYWHERE in the function
+// materialises — including a view that is dead long before the removal, and one bound after
+// it.  That costs two things this plan's own closure bar never allows:
+//
+//   * a LOST WRITE — the write went to the copy, and mainline (no materialise) lands it;
+//   * UNTRUE ADVICE — "`v` is modified while `c` is in use" said of a `c` not in use.
+//
+// So the question is not "does a reshape materialise" (F2 measured that) but "WHICH views is a
+// reshape allowed to reach".  These cells move the axes that decide it, together:
+//
+//   ORDER      — the removal after the bind (L2) vs before it (L8)
+//   LIVE-END   — the view's last use is a WRITE before the removal (L1) vs a READ after (L4)
+//   NESTING    — the removal in the same block (L2), an `if` (L6), a loop (L7); the BIND in a
+//                block that closes first (L5); both inside one loop body (L9)
+//   MULTIPLICITY — two views of one container, one dead and one live (L10)
+//
+// Hand-computed, every cell, before running: agreement between two binaries is not a pass.
+// L2/L3/L4/L6/L7/L9 are F2's own evidence restated — they must NOT move, and they are the
+// guard that a liveness narrowing did not go too far the other way.
+//
+// Run:  loft --interpret 39-f2-liveness-boundary.loft   and  loft --native …
+// Also: LOFT_STRICT_STORES=1 — no cell may pass by leaking.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn ok(name: text, got: integer, want: integer) {
+  if got == want { print("39 {name}  {got}  want {want}   ok\n"); }
+  if got != want { print("39 {name}  {got}  want {want}   BROKEN\n"); }
+}
+
+// ---- ORDER + LIVE-END ------------------------------------------------------------
+
+// L1 — THE REGRESSION.  The view's last use is a write, BEFORE the removal, so it is dead at
+// the removal and there is nothing to invalidate.  The write must reach `v`.
+// Mainline answers 99; the branch answers 11 and prints advice about a `c` not in use.
+fn l1_dead_before_removal() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[0];
+  c.n = 99;
+  v.remove(2);
+  return v[0].n;
+}
+
+// L2 — F2's own case, unchanged: the view is live ACROSS the removal (written after it), so it
+// materialises and the write lands in the copy, not in `v`.
+fn l2_live_across_write_after() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[0];
+  v.remove(2);
+  c.n = 99;
+  return v[0].n;
+}
+
+// L2b — the same cell read from the other side: the copy DID take the write.
+fn l2b_copy_took_the_write() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[0];
+  v.remove(2);
+  c.n = 99;
+  return c.n;
+}
+
+// L3 — read-only across a SHIFTING removal (probe 05's shape).  The materialise is what keeps
+// this naming its own element: without it the pinned index 1 answers the shifted-in 33.
+fn l3_live_across_read_only() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[1];
+  v.remove(0);
+  return c.n;
+}
+
+// L4 — written BEFORE the removal and read AFTER it, so it is live across.  It materialises at
+// the BIND, which diverts the earlier write too: the copy carries 99 and `v` keeps 11.  That
+// cost is the stated one — this cell exists so a liveness fix cannot quietly change it.
+fn l4_write_before_read_after_copy() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[0];
+  c.n = 99;
+  v.remove(2);
+  return c.n;
+}
+
+fn l4b_write_before_read_after_container() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[0];
+  c.n = 99;
+  v.remove(2);
+  d = c.n;
+  return v[0].n;
+}
+
+// ---- NESTING ---------------------------------------------------------------------
+
+// L5 — the BIND sits in a block that has already CLOSED at the removal.  The view cannot be
+// live across it, so the write must land.  This is the shape that broke `45-field-iter` when
+// F8's first version used a per-function proxy, reached from the other cause.
+fn l5_bind_in_closed_block() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  if len(v) == 3 {
+    c = v[0];
+    c.n = 99;
+  }
+  v.remove(2);
+  return v[0].n;
+}
+
+// L6 — the removal is inside a later `if`.  It MAY run, so the view is at risk: materialise.
+fn l6_removal_in_if() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[0];
+  if len(v) == 3 { v.remove(2); }
+  c.n = 99;
+  return v[0].n;
+}
+
+// L7 — the removal is inside a later loop body.  Same answer, different nesting construct.
+fn l7_removal_in_loop() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  c = v[0];
+  for i in 0..1 { v.remove(2); }
+  c.n = 99;
+  return v[0].n;
+}
+
+// L8 — the removal happens BEFORE the bind.  Nothing was viewing `v` when it shrank, so the
+// later view is sound and its write must land.  Order-blindness is exactly what this catches.
+fn l8_removal_before_bind() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  v.remove(2);
+  c = v[0];
+  c.n = 99;
+  return v[0].n;
+}
+
+// L9 — bind and removal both inside ONE loop body, removal later.  Live across within the
+// iteration, so it materialises.
+fn l9_bind_and_removal_in_one_body() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }, Box { n: 44 }];
+  for i in 0..1 {
+    c = v[0];
+    v.remove(3);
+    c.n = 99;
+  }
+  return v[0].n;
+}
+
+// ---- MULTIPLICITY ----------------------------------------------------------------
+
+// L10 — two views of the SAME container in one function: `d` is dead before the removal and
+// must write through; `c` is live across it and must materialise.  A per-container set cannot
+// tell them apart — it strips both.  Encoded as one number so a half-fix cannot read as a pass:
+//   v[0].n = 99 (d wrote through) and v[1].n = 22 (c's write went to its copy).
+fn l10_one_dead_one_live() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+  d = v[0];
+  d.n = 99;
+  c = v[1];
+  v.remove(2);
+  c.n = 77;
+  return v[0].n * 1000 + v[1].n;
+}
+
+fn main() {
+  ok("L1  dead-before-removal, write lands   ", l1_dead_before_removal(), 99);
+  ok("L2  live-across, write diverted        ", l2_live_across_write_after(), 11);
+  ok("L2b live-across, copy took the write   ", l2b_copy_took_the_write(), 99);
+  ok("L3  live-across, read-only, own element", l3_live_across_read_only(), 22);
+  ok("L4  write-then-read across, copy has it", l4_write_before_read_after_copy(), 99);
+  ok("L4b write-then-read across, v untouched", l4b_write_before_read_after_container(), 11);
+  ok("L5  bind in a closed block, write lands", l5_bind_in_closed_block(), 99);
+  ok("L6  removal in a later if              ", l6_removal_in_if(), 11);
+  ok("L7  removal in a later loop            ", l7_removal_in_loop(), 11);
+  ok("L8  removal before the bind, write lands", l8_removal_before_bind(), 99);
+  ok("L9  bind+removal in one loop body      ", l9_bind_and_removal_in_one_body(), 11);
+  ok("L10 one dead + one live view           ", l10_one_dead_one_live(), 99022);
+}

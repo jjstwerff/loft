@@ -1058,6 +1058,42 @@ impl ShowDb<'_> {
                     } else {
                         "?"
                     };
+                    let tp_nr = if v <= 0 || (v as usize - 1) >= vals.len() {
+                        u16::MAX
+                    } else {
+                        vals[v as usize - 1].0
+                    };
+                    let payload = match tp_nr {
+                        u16::MAX => None,
+                        _ => match &self.stores.types[tp_nr as usize].parts {
+                            Parts::EnumValue(_, st) => Some(st),
+                            _ => None,
+                        },
+                    };
+                    if self.json {
+                        // Reached when the value is typed as the ENUM (a field, a
+                        // vector element, a nested record); the `Parts::EnumValue`
+                        // arm below is reached when it is typed as the VARIANT
+                        // (a bare construction). Both are the same value, so both
+                        // emit the same JSON: a quoted variant name, or a
+                        // single-key object keyed by it when the variant carries
+                        // fields. Rendering the name bare — `{"kind":Circle {…}}` —
+                        // is not JSON at all, and `json_parse` rejected the whole
+                        // document rather than just that field (loft#768).
+                        if let Some(st) = payload {
+                            write!(s, "{{\"{enum_val}\":").unwrap();
+                            self.write_struct(s, st, indent);
+                            s.push('}');
+                        } else {
+                            // Payload-less (and the absent discriminant): the
+                            // same rule the SCALAR route uses, asked in one place.
+                            // A discriminant outside a byte is already corrupt;
+                            // 0 is the absent case, which renders as `null`.
+                            let discr = u8::try_from(v).unwrap_or(0);
+                            s.push_str(&self.stores.enum_val_json(self.known_type, discr));
+                        }
+                        return;
+                    }
                     // loft qualifies a real variant as `Enum.Variant` so it
                     // re-parses unambiguously (a bare `Variant` can't infer its
                     // enum type in the language parser).
@@ -1065,14 +1101,7 @@ impl ShowDb<'_> {
                         write!(s, "{}.", self.stores.types[self.known_type as usize].name).unwrap();
                     }
                     s.push_str(enum_val);
-                    let tp_nr = if v <= 0 || (v as usize - 1) >= vals.len() {
-                        u16::MAX
-                    } else {
-                        vals[v as usize - 1].0
-                    };
-                    if tp_nr != u16::MAX
-                        && let Parts::EnumValue(_, st) = &self.stores.types[tp_nr as usize].parts
-                    {
+                    if let Some(st) = payload {
                         s.push(' ');
                         self.write_struct(s, st, indent);
                     }

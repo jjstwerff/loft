@@ -708,6 +708,42 @@ state.execute_argv("main", ...)              # run
 If a cdylib is not found but `native/Cargo.toml` exists, the interpreter
 runs `cargo build --release` automatically via `auto_build_native()`.
 
+#### An artifact is stale when any source it CONTAINS is newer (loft#777)
+
+An auto-native cdylib is not just its own package: `emit_program` emits the
+export set **and its transitive dependencies**, so `hex_editor`'s cdylib holds a
+full copy of `hex_part`'s functions — and exports them under the same
+`loft_shared_<name>` symbols `hex_part`'s own cdylib exports.  Whichever library
+is dlopened first wins the lookup.
+
+So the freshness question has to span every package that contributed code, not
+just the one that owns the artifact (`source_newer_than` /
+`source_content_hash`, `src/native_lib.rs`, take a *set* of package dirs — the
+run path passes `pending_native`).  Asking only about the owner reported a
+dependent as fresh after its **dependency** was edited: the edited library
+rebuilt correctly, the dependent kept serving its stale inlined copy, and it won.
+Permanently — nothing about the dependent's own sources ever changes again, so no
+later run could clear it; only deleting `native-auto/` by hand did.
+
+Two things made it expensive to see, and both are worth remembering:
+
+- **It reads as a consumer-SIZE effect.**  It was filed as "a 5,900-line program
+  is stale where an 8-line one tracks the edit", because you need a second
+  library in the graph, loaded first, before anything can shadow the fresh one.
+  A small consumer that `use`s the edited library directly was always right.
+  Size was a proxy for *graph shape*.
+- **The compile is fresh while the execution is stale.**  A syntax error in the
+  edited library still fails startup, and the *generated* `.rs` beside the stale
+  `.so` shows the NEW code — so every "is it being re-read?" check passes.  The
+  discriminator is `LOFT_NO_NATIVE_LIBS=1`: same run, same program, and the
+  interpreter answers differently from the cdylib.
+
+The wider question costs one `stat` walk over the loaded packages (under a
+millisecond for a ten-package tree, against a `rustc` invocation).  It does mean
+a dependency edit makes every dependent stale — which is the honest answer, since
+the dependent really does contain the edited code — and `dev-interpret-on-edit`
+still keeps `rustc` out of the loop until editing settles.
+
 ### Agent discovery — generated API stubs (shipped)
 
 Installed packages live outside the consumer project

@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 27 — cluster II matrix: producer = a view STORED into another record.
+//
+// `h.inner = boxes[2]` puts an element view into a second structure, so the view outlives
+// the statement that made it and is reached through a different name entirely.  If the
+// store copies, `h.inner` is independent and the removal cannot touch it.  If it aliases,
+// the removal shifts the element out from under it.
+//
+// Hand-computed: either answer is self-consistent, so BOTH are asserted against the
+// element the view named (n=33), not against a slot.  A copy keeps `h.inner.n == 33`
+// after the shift; an alias must follow the element to index 1.  What must NOT happen is
+// `h.inner` reading some third element.
+
+struct Box { n: integer, tag: integer = 0 }
+struct Holder { inner: Box }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  h = Holder { inner: boxes[2] };
+
+  assert(h.inner.n == 33 && h.inner.tag == 333, "27 pre {h.inner.n}/{h.inner.tag} want 33/333");
+
+  boxes.remove(0);                 // [22,33]
+
+  // Whatever the storage rule, the view must still describe the element it was given.
+  assert(h.inner.n == 33, "27 h.inner.n {h.inner.n} want 33");
+  assert(h.inner.tag == 333, "27 h.inner.tag {h.inner.tag} want 333");
+  assert(len(boxes) == 2, "27 len {len(boxes)} want 2");
+  assert(boxes[1].n == 33, "27 e1 {boxes[1].n} want 33");
+  println("probe 27 PASSED");
+}

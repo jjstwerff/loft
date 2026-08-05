@@ -1505,6 +1505,11 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
         let file = std::path::Path::new(name)
             .file_name()
             .map_or(name.as_str(), |f| f.to_str().unwrap_or(name));
+        // `.dll` belongs in this chain beside `.so` / `.dylib`: `-l` names the
+        // LIBRARY, not the file, and MSVC appends `.lib` to whatever it is given.
+        // Leaving the extension on made `-l dylib=sqlite_shim_<hash>.dll` open
+        // `sqlite_shim_<hash>.dll.lib` — the exact `LNK1181` the Windows leg died
+        // on, for a shim whose import library is `sqlite_shim_<hash>.lib`.
         let stem = file
             .strip_prefix("lib")
             .unwrap_or(file)
@@ -1514,6 +1519,9 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
             .split(".dylib")
             .next()
             .unwrap_or(file)
+            .split(".dll")
+            .next()
+            .unwrap_or(file)
             .to_string();
         if beside.exists()
             && let Some(parent) = beside.parent()
@@ -1521,8 +1529,16 @@ pub(crate) fn add_c_library_flags(cmd: &mut std::process::Command, data: &crate:
             cmd.arg("-L").arg(format!("native={}", parent.display()));
             // The built binary has to find it at RUN time too, and a library
             // that ships beside its package is not on the system search path.
-            cmd.arg("-C")
-                .arg(format!("link-arg=-Wl,-rpath,{}", parent.display()));
+            //
+            // Windows has no RPATH — MSVC `link.exe` does not understand
+            // `-Wl,-rpath` and said so (`LNK4044: unrecognized option`, ignored),
+            // so passing it was noise that hid the real error below it. The DLL is
+            // found beside the `.exe` / on `PATH` instead, the same arrangement
+            // `stage_native_dlls` already makes for a package cdylib (@PLN26 ph.4).
+            if !cfg!(windows) {
+                cmd.arg("-C")
+                    .arg(format!("link-arg=-Wl,-rpath,{}", parent.display()));
+            }
         }
         // A VERSIONED soname links by exact filename, not by stem.
         //
@@ -1793,6 +1809,103 @@ pub(crate) fn add_native_extern_flags(
     }
 }
 
+/// Say something useful when a Windows binary dies before `main`.
+///
+/// `STATUS_DLL_NOT_FOUND` (`0xC000_0135`) is the loader refusing to start a
+/// process whose imports it cannot resolve. It happens BEFORE any user code, so
+/// the program writes nothing at all: no stdout, no stderr, just an exit code
+/// most people have never seen. That silence is the worst part of the failure,
+/// and it is entirely avoidable — loft knows which libraries it staged and where.
+///
+/// Reports what IS beside the binary rather than guessing which import is
+/// missing: naming the missing DLL needs the import table, and the useful
+/// question for an author is almost always "did my library get here at all".
+/// A `[c]` library resolved from the system (a bare soname) is deliberately not
+/// listed — it was never loft's to place.
+///
+/// No-op off Windows and for any other exit code.
+pub(crate) fn explain_windows_startup_failure(
+    status: std::process::ExitStatus,
+    binary: &std::path::Path,
+    data: &crate::data::Data,
+) {
+    const STATUS_DLL_NOT_FOUND: i32 = 0xC000_0135_u32 as i32;
+    if !cfg!(windows) || status.code() != Some(STATUS_DLL_NOT_FOUND) {
+        return;
+    }
+    eprintln!(
+        "loft: the program could not start — Windows could not find a DLL it \
+         imports (STATUS_DLL_NOT_FOUND, 0x{STATUS_DLL_NOT_FOUND:08X}). This \
+         happens before any of your code runs, which is why nothing was printed."
+    );
+    if let Some(dir) = binary.parent() {
+        let mut staged: Vec<String> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.to_ascii_lowercase().ends_with(".dll"))
+            .collect();
+        staged.sort();
+        if staged.is_empty() {
+            eprintln!("loft:   no DLLs are staged beside `{}`", dir.display());
+        } else {
+            eprintln!(
+                "loft:   staged beside `{}`: {}",
+                dir.display(),
+                staged.join(", ")
+            );
+        }
+    }
+    for lib in &data.c_libraries {
+        let d = std::path::Path::new(&lib.pkg_dir);
+        if let Some(found) =
+            crate::platform::existing_lib_beside(d, &lib.name, crate::platform::host_lib_os())
+        {
+            eprintln!("loft:   `[c]` library shipped by the package: {found}");
+        }
+    }
+    eprintln!(
+        "loft:   Windows has no RPATH: a DLL is found beside the executable or \
+         on PATH. A MinGW-built library may also need its own runtime \
+         (libgcc_s_seh-1.dll, libwinpthread-1.dll) on PATH."
+    );
+}
+
+/// @PLN24 — the `[c]` half of [`stage_native_dlls`]: a C library that ships
+/// BESIDE its package has the same run-time problem as a native-package cdylib,
+/// and had none of the answer.
+///
+/// The link succeeds (the import library is right there), and then the binary
+/// dies before `main` with `STATUS_DLL_NOT_FOUND` — writing nothing at all, so
+/// the failure presents as an empty stdout and an empty stderr. Windows has no
+/// RPATH to fall back on, which is exactly why `add_c_library_flags` stopped
+/// emitting one there.
+///
+/// Only libraries that are really PRESENT beside the package are copied:
+/// `existing_lib_beside` answers `None` for a bare soname like
+/// `libsqlite3.so.0`, and that is the correct answer — a system library is the
+/// system's to find, and copying one next to the binary would be wrong.
+/// Best-effort, like its sibling: a failed copy leaves the loader's normal
+/// search to do what it can.
+fn stage_c_library_dlls(exe_dir: &std::path::Path, data: &crate::data::Data) {
+    for lib in &data.c_libraries {
+        let dir = std::path::Path::new(&lib.pkg_dir);
+        let Some(found) =
+            crate::platform::existing_lib_beside(dir, &lib.name, crate::platform::host_lib_os())
+        else {
+            continue; // a bare soname — the system's to resolve, not ours to copy
+        };
+        let src = dir.join(&found);
+        if let Some(name) = src.file_name() {
+            let dest = exe_dir.join(name);
+            if dest != src {
+                let _ = std::fs::copy(&src, &dest);
+            }
+        }
+    }
+}
+
 /// @PLN26 phase 4 — stage every native-package DLL beside a just-built Windows
 /// binary so it loads at run time.  Windows has no RPATH, so the loader finds a
 /// linked DLL beside the `.exe` / on `PATH`; copying it next to the binary is the
@@ -1802,7 +1915,11 @@ pub(crate) fn add_native_extern_flags(
 /// same `resolve_native_lib` the link used, so run-time and link-time agree on the
 /// file.  Best-effort: a failed copy leaves the loader's normal search to find it.
 pub(crate) fn stage_native_dlls(exe_dir: &std::path::Path, data: &crate::data::Data) {
-    if !cfg!(windows) || !native_cabi_enabled() {
+    if !cfg!(windows) {
+        return;
+    }
+    stage_c_library_dlls(exe_dir, data);
+    if !native_cabi_enabled() {
         return;
     }
     for (crate_name, pkg_dir) in &data.native_packages {

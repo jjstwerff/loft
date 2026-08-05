@@ -2102,7 +2102,30 @@ struct Area {
 
 === Value structs
 
-Prefix a struct with 'value' to give it value (copy) semantics and zero heap overhead: it is stored inline inside a record or vector element, exactly like a plain integer. Reading one out of a field or element yields an independent COPY — writing to that copy never changes the original. Use a 'value struct' for small wrapper types (a point, a colour, a timestamp) that should be as cheap as the number they wrap. A plain (reference) struct, by contrast, is shared: a binding is a live view onto the same record.
+Prefix a struct with 'value' to give it value (copy) semantics and zero heap overhead: it is stored inline inside a record or vector element, exactly like a plain integer. Reading one out of a field or element yields an independent COPY — writing to that copy never changes the original. Use a 'value struct' for small wrapper types (a point, a colour, a timestamp) that should be as cheap as the number they wrap.
+
+A plain (reference) struct differs only when you read one OUT of somewhere. Two spellings look alike, so it is worth keeping them apart:
+
+- Binding a whole value COPIES it, always. After 'b = a' the two names are
+
+```
+independent, and writing 'b' never changes 'a'. The copy goes all the way
+down, including nested structs and vectors.
+```
+
+- Reading a struct-typed field or element gives you a VIEW: 'w = o.inner'
+
+```
+and 'c = v[i]' name the record in place, so 'w.n = 42' changes 'o.inner'
+too. A view is not a copy — it points at the interior of what you read it
+from. (A vector-typed field is a whole value, so 'av = bx.v' copies.)
+```
+
+- Write '&' when you want a live link where a bind would copy: 'b = &a' and
+
+```
+'av = &bx.v' both write through to the source.
+```
 
 ```rust
 value struct Point {
@@ -2210,6 +2233,32 @@ q is an independent COPY of element 0
   q.x = 99;
   assert(pts[0].x == 1, "value struct copy does not write back");
   assert(q.x == 99, "the copy itself did change");
+```
+
+A PLAIN struct answers the same two questions differently, so here they are side by side. Reading one out of an element gives a view, and writing the view reaches the element.
+
+```rust
+  shelf =[Product {name: "Pear", price: 90, stock: 10 }];
+  item = shelf[0];
+  item.stock = 7;
+  assert(shelf[0].stock == 7, "a plain struct element read is a view");
+```
+
+Binding the whole value copies it, so the original keeps its own stock.
+
+```rust
+  spare = item;
+  spare.stock = 3;
+  assert(item.stock == 7, "a whole-value bind copies");
+  assert(spare.stock == 3, "and the copy moves on its own");
+```
+
+Write '&' to get a live link where a bind would otherwise copy.
+
+```rust
+  linked = &item;
+  linked.stock = 1;
+  assert(item.stock == 1, "'&' binds a live link");
 ```
 
 === sizeof
@@ -6717,7 +6766,8 @@ Works for any store-rooted collection — `hash`, `sorted`, `ordered`, `index` (
 First call on a path that does NOT yet exist: serialises the current in-memory Store at the reference's slot to disk (padded to a valid ≥1024-word image with a tail free block), then mmaps it back.  Caller's existing DbRefs into that slot remain valid.
 Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.
 Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).
-Typical dryopea-style pattern: pw = PaintedWorld { painted: \[\] }   // painted's declared type is hash\<PaintedHex\[q, r\]\> store\_persist\_bind(pw.painted, "dryopea\_world.store") // …mutations to pw.painted now hit mmap'd bytes… `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial` (each keyed local/field is its own dedicated Store).  A bare `reference` parameter accepts them all; `bind\_path` is collection-agnostic (it snapshots the whole Store's bytes).  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.
+Typical dryopea-style pattern: pw = PaintedWorld { painted: \[\] }   // painted's declared type is hash\<PaintedHex\[q, r\]\> store\_persist\_bind(pw.painted, "dryopea\_world.store") // …mutations to pw.painted now hit mmap'd bytes… `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial`. A bare `reference` parameter accepts them all.
+It snapshots the whole STORE `r` lives in, which is not always a store of just `r` (loft\#757).  A keyed LOCAL owns its store, so binding it writes a file for that collection.  A keyed FIELD shares its container's store, so binding `pw.painted` above writes a file for `PaintedWorld` — carrying the container and every sibling collection — and that file will NOT load back into a bare `hash\<PaintedHex\[q, r\]\>`.  Both are usable; they are just different files.  Bind through the container consistently, or bind a local of the collection's own type when another program has to read the file. The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.
 
 ```rust
 pub fn store_load(r: reference, path: text) -> boolean fs#read
@@ -6758,11 +6808,39 @@ You say when, because only the program knows whether a drop is permanent: a coll
 You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft\#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
 
 ```rust
-pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read
+pub fn store_bind_lazy(local: reference, source: text) -> boolean
 ```
 
 Working-set load: fetch ONE integer-keyed entry from a persisted HASH image into the empty local hash `local`, reading only the pages the lookup touches — not the whole file. The bounded-fetch counterpart of `store\_load`, for when `local` should hold only the entries actually asked for (a phone pulling the few map tiles a route needs from a large block). `path` is a local file or an `http(s)://` URL served with `Range`, on every target including the browser (`--html`), where the fetch goes through the same bridge `store\_load\_url\_trusted` uses. Returns false when the key is absent, the file is unreadable, or the collection is not an integer-keyed hash.
-The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector\<text\>` or a `vector\<vector\>` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)   // tiles now holds entry 42 only
+The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector\<text\>` or a `vector\<vector\>` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)   // tiles now holds entry 42 only \@PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.
+Per COLLECTION, not per store: `persons` and `companies` are different sources, and two collections of one type can bind differently. Binding replaces, and may be done before the collection holds anything.
+`source` is what `store\_load\_key` accepts — a local `.store` image or an `http(s)://` URL served with Range. Returns false for a null collection. persons: hash\<Person\[id\]\> = \[\] store\_bind\_lazy(persons, "people.store") p = persons\[42\]        // fetches exactly entry 42, then holds it
+
+```rust
+pub fn store_lazy_error(local: reference) -> text
+```
+
+\@PLN129 arc C — why the last lazy fetch could not REACH this collection's source, or "" when it is healthy.
+A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:
+p = persons\[42\]; if p == null { why = store\_lazy\_error(persons); if why == "" { /\* really no such person \*/ } else { /\* could not reach: {why} \*/ } }
+A genuine absence CLEARS it: reaching the source and not finding the key proves the source was reachable, so a stale error never outlives it.
+
+```rust
+pub fn store_lazy_faults(local: reference) -> integer
+```
+
+\@PLN129 arc C — how many fetches could not REACH this collection's source. 0 is healthy. The magnitude behind `store\_lazy\_error`: after a traversal it answers "how incomplete am I".
+
+```rust
+pub fn store_lazy_clear(local: reference) -> boolean
+```
+
+\@PLN129 arc C — acknowledge this collection's fetch failures, returning whether there was anything to acknowledge.
+The ONLY thing that clears them. A later fetch happening to succeed does NOT: a traversal whose first lookup could not reach the source and whose second could is MISSING data, and answering "healthy" afterwards would be exactly the silent wrong answer this channel exists to prevent. Clearing is a caller saying "I have seen this", which is a different event entirely.
+
+```rust
+pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read
+```
 
 ```rust
 pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read

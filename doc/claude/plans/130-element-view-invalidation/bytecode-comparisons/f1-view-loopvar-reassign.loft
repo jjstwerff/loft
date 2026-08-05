@@ -1,0 +1,16 @@
+// @PLN130 F1 — minimal repro: reassigning a view from a loop var destroys the container.
+// interp: len(a) == 0.  native: len(a) == 3 (correct).  The native side is the WORKING
+// reference for this bug-fix.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  a = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  k = a[0];
+  for x in a {
+    if x.n == 33 {
+      k = x;
+    }
+  }
+  println("len {len(a)} k.n {k.n}");
+}

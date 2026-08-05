@@ -774,7 +774,7 @@ pub fn dump_var_tables(data: &Data, from: u32) {
             };
             let idx16 = u16::try_from(idx).unwrap_or(u16::MAX);
             eprintln!(
-                "[vartable]   {idx:<3} {:<18} {:<14} scope={scope:<4} {}{}{}{}{}{}",
+                "[vartable]   {idx:<3} {:<18} {:<14} scope={scope:<4} {}{}{}{}{}{}{}",
                 var.name,
                 short_type(&var.type_def),
                 if var.argument { "arg " } else { "" },
@@ -782,6 +782,14 @@ pub fn dump_var_tables(data: &Data, from: u32) {
                 if var.skip_free { "skipfree " } else { "" },
                 if vars.is_inline_ref(idx16) {
                     "inlineref "
+                } else {
+                    ""
+                },
+                // @PLN130 F9 — the `&` at a struct projection is invisible in the IR
+                // (`c = &v[0]` and `c = v[0]` emit the same ops), so this column is the
+                // only place the two spellings can be told apart.
+                if vars.is_amp_link(idx16) {
+                    "amplink "
                 } else {
                     ""
                 },

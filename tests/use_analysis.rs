@@ -1616,21 +1616,30 @@ fn warn(src: &str, gated_on: bool) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// @PLN90 W5 — the ENFORCED copy lint: `LOFT_WARN_COPIES` routes the Avoidable copy
-/// rows (the same survival-split set the `--report-copies` report shows) through the
-/// normal `Level::Warning` diagnostics channel, so they surface as compiler warnings.
-/// Default OFF stays byte-identical (silent). Promotes to default once the Avoidable
-/// set is drained (A2 / bucket-2 elision).
+/// @PLN130 F5 — the copy notice is DEFAULT-ON and needs no flag.
+///
+/// It was gated (`LOFT_WARN_COPIES`) and silent by default, on the reasoning that it should
+/// wait until the Avoidable set was drained. Measured instead: across 585 `tests/scripts`
+/// only 27 produce any row (55 rows), and each responds to a small source change — keep the
+/// source unused after the copy and it becomes a move, or build the value in place. A notice
+/// that is quiet on 95% of programs and actionable on the rest does not need draining first.
+///
+/// Emitted as `Advice`, not `Warning`: the program is CORRECT and merely pays a copy, and the
+/// repo rule is that a diagnostic gates only when ignoring it can produce a wrong result.
 #[test]
-fn warn_copies_enforced_lint_gated() {
-    let on = warn(REPORT_SRC, true);
-    assert!(
-        on.contains("warning:") && on.contains("avoidable copy"),
-        "LOFT_WARN_COPIES must emit avoidable-copy warnings; stderr:\n{on}"
-    );
+fn warn_copies_is_default_on_advice() {
     let off = warn(REPORT_SRC, false);
     assert!(
-        !off.contains("avoidable copy"),
-        "the lint must stay silent by default (gate off); stderr:\n{off}"
+        off.contains("advice:") && off.contains("copy of"),
+        "the copy notice must fire with no flag set; stderr:\n{off}"
+    );
+    assert!(
+        !off.contains("warning:"),
+        "a copy is correct-but-costly, so it must be advice rather than a warning; stderr:\n{off}"
+    );
+    // The text must name what the author can DO, not what the analysis concluded.
+    assert!(
+        off.contains("still used after this point"),
+        "the notice must name the lever (the surviving source); stderr:\n{off}"
     );
 }
