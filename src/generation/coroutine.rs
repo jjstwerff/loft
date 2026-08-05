@@ -285,7 +285,13 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
             continue;
         }
         let name = var_table.name(v);
-        if name.starts_with("__") {
+        // `__vdb_*` is the exception among the compiler-internal locals: it OWNS the backing
+        // store of a vector literal, so it has to survive resumes or the store allocated in
+        // one state is orphaned when the next `next_*` call re-declares the local — and the
+        // tail's `OpFreeRef(__vdb_N)` then frees a fresh `DbRef::NULL` instead.  `__work_*`
+        // (P218, a `String` pre-declared at function scope) and `__yf_*` (built inline by the
+        // eager-collect factory) own no store and keep their own emission paths.
+        if name.starts_with("__") && !name.starts_with("__vdb") {
             continue;
         }
         let tp = var_table.tp(v);
@@ -677,17 +683,32 @@ impl Output<'_> {
                 if !name.starts_with("__vdb") && !name.starts_with("__ref") {
                     continue;
                 }
+                // A `__vdb_*` that became a persistent FIELD must not also get a local of the
+                // same name — the local would shadow the field and the frees would miss.
+                if self.coroutine_persistent_vars.contains(&v) {
+                    continue;
+                }
                 to_predeclare_vdb.push(v);
             }
         }
+        // `DbRef::NULL`, NOT `null_named` — the same @P317 rule the ordinary local path
+        // already follows (an ordinary function emits `let mut var___ref_1: DbRef =
+        // DbRef::NULL`).  `null_named` allocates a real store slot, and this declaration runs
+        // on EVERY `next_*` call, so it leaked one store per hidden work-ref per resume — six
+        // records for a two-`__ref` generator advanced three times.  Each state re-initialises
+        // these before use, so there is nothing for the placeholder to carry.
         for v in &to_predeclare_vdb {
             let name = sanitize(self.data.def(self.def_nr).variables().name(*v));
-            writeln!(
-                w,
-                "        let mut var_{name}: DbRef = stores.null_named(\"var_{name}\");"
-            )?;
+            writeln!(w, "        let mut var_{name}: DbRef = DbRef::NULL;")?;
             self.declared.insert(*v);
         }
+        // These, plus `__work_*` above, are in scope for the WHOLE `next_*` body, so the tail
+        // state may name them — unlike a local declared inside one match arm.
+        let fn_scope: std::collections::HashSet<u16> = to_predeclare
+            .iter()
+            .chain(to_predeclare_vdb.iter())
+            .copied()
+            .collect();
         // N8b.3: wrap in `loop {}` so yield-from states can `continue` to the
         // next state immediately after sub-generator exhaustion.
         if has_yf {
@@ -839,6 +860,7 @@ impl Output<'_> {
             op.walk(&mut |n| {
                 if let Value::Var(v) = n
                     && !out.coroutine_persistent_vars.contains(v)
+                    && !fn_scope.contains(v)
                     && !vars.is_argument(*v)
                 {
                     ok = false;

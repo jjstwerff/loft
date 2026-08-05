@@ -152,7 +152,7 @@ interpreter lose it. Tracked as part of the uncovered copy set.
 
 ## Probe suite
 
-`probes/` — 42 probes, every one run on **both** backends. Not CI-run (see the probe→CI mapping
+`probes/` — 43 probes, every one run on **both** backends. Not CI-run (see the probe→CI mapping
 above for the ones that encode a guarantee); these are the investigation's landmarks.
 
 | range | what it holds |
@@ -167,6 +167,7 @@ above for the ones that encode a guarantee); these are the investigation's landm
 | 39 | F2's liveness boundary, 12 cells |
 | [40](probes/40-reshape-refusal/README.md) | F9's refusal boundary, 25 cells, with the *before* column measured on the pre-fix binary |
 | 41 | the `&`-alias sweep over the rule's PRODUCERS — what found D-bind-9 |
+| 42 | the native coroutine boundary — what running one "unmeasured" residual found |
 
 ## What this plan cost, and what it left
 
@@ -178,9 +179,12 @@ a measurement was run rather than a claim trusted:
 - **loft#779** — a sign-off whose claim measurement contradicted, reopened and closed properly.
 - **D-bind-9** — a rule closed on one of its three producers.
 - **The native coroutine defects** — `--native` could not compile any generator holding a heap
-  local, and silently dropped every statement after the last `yield`. Both pre-existing on
-  `main`, both found by running one residual this plan had recorded as *"unmeasured, not
-  known-broken"*. Fixed; `tests/scripts/776-generator-heap-locals.loft`.
+  local, and silently dropped every statement after the last `yield` (a dropped side effect, not
+  merely a leak). Both pre-existing on `main`, both found by running one residual this plan had
+  recorded as *"unmeasured, not known-broken"*. Four faults in all, each with its own chokepoint
+  and three of them only reachable once the one before it was fixed. Boundary
+  [probes/42](probes/42-generator-heap-locals.loft); CI form
+  `tests/scripts/776-generator-heap-locals.loft`, leak-clean on both backends.
 
 The last one is the plan's own lesson turned on itself: **"no specific reason to expect
 divergence" is not a measurement.**

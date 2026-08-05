@@ -149,9 +149,13 @@ impl Output<'_> {
         // value is a different store (an adopting callee returns the SAME
         // store — the free must then no-op, and a never-assigned sentinel
         // store_nr is a no-op inside OpFreeRef).  Excluded, matching the
-        // interpreter's predicate: borrowed views (non-empty dep), the
-        // fn's hidden return buffer (the CALLER owns that store), and
-        // coroutine-persistent fields (no `var_x` local exists).
+        // interpreter's predicate: borrowed views (non-empty dep) and the
+        // fn's hidden return buffer (the CALLER owns that store).
+        //
+        // A coroutine-persistent field used to be excluded too, on the reasoning that
+        // "no `var_x` local exists" — true, but the answer is to name the FIELD, not to
+        // skip the free.  Skipping it leaked one store per reassignment inside a
+        // generator (`s = mk(11); yield …; s = mk(22)` orphans the first).
         {
             let variables = self.data.def(self.def_nr).variables();
             let is_retbuf_attr =
@@ -168,7 +172,6 @@ impl Output<'_> {
                     Type::Reference(_, _) | Type::Enum(_, true, _)
                 )
                 && variables.tp(var).depend().is_empty()
-                && !self.coroutine_persistent_vars.contains(&var)
                 // A fresh-store-producing rhs: a call, an inline object `Insert`,
                 // or a `Block` that builds a new store (the `nullable_unwrap_copy`
                 // / `ncc` materialisers — `chosen = v[i] ?? d`).  A bare `Var` rhs
@@ -191,11 +194,16 @@ impl Output<'_> {
                 } else {
                     String::new()
                 };
-                write!(w, "{{ let _old_{name}: DbRef = var_{name}; ")?;
+                let place = if self.coroutine_persistent_vars.contains(&var) {
+                    format!("self.var_{name}")
+                } else {
+                    format!("var_{name}")
+                };
+                write!(w, "{{ let _old_{name}: DbRef = {place}; ")?;
                 self.output_set_inner(w, var, to)?;
                 write!(
                     w,
-                    "; if _old_{name}.store_nr != var_{name}.store_nr{witness_guard} \
+                    "; if _old_{name}.store_nr != {place}.store_nr{witness_guard} \
                      {{ OpFreeRef(cell, _old_{name}, \"var_{name}(prev)\"); }} }}"
                 )?;
                 return Ok(());
