@@ -168,6 +168,12 @@ whose scope and root cause are already pinned, skip it and fix the bug.
    call shape while pinning depth, Set-count, parameter kind and caller-count at 1.
    A clean sweep over one axis reads as proof and is not — the cell that broke needed
    all four moved at once.
+10. **Propose three or more cases? Write them all down BEFORE starting the first**
+    (investigation ground rule). Detail decays while you work: by the time case one is
+    done, the reason case three mattered has usually gone, and what gets lost is the
+    *specifics* — which axis, which shape, why it was suspected — not the headline. The
+    § Probe gaps list was written in full before any of it was worked, and that is the
+    order to keep. It also makes the list reviewable while it is still cheap to change.
 
 ## Stage A finding — which copies happen with no warning
 
@@ -304,7 +310,9 @@ on both backends.
 
 ## Probe gaps — what is NOT covered yet
 
-Ordered by what would cost most to keep not knowing.
+Ordered by what would cost most to keep not knowing. Written **in full before any of it was
+worked** — see § Method rule 10: with three or more candidate cases, the specifics of the
+later ones decay while you work the first.
 
 **1. Re-run probe 22's escape routes with the axes probe 23 exposed. Do this first.**
 Probe 22 concluded *"every escape route yields independent values"*, and that conclusion is
