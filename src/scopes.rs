@@ -3227,6 +3227,16 @@ impl Scopes {
             && let Type::Reference(src_d, _) | Type::Enum(src_d, true, _) = function.tp(*src)
             && d_nr == *src_d
         {
+            // @PLN130 F1 — this strip is LOAD-BEARING FOR NATIVE, which is why the obvious
+            // narrowing does not work.  Skipping it when both sides are borrows fixes the
+            // interpreter (probe 30 goes green) and BREAKS native (`len 0 want 3`, the same
+            // destruction the other way round): the emptied deps are exactly what makes the
+            // native generator materialise `_own_store_k` at the bind, so leaving them makes
+            // native alias the container instead.  Measured, then reverted.
+            //
+            // The real fix therefore cannot be "stop promoting the borrow" — it has to
+            // materialise at the BIND for both backends, which is what native already does
+            // as a side effect of this strip. See @PLN130 § F1 + F2 design.
             let deps: Vec<u16> = function.tp(v).depend().clone();
             for d in deps {
                 function.make_independent(v, d);

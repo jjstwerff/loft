@@ -467,6 +467,25 @@ the dep **also re-enables the pre-Set free**, and that free runs on the value `v
 BEFORE the reassignment — which was the borrowed container. One strip, two consequences,
 only one of them intended.
 
+**ATTEMPTED AND REVERTED — the strip is load-bearing for native.** The obvious narrowing is
+to stop promoting a borrow: skip the strip when *both* sides are borrows, since `k = x` is
+then a pointer rebind and `v` owns nothing at either end. Measured:
+
+```
+--interpret   probe 30 PASSES   (F1 fixed)
+--native      probe 30 FAILS    len 0 want 3 — the same destruction, other backend
+```
+
+The emptied deps are precisely what makes the native generator materialise `_own_store_k` at
+the bind. Leave them in place and native aliases the container instead. So the strip is not
+a bug to remove — it is native's materialisation trigger wearing a misleading name, and the
+interpreter is the backend that fails to act on it.
+
+**That rules out the whole "stop promoting the borrow" family of fixes** and leaves one
+shape: materialise at the BIND, explicitly, for both backends — making native's accidental
+behaviour the deliberate behaviour of both. A comment now marks the site so the next reader
+does not re-run this experiment.
+
 **This unifies F1 and F2 into one analysis with two triggers.** Materialise an element-read
 binding when either:
 
