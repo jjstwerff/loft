@@ -15,7 +15,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
 | C — Fix design | ✅ closed — F1+F2 one analysis; F4 reuses it; F3 settled by two decisions rather than machinery |
-| D — Implementation | ✅ F1, F2, F4, F5, F6 fixed (tests 144-146); F3 resolved by decision (dense vectors + edge case). Suggestions spun out as @PLN131 |
+| D — Implementation | 🟡 F1, F2, F4, F5, F6 shipped; F3 decided. F7 OPEN — the root defect: a whole-value bind must COPY, which deletes much of F2/F4 machinery |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -363,6 +363,7 @@ finding resolves exactly one of:
 | F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
 | F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |
+| **F7** | **`c = v[i]` ALIASES when a whole-value bind must COPY** — `&` is the aliasing spelling (§ F7) | measured both backends | **FIXED** — make the bind copy; `&v[i]` keeps aliasing | **OPEN — the root of loft#774; supersedes F2/F4's triggers** |
 
 **loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
 tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
@@ -574,6 +575,65 @@ Widening it to any field write through an element view would take write-through 
 keyed elements generally — a much larger semantic loss than F4 is worth. That means mapping
 the key NAME carried on the collection type to the field OFFSET the write uses, which is the
 part to get right rather than approximate.
+
+## F7 — the ROOT: a whole-value bind must COPY, and `&` is the aliasing spelling
+
+**This supersedes the premise the rest of the plan was built on.** Every section above treated
+`c = v[i]` aliasing as *documented, intended* behaviour (loft#774's own analysis says so, and
+`doc/08-struct.html` states it). It is not intended. The rule is one rule:
+
+| spelling | meaning |
+|---|---|
+| `b = a`, `c = v[i]`, `w = s.f` | **whole-value bind — COPIES**, always, whatever the source |
+| `d = &v[i]`, `r = &s.f` | **alias** — writes reach the container |
+
+Measured on both backends — `&` is already right; the plain bind is wrong:
+
+```
+c = a[0];  c.n = 42;    ->  a[0].n 42  c.n 42     WRONG: should be 1 / 42
+d = &b[0]; d.n = 42;    ->  b[0].n 42  d.n 42     right
+```
+
+So loft#774's "same assignment, opposite semantics" is a genuine **inconsistency**, not a
+design with two halves. `b = a` is correct; `c = v[i]` is the defect. The asymmetry the
+ticket reported has one fix: make the element/field read copy like every other whole-value
+bind.
+
+### What this simplifies
+
+Most of the machinery built for F2 and F4 exists only to decide *when* an alias must become a
+copy. If the bind always copies, the question disappears:
+
+- `collect_reshaped_containers` + the reshape trigger (F2) — **unnecessary**
+- `note_key_field_write` + the key-name/offset mapping (F4) — **unnecessary**
+- `container_element_base`'s use as a materialise trigger — collapses into "this is a bind"
+- the `advice: … was copied out of …` notices — replaced by the ordinary copy notice (F5),
+  because there is nothing special left to say
+
+That is a large net deletion, and it is the good kind: the special cases were compensating
+for a rule that was not being applied uniformly.
+
+### What it costs, stated honestly
+
+1. **This is a behaviour change for every `c = v[i]` that relies on write-through.** The
+   repo's rule is that no functioning program breaks. A program depending on the alias is
+   depending on the defect, but it is still a program that works today — so this needs the
+   deliberate-break route (`COMPATIBILITY.md`, @PLN113 contract-keying), not a quiet fix.
+2. **`tests/scripts/144/145/146` assert the alias survives** in non-reshaping scopes. Those
+   assertions become wrong and must flip — they were written to protect the very behaviour
+   this arc removes.
+3. **The copy notice (F5) will fire far more**, since every element bind becomes a copy. That
+   makes the "allowed for now" bucket much larger and makes @PLN131's suggestions more
+   valuable, not less — but the volume must be re-measured before it ships default-on.
+4. **`doc/08-struct.html` is wrong** and its source is `tests/docs/08-struct.loft`: *"A plain
+   (reference) struct, by contrast, is shared: a binding is a live view onto the same
+   record."* That sentence documents the defect. Correcting it is part of this arc, not F6.
+
+### Order
+
+Rule first, machinery second: land the copying bind, then DELETE the F2/F4 triggers it makes
+redundant, then re-measure F5's volume, then fix the doc. Deleting first would leave the
+corruption exposed in between.
 
 ## F3 — RESOLVED by two decisions, not by machinery
 
