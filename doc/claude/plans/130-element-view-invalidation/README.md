@@ -14,8 +14,8 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 |---|---|
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
-| C — Fix design | ✅ F1+F2 shipped as one analysis, two triggers. F3 needs a different mechanism (it needs the alias to SURVIVE) |
-| D — Implementation | 🟡 F1, F2, F4, F5, F6 DONE (tests 144-146). F3 BLOCKED — needs stable slots. Suggestions spun out as @PLN131 |
+| C — Fix design | ✅ closed — F1+F2 one analysis; F4 reuses it; F3 settled by two decisions rather than machinery |
+| D — Implementation | ✅ F1, F2, F4, F5, F6 fixed (tests 144-146); F3 resolved by decision (dense vectors + edge case). Suggestions spun out as @PLN131 |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -359,7 +359,7 @@ finding resolves exactly one of:
 |---|---|---|---|---|
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
 | F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145` |
-| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **FIXED** — needs stable slots (§ F3); materialise and fat-`&` both shown not to work | BLOCKED on a representation decision |
+| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **STATED** — edge case; takes F2's materialise + advice (§ F3). Stable slots REJECTED: vectors stay dense | decided |
 | F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
 | F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |
@@ -574,6 +574,33 @@ Widening it to any field write through an element view would take write-through 
 keyed elements generally — a much larger semantic loss than F4 is worth. That means mapping
 the key NAME carried on the collection type to the field OFFSET the write uses, which is the
 part to get right rather than approximate.
+
+## F3 — RESOLVED by two decisions, not by machinery
+
+**Decision 1 — a `vector` stays DENSE. `remove` compacts; there are no holes.** Stable slots
+were the last mechanism that could have let a view follow its element, and they are rejected:
+holes would make `v[i]` return null after an unrelated removal, and no other index type in
+loft behaves that way. Being agnostic across index types is worth more than the copy the
+compaction costs. This closes option 1 permanently — it is not deferred, it is decided.
+
+**Decision 2 — holding a view across a removal of its own container is an EDGE CASE.** It
+therefore gets a proportionate answer, not a representation change.
+
+Together those settle it: if the element genuinely moves, no reference can follow it without
+per-reference bookkeeping, and constraint 5 forbids that. So F3 takes **F2's answer** — the
+view materialises and the author is told — which is already built and shipped.
+
+Two things make that the right size rather than a compromise:
+
+- loft **already advises against the spelling** probe 26 uses: *"`&` on parameter `target`
+  only slows it down here — field mutation already propagates to the caller without it. Drop
+  the `&` unless you REASSIGN the whole binding."* The probe leans on a discouraged idiom.
+- The remaining loss is a write through a materialised view, which is **stated**, not silent.
+  No element is corrupted and none becomes unreachable — the two things the closure bar
+  actually forbids.
+
+Recorded for the next reader: the two mechanisms below were both examined and neither works,
+so nobody needs to re-derive them.
 
 ## F3 — why the two obvious mechanisms both fail
 
