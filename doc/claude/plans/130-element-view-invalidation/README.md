@@ -629,11 +629,40 @@ for a rule that was not being applied uniformly.
    (reference) struct, by contrast, is shared: a binding is a live view onto the same
    record."* That sentence documents the defect. Correcting it is part of this arc, not F6.
 
+### The existing probe suite IS the implementation checklist
+
+This arc belongs in @PLN130 and not in a plan of its own, for a concrete reason: **the 34
+probes are the asset F7 needs.** They already say, cell by cell, what copies and what aliases,
+so F7 is not "write a new matrix" — it is "flip the few cells that encode the defect and watch
+the rest hold still". Splitting the arc off would have orphaned that.
+
+Measured across the whole suite, only **four** assertions depend on the aliasing, and all four
+were written during @PLN130 to protect it:
+
+| where | assertion that must flip |
+|---|---|
+| `tests/scripts/144:37` | `a[2].n == 99` — "unreassigned view still aliases" |
+| `tests/scripts/145:71` | `boxes[1].n == 99` — "alias must survive" |
+| `tests/scripts/146:53` | `s[30].tag == 999` — a non-key write reaches the element |
+| `probes/08:18` | `h["c"].n == 99` — keyed element write-through |
+
+**Probe 31 does NOT flip.** A `match` capture is a documented view of its subject, not a
+whole-value bind, so F7 leaves it alone — the distinction to hold while implementing.
+
+Everything else already encodes the target behaviour, and several probes stop being special
+cases: **25** (captured loop var), **27** (view stored into a record), **32** (tuple element)
+and **31**'s scalar arm each measured a COPY and were recorded as exceptions to the aliasing
+rule. Under F7 they are simply the rule — which also dissolves § cluster II's finding that
+*"the producer split has no marker in the source"*, because there is no split left.
+
+So the whole of cluster II's matrix survives F7 as-is, and becomes evidence FOR the uniform
+rule rather than a catalogue of inconsistencies.
+
 ### Order
 
 Rule first, machinery second: land the copying bind, then DELETE the F2/F4 triggers it makes
-redundant, then re-measure F5's volume, then fix the doc. Deleting first would leave the
-corruption exposed in between.
+redundant, then flip the four assertions above, then re-measure F5's volume, then fix the doc.
+Deleting first would leave the corruption exposed in between.
 
 ## F3 — RESOLVED by two decisions, not by machinery
 
