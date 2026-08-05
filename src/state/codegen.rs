@@ -2435,6 +2435,26 @@ impl State {
             // give d its own independent record by allocating storage and copying c's data.
             self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            && stack.function.tp(v).depend().is_empty()
+            && Self::is_container_element_read(stack, value)
+        {
+            // @PLN130 F1 — MATERIALISE an element read into a store `v` owns.
+            //
+            // `c = v[i]` normally binds a VIEW and keeps its container dep, which is the
+            // documented alias (loft#774) and stays a borrow.  Reaching here means the deps
+            // are EMPTY — `scopes.rs` stripped them because `v` is reassigned later, so from
+            // this point on every consumer treats `v` as an owner.  Binding the raw interior
+            // pointer anyway left an owner whose "own" store is the CONTAINER's: the
+            // reassignment's pre-Set `OpFreeRef` then released the whole container, and
+            // `k = a[0]; for x in a { k = x }` ended with `len(a) == 0` before any removal
+            // (probe 30 / loft#778).
+            //
+            // Native already does the right thing here — the same empty deps make its
+            // generator allocate `_own_store_k` at the bind — so this makes the interpreter
+            // act on the fact both backends already read, rather than changing the fact.
+            // A binding that kept its deps is untouched and still aliases.
+            self.gen_set_first_ref_elem_copy(stack, v, value, d_nr);
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::TupleGet(_, _) = value
         {
             // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
@@ -2725,6 +2745,55 @@ impl State {
         self.generate(&copy_val, stack, false);
         // @PLN130 — recorded HERE, past the last-use-move return above, so the manifest
         // claims a copy only where one is actually written.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpRecordBind,
+        );
+    }
+
+    /// Is this RHS a read of an element/field OUT of a container — the shape that yields an
+    /// interior pointer into someone else's store rather than a store of its own?
+    ///
+    /// `OpGetVector` / `OpVectorRef` are `v[i]`; `OpGetField` is `s.f`. All three return a
+    /// `DbRef` that shares `store_nr` with the container, which is what makes a binding of
+    /// one a borrow rather than an owner.
+    fn is_container_element_read(stack: &Stack, value: &Value) -> bool {
+        matches!(value.unspan(), Value::Call(d, _)
+        if matches!(
+            stack.data.def(*d).name(),
+            "OpGetVector" | "OpVectorRef" | "OpGetField"
+        ))
+    }
+
+    /// First-assignment materialisation of a container element read into a store `v` owns.
+    ///
+    /// Same emission shape as [`Self::gen_set_first_ref_tuple_copy`] — allocate at `v`'s
+    /// slot, then deep-copy the interior pointer's record into it — but reached from an
+    /// element/field read whose deps were stripped, so `v` is an owner (@PLN130 F1).
+    fn gen_set_first_ref_elem_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
+        let tp_nr = stack.data.def(d_nr).known_type();
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = stack.step(slot_end) - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRef", self);
+        self.code_add(slot_offset);
+        stack.add_op("OpDatabase", self);
+        self.code_add(slot_offset);
+        self.code_add(tp_nr);
+        let copy_nr = stack.data.def_nr("OpCopyRecord");
+        let copy_val = Value::Call(
+            copy_nr,
+            vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+        );
+        self.generate(&copy_val, stack, false);
         crate::copy_manifest::record(
             stack.def_nr,
             v,
