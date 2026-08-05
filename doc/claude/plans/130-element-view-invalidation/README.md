@@ -485,13 +485,39 @@ every compile, and a `--native` run reports both generators, so its column rough
   hidden buffer, nobody else owns it), and `return_adopts_fresh_store` tests for the marker by
   VALUE rather than asking whether the named attr *is* a hidden retbuf.
 
-  **Not yet verified — the safety question that gates any fix:** whether adopting the `[1]`
-  case is sound depends on whether the caller REUSES that buffer before the binding dies (the
-  hazard `gen_set_first_at_tos`'s comment names: "a hidden `ref_return` work-ref the caller
-  REUSES across iterations"). Probe 17 is the shape that would break if it is reused. Answer
-  this before touching `return_adopts_fresh_store` — extending the predicate to accept a
-  hidden-attr dep is a one-line change that would silently widen aliasing if the reuse hazard
-  is real.
+  **The reuse hazard — MEASURED, and it splits in two.** The gating question was whether the
+  caller reuses that buffer before the binding dies (`gen_set_first_at_tos`: "a hidden
+  `ref_return` work-ref the caller REUSES across iterations"). Traced on native with a
+  three-iteration loop over a `[1]`-dep callee:
+
+  ```
+  keep = mk_local(100)   [copy] src=#1 dst=#0 free_src=true
+  loop i=1              [copy] src=#2 dst=#1 free_src=true
+  loop i=2              [copy] src=#2 dst=#1 free_src=true
+  loop i=3              [copy] src=#2 dst=#1 free_src=true
+  ```
+
+  - **The buffer VARIABLE is reused** — `var___ref_2` is declared once at function scope and
+    handed to all three calls, which is what the warning was about.
+  - **The STORE it names is NOT.** `free_src=true` on *every* call: `OpCopyRecord` frees the
+    source right after copying it. The constant `#2` is the allocator returning the slot it
+    just freed, not a store living across iterations.
+  - **Distinct call sites get distinct buffers** — `keep` uses `__ref_1`, the loop call uses
+    `__ref_2` — so cross-site aliasing is not a concern.
+
+  So the emitted sequence is **copy-then-free: a move implemented the expensive way.** At the
+  moment of the copy the source belongs to nobody else and is about to be discarded — which
+  is precisely the situation the `[u16::MAX]` marker path already adopts.
+
+  **The predicate this implies is sharper than "dep names a hidden attr":** adopt when the dep
+  names the callee's OWN retbuf **and** the return is not a borrowed view (`free_src` set). A
+  genuine borrowed-view return leaves the free bit clear, and there the copy is required.
+
+  **Still not verified — the one case that could still break it:** whether any shape keeps two
+  results from the SAME call site simultaneously live. Reassignment cannot (each call displaces
+  the previous binding) and a container insert deep-copies on the way in, but that is reasoning,
+  not a sweep. Enumerate it before changing `return_adopts_fresh_store` — this is the last gate,
+  and it is a bounded case analysis rather than an open question.
 - **Q6 — which of the uncovered families should be silenced rather than removed?** The owner's
   framing: prevent the copy where possible, and where it is genuinely needed allow it silently
   *but closely guarded* — i.e. an accept recorded at the site, not a blanket exemption.
