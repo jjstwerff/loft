@@ -163,6 +163,16 @@ pub struct Variable {
     /// element, field, nested) is rejected, but a rebind (`=`) that re-points the
     /// slot is allowed.  The sibling of the `&T` mutable borrow.  @PLN40 phase 1.
     value_const: bool,
+    /// @PLN130 F9 — this binding was spelled with `&` at a STRUCT-typed projection
+    /// (`c = &v[0]`, `c = &o.inner`).  Such a projection is already a VIEW under B-View,
+    /// so both spellings lower to byte-identical IR and the `&` used to be dropped as
+    /// redundant.  It stopped being redundant when F2 made a view MATERIALISE on a
+    /// reshape: from then on `&` also means *"and do not silently copy it"*, which is
+    /// information the IR no longer carries.  A marker rather than `Type::RefVar` on
+    /// purpose — RefVar would re-route every read and write through the double
+    /// indirection parameters use, slowing every access to carry a compile-time fact.
+    /// See loft#779 / `formal/binding.md` D-bind-8.
+    amp_link: bool,
     /// Whether this variable's stack storage has been initialised by codegen.
     /// Set to `true` when the first-allocation init opcodes are emitted (A6.3).
     /// Arguments are pre-allocated by the caller, so they start as `true`.
@@ -496,6 +506,7 @@ impl Function {
                 defined: false,
                 const_binding: false,
                 value_const: false,
+                amp_link: false,
                 first_def: u32::MAX,
                 last_use: 0,
                 pre_assigned_pos: u16::MAX,
@@ -1318,6 +1329,7 @@ impl Function {
             defined: false,
             const_binding: false,
             value_const: false,
+            amp_link: false,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1347,6 +1359,7 @@ impl Function {
             defined: self.variables[var as usize].defined,
             const_binding: self.variables[var as usize].const_binding,
             value_const: self.variables[var as usize].value_const,
+            amp_link: self.variables[var as usize].amp_link,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1378,6 +1391,7 @@ impl Function {
             defined: false,
             const_binding: false,
             value_const: false,
+            amp_link: false,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1407,6 +1421,7 @@ impl Function {
             defined: true,
             const_binding: false,
             value_const: false,
+            amp_link: false,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1725,6 +1740,18 @@ impl Function {
     /// field, nested) is rejected; a rebind (`=`) that re-points the slot is allowed.
     pub fn is_value_const(&self, var_nr: u16) -> bool {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].value_const
+    }
+
+    /// Mark `var_nr` as bound with an explicit `&` at a struct-typed projection —
+    /// the author asked for a live link, not a view loft may quietly copy (@PLN130 F9).
+    pub fn set_amp_link(&mut self, var_nr: u16) {
+        self.variables[var_nr as usize].amp_link = true;
+    }
+
+    /// Whether `var_nr` was spelled `&` at a struct-typed projection.  The `&` is
+    /// otherwise invisible after parsing: `c = &v[0]` and `c = v[0]` emit the same IR.
+    pub fn is_amp_link(&self, var_nr: u16) -> bool {
+        (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].amp_link
     }
 
     /// Whether `var_nr` carries EITHER const axis — used by the guards that apply to

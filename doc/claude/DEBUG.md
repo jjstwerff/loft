@@ -122,6 +122,13 @@ answer the ownership question in the same line: `arg`, `def`, `skipfree`, `inlin
 and `OWNS` (the `Function::owns_store` verdict — the ONE predicate every consumer
 reads; an element or a match binding must NOT show it).
 
+One flag is there for a different reason.  **`amplink`** marks a binding the author
+spelled with `&` at a struct-typed projection (`c = &v[0]`, `c = &o.inner`).  Such a
+projection is already a view, so both spellings emit *byte-identical* IR — this column
+is the only place the `&` is still visible after parsing, and the only way to check
+that a decision keyed on it is looking at the binding you think it is (@PLN130 F9,
+loft#779).
+
 ---
 
 ## Database / Struct Debug Dumps in the Trace

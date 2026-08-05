@@ -1459,6 +1459,12 @@ use a separate collection or add after the loop"
         // deep copy and is NON-OWNING (its dep names the source, so `owns = dep.is_empty()`
         // is false and it never frees the source's store).  `d[i] = x` then writes THROUGH.
         let amp_vector_bind = op == "=" && self.amp_pending && matches!(s_type, Type::Vector(_, _));
+        // @PLN130 F9 step 2 — track whether the `&` finds a lowering below.  A STRUCT-typed
+        // projection (`c = &v[0]`, `c = &o.inner`) finds none: it is already a VIEW under
+        // B-View, so both spellings emit byte-identical IR and the `&` was dropped as
+        // redundant.  It stopped being redundant when F2 made a view MATERIALISE on a
+        // reshape — from then on `&` also says *"and do not silently copy it"*.
+        let mut amp_unlowered = op == "=" && self.amp_pending && !amp_vector_bind;
         // @PLN87 L1 / #2 — a local `&`-binding to a SCALAR lvalue (`b = &a` or
         // `b: &integer = a`) makes `b` a LIVE reference to the source's stack slot:
         // lower it to `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T`
@@ -1522,6 +1528,7 @@ use a separate collection or add after the loop"
                 None
             };
             if let Some(src) = stack_src {
+                amp_unlowered = false;
                 let inner = self.vars.tp(src).clone();
                 let is_ref = matches!(inner, Type::Reference(..));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
@@ -1536,6 +1543,7 @@ use a separate collection or add after the loop"
                 // free decision to derive.
                 s_type = Type::RefVar(Box::new(if is_ref { inner.depending(src) } else { inner }));
             } else if let Some(eref) = heap_ref {
+                amp_unlowered = false;
                 // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
                 // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its
                 // pointer construction off this `OpGetField`/`OpGetVector` value — so no
@@ -1543,6 +1551,18 @@ use a separate collection or add after the loop"
                 *code = eref;
                 s_type = Type::RefVar(Box::new(s_type));
             }
+        }
+        // @PLN130 F9 step 2 — the `&` reached no lowering, so record it on the VARIABLE:
+        // the IR is about to lose it entirely.  A marker rather than `Type::RefVar` on
+        // purpose — RefVar would re-route every read and write through the double
+        // indirection parameters use, paying on every access to carry a compile-time
+        // fact, which is exactly what loft's own advice warns about for a redundant `&`
+        // param.  INERT: nothing reads it yet (step 3, the refusal, is what will).
+        if amp_unlowered
+            && var_nr != u16::MAX
+            && matches!(s_type, Type::Reference(..) | Type::Enum(_, true, _))
+        {
+            self.vars.set_amp_link(var_nr);
         }
         // `amp_pending` is a one-shot per binding — clear it here so a `&` that did
         // NOT take the scalar-reference path (a heap `&`-view, a non-`Var` source, an

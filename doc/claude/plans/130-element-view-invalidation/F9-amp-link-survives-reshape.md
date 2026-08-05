@@ -169,7 +169,31 @@ used on a LATER iteration of an enclosing loop is not tracked, because the frame
 block. A disturbance anywhere inside a loop shakes every view held from *outside* it before the
 body is walked, so the ordinary loop shapes are covered; this one keeps today's behaviour.
 
-### Step 2 — give `&` a representation that survives to the check (INERT)
+### Step 2 — give `&` a representation that survives to the check (INERT) ✅ DONE (2026-08-05)
+
+**Shipped.** `Variable::amp_link` + `set_amp_link`/`is_amp_link`, set in
+`parse_assign_op` at the point the `&` previously evaporated — the branch where neither the
+scalar-stack nor the heap-ref lowering claimed it and the source type is a struct. Rendered as
+an `amplink` column by `LOFT_VAR_TABLE`, which is the only way to tell the two spellings apart.
+Still INERT: no decision reads it.
+
+**Calibrated in both directions, because a marker that has never been made to fire and to stay
+quiet is an unread dial** — and without this the gate below would have proved only that dead
+code changes nothing:
+
+| shape | `amplink` |
+|---|---|
+| `c = &v[0]` · `c = &o.inner` · `c = &v[0].inner` | **set** |
+| `c = v[0]` · `c = o.inner` (plain projections) | quiet |
+| `b = &a` (scalar), `p = &o` (whole value), `d = &v` (vector) — the `&`s that already lower | quiet |
+
+**Gate: both halves byte-identical**, on a corpus carrying all three groups plus `&` parameters
+(`scratchpad/amp-corpus.loft`) — emitted IR + bytecode, and generated native Rust. Each was
+first shown DETERMINISTIC across two runs of the same binary, so the comparison means something;
+that check earned its keep, because the first attempt diverged on nothing but the program cache
+serving run 2 (`LOFT_NO_CACHE=1` is required) and the run before that compared a binary which,
+copied out of `target/release/`, could find neither the stdlib nor its deps directory and so
+compiled nothing at all. Behaviour identical on both backends.
 
 Mark the binding when the parser sees `&` at a projection bind — a flag on the variable, **not** a
 type change. Nothing reads it yet.
@@ -239,21 +263,40 @@ One frame deep only. A reshape two calls down keeps today's behaviour and gets i
 - `LOFT.md`: the user-facing paragraph gains the `&` row, since the error is something an author
   will meet.
 
-## The compatibility question, which must be answered before step 3 lands ⚑
+## The compatibility question — ANSWERED 2026-08-05: cleared, and the doc urges it
 
 **Adding an error can stop compiling a program that compiles today** —
-[COMPATIBILITY.md](../../COMPATIBILITY.md), and *"compatibility is ABSOLUTE"*. The argument that
-this is nonetheless allowed:
+[COMPATIBILITY.md](../../COMPATIBILITY.md), and *"compatibility is ABSOLUTE"*. Checked against
+the freeze machinery rather than assumed, as this section demanded:
+
+**`manifest::CONTRACT_VERSION == 0` — the freeze has NOT happened.** Its own doc comment calls
+0 the pre-freeze baseline, and `tests/layout_golden.rs` keeps the flip-gate inert while it holds.
+So the refusal lands **unconditionally** and needs no @PLN113 edition valve. That was the branch
+this section was written to discover, and it is the cheap one.
+
+**The stronger finding: post-freeze this becomes impossible, so it is now or never.**
+[COMPATIBILITY.md § The error surface is one-directional](../../COMPATIBILITY.md) is explicit —
+loft may always *drop* an error and, after the freeze, may **never add one**. That *inverts* the
+usual pre-freeze disposition: *"be strict now, because you can always relax later but never
+tighten,"* and every place loft is too permissive is a **last-chance-to-add**. A silently
+dropped write through a `&` is exactly the "silently accepts something dubious" shape it names.
+So step 3 is not merely permitted, it is on the pre-freeze audit's own list.
+
+**The one caveat that genuinely applies, and why it does not block.** The same section says the
+*first* resolution of a would-be-error is **a rewrite to correct function, not an error** (the
+C80 model: give it a sane defined behaviour instead of rejecting). For this shape that rewrite
+exists and is named above — make the link FOLLOW its element, which a dense vector makes
+arithmetic rather than a lookup. It was considered and **declined by the maker** as not worth
+runtime arithmetic per link for an edge case. That is the required "consciously accept" step,
+taken by the person entitled to take it, and recorded here so the freeze audit does not have to
+re-derive it.
+
+Two supporting arguments, unchanged and still true:
 
 - Every program the error rejects is **already silently wrong** — it loses a write with no
   diagnostic. Refusing it converts silent breakage into a compile-time message, which is the
   direction the closure bar demands, not a regression.
 - It is an **edge case** by the maker's own classification, so the blast radius is small.
-
-That argument still has to be checked against the contract-freeze machinery rather than assumed:
-`CONTRACT_VERSION` and whether this counts as a pre-freeze error-add (D-const-1 in `binding.md`
-was one, and recorded as such). **Do this check first** — if the freeze has passed, the refusal
-needs the edition-style valve (@PLN113 contract-keying) instead of landing unconditionally.
 
 ## Deliberately out of scope
 
