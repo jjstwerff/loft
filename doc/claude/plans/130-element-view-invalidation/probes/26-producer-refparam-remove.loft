@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 26 — cluster II matrix: producer = a `&` parameter bound from an element.
+//
+// `LOFT.md` documents a `&` parameter as sharing the caller's store in place, and #775
+// showed a field view escaping through one.  Here the `&` arg IS a container element, and
+// the container is reshaped while the callee's view is live — the callee writes AFTER the
+// removal has shifted the elements underneath it.
+//
+// Hand-computed: `shift_then_write` receives the element whose n is 33 (index 2).  It
+// removes index 0, which moves that element to index 1, then writes through its `&` view.
+// The write must land on the element it was given.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn shift_then_write(target: &Box, all: &vector<Box>) {
+  all.remove(0);
+  target.n = 99;
+}
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  shift_then_write(boxes[2], boxes);
+
+  assert(len(boxes) == 2, "26 len {len(boxes)} want 2");
+  assert(boxes[0].n == 22 && boxes[0].tag == 222, "26 e0 {boxes[0].n}/{boxes[0].tag} want 22/222");
+  assert(boxes[1].n == 99 && boxes[1].tag == 333, "26 e1 {boxes[1].n}/{boxes[1].tag} want 99/333");
+  println("probe 26 PASSED");
+}

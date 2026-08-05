@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 29 — cluster II matrix: invalidator = removal during iteration of a
+// DIFFERENT view of the same container.
+//
+// Probe 07 removed through the loop's own element (`b#remove`).  This one holds a view
+// taken BEFORE the loop while a `#remove` fires from inside it — two live views of one
+// container, one of them doing the reshaping.
+//
+// Hand-computed: `held` names the element whose n is 44 (index 3).  The loop removes the
+// two elements with n < 30 (indices 0 and 1), so that element ends at index 1.  A write
+// through `held` must land there.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 },
+           Box { n: 33, tag: 333 }, Box { n: 44, tag: 444 }];
+  held = boxes[3];
+
+  for b in boxes {
+    if b.n < 30 {
+      b#remove;
+    }
+  }
+
+  assert(len(boxes) == 2, "29 len {len(boxes)} want 2");
+  held.n = 99;
+  assert(boxes[0].n == 33 && boxes[0].tag == 333, "29 e0 {boxes[0].n}/{boxes[0].tag} want 33/333");
+  assert(boxes[1].n == 99 && boxes[1].tag == 444, "29 e1 {boxes[1].n}/{boxes[1].tag} want 99/444");
+  println("probe 29 PASSED");
+}

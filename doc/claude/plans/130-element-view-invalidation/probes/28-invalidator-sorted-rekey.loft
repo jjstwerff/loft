@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 28 — cluster II matrix: invalidator = REORDERING, not removal.
+//
+// The other half of the row: a KNOWN producer (`c = collection[…]`) against an untested
+// invalidator.  A `sorted<T[key]>` keeps its elements in key order, so mutating the key
+// of a live element reorders the collection — the same positional shift `remove` causes,
+// reached without deleting anything.
+//
+// Hand-computed: `c` names the element whose key is 30.  Setting its key to 5 must move it
+// to the FRONT of the sorted order.  `c` must still describe that element afterwards, and
+// the collection must hold 3 elements in key order 5, 10, 20.
+//
+// MEASURED — FAILS identically on both backends, and the failure is sharper than "stale
+// index".  After `c.key = 5`:
+//
+//   c.key   == 5     c.tag == 333    the element itself is updated
+//   s[5]    -> null                  NOT findable at its new key
+//   s[30]   -> null                  NOT findable at its old key either
+//   iterate -> 3 elements            still present, so nothing was deleted
+//
+// The element becomes unreachable by key while remaining in the collection: the write
+// through the view updated the record but never told the collection to re-index.  A
+// program that keys into `s` silently loses an element it can still iterate over — no
+// error, no diagnostic, and the count still looks right.
+
+struct Elm { key: integer, tag: integer = 0 }
+
+fn main() {
+  s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 },
+                         Elm { key: 20, tag: 222 },
+                         Elm { key: 30, tag: 333 }];
+
+  c = s[30];
+  assert(c.tag == 333, "28 pre c.tag {c.tag} want 333");
+
+  c.key = 5;                       // re-key: this element sorts to the front now
+
+  assert(c.tag == 333, "28 c.tag {c.tag} want 333");
+  assert(c.key == 5, "28 c.key {c.key} want 5");
+  assert(s[5].tag == 333, "28 s[5].tag {s[5].tag} want 333");
+  assert(s[10].tag == 111, "28 s[10].tag {s[10].tag} want 111");
+  assert(s[20].tag == 222, "28 s[20].tag {s[20].tag} want 222");
+  println("probe 28 PASSED");
+}

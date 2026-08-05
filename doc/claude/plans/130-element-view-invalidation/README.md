@@ -12,7 +12,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | 🟡 24 probes on both backends. Gap 1 closed (probe 24 — E3/E4 retracted). Cluster II's producer × invalidator matrix is still 2×2 of a much larger grid — see § Probe gaps |
+| A — Probe catalogue | 🟡 30 probes on both backends. Gaps 1 and 2 worked; loft#778 filed from the matrix. Remaining cells: `par` writes, nested-container removal, `match` captures, tuple elements |
 | B — Mechanism investigation | 🟡 Cluster I mechanisms verified to a code line; Q5 answered; cluster II's mechanism still hypothesised |
 | C — Fix design | ⏸️ the model is chosen (below), the enforcement point is not. The Q5 one-liner was tried and reverted — it needs an analysis, not a flag test |
 | D — Implementation | ⏸️ pending C. Nothing eliminated yet: the guard is built, the class is catalogued, no copy removed and no view fixed |
@@ -340,7 +340,42 @@ This also sharpens what a real fix must do: it is not enough to know a buffer is
 the copy (probe 21). The predicate must also know whether the adopted value will be **bound or
 stored a second time** — E3 and E4 are exactly that, and they are the routes that break.
 
-**2. Cluster II's producer × invalidator matrix — the largest real hole.**
+**2. Cluster II's producer × invalidator matrix — WORKED (probes 25–30). Four new failures,
+one of them a different and worse bug.**
+
+| # | cell | interp | native | result |
+|---|---|---|---|---|
+| 25 | producer: `for` loop var captured out of the loop | pass | pass | **safe** — the capture COPIES; not an index-pinned view |
+| 27 | producer: a view stored into another record | pass | pass | **safe** — the store copies |
+| 26 | producer: a `&` param bound from an element | **FAIL** | **FAIL** | write through the `&` view is lost after a shift |
+| 29 | invalidator: removal during iteration of a *different* view | **FAIL** | **FAIL** | same class as 03/07, reached with two live views |
+| 28 | invalidator: re-keying a `sorted<T[key]>` element through a view | **FAIL** | **FAIL** | see below — worse than a stale index |
+| 30 | reassigning a view from a loop var | **FAIL** | pass | **silent total data loss, interpreter-only** |
+
+**So "reading out of a container" is not one rule.** `v[i]` and `v[i].f` alias (03–06), a `&`
+param from an element aliases (26), but a captured loop var (25) and a stored view (27) copy.
+That split is not visible in the source.
+
+**Probe 28 is sharper than "the index goes stale".** After `c.key = 5` on a live element:
+`c` itself updates, `s[5]` answers **null**, `s[30]` answers **null**, and iteration still
+yields 3 elements. The element becomes **unreachable by key while remaining in the
+collection** — the write updated the record but never re-indexed. A program that keys into
+`s` loses an element it can still iterate over, with no error and a count that still looks
+right.
+
+**Probe 30 is a different bug and the most severe thing found so far — filed as [loft#778](https://github.com/loft-lang/loft/issues/778).** `k = a[0]; for x in a
+{ … k = x … }` leaves `len(a) == 0` — the container is destroyed **before any removal**, and
+`a[0]` then reads `null(oob)` rather than faulting. Interpreter-only; native is correct.
+Reproduced on the installed 2026-08-04 binary, so it is mainline. Hypothesised mechanism: the
+reassignment frees `k`'s previous store, and `k` was a *view*, so the free releases the
+CONTAINER — the same "a view is not a store" invariant as #775, reached through a loop-var
+reassignment. The boundary is narrow, which is why it survived: no capture, capture into an
+owned local, and reassigning a view *outside* a loop are all safe.
+
+The remaining untested cells are `par` writes and nested-container removal (invalidators),
+and `match` captures and tuple elements (producers).
+
+**Original scoping note:**
 This is #774's actual defect, it corrupts silently, and it is unfixed. Probes 01–09 cover
 **2 producers × 2 invalidators**:
 
