@@ -88,6 +88,43 @@ thread_local! {
     static SITES: RefCell<Vec<CopySite>> = const { RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// @PLN130 F2 — bindings whose alias was taken away because their container is reshaped
+    /// while they are live: `(binding, container)`. Recorded by `scopes`, reported to the
+    /// author by [`report_materialised_views`].
+    static MATERIALISED: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Note that `var`'s element view was materialised because `container` is reshaped.
+///
+/// The author asked for an alias and is getting a copy, so this is not an internal detail —
+/// a write through `var` no longer reaches the container. Reported unconditionally: a silent
+/// copy is the one thing the model does not allow.
+pub fn note_materialised_view(var: &str, container: &str) {
+    MATERIALISED.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.iter().any(|(v, c)| v == var && c == container) {
+            m.push((var.to_string(), container.to_string()));
+        }
+    });
+}
+
+/// Tell the author which views lost their alias, and why. Drains.
+///
+/// Deliberately not gated: constraint 2 of @PLN130 — where rustc errors on a use-after-move,
+/// loft copies and warns. The copy keeps the program correct; this is what keeps it honest.
+pub fn report_materialised_views() {
+    let rows: Vec<(String, String)> = MATERIALISED.with(|m| std::mem::take(&mut *m.borrow_mut()));
+    for (var, container) in rows {
+        eprintln!(
+            "advice: `{var}` was copied out of `{container}` because `{container}` is \
+             modified while `{var}` is in use — removing an element renumbers the others, so \
+             the view could not stay valid. Writes through `{var}` no longer reach \
+             `{container}`."
+        );
+    }
+}
+
 /// Record a deep copy at the moment it is emitted.
 ///
 /// Call this from the branch that actually WRITES the copy — never from the function that

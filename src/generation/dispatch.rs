@@ -583,6 +583,50 @@ impl Output<'_> {
             );
             return Ok(());
         }
+        // @PLN130 F1/F2 — MATERIALISE an element/field read into a store `var` owns.
+        //
+        // Sibling of the interpreter's `gen_set_first_ref_elem_copy`.  `c = v[i]` normally
+        // keeps a dep on its container and stays a borrow (the documented alias, loft#774);
+        // reaching here with EMPTY deps means some earlier pass decided `var` is an owner —
+        // either it is reassigned later (F1) or its container is reshaped while it is live
+        // (F2, where `scopes` strips the dep and warns).  Emitting the raw interior pointer
+        // then leaves an "owner" whose store belongs to the container.
+        //
+        // Native needed its own arm: it materialises `_own_store_*` for a CALL return, but
+        // not for an element read, so the F2 strip alone left `--native` still reading the
+        // wrong element (probe 05: `c.n 44 want 33`) while the interpreter was already
+        // correct.  One fact, and until this both backends did not act on it.
+        if let Some(d_nr) = variables.tp(var).heap_def_nr()
+            && variables.tp(var).depend().is_empty()
+            && crate::generation::container_element_base(self.data, to_unspanned).is_some()
+        {
+            let tp_nr = self.data.def(d_nr).known_type();
+            if !self.declared.contains(&var) {
+                self.declared.insert(var);
+                let tp_str = rust_type(variables.tp(var), &Context::Variable);
+                writeln!(
+                    w,
+                    "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
+                )?;
+                self.indent(w)?;
+            }
+            write!(w, "{{ let _src = ")?;
+            self.output_code_inner(w, to)?;
+            writeln!(w, ";")?;
+            self.indent(w)?;
+            write!(
+                w,
+                "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
+                 OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}"
+            )?;
+            crate::copy_manifest::record(
+                self.def_nr,
+                var,
+                tp_nr,
+                crate::copy_manifest::Origin::NativeRecordBind,
+            );
+            return Ok(());
+        }
         // When assigning a reference to a reference variable, a pointer copy is not
         // sufficient — emit an OpCopyRecord call for a deep copy.
         // For a first declaration, we also need to allocate a fresh store via

@@ -1,9 +1,16 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @PLN130 probe 06 — the producer is a field OF an element, not the element itself.
-// w names outs[2].inner; remove(0) shifts that element to index 1.
-// Status: FAILS both backends — outs[1].inner.k stays 33.  The nesting inherits the
-// index pinning, so the class is not limited to a bare `v[i]` bind.
+//
+// CONTRACT CHANGED (F2, option 2 — signed off).  `w = outs[2].inner` previously lost its
+// write after a shift, exactly like a bare `v[i]` — which is what showed the nesting
+// inherits the index pinning.
+//
+// This is also the probe that caught an incomplete fix: the reshape trigger first looked
+// only at the OUTERMOST accessor's first argument, and `outs[2].inner` is
+// `OpGetField(OpGetVector(outs, …), …)` — so the base container was another call, the
+// materialise never fired, and no warning was printed either.  Silently missing a case is
+// the one outcome the model does not allow, so the trigger now peels the whole chain.
 
 struct Inner { k: integer, tag: integer = 0 }
 struct Outer { id: integer, inner: Inner }
@@ -17,6 +24,8 @@ fn main() {
   w.k = 99;
   assert(len(outs) == 2, "06 len {len(outs)} want 2");
   assert(outs[0].id == 2 && outs[0].inner.k == 22, "06 e0 {outs[0].id}:{outs[0].inner.k} want 2:22");
-  assert(outs[1].id == 3 && outs[1].inner.k == 99, "06 e1 {outs[1].id}:{outs[1].inner.k} want 3:99");
-  println("probe 06 PASSED");
+  // The nested view materialised: it keeps its element's values, the write stays in the copy.
+  assert(outs[1].id == 3 && outs[1].inner.k == 33, "06 e1 {outs[1].id}:{outs[1].inner.k} want 3:33");
+  assert(w.k == 99 && w.tag == 333, "06 w {w.k}/{w.tag} want 99/333");
+  println("probe 06 PASSED — nested field view materialised, chain peeled");
 }

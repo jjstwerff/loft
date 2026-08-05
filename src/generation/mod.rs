@@ -758,6 +758,40 @@ pub(crate) fn returns_owned_string(def: &crate::data::Definition) -> bool {
             || def_returns_owned_text(def))
 }
 
+/// @PLN130 — the container VARIABLE an element/field read ultimately reads out of.
+///
+/// `OpGetVector` / `OpVectorRef` are `v[i]`, `OpGetField` is `s.f`. All three yield a `DbRef`
+/// sharing `store_nr` with the container, which is what makes binding one a borrow rather
+/// than an owner. The whole chain is peeled, because a view can sit several levels down
+/// (`outs[2].inner`).
+///
+/// `None` when the chain does not bottom out in a plain variable — notably a field of a CALL
+/// result (`return mk().a.b`), whose base is a temporary rather than a container someone
+/// else owns. Materialising there is a different question and answering it here broke
+/// `tests/scripts/85-store-lifetime-return-field-of-local`, so the emitters require a real
+/// base variable. Shared by both generators and mirrored by `scopes::base_container_var`, so
+/// the three cannot disagree about the shape.
+#[must_use]
+pub fn container_element_base(data: &Data, value: &Value) -> Option<u16> {
+    let mut cur = value;
+    loop {
+        let Value::Call(d, args) = cur.unspan() else {
+            return None;
+        };
+        if !matches!(
+            data.def(*d).name(),
+            "OpGetVector" | "OpVectorRef" | "OpGetField"
+        ) {
+            return None;
+        }
+        match args.first().map(Value::unspan) {
+            Some(Value::Var(c)) => return Some(*c),
+            Some(inner) => cur = inner,
+            None => return None,
+        }
+    }
+}
+
 /// Use this to map a loft type to the Rust type used in generated code.
 /// The context controls whether the type appears as an owned value, argument, variable, or reference.
 ///

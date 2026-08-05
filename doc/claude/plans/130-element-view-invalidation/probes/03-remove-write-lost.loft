@@ -1,9 +1,24 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @PLN130 probe 03 — a view WRITTEN through after a shifting removal.
-// c names the element whose n is 33; remove(0) shifts it to index 1, so the write must
-// land there.  Status: FAILS both backends — boxes[1].n stays 33.  The write goes to
-// index 2, past the live length, and is silently lost.
+//
+// CONTRACT CHANGED (F2, option 2 — signed off).  This probe used to assert write-through:
+// `c` named the element whose n is 33, `remove(0)` moved it to index 1, and the write was
+// expected to land there.  It did not — it went to the stale position, past the live length,
+// and was silently lost.  That was the defect.
+//
+// The fix does not restore write-through, it removes the alias: because `boxes` is reshaped
+// while `c` is live, `c` is MATERIALISED into its own store at the bind and the author is
+// told —
+//
+//   advice: `c` was copied out of `boxes` because `boxes` is modified while `c` is in
+//   use — removing an element renumbers the others, so the view could not stay valid.
+//   Writes through `c` no longer reach `boxes`.
+//
+// So `c` is now an independent copy of the element it named: it keeps that element's values,
+// the write reaches `c` alone, and `boxes` is untouched.  Correct and stated, instead of
+// wrong and silent.  A view in a function that never reshapes keeps its alias — see
+// `tests/scripts/144`.
 
 struct Box { n: integer, tag: integer = 0 }
 
@@ -14,6 +29,8 @@ fn main() {
   c.n = 99;
   assert(len(boxes) == 2, "03 len {len(boxes)} want 2");
   assert(boxes[0].n == 22, "03 e0 {boxes[0].n} want 22");
-  assert(boxes[1].n == 99, "03 e1 {boxes[1].n} want 99 (the write is lost)");
-  println("probe 03 PASSED");
+  // The copy took the element's values with it, and the write stayed in the copy.
+  assert(c.n == 99 && c.tag == 333, "03 c {c.n}/{c.tag} want 99/333");
+  assert(boxes[1].n == 33 && boxes[1].tag == 333, "03 e1 {boxes[1].n}/{boxes[1].tag} want 33/333");
+  println("probe 03 PASSED — view materialised, write stayed in the copy");
 }

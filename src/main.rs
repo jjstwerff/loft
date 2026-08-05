@@ -7653,6 +7653,9 @@ fn main() {
     // @PLN90 Step 5 — the user-facing copy report, emitted ONCE here (the whole program is now
     // loaded + checked) rather than per file-load. Gated on `--report-copies`; a no-op otherwise.
     loft::use_analysis::report_copies(&p.data);
+    // @PLN130 F2 — views whose alias was taken away because their container is reshaped
+    // while they are live.  The copy keeps the program correct; this keeps it honest.
+    loft::copy_manifest::report_materialised_views();
     // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
     // `[library] compile = "native"`, **build-before-mark**: build each library's
     // cdylib from the post-parse type schema FIRST, then mark its functions native

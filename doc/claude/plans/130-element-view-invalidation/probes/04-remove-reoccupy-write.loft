@@ -1,10 +1,15 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @PLN130 probe 04 — the severe form: the stale index is RE-OCCUPIED by a live element.
-// c names the n=33 element (index 1 after the removal).  The append puts a new element at
-// index 2, where the view still points.  Status: FAILS both backends with CROSS-ELEMENT
-// CORRUPTION — boxes[2] reads 99/444, a TORN record: n from the stray write, tag from the
-// real element.  The intended target boxes[1] is untouched.
+//
+// CONTRACT CHANGED (F2, option 2 — signed off).  This was the worst cell in the plan: after
+// `remove(0)` then an append, the view's stale index named a DIFFERENT live element, and the
+// write tore it — `e2` read `99/444`, n from the stray write and tag from the real element,
+// while the intended target kept `33/333`.  Cross-element corruption, silent, both backends.
+//
+// With `boxes` reshaped while `c` is live, `c` is materialised at the bind and the author is
+// told.  The write now lands in `c` alone: no torn record, no cross-element write, and the
+// appended element is untouched.
 
 struct Box { n: integer, tag: integer = 0 }
 
@@ -16,7 +21,9 @@ fn main() {
   c.n = 99;
   assert(len(boxes) == 3, "04 len {len(boxes)} want 3");
   assert(boxes[0].n == 22 && boxes[0].tag == 222, "04 e0 {boxes[0].n}/{boxes[0].tag} want 22/222");
-  assert(boxes[1].n == 99 && boxes[1].tag == 333, "04 e1 {boxes[1].n}/{boxes[1].tag} want 99/333");
-  assert(boxes[2].n == 44 && boxes[2].tag == 444, "04 e2 {boxes[2].n}/{boxes[2].tag} want 44/444 (torn)");
-  println("probe 04 PASSED");
+  assert(boxes[1].n == 33 && boxes[1].tag == 333, "04 e1 {boxes[1].n}/{boxes[1].tag} want 33/333");
+  // The element that used to be torn is now intact.
+  assert(boxes[2].n == 44 && boxes[2].tag == 444, "04 e2 {boxes[2].n}/{boxes[2].tag} want 44/444");
+  assert(c.n == 99 && c.tag == 333, "04 c {c.n}/{c.tag} want 99/333");
+  println("probe 04 PASSED — no torn record; the write stayed in the copy");
 }

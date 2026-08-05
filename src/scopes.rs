@@ -115,6 +115,20 @@ struct Scopes {
     /// declared deps so the OWNED path deep-copies + frees the slot — otherwise the
     /// displaced owned store is orphaned and leaks. Empty when the flag is off.
     displaced_owned: HashSet<u16>,
+    /// @PLN130 F2 — container variables this function RESHAPES: the target of an
+    /// `OpRemoveVector` (`v.remove(i)`) or `OpRemove` (`e#remove`).
+    ///
+    /// A removal renumbers the positions inside the container's store, and an element view
+    /// is a `DbRef` pinned to a position — so a view that is live across one silently starts
+    /// naming a different element (probes 03-07, 29: a pure READ answered `44/444` where its
+    /// element held `33/333`, and a write tore a live record). Ownership information cannot
+    /// fix that; the only compile-time answer that keeps the program correct is to give the
+    /// binding its own copy, and say so.
+    ///
+    /// Deliberately whole-function and not live-range precise: over-materialising costs a
+    /// copy the author is TOLD about, while under-materialising is silent corruption. The
+    /// asymmetry decides the approximation.
+    reshaped_containers: HashSet<u16>,
     /// loft#721 — fn-ref variable -> the definition it was assigned, or
     /// `u32::MAX` when more than one definition reaches it.  A `CallRef`'s callee
     /// is a runtime value, so this local fact is what lets the lift ask the
@@ -134,6 +148,61 @@ struct Scopes {
 /// as `FnRef(d_nr, closure)`; both forms are searched.  A variable that receives
 /// two different definitions maps to `u32::MAX` (ambiguous), and a caller that
 /// cannot name one definition must not lift — see `callref_owned_return`.
+/// @PLN130 F2 — the container variable an element/field read ultimately reads OUT of.
+///
+/// Peels the whole accessor chain, because a view can sit more than one level down:
+/// `outs[2].inner` is `OpGetField(OpGetVector(outs, …), …)`, and looking only at the
+/// outermost call's first argument finds another call rather than `outs`. Stopping there
+/// left the nested case unrecognised — no materialise and, worse, no warning, which is the
+/// one outcome the model does not allow.
+///
+/// Returns `None` when the chain does not bottom out in a plain variable; the caller then
+/// leaves the binding exactly as it is today rather than guessing.
+fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
+    let mut cur = value;
+    loop {
+        let Value::Call(d, args) = cur.unspan() else {
+            return None;
+        };
+        if !matches!(
+            data.def(*d).name(),
+            "OpGetVector" | "OpVectorRef" | "OpGetField"
+        ) {
+            return None;
+        }
+        match args.first().map(Value::unspan) {
+            Some(Value::Var(c)) => return Some(*c),
+            Some(inner) => cur = inner,
+            None => return None,
+        }
+    }
+}
+
+/// @PLN130 F2 — every container variable this function REMOVES from.
+///
+/// `v.remove(i)` lowers to `OpRemoveVector(v, size, index)` (container = arg 0) and the
+/// in-loop `e#remove` to `OpRemove(index, container, …)` (container = arg 1). Both renumber
+/// the positions inside the container's store, which is what invalidates an element view.
+///
+/// Only a container named by a plain `Var` is collected; a reshape reached through some
+/// other expression is not recognised, so the answer is a lower bound and a missed case
+/// keeps today's behaviour rather than inventing a new one.
+fn collect_reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
+    let mut out: HashSet<u16> = HashSet::new();
+    code.walk(&mut |v| {
+        let Value::Call(d, args) = v else { return };
+        let arg = match data.def(*d).name() {
+            "OpRemoveVector" => args.first(),
+            "OpRemove" => args.get(1),
+            _ => return,
+        };
+        if let Some(Value::Var(c)) = arg.map(Value::unspan) {
+            out.insert(*c);
+        }
+    });
+    out
+}
+
 fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
     let mut out: HashMap<u16, u32> = HashMap::new();
     code.walk(&mut |v| {
@@ -212,6 +281,7 @@ fn run_scan_phase(
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         displaced_owned,
+        reshaped_containers: collect_reshaped_containers(orig_code, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
     };
     let mut function = Function::copy(orig_vars);
@@ -3212,6 +3282,36 @@ impl Scopes {
                     }
                 }
             }
+        }
+        // @PLN130 F2 — an element view that is live across a RESHAPE of its container cannot
+        // stay an alias.  `remove` renumbers the positions in the container's store and the
+        // view is a `DbRef` pinned to one, so it silently starts naming a different element:
+        // measured, a pure READ answered `44/444` where its element held `33/333`, and a
+        // write tore a live record (`99/444` — n from the stray write, tag from the real
+        // element).  No detector sees it: nothing is freed and the pointer is live.
+        //
+        // Strip the container dep so the binding materialises into a store it owns (the same
+        // F1 arm in `state/codegen.rs` picks it up, and native's generator already
+        // materialises off empty deps).  The alias is LOST for this binding, so say so —
+        // constraint 2, where rustc errors on a use-after-move loft copies and warns.
+        //
+        // Only fires when the container is actually reshaped somewhere in this function; a
+        // view in a function that never removes keeps its dep and still writes through.
+        if matches!(
+            function.tp(v),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && let Some(container) = base_container_var(unspanned_value, data)
+            && self.reshaped_containers.contains(&container)
+            && function.tp(v).depend().contains(&container)
+        {
+            let container = &container;
+            let vname = function.name(v).to_string();
+            let cname = function.name(*container).to_string();
+            let deps: Vec<u16> = function.tp(v).depend().clone();
+            for d in deps {
+                function.make_independent(v, d);
+            }
+            crate::copy_manifest::note_materialised_view(&vname, &cname);
         }
         // Companion to the !adopts_fresh_store (deep-copy) branch above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and

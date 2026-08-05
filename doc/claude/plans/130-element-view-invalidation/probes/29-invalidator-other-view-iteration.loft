@@ -1,15 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// @PLN130 probe 29 — cluster II matrix: invalidator = removal during iteration of a
-// DIFFERENT view of the same container.
+// @PLN130 probe 29 — invalidator = removal during iteration of a DIFFERENT view.
 //
-// Probe 07 removed through the loop's own element (`b#remove`).  This one holds a view
-// taken BEFORE the loop while a `#remove` fires from inside it — two live views of one
-// container, one of them doing the reshaping.
+// CONTRACT CHANGED (F2, option 2 — signed off).  Two live views of one container, one of
+// them doing the reshaping: `held` was taken before the loop and the loop `#remove`d from
+// under it, so its write went to a stale position and vanished.
 //
-// Hand-computed: `held` names the element whose n is 44 (index 3).  The loop removes the
-// two elements with n < 30 (indices 0 and 1), so that element ends at index 1.  A write
-// through `held` must land there.
+// `boxes` is reshaped while `held` is live, so `held` materialises and the author is told.
 
 struct Box { n: integer, tag: integer = 0 }
 
@@ -27,6 +24,7 @@ fn main() {
   assert(len(boxes) == 2, "29 len {len(boxes)} want 2");
   held.n = 99;
   assert(boxes[0].n == 33 && boxes[0].tag == 333, "29 e0 {boxes[0].n}/{boxes[0].tag} want 33/333");
-  assert(boxes[1].n == 99 && boxes[1].tag == 444, "29 e1 {boxes[1].n}/{boxes[1].tag} want 99/444");
-  println("probe 29 PASSED");
+  assert(boxes[1].n == 44 && boxes[1].tag == 444, "29 e1 {boxes[1].n}/{boxes[1].tag} want 44/444");
+  assert(held.n == 99 && held.tag == 444, "29 held {held.n}/{held.tag} want 99/444");
+  println("probe 29 PASSED — the held view materialised; the container is intact");
 }

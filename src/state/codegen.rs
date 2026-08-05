@@ -2436,7 +2436,7 @@ impl State {
             self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && stack.function.tp(v).depend().is_empty()
-            && Self::is_container_element_read(stack, value)
+            && crate::generation::container_element_base(stack.data, value).is_some()
         {
             // @PLN130 F1 — MATERIALISE an element read into a store `v` owns.
             //
@@ -2751,20 +2751,6 @@ impl State {
             tp_nr,
             crate::copy_manifest::Origin::InterpRecordBind,
         );
-    }
-
-    /// Is this RHS a read of an element/field OUT of a container — the shape that yields an
-    /// interior pointer into someone else's store rather than a store of its own?
-    ///
-    /// `OpGetVector` / `OpVectorRef` are `v[i]`; `OpGetField` is `s.f`. All three return a
-    /// `DbRef` that shares `store_nr` with the container, which is what makes a binding of
-    /// one a borrow rather than an owner.
-    fn is_container_element_read(stack: &Stack, value: &Value) -> bool {
-        matches!(value.unspan(), Value::Call(d, _)
-        if matches!(
-            stack.data.def(*d).name(),
-            "OpGetVector" | "OpVectorRef" | "OpGetField"
-        ))
     }
 
     /// First-assignment materialisation of a container element read into a store `v` owns.

@@ -14,8 +14,8 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 |---|---|
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
-| C — Fix design | ⏸️ the model is chosen (below), the enforcement point is not. The Q5 one-liner was tried and reverted — it needs an analysis, not a flag test |
-| D — Implementation | ⏸️ F1+F2 designed to one analysis, two triggers; F6 is a doc edit. Closure bar is INFORMATION, not exhaustive correctness — see § Must resolve before close |
+| C — Fix design | ✅ F1+F2 shipped as one analysis, two triggers. F3 needs a different mechanism (it needs the alias to SURVIVE) |
+| D — Implementation | 🟡 F1 + F2 DONE on both backends (tests 144, 145). Open: F3, F4, F5 default-on notice, F6 doc |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -357,8 +357,8 @@ finding resolves exactly one of:
 
 | # | problem | evidence | resolves as | state |
 |---|---|---|---|---|
-| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | mechanism VERIFIED to a code line; fix designed, not applied |
-| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–06, 29 | **FIXED** — materialise (the warn states the cost, it is not the fix) | designed; shares F1's analysis |
+| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
+| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145` |
 | F3 | `&` param bound from an element loses its write after a shift | probe 26 | **FIXED** — a lost write is breakage; a diagnostic does not buy it off | open |
 | F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | **FIXED** — an unreachable live element is breakage | open |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** (the `none` report is misinformation) + **STATED** (the copies then rest as *allowed for now*) | guard built; notice not yet default-on |
