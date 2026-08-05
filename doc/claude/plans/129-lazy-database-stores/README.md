@@ -376,8 +376,8 @@ an eager read with extra steps.
 
 - **@PLN105** — `LayoutDesc` and its sufficiency oracle; arc B is its second consumer after the
   browser bridge.
-- **@PLN127** — type reflection reads the same descriptor from loft code. If both land, the schema
-  has one home and two readers.
+- **@PLN127** (closed) — type reflection reads the same descriptor from loft code, and has
+  landed. Arc B is the second reader; once it lands the schema has one home and two readers.
 - **@PLN23 / @PLN24** — where a SQL source and the `#c` bindings come from.
 - **@PLN97** — the layout contract the descriptor is pinned against; a lazy image must not become
   a second description of the same layout.
