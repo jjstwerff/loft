@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @PLN130 probe 26 — cluster II matrix: producer = a `&` parameter bound from an element.
 //
+// RESOLVED (F9, 2026-08-05): this program no longer COMPILES.  It is the shape B-Ref-Reshape
+// refuses — an element of `boxes` and `boxes` itself handed to a function that removes from
+// it.  Kept as the record of the defect it caught (a silently lost write, both backends); the
+// live boundary is `40-reshape-refusal/`, and the workaround is to pass the INDEX.
+//
 // `LOFT.md` documents a `&` parameter as sharing the caller's store in place, and #775
 // showed a field view escaping through one.  Here the `&` arg IS a container element, and
 // the container is reshaped while the callee's view is live — the callee writes AFTER the

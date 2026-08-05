@@ -1596,7 +1596,29 @@ c = v[0];  v.remove(2);  c.n = 99;   // copied — `c` is used after `v` changed
 
 Overwriting a place is not ending it: `o.inner = Box{…}` writes into the place
 `o.inner` already occupies, so a view of it sees the new value and still writes
-through.  Full rule + the reasoning:
+through.
+
+**Write `&` and you get an error instead of a copy.**  `c = &v[0]` says *"I want a
+live link"*, so loft will not quietly hand you a copy — it refuses the removal:
+
+```
+error: cannot remove from `v` while `c` references an element of it — a removal
+  renumbers the remaining elements, so a write through `c` would no longer reach
+  the element it names. Move the removal after the last use of `c`, or bind
+  without `&` to work on a copy
+```
+
+The same refusal covers a **call**: passing an element of a container and the
+container itself to a function that removes from it (`shift(v[2], v)`) is rejected,
+whether or not the parameter is spelled `&` — a struct parameter names the caller's
+element either way, so the write would be lost either way.  Pass the INDEX instead
+and read the element again after the removal:
+
+```loft
+fn shift(idx: integer, all: &vector<Box>) { all.remove(0); all[idx - 1].n = 99; }
+```
+
+Full rule + the reasoning:
 [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not).
 
 **Empty vectors** require a type annotation so the compiler knows the element type.

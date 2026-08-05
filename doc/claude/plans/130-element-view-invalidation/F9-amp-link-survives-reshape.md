@@ -5,9 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # F9 — a `&` link always writes through; reshaping under one is REFUSED (D-bind-8)
 
-**Status — DESIGN, not started.** Tracker: [loft#779](https://github.com/loft-lang/loft/issues/779) ·
-deviation [`formal/binding.md` D-bind-8](../../formal/binding.md) · lock-ins
-`d_bind_8_*` in `tests/parse_errors.rs`.
+**Status — SHIPPED (2026-08-05), all five steps.** Tracker:
+[loft#779](https://github.com/loft-lang/loft/issues/779) · rule
+[`formal/binding.md` B-Ref-Reshape](../../formal/binding.md), which replaced deviation D-bind-8
+(OPEN is back to **0**) · lock-ins `b_ref_reshape_*` in `tests/parse_errors.rs` ·
+`tests/scripts/149-reference-survives-callee-reshape.loft` · boundary
+[`probes/40-reshape-refusal/`](probes/40-reshape-refusal/README.md).
 
 ## The rule
 
@@ -209,7 +212,7 @@ type change. Nothing reads it yet.
   suite green.
 - **Risk: low.** Adds a fact, changes no decision.
 
-### Step 3 — refuse a removal while a `&` link into that container is LIVE (same function)
+### Step 3 — refuse a removal while a `&` link into that container is LIVE ✅ DONE (2026-08-05)
 
 At each `remove` / `#remove` site, if any `&`-marked link into that container is live across it,
 report a compile-time error naming both the removal and the link.
@@ -218,50 +221,78 @@ report a compile-time error naming both the removal and the link.
   the removal is no conflict, and `c = &v[0]; c.n = 1; v.remove(0);` must keep compiling. The F2
   liveness walk (`collect_views_to_materialise`, added for F8) already computes exactly
   "is this binding live across this operation", so this reuses it rather than inventing one.
-- **Also exempt `&` from the materialise here.** Once the dangerous shape is refused, a surviving
-  `&` link is by definition not live across a removal, so it must keep its dep and write through.
-  This is safe *only* in combination with the refusal — on its own, exempting `&` would turn
-  case (b)'s dropped write into a write to the vacated slot, trading a lost update for possible
-  corruption. That pairing is the single most important ordering constraint in this design.
 - **Fixes:** (a) and (b).
-- **Gate:** both same-function lock-ins report the error, with the caret on the removal; `145`,
-  `146`, `201`, `774`, `147` unchanged (they pin plain binds and must not move); a positive cell
-  where the link is dead before the removal still compiles and still writes through; both
-  backends; `LOFT_STRICT_STORES` clean; full suite green.
 - **Risk: medium**, and it is a COMPATIBILITY risk rather than a correctness one — see below.
 
-### Step 4 — the cross-frame case (c)
+#### Step 3, as shipped — and the ordering constraint DISSOLVED
 
-The callee removes from a `&vector` param while the caller holds a `&` link into that container.
-Two places the check can sit, and the caller is the honest one:
+Shipped as producer 1 of `scopes::reshape_refusals`: the same `ViewWalk`, filtered to
+`is_amp_link` bindings condemned by a `Reshaped` cause. Both same-function lock-ins report with
+the caret on the removal; `145`, `146`, `201`, `774`, `147` unchanged.
 
-- **At the call site (preferred).** The caller can see that an argument is a projection of another
-  argument (`shift(v[2], v)`) and that it holds a live `&` link into `v`. Needs a per-definition
-  fact *"this callee removes from `&` param k"* — prototyped as `reshaped_ref_params` during the
-  audit, then reverted with the reasons recorded at `collect_reshaped_containers`.
-- **In the callee (fallback, coarser).** A `&`-element param plus a removal from a `&`-container
-  param is suspicious without knowing they are related — it would refuse some sound programs, so
-  it is second choice.
+**The design's "single most important ordering constraint" turned out not to exist.** It said
+exempting `&` from the materialise is safe only in combination with the refusal, because on its
+own it would turn case (b)'s dropped write into a write to the vacated slot. True — but the
+exemption is not needed at all. The refusal fires on exactly the set the materialise would have
+copied (same walk, same cause, filtered by the same flag), so every program that would have been
+exempted is a program that no longer compiles. The materialise is left untouched, which is the
+smaller change and removes the pairing hazard by construction rather than by sequencing.
 
-One frame deep only. A reshape two calls down keeps today's behaviour and gets its own
-`#[ignore]`d lock-in, which is a lower bound in the safe direction.
+### Step 4 — the cross-frame case (c) ✅ DONE (2026-08-05)
+
+The callee removes from a `&vector` param while the caller holds a reference into that container.
+Checked **at the call site**, which is the only place the two are known to name the same store:
+inside the callee they are two unrelated parameters, and refusing there would reject sound
+programs. The per-definition fact it needs is `removed_ref_params` — *"this callee removes from
+`&` param k"*, the mirror of F8's `reassigned_ref_params`.
+
+#### Step 4, as shipped — two things the measurement changed
+
+**The `&` is not the carrier, and loft#779's own boundary table said it was.** The issue's row A2
+reads *"same as A1 with the `&` dropped — plain param copies (C86), so nothing to lose"*. It does
+not copy. Probe 40 cell **X9** is one line — `fn w(t: Box) { t.n = 99 }` called as `w(v[2])` —
+and it writes **99 into the caller's `v`**. A plain struct parameter aliases the caller's element
+exactly as a `&` one does, which is precisely what loft's own `warn_redundant_amp` advice tells
+authors (*"field mutation already propagates to the caller without it"*). So the cross-frame
+lost write happens with or without the `&`, and refusing only the `&` spelling would have meant
+an author who takes loft's advice and drops it trades a compile error for a silent lost write —
+the worst possible pairing. The call-site check therefore keys on the ALIASING relation.
+
+That is not inconsistent with step 3 being `&`-only: a plain LOCAL bind does not alias across a
+reshape, because F2 materialises it. At a PARAMETER there is no bind site to materialise at.
+One sentence covers both: **the refusal fires where the binding still aliases the container.**
+
+**One frame deep was a scoping choice, and the closure is cheap, so it is gone.** The design
+planned to leave a removal two calls down alone with an `#[ignore]`d lock-in. That hole is one an
+author would trip over by REFACTORING — extract `all.remove(0)` into a helper and the refusal
+disappears along with the diagnostic. `removed_params_map` now closes over the call graph with a
+worklist built in the same pass as the direct removals (*"caller `c` passes its own `&` parameter
+`s` as callee `e`'s parameter `k`"* edges), so cell X7 is refused too. Cost is one walk of each
+body plus the propagation. Only a callee reached through a runtime fn-ref is still invisible.
+
+**Where the check lives, and the trap in getting there.** `Parser::check_reshape_under_reference`,
+post-pass-2 beside `check_subrule_wellformedness` and for the same reason: the question is asked
+of a *callee's* body, which is only complete once the file is parsed. The first cut filtered the
+definitions by `source != STD_SOURCE`, to avoid re-walking the stdlib on every load —
+**and that made the check a silent no-op for the entire Rust test suite**, because
+`Parser::parse_str` never leaves `STD_SOURCE`. It fired on a file and not on a `code!`, which
+reads exactly like "the feature works" until a lock-in disagrees. Every definition is checked
+now; measured cost is in the noise (~8 ms on a hello-world parse, unmeasurable on a real one)
+and it means the stdlib is checked too.
 
 - **Fixes:** (c), probe 26, probe 38 cell A1; closes loft#779.
-- **Gate:** the third lock-in reports; probes 26 and 38 green on both backends; probe 38 graduates
-  to `tests/scripts/`.
-- **Risk: medium.**
+- **Gate:** all six refusal lock-ins report; the three positive lock-ins and
+  `tests/scripts/149-…` compile and write through on both backends; probe 40's 25 cells match
+  their hand-computed values; `LOFT_STRICT_STORES` clean; full suite green (3733).
 
-### Step 5 — close the deviation and state the rule
+### Step 5 — close the deviation and state the rule ✅ DONE (2026-08-05)
 
-- Add the refusal to `formal/binding.md` as a **rule** (it is a spec addition, not a correction) —
-  suggested name **B-Ref-Reshape** — beside B-Ref-Alias, with its own conformance lock-ins.
-- Delete D-bind-8; `OPEN` returns to **0**.
-- Replace the *"known gap"* wording in
-  [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](../../OWNERSHIP_MODEL.md) and
-  the C86 lifetime paragraph in [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) with the shipped
-  two-row rule (plain → materialise; `&` → refused).
-- `LOFT.md`: the user-facing paragraph gains the `&` row, since the error is something an author
-  will meet.
+- **B-Ref-Reshape** is now a rule in `formal/binding.md` beside B-Ref-Alias; D-bind-8 is closed
+  with its evidence, and `OPEN` is back to **0**.
+- [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](../../OWNERSHIP_MODEL.md) and
+  the C86 lifetime paragraph in [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) carry the shipped
+  two-row rule (plain → materialise; reference → refused) instead of the *"known gap"* wording.
+- `LOFT.md`'s user-facing paragraph gains the error and the index workaround.
 
 ## The compatibility question — ANSWERED 2026-08-05: cleared, and the doc urges it
 
@@ -298,6 +329,15 @@ Two supporting arguments, unchanged and still true:
   direction the closure bar demands, not a regression.
 - It is an **edge case** by the maker's own classification, so the blast radius is small.
 
+**Measured, after the fact: the blast radius is zero on this repo.** The full suite (3733 tests,
+including every library fixture) is green with the refusal active, and the stdlib does not trip
+it. The one program shape that lost something it had is probe 40 cell **X3** — a callee removing
+an element BELOW the reference, where the element never moves and the write lands today. It is
+refused anyway, because the rule is about an OPEN reference and not about whether this particular
+removal would have invalidated it; deciding otherwise needs the removal index and the reference's
+index, which are usually only known at run time. Its same-function twin (cell S1) is already
+broken today, so keeping the two answers consistent is worth more than saving X3.
+
 ## Deliberately out of scope
 
 **A `&` link across a keyed-collection RE-KEY.** F4 treats a key-field write as a reshape and
@@ -306,10 +346,12 @@ decided rule it should presumably be refused too — but a re-key is a *write*, 
 the maker's sentence does not literally cover it. Needs its own decision. Recorded so nobody
 assumes step 3 covered it.
 
-## Reading order for the next session
+## Where the shipped rule lives
 
-1. This file.
-2. `formal/binding.md` § D-bind-8 — the rule, the falsifying programs, the root cause.
-3. `probes/38-refparam-view-across-reshape.loft` — the measured boundary as cells, including the
-   two CONFORMANT ones (B1, C1) that localise the defect to the frame boundary.
-4. `tests/parse_errors.rs::d_bind_8_*` — the three lock-ins.
+1. `formal/binding.md` § B-Ref-Reshape — the rule; § Deviations carries D-bind-8's closure record.
+2. `probes/40-reshape-refusal/README.md` — the 25-cell boundary, with the *before* column measured
+   on the pre-fix binary and the three cells (X9, S4, X3) that decided the shape of the fix.
+3. `tests/parse_errors.rs::b_ref_reshape_*` — six refused shapes and three positive ones;
+   `tests/scripts/149-reference-survives-callee-reshape.loft` — the runnable positive cells.
+4. `scopes::reshape_refusals` — the analysis (two producers);
+   `Parser::check_reshape_under_reference` — the reporting.

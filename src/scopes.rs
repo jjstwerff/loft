@@ -232,6 +232,153 @@ fn reassigned_ref_params(data: &Data, d_nr: u32) -> HashSet<u16> {
     out
 }
 
+/// See through the `OpCreateStack` wrapper an argument passed to a `&` parameter carries.
+///
+/// A bare `Var` is returned unchanged, so a lowering change that stops wrapping cannot
+/// silently lose the fact this is asked for.
+fn peel_stack_ref<'a>(arg: &'a Value, data: &Data) -> &'a Value {
+    let inner = arg.unspan();
+    if let Value::Call(cs, cargs) = inner
+        && data.def(*cs).name() == "OpCreateStack"
+        && let Some(first) = cargs.first()
+    {
+        return first.unspan();
+    }
+    inner
+}
+
+/// @PLN130 F9 — which `&` parameters of `d_nr` its body REMOVES from.
+///
+/// The mirror of [`reassigned_ref_params`], and needed for the same reason: a `&` parameter
+/// is a double indirection into the CALLER's variable, so `all.remove(0)` in the callee
+/// renumbers the caller's container. Nothing at the call site says so, which is why the
+/// caller needs this fact about the callee rather than a guess from the argument's shape
+/// ([loft#779](https://github.com/loft-lang/loft/issues/779)).
+///
+/// Answered from the callee's IR: an `OpRemoveVector` / `OpRemove` whose container argument
+/// is an argument slot declared `RefVar`. Argument slots lead the variable numbering, so the
+/// slot number indexes the attribute list. This is the DIRECT answer only; a removal further
+/// down reaches the caller through [`removed_params_map`], which closes it over the call graph.
+fn removed_ref_params(data: &Data, d_nr: u32) -> HashSet<u16> {
+    let def = data.def(d_nr);
+    let mut out: HashSet<u16> = HashSet::new();
+    if def.attributes.is_empty() {
+        return out;
+    }
+    def.code.walk(&mut |v| {
+        let Value::Call(d, args) = v else { return };
+        let arg = match data.def(*d).name() {
+            "OpRemoveVector" => args.first(),
+            "OpRemove" => args.get(1),
+            _ => return,
+        };
+        if let Some(Value::Var(slot)) = arg.map(Value::unspan)
+            && let Some(a) = def.attributes.get(usize::from(*slot))
+            && matches!(a.typedef, Type::RefVar(_))
+        {
+            out.insert(*slot);
+        }
+    });
+    out
+}
+
+/// @PLN130 F9 — every container variable `stmt` reshapes THROUGH A CALL: passed as a `&`
+/// argument to a callee that removes from that parameter.
+///
+/// Deliberately separate from [`reshaped_containers`] rather than folded into it, because the
+/// two answers feed different decisions and folding them was measured to break a cell. F2's
+/// materialise is conservative — *any* reshape copies the view — so counting a callee's removal
+/// there would silently COPY a plain view whose element never moves and whose write
+/// legitimately lands, which is the regression the earlier attempt at this fix measured
+/// (probe 38 cell C1). The REFUSAL wants the wider answer, because a rejected program is not
+/// silently anything; the materialise wants the narrower one.
+fn reshaped_via_call(stmt: &Value, data: &Data, removed: &RemovedParams) -> HashMap<u16, u32> {
+    let mut out: HashMap<u16, u32> = HashMap::new();
+    stmt.walk(&mut |v| {
+        let Value::Call(d, args) = v else { return };
+        let Some(params) = removed.get(d) else { return };
+        for k in params {
+            if let Some(Value::Var(c)) = args.get(usize::from(*k)).map(|a| peel_stack_ref(a, data))
+            {
+                out.insert(*c, *d);
+            }
+        }
+    });
+    out
+}
+
+/// Every user definition that removes from at least one of its `&` parameters, and which.
+///
+/// Built once per program rather than re-derived at each call site: the question is asked once
+/// per CALL, and a callee body would otherwise be re-walked once per call to it.
+type RemovedParams = HashMap<u32, HashSet<u16>>;
+
+/// [`RemovedParams`], CLOSED OVER THE CALL GRAPH: a function that forwards its own `&`
+/// parameter to something that removes from it removes from it too.
+///
+/// Without the closure the answer is one frame deep, and the hole is one an author would trip
+/// over by refactoring: extracting `all.remove(0)` into a helper makes the refusal disappear and
+/// the silent lost write come back (probe 40 cell X7). Closed with a worklist over
+/// *"caller `c` passes its own `&` parameter `s` as callee `e`'s parameter `k`"* edges, built in
+/// the same pass as the direct removals, so the cost stays one walk of each body plus the
+/// propagation.
+///
+/// A callee reached only through a runtime fn-ref has no edge here and keeps today's behaviour —
+/// a lower bound in the safe direction, since the refusal simply does not fire.
+fn removed_params_map(data: &Data) -> RemovedParams {
+    let mut out = RemovedParams::new();
+    let mut work: Vec<(u32, u16)> = Vec::new();
+    // (callee, its param) -> every (caller, caller's own `&` param) that feeds it.
+    let mut forwards: HashMap<(u32, u16), Vec<(u32, u16)>> = HashMap::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !def.name.starts_with("n_") {
+            continue;
+        }
+        for k in removed_ref_params(data, d_nr) {
+            if out.entry(d_nr).or_default().insert(k) {
+                work.push((d_nr, k));
+            }
+        }
+        if def.attributes.is_empty() {
+            continue;
+        }
+        def.code.walk(&mut |v| {
+            let Value::Call(callee, args) = v else { return };
+            if !data.def(*callee).name.starts_with("n_") {
+                return;
+            }
+            for (i, arg) in args.iter().enumerate() {
+                let Ok(i) = u16::try_from(i) else { continue };
+                // Only the caller's OWN `&` parameter forwards a reshape upwards; a local
+                // container passed down is reshaped inside this frame, not the caller's.
+                if let Value::Var(slot) = peel_stack_ref(arg, data)
+                    && def
+                        .attributes
+                        .get(usize::from(*slot))
+                        .is_some_and(|a| matches!(a.typedef, Type::RefVar(_)))
+                {
+                    forwards
+                        .entry((*callee, i))
+                        .or_default()
+                        .push((d_nr, *slot));
+                }
+            }
+        });
+    }
+    while let Some(key) = work.pop() {
+        let Some(ups) = forwards.get(&key) else {
+            continue;
+        };
+        for (caller, slot) in ups {
+            if out.entry(*caller).or_default().insert(*slot) {
+                work.push((*caller, *slot));
+            }
+        }
+    }
+    out
+}
+
 /// @PLN130 F2/F8 — why a view had to give up its alias.
 ///
 /// The two causes read differently to an author and have different remedies, so the walk
@@ -245,11 +392,27 @@ enum ViewCause {
     Reassigned,
 }
 
-/// Record `cause` for `view`, keeping [`ViewCause::Reshaped`] when both apply.
-fn record_cause(map: &mut HashMap<u16, ViewCause>, view: u16, cause: ViewCause) {
-    let slot = map.entry(view).or_insert(cause);
-    if cause == ViewCause::Reshaped {
-        *slot = cause;
+/// One disturbance of a container, as the walk saw it.
+///
+/// The cause decides the advice line; `line` and `via` exist only so the F9 refusal can point
+/// its caret at the statement responsible instead of at the whole function.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Disturbance {
+    cause: ViewCause,
+    /// Source line of the statement that disturbed the container.
+    line: u32,
+    /// The callee that did the removal, when it was not this frame's own statement.
+    via: Option<u32>,
+    /// The container the view names — carried so a diagnostic can name it without re-deriving
+    /// the view→container mapping from a frame that has since closed.
+    container: u16,
+}
+
+/// Record `d` for `view`, keeping [`ViewCause::Reshaped`] when both apply.
+fn record_cause(map: &mut HashMap<u16, Disturbance>, view: u16, d: Disturbance) {
+    let slot = map.entry(view).or_insert(d);
+    if d.cause == ViewCause::Reshaped {
+        *slot = d;
     }
 }
 
@@ -318,19 +481,11 @@ fn collect_views_to_materialise(
     function: &Function,
     data: &Data,
 ) -> HashMap<u16, ViewCause> {
-    let mut walk = ViewWalk {
-        function,
-        data,
-        open: vec![Vec::new()],
-        shaken: HashMap::new(),
-        out: HashMap::new(),
-    };
-    walk.walk_block(std::slice::from_ref(code));
-    let out = walk.out;
+    let out = ViewWalk::run(code, function, data, None, 0);
     if !out.is_empty() && std::env::var_os("LOFT_DEBUG_F8").is_some() {
         let mut names: Vec<String> = out
             .iter()
-            .map(|(v, cause)| format!("{}({cause:?})", function.name(*v)))
+            .map(|(v, d)| format!("{}({:?})", function.name(*v), d.cause))
             .collect();
         names.sort();
         eprintln!(
@@ -338,7 +493,7 @@ fn collect_views_to_materialise(
             names.join(" ")
         );
     }
-    out
+    out.into_iter().map(|(v, d)| (v, d.cause)).collect()
 }
 
 /// The state of [`collect_views_to_materialise`]'s in-order walk.
@@ -350,14 +505,50 @@ struct ViewWalk<'a> {
     open: Vec<Vec<(u16, u16)>>,
     /// Views whose container has been disturbed since the bind, and by what. Being shaken is
     /// not yet a verdict — it becomes one at the next use.
-    shaken: HashMap<u16, ViewCause>,
+    shaken: HashMap<u16, Disturbance>,
     /// The answer: views USED after their container was disturbed.
-    out: HashMap<u16, ViewCause>,
+    out: HashMap<u16, Disturbance>,
+    /// `Some` also counts a CALLEE's removal from a `&` parameter as a reshape (F9's refusal);
+    /// `None` stays inside this frame (F2's materialise). See [`reshaped_via_call`] for why the
+    /// two questions do not share an answer.
+    cross_frame: Option<&'a RemovedParams>,
+    /// The source line of the statement being walked, tracked from the `Value::Line` markers
+    /// a block interleaves with its operators — the only line information the IR carries.
+    line: u32,
 }
 
 impl ViewWalk<'_> {
+    /// Walk `code` in source order and answer which views were used after their container was
+    /// disturbed.
+    ///
+    /// `start_line` seeds the line tracking with the definition's own: a block emits a
+    /// `Value::Line` marker only where the line CHANGES, so a body whose first statement is on
+    /// the signature's line carries no marker at all and would otherwise report line 0.
+    fn run<'a>(
+        code: &Value,
+        function: &'a Function,
+        data: &'a Data,
+        cross_frame: Option<&'a RemovedParams>,
+        start_line: u32,
+    ) -> HashMap<u16, Disturbance> {
+        let mut walk = ViewWalk {
+            function,
+            data,
+            open: vec![Vec::new()],
+            shaken: HashMap::new(),
+            out: HashMap::new(),
+            cross_frame,
+            line: start_line,
+        };
+        walk.walk_block(std::slice::from_ref(code));
+        walk.out
+    }
+
     fn walk_block(&mut self, stmts: &[Value]) {
         for stmt in stmts {
+            if let Value::Line(n) = stmt.unspan() {
+                self.line = *n;
+            }
             self.walk_stmt(stmt);
         }
     }
@@ -407,9 +598,22 @@ impl ViewWalk<'_> {
 
     /// Shake for everything `stmt` disturbs, at any depth inside it.
     fn disturb(&mut self, stmt: &Value) {
-        self.shake(&reshaped_containers(stmt, self.data), ViewCause::Reshaped);
+        self.shake(
+            &reshaped_containers(stmt, self.data),
+            ViewCause::Reshaped,
+            None,
+        );
+        if let Some(removed) = self.cross_frame {
+            for (container, callee) in reshaped_via_call(stmt, self.data, removed) {
+                self.shake(
+                    &HashSet::from([container]),
+                    ViewCause::Reshaped,
+                    Some(callee),
+                );
+            }
+        }
         let established = established_stores(stmt, self.function, self.data);
-        self.shake(&established, ViewCause::Reassigned);
+        self.shake(&established, ViewCause::Reassigned, None);
     }
 
     /// One statement, in the order its parts take effect: what it disturbs, then what it
@@ -441,19 +645,25 @@ impl ViewWalk<'_> {
     /// Mark every open view of one of `containers` as disturbed. Not a verdict yet — only a
     /// use after this point makes the view wrong, which is what separates one that is live
     /// across the disturbance from one that is already dead.
-    fn shake(&mut self, containers: &HashSet<u16>, cause: ViewCause) {
+    fn shake(&mut self, containers: &HashSet<u16>, cause: ViewCause, via: Option<u32>) {
         if containers.is_empty() {
             return;
         }
-        let hit: Vec<u16> = self
+        let hit: Vec<(u16, u16)> = self
             .open
             .iter()
             .flatten()
             .filter(|(_, container)| containers.contains(container))
-            .map(|(view, _)| *view)
+            .copied()
             .collect();
-        for view in hit {
-            record_cause(&mut self.shaken, view, cause);
+        for (view, container) in hit {
+            let d = Disturbance {
+                cause,
+                line: self.line,
+                via,
+                container,
+            };
+            record_cause(&mut self.shaken, view, d);
         }
     }
 
@@ -477,6 +687,241 @@ impl ViewWalk<'_> {
             }
         }
     }
+}
+
+/// Visit every node of `code`, telling `f` which source LINE is in effect for it.
+///
+/// A statement's line is not on the statement: a block interleaves `Value::Line(n)` markers
+/// with its operators, so the line has to be carried down the walk. `Block`, `Loop` and
+/// `Insert` therefore re-read it per operator; every other form inherits its parent's.
+fn walk_lined(code: &Value, line: u32, f: &mut impl FnMut(&Value, u32)) {
+    let node = code.unspan();
+    let stmts: Option<&[Value]> = match node {
+        Value::Block(b) | Value::Loop(b) => Some(&b.operators),
+        Value::Insert(ops) => Some(ops),
+        _ => None,
+    };
+    f(node, line);
+    if let Some(stmts) = stmts {
+        let mut cur = line;
+        for s in stmts {
+            if let Value::Line(n) = s.unspan() {
+                cur = *n;
+            }
+            walk_lined(s, cur, f);
+        }
+    } else {
+        node.for_each_child(&mut |c| walk_lined(c, line, f));
+    }
+}
+
+/// @PLN130 F9 — does argument `arg` name an ELEMENT of container `c`?
+///
+/// Both ways an author can write it, because the two reach the check in different shapes:
+///
+/// - **bound earlier** (`t = v[2]; f(t, v)`) — `t` arrives as a plain `Var` and carries `v` in
+///   its type deps, which is the borrow relation itself;
+/// - **written into the call** (`f(v[2], v)`) — the parser does not leave that inline. It lifts
+///   the projection into a temp first, so the argument is
+///   `Insert([Set(t, OpGetVector(v, …)), OpCreateStack(t)])` and the alias is a `Set` INSIDE the
+///   argument expression. Reading only the argument's value misses it, which is how the issue's
+///   own repro (`shift(v[2], v)`) went unreported while `t = v[2]; shift(t, v)` did not.
+///
+/// The lifted `Set` is looked up by the temp the argument actually passes rather than by
+/// searching the expression for any projection of `c`: `f(w[v[0].n], v)` mentions `v[0]` but
+/// passes an element of `w`, and a search would refuse it.
+fn arg_references_element_of(arg: &Value, c: u16, function: &Function, data: &Data) -> bool {
+    let Value::Var(t) = arg_target(arg, data) else {
+        return base_container_var(arg_target(arg, data), data) == Some(c);
+    };
+    if *t == c {
+        return false;
+    }
+    if function.tp(*t).depend().contains(&c) {
+        return true;
+    }
+    let mut lifted = false;
+    arg.walk(&mut |n| {
+        if let Value::Set(s, rhs) = n
+            && *s == *t
+            && base_container_var(rhs.unspan(), data) == Some(c)
+        {
+            lifted = true;
+        }
+    });
+    lifted
+}
+
+/// The value an argument ultimately passes: the tail of any lifting preamble, with the
+/// `OpCreateStack` wrapper a `&` parameter adds peeled off.
+///
+/// Deliberately NOT folded into [`peel_stack_ref`]: that one answers which variable a `&`
+/// CONTAINER argument names, where no lift is involved, and widening it would quietly change
+/// what @PLN130 F8's `established_stores` treats as a reassignment.
+fn arg_target<'a>(arg: &'a Value, data: &Data) -> &'a Value {
+    let inner = arg.tail().unspan();
+    if let Value::Call(cs, cargs) = inner
+        && data.def(*cs).name() == "OpCreateStack"
+        && let Some(first) = cargs.first()
+    {
+        return first.tail().unspan();
+    }
+    inner
+}
+
+/// @PLN130 F9 — one program shape the compiler REFUSES, ready to be reported.
+///
+/// Carries a position rather than being emitted here, because the analysis runs over `Data`
+/// (where every callee's body is available) while the diagnostics collector lives on the
+/// parser's lexer.
+pub struct ReshapeRefusal {
+    pub file: String,
+    pub line: u32,
+    pub message: String,
+}
+
+/// @PLN130 F9 / [loft#779](https://github.com/loft-lang/loft/issues/779) — the shapes where a
+/// container is reshaped while a reference into it is still live, which loft REFUSES.
+///
+/// **B-Ref-Alias is unconditional** — a `&` binding is a live link to the source, so every
+/// write through it reaches the source. There is exactly one program shape where it cannot:
+/// `remove` renumbers the positions inside a container's store, and a reference is pinned to
+/// one, so a write through it lands on the wrong element or on a vacated slot and is lost.
+/// Rather than carry runtime machinery to re-point the link, that shape is rejected before it
+/// runs (maker, 2026-08-05). It is the rustc bargain in loft's spelling: where rustc refuses
+/// the mutation while a borrow is live, loft refuses the removal.
+///
+/// Two producers, because a reference into a container reaches a removal two ways:
+///
+/// 1. a **`&` LINK in this frame** (`c = &v[0]`) that is live across a removal from `v` — the
+///    removal being either this frame's own or one a callee does through a `&` parameter;
+/// 2. a **CALL that is handed both a container and a reference into it** (`shift(v[2], v)`),
+///    where the callee removes from the container parameter. Checked at the CALL SITE, which is
+///    the only place the two arguments are known to name the same store: inside the callee they
+///    are two unrelated parameters, and refusing there would reject sound programs.
+///
+/// **Liveness is the condition, not existence** — the rustc rule, and the same walk F2 uses.
+/// `c = &v[0]; c.n = 1; v.remove(0);` keeps compiling: the link is dead before the removal, so
+/// there is no conflict and the write lands.
+///
+/// Producer 2 does **not** ask whether the argument was spelled `&`, and that is measured, not
+/// an oversight: a plain struct parameter aliases the caller's element exactly as a `&` one
+/// does (`fn w(t: Box) { t.n = 99 }` called as `w(v[2])` writes 99 into `v` — and loft's own
+/// `warn_redundant_amp` advice tells authors so). Refusing only the `&` spelling would mean an
+/// author who takes that advice and drops the `&` trades a compile error for a silent lost
+/// write. Producer 1 is `&`-only for the opposite and equally measured reason: a PLAIN local
+/// bind does not alias across a reshape, because @PLN130 F2 materialises it and says so.
+///
+/// Known lower bound, in the safe direction (the refusal simply does not fire): a callee
+/// reached only through a runtime fn-ref has no static call edge, so [`removed_params_map`]'s
+/// closure cannot follow it. Declaration order does NOT matter — the check runs once the whole
+/// world is parsed, so a callee written below its caller is answered the same way.
+///
+/// Every definition is checked, the stdlib's included. Filtering by `source` was tried and is
+/// wrong: `Parser::parse_str` — the whole Rust test harness — never leaves `STD_SOURCE`, so the
+/// filter silently made the check a no-op there while it still fired on a file. A pass over
+/// definitions that cannot possibly trip it is the cheaper mistake.
+#[must_use]
+pub fn reshape_refusals(data: &Data) -> Vec<ReshapeRefusal> {
+    let removed = removed_params_map(data);
+    let mut out: Vec<ReshapeRefusal> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        out.extend(def_reshape_refusals(data, d_nr, &removed));
+    }
+    out
+}
+
+fn def_reshape_refusals(data: &Data, d_nr: u32, removed: &RemovedParams) -> Vec<ReshapeRefusal> {
+    let def = data.def(d_nr);
+    if !matches!(def.def_type, DefType::Function) || matches!(def.code, Value::Null) {
+        return Vec::new();
+    }
+    let function = &def.variables;
+    let file = def.position.file.clone();
+    let mut out: Vec<ReshapeRefusal> = Vec::new();
+    // (1) — a `&` link this frame holds, still live where the container is reshaped.
+    for (view, d) in ViewWalk::run(&def.code, function, data, Some(removed), def.position.line) {
+        if d.cause != ViewCause::Reshaped || !function.is_amp_link(view) {
+            continue;
+        }
+        let view_name = function.name(view);
+        let container = function.name(d.container);
+        let message = match d.via {
+            Some(callee) => format!(
+                "cannot call `{}` while `{view_name}` references an element of `{container}` \
+                 — `{0}` removes from `{container}`, and a removal renumbers the remaining \
+                 elements, so a write through `{view_name}` would no longer reach the element \
+                 it names. Move the call after the last use of `{view_name}`, or bind without \
+                 `&` to work on a copy",
+                data.def(callee).original_name()
+            ),
+            None => format!(
+                "cannot remove from `{container}` while `{view_name}` references an element of \
+                 it — a removal renumbers the remaining elements, so a write through \
+                 `{view_name}` would no longer reach the element it names. Move the removal \
+                 after the last use of `{view_name}`, or bind without `&` to work on a copy"
+            ),
+        };
+        out.push(ReshapeRefusal {
+            file: file.clone(),
+            line: d.line,
+            message,
+        });
+    }
+    // (2) — a call handed both a container and a reference into it.
+    walk_lined(&def.code, def.position.line, &mut |node, line| {
+        let Value::Call(callee, args) = node else {
+            return;
+        };
+        let cdef = data.def(*callee);
+        let Some(params) = removed.get(callee) else {
+            return;
+        };
+        for k in params {
+            let k = usize::from(*k);
+            let Some(Value::Var(c)) = args.get(k).map(|a| peel_stack_ref(a, data)) else {
+                continue;
+            };
+            for (j, arg) in args.iter().enumerate() {
+                if j == k {
+                    continue;
+                }
+                // Only a parameter that can NAME an element is a hazard; a scalar or a text
+                // copies, so there is nothing pinned to a position.
+                let Some(attr) = cdef.attributes.get(j) else {
+                    continue;
+                };
+                let ptp = match &attr.typedef {
+                    Type::RefVar(inner) => inner.as_ref(),
+                    other => other,
+                };
+                if !matches!(ptp, Type::Reference(_, _) | Type::Enum(_, true, _)) {
+                    continue;
+                }
+                if !arg_references_element_of(arg, *c, function, data) {
+                    continue;
+                }
+                out.push(ReshapeRefusal {
+                    file: file.clone(),
+                    line,
+                    message: format!(
+                        "cannot pass both `{cname}` and a reference into it to `{fname}` — \
+                         `{fname}` removes from `{cparam}`, which renumbers the remaining \
+                         elements while `{vparam}` still references one, so a write through \
+                         `{vparam}` would be lost. Pass the INDEX instead and read the element \
+                         again after the removal",
+                        cname = function.name(*c),
+                        fname = cdef.original_name(),
+                        cparam = cdef.attributes[k].name,
+                        vparam = attr.name,
+                    ),
+                });
+            }
+        }
+    });
+    out.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.message.cmp(&b.message)));
+    out.dedup_by(|a, b| a.line == b.line && a.message == b.message);
+    out
 }
 
 /// Every variable whose store `stmt` establishes, at any depth.
@@ -507,16 +952,7 @@ fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet
                 if !u16::try_from(i).is_ok_and(|i| reassigned.contains(&i)) {
                     continue;
                 }
-                // A `&` argument arrives as `OpCreateStack(Var(v))`; a bare `Var` is accepted
-                // too so a future lowering change cannot silently lose the fact.
-                let mut inner = arg.unspan();
-                if let Value::Call(cs, cargs) = inner
-                    && data.def(*cs).name() == "OpCreateStack"
-                    && let Some(first) = cargs.first()
-                {
-                    inner = first.unspan();
-                }
-                if let Value::Var(t) = inner {
+                if let Value::Var(t) = peel_stack_ref(arg, data) {
                     note(*t, &mut out);
                 }
             }

@@ -212,13 +212,27 @@ binding that is not in use. Both are on @PLN130's closure bar. Pinned by
 `tests/scripts/148-view-liveness-across-reshape.loft`, which asserts each edge in both
 directions on both backends.
 
-**A `&` binding is exempt — it is a live link and always writes through.** `c = &v[0]` opts
-into aliasing explicitly, so no reshape may turn it into a copy
-([formal/binding.md](formal/binding.md) B-Ref-Alias). The three rows above are the PLAIN-bind
-rule: that binding copies, so losing write-through is consistent with what it already meant.
-**Known gap:** the compiler does not honour the exemption yet — `&` on a local struct
-projection compiles to byte-identical IR to a plain bind, so nothing marks it as a `&` at the
-point the decision is made. Open deviation **D-bind-8**; see
+**A `&` binding is never materialised — it is a live link and always writes through, because
+the shape that could break that does not compile.** `c = &v[0]` opts into aliasing explicitly,
+so no reshape may quietly turn it into a copy ([formal/binding.md](formal/binding.md)
+B-Ref-Alias). The three rows above are the PLAIN-bind rule: that binding copies, so losing
+write-through is consistent with what it already meant. For a `&` there is nothing consistent
+to do, so loft **refuses the removal instead** — B-Ref-Reshape, the rustc bargain in loft's
+spelling. Two rows, and they are disjoint:
+
+| binding | container reshaped while it is live | outcome |
+|---|---|---|
+| plain `c = v[0]` | yes | materialise + advice (the table above) |
+| `c = &v[0]` | yes | **compile-time error** |
+| `c = &v[0]` | no | live link, writes through |
+
+**Across a frame the `&` stops being the discriminator, and that is measured.** A struct
+PARAMETER aliases the caller's element whether or not it is spelled `&` — `fn w(t: Box) { t.n
+= 99 }` called as `w(v[2])` writes 99 into the caller's `v`, which is exactly what the
+redundant-`&` advice tells authors. So `f(v[i], v)` where `f` removes from its container
+parameter is refused for both spellings; there is no bind site inside `f` to materialise at,
+and refusing only `&` would mean taking loft's own advice trades a compile error for a silent
+lost write. Closed deviation **D-bind-8**;
 [loft#779](https://github.com/loft-lang/loft/issues/779).
 
 **Mutating the place is not ending it.** `d.mid = Mid{…}` writes the new value INTO the place

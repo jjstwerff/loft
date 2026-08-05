@@ -6763,6 +6763,29 @@ impl Parser {
         }
     }
 
+    /// @PLN130 F9 / [loft#779](https://github.com/loft-lang/loft/issues/779) — refuse the one
+    /// program shape where a `&` reference could not write through: a container reshaped while
+    /// a reference into it is still live.
+    ///
+    /// Post-parse over pass 2, like [`Self::check_subrule_wellformedness`], and for the same
+    /// reason: the question is asked of a CALLEE's body (*"does it remove from `&` parameter
+    /// k?"*), which is only complete once the whole file is parsed. Runs on the program parse
+    /// only — the stdlib's definitions are still in `Data` then, so a separate pass over the
+    /// `default` load would only report them twice.
+    ///
+    /// The analysis is [`crate::scopes::reshape_refusals`]; this only turns its findings into
+    /// diagnostics, because the collector lives on the lexer and the analysis does not.
+    pub(crate) fn check_reshape_under_reference(&mut self) {
+        for r in crate::scopes::reshape_refusals(&self.data) {
+            let pos = crate::lexer::Position {
+                file: r.file,
+                line: r.line,
+                pos: 1,
+            };
+            diagnostic_at!(self.lexer, &pos, Level::Error, "{}", r.message);
+        }
+    }
+
     /// The user-facing name of a rule fn (`n_expr` -> `expr`).
     fn rule_display_name(data: &crate::data::Data, nr: u32) -> String {
         let n = data.def(nr).name();

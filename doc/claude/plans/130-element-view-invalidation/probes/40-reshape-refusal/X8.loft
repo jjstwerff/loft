@@ -1,0 +1,12 @@
+struct Box { n: integer, tag: integer = 0 }
+fn local_remove(target: &Box) {
+  own = [Box { n: 44, tag: 444 }, Box { n: 55, tag: 555 }];
+  own.remove(0);
+  target.n = 99;
+  print("X8 own {own[0].n}\n");
+}
+fn main() {
+  v = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  local_remove(v[2]);
+  print("X8 {v[2].n} {len(v)}\n");
+}

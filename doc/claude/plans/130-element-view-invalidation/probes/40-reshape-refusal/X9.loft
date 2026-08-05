@@ -1,0 +1,7 @@
+struct Box { n: integer, tag: integer = 0 }
+fn plain_write(target: Box) { target.n = 99; }
+fn main() {
+  v = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  plain_write(v[2]);
+  print("X9 {v[2].n} {len(v)}\n");
+}

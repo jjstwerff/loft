@@ -3,6 +3,13 @@
 // @PLN130 probe 38 — probe 26's residual, characterised: a view held as a PARAMETER while its
 // container is reshaped.
 //
+// RESOLVED (F9, 2026-08-05): cells A1, A2 and C1 no longer COMPILE — they are what
+// B-Ref-Reshape refuses.  Kept for its axis analysis, which is what localised the defect to
+// the frame boundary; probe 40 (`40-reshape-refusal/`) carries the same axes plus the ones
+// this one held fixed, and is the live boundary.  One of probe 38's readings is
+// measurement-contradicted there: A2 is NOT 'the `&` is the carrier' — a plain struct
+// parameter aliases identically (cell X9), so A2 lost the same write for the same reason.
+//
 // Probe 26 is the one cell of this plan's matrix that still FAILS, on BOTH backends, and it was
 // carried as a known-FAIL row rather than driven to a boundary.  The write through the view is
 // silently LOST:

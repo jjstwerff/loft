@@ -2200,65 +2200,204 @@ fn test() {
     );
 }
 
-// formal/binding.md D-bind-8 — removing from a container while a `&` link into it is OPEN
-// must be REFUSED AT COMPILE TIME (maker, 2026-08-05: "The removal of anything from a
+// formal/binding.md B-Ref-Reshape — removing from a container while a reference into it is
+// OPEN is REFUSED AT COMPILE TIME (maker, 2026-08-05: "The removal of anything from a
 // structure (vector for example) that has an open & relation (for us an edge case) should be
 // forbidden on compile time").  Together with B-Ref-Alias — a `&` writes through in ALL cases
-// — that makes the pair total with no runtime machinery: the one shape where a link could not
-// write through is rejected before it runs.
+// — that makes the pair total with no runtime machinery: the one shape where a reference could
+// not write through is rejected before it runs.  loft#779; the boundary these are drawn from
+// is doc/claude/plans/130-element-view-invalidation/probes/40-reshape-refusal/.
 //
-// These are the deviation's falsifying programs, checked in and `#[ignore]`d so each flips as
-// the fix lands.  Today all three COMPILE and silently DROP the write (11 / 33 / 33), which is
-// the breakage; the design is
-// doc/claude/plans/130-element-view-invalidation/F9-amp-link-survives-reshape.md.
-//
-// Blocked on: `&` at a local struct projection has NO representation — `c = &v[0]` and
-// `c = v[0]` compile to byte-identical IR — so nothing marks the binding as a `&` at the point
-// the check would run.  Step 1 of the design adds that mark.  See loft#779.
-//
-// The message text is a placeholder until step 2 fixes its wording; what these pin is that the
-// programs are REFUSED rather than silently miscompiled.
+// Every REFUSED case below compiled and silently dropped the write before the fix; the
+// POSITIVE cases at the end are the ones the refusal must not swallow.
 
-/// D-bind-8 (a) — the removal does not even move the linked element, and is still refused:
-/// the rule is about an OPEN `&` relation, not about whether this particular removal would
-/// have invalidated it.
+/// B-Ref-Reshape (a) — the removal does not even move the linked element, and is still refused:
+/// the rule is about an OPEN reference, not about whether this particular removal would have
+/// invalidated it.  Deciding otherwise needs the removal index and the view index, which are
+/// usually only known at run time.
 #[test]
-#[ignore = "D-bind-8: compiles and drops the write (11) instead of refusing (loft#779)"]
-fn d_bind_8_removal_under_open_amp_link_is_error() {
+fn b_ref_reshape_removal_under_open_amp_link_is_error() {
     code!(
         "struct Box { n: integer } \
          fn test() { v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }]; \
            c = &v[0]; v.remove(2); c.n = 99; print(\"{v[0].n}\\n\"); }"
     )
-    .error("cannot remove from `v` while `c` holds a `&` reference into it");
+    .error(
+        "cannot remove from `v` while `c` references an element of it — a removal renumbers \
+         the remaining elements, so a write through `c` would no longer reach the element it \
+         names. Move the removal after the last use of `c`, or bind without `&` to work on a \
+         copy at b_ref_reshape_removal_under_open_amp_link_is_error:1:1",
+    );
 }
 
-/// D-bind-8 (b) — the linked element MOVES (index 2 → 1).  Refused for the same reason, which
-/// is why no follow-the-element machinery is needed.
+/// B-Ref-Reshape (b) — the linked element MOVES (index 2 → 1).  Refused for the same reason,
+/// which is why no follow-the-element machinery is needed.
 #[test]
-#[ignore = "D-bind-8: compiles and drops the write (33) instead of refusing (loft#779)"]
-fn d_bind_8_removal_moving_linked_element_is_error() {
+fn b_ref_reshape_removal_moving_linked_element_is_error() {
     code!(
         "struct Box { n: integer } \
          fn test() { v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }]; \
            c = &v[2]; v.remove(0); c.n = 99; print(\"{v[1].n}\\n\"); }"
     )
-    .error("cannot remove from `v` while `c` holds a `&` reference into it");
+    .error(
+        "cannot remove from `v` while `c` references an element of it — a removal renumbers \
+         the remaining elements, so a write through `c` would no longer reach the element it \
+         names. Move the removal after the last use of `c`, or bind without `&` to work on a \
+         copy at b_ref_reshape_removal_moving_linked_element_is_error:1:1",
+    );
 }
 
-/// D-bind-8 (c) — the removal is in the CALLEE, through a `&` parameter.  This is @PLN130
-/// probe 26, carried as a known-FAIL through the plan and mis-resolved there as STATED; it is
-/// the cell with no diagnostic of any kind today.
+/// B-Ref-Reshape (c) — the removal is in the CALLEE, through a `&` parameter: loft#779's own
+/// repro, and @PLN130 probe 26, carried as a known-FAIL through the whole plan.  It was the
+/// cell with no diagnostic of any kind.
 #[test]
-#[ignore = "D-bind-8: compiles and drops the write (33), no diagnostic at all (loft#779)"]
-fn d_bind_8_callee_removal_under_amp_param_is_error() {
+fn b_ref_reshape_callee_removal_under_amp_param_is_error() {
     code!(
         "struct Box { n: integer } \
          fn shift(target: &Box, all: &vector<Box>) { all.remove(0); target.n = 99; } \
          fn test() { v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }]; \
            shift(v[2], v); print(\"{v[1].n}\\n\"); }"
     )
-    .error("cannot remove from `v` while a `&` reference into it is open");
+    .error(
+        "cannot pass both `v` and a reference into it to `shift` — `shift` removes from `all`, \
+         which renumbers the remaining elements while `target` still references one, so a write \
+         through `target` would be lost. Pass the INDEX instead and read the element again \
+         after the removal at b_ref_reshape_callee_removal_under_amp_param_is_error:1:1",
+    )
+    .advice(
+        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
+         (slower on every access), and field mutation already propagates to the caller without \
+         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
+         thing `&` is for. at b_ref_reshape_callee_removal_under_amp_param_is_error:1:70",
+    );
+}
+
+/// B-Ref-Reshape (d) — the same call with the `&` DROPPED from the view parameter.
+///
+/// Refused too, and that is measured rather than assumed: a plain struct parameter aliases the
+/// caller's element exactly as a `&` one does, so this loses the same write.  loft's own
+/// `warn_redundant_amp` advice tells authors the `&` here is pointless — if only the `&`
+/// spelling were refused, taking that advice would trade a compile error for a silent lost
+/// write.  (Probe 40 cell X9 is the measurement: `fn w(t: Box) { t.n = 99 }` called as
+/// `w(v[2])` writes 99 into the caller's `v`.)
+#[test]
+fn b_ref_reshape_callee_removal_under_plain_param_is_error() {
+    code!(
+        "struct Box { n: integer } \
+         fn shift(target: Box, all: &vector<Box>) { all.remove(0); target.n = 99; } \
+         fn test() { v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }]; \
+           shift(v[2], v); print(\"{v[1].n}\\n\"); }"
+    )
+    .error(
+        "cannot pass both `v` and a reference into it to `shift` — `shift` removes from `all`, \
+         which renumbers the remaining elements while `target` still references one, so a write \
+         through `target` would be lost. Pass the INDEX instead and read the element again \
+         after the removal at b_ref_reshape_callee_removal_under_plain_param_is_error:1:1",
+    );
+}
+
+/// B-Ref-Reshape (e) — the removal is TWO calls down.
+///
+/// `removed_ref_params` closes over the call graph rather than looking one frame deep, so
+/// extracting the removal into a helper does not make the refusal disappear.  Without the
+/// closure this is the shape that would let a refactor silently reinstate the lost write.
+#[test]
+fn b_ref_reshape_removal_two_frames_down_is_error() {
+    code!(
+        "struct Box { n: integer } \
+         fn inner(all: &vector<Box>) { all.remove(0); } \
+         fn shift(target: &Box, all: &vector<Box>) { inner(all); target.n = 99; } \
+         fn test() { v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }]; \
+           shift(v[2], v); print(\"{v[1].n}\\n\"); }"
+    )
+    .error(
+        "cannot pass both `v` and a reference into it to `shift` — `shift` removes from `all`, \
+         which renumbers the remaining elements while `target` still references one, so a write \
+         through `target` would be lost. Pass the INDEX instead and read the element again \
+         after the removal at b_ref_reshape_removal_two_frames_down_is_error:1:1",
+    )
+    .advice(
+        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
+         (slower on every access), and field mutation already propagates to the caller without \
+         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
+         thing `&` is for. at b_ref_reshape_removal_two_frames_down_is_error:1:117",
+    );
+}
+
+/// B-Ref-Reshape (f) — a `&` link in this frame, and the removal one call down.
+///
+/// Neither half is visible to the other on its own: the caller sees no removal, the callee sees
+/// no link.  The fact that closes the gap is *"this callee removes from `&` parameter k"*.
+#[test]
+fn b_ref_reshape_callee_removal_under_local_amp_link_is_error() {
+    code!(
+        "struct Box { n: integer } \
+         fn drop_last(all: &vector<Box>) { all.remove(2); } \
+         fn test() { v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }]; \
+           c = &v[0]; drop_last(v); c.n = 99; print(\"{v[0].n}\\n\"); }"
+    )
+    .error(
+        "cannot call `drop_last` while `c` references an element of `v` — `drop_last` removes \
+         from `v`, and a removal renumbers the remaining elements, so a write through `c` would \
+         no longer reach the element it names. Move the call after the last use of `c`, or bind \
+         without `&` to work on a copy at \
+         b_ref_reshape_callee_removal_under_local_amp_link_is_error:1:1",
+    );
+}
+
+/// The POSITIVE cell the refusal must not swallow: a link that is DEAD before the removal is
+/// no conflict.  Liveness is the condition, not existence — the rustc rule.
+#[test]
+fn b_ref_reshape_dead_amp_link_before_removal_still_compiles() {
+    code!(
+        "struct Box { n: integer } \
+         fn check() -> integer { v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }]; \
+           c = &v[0]; c.n = 99; v.remove(2); v[0].n }"
+    )
+    .expr("check()")
+    .result(Value::Int(99));
+}
+
+/// The second POSITIVE cell: the callee removes, but from a DIFFERENT container than the one
+/// the reference names.  Relating the two arguments is the whole precision of the check — a
+/// rule keyed on "a callee that removes" alone would reject this.
+#[test]
+fn b_ref_reshape_reference_into_other_container_still_compiles() {
+    code!(
+        "struct Box { n: integer } \
+         fn shift(target: &Box, all: &vector<Box>) { all.remove(0); target.n = 99; } \
+         fn check() -> integer { v = [Box { n: 11 }, Box { n: 22 }]; \
+           w = [Box { n: 44 }, Box { n: 55 }]; shift(w[1], v); w[1].n }"
+    )
+    .expr("check()")
+    .advice(
+        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
+         (slower on every access), and field mutation already propagates to the caller without \
+         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
+         thing `&` is for. at b_ref_reshape_reference_into_other_container_still_compiles:1:70",
+    )
+    .result(Value::Int(99));
+}
+
+/// The third POSITIVE cell: the callee removes from a container it OWNS, so nothing the caller
+/// holds is renumbered.  Guards the `RefVar` test in the call-graph closure — dropping it would
+/// propagate a local's reshape up to every caller.
+#[test]
+fn b_ref_reshape_callee_local_removal_still_compiles() {
+    code!(
+        "struct Box { n: integer } \
+         fn own(target: &Box) { mine = [Box { n: 44 }, Box { n: 55 }]; mine.remove(0); \
+           target.n = 99 + mine[0].n; } \
+         fn check() -> integer { v = [Box { n: 11 }, Box { n: 22 }]; own(v[1]); v[1].n }"
+    )
+    .expr("check()")
+    .advice(
+        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
+         (slower on every access), and field mutation already propagates to the caller without \
+         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
+         thing `&` is for. at b_ref_reshape_callee_local_removal_still_compiles:1:49",
+    )
+    .result(Value::Int(154));
 }
 
 /// The POSITIVE cell the refusal must not swallow: a link that is DEAD before the removal is

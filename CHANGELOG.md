@@ -184,6 +184,54 @@ db.db_rows(q)
 
 See [LOFT.md § Building a value instead of text](doc/claude/LOFT.md).
 
+### Removing from a container you hold a reference into no longer loses your write
+
+Handing a function an element of a vector *and* the vector, where the function
+removes from it, threw the write away:
+
+```loft
+fn shift_then_write(target: &Box, all: &vector<Box>) {
+  all.remove(0);        // the element `target` names moves down one
+  target.n = 99;        // went nowhere
+}
+shift_then_write(boxes[2], boxes);
+```
+
+Removing renumbers the remaining elements, so `target` kept pointing at the slot
+the element used to occupy. Nothing said so — no warning, no crash, just a value
+that never changed. The same thing happened without a call, with the removal and
+the reference in one function.
+
+loft now **refuses the program**:
+
+```
+error: cannot remove from `v` while `c` references an element of it — a removal
+  renumbers the remaining elements, so a write through `c` would no longer reach
+  the element it names. Move the removal after the last use of `c`, or bind
+  without `&` to work on a copy
+```
+
+It only fires while the reference is still in use — finish with it before the
+removal and nothing changes:
+
+```loft
+c = &v[0];  c.n = 99;  v.remove(2);   // fine — `c` is done before `v` changes
+c = &v[0];  v.remove(2);  c.n = 99;   // refused
+```
+
+For the call version, pass the **index** instead and read the element again after
+the removal:
+
+```loft
+fn shift_then_write(idx: integer, all: &vector<Box>) {
+  all.remove(0);
+  all[idx - 1].n = 99;
+}
+```
+
+Plain (non-`&`) bindings are unaffected: `c = v[0]` still gets its own copy when
+the container changes underneath it, and still tells you it did.
+
 ### An element taken out of a returned value stays valid
 
 Binding an element out of a struct a function just returned gave you a reference

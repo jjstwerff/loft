@@ -5,12 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 130 — A copy nobody is told about, and a view that outlives what it names
 
-**Status — CLOSED 2026-08-05, with ONE finding filed out rather than fixed.** F1, F2, F4, F5,
-F6, F8 fixed on both backends; F7 retracted; F3 **re-opened as [loft#779](https://github.com/loft-lang/loft/issues/779)**
-— it was signed off as STATED on a claim that measurement contradicts (§ F3), and a lost write is
-breakage the plan's own bar never allows. The remaining fix needs a `&`-semantics decision, which
-is a legitimate spinoff reason; everything else is done. Kept as the investigation record
-(§ Method, the probe suite, the cluster catalogue and the retraction).
+**Status — CLOSED 2026-08-05; the one finding filed out is now FIXED too.** F1, F2, F4, F5,
+F6, F8 fixed on both backends; F7 retracted; F3 was re-opened as
+[loft#779](https://github.com/loft-lang/loft/issues/779) — it had been signed off as STATED on a
+claim that measurement contradicts (§ F3), and a lost write is breakage the plan's own bar never
+allows. The `&`-semantics decision it was waiting for arrived the same day, and F9 shipped it:
+reshaping a container while a reference into it is live is now a COMPILE-TIME ERROR
+([`formal/binding.md` B-Ref-Reshape](../../formal/binding.md), design in
+[F9-amp-link-survives-reshape.md](F9-amp-link-survives-reshape.md), boundary in
+[probes/40-reshape-refusal/](probes/40-reshape-refusal/README.md)). Kept as the investigation
+record (§ Method, the probe suite, the cluster catalogue and the retraction).
 
 Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 [loft#774](https://github.com/loft-lang/loft/issues/774).
@@ -39,7 +43,7 @@ in `probes/` as landmarks:
 | F7 — the C86 copy/view boundary, 30 cells | 09–14 | `tests/scripts/201-bind-copies-projection-views.loft` |
 | F8 — a view live across a container REASSIGNMENT | 35, 36, 37 | `tests/scripts/774-view-outlives-reassigned-container.loft` |
 | the producer × invalidator boundary — which binds VIEW vs COPY, what invalidates | 25, 27, 29, 31, 32, 33, 34 | `tests/scripts/147-view-producer-invalidator-boundary.loft` |
-| F3 — a view whose container the CALLEE reshapes | 26, 38 | **none — [loft#779](https://github.com/loft-lang/loft/issues/779)**; cell A1 still fails, so the probe cannot graduate |
+| F3/F9 — a reference whose container the CALLEE reshapes | 26, 38, **40** | `tests/parse_errors.rs::b_ref_reshape_*` (the refused shapes) + `tests/scripts/149-reference-survives-callee-reshape.loft` (the ones that must still compile) |
 
 **Still-open findings, filed forward** (obligation 1: the in-plan no-file rule inverts at
 closure).  All three are residuals, not unfixed bugs, so they went to
@@ -404,7 +408,7 @@ finding resolves exactly one of:
 |---|---|---|---|---|
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
 | F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145`. The first cut keyed on the CONTAINER and was order-blind, so it also materialised views that were DEAD at the removal — a lost write plus untrue advice, both on the bar above. Made liveness-aware in F9 step 1 (probe 39, `tests/scripts/148`) |
-| F3 | `&` param bound from an element loses its write after a shift | probes 26, 38 | **STATED was WRONG — this is BREAKAGE** (see § F3). A lost write is what the bar above never allows, and the claim that F2's materialise covers it is false: measured, cell A1 emits NO advice and the write vanishes silently | **FILED [loft#779](https://github.com/loft-lang/loft/issues/779)** — needs a `&`-semantics decision |
+| F3 | `&` param bound from an element loses its write after a shift | probes 26, 38, 40 | **STATED was WRONG — this is BREAKAGE** (see § F3). A lost write is what the bar above never allows, and the claim that F2's materialise covers it is false: measured, cell A1 emits NO advice and the write vanishes silently | **FIXED as F9** — the program is REFUSED at compile time (B-Ref-Reshape). loft#779's own boundary table was wrong in turn: its row A2 says a plain param copies, and probe 40 cell X9 measures it writing through, so the refusal keys on aliasing rather than on the `&` |
 | F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
 | F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |

@@ -2011,9 +2011,14 @@ already occupies, so a view of `d.mid.inner` still sees it and still writes thro
 **This applies to a PLAIN bind only.** A `&` binding is a live link and writes through
 unconditionally ([formal/binding.md](formal/binding.md) B-Ref-Alias, the maker's rule
 2026-08-05: *"a reference … should allow for writing it too. In all cases"*), so it may never be
-materialised. The code currently does materialise it, which is the open deviation **D-bind-8**
-— tracked there and in [loft#779](https://github.com/loft-lang/loft/issues/779), not a
-narrowing of this decision. Full rule:
+materialised. What loft does instead is **refuse the removal**: taking a reference into a
+container and then reshaping it while the reference is still live is a compile-time error
+(B-Ref-Reshape, the maker's companion rule of the same day). That closes D-bind-8 and makes the
+pair total with no runtime machinery — a `&` always writes through, because the one shape where
+it could not does not compile. Across a frame the refusal covers a PLAIN parameter too, because
+a parameter aliases the caller's element either way (measured; there is no bind site in the
+callee to materialise at). See [loft#779](https://github.com/loft-lang/loft/issues/779).
+Full rule:
 [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not);
 pinned by `tests/scripts/774-view-outlives-reassigned-container.loft`.
 

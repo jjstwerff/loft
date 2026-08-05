@@ -1518,6 +1518,9 @@ impl Parser {
         // counted).  Silenceable via `LOFT_NO_HINT_NOT_NULL=1`.
         if !self.first_pass && !default {
             self.emit_not_null_hints();
+            // @PLN130 F9 (loft#779) — the whole world is parsed here, so a callee's body can
+            // be asked whether it removes from a `&` parameter.
+            self.check_reshape_under_reference();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2062,6 +2065,10 @@ impl Parser {
             self.lexer.parse_string(content, filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
+            // @PLN130 F9 (loft#779) — see `parse`.
+            if !default {
+                self.check_reshape_under_reference();
+            }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2100,6 +2107,10 @@ impl Parser {
             self.lexer.parse_string(content, filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
+            // @PLN130 F9 (loft#779) — see `parse`.
+            if !default {
+                self.check_reshape_under_reference();
+            }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2216,6 +2227,8 @@ impl Parser {
         self.resolve_deferred_unknowns();
         // @PLN35 PC3 — reject a left-recursive sub-rule grammar (see `check_subrule_termination`).
         self.check_subrule_wellformedness();
+        // @PLN130 F9 (loft#779) — see `parse`.
+        self.check_reshape_under_reference();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -2256,6 +2269,8 @@ impl Parser {
         self.data.source = source;
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // @PLN130 F9 (loft#779) — see `parse`.
+        self.check_reshape_under_reference();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
