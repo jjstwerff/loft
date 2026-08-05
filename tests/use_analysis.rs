@@ -1643,3 +1643,75 @@ fn warn_copies_is_default_on_advice() {
         "the notice must name the lever (the surviving source); stderr:\n{off}"
     );
 }
+
+/// loft#781 — a copy inside a DEPENDENCY is reported against the DEPENDENCY's file.
+///
+/// The copy op carries no span of its own, so it borrows the enclosing line marker: a
+/// line number with an EMPTY file. Substituting the entry file there paired a
+/// dependency's line with the consumer's path — a real line in the wrong file, which
+/// lands on whatever happens to sit there. In one consumer 29 of 67 notices echoed a
+/// comment, a blank line or a `const`, and 43% wrong is what makes a reader stop
+/// reading the other 57%. The failure mode a DEFAULT-ON diagnostic can least afford.
+///
+/// The LINE was always correct; only the file was wrong. So this pins the file and the
+/// echoed source line TOGETHER — asserting the line alone passes on the bug. The entry
+/// file carries a `const` at exactly the library's copy line, so a regression does not
+/// merely fail, it reproduces the original symptom.
+#[test]
+fn a_dependency_copy_is_reported_against_the_dependency_file() {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("loft_781_{}_{n}", std::process::id()));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).expect("probe dirs");
+
+    // The copy is line 6 of the library: `xs` is named into the struct and used again
+    // on the next line, so it survives and cannot be moved.
+    std::fs::write(
+        lib.join("copier781.loft"),
+        "// 1\npub struct Holder { v: vector<integer> }\n\n\
+         pub fn make_it() -> integer {\n  xs = [1, 2, 3];\n  \
+         h = Holder { v: xs };\n  return len(xs) + len(h.v);\n}\n",
+    )
+    .expect("write lib");
+
+    // Line 6 of the ENTRY is a `const` — where the notice used to land.
+    let entry = root.join("main781.loft");
+    std::fs::write(
+        &entry,
+        "use copier781;\n// 2\n// 3\n// 4\n// 5\nconst UNRELATED = 0.75;\n// 7\n\
+         fn main() {\n  println(\"{make_it()}\");\n}\n",
+    )
+    .expect("write entry");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--interpret", "--check"])
+        .arg("--lib")
+        .arg(&lib)
+        .arg(&entry)
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("spawn loft");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    let all = format!("{}{err}", String::from_utf8_lossy(&out.stdout));
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        all.contains("copy of vector<integer>") && all.contains("`xs`"),
+        "the cross-file copy notice must still fire; output:\n{all}"
+    );
+    assert!(
+        all.contains("copier781.loft:6"),
+        "a copy in a dependency must name the DEPENDENCY's file and line; output:\n{all}"
+    );
+    assert!(
+        !all.contains("main781.loft:6"),
+        "the notice must not be attributed to the entry file (loft#781); output:\n{all}"
+    );
+    // The echoed source line proves the location resolves to the copy, not to whatever
+    // sits at that line number elsewhere.
+    assert!(
+        all.contains("h = Holder { v: xs }"),
+        "the echoed line must be the copy site, not a `const` or a comment; output:\n{all}"
+    );
+}

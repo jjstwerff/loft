@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 fn loft_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_loft"))
@@ -464,4 +465,80 @@ fn len_guard_does_not_silence_dead_store_interpret() {
 #[test]
 fn len_guard_does_not_silence_dead_store_native() {
     assert_len_guard("--native");
+}
+
+/// loft#781 (the sibling defect) — a dead store inside a DEPENDENCY is reported
+/// against the DEPENDENCY's file.
+///
+/// `var_source` gives a line in the file the DEFINITION was parsed from, and that line
+/// was paired with the ENTRY file: a real line number in the wrong file, echoing
+/// whatever sits there. Found by sweeping the producers after the copy notice was fixed
+/// — the copy notice was the reported case, not the whole rule.
+///
+/// It bites harder here than it did there. The copy notice is `advice`; this is a
+/// `warning`, and a warning gates a library's CI under `LOFT_DENY_WARNINGS`. So a
+/// dependency's dead store failed a consumer's build at a line the consumer could look
+/// at and find a `const`.
+///
+/// The entry file carries a `const` at exactly the library's dead-store line, so a
+/// regression reproduces the original symptom rather than merely failing.
+#[test]
+fn a_dependency_dead_store_is_reported_against_the_dependency_file() {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("loft_781ds_{}_{n}", std::process::id()));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).expect("probe dirs");
+
+    // The dead store is line 5 of the library: the whole-value bind `d = s.items` COPIES
+    // (C86), `d` is mutated, and `d` is never read — so the write is lost.
+    std::fs::write(
+        lib.join("dstore781.loft"),
+        "// 1\npub struct Data781 { items: vector<integer> }\n// 3\n\
+         pub fn lose_it(s: Data781) -> integer {\n  d = s.items;\n  d[0] = 99;\n  \
+         return len(s.items);\n}\n",
+    )
+    .expect("write lib");
+
+    // Line 5 of the ENTRY is a `const` — where the warning used to land.
+    let entry = root.join("main781ds.loft");
+    std::fs::write(
+        &entry,
+        "use dstore781;\n// 2\n// 3\n// 4\nconst UNRELATED781 = 1;\n// 6\n\
+         fn main() {\n  s = Data781 { items: [1, 2, 3] };\n  println(\"{lose_it(s)}\");\n}\n",
+    )
+    .expect("write entry");
+
+    let out = Command::new(loft_bin())
+        .args(["--interpret", "--check"])
+        .arg("--lib")
+        .arg(&lib)
+        .arg(&entry)
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        all.contains("is mutated but its value is never read"),
+        "the cross-file dead-store warning must still fire; output:\n{all}"
+    );
+    assert!(
+        all.contains("dstore781.loft:5"),
+        "a dead store in a dependency must name the DEPENDENCY's file and line; output:\n{all}"
+    );
+    assert!(
+        !all.contains("main781ds.loft:5"),
+        "the warning must not be attributed to the entry file (loft#781); output:\n{all}"
+    );
+    assert!(
+        !all.contains("const UNRELATED781"),
+        "the echoed line must be the dead store, not a `const`; output:\n{all}"
+    );
 }

@@ -2403,6 +2403,16 @@ pub fn warn_dead_stores(
         if !matches!(def.def_type, DefType::Function) {
             continue;
         }
+        // `var_source` gives a line in the file THIS definition was parsed from, so the
+        // file must come from the definition too — the same pairing that put the copy
+        // notice on the consumer's entry file (loft#781). It bites harder here: this is a
+        // `warning`, and a warning gates a library's CI, so a dependency's dead store
+        // would fail a consumer that cannot see the line it names.
+        let def_file = if def.position.file.is_empty() {
+            fallback_file
+        } else {
+            def.position.file.as_str()
+        };
         let func = &def.variables;
         let n = func.var_count();
         let acc = dead_store_accesses(&def.code, n, data);
@@ -2473,7 +2483,7 @@ pub fn warn_dead_stores(
             diags.add_at(
                 crate::diagnostics::Level::Warning,
                 &msg,
-                fallback_file,
+                def_file,
                 line,
                 col,
             );
@@ -2675,11 +2685,21 @@ pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fal
                 data.type_name_str(def.variables.tp(r.source))
             };
             // The copy op carries no span; it borrows the nearest span or (S5.2) the enclosing
-            // line marker. A line-only fallback has an empty `file` — substitute the caller's
-            // source file. When even the line is unknown, fall back to line 0 + the fn name.
-            let (file, line, col) = r.loc.as_ref().map_or((fallback_file, 0, 0), |p| {
+            // line marker. A line-only fallback has an empty `file`, and the file that line
+            // belongs to is the one THIS DEFINITION was parsed from — not the entry file.
+            // Pairing a dependency's line number with the consumer's path is a real line in
+            // the wrong file, so it lands on whatever happens to sit there: a comment or a
+            // `const` in 29 of 67 notices from one consumer (loft#781). `fallback_file` is
+            // the last resort, for a definition carrying no position either.
+            let def_file = if def.position.file.is_empty() {
+                fallback_file
+            } else {
+                def.position.file.as_str()
+            };
+            // When even the line is unknown, fall back to line 0 + the fn name.
+            let (file, line, col) = r.loc.as_ref().map_or((def_file, 0, 0), |p| {
                 let f = if p.file.is_empty() {
-                    fallback_file
+                    def_file
                 } else {
                     p.file.as_str()
                 };
