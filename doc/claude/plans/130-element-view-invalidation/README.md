@@ -15,7 +15,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
 | C — Fix design | ✅ F1+F2 shipped as one analysis, two triggers. F3 needs a different mechanism (it needs the alias to SURVIVE) |
-| D — Implementation | 🟡 F1 + F2 DONE on both backends (tests 144, 145). Open: F3, F4, F5 default-on notice, F6 doc |
+| D — Implementation | 🟡 F1 + F2 DONE both backends (tests 144, 145). F3 BLOCKED — needs stable slots (§ F3). Open: F4, F5 notice, F6 doc |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -359,7 +359,7 @@ finding resolves exactly one of:
 |---|---|---|---|---|
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
 | F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145` |
-| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **FIXED** — a lost write is breakage; a diagnostic does not buy it off | open |
+| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **FIXED** — needs stable slots (§ F3); materialise and fat-`&` both shown not to work | BLOCKED on a representation decision |
 | F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | **FIXED** — an unreachable live element is breakage | open |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** (the `none` report is misinformation) + **STATED** (the copies then rest as *allowed for now*) | guard built; notice not yet default-on |
 | F6 | `LOFT.md` claims a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — misinformation in the doc | open |
@@ -533,6 +533,51 @@ the owner rather than to me.
 option 2 makes `c = v[i]` copy in reshape-containing scopes, and probes 03/04/05 flip from
 asserting write-through to asserting the copy. F1 does not need that sign-off and is being
 implemented first.
+
+## F3 — why the two obvious mechanisms both fail
+
+F3 (probe 26) needs the callee's write to **reach the caller's element**:
+
+```loft
+fn shift_then_write(target: &Box, all: &vector<Box>) {
+  all.remove(0);      // the element `target` names moves down one
+  target.n = 99;
+}
+shift_then_write(boxes[2], boxes);   // asserts boxes[1].n == 99
+```
+
+**Materialising does not work** — it is F2's fix and the opposite of what F3 needs. Give the
+callee a private copy and the write never reaches `boxes`; the lost write stays lost, for a
+new reason. F2 removes the alias, F3 depends on it surviving.
+
+**A fat `&` reference does not work either.** Carrying `(container, index)` and re-resolving
+per access sounds like it should follow the element, but the INDEX is precisely what goes
+stale:
+
+```
+boxes = [A(11), B(22), C(33)]     target = &boxes[2]  ->  (boxes, 2)
+all.remove(0)                     -> [B, C]; C is now at index 1
+target.n = 99                     resolves boxes[2] — out of range
+```
+
+Keeping a fat ref valid means renumbering outstanding references when a removal shifts —
+runtime bookkeeping, which constraint 5 excludes. And a fat ref only helps if the container
+does NOT renumber; if it does not, a plain `DbRef` is already correct and the fat ref buys
+nothing.
+
+**So F3 reduces to option 1: removal must stop renumbering** (stable slots / tombstones).
+That is the only mechanism that lets a write follow its element without per-access
+bookkeeping.
+
+Worth stating because it changes the value of the option: **stable slots would also let F2
+keep its alias.** What shipped here materialises the view and warns — correct, but it gives
+up the documented write-through. With stable slots the view stays valid, the copy becomes
+unnecessary, and F2's materialise could be REVERTED rather than kept. Option 1 is strictly
+better for both findings; it is simply much larger — a store representation with holes, a
+compaction policy, and a revised `len`/iteration contract. It belongs in its own plan.
+
+Until then F3 stays open and BROKEN, which the closure bar does not permit — so this plan
+cannot close on F3 without either that plan or an explicit de-scope.
 
 ## Probe gaps — what is NOT covered yet
 
