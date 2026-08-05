@@ -232,11 +232,87 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **0**. The @PLN87 ladder (L1–L6), the model + doc reconciliation
-(PR#436), and the last residual D-bind-7 are all closed and verified below; @PLN40's
+OPEN: **1** — D-bind-8, below. The @PLN87 ladder (L1–L6), the model + doc reconciliation
+(PR#436), and the residual D-bind-7 are all closed and verified below; @PLN40's
 Const-Bind / Const-Value / Const-ScalarCollapse / Const-Compose are shipped and enforced
 for struct fields, parameters, and locals — and, since @PLN102 K1, for **enum-variant
 fields** too (their one former residual gap, D-const-1, now closed).
+
+### D-bind-8 — a `&` link is silently DOWNGRADED TO A COPY when its container is reshaped ⚑
+
+**B-Ref-Alias is unconditional** — *"the `&τ` annotation makes ANY binding a live LINK to the
+source"* — and it has no exception for a container that changes shape. The code has one.
+Falsifying programs, both backends:
+
+```loft
+// (a) the element does not even MOVE: `remove(2)` drops the last element.
+v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+c = &v[0];
+v.remove(2);
+c.n = 99;                 // v[0].n == 11 — the write was DISCARDED. B-Ref-Alias says 99.
+
+// (b) the element moves (index 2 -> 1) and the link does not follow it.
+c = &v[2];
+v.remove(0);
+c.n = 99;                 // v[1].n == 33 — write discarded. B-Ref-Alias says 99.
+
+// (c) the reshape is in the CALLEE, through a `&` parameter — loft#779.
+fn shift_then_write(target: &Box, all: &vector<Box>) {
+  all.remove(0);
+  target.n = 99;          // discarded, and here with NO diagnostic at all.
+}
+```
+
+**Root cause — `&` on a local projection has NO REPRESENTATION, so the rule cannot be
+applied.** `c = &v[0]` and `c = v[0]` compile to **byte-identical IR**
+(`c:ref(Box)["v"] = OpGetVector(v, 16, 0)`; verified with `loft introspect`, the only diff is
+line numbers). For a STRUCT-typed projection the two were equivalent under B-View — both alias
+— so the parser drops the `&` as redundant. That was harmless until @PLN130 F2 made a view
+materialise when its container is reshaped: from that point the two stopped being equivalent,
+and the discarded `&` became load-bearing information that no longer exists. D-bind-0 closed
+on *"`&τ` is now `Type::RefVar`, a reference type the variable carries"*, which holds for
+parameters (they render `&vec<ref(N)>`) but **not** for a local struct projection.
+
+So this is one deviation with two mechanisms: (a)/(b) the materialise fires on a `&` because
+nothing marks it as a `&`; (c) the materialise does *not* fire (a `&` param IS distinguishable)
+but nothing adjusts the link, so the write goes to a stale position.
+
+**Why D-bind-4 did not catch it.** Its lock-in is `c=&v[0]; c=9; v[0]==9` — no reshape. The
+rule was stated unconditionally and verified only in the simple shape, so a later change could
+narrow it without flipping any cell.
+
+**Not a spec change to B-Ref-Alias.** It is what the maker's rule says (*"a reference to any
+structure variable or otherwise should allow for writing it too. In all cases"*, 2026-08-05), so
+the rule stands as written and the CODE is what must move. @PLN130 F2's materialise remains
+correct for a PLAIN bind — that binding copies, so dropping write-through is consistent — and
+must not apply to a `&`.
+
+**The companion rule is a spec ADDITION (maker, 2026-08-05):** *"The removal of anything from a
+structure (vector for example) that has an open `&` relation (for us an edge case) should be
+forbidden on compile time."*  So the resolution is **refusal, not repair** — the falsifying
+programs above must be REJECTED at compile time rather than made to write 99. That makes the pair
+total with no runtime machinery: a `&` always writes through, because the one shape where it could
+not is rejected before it runs. It is the rustc bargain in loft's spelling (rustc refuses the
+mutation while a borrow lives; loft refuses the removal), affordable because it is an edge case.
+The rule wants a name and its own conformance lock-ins when it lands — proposed **B-Ref-Reshape**,
+beside B-Ref-Alias. Liveness is the condition, not existence: a `&` link dead before the removal
+is no conflict.
+
+This also retires what would otherwise be an undecided sub-case — a `&` to the element that is
+*itself* removed has nothing to write through to, and under refusal the question never arises.
+
+**A second defect the same measurement exposed, and it is a REGRESSION on the @PLN130 branch
+(not yet on `main`):** F2's reshape path keys on the CONTAINER and is order-blind, so it
+materialises a view that is DEAD long before the removal — `c = v[0]; c.n = 99; v.remove(2)`
+answers 11 where the installed mainline binary answers 99. A lost write plus advice that claims
+*"`v` is modified while `c` is in use"* when it is not. Lock-in
+`f2_dead_view_before_removal_keeps_writing_through` (`tests/parse_errors.rs`); it is step 1 of the
+design below and blocks the branch merging.
+
+Landmarks: `tests/scripts/774-…` and `145-…` pin the PLAIN-bind behaviour (unaffected);
+[@PLN130 § F3](../plans/130-element-view-invalidation/README.md) and
+[loft#779](https://github.com/loft-lang/loft/issues/779) hold the measured boundary; the step plan
+is [F9-amp-link-survives-reshape.md](../plans/130-element-view-invalidation/F9-amp-link-survives-reshape.md).
 
 > **Landed via @PLN102 K1 (verified, closed):**
 > - **D-const-1 — enum-variant `const` / value-const fields are now enforced identically

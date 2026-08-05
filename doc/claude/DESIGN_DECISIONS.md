@@ -2006,7 +2006,14 @@ reported to the author — when the container is **reshaped** (`a.remove(i)` ren
 the view's place with nothing to point at). Reassignment was the one that shipped broken: the
 view answered the replacement's value, and on `--native` read freed memory.
 Overwriting a place is not destroying it — `d.mid = Mid{…}` writes into the place `d.mid`
-already occupies, so a view of `d.mid.inner` still sees it and still writes through. Full rule:
+already occupies, so a view of `d.mid.inner` still sees it and still writes through.
+
+**This applies to a PLAIN bind only.** A `&` binding is a live link and writes through
+unconditionally ([formal/binding.md](formal/binding.md) B-Ref-Alias, the maker's rule
+2026-08-05: *"a reference … should allow for writing it too. In all cases"*), so it may never be
+materialised. The code currently does materialise it, which is the open deviation **D-bind-8**
+— tracked there and in [loft#779](https://github.com/loft-lang/loft/issues/779), not a
+narrowing of this decision. Full rule:
 [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not);
 pinned by `tests/scripts/774-view-outlives-reassigned-container.loft`.
 

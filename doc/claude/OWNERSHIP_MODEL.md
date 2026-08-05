@@ -202,6 +202,15 @@ After materialising, writes through the binding **no longer reach the container*
 why every one of them is reported rather than done silently. The advice names the function, the
 binding and the container.
 
+**A `&` binding is exempt — it is a live link and always writes through.** `c = &v[0]` opts
+into aliasing explicitly, so no reshape may turn it into a copy
+([formal/binding.md](formal/binding.md) B-Ref-Alias). The three rows above are the PLAIN-bind
+rule: that binding copies, so losing write-through is consistent with what it already meant.
+**Known gap:** the compiler does not honour the exemption yet — `&` on a local struct
+projection compiles to byte-identical IR to a plain bind, so nothing marks it as a `&` at the
+point the decision is made. Open deviation **D-bind-8**; see
+[loft#779](https://github.com/loft-lang/loft/issues/779).
+
 **Mutating the place is not ending it.** `d.mid = Mid{…}` writes the new value INTO the place
 `d.mid` already occupies, so a view of `d.mid.inner` sees the update and keeps writing through:
 that is the in-place path mutation above, not an invalidation. A view survives its place being
