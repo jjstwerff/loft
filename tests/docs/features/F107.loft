@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @F107 — GENERATED from loft-lang/features#107 by tools/features/gen.loft — DO NOT EDIT.
+struct Row { id: integer, name: text, active: boolean }
+
+fn main() {
+    row = Row { id: 7, name: "ada", active: true };
+
+    t = type_of(row);                       // the TYPE of row, not its value
+    println("{t.name} — {t.size} bytes");
+    for f in t.fields {
+        println("  {f.name}: {f.type_name} @{f.position}");
+    }
+
+    // The name can also arrive at runtime — from a config file or a catalogue.
+    u = type_named("Row");
+    if u == null { println("no such type") } else { println("found {u.name}") }
+}

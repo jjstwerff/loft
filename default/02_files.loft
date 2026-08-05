@@ -516,6 +516,8 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 // says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522).
 //   tiles: hash<Tile[id]> = []
 //   store_load_key(tiles, "block.store", 42)   // tiles now holds entry 42 only
+// @F108 — Lazy store binding (catalogue anchor, @PLN92)
+//
 // @PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that
 // MISSES fetches that one entry and inserts it, so the next lookup is an ordinary
 // resident hit; a lookup that hits never leaves the process. The collection is

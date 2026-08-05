@@ -761,6 +761,46 @@ Off when the `mmap` Cargo feature is disabled at build time:
 returns `false` so consumers branch into a JSON fallback (or
 rebuild-from-source).
 
+### Lazy store binding (`@PLN129`, `@F108`)
+
+Bind a collection to a source and let the LOOKUPS do the loading: a lookup that
+misses fetches exactly that one entry and inserts it, so the next lookup for the
+same key is an ordinary resident hit.  The collection is therefore its own cached
+working set — there is no second structure to keep in step with it.  Contrast
+`store_load_key` ([REMOTE_STORES.md](REMOTE_STORES.md)), where the program names
+the entries to fetch.
+
+| Function | Description |
+|----------|-------------|
+| `store_bind_lazy(c: reference, source: text) -> boolean` | Bind collection `c` to `source` — a local `.store` image or an `http(s)://` URL served with Range, i.e. whatever `store_load_key` accepts.  Per COLLECTION, not per store: two collections of one type may bind differently.  Binding replaces any previous binding, and may be done before `c` holds anything.  Returns `false` for a null collection. |
+| `store_lazy_error(c: reference) -> text` | Why the last fetch could not REACH the source, or `""` when healthy.  A genuine absence CLEARS it — reaching the source and not finding the key proves the source was reachable — so a stale error never outlives the truth. |
+| `store_lazy_faults(c: reference) -> integer` | How many fetches could not reach the source.  `0` is healthy; after a traversal it answers "how incomplete am I". |
+| `store_lazy_clear(c: reference) -> boolean` | Acknowledge those faults, answering whether there was anything to acknowledge. |
+
+**Ask after a null, because a null cannot say why.**  C80 means a value read never
+raises, so a miss answers `null` whether the key is genuinely absent or the source
+was unreachable — two different facts, one stable and one not:
+
+```loft
+p = persons[42];
+if p == null {
+  why = store_lazy_error(persons);
+  if why == "" { /* really no such person */ } else { /* could not reach: {why} */ }
+}
+```
+
+**Faults are sticky, and only `store_lazy_clear` clears them.**  A later fetch
+that happens to succeed does not: a traversal whose first lookup could not reach
+the source and whose second could is MISSING data, and reporting "healthy"
+afterwards would be exactly the silent wrong answer this channel exists to
+prevent.
+
+The source is pinned at bind time, so a traversal sees one consistent world; an
+image that changes underneath is REFUSED and reported through the fault channel
+rather than silently mixing two versions.  `len` is the RESIDENT count, not the
+source's.  Assigning `= []` reclaims what the collection holds while keeping the
+binding and preserving held references — the blunt way to cap a working set.
+
 ### Images — `use imaging;`
 
 These live in the **`imaging` package**, not the always-loaded stdlib: `Image` and

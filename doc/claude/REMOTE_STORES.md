@@ -72,6 +72,12 @@ on every target including the browser (`--html`). Nothing in the program changes
 when the data moves from disk to a CDN — which is what makes "develop against a
 local file, ship against a URL" work.
 
+There is a third way, for when the program should not have to say which entries it
+wants: `store_bind_lazy` binds a collection to one of these sources once, and every
+lookup that MISSES fetches its own entry ([STDLIB.md § Lazy store
+binding](STDLIB.md), `@F108`). Same reader, same pages — driven by the lookups
+instead of by a call.
+
 ```loft
 // The whole dataset is 800 MB on a CDN. This reads a few pages of it.
 parts: hash<Part[id]> = [];

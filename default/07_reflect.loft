@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F107 — Type reflection (catalogue anchor, @PLN92)
 //
 // @PLN127 arc B — type reflection: the declared shape of a type, as data.
 //
