@@ -884,25 +884,23 @@ probe gap — see Tool gaps.
 
 ## Open questions
 
-- **Q1 — which diagnostic tier?** Decision 2 says *warning*. The repo rule is *a diagnostic
-  gates iff ignoring it can produce a wrong result* (`CLAUDE.md`), and an unwanted copy
-  yields a correct-but-slower program — which points at `advice`. Recommendation: ship the
-  copy notice as `advice` and reserve `warning` for cluster II, where ignoring it **does**
-  produce a wrong value. To be confirmed; if warning is still wanted, the tier rule needs
-  the amendment written down with it.
-- **Q2 — can cluster II be fixed without weakening the alias default?** Materialising every
-  container read would close it and violate decision 1. Tombstoning, or re-pointing live
-  views on shift, keeps the alias. Decide against cluster III's mechanism, not before.
-- **Q3 — what does the `Avoidable` set actually contain?** Decision 3 makes draining it a
-  prerequisite, and `keys.rs:377` says it is not drained today (*"the Avoidable set is not
-  yet drained"* is the stated reason the lint is off). Stage B must size it: run the report
-  across the stdlib, the test corpus, and a real consumer, and split the set into *copies we
-  can eliminate*, *copies that should be reclassified* (`Forced`/`Implicit` mislabelled as
-  `Avoidable`), and *copies a human must accept*. Only the last group should ever reach an
-  author, and if it is large the accept mechanism is being used to hide analysis weakness.
-- **Q4 — what is the per-file accept spelled as?** `#superseded "…"` gives the per-definition
-  shape; nothing in the language currently scopes an annotation to a whole file. Needs a
-  syntax decision before cluster I can ship.
+- **Q1 — ANSWERED: `advice`.** The recommendation held — the repo rule is *a diagnostic gates
+  iff ignoring it can produce a wrong result*, and an unwanted copy yields a correct-but-slower
+  program. F5 shipped default-on as advice; cluster II's wrong-value case is a materialise plus
+  a notice, so nothing needed `warning` and the tier rule needs no amendment.
+- **Q2 — ANSWERED: yes, and the alias default was never the thing to weaken.** F2 materialises
+  only a view whose container is RESHAPED while it is live, which leaves every other projection
+  aliasing. F7 then tested the opposite hypothesis — weaken it everywhere — and the 30-cell
+  sweep retired it (§ F7). Neither tombstoning nor re-pointing is needed: F3 decides that a
+  vector stays dense and that an edge-case view materialises with a notice.
+- **Q3 — ANSWERED: sized, and small.** F5 ran the report across the script corpus: 55 rows over
+  27 of 585 scripts, each author-resolvable. Nothing in it needed the accept mechanism to hide
+  an analysis weakness.
+- **Q4 — MOOT for this plan; still OPEN as a language question.** The per-file accept was a
+  prerequisite only for a *gating* copy diagnostic. Q1 settled the notice as `advice`, which
+  never gates and therefore needs nothing to suppress it. If a copy diagnostic is ever promoted
+  to `warning`, the syntax question returns — it belongs with @PLN102 arc C's annotation
+  surface (`#superseded "…"` is the per-definition precedent), not here.
 
 ## The guard — codegen reality vs. what the diagnostic claimed
 
@@ -1199,7 +1197,7 @@ had been reset, so loft never opened the probe file. Native reports normally und
   `none`" is that silence working, NOT a blind spot; conflating *not shown* with *not
   accounted for* is a mistake this plan made once and corrected.
   Still uninstrumented: `parser/mod.rs:5530` is a RECOGNISER, not an emitter.
-- No probe-set runner yet; add at ≥20 probes.
+- Probe-set runner: **built** — `probes/run_set.sh [view|copy|secret|all]`.
 
 Investigation-only aids (NOT shipped, NOT part of the guard — recorded so the next session
 does not mistake them for gates):
@@ -1213,8 +1211,13 @@ does not mistake them for gates):
 
 ## See also
 
-- [loft#774](https://github.com/loft-lang/loft/issues/774) — the report. Its `b = a` half is
-  not the defect; its `c = v[0]` half is cluster II.
+- [loft#774](https://github.com/loft-lang/loft/issues/774) — the report. **Neither half is a
+  semantics defect** (§ F7): `b = a` is B-Copy, `c = v[0]` is B-View, both as decided in C86.
+  What is real is the DOC it reasons from — `tests/docs/08-struct.loft` claimed *"a binding is
+  a live view onto the same record"*, over-generalising B-View to every binding. Corrected, and
+  the ticket's moros case (`held = current`) has a direct answer in `held = &current`. The
+  separate defect class this plan found through it — a view whose container is RESHAPED under
+  it — is F1/F2/F4, fixed.
 - [loft#775](https://github.com/loft-lang/loft/issues/775) — the sibling: a field view
   escaping through a `&` write-back. Same "a view is not a store" invariant, different
   invalidator (frame exit rather than container reshape). Fixed by materialising — a
