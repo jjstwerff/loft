@@ -15,7 +15,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
 | C — Fix design | ⏸️ the model is chosen (below), the enforcement point is not. The Q5 one-liner was tried and reverted — it needs an analysis, not a flag test |
-| D — Implementation | ⏸️ pending C. NOTHING fixed yet — see § Must fix before close (F1–F6); the plan does not close on a catalogue |
+| D — Implementation | ⏸️ F1+F2 designed to one analysis, two triggers; F6 is a doc edit. Closure bar is INFORMATION, not exhaustive correctness — see § Must resolve before close |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -51,9 +51,23 @@ with the interpreter and `--native` deriving that from one shared fact.
    is the existing per-definition annotation precedent; the per-file form has none yet and
    needs designing.
 
-   Consequence: draining the `Avoidable` set is a **prerequisite of the plan**, not a
-   follow-up. Default-on is only livable once a clean program is quiet — otherwise the
-   accepts become noise-suppression rather than statements of intent.
+   Consequence — and this is NOT "drain `Avoidable` to zero first". A copy may be **allowed
+   to stand** while it is still eliminable in principle. Three kinds, and only the last
+   blocks anything:
+
+   - **Necessary** — the source survives and is mutated; no analysis will ever remove it.
+     Stated once, accepted at the site, quiet thereafter.
+   - **Allowed for now** — we *could* eliminate it with a better analysis but have not.
+     It stays, it is **stated**, and it is tracked as a future-elimination candidate. This
+     is the `Avoidable` bucket, and it is a legitimate resting state, not a debt that must
+     be paid before the plan closes. `exists()` lives here.
+   - **Unknown** — a copy no diagnostic accounts for. This is the only unacceptable kind,
+     because the author cannot decide about something they are not told. The manifest guard
+     exists to keep this set empty.
+
+   So default-on is livable as soon as the notices are TRUE and actionable — not once they
+   are absent. An accept then records a real decision ("intended here"), and an allowed copy
+   records a real trade-off, rather than either being noise-suppression.
 4. **Both backends, one semantics.** `--native` is the path that must be quickest, so it may
    not be the backend that always deep-copies. Backend parity is in scope here, not a
    follow-up.
@@ -309,21 +323,37 @@ the diagnostics change).
 Runner: `probes/run_set.sh [view|copy|secret|all]` — per probe, pass/uncovered/executed-copies
 on both backends.
 
-## Must fix before close — no deferral
+## Must resolve before close — no deferral
 
 An investigation plan OWNS every problem it surfaces. Probing is the work, but a catalogue is
-not a result: each of these is **fixed in-plan**, with a regression test, before the plan is
-deemed finished. Nothing here gets handed to the tracker to be somebody's later problem —
-filing is not a marker of significance, it is a deferral.
+not a result: each row below is **resolved in-plan**, with a regression test. Nothing gets
+handed to the tracker to be somebody's later problem — filing is not a marker of
+significance, it is a deferral.
 
-| # | problem | evidence | state |
-|---|---|---|---|
-| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **mechanism VERIFIED** — see below; fix not yet applied |
-| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–06, 29 | open |
-| F3 | `&` param bound from an element loses its write after a shift | probe 26 | open |
-| F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | open |
-| F5 | Copies no diagnostic accounts for — the `exists()` family | probes 10–12, 18, 19 | open (Q5 route reverted) |
-| F6 | `LOFT.md` claims a match capture is a view "whatever the field's type"; scalars copy | probe 31 | open (doc fix) |
+**The closure bar is INFORMATION, not exhaustive correctness.** This plan can close without
+every case being solved, provided a programmer has what they need to make the right decision
+for their own codebase. That is the plan's own thesis applied to itself: the defect was never
+that hard cases exist, it was that loft was **silent** about them. So each finding resolves
+one of two ways:
+
+- **FIXED** — where silence is not a choice. Silent data loss and silent corruption leave the
+  author nothing to decide, so they are fixed outright (F1).
+- **STATED** — where a real trade-off exists, the author is told, precisely and at compile
+  time, and decides. A materialise-and-warn (F2), a diagnostic on a lost write (F3/F4), a
+  copy notice (F5), a corrected doc (F6). "Stated" is a resolution, not a deferral: what is
+  *not* acceptable is the program being wrong and nobody being told.
+
+A row may therefore close as STATED with its underlying case still open — but never as
+"documented in the plan and left silent to users".
+
+| # | problem | evidence | resolves as | state |
+|---|---|---|---|---|
+| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | mechanism VERIFIED to a code line; fix designed, not applied |
+| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–06, 29 | **STATED** — materialise + warn (option 2, signed off) | designed; shares F1's analysis |
+| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **STATED** — diagnostic on the lost write | open |
+| F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | **STATED** — diagnostic; re-index is a separate design | open |
+| F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **STATED** — guard keeps the *unknown* set empty; the copies themselves stay as *allowed for now* | guard built; notice not yet default-on |
+| F6 | `LOFT.md` claims a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **FIXED** — correct the doc | open |
 
 **loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
 tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
@@ -398,6 +428,45 @@ Its remedy is one line — `self.vars.depend(v_nr, tmp)` — and `create_elm`
 
 Note this is a dep on the **variable**, not a dep smuggled into a returned `Type` — the
 latter is a dep-space crossing and the wrong route.
+
+**CORRECTION — the dep is not missing at the bind. It is STRIPPED later.** Measured with
+`LOFT_VAR_TABLE=main` on two programs that both bind `= a[…]`:
+
+```
+rm.loft  (safe)      c  ref(657)  def deps=[a(0)]     <- dep present
+f1 repro (destroys)  k  ref(657)  def OWNS            <- dep stripped
+```
+
+The only difference is that `k` is later reassigned. So `c = v[i]` **does** record the
+borrow; the reassignment removes it. Adding a dep at the bind would have changed nothing —
+this is why the var table was worth reading before writing the fix.
+
+**The stripper is `scopes.rs:3225`:**
+
+```rust
+// When `Set(v, Var(src))` and both are References to the same struct, codegen
+// takes gen_set_first_ref_var_copy which deep-copies src into a FRESH store
+// owned by `v`.  Strip v's declared deps so get_free_vars emits OpFreeRef.
+if let Value::Var(src) = unspanned_value && … d_nr == *src_d {
+    for d in deps { function.make_independent(v, d); }
+}
+```
+
+Its reasoning is correct for its own case: after the reassignment `v` genuinely owns a fresh
+store and genuinely needs a scope-exit free. What it does not account for is that stripping
+the dep **also re-enables the pre-Set free**, and that free runs on the value `v` held
+BEFORE the reassignment — which was the borrowed container. One strip, two consequences,
+only one of them intended.
+
+**This unifies F1 and F2 into one analysis with two triggers.** Materialise an element-read
+binding when either:
+
+- **(F2)** the container is reshaped while the binding is live, or
+- **(F1)** the binding is later reassigned — it must own a store from the start, exactly as
+  native already does with `_own_store_k`.
+
+Otherwise keep the borrow. One rule, one implementation, and it is the option-2 machinery in
+both cases — materialise when the alias cannot be held, warn, keep the alias everywhere else.
 
 **Decision site it feeds:** `state/codegen.rs:1899` computes
 `owned_ref = … && tp(v).depend().is_empty() && !is_skip_free(v)`, and line 1927 emits the
