@@ -752,6 +752,77 @@ and is not.
 | fires on a known fault (probe 36, `--native`) | 4 violations, exit 1 |
 | silent on clean code (40 scripts, both backends) | 0 reports, exit 0 |
 
+## What remains to close this plan
+
+Measured against this plan's own closure bar (§ Must resolve before close): **breakage is never
+allowed**, misinformation is never allowed, and only *copies* may rest as STATED.
+
+### Blocking — one item, and it is breakage
+
+**F8's fix.** Everything else is DONE, decided, or legitimately STATED. F8 is a wrong value
+with no diagnostic, which the bar forbids outright, so the plan cannot close on it.
+
+**Root cause, pinned today — a dep names a VARIABLE, not a store instance.** The var tables
+say it directly:
+
+```
+n_covered (vector local)          n_broken (struct local)
+  a    vec  deps=[__vdb_2(6)]       bx   ref  def OWNS
+  c    ref  deps=[a(0)]             c    ref  deps=[bx(0)]
+```
+
+A vector literal allocates through a hidden `__vdb_N` owner, so reassigning `a` mints a NEW
+one (`__vdb_2`) and the original store keeps its identity — `c` still reads it, and strict
+mode confirms **neither store leaks**, so the vector case is correct by construction rather
+than by luck. A struct local has no such indirection: `bx` IS the owner, so reassigning it
+changes what the name means while `c`'s dep still says "bx". The dep survives; the thing it
+named does not.
+
+That makes F8 the same shape as the `deps` mistakes already catalogued — a per-VARIABLE fact
+answering a per-STORE-INSTANCE question. Two candidate fixes, and the first is cheaper and
+already proven in-tree:
+
+1. **Generalise the `__vdb_N` indirection** — give a reassigned owner with live dependents a
+   fresh store and let the old one die when its last dependent does. This is exactly what the
+   covered cell already does, so it is extending a working mechanism rather than inventing one.
+2. **Add reassignment as a third invalidation trigger** — treat `bx = …` with live views the
+   way `collect_reshaped_containers` treats `a.remove(0)`: materialise the views first, warn.
+   Reuses F2 wholesale, at the cost of copies the vector path does not pay.
+
+Prefer 1, fall back to 2 where the fresh-store route cannot be proven safe. Either way the
+gate is both backends plus `LOFT_STRICT_STORES` clean, and probes 35/36 graduate to
+`tests/scripts/`.
+
+### Open for investigation — genuinely unknown, ordered by what it would cost to not know
+
+1. **Why do the backends use different mechanisms?** `--interpret` REUSES the store in place;
+   `--native` FREES it. That divergence is not explained, and a fix aimed at one may leave the
+   other. It may also be a defect in its own right — two backends disagreeing about whether a
+   reassignment frees is a store-lifetime contract question, not an implementation detail.
+2. **F8's real boundary.** Measured: vector local COVERED, struct field and element-of-field
+   BROKEN, out-of-scope COVERED. **Not** measured: a keyed collection as the container, a
+   container reassigned inside a CALLED function, a `&` parameter, deeper chains, and the
+   concurrency paths (`par`, coroutines). Filed scope is usually a tenth of the defect, and
+   this scope came from seven cells.
+3. **Sibling routes by which a name stops meaning its store.** Reassignment is one. Others not
+   yet probed: handing the container to a function that reassigns it, the owner going out of
+   scope inside a loop, a swap through a temporary, and `#remove` of the owner itself. Each is
+   a probe, per § Method rule 8.
+4. **Q6 — which uncovered copy families should be silenced rather than removed.** The owner's
+   framing (an accept recorded at the site, never a blanket exemption) is written down; which
+   families qualify is not.
+5. **The uncovered copy set.** Sized, not drained: 29 distinct sites over a 90-script sample,
+   across four origins. Decision 3 makes "allowed for now" legitimate, so this is **STATED**
+   and does not block — but it is the largest known unfinished measurement.
+
+### Not this plan's, though it surfaced here
+
+The `wasm32-wasip2` rlib **cannot be rebuilt** (`n_store_load_key` unresolved under
+`--no-default-features --features random`). `find_problems` rebuilds it with `-q`, so the
+failure is silent and the wasm gate has been running against a STALE library — green for a
+reason unrelated to the code under test. Adding one `loft::keys` symbol is what exposed it.
+Belongs in its own issue; recorded here only so the next reader does not re-diagnose it.
+
 ## F3 — RESOLVED by two decisions, not by machinery
 
 **Decision 1 — a `vector` stays DENSE. `remove` compacts; there are no holes.**
