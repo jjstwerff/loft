@@ -35,4 +35,8 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "default/06_json.loft",
         include_str!("../default/06_json.loft"),
     ),
+    (
+        "default/07_reflect.loft",
+        include_str!("../default/07_reflect.loft"),
+    ),
 ];

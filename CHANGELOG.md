@@ -26,6 +26,117 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Reflection knows which fields can be null
+
+`type_of` and `type_named` now report `nullable` on every field, so a generated
+schema can carry the constraint:
+
+```loft
+for f in t.fields {
+  col = "{f.name} {sql_type(f.kind)}";
+  if !f.nullable { col += " NOT NULL" }
+}
+```
+
+It is not something the stored bytes could tell you — a `text?` occupies exactly
+the same space as a `text` — so it reaches you only because the compiler records
+it. Whether a field is `const` is deliberately not reported: that constrains loft
+code rather than the data.
+
+### `type_named("Row")` when you only have the name
+
+`type_of` needs a value. When the type name arrives from a config file, a
+database catalogue or a command line, there is nothing to pass it:
+
+```loft
+t = type_named(wanted);
+if t == null { println("no such type") } else { println("{t.name} has {len(t.fields)} fields") }
+```
+
+`TypeInfo?` — a name this program has no type for answers null rather than an
+empty-looking shape, so a typo cannot read as a type with no fields.
+
+### `type_of(x)` tells you the shape of a type
+
+A program can now ask what a type IS — its fields, their types, their byte
+offsets, an enum's variants — without a JSON round-trip and without writing the
+shape down a second time:
+
+```loft
+t = type_of(row);
+println("{t.name} ({t.size} bytes)");
+for f in t.fields { println("  {f.name}: {f.type_name} @{f.position}") }
+```
+
+`t.kind` says which of the rest to read: a record has `fields`, an enum has
+`variants`, a vector has an `element`. Empty is the honest answer for a kind that
+has no such thing.
+
+The argument is read for its **type** and is not evaluated — the same contract
+C's `sizeof` has — so pass a variable, a field or a parameter rather than an
+expression with a side effect. It also does not work inside a generic, where the
+type parameter has no concrete type yet.
+
+This is what a generic serialiser, an ORM mapping or a schema check needs, and
+until now only a JavaScript reader of a loft value could see it.
+
+### `{x:j}` produces JSON for two shapes that used to break it
+
+A struct holding an **enum field** wrote the variant name bare:
+
+```
+{"kind":Circle {"r":2}}      // not JSON — `Circle` is an unquoted token
+```
+
+so `json_parse` rejected the whole document and *no* field of that struct could
+be read back, not just the enum. It now nests the same object a bare enum
+always produced:
+
+```
+{"kind":{"Circle":{"r":2}}}
+```
+
+And a **`text?` holding null** came back as a one-character string containing a
+NUL rather than as JSON `null` — an absent value arriving as a present, corrupt
+one. It is `null` now, so absent and empty stay the two different answers the
+type exists to keep apart:
+
+```loft
+"{ Note { note: null, n: 4 } :j}"   // {"note":null,"n":4}
+"{ Note { note: "",   n: 4 } :j}"   // {"note":"","n":4}
+```
+
+Both round-trip through `.parse` in both directions. `{x}` — the debug form —
+is unchanged.
+
+### A format string can hand a value of your own type to the type it builds
+
+A format string whose target type implements the interpolation contract already
+handed over its parts — the bytes you wrote go to `lit`, an interpolated value to
+`hole_<kind>`. Holes had to be scalars. Now a hole can be a value of your own
+struct or enum, and its method is named after the type:
+
+```loft
+fn hole_sql_ident(self: SqlText, v: SqlIdent?)    // SqlIdent -> hole_sql_ident
+```
+
+That is what lets a builder treat one hole differently from the rest. A SQL table
+name cannot be a bound parameter — no placeholder stands for it — so a safe query
+builder has to put it in the statement itself. Making it a *type* is what keeps
+that safe: nothing constructs a `SqlIdent` but a constructor that refuses anything
+which is not a name, so there is one place to check rather than a rule to remember.
+
+```loft
+tbl = ident("orders");                              // null if it is not a name
+q: SqlText = "SELECT id FROM {tbl} WHERE name = {n}";
+```
+
+`tbl` becomes syntax; `n` becomes a bound value; and a refused `tbl` leaves the
+statement with no text to send at all.
+
+A hole kind your type does not accept is still a compile error naming the method
+to add, and never a quiet fall back to rendering the value into the text.
+
 ### `chr(65)` gives you `"A"`
 
 There was no way to turn a code point back into text — `ch as integer` took a

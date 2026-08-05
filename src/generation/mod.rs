@@ -3292,7 +3292,52 @@ extern crate loft;"
     /// `s_var` is the Rust variable holding the parent struct's runtime id
     /// (e.g. `t59` for `known_type=59`).
     #[allow(clippy::too_many_arguments)]
+    /// Register one field in the generated `init()`, then — @PLN127 arc D —
+    /// replay the nullability deposit beside it.
+    ///
+    /// `--native` rebuilds the schema by REPLAYING `init()`, so a fact the parser
+    /// deposits and the generator does not emit is simply ABSENT there.
+    /// Reflection answered `nullable=false` for every field on the native backend
+    /// until this existed, and the parity probe is what caught it. It wraps the
+    /// emitter rather than sitting in either caller because there are two call
+    /// sites and the one that mattered was not the obvious one.
+    #[allow(clippy::too_many_arguments)]
     fn emit_field(
+        &self,
+        w: &mut dyn Write,
+        s_var: &str,
+        host_type_id: u16,
+        field_name: &str,
+        typedef: &Type,
+        nullable: bool,
+        known_type: u16,
+        forced_size: Option<u8>,
+        bare_io: &[(u16, BareIo)],
+        bare_emitted: &mut [bool],
+    ) -> std::io::Result<()> {
+        self.emit_field_inner(
+            w,
+            s_var,
+            host_type_id,
+            field_name,
+            typedef,
+            nullable,
+            known_type,
+            forced_size,
+            bare_io,
+            bare_emitted,
+        )?;
+        if nullable || matches!(typedef, Type::Optional(_)) {
+            writeln!(
+                w,
+                "    db.set_field_nullable({s_var}, \"{field_name}\", true);"
+            )?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_field_inner(
         &self,
         w: &mut dyn Write,
         s_var: &str,

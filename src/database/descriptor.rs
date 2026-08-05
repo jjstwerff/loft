@@ -78,6 +78,14 @@ pub struct LayoutField {
     pub name: String,
     pub position: u16,
     pub content: u16,
+    /// @PLN127 arc D — was this field DECLARED nullable?
+    ///
+    /// Carried, never RENDERED: `render_dump` is the @PLN97 layout identity and
+    /// nullability is not a layout fact — `text?` occupies the same bytes as
+    /// `text` and spells absence with a sentinel. So this rides along for a
+    /// reader that wants the declaration without moving the hash a store was
+    /// written under.
+    pub nullable: bool,
 }
 
 /// The five keyed-collection kinds `read_data` refuses to serialize (store-internal
@@ -552,6 +560,7 @@ impl Stores {
             name: f.name.clone(),
             position: f.position,
             content: f.content,
+            nullable: f.nullable,
         };
         match &self.types[kt as usize].parts {
             Parts::Base => {

@@ -180,12 +180,25 @@ fn release(self: Maria) {
 // `size(sql)` is the BYTE count `mysql_stmt_prepare` wants — `len` would be the
 // character count, which is a different number the moment the author's SQL
 // contains anything outside ASCII.
+//
+// Identifiers take a BACKTICK here. It is the one dialect difference of the four
+// — mariadb reads a double-quoted name as a string literal unless the server is
+// in `ANSI_QUOTES` mode — which is why the quote is chosen at assembly time by
+// the backend rather than baked in when the hole was filled.
 fn prepare_bind(self: Maria, q: SqlText) -> boolean {
+  sql = q.statement(SQL_QMARK, "`");
+  if sql == null { self.err = "an identifier was refused"; return false }
+  return self.prepare_text(sql, q);
+}
+
+// The same prepare-and-bind, given the statement TEXT rather than deriving it —
+// which is what a CALL has: its name and arity come from the procedure, and its
+// values arrive beside them.
+fn prepare_text(self: Maria, sql: text, q: SqlText) -> boolean {
   self.err = "";
   self.release();
   self.ps = my_stmt_init(self.conn);
   if self.ps == 0 { self.err = "cannot allocate a statement"; return false }
-  sql = q.statement(false);
   if my_stmt_prepare(self.ps, sql, size(sql)) != 0 {
     self.err = my_stmt_error(self.ps);
     return false
@@ -214,6 +227,45 @@ fn prepare_bind(self: Maria, q: SqlText) -> boolean {
 
 pub fn db_run(self: Maria, q: SqlText) -> boolean {
   if !self.prepare_bind(q) { return false }
+  if my_stmt_execute(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
+  self.release();
+  return true;
+}
+
+// --- H7: procedures, in the server's catalogue --------------------------------
+//
+// MariaDB has no positional parameters INSIDE a body — it reads the names it was
+// declared with — so the body is rendered in `SQL_NAMED` (`p1`, `p2`, …) against
+// a signature that declares exactly those names. Same pieces, a different
+// rendering; nothing is rewritten, which is why a `?` the author wrote inside a
+// literal is still just bytes.
+//
+// One statement per body, so no `BEGIN … END` and no `DELIMITER`: the C API
+// takes the whole `CREATE PROCEDURE` as one string, and a body needing more than
+// one statement is refused by the two backends that emulate it, which keeps the
+// four honestly comparable.
+pub fn db_deploy(self: Maria, p: SqlProc) -> boolean {
+  self.err = "";
+  sig = p.proc_signature("`", "IN ", ["TEXT", "BIGINT", "DOUBLE", "BOOLEAN"]);
+  if sig == null { self.err = "a parameter has no type"; return false }
+  body = p.proc_body(SQL_NAMED, "`");
+  if body == null { self.err = "an identifier was refused"; return false }
+  // One statement per procedure, here too — mariadb and postgres do not share a
+  // procedural language either, so a body beyond one statement has no uniform
+  // meaning to accept. `procedural` holds that rule for all four.
+  if procedural(body) { self.err = "a procedure body is one statement"; return false }
+  return self.db_exec("CREATE OR REPLACE PROCEDURE {sig} {body}");
+}
+
+// Calling one is an ordinary prepared statement — `CALL \`name\`(?, …)` — so the
+// values still travel down the bind path and nothing new is trusted.
+pub fn db_call(self: Maria, p: SqlProc, args: SqlText) -> boolean {
+  if !p.proc_ok() { self.err = "no procedure"; return false }
+  if args.params() != p.proc_arity() { self.err = "wrong number of arguments"; return false }
+  // Through a LOCAL: a text returned across a package boundary is empty if it is
+  // consumed where it is produced (loft#773).
+  call = p.proc_call_sql(SQL_QMARK, "`");
+  if !self.prepare_text(call, args) { return false }
   if my_stmt_execute(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
   self.release();
   return true;

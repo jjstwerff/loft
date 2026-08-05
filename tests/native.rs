@@ -1492,7 +1492,30 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     //   big=1000 a value far past the 256-byte column buffer mariadb's result
     //            binds start with, round-tripped at full length — the truncation
     //            re-fetch is exercised, not merely written.
-    let bound = "p=2 [ada] <null> [] ['); DROP TABLE loft_p; --] hit=4 big=1000";
+    //
+    // @PLN23 H6 — the identifier, the ONE hole that is not a value. Four tokens,
+    // two of which move in opposite directions if the type stops carrying it:
+    //
+    //   ident=4  a `SqlIdent` named the TABLE the query reads, so it reached the
+    //            statement as SYNTAX. No placeholder stands for a table name, so
+    //            a `SqlIdent` that went down the bind path instead would not have
+    //            found the wrong row — it would have failed to prepare at all.
+    //            The quoting is per-dialect and this is where that is measured:
+    //            giving mariadb the ANSI quote the other three use answers
+    //            `FAIL q8 … error in your SQL syntax … near '"loft_p" WHERE`,
+    //            because it reads a double-quoted name as a string literal. The
+    //            backtick is not a preference, and choosing the quote at ASSEMBLY
+    //            time rather than when the hole was filled is what allows it.
+    //   refused=true   the same construction given `loft_p; DROP TABLE loft_p; --`
+    //            is refused AT CONSTRUCTION — before any statement was built
+    //            around it, and long before a server could be asked about it.
+    //   ran=false      the statement built on the refused identifier has no text.
+    //            `statement` answers `text?` and every backend must discharge it,
+    //            so nothing is sent.
+    //   alive=true     and the table is still there. Vacuous only if `dump`
+    //            itself were broken, which the `[ada] <null> []` cells rule out.
+    let bound = "p=2 [ada] <null> [] ['); DROP TABLE loft_p; --] hit=4 big=1000 \
+                 ident=4 refused=true ran=false alive=true";
 
     // @PLN23 T1–T3 — the transaction line, from one generic `transact<D: SqlDb>` that
     // names no backend. It lands before the object mapping because writing a collection
@@ -1510,6 +1533,27 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     // Proven to FIRE by replacing sqlite's three methods with `return true` (a backend
     // that reports transactions it never opens): `nested=true rows=1/2 stray=true/true`.
     let tx = "begin=true/true nested=false rollback=true commit=true rows=0/1 stray=false/false";
+
+    // @PLN23 H7 — procedures, from one generic `procedures<D: SqlDb>` that names no
+    // backend. Two of the four put the definition in the SERVER's catalogue
+    // (`CREATE OR REPLACE PROCEDURE`, then `CALL`) and two keep it in the PROCESS
+    // and prepare it on call; this line is what says a caller cannot tell which.
+    //
+    //   deployed=true  the definition was accepted. The body's parameters are typed
+    //                  by the holes' own loft types, so a procedure is declared by
+    //                  writing its statement rather than declaring a signature twice.
+    //   called=true    running it did the work, and `rows=1` is that work seen from
+    //                  OUTSIDE the procedure — the pair is what makes the cell
+    //                  non-vacuous. Proven to fire by replacing sqlite's `db_call`
+    //                  with `return true`: `guard=true rows=0`, two fields moving.
+    //   guard=false    the same procedure called with the wrong NUMBER of values is
+    //                  refused before anything is sent.
+    //   ctl=false      a two-statement body is refused AT DEPLOY, everywhere. sqlite
+    //                  and duckdb have no procedural language; mariadb and postgres
+    //                  each have one and they are not the same one (SQL/PSM vs
+    //                  plpgsql), so there is no such body a uniform API could carry.
+    //                  Proven to fire by making `procedural` never refuse: `ctl=true`.
+    let proc = "deployed=true called=true guard=false rows=1 ctl=false";
 
     // sqlite — no server, so whenever the library is here a failure is real.
     //
@@ -1541,6 +1585,11 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             s.contains(&format!("sqlite tx {tx}")),
             "sqlite: rollback must discard, commit must persist, and a nested begin \
              must be REFUSED:\n{s}"
+        );
+        assert!(
+            s.contains(&format!("sqlite proc {proc}")),
+            "sqlite: a procedure kept in the PROCESS must deploy, call and do the \
+             work, and refuse a body needing a procedural language:\n{s}"
         );
         assert_eq!(
             run("--native", "sqlite")?,
@@ -1575,6 +1624,14 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
         assert!(
             out.contains(&format!("{mode} tx {tx}")),
             "{mode}: transactions must behave exactly as sqlite's do:\n{out}"
+        );
+        // The interesting half of H7: this backend put the definition in its own
+        // catalogue and CALLed it, sqlite kept it in the process — and the line is
+        // byte-identical. Where a procedure lives is not something a caller can see.
+        assert!(
+            out.contains(&format!("{mode} proc {proc}")),
+            "{mode}: a server-side procedure must give the same answer as the \
+             process-side emulation:\n{out}"
         );
         assert_eq!(
             run("--native", mode)?,
@@ -1621,6 +1678,11 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             out.contains(&format!("duckdb tx {tx}")),
             "duckdb: rollback must discard, commit must persist, and a nested begin \
              must be REFUSED — `BEGIN TRANSACTION` is its own spelling:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("duckdb proc {proc}")),
+            "duckdb: the process-side procedure registry is SHARED with sqlite's, so \
+             its answer must be sqlite's:\n{out}"
         );
     }
 

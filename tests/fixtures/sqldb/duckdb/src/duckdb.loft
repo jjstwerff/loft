@@ -71,10 +71,14 @@ pub struct Duck {
   stmt: integer,
   err: text,
   tx: Tx,
+  // H7 — duckdb has no `CREATE PROCEDURE`, so the definitions live here, the
+  // same answer sqlite gives and through the same shared registry.
+  procs: Procs,
 }
 
 pub fn duck() -> Duck {
-  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "", tx: tx_new() };
+  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "",
+                tx: tx_new(), procs: procs_new() };
 }
 
 // Is this backend usable on this machine?
@@ -173,9 +177,19 @@ fn release(self: Duck) {
 }
 
 fn prepare_bind(self: Duck, q: SqlText) -> boolean {
+  // A refused identifier has no statement (H6) — nothing to prepare, nothing sent.
+  stmt = q.statement(SQL_QMARK, "\"");
+  if stmt == null { self.err = "an identifier was refused"; return false }
+  return self.prepare_text(stmt, q);
+}
+
+// The same bind, given the statement TEXT rather than deriving it — which is
+// what a registered procedure has: its body was assembled at deploy, and its
+// values arrive later.
+fn prepare_text(self: Duck, sql: text, q: SqlText) -> boolean {
   if self.conn == 0 { return false }
   self.release();
-  if ddb_prepare(self.conn, q.statement(false), slot_stmt()) != 0 {
+  if ddb_prepare(self.conn, sql, slot_stmt()) != 0 {
     self.stmt = take_stmt();
     self.err = ddb_prepare_error(self.stmt) ?? "prepare failed";
     self.release();
@@ -234,6 +248,35 @@ pub fn db_rows(self: Duck, q: SqlText) -> boolean {
 pub fn db_begin(self: Duck) -> boolean { return tx_begin(self, self.tx, "BEGIN TRANSACTION"); }
 pub fn db_commit(self: Duck) -> boolean { return tx_commit(self, self.tx); }
 pub fn db_rollback(self: Duck) -> boolean { return tx_rollback(self, self.tx); }
+
+// --- H7: procedures, kept in the process --------------------------------------
+//
+// duckdb has no `CREATE PROCEDURE` either, so it gives sqlite's answer through
+// the SAME shared registry — including the refusal of a body needing procedural
+// control flow. Two backends cannot drift apart about what "procedural" means
+// when only one function decides it.
+//
+// UNPROVEN like the rest of this backend, and that is exactly why the logic is
+// shared: what runs here is what sqlite's cell exercises on every run.
+pub fn db_deploy(self: Duck, p: SqlProc) -> boolean {
+  return proc_register(self.procs, p, "\"");
+}
+
+pub fn db_call(self: Duck, p: SqlProc, args: SqlText) -> boolean {
+  if !p.proc_ok() { self.err = "no procedure"; return false }
+  // The name goes through a LOCAL: a text returned across a package boundary is
+  // empty if it is consumed where it is produced (loft#773).
+  nm = p.proc_name();
+  sql = self.procs.proc_lookup(nm);
+  if sql == null { self.err = "no procedure {p.proc_name()}"; return false }
+  if args.params() != p.proc_arity() { self.err = "wrong number of arguments"; return false }
+  if !self.prepare_text(sql, args) { return false }
+  ok = ddb_execute_prepared(self.stmt, result_buf()) == 0;
+  if !ok { self.err = ddb_result_error(result_buf()) ?? "execute failed" }
+  ddb_destroy_result(result_buf());
+  self.release();
+  return ok;
+}
 
 pub fn db_shut(self: Duck) {
   self.release();

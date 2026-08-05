@@ -106,7 +106,14 @@ enum Node {
   NdText { s: text },
   NdCall { def_nr: integer, args: vector<Node> },
   NdCallRef { var: integer, args: vector<Node> },
-  NdBlock { block: reference < Block > },
+  // BY REFERENCE, as a box-of-one vector — the idiom this schema already uses
+  // for `Block.result`, `DbField.default` and every other single sub-record.
+  // `src/data.rs` boxes a `Block`, and inlining it cost every Node in the image
+  // the size of the largest one (48-byte stride for a 12-byte `NdVar`).
+  //
+  // NOT `reference<Block>`: that generates a 12-byte `Parts::DbRef`, three times
+  // the width for the same indirection, and nothing else in this store reads one.
+  NdBlock { block: vector<Block> },
   NdInsert { items: vector<Node> },
   NdVar { n: integer },
   NdSet { var: integer, inner: vector<Node> },
@@ -115,7 +122,7 @@ enum Node {
   NdBreakWith { n: integer, inner: vector<Node> },
   NdContinue { n: integer },
   NdIf { cond: vector<Node>, t: vector<Node>, f: vector<Node> },
-  NdLoop { block: reference < Block > },
+  NdLoop { block: vector<Block> },   // box-of-one, as NdBlock
   NdDrop { inner: vector<Node> },
   NdIter { var: integer, create: vector<Node>, next: vector<Node>, init: vector<Node> },
   NdKeys { keys: vector<Key> },
@@ -126,7 +133,7 @@ enum Node {
   NdFnRef { def_nr: integer, var: integer, t: vector<TypeT> },
   NdFnRefDnr { n: integer },
   NdParallel { arms: vector<Node> },
-  NdParFor { body: reference < ParForBody > },
+  NdParFor { body: vector<ParForBody> }, // box-of-one, as NdBlock
   NdRawExpr { s: text },
 }
 
@@ -263,6 +270,7 @@ struct DbField {
   position: integer, // u16 byte offset
   default: vector<DbContent>, // Content (box-of-one)
   other_indexes: vector<integer>,
+  nullable: boolean, // @PLN127 arc D — declared nullable; not a layout fact
 }
 
 struct EnumPair {

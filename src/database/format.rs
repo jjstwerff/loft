@@ -934,13 +934,14 @@ impl ShowDb<'_> {
                 }
             } else {
                 let text_val = self.store().get_str(text_nr);
-                if (self.json || self.loft) && text_val == crate::state::STRING_NULL {
-                    // A `text?` holding null is stored as the STRING_NULL ("\0")
-                    // sentinel — the same absence the `text_nr == 0` branch above
-                    // renders, reached by a different route, so it renders the
-                    // same way. Escaping it instead published the sentinel as
-                    // data: `{"note":" "}` turned an absent value into a
-                    // present one-character string (loft#769).
+                if text_val == crate::state::STRING_NULL && (self.json || self.loft) {
+                    // loft#769 — an ABSENT `text?` is stored as the sentinel string
+                    // `"\0"`, not as a null pointer, so it reached the escaper and
+                    // came back as the one-character string `" "`: a present,
+                    // corrupt value where the program meant nothing. It is the same
+                    // absence the null-pointer branch above renders, so it renders
+                    // the same way — which is what keeps SQL NULL distinct from `''`
+                    // across a round trip rather than collapsing both to a string.
                     s.push_str("null");
                 } else if self.json || self.loft {
                     // loft string literals accept the same escapes as JSON
@@ -1015,9 +1016,44 @@ impl ShowDb<'_> {
                         return;
                     }
                     let v = self.store().get_byte(self.rec, self.pos, 0);
+                    let known = v > 0 && (v as usize - 1) < vals.len();
+                    // loft#768 — in JSON an enum-TYPED position wraps its variant the
+                    // same way an enum-VALUE position does (`Parts::EnumValue` below):
+                    // `{"Circle":{"r":2}}`. Writing the tag bare produced
+                    // `{"kind":Circle {"r":2}}`, which is not JSON at all — an unquoted
+                    // token in value position — so `json_parse` rejected the WHOLE
+                    // document and a struct holding an enum could not be read back at
+                    // all. The reader already accepts this shape (`walk_parsed_into`
+                    // takes a one-entry object as a tagged variant), so writer and
+                    // reader now name one shape between them.
+                    //
+                    // An absent discriminant, and one naming no variant this schema
+                    // has, are both `null`: JSON has no way to spell "a variant I
+                    // cannot name", and the reader already degrades an unknown tag to
+                    // the null sentinel rather than guessing a variant.
+                    if self.json {
+                        if !known {
+                            s.push_str("null");
+                            return;
+                        }
+                        let (variant_tp, variant_name) = &vals[v as usize - 1];
+                        write!(s, "{{\"{variant_name}\":").unwrap();
+                        // A variant with no payload type at all still gets a body, so
+                        // every variant reads back through one code path.
+                        if *variant_tp != u16::MAX
+                            && let Parts::EnumValue(_, st) =
+                                &self.stores.types[*variant_tp as usize].parts
+                        {
+                            self.write_struct(s, st, indent);
+                        } else {
+                            s.push_str("{}");
+                        }
+                        s.push('}');
+                        return;
+                    }
                     let enum_val = if v <= 0 {
                         "null"
-                    } else if (v as usize - 1) < vals.len() {
+                    } else if known {
                         &vals[v as usize - 1].1
                     } else {
                         "?"

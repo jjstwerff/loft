@@ -1109,6 +1109,22 @@ The method names, and which kind each hole uses:
 | `single` | `hole_single` |
 | `boolean` | `hole_boolean` |
 | `character` | `hole_character` |
+| a struct or enum | `hole_<type name in method case>` — `SqlIdent` → `hole_sql_ident`, `Level` → `hole_level` |
+
+A hole of your OWN type is what lets a builder treat one hole differently from
+all the others. A SQL table name cannot be a bound parameter — no placeholder
+stands for it — so a query builder has to put it in the statement itself, and
+making it a type is what keeps that safe:
+
+```loft
+tbl = ident("orders");                              // null if it is not a name
+q: SqlText = "SELECT id FROM {tbl} WHERE name = {n}";
+```
+
+`tbl` reaches `hole_sql_ident` and the builder writes it into the text; `n`
+reaches `hole_text` and is bound. Nothing constructs a `SqlIdent` but `ident`,
+which refuses anything that is not a name — so there is one place to check
+rather than a rule to remember.
 
 Rules worth knowing:
 
@@ -1120,8 +1136,13 @@ Rules worth knowing:
   over rather than rendered, so there is nothing to format.
 - **A string with no holes still builds the type** — an empty statement is still a
   statement.
+- **A hole does not inherit the target type.** A string literal INSIDE a hole
+  (`"{"seed"}"`) is ordinary text, not a second value of the target type — which
+  also means a format string in argument position inside a hole
+  (`"{ build("p{n}q") }"`) is text, so build it in a local first.
 
-`tests/scripts/interpolation-hook.loft` is a complete worked example.
+`tests/scripts/interpolation-hook.loft` is a complete worked example, and
+`tests/fixtures/sqldb/sql/src/sql.loft` is a real one.
 
 ---
 

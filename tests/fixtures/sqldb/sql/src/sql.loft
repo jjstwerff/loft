@@ -29,12 +29,31 @@
 // Writing them means re-deriving, in a second place, a boundary the parser
 // already had; and a `?` inside a quoted literal makes that second derivation a
 // SQL-parsing problem, which is a class of bug this design simply does not have.
+//
+// H6 adds the ONE hole that is not a value — an identifier, which no placeholder
+// can stand for. It is admitted by type rather than by parser: see `SqlIdent`.
 
 pub const SQL_TEXT = 0;
 pub const SQL_INT = 1;
 pub const SQL_FLOAT = 2;
 pub const SQL_BOOLEAN = 3;
 pub const SQL_NULL = 4;
+
+// What follows a literal chunk: a value the backend binds, or — H6 — an
+// identifier that becomes part of the statement's own syntax.
+pub const SQL_BIND = 0;
+pub const SQL_IDENT = 1;
+
+// How a server spells the place a value goes.
+//
+// The first two are what a CALLER writes; the third exists only inside a
+// procedure BODY on mariadb, which has no positional parameters there and reads
+// its own declared names instead. One statement, three renderings — assembled
+// from the same pieces rather than rewritten, so no backend ever has to find a
+// placeholder inside SQL it did not write.
+pub const SQL_QMARK = 0;    // ?         sqlite, mariadb, duckdb
+pub const SQL_DOLLAR = 1;   // $1 $2 …   postgres, caller-side and in a body
+pub const SQL_NAMED = 2;    // p1 p2 …   inside a mariadb procedure body
 
 // One interpolated value, carried beside the statement rather than inside it.
 pub struct Bound {
@@ -45,23 +64,38 @@ pub struct Bound {
 }
 
 pub struct SqlText {
-  // The author's literal chunk that comes BEFORE each value, so
-  // `len(chunks) == len(binds)` always.
+  // The author's literal chunk that comes BEFORE each piece, so
+  // `len(chunks) == len(kinds)` always.
   const chunks: vector<text>,
-  // The literal after the last value — the only chunk with no value after it.
-  tail: text,
+  // What each chunk is followed by: `SQL_BIND` or `SQL_IDENT`. The two payload
+  // vectors below are per-kind and in order, so `binds` stays a values-only list
+  // a backend can walk straight down its bind API with the index it needs.
+  const kinds: vector<integer>,
   const binds: vector<Bound>,
+  const idents: vector<text>,
+  // The literal after the last piece — the only chunk with nothing after it.
+  tail: text,
+  // An identifier was REFUSED, so this statement has no text at all. Carried
+  // rather than acted on here, because the accumulator is built by the parser
+  // and has no way to raise; `statement` is where it becomes an answer.
+  refused: boolean,
 }
 
 // A literal chunk the author wrote.
 pub fn lit(self: SqlText, s: text) { self.tail += s; }
 
+// Close the current literal chunk, and record what follows it.
+fn piece(self: SqlText, kind: integer) {
+  self.chunks += [self.tail];
+  self.tail = "";
+  self.kinds += [kind];
+}
+
 // An interpolated value closes the current literal chunk and is recorded apart
 // from it. `text?` rather than `text`, so an absent value is SQL NULL — which is
 // not the empty string, and the type is what keeps the two apart.
 pub fn hole_text(self: SqlText, v: text?) {
-  self.chunks += [self.tail];
-  self.tail = "";
+  self.piece(SQL_BIND);
   if v == null {
     self.binds += [Bound { kind: SQL_NULL, t: "", i: 0, f: 0.0 }];
   } else {
@@ -70,38 +104,109 @@ pub fn hole_text(self: SqlText, v: text?) {
 }
 
 pub fn hole_int(self: SqlText, v: integer) {
-  self.chunks += [self.tail];
-  self.tail = "";
+  self.piece(SQL_BIND);
   self.binds += [Bound { kind: SQL_INT, t: "", i: v, f: 0.0 }];
 }
 
 pub fn hole_float(self: SqlText, v: float) {
-  self.chunks += [self.tail];
-  self.tail = "";
+  self.piece(SQL_BIND);
   self.binds += [Bound { kind: SQL_FLOAT, t: "", i: 0, f: v }];
 }
 
 // The value rides in `i` so a backend needs one integer path, not two.
 pub fn hole_boolean(self: SqlText, v: boolean) {
-  self.chunks += [self.tail];
-  self.tail = "";
+  self.piece(SQL_BIND);
   n = if v { 1 } else { 0 };
   self.binds += [Bound { kind: SQL_BOOLEAN, t: "", i: n, f: 0.0 }];
 }
 
-// How many values the statement binds.
+// --- H6: the deliberate exception -------------------------------------------
+//
+// A table or column name is genuinely part of SQL's syntax: no placeholder can
+// stand for it, so `SELECT … FROM ?` is not a statement any server will prepare.
+// It therefore goes in INLINE — the one thing every other hole is forbidden.
+//
+// What makes that safe is not the parser this time, it is the TYPE. Nothing
+// constructs a `SqlIdent` but `ident` below, which refuses anything that is not
+// an identifier; so the bytes that reach the statement are still only
+// author-written literals plus names that have been checked. One method, one
+// validating constructor, one place to audit.
+pub struct SqlIdent { const nm: text }
+
+// The ONE gate. A name that is not an identifier is refused HERE, at
+// construction — not at execution, where a caller has already built a statement
+// around it and the refusal would arrive as a server error about someone else's
+// syntax.
+//
+// ASCII deliberately, and not `is_alphanumeric`: that is Unicode-aware, and a
+// name a server would fold, normalise or reject is not one this should admit
+// just because some locale calls it a letter. Length is capped at the 64 bytes
+// every backend here allows.
+pub fn ident(s: text) -> SqlIdent? {
+  if s == "" || size(s) > 64 { return null }
+  for c in s {
+    ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+      || (c#count > 0 && c >= '0' && c <= '9');
+    if !ok { return null }
+  }
+  return SqlIdent { nm: s };
+}
+
+// The name this identifier admitted.
+pub fn name(self: SqlIdent) -> text { return self.nm; }
+
+// An identifier hole. A refused one (`null`) poisons the statement rather than
+// quietly dropping out of it: a `DELETE FROM  WHERE …` with the table missing is
+// the one outcome worse than no statement at all.
+pub fn hole_sql_ident(self: SqlText, v: SqlIdent?) {
+  if v == null { self.refused = true; return }
+  // Bound to a local before it crosses: a text field read straight out of a
+  // nullable struct leaks its record (loft#771).
+  nm = v.nm ?? "";
+  self.piece(SQL_IDENT);
+  self.idents += [nm];
+}
+
+// How many values the statement binds. Identifiers are not values and are not
+// counted — they are already in the text.
 pub fn params(self: SqlText) -> integer { return len(self.binds); }
 
-// The statement in the backend's own placeholder dialect: `$1 $2 …` when
-// `numbered` (postgres), `?` otherwise (sqlite, mariadb, duckdb).
+// Where the `at`th value goes, in `style`.
+pub fn placeholder(style: integer, at: integer) -> text {
+  if style == SQL_DOLLAR { return "${at}" }
+  if style == SQL_NAMED { return "p{at}" }
+  return "?";
+}
+
+// The statement in the backend's own dialect: values in `style`, and `quote`
+// around each identifier (a backtick for mariadb, an ANSI double quote for the
+// rest).
 //
 // Assembled from the chunks rather than by rewriting a caller's text, so no
 // backend ever has to find a placeholder inside SQL it did not write.
-pub fn statement(self: SqlText, numbered: boolean) -> text {
+//
+// **`text?`, and null means a refused identifier.** There is no statement to
+// give: the name that was supposed to be in it never passed the gate. Saying so
+// in the TYPE is what makes each backend handle it — a boolean beside the text
+// would be a flag every backend has to remember to read.
+pub fn statement(self: SqlText, style: integer, quote: text) -> text? {
+  if self.refused { return null }
   out = "";
-  for c in self.chunks {
-    out += c;
-    if numbered { out += "${c#count + 1}" } else { out += "?" }
+  values = 0;
+  names = 0;
+  // `kinds` is what drives the walk, because it is the only vector that holds
+  // the ORDER; `chunks` is the same length by construction, and an absent chunk
+  // would be an empty literal, which is the neutral thing to add.
+  for k in self.kinds {
+    out += self.chunks[k#count] ?? "";
+    if k == SQL_IDENT {
+      nm = self.idents[names] ?? "";
+      out += "{quote}{nm}{quote}";
+      names += 1;
+    } else {
+      values += 1;
+      out += placeholder(style, values);
+    }
   }
   out += self.tail;
   return out;
@@ -184,6 +289,169 @@ pub fn tx_rollback <D: SqlDb> (d: D, t: Tx) -> boolean {
   return ok;
 }
 
+// --- H7: procedures ---------------------------------------------------------
+//
+// With the hook, a procedure is just *a named, parameterised statement*:
+//
+//   p = procedure(ident("archive_orders"),
+//                 "DELETE FROM {tbl} WHERE created < {cutoff}");
+//
+// `tbl` is a `SqlIdent` — validated, quoted, INLINE, because a table name is
+// syntax. `cutoff` is a hole, and a hole in a body is a PARAMETER: its loft type
+// is the type of the value the procedure will be given, which is exactly what
+// the server has to be told, so a procedure is declared by writing its statement
+// rather than by declaring its signature a second time. The value `cutoff` holds
+// at definition time is never used.
+//
+// **The body's text is therefore author-written plus validated identifiers, by
+// construction rather than by convention** — the same property a caller-side
+// statement has, and for the same reason.
+//
+// sqlite and duckdb have no stored procedures. Rather than answer "unsupported"
+// and lose the uniform API, they keep the definition in the PROCESS (`Procs`
+// below) and prepare it on call. The safety property is identical on all four,
+// because it comes from the type and not from where the definition is stored.
+pub struct SqlProc {
+  const nm: text,
+  const body: SqlText,
+  // The name was refused, so there is no procedure. Carried exactly the way
+  // `SqlText` carries a refused identifier, and for the same reason: ONE idiom
+  // for a refusal, and a value a caller can pass on without discharging it at
+  // every hop.
+  refused: boolean,
+}
+
+// A procedure, or a refusal carrying itself. The name is a `SqlIdent` for the
+// same reason a table name is: it lands in the DDL as syntax, so it goes through
+// the one gate.
+pub fn procedure(name: SqlIdent?, body: SqlText) -> SqlProc {
+  if name == null { return SqlProc { nm: "", body: body, refused: true } }
+  n = name.nm ?? "";
+  return SqlProc { nm: n, body: body, refused: n == "" };
+}
+
+// Is there a procedure here at all?
+pub fn proc_ok(self: SqlProc) -> boolean { return !self.refused; }
+
+pub fn proc_name(self: SqlProc) -> text { return self.nm; }
+
+// How many values a call must supply.
+pub fn proc_arity(self: SqlProc) -> integer { return len(self.body.binds); }
+
+// The body, with its parameters written the way a body on this server reads
+// them (`$1 …` for postgres, `p1 …` for mariadb, `?` for a client-side registry).
+pub fn proc_body(self: SqlProc, style: integer, quote: text) -> text? {
+  if self.refused { return null }
+  return self.body.statement(style, quote);
+}
+
+// `"archive"(IN p1 BIGINT, IN p2 TEXT)` — the name and parameter list a
+// `CREATE PROCEDURE` needs.
+//
+// `types` is indexed by a bound value's `kind`, so a backend supplies its four
+// type NAMES and nothing else: a type name is precisely the part of SQL no two
+// servers spell alike (`DOUBLE` and `DOUBLE PRECISION` are the same type), while
+// the shape of a parameter list is not.
+//
+// A parameter typed only by a NULL is refused: a null carries no type, and
+// guessing one would deploy a procedure whose signature is a coincidence.
+pub fn proc_signature(self: SqlProc, quote: text, kw: text, types: vector<text>) -> text? {
+  if self.refused { return null }
+  out = "{quote}{self.nm}{quote}(";
+  for b in self.body.binds {
+    if b#count > 0 { out += ", " }
+    t = types[b.kind] ?? "";
+    if t == "" { return null }
+    out += "{kw}p{b#count + 1} {t}";
+  }
+  out += ")";
+  return out;
+}
+
+// `CALL "archive"($1, $2)` — the statement that invokes a deployed procedure.
+pub fn proc_call_sql(self: SqlProc, style: integer, quote: text) -> text {
+  out = "CALL {quote}{self.nm}{quote}(";
+  n = len(self.body.binds);
+  for i in 0..n {
+    if i > 0 { out += ", " }
+    out += placeholder(style, i + 1);
+  }
+  out += ")";
+  return out;
+}
+
+// Does this body need a procedural language?
+//
+// A body that runs more than one statement, declares variables, branches or
+// loops is **refused at deploy** — on every backend, not only the two that
+// emulate procedures.
+//
+// The design expected this to be the sqlite-versus-servers line. Measuring it
+// moved the line: mariadb writes procedural bodies in SQL/PSM and postgres in
+// plpgsql or a `BEGIN ATOMIC` body, and neither reads the other's. A `BEGIN …
+// END` accepted by mariadb is a syntax error to postgres, so there is no
+// procedural body a uniform API could carry across even the two backends that
+// HAVE one. The uniform contract is therefore one statement per procedure, and
+// anything more is refused where the author can see it rather than accepted by
+// whichever backend happens to be underneath.
+//
+// Refusing beats degrading for the reason the whole plan turns on: a program
+// that quietly means something different on a different backend cannot be
+// caught afterwards. Same rule as `#c`'s wasm column — a defined answer
+// everywhere.
+//
+// Scanning the assembled text is sound because only two things are ever in it:
+// bytes the AUTHOR wrote, and identifiers that passed `ident`. No caller can
+// move this answer.
+//
+// Conservative on purpose. A `;` inside a quoted literal the author wrote reads
+// as a second statement here, and is refused; the honest alternative is a SQL
+// parser, and a wrong REFUSAL is a build-time complaint while a wrong acceptance
+// is a backend that behaves differently in production.
+pub fn procedural(sql: text) -> boolean {
+  s = sql.trim();
+  // One trailing `;` terminates the single statement; anything after it starts
+  // a second one.
+  if s.ends_with(";") { s = s[0..(size(s) - 1)].trim() }
+  if s.find(";") != null { return true }
+  u = s.to_uppercase();
+  for w in ["BEGIN ", "DECLARE ", "IF ", "WHILE ", "REPEAT ", "LOOP ", "SET @"] {
+    if u.starts_with(w) || u.find(" {w}") != null { return true }
+  }
+  return false;
+}
+
+// --- the registry a server without procedures keeps in the process ----------
+
+pub struct Reg { nm: text, sql: text, np: integer }
+
+pub struct Procs { const defs: vector<Reg> }
+
+pub fn procs_new() -> Procs { return Procs { }; }
+
+// Register a procedure, or REFUSE it. The name replaces any earlier definition,
+// which is what `CREATE OR REPLACE` means on the servers that have it.
+pub fn proc_register(self: Procs, p: SqlProc, quote: text) -> boolean {
+  if !p.proc_ok() { return false }
+  body = p.proc_body(SQL_QMARK, quote);
+  if body == null { return false }
+  if procedural(body) { return false }
+  for r in self.defs {
+    if r.nm == p.nm { r.sql = body; r.np = p.proc_arity(); return true }
+  }
+  self.defs += [Reg { nm: p.nm, sql: body, np: p.proc_arity() }];
+  return true;
+}
+
+// The registered statement for a name, or null when nothing was deployed under
+// it — which a caller must tell apart from a statement that failed.
+pub fn proc_lookup(self: Procs, nm: text) -> text? {
+  for r in self.defs {
+    if r.nm == nm { return r.sql }
+  }
+  return null;
+}
+
 pub interface SqlDb {
   fn db_open(self: Self, target: text) -> boolean
   // Author-written SQL with no values in it — DDL, and the statements a
@@ -208,4 +476,14 @@ pub interface SqlDb {
   fn db_begin(self: Self) -> boolean
   fn db_commit(self: Self) -> boolean
   fn db_rollback(self: Self) -> boolean
+
+  // H7 — a procedure. `db_deploy` defines it, `db_call` runs it with the values
+  // in `args` (a `SqlText` whose holes ARE the arguments; its literals are not
+  // used). Two backends put the definition in the server's catalogue and two
+  // keep it in the process, and a caller cannot tell which from the answers.
+  //
+  // `db_deploy` returns false for a body the backend cannot honour — no backend
+  // here accepts one needing procedural control flow.
+  fn db_deploy(self: Self, p: SqlProc) -> boolean
+  fn db_call(self: Self, p: SqlProc, args: SqlText) -> boolean
 }

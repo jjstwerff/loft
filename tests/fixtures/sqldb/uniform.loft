@@ -102,8 +102,35 @@ fn bound <D: SqlDb> (d: D, create: text) -> text {
   if !d.db_rows(q7) { return "FAIL q7 {d.db_last_error()}" }
   while d.db_next() { got = size(d.db_col(0) ?? "") }
 
+  // --- H6: the identifier, and the two answers it can give -----------------
+  //
+  // A table name is genuinely syntax — no placeholder stands for it — so it goes
+  // in INLINE, which is the one thing every other hole is forbidden. What makes
+  // that safe is the TYPE: nothing builds a `SqlIdent` but `ident`, which
+  // refuses anything that is not a name.
+  //
+  // The accepted cell has to prove the identifier really became syntax rather
+  // than a bound value: it names the table the row lives in, so a placeholder
+  // there would not have found the row — or any table at all.
+  tbl = ident("loft_p");
+  id_hit = "";
+  q8: SqlText = "SELECT id FROM {tbl} WHERE name = {attack}";
+  if !d.db_rows(q8) { return "FAIL q8 {d.db_last_error()}" }
+  while d.db_next() { id_hit += "{d.db_col(0) ?? "?"}" }
+
+  // The refused cell, and it is the one that matters. This is exactly the text a
+  // caller would splice in if identifiers were ordinary interpolation, and there
+  // is no quoting that makes it a name — so it is refused at CONSTRUCTION, and
+  // the statement built around it has no text to send at all. The DROP never
+  // reaches the server, which the SELECT after it proves by still returning rows.
+  evil = ident("loft_p; DROP TABLE loft_p; --");
+  refused = evil == null;
+  q9: SqlText = "SELECT id FROM {evil} WHERE id = {1}";
+  ran = d.db_rows(q9);
+  survived = dump(d, "SELECT id, name FROM loft_p WHERE id = 1") != "";
+
   _ = d.db_exec("DROP TABLE loft_p");
-  return "p={n} {rows}hit={hit} big={got}";
+  return "p={n} {rows}hit={hit} big={got} ident={id_hit} refused={refused} ran={ran} alive={survived}";
 }
 
 // --- T1–T3 ---------------------------------------------------------------
@@ -154,6 +181,65 @@ fn transact <D: SqlDb> (d: D, create: text) -> text {
   return "begin={b1}/{b2} nested={nested} rollback={r1} commit={c1} rows={after_rollback}/{after_commit} stray={stray_c}/{stray_r}";
 }
 
+// --- H7 -------------------------------------------------------------------
+//
+// A procedure is a named, parameterised statement — and that is the whole of it,
+// because the hook already separates the parts. The table name is a `SqlIdent`
+// (validated, quoted, inline); the holes are the PARAMETERS, typed by the values
+// they will receive rather than declared a second time.
+//
+// Two of the four backends put the definition in the server's catalogue and two
+// keep it in the process. Every claim below is answered identically by all of
+// them, which is the point: the safety comes from the type, not from where the
+// definition is stored.
+//
+//   deployed=true   the definition was accepted
+//   called=true     and running it did the work — `rows=1` is that work, seen
+//                   from outside the procedure
+//   guard=false     the same procedure called with the wrong number of values is
+//                   REFUSED, before anything is sent
+//   ctl=false       a body that needs procedural control flow (two statements)
+//                   is refused AT DEPLOY, on every backend, rather than
+//                   half-run. sqlite and duckdb have no procedural language at
+//                   all; mariadb and postgres each have one and they are not the
+//                   same one, so there is no such body a uniform API could
+//                   carry. Refusing where the author can see it is the only
+//                   answer that does not mean something different underneath.
+fn procedures <D: SqlDb> (d: D, create: text) -> text {
+  _ = d.db_exec("DROP TABLE IF EXISTS loft_q");
+  if !d.db_exec(create) { return "FAIL create {d.db_last_error()}" }
+
+  tbl = ident("loft_q");
+  // `1` and `"seed"` are here for their TYPES: they say the procedure takes an
+  // integer and a text. The values themselves are never used.
+  body: SqlText = "INSERT INTO {tbl} VALUES ({1}, {"seed"})";
+  // The name goes through a LOCAL: a `T?` handed straight to a call is never
+  // freed (loft#771).
+  add = ident("loft_add");
+  p = procedure(add, body);
+  if !p.proc_ok() { return "FAIL procedure" }
+
+  deployed = d.db_deploy(p);
+  args: SqlText = "{7}{"added"}";
+  called = d.db_call(p, args);
+
+  // The wrong arity is refused rather than sent and left to the server.
+  short: SqlText = "{7}";
+  guard = d.db_call(p, short);
+
+  rows = 0;
+  if d.db_select("SELECT id FROM loft_q") { while d.db_next() { rows += 1 } }
+
+  // Two statements in one body: a procedural language, or nothing.
+  two: SqlText = "DELETE FROM {tbl}; DELETE FROM {tbl}";
+  two_nm = ident("loft_two");
+  p2 = procedure(two_nm, two);
+  ctl = d.db_deploy(p2);
+
+  _ = d.db_exec("DROP TABLE loft_q");
+  return "deployed={deployed} called={called} guard={guard} rows={rows} ctl={ctl}";
+}
+
 fn env_or(name: text, fallback: text) -> text {
   // `env_variable` answers "" for an unset variable, not null, so `??` never
   // fires on it — treating "" as absent is the caller's job.
@@ -180,6 +266,7 @@ fn main() {
     println("sqlite {dump(ds, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("sqlite bound {bound(ds, "CREATE TABLE loft_p (id INTEGER PRIMARY KEY, name TEXT)")}");
     println("sqlite tx {transact(ds, "CREATE TABLE loft_x (id INTEGER PRIMARY KEY)")}");
+    println("sqlite proc {procedures(ds, "CREATE TABLE loft_q (id INTEGER PRIMARY KEY, name TEXT)")}");
     ds.db_shut();
     return
   }
@@ -195,6 +282,7 @@ fn main() {
     println("postgres {dump(dp, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("postgres bound {bound(dp, "CREATE TABLE loft_p (id INT PRIMARY KEY, name TEXT)")}");
     println("postgres tx {transact(dp, "CREATE TABLE loft_x (id INT PRIMARY KEY)")}");
+    println("postgres proc {procedures(dp, "CREATE TABLE loft_q (id INT PRIMARY KEY, name TEXT)")}");
     _ = dp.db_exec("DROP TABLE loft_u");
     dp.db_shut();
     return
@@ -211,6 +299,7 @@ fn main() {
     println("maria {dump(dm, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("maria bound {bound(dm, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR(2000))")}");
     println("maria tx {transact(dm, "CREATE TABLE loft_x (id BIGINT PRIMARY KEY) ENGINE=InnoDB")}");
+    println("maria proc {procedures(dm, "CREATE TABLE loft_q (id BIGINT PRIMARY KEY, name VARCHAR(32)) ENGINE=InnoDB")}");
     _ = dm.db_exec("DROP TABLE loft_u");
     dm.db_shut();
     return
@@ -233,6 +322,7 @@ fn main() {
     println("duckdb {dump(dd, "SELECT id, name FROM loft_u ORDER BY id")}");
     println("duckdb bound {bound(dd, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR)")}");
     println("duckdb tx {transact(dd, "CREATE TABLE loft_x (id BIGINT PRIMARY KEY)")}");
+    println("duckdb proc {procedures(dd, "CREATE TABLE loft_q (id BIGINT PRIMARY KEY, name VARCHAR)")}");
     dd.db_shut();
     return
   }

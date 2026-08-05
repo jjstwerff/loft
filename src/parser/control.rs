@@ -11922,6 +11922,53 @@ impl Parser {
                 );
                 return Type::Void;
             }
+            // @PLN127 arc B — `type_of(x)`: the declared shape of x's TYPE.
+            //
+            // The id is resolved HERE, so it is a parse-time constant on both
+            // backends — the same mechanism `to_json` uses, and the reason the
+            // answer needs no runtime name lookup (which `--native` could not
+            // give, since it REPLAYS the type table rather than minting it).
+            //
+            // The argument is not evaluated. Nothing about the answer depends on
+            // the value, and evaluating it would mean discarding a result — the
+            // one operation loft's ownership model gets wrong most easily. The
+            // contract is C's `sizeof`, and it is stated in the doc comment.
+            "type_of" if types.len() == 1 => {
+                if self.first_pass {
+                    // First pass still needs the RESULT type, so an enclosing
+                    // `t = type_of(v)` infers `TypeInfo` on both passes and the
+                    // name-keyed variable tables do not shift underneath.
+                    let ti = self.data.def_nr("TypeInfo");
+                    return if ti == u32::MAX {
+                        Type::Unknown(0)
+                    } else {
+                        Type::Reference(ti, crate::data::Deps::none())
+                    };
+                }
+                // `get_type` answers the STORAGE type, which is right for its own
+                // callers and wrong here for two scalars: a character is stored as
+                // an integer, and a boolean has no entry at all. Reflection must
+                // answer what the author DECLARED where the descriptor can express
+                // it, so those two are named directly; everything else keeps the one
+                // derivation, because a second one would be a second thing to drift.
+                let kt = match &types[0] {
+                    Type::Boolean => self.database.name("boolean"),
+                    Type::Character => self.database.name("character"),
+                    other => self.get_type(&other.clone()),
+                };
+                let d_nr = self.data.def_nr("n_reflect_type");
+                let ti = self.data.def_nr("TypeInfo");
+                if d_nr == u32::MAX || ti == u32::MAX {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "type_of is unavailable — default/07_reflect.loft did not load"
+                    );
+                    return Type::Unknown(0);
+                }
+                *val = Value::Call(d_nr, vec![Value::Int(i32::from(kt))]);
+                return Type::Reference(ti, crate::data::Deps::none());
+            }
             "parallel_for" => return self.parse_parallel_for(val, list, types),
             "par_fold" => return self.parse_par_fold(val, list, types),
             "map" => return self.parse_map(val, list, types),

@@ -7,10 +7,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN124 H1–H5 built.** A format string whose TARGET TYPE implements the
+**@PLN124 H1–H7 built.** A format string whose TARGET TYPE implements the
 interpolation contract hands over its literal and hole parts instead of appending
 them into a text buffer. `text` is unchanged, proven as a byte-identical IR diff.
-Its first consumer is @PLN23 S4, which is built on it.
+Its first consumer is @PLN23 S4, which is built on it; H6/H7 add the identifier
+and procedures on top.
 
 The design — why neither the type system nor `const` can carry the distinction,
 and why the parser already knows it — is
@@ -36,6 +37,24 @@ author's literal bytes is a type that can be built. The `hole_*` methods it goes
 on to define say which value kinds it takes, and **a kind it does not define is a
 compile error naming the method to add** — never a quiet fall back to text, which
 would put a value back on the path this exists to close.
+
+**H6 — a hole may also be a value of a NAMED type**, struct or enum, and its kind
+is the type's own name in the case a loft method is spelled in:
+
+```loft
+fn hole_sql_ident(self: SqlText, v: SqlIdent?)   // SqlIdent  -> hole_sql_ident
+fn hole_level(self: T, v: Level)                 // Level     -> hole_level
+```
+
+Derived rather than chosen, so a target and the parser cannot disagree about what
+a type's hole is called and the diagnostic can name the exact method to add; an
+acronym run breaks at the last capital (`SQLIdent` → `hole_sql_ident`).
+
+That is what lets a target hold something apart from both a literal and a bound
+value. A SQL table name is genuinely syntax, so `SqlText` puts it in INLINE — and
+the safety then rests on the TYPE rather than on the parser, because nothing
+builds a `SqlIdent` but its validating constructor. One method, one constructor,
+one place to audit.
 
 ```loft
 q: SqlText = "SELECT id FROM t WHERE name = {name}";
@@ -76,6 +95,30 @@ per argument, at both the free-function and the method site.
 to format — the value is handed over, not rendered — so it is an error rather than
 a silently ignored spec.
 
+**The expected-type channel leaked a second time — into the HOLE.** A hole is not
+the destination, so a string literal inside one must not inherit the
+destination's type; without that, `q: SqlText = "{"seed"}"` checked the inner
+literal against `SqlText` and it took the BUILD path, so a string that was plainly
+the author's value came back as a second accumulator. The same leak the arc had
+already closed per call argument, one level in, and found only once H7 wrote a
+text hole inside a built statement.
+
+**The fix had to be narrower than the first one written.** Clearing `expected`
+for the whole hole — the obvious mirror of the call-argument fix — broke
+`store_load_layout_gate` on `--native`: the hole
+`"{(h[42] ?? Tile { … }).name}"` is a KEYED LOOKUP, and a keyed lookup resolves
+its record type through that same channel, so blanking it silently changed the
+schema the generated `init()` replays. The suite caught it and a pristine-`HEAD`
+binary in a `git worktree` proved whose it was. What is gated now is only the
+TARGET derivation, and only its `expected` source (`var_tp` still applies, since
+a declaration written inside a hole does name a destination). The channel itself
+is untouched. Re-proved inert on the corpus, and the gate passes again.
+
+The narrow gate costs one shape: a format string in ARGUMENT position inside a
+hole (`"{ build("p{n}q") }"`) is plain text rather than a built value. That is a
+visible type error at the call, not a silent difference, and it was worth more
+than reaching into a channel that carries other facts.
+
 **Nullability is not a kind.** A `text?` hole is a text hole whose value may be
 absent; `format_hole` peels `Optional` and lets the target's own `hole_text`
 parameter type decide whether it accepts one. That is what lets `SqlText` make SQL
@@ -91,10 +134,18 @@ NULL a distinct bound value rather than the text `"null"`.
   braces, `+=` accumulation, and argument position. 104 format sites.
   `loft introspect` before/after is **byte-identical**; an empty diff is the whole
   proof, and it is re-checked after each change to the arc.
-- **H2/H3/H4.** `tests/scripts/interpolation-hook.loft` asserts the call SEQUENCE
-  rather than the result — a target that only checked the final string could not
-  tell the hook from ordinary formatting. Every scalar kind routes to its own
-  method; both backends.
+- **H2/H3/H4/H6.** `tests/scripts/interpolation-hook.loft` asserts the call
+  SEQUENCE rather than the result — a target that only checked the final string
+  could not tell the hook from ordinary formatting. Every scalar kind routes to
+  its own method, and so do a struct and an enum; both backends.
+  `tests/scripts/pln124-hole-kind-refused.loft` pins the two REFUSALS (an
+  unhandled kind, a spec on a hole), which are the rules that would be cheapest
+  to soften and the ones that put a value back on the text path if softened.
+- **H5/H6/H7.** `tests/native.rs::one_sql_interface_drives_four_different_c_libraries`
+  runs the whole contract against sqlite, postgres and mariadb, on both backends,
+  and compares the lines WHOLE. Each field was proven to move: replacing sqlite's
+  `db_call` with `return true` gives `guard=true rows=0`, and a `procedural` that
+  never refuses gives `ctl=true`.
 - **The target shape was captured BEFORE the parser was touched.**
   `124-interpolation-hook/bytecode-comparisons/target-shape.loft` is the hand-written program whose IR
   the branch had to reproduce, proven on both backends first. It also settled a
@@ -102,13 +153,59 @@ NULL a distinct bound value rather than the text `"null"`.
   named constructor, so the contract needs only methods and `Interpolated` stays a
   pure interface.
 
+## H6 and H7 — what the consumer proved
+
+**H6, the identifier.** `SqlIdent` in `tests/fixtures/sqldb/sql`: `ident(text)`
+admits ASCII `[A-Za-z_][A-Za-z0-9_]*` up to 64 bytes and answers `null` for
+anything else, at CONSTRUCTION rather than at execution. A refused one poisons the
+statement, and `statement` therefore answers `text?` — **saying it in the type is
+what makes each backend handle it**, where a boolean beside the text would be a
+flag every backend has to remember to read.
+
+The identifier is recorded structurally and quoted at ASSEMBLY time, not when the
+hole was filled, because the quote is per-dialect: mariadb reads `"loft_p"` as a
+string literal and wants a backtick. Measured — handing mariadb the ANSI quote the
+other three use answers *`error in your SQL syntax … near '"loft_p" WHERE`*, so
+the split is not a preference.
+
+**H7, procedures.** A procedure is a named, parameterised statement, and the hook
+already separates the parts: the table name is a `SqlIdent`, and a hole in a body
+is a PARAMETER typed by the value it will receive. **A procedure is declared by
+writing its statement, not by declaring its signature a second time.** postgres
+and mariadb `CREATE OR REPLACE PROCEDURE` and `CALL`; sqlite and duckdb keep the
+definition in the process through one shared registry. The uniform line is
+byte-identical on all of them — where a procedure lives is not something a caller
+can see.
+
+**The design's one correction.** It expected procedural control flow to be the
+sqlite-versus-servers line: "a body using them must be rejected by the sqlite
+backend". Measuring moved the line. mariadb writes procedural bodies in SQL/PSM
+and postgres in plpgsql or a `BEGIN ATOMIC` body, and neither reads the other's —
+a `BEGIN … END` mariadb accepts is a syntax error to postgres. So there is no
+procedural body a uniform API could carry across even the two backends that HAVE
+one, and the contract is **one statement per procedure, refused at deploy
+everywhere**. One rule, one function (`procedural`), four backends that cannot
+drift apart on what it means.
+
 ## What is NOT built
 
-- **`SqlIdent`** (H6) — the deliberate exception, where an identifier is validated
-  and quoted INLINE. Nothing is built; today every hole is a value.
-- **Procedures** (H7) — needs H6 first.
 - **A boxed value type** collapsing the per-kind `hole_*` methods into one
   (@PLN125 arc A, associated types). The per-kind form was chosen first precisely
   because it can be collapsed later without changing what the author writes.
 - **Specs on holes** are refused rather than delivered; if a target ever wants
   them, they have to reach the hole as data, not as a rendering.
+- **A procedural body** on the two backends that could carry one — refused
+  instead, for the reason above.
+
+## Bugs this surfaced, filed rather than fixed here
+
+Both are store-lifetime / marshalling faults with clean workarounds, and both are
+their own investigation rather than a patch alongside a language feature:
+
+- **loft#771** — a value consumed where it is PRODUCED keeps no owner, in two
+  carriers: a text field returned from a nullable struct, and a `T?`-returning
+  call passed inline as an argument. Binding to a local first frees it.
+- **loft#773** — a library function returning `text` answers `""` when used in
+  place (a call argument, a format hole) through the prebuilt-cdylib bridge on
+  `--interpret`; `--native` and `LOFT_NO_NATIVE_LIBS=1` are correct. Silent, and
+  the default mode for every published library has it.

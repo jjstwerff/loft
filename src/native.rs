@@ -434,6 +434,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
         crate::engine_host::n_kernel_default_host_dest,
     ),
     ("n_stack_trace", n_stack_trace),
+    ("n_reflect_type", n_reflect_type),
+    ("n_type_named", n_type_named),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("n_hash_sorted", n_hash_sorted),
@@ -2501,6 +2503,232 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         crate::vector::vector_finish(&vec, &mut stores.allocations);
     }
     stores.put(stack, vec);
+}
+
+/// @PLN127 arc B: build a `TypeInfo` for one type id.
+///
+/// The source is @PLN105's [`crate::database::LayoutDesc`], not the
+/// type table directly. That descriptor is pinned byte-for-byte against the
+/// @PLN97 layout dump and is what the browser bridge already reads, so
+/// reflection cannot become a second, drifting description of the same layout —
+/// which is the whole reason it exists rather than a fresh walk of `Parts`.
+///
+/// Field positions come from the schema (`stores.position`) exactly as
+/// `n_stack_trace` does: a rename in `default/07_reflect.loft` then panics with a
+/// clear message instead of writing silent garbage at byte 65535.
+fn n_reflect_type(stores: &mut Stores, stack: &mut DbRef) {
+    let kt = *stores.get::<i64>(stack) as u16;
+    let result = reflect_type_into(stores, kt);
+    stores.put(stack, result);
+}
+
+/// @PLN127 arc C: `type_named(name)` — reflection with no value in hand.
+///
+/// `Stores::name` is a total lookup that answers `u16::MAX` for a name this
+/// program has no type for, so a typo reads back as ABSENT rather than minting a
+/// type. `--native` replays the type registrations in `init()`, names included,
+/// which is why a runtime name works there too — the question the plan expected
+/// to be load-bearing.
+fn n_type_named(stores: &mut Stores, stack: &mut DbRef) {
+    let raw = *stores.get::<Str>(stack);
+    let result = type_named_in(stores, raw.str());
+    stores.put(stack, result);
+}
+
+/// Shared by both backends: the named type's shape, or a null `DbRef`.
+pub fn type_named_in(stores: &mut Stores, name: &str) -> DbRef {
+    let kt = stores.name(name);
+    if kt == u16::MAX {
+        return DbRef::NULL;
+    }
+    reflect_type_into(stores, kt)
+}
+
+/// The `TypeKind` discriminant for a descriptor node — 1-indexed, matching the
+/// variant order in `default/07_reflect.loft`.
+fn reflect_kind(node: Option<&crate::database::LayoutNode>) -> i32 {
+    use crate::database::{BaseKind, LayoutNode};
+    match node {
+        Some(LayoutNode::Base(b)) => match b {
+            BaseKind::Integer => 1,
+            BaseKind::Long => 2,
+            BaseKind::Single => 3,
+            BaseKind::Float => 4,
+            BaseKind::Boolean => 5,
+            BaseKind::Text => 6,
+            BaseKind::Character => 7,
+        },
+        // A narrow scalar is an INTEGER that happens to be stored small. The
+        // declared width shows up in `size`, so reporting a separate kind would
+        // make a caller match twice on one fact.
+        Some(
+            LayoutNode::Byte { .. }
+            | LayoutNode::Short { .. }
+            | LayoutNode::Int { .. }
+            | LayoutNode::ShortRaw { .. },
+        ) => 1,
+        Some(LayoutNode::Record(_)) => 8,
+        Some(LayoutNode::Choices(_)) => 9,
+        Some(LayoutNode::EnumValue(_, _)) => 10,
+        Some(LayoutNode::Vector(_) | LayoutNode::Array(_) | LayoutNode::FlatArray { .. }) => 11,
+        Some(LayoutNode::Iterated(_)) => 12,
+        Some(LayoutNode::Ref | LayoutNode::ChildRec(_)) => 13,
+        // A kind this loft version has no name for is reported as such, never
+        // guessed at: a wrong kind is worse than an unknown one, because a
+        // caller can branch on unknown and cannot detect a lie.
+        _ => 14,
+    }
+}
+
+/// Fill a `TypeInfo` record for `kt` and return it.
+#[allow(clippy::too_many_lines)] // one schema-driven writer; splitting it hides the field map
+/// # Panics
+/// When `default/07_reflect.loft` has drifted from the field names read here —
+/// deliberately loud, because the alternative is a silent write to byte 65535.
+pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
+    use crate::database::LayoutNode;
+    let desc = stores.layout_descriptor(&[kt]);
+    let node = desc.nodes.get(&kt).cloned();
+    let type_name = desc
+        .names
+        .get(&kt)
+        .cloned()
+        .unwrap_or_else(|| format!("#{kt}"));
+    let size = desc.sizes.get(&kt).copied().unwrap_or(0);
+
+    let ti_tp = stores.name("TypeInfo");
+    let fi_tp = stores.name("FieldInfo");
+    let vi_tp = stores.name("VariantInfo");
+    let lookup = |stores: &Stores, tp: u16, ty: &str, field: &str| {
+        let p = stores.position(tp, field);
+        assert_ne!(
+            p,
+            u16::MAX,
+            "{ty} schema is missing field '{field}' — \
+             default/07_reflect.loft has drifted from src/native.rs::reflect_type_into"
+        );
+        u32::from(p)
+    };
+    let ti_name = lookup(stores, ti_tp, "TypeInfo", "name");
+    let ti_kind = lookup(stores, ti_tp, "TypeInfo", "kind");
+    let ti_size = lookup(stores, ti_tp, "TypeInfo", "size");
+    let ti_fields = lookup(stores, ti_tp, "TypeInfo", "fields");
+    let ti_variants = lookup(stores, ti_tp, "TypeInfo", "variants");
+    let ti_element = lookup(stores, ti_tp, "TypeInfo", "element");
+    let fi_name = lookup(stores, fi_tp, "FieldInfo", "name");
+    let fi_type = lookup(stores, fi_tp, "FieldInfo", "type_name");
+    let fi_pos = lookup(stores, fi_tp, "FieldInfo", "position");
+    let fi_kind = lookup(stores, fi_tp, "FieldInfo", "kind");
+    let fi_null = lookup(stores, fi_tp, "FieldInfo", "nullable");
+    let vi_name = lookup(stores, vi_tp, "VariantInfo", "name");
+    let vi_tag = lookup(stores, vi_tp, "VariantInfo", "tag");
+
+    let ti_bytes = u32::from(stores.size(ti_tp));
+    let out = stores.database(ti_bytes.div_ceil(8) + 1);
+    // Stamp the record's own type id. Without it the record is typeless, which
+    // reads as `kt=65535 ?` in a leak report and leaves anything that walks the
+    // value by schema with nothing to walk.
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, 4, u32::from(ti_tp));
+    let name_str = stores.store_mut(&out).set_str(&type_name);
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, out.pos + ti_name, name_str);
+    stores
+        .store_mut(&out)
+        .set_byte(out.rec, out.pos + ti_kind, 0, reflect_kind(node.as_ref()));
+    stores
+        .store_mut(&out)
+        .set_int(out.rec, out.pos + ti_size, i64::from(size));
+    // Zero the two vector headers: a reused store block would otherwise leave
+    // bytes that read as a valid first record.
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, out.pos + ti_fields, 0);
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, out.pos + ti_variants, 0);
+
+    // The element type, for the two kinds that hold one.
+    let elem = match &node {
+        Some(LayoutNode::Vector(e) | LayoutNode::Array(e) | LayoutNode::ChildRec(e)) => Some(*e),
+        Some(LayoutNode::FlatArray { elem }) => Some(*elem),
+        Some(LayoutNode::Iterated(it)) => Some(it.elem()),
+        _ => None,
+    };
+    let elem_name = elem.map_or_else(String::new, |e| {
+        desc.names
+            .get(&e)
+            .cloned()
+            .unwrap_or_else(|| format!("#{e}"))
+    });
+    let elem_str = stores.store_mut(&out).set_str(&elem_name);
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, out.pos + ti_element, elem_str);
+
+    // Fields — a record and a struct-enum variant both have them, and they are
+    // the same list, so they are written by one path.
+    if let Some(LayoutNode::Record(fields) | LayoutNode::EnumValue(_, fields)) = &node {
+        let fi_bytes = u32::from(stores.size(fi_tp));
+        let words = ((fields.len() as u32) * fi_bytes + 15) / 8 + 1;
+        let vec_rec = stores.store_mut(&out).claim(words.max(1));
+        stores
+            .store_mut(&out)
+            .set_u32_raw(vec_rec, 4, fields.len() as u32);
+        stores
+            .store_mut(&out)
+            .set_u32_raw(out.rec, out.pos + ti_fields, vec_rec);
+        for (i, f) in fields.iter().enumerate() {
+            let at = 8 + (i as u32) * fi_bytes;
+            let fld = stores.store_mut(&out).set_str(&f.name);
+            stores
+                .store_mut(&out)
+                .set_u32_raw(vec_rec, at + fi_name, fld);
+            let f_ty = desc
+                .names
+                .get(&f.content)
+                .cloned()
+                .unwrap_or_else(|| format!("#{}", f.content));
+            let f_ty_str = stores.store_mut(&out).set_str(&f_ty);
+            stores
+                .store_mut(&out)
+                .set_u32_raw(vec_rec, at + fi_type, f_ty_str);
+            stores
+                .store_mut(&out)
+                .set_int(vec_rec, at + fi_pos, i64::from(f.position));
+            let k = reflect_kind(desc.nodes.get(&f.content));
+            stores.store_mut(&out).set_byte(vec_rec, at + fi_kind, 0, k);
+            stores
+                .store_mut(&out)
+                .set_byte(vec_rec, at + fi_null, 0, i32::from(f.nullable));
+        }
+    }
+
+    // Variants — an enum only.
+    if let Some(LayoutNode::Choices(vals)) = &node {
+        let vi_bytes = u32::from(stores.size(vi_tp));
+        let words = ((vals.len() as u32) * vi_bytes + 15) / 8 + 1;
+        let vec_rec = stores.store_mut(&out).claim(words.max(1));
+        stores
+            .store_mut(&out)
+            .set_u32_raw(vec_rec, 4, vals.len() as u32);
+        stores
+            .store_mut(&out)
+            .set_u32_raw(out.rec, out.pos + ti_variants, vec_rec);
+        for (i, (_tp, name)) in vals.iter().enumerate() {
+            let at = 8 + (i as u32) * vi_bytes;
+            let n = stores.store_mut(&out).set_str(name);
+            stores.store_mut(&out).set_u32_raw(vec_rec, at + vi_name, n);
+            // 1-indexed: the store spells "absent" as 0, so a real variant is
+            // never 0 and a caller can test for it.
+            stores
+                .store_mut(&out)
+                .set_int(vec_rec, at + vi_tag, i as i64 + 1);
+        }
+    }
+    out
 }
 
 /// TR1.4: append a `vector<VarInfo>` to the StackFrame at the given offset.

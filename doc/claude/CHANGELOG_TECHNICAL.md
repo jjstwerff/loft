@@ -9,6 +9,275 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The IR store holds a block BY REFERENCE — `Node` shrinks 48 → 28 bytes (2026-08-04)
+
+`NdBlock` / `NdLoop` inlined a whole `Block`, and `NdParFor` a whole
+`ParForBody`, so a `Node` record was as wide as its largest variant: 48 bytes,
+paid by every node in the image including a 12-byte `NdVar`. They hold a
+**box-of-one vector** now — the idiom the schema already uses for `Block.result`
+and `DbField.default` — and the stride is 28.
+
+A box is a 4-byte handle. `reference<Block>`, which `ir.loft` had drifted to,
+generates a 12-byte `Parts::DbRef`: the same indirection for three times the
+width, with no other reader of one in this store and no existing helpers. The box
+reuses `field_recvec` / `push` / `get` unchanged.
+
+What moved together, because a half-done version of this is a store that reads
+its own records at the wrong offsets:
+
+- `ir.loft` → regenerated `ir_schema_gen.rs` (the field is a vector handle now).
+- `data_store.rs`: `NDBLOCK_BLOCK` / `NDPARFOR_BODY` are the HANDLE offsets, and
+  the sub-struct constants became the sub-record's own — `PARFOR_X_VAR` is 0, not
+  `body_base + 0`. New `Node::block_rec` / `Node::par_for_rec` reach the record,
+  and `write_block` / `write_loop` / `write_par_for` push the box and hand it
+  back so a caller fills it without a second lookup.
+- `ir_store` / `ir_read` / `ir_node` read and write through those records.
+- `CACHE_FORMAT_VERSION` → 3: every offset in a `Node` moved.
+
+The layout guard in `data_store.rs` is what made this safe to do — it asserts
+each baked constant against the registered schema, so the migration was a
+conversation with a failing assertion rather than a hunt for silent corruption.
+
+### `ir_schema_gen.rs` regenerates byte-identically again (2026-08-04)
+
+The IR store-schema generator had been unusable, so schema edits were HAND-ADDED
+to the generated file — which is how it drifted out of sync with `ir.loft`
+without anyone seeing. Two independent defects and one wrong declaration:
+
+- **`tN` labels were absolute type ids.** `generated.rs` numbers types after the
+  whole stdlib and `extract.py` copied those names verbatim, so adding ONE stdlib
+  type renumbered every label and a fresh regen differed in ~1300 lines. They are
+  only Rust locals, so the extractor now relabels ours in declaration order from
+  `t7` (after the `t0..t6` base prelude). Proven: a binary WITHOUT
+  `default/07_reflect.loft` and one with it now produce byte-identical output.
+- **Named locals were dropped.** The keep-rule listed `byte_enum` and `vec_*`
+  only, so a field whose storage local was `dbref_*` referenced a name nothing
+  bound and the regenerated file did not compile — which is what forced the
+  hand-adds. Every `let <name> = db.…` is kept now.
+- **`ir.loft` described `src/data.rs` instead of the STORE.** It had drifted to
+  `NdBlock { block: reference<Block> }` because `data.rs` boxes it; the store
+  INLINES the block and the hand layer reads it that way
+  (`NDBLOCK_BLOCK + BLOCK_SCOPE`). Regenerating from that produced a schema
+  nothing could read — SIGSEGV in five IR round-trip tests. `ir.loft` says
+  `Block` again, with the reason written beside it: making that field
+  by-reference is a real store migration (schema, `ir_store`, `ir_read`, the
+  baked offsets, `CACHE_FORMAT_VERSION`), not a transcription change.
+
+The committed schema's CONTENT is unchanged — the regenerated file matches the
+previous one registration for registration. What changed is that it is
+reproducible, so the next schema edit is a regen rather than a hand-edit.
+
+### @PLN127 arc D: reflection reports field nullability (2026-08-04)
+
+`FieldInfo.nullable` — and the line it draws is the contract decision the plan
+asked for: **reflection reports what a VALUE can be, not what CODE may do to it.**
+Nullability is the first kind; `const` is the second and stays out.
+
+Neither was a storage fact. `text?` and `text` share a content type and spell
+absence with a SENTINEL, so nothing in the stored bytes implies either. (A NARROW
+int is the exception — it registers a distinct content type per nullability, which
+is why the descriptor reported nullable for those and only those.) The fact
+therefore had to be DEPOSITED: `Field.nullable`, set at the one parse-time site
+that knows (`typedef.rs`, where `Optional(τ)` is peeled before layout), carried by
+`LayoutField`, and read back by `reflect_type_into`.
+
+Nullability is deliberately **not RENDERED**. `layout_algo_hash` hashes
+`layout_dump`, and `LayoutDesc::layout_hash` hashes `render_dump` — neither
+mentions it, so the @PLN97 layout identity is untouched. That is measured, not
+argued: a store written by the pre-arc-D binary loads under the arc-D binary
+through both the whole-image and keyed paths with `ok=true`, and the same gate
+still REFUSES a genuinely reshaped layout, so the check is not vacuous.
+
+**`--native` reported `nullable=false` for every field** until the generator
+emitted the deposit too — it rebuilds the schema by REPLAYING `init()`, so a fact
+the parser deposits and the generator does not emit is simply absent there. The
+parity probe caught it. The emission wraps `emit_field` rather than sitting in
+either caller, because there are two call sites and the one that mattered was not
+the obvious one.
+
+The setter is keyed by NAME rather than field index for the same reason: the
+generated `init()` writes it beside the `db.field` it belongs to, and one spelling
+for both backends is what stops them disagreeing.
+
+It also had to reach the @PLN11 IR-store round trip (`ir_store` / `ir_read` /
+`DbField` in `tools/ir_schema/ir.loft`), or a schema read back from a store
+answered "not nullable" for every field — caught by
+`read_stdlib_schema_round_trips`. That grew `DbField` by a byte (stride 28 → 29),
+which needed **`CACHE_FORMAT_VERSION` bumped to 2**: the stdlib cache key does not
+fold in the binary's mtime the way a program bundle does (`BUILD_ID` is the git
+HEAD hash, unchanged across uncommitted edits), so a cache written at the old
+stride was read at the new one and panicked in `ir_read` on a shifted
+discriminant — 25 LSP tests, all one cause. A layout change is exactly what that
+byte is for. The registration is HAND-ADDED to
+`src/ir_schema_gen.rs` beside the existing `ty_optional` hand-add rather than
+regenerated: a clean `extract.py` run reorders that whole file today, so a regen
+would fold an unrelated drift into this change. `ir.loft` carries the field, so
+the source of truth is right and the regen cleanup stays its own task.
+
+Arc E's generator is what made this concrete — written before arc D it was
+complete, correct, and could not emit `NOT NULL`, which does not make a DDL less
+detailed, it makes it accept rows the loft type would refuse.
+
+### @PLN127 arcs C + E: `type_named`, and the consumer that used the API as a gate (2026-08-04)
+
+`type_named(name) -> TypeInfo?` is reflection with no value in hand — the shape an
+ORM needs when the type name arrives from a config file or a catalogue. No parser
+intercept, because the name is a RUNTIME value; it works on `--native` because the
+generated `init()` replays the type registrations, names included, and
+`Stores::name` is a TOTAL lookup that answers absent rather than minting a type
+for a typo. Both entry points reach ONE filler, so they cannot disagree.
+
+**That is the plan's Q1 answered rather than worked around.** It expected a
+runtime name→id lookup to be impossible under `--native`'s replayed type table;
+the replay includes the names.
+
+Arc E is the dogfood gate: `tests/scripts/pln127-reflect-consumer.loft` generates
+`CREATE TABLE` from a loft struct through the API only, with the table name as a
+runtime value. It passes on both backends, and used as a gate it found two limits:
+
+- **It cannot emit `NOT NULL`.** Nullability is not in the answer because it is
+  not in the STORE — `Field` carries a name, a content type-id, a position and a
+  default. A narrow scalar records a nullable flag; `text` and a record reference
+  spell absent with a SENTINEL instead (`text?` is stored as `"\0"`, the fact arc
+  A repaired in the JSON writer). `const` is the same.
+- **It had to be a schema generator, not a serialiser.** Reflection describes a
+  TYPE; a value's field cannot be read by name, and a serialiser needs both.
+
+So arc D's question changed shape: not "grow the descriptor by two fields" but
+"does reflection report facts that exist only in the SOURCE?". One measurement
+bears on the cost — `layout_hash` hashes `render_dump()`, so a fact the descriptor
+CARRIES but does not RENDER leaves the @PLN97 layout identity untouched. The
+carrying is cheap; the depositing is the decision.
+
+### @PLN127 arc B: `type_of(x)` — the declared shape of a type, as data (2026-08-04)
+
+loft had VALUE reflection (`{x:j}`, `Type.parse`) and FRAME reflection
+(`stack_trace`) reachable from loft code, and a SCHEMA level only Rust and a
+foreign JavaScript reader could see. `default/07_reflect.loft` brings the third
+one across: `TypeInfo` / `FieldInfo` / `VariantInfo` / `TypeKind`, filled from
+@PLN105's `LayoutDesc` — the descriptor the browser bridge already reads, pinned
+byte-for-byte against the @PLN97 layout dump. Reading THAT rather than walking
+`Parts` afresh is what stops reflection becoming a second, drifting description
+of the same layout.
+
+`type_of(x)` is intercepted in `parse_call_extra` and lowered to
+`n_reflect_type(<type-id>)`, so the id is a parse-time constant — the mechanism
+`to_json` already uses. One filler (`native::reflect_type_into`) serves both
+backends: the interpreter through `src/native.rs`, `--native` through a
+`codegen_runtime` wrapper onto the SAME function.
+
+**The argument is not evaluated.** Nothing about the answer depends on the value,
+and evaluating it would mean discarding a result — the operation loft's ownership
+model gets wrong most easily (loft#771). The contract is C's `sizeof`, and the
+doc comment says so.
+
+Three things the build settled:
+
+- **The plan's Q1 dissolves for `type_of`.** `--native` REPLAYS the type table
+  rather than minting it, which is why a runtime name lookup was the plan's one
+  load-bearing question — but a parse-time id is replayed with the table. Q1 is
+  arc C's question, not arc B's.
+- **Q3 answers itself for exactly two scalars.** `get_type`, the one existing
+  storage derivation, reports `integer` for a `character` (which is how it is
+  stored) and has no entry at all for a `boolean` (`#65535`). Those two are named
+  directly; everything else keeps the single derivation, because a second one is
+  a second thing to drift. Narrow ints still report storage, and `size` shows it.
+- **Reflection inside a generic is not reachable this way.** A generic body is
+  parsed ONCE against its type variable, so `type_of(v)` there answers
+  `__typevar_T` — the same mechanism that makes `"{v:j}"` in a generic body render
+  `{}`. Stated in the doc comment rather than left to be discovered.
+
+Arc A was a prerequisite in fact, not just in order: a `TypeInfo` holds an enum in
+a struct field, the exact shape that made `json_parse` reject a whole document, so
+`"{t:j}"` on a `TypeInfo` renders complete JSON only because arc A landed.
+
+`tests/scripts/pln127-reflect.loft`, both backends: a record with hand-checked
+byte offsets, an enum whose tags start at 1 (0 is how the store spells ABSENT), a
+struct-enum variant, a nested record, a vector's element, all five scalars, and
+the `TypeInfo` itself serialising.
+
+### @PLN127 arc A: the JSON form is the only field enumeration loft has, and two shapes broke it (loft#768, loft#769) (2026-08-04)
+
+`{x:j}` + `json_parse` is what a generic serialiser, an ORM or a schema walk
+reaches for, and both defects were WHOLE-DOCUMENT failures rather than a wrong
+field — a struct holding either shape could not be read back at all.
+
+**An enum-typed field wrote its tag bare** (`{"kind":Circle {"r":2}}`), an
+unquoted token in value position, so the text was not JSON and `json_parse`
+returned null for everything. Two writers render an enum and only one knew about
+JSON: `Parts::EnumValue` (an enum-VALUE position, the bare `Circle{…}` form)
+wrapped as `{"Circle":{…}}`, while `Parts::Enum` (an enum-TYPED position — a
+struct field, a vector element) did not. The typed position now wraps the same
+way, and `walk_parsed_into` already accepted that shape as a tagged variant, so
+writer and reader name one shape between them rather than two. A fieldless
+variant gets a body (`{"Dot":{}}`) so every variant reads back through one path;
+an absent discriminant and one naming no variant this schema has are both `null`,
+which is what the reader already degrades an unknown tag to.
+
+**An absent `text?` is stored as the sentinel `"\0"`, not as a null pointer**, so
+it reached the JSON escaper and came back as the one-character string
+`" "` — a present, corrupt value where the program meant nothing. It is the
+same absence the null-pointer branch beside it already rendered as `null`, so it
+renders the same way. That is the distinction the type exists to carry: SQL NULL
+and `''` stay different answers across a round trip instead of collapsing.
+
+The debug form (`{x}`) is deliberately unchanged — it shows the representation,
+and only the `json`/`loft` re-parseable forms make a claim about round-tripping.
+
+Seven cells in `tests/scripts/57-json.loft`, both backends, each proven able to
+fail first: the field form, its round trip through `.parse`, a fieldless variant,
+an enum inside a vector, the bare form unchanged, null-text as JSON null, and
+absent-versus-empty surviving as themselves.
+
+### @PLN124 H6/H7: an interpolation hole may be a value of a NAMED type (2026-08-04)
+
+`format_hole` read a hole's kind off the value's type and accepted six scalars; a
+struct or enum was a compile error. It now derives the kind from the type's own
+NAME in the case a loft method is spelled in — `SqlIdent` asks for
+`hole_sql_ident`, `Level` for `hole_level`, and an acronym run breaks at the last
+capital (`SQLIdent` → `sql_ident`). Derived rather than chosen, so a target and
+the parser cannot disagree about what a type's hole is called and the diagnostic
+names the exact method to add. The refusals are unchanged: a kind the target does
+not define, and a spec on any hole, are both errors.
+
+That is what lets a target hold something apart from BOTH a literal and a bound
+value. The motivating case is @PLN23 H6: a SQL table name is genuinely syntax, so
+`SqlText` puts it in inline — and the safety rests on the TYPE, because nothing
+builds a `SqlIdent` but its validating constructor.
+
+**A second leak of the expected-type channel, into the HOLE.** A hole is not the
+destination, so a string literal inside one must not inherit the destination's
+type; without that, `q: SqlText = "{"seed"}"` checked the inner literal against
+`SqlText` and it took the BUILD path. The same leak the arc closed per call
+argument, one level in, and found only once a consumer wrote a text hole inside a
+built statement.
+
+The fix is narrower than the call-argument one deliberately. Clearing `expected`
+for the whole hole broke `store_load_layout_gate` on `--native`: the hole
+`"{(h[42] ?? Tile { … }).name}"` is a KEYED LOOKUP, and a keyed lookup resolves
+its record type through that same channel, so blanking it silently changed the
+schema the generated `init()` replays. Only the TARGET derivation is gated now
+(`in_format_expr` in `constant`), and only its `expected` source — `var_tp` still
+applies, since a declaration written inside a hole does name a destination. Cost:
+a format string in argument position inside a hole is plain text, which is a
+visible type error at the call rather than a silent difference.
+
+Inertness re-proved after both changes: the 104-site corpus is byte-identical in
+IR and in generated Rust.
+
+@PLN23 H6/H7 rest on it — `SqlIdent`, and procedures as named parameterised
+statements (`CREATE OR REPLACE PROCEDURE` + `CALL` on postgres/mariadb, a shared
+process-side registry for sqlite/duckdb). Two findings from that build:
+
+- **Identifier quoting is chosen at ASSEMBLY time**, not when the hole is filled:
+  mariadb reads `"loft_p"` as a string literal and wants a backtick, measured as
+  a syntax error when given the ANSI quote the other three use.
+- **A procedural body is refused on all four backends**, not just the two with no
+  procedural language. mariadb writes them in SQL/PSM and postgres in plpgsql or
+  `BEGIN ATOMIC`, and neither reads the other's, so there is no such body a
+  uniform API could carry. One statement per procedure, refused where the author
+  can see it.
+
 ### `chr(cp)` names the code-point constructor that already worked (loft#748) (2026-08-03)
 
 `cp as character` already produced the right character and interpolating it

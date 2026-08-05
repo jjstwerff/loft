@@ -3,9 +3,112 @@
 
 ## Status
 
-**Open — no implementation.** The substrate is built and validated; nothing projects it
-into loft.  Arc A (the two mainline defects below) is independently shippable and should
-land first, because it repairs the only field enumeration loft has today.
+**Arcs A, B, C, D and E are BUILT.** Arc D shipped the nullability half; `const` is
+deliberately left out.
+
+Arc B projects `LayoutDesc` into loft: `default/07_reflect.loft` declares `TypeInfo` /
+`FieldInfo` / `VariantInfo` / `TypeKind`, `type_of(x)` is intercepted in
+`src/parser/control.rs` and lowered to `n_reflect_type(<type-id>)`, and one filler
+(`native::reflect_type_into`) serves both backends — the interpreter through
+`src/native.rs`, `--native` through a `codegen_runtime` wrapper onto the SAME function.
+A second implementation there would be exactly the drift this plan exists to avoid.
+
+Four things the build settled that the design had not:
+
+- **Q1 dissolves for `type_of`.** The type id is resolved where the call is WRITTEN, so
+  it is a parse-time constant — the mechanism `to_json` already uses. `--native` replays
+  the type table rather than minting it, and a parse-time id is replayed with it. Q1 is
+  only load-bearing for a name given at RUNTIME, which is arc C's real question.
+- **Q3 answers itself for two scalars, and only two.** `get_type` — the one existing
+  storage derivation — reports `integer` for a `character` (which is how it is stored)
+  and has no entry at all for a `boolean` (`#65535`). Reflection names those two
+  directly and keeps the single derivation for everything else, because a second
+  derivation is a second thing to drift. Narrow ints still report storage, and `size`
+  is where that shows.
+- **Reflection inside a generic is NOT reachable this way.** A generic body is parsed
+  ONCE against its type variable, so `type_of(v)` there answers `__typevar_T`. The same
+  mechanism makes `"{v:j}"` in a generic body render `{}`. It needs the body parsed per
+  instantiation, which is a different plan; the doc comment says so rather than
+  implying otherwise.
+- **Arc A was a prerequisite in fact, not just in order.** A `TypeInfo` holds an enum in
+  a struct field, which is precisely the shape that made `json_parse` reject a whole
+  document. `"{t:j}"` on a `TypeInfo` renders complete JSON only because arc A landed.
+
+Arc C is `type_named(name) -> TypeInfo?` — reflection with no value in hand, the shape an
+ORM needs when the name arrives from a config file or a catalogue. No parser intercept: the
+name is a RUNTIME value, and the lookup works on `--native` because the generated `init()`
+replays the type registrations, names included, and `Stores::name` is a TOTAL lookup that
+answers absent rather than minting a type for a typo. Measured on both backends, including
+a name held in a variable. **That is Q1, answered rather than worked around.**
+
+Arc E is `tests/scripts/pln127-reflect-consumer.loft`: an ORM's schema half — `CREATE TABLE`
+generated from a loft struct, written only through the API, with the table name arriving as
+a runtime value. It passes on both backends, and being used as a gate it found two things:
+
+- **It cannot emit `NOT NULL`.** Nullability is not in the answer because it is not in the
+  STORE: `Field` carries a name, a content type-id, a position and a default, and nothing
+  else. A narrow scalar does record a nullable flag; `text` and a record reference spell an
+  absent value with a SENTINEL instead — `text?` is stored as `"\0"`, which is precisely
+  what arc A had to repair in the JSON writer. The same holds for `const`.
+- **It had to be a schema generator, not the plan's "generic serialiser".** Reflection
+  describes a TYPE; there is no way to read a VALUE's field by name, and a serialiser needs
+  both. That is the write-access question the plan deferred, arriving from the read side.
+
+### Arc D — nullability yes, `const` no
+
+The plan asked whether `LayoutDesc` should grow `const`-ness and non-narrow nullability, or
+read them from a second source. Measuring found neither was the real choice, because
+**neither is a storage fact**: `text?` and `text` share a content type and spell absence with
+a SENTINEL, so nothing in the stored bytes implies either. (A NARROW int is the exception —
+it registers a distinct content type per nullability, which is why the descriptor already
+reported nullable for those and only those.) So D was really: *does reflection report facts
+that exist only in the source?*
+
+**The line drawn: what a VALUE can be, yes; what CODE may do to it, no.** Nullability is the
+first kind and is load-bearing — arc E's generator was complete, correct, and could not emit
+`NOT NULL`, which does not make a DDL less detailed, it makes it accept rows the loft type
+would refuse. `const` is the second kind: it constrains loft code, not data, so an ORM has no
+use for it and admitting it would make reflection a mirror of the source text.
+
+Built as a deposit at the one parse-time site that knows (`typedef.rs`, where `Optional(τ)`
+is peeled), **replayed by the native generator**, carried by `LayoutField` and *not* rendered.
+
+Two things this cost that reading the code would not have shown:
+
+- **`--native` reported `nullable=false` for every field** until the generator emitted the
+  deposit too, because it rebuilds the schema by REPLAYING `init()`. The parity probe caught
+  it; the fix wraps `emit_field` rather than sitting in either caller, because there are two
+  call sites and the one that mattered was not the obvious one.
+- **The IR-store round trip had to carry it too**, or a schema read back from a store
+  answered "not nullable" for every field. That grew `DbField` by a byte, which needed
+  `CACHE_FORMAT_VERSION` bumped — the stdlib cache key does not fold in the binary's mtime,
+  so a cache written at the old stride was read at the new one and panicked. 25 LSP tests
+  failed on that one cause.
+- **The @PLN97 layout identity is unchanged, and that is measured rather than argued.** A
+  store written by the pre-arc-D binary loads under the arc-D binary through both the
+  whole-image and keyed paths with `ok=true`, and the same gate still REFUSES a genuinely
+  reshaped layout. `layout_hash` hashes `render_dump()`, and nullability is carried there
+  but never rendered.
+
+Also settled, and it removes the plan's stated reason for ordering D before C: the two entry
+points cannot disagree, because `type_of` and `type_named` are two ways to reach ONE filler.
+
+Arc A landed first because it repairs the only field enumeration loft has today, and it
+was a repair rather than a feature: both defects were WHOLE-DOCUMENT failures, so a
+struct holding either shape could not be read back at all.
+
+- **loft#768** — an enum-TYPED position (a struct field, a vector element) wrote its tag
+  bare, which is not JSON. Two writers render an enum and only one knew about JSON:
+  `Parts::EnumValue` wrapped as `{"Circle":{…}}`, `Parts::Enum` did not. The typed
+  position now wraps the same way, and `walk_parsed_into` already accepted that shape —
+  so writer and reader name ONE shape between them rather than two.
+- **loft#769** — an absent `text?` is stored as the sentinel `"\0"`, not as a null
+  pointer, so it reached the escaper and came back as a present one-character string. It
+  is the same absence the null-pointer branch beside it already rendered as `null`.
+
+Seven cells in `tests/scripts/57-json.loft`, both backends, each proven able to fail
+first. The debug form (`{x}`) is unchanged — only the re-parseable forms make a
+round-trip claim.
 
 **Issue:** [loft-lang/plans#127](https://github.com/loft-lang/plans/issues/127).
 
@@ -106,21 +209,31 @@ backends can silently disagree.  Probe it with the strict flag on.
 
 | Item | Source | Status |
 |---|---|---|
-| **A** — repair the fallback: loft#768 + loft#769 | [#768](https://github.com/loft-lang/loft/issues/768), [#769](https://github.com/loft-lang/loft/issues/769) | Open |
-| **B** — the type-info struct family + `type_of(value)` | this doc | Open |
-| **C** — reflection with no value: `type_named(text)` | this doc, Q1 | Open |
-| **D** — the declared-vs-storage contract | this doc, Q2/Q3 | Open |
-| **E** — a real consumer built only through the API | this doc | Open |
+| **A** — repair the fallback: loft#768 + loft#769 | [#768](https://github.com/loft-lang/loft/issues/768), [#769](https://github.com/loft-lang/loft/issues/769) | **Built** — `src/database/format.rs`, cells in `tests/scripts/57-json.loft` |
+| **B** — the type-info struct family + `type_of(value)` | this doc | **Built** — `default/07_reflect.loft`, `native::reflect_type_into`, `tests/scripts/pln127-reflect.loft` |
+| **C** — reflection with no value: `type_named(text)` | this doc, Q1 | **Built** — `native::type_named_in`, both backends, runtime-valued names |
+| **D** — the declared-vs-storage contract | this doc, Q2/Q3 | **Built** — nullability reported, `const` deliberately not; cross-version store load proves the layout identity is untouched |
+| **E** — a real consumer built only through the API | this doc | **Built** — `tests/scripts/pln127-reflect-consumer.loft` (CREATE TABLE from a struct) |
 
 ## Phase ordering
 
-1. **A** first, alone.  It is independently valuable, it is the smallest thing here, and it
-   unblocks the workaround everyone is told to use while B–E are still unbuilt.
-2. **B** — `default/07_reflect.loft` plus a native filler over `LayoutDesc`, mirroring
-   `stack_trace`.  Read-only, `type_of(value)` only.  This is where the Stage-A matrix is
-   built and run.
+1. ~~**A** first, alone.~~  **Done.**  It was independently valuable, it was the smallest
+   thing here, and it unblocks the workaround everyone is told to use while B–E are still
+   unbuilt.  It also corrected the plan's own framing: the fallback was not merely
+   awkward, both defects rejected the WHOLE document, so "enumerate a value's fields with
+   `{x:j}` + `json_parse`" was not a degraded path but an unavailable one for any struct
+   holding an enum or an absent `text?`.
+2. ~~**B** — `default/07_reflect.loft` plus a native filler over `LayoutDesc`, mirroring
+   `stack_trace`.~~  **Done**, read-only and `type_of(value)` only.  The matrix is
+   `tests/scripts/pln127-reflect.loft`: a record with hand-checked byte offsets, an enum
+   whose tags start at 1 (0 is how the store spells ABSENT), a struct-enum variant, a
+   nested record, a vector's element, all five scalars, and the `TypeInfo` itself
+   serialising.
 3. **D** before **C**: what the API *answers* (declared or storage type) has to be settled
    before adding a second way to ask the question, or the two entry points will disagree.
+   Arc B settled the part it could not avoid — declared for `boolean` and `character`,
+   storage for narrow ints — so D is now about `const`-ness and non-narrow nullability,
+   the two facts `LayoutDesc` verifiably does not carry.
 4. **C** — the name→id lookup, with the identity row of the matrix as its gate.
 5. **E** — a generic serialiser or a small ORM mapping written *only* through the
    reflection API.  This is the dogfood gate that decides whether the API is sufficient;

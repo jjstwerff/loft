@@ -340,32 +340,35 @@ fn read_int_spec(stores: &Stores, slot: Record) -> IntegerSpec {
     }
 }
 
-/// Read an inlined `Block` from an `NdBlock` / `NdLoop` record.  `Block.name`
+/// Read the referenced `Block` of an `NdBlock` / `NdLoop` record.  `Block.name`
 /// is `&'static str` — reconstructed via a bounded leak (see module note).
 fn read_block(stores: &Stores, slot: Node) -> Block {
-    let name: &'static str = Box::leak(slot.block_name(stores).to_owned().into_boxed_str());
+    let blk = slot.block_rec(stores);
+    let name: &'static str = Box::leak(
+        blk.field_str(stores, ds::BLOCK_NAME)
+            .to_owned()
+            .into_boxed_str(),
+    );
     Block {
         name,
-        operators: read_node_list(stores, slot.block_operators()),
-        result: read_type_child(
-            stores,
-            slot.field_recvec(ds::NDBLOCK_BLOCK + ds::BLOCK_RESULT, ds::TYPET_STRIDE),
-        ),
-        scope: slot.field_int(stores, ds::NDBLOCK_BLOCK + ds::BLOCK_SCOPE) as u16,
-        var_size: slot.field_int(stores, ds::NDBLOCK_BLOCK + ds::BLOCK_VAR_SIZE) as u16,
+        operators: read_node_list(stores, blk.field_vec(ds::BLOCK_OPERATORS)),
+        result: read_type_child(stores, blk.field_recvec(ds::BLOCK_RESULT, ds::TYPET_STRIDE)),
+        scope: blk.field_int(stores, ds::BLOCK_SCOPE) as u16,
+        var_size: blk.field_int(stores, ds::BLOCK_VAR_SIZE) as u16,
     }
 }
 
-/// Read an inlined `ParForBody` from an `NdParFor` record.
+/// Read the referenced `ParForBody` of an `NdParFor` record.
 fn read_par_for(stores: &Stores, slot: Node) -> ParForBody {
+    let pf = slot.par_for_rec(stores);
     ParForBody {
-        input: read_node_child(stores, slot.field_vec(ds::PARFOR_INPUT)),
-        x_var: slot.field_int(stores, ds::PARFOR_X_VAR) as u16,
-        r_var: slot.field_int(stores, ds::PARFOR_R_VAR) as u16,
-        worker: read_node_child(stores, slot.field_vec(ds::PARFOR_WORKER)),
-        threads: read_node_child(stores, slot.field_vec(ds::PARFOR_THREADS)),
-        body: read_node_child(stores, slot.field_vec(ds::PARFOR_BODY)),
-        stitch_id: slot.field_int(stores, ds::PARFOR_STITCH_ID) as u8,
+        input: read_node_child(stores, pf.field_vec(ds::PARFOR_INPUT)),
+        x_var: pf.field_int(stores, ds::PARFOR_X_VAR) as u16,
+        r_var: pf.field_int(stores, ds::PARFOR_R_VAR) as u16,
+        worker: read_node_child(stores, pf.field_vec(ds::PARFOR_WORKER)),
+        threads: read_node_child(stores, pf.field_vec(ds::PARFOR_THREADS)),
+        body: read_node_child(stores, pf.field_vec(ds::PARFOR_BODY)),
+        stitch_id: pf.field_int(stores, ds::PARFOR_STITCH_ID) as u8,
     }
 }
 
@@ -914,6 +917,7 @@ fn read_db_fields(stores: &Stores, parent: Record, off: u32) -> Vec<SchemaField>
                 r.field_int(stores, ds::DBFIELD_CONTENT) as u16,
                 r.field_int(stores, ds::DBFIELD_POSITION) as u16,
                 default,
+                r.field_bool(stores, ds::DBFIELD_NULLABLE),
                 read_dep_list(stores, r, ds::DBFIELD_OTHER_INDEXES),
             )
         })

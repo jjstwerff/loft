@@ -1018,6 +1018,13 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                 }
             };
             database.field(s_type, &data.attr_name(d_nr, a_nr), tp);
+            // @PLN127 arc D — the ONE parse-time site that knows. `a_type` was
+            // peeled above (an `Optional(τ)` lays out exactly like `τ`), so
+            // without depositing it here the fact is gone by the time anything
+            // can be asked about it.
+            if nullable {
+                database.set_field_nullable(s_type, &data.attr_name(d_nr, a_nr), true);
+            }
         }
     }
     // Propagate Data-side LinkedFieldGroups (currently: tuple element
