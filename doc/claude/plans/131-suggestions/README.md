@@ -155,6 +155,13 @@ Ship order:
   shape as @PLN130's probes. Plus the doc-link check from § entry point: assert every
   suggestion names a concept and resolves to a real catalogue entry, so a renamed or deleted
   feature breaks the build rather than shipping a dead door.
+- **Q6 — PREREQUISITES found by the fix-line prototype** ([`fix-line-prototype.md`](fix-line-prototype.md)):
+  the condition cannot name the surviving use (the analysis holds `last_use_pos` as a traversal
+  index, not a span), and the `move` concept has no catalogue entry to link to (105 entries,
+  none on move/copy/ownership). Both are prerequisites rather than polish — without the first
+  a veteran goes hunting instead of affirming; without the second the teaching half does not
+  happen. The prototype also found that the append shape has **no mechanical fix at all**, so
+  the feature must not assume every diagnostic offers one.
 - **Q5 — can the concept link be derived rather than hand-written?** The feature catalogue is
   canonical and generated (`make features-gen`), so a suggestion could carry an `@F`/`@I` id
   and let the renderer resolve it — one home, and a link that cannot drift from the feature it
