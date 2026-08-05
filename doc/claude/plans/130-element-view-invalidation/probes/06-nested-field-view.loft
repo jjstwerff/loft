@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 06 — the producer is a field OF an element, not the element itself.
+// w names outs[2].inner; remove(0) shifts that element to index 1.
+// Status: FAILS both backends — outs[1].inner.k stays 33.  The nesting inherits the
+// index pinning, so the class is not limited to a bare `v[i]` bind.
+
+struct Inner { k: integer, tag: integer = 0 }
+struct Outer { id: integer, inner: Inner }
+
+fn main() {
+  outs = [Outer { id: 1, inner: Inner { k: 11, tag: 111 } },
+          Outer { id: 2, inner: Inner { k: 22, tag: 222 } },
+          Outer { id: 3, inner: Inner { k: 33, tag: 333 } }];
+  w = outs[2].inner;
+  outs.remove(0);
+  w.k = 99;
+  assert(len(outs) == 2, "06 len {len(outs)} want 2");
+  assert(outs[0].id == 2 && outs[0].inner.k == 22, "06 e0 {outs[0].id}:{outs[0].inner.k} want 2:22");
+  assert(outs[1].id == 3 && outs[1].inner.k == 99, "06 e1 {outs[1].id}:{outs[1].inner.k} want 3:99");
+  println("probe 06 PASSED");
+}

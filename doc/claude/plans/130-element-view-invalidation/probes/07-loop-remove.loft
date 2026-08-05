@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 07 — the invalidator is the in-loop `#remove`, not the `remove(i)` call.
+// c is bound BEFORE the loop; the loop deletes an earlier element.
+// Status: FAILS both backends, identically to probe 03 — so the defect is the positional
+// shift itself, not one particular removal spelling.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c = boxes[2];
+  for b in boxes {
+    if b.n == 11 {
+      b#remove;
+    }
+  }
+  c.n = 99;
+  assert(len(boxes) == 2, "07 len {len(boxes)} want 2");
+  assert(boxes[0].n == 22, "07 e0 {boxes[0].n} want 22");
+  assert(boxes[1].n == 99, "07 e1 {boxes[1].n} want 99");
+  println("probe 07 PASSED");
+}

@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 02 — a view READ after a shifting removal.
+// Expect: c still names the element whose n is 33.
+// Status: PASSES, but BY LUCK — the vacated slot still holds the old bytes.  Probe 05
+// is the same shape with the slot re-occupied, and it fails.  Kept as the contrast that
+// shows why a passing read is not evidence the view is intact.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c = boxes[2];
+  boxes.remove(0);
+  assert(c.n == 33, "02 c.n {c.n} want 33");
+  assert(c.tag == 333, "02 c.tag {c.tag} want 333");
+  assert(len(boxes) == 2, "02 len {len(boxes)} want 2");
+  println("probe 02 PASSED");
+}

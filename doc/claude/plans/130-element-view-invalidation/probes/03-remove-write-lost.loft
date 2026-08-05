@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 03 — a view WRITTEN through after a shifting removal.
+// c names the element whose n is 33; remove(0) shifts it to index 1, so the write must
+// land there.  Status: FAILS both backends — boxes[1].n stays 33.  The write goes to
+// index 2, past the live length, and is silently lost.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c = boxes[2];
+  boxes.remove(0);
+  c.n = 99;
+  assert(len(boxes) == 2, "03 len {len(boxes)} want 2");
+  assert(boxes[0].n == 22, "03 e0 {boxes[0].n} want 22");
+  assert(boxes[1].n == 99, "03 e1 {boxes[1].n} want 99 (the write is lost)");
+  println("probe 03 PASSED");
+}

@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 04 — the severe form: the stale index is RE-OCCUPIED by a live element.
+// c names the n=33 element (index 1 after the removal).  The append puts a new element at
+// index 2, where the view still points.  Status: FAILS both backends with CROSS-ELEMENT
+// CORRUPTION — boxes[2] reads 99/444, a TORN record: n from the stray write, tag from the
+// real element.  The intended target boxes[1] is untouched.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c = boxes[2];
+  boxes.remove(0);
+  boxes += [Box { n: 44, tag: 444 }];
+  c.n = 99;
+  assert(len(boxes) == 3, "04 len {len(boxes)} want 3");
+  assert(boxes[0].n == 22 && boxes[0].tag == 222, "04 e0 {boxes[0].n}/{boxes[0].tag} want 22/222");
+  assert(boxes[1].n == 99 && boxes[1].tag == 333, "04 e1 {boxes[1].n}/{boxes[1].tag} want 99/333");
+  assert(boxes[2].n == 44 && boxes[2].tag == 444, "04 e2 {boxes[2].n}/{boxes[2].tag} want 44/444 (torn)");
+  println("probe 04 PASSED");
+}
