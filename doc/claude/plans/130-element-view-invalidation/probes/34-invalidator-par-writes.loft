@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 34 — cluster II matrix: invalidator = `par` writes.
+//
+// The last invalidator on the list.  A `par(...)` clause runs its expression on worker
+// threads while the loop body accumulates on the main one, so a view held across the loop
+// is live while other threads are touching the same container's records.
+//
+// This probe does NOT try to prove thread-safety in general — it asks the narrow matrix
+// question: does a view taken BEFORE a `par` loop still name its element AFTER it?
+//
+// Hand-computed: `held` names `boxes[2]` (n = 33).  The par loop reads every element and
+// sums twice its `n`, which is 2*(11+22+33) = 132.  `held` must still address the same
+// element afterwards, so the write through it lands at index 2.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn dbl(b: Box) -> integer {
+  b.n * 2
+}
+
+fn main() {
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  held = boxes[2];
+  assert(held.n == 33, "34 held.n {held.n} want 33");
+
+  total = 0;
+  for b in boxes par(d = dbl(b), 2) {
+    total += d;
+  }
+  assert(total == 132, "34 total {total} want 132");
+
+  held.n = 99;
+  assert(len(boxes) == 3, "34 len {len(boxes)} want 3");
+  assert(boxes[2].n == 99 && boxes[2].tag == 333, "34 e2 {boxes[2].n}/{boxes[2].tag} want 99/333");
+  assert(boxes[0].n == 11, "34 e0 {boxes[0].n} want 11");
+  println("probe 34 PASSED");
+}

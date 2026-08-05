@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 33 — cluster II matrix: invalidator = removal from a NESTED container.
+//
+// Every failing cell so far reshapes the container the view is an element of.  This one
+// reshapes a container one level DOWN: the view names an outer element, and the removal
+// happens inside that element's own vector field.  The outer positions never move, so if
+// the view is only index-pinned at the outer level it should survive — and if the inner
+// removal disturbs it, the pinning reaches further than the plan has assumed.
+//
+// Hand-computed: `w` names `outs[1]`, whose `data` is [10, 20, 30].  Removing `data[0]`
+// leaves [20, 30]; `w` must still describe that same outer element, and the write through
+// `w` must land in it.
+
+struct Outer { id: integer, data: vector<integer> = [] }
+
+fn main() {
+  outs = [Outer { id: 1 }, Outer { id: 2 }, Outer { id: 3 }];
+  outs[0].data += [1];
+  outs[1].data += [10];
+  outs[1].data += [20];
+  outs[1].data += [30];
+  outs[2].data += [100];
+
+  w = outs[1];                      // a view of the OUTER element
+  assert(w.id == 2, "33 w.id {w.id} want 2");
+  assert(len(w.data) == 3, "33 len(w.data) {len(w.data)} want 3");
+
+  w.data.remove(0);                 // reshape the NESTED container
+
+  assert(len(outs) == 3, "33 len(outs) {len(outs)} want 3");
+  assert(len(w.data) == 2, "33 len(w.data) {len(w.data)} want 2");
+  assert(w.data[0] == 20 && w.data[1] == 30, "33 w.data {w.data[0]}/{w.data[1]} want 20/30");
+
+  w.id = 99;                        // the view must still address outs[1]
+  assert(outs[1].id == 99, "33 outs[1].id {outs[1].id} want 99");
+  assert(outs[0].id == 1, "33 outs[0].id {outs[0].id} want 1");
+  assert(outs[2].id == 3, "33 outs[2].id {outs[2].id} want 3");
+  assert(len(outs[1].data) == 2, "33 len(outs[1].data) {len(outs[1].data)} want 2");
+  println("probe 33 PASSED");
+}

@@ -12,10 +12,10 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | 🟡 30 probes on both backends. Gaps 1 and 2 worked; loft#778 filed from the matrix. Remaining cells: `par` writes, nested-container removal, `match` captures, tuple elements |
+| A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I mechanisms verified to a code line; Q5 answered; cluster II's mechanism still hypothesised |
 | C — Fix design | ⏸️ the model is chosen (below), the enforcement point is not. The Q5 one-liner was tried and reverted — it needs an analysis, not a flag test |
-| D — Implementation | ⏸️ pending C. Nothing eliminated yet: the guard is built, the class is catalogued, no copy removed and no view fixed |
+| D — Implementation | ⏸️ pending C. NOTHING fixed yet — see § Must fix before close (F1–F6); the plan does not close on a catalogue |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -309,6 +309,25 @@ the diagnostics change).
 Runner: `probes/run_set.sh [view|copy|secret|all]` — per probe, pass/uncovered/executed-copies
 on both backends.
 
+## Must fix before close — no deferral
+
+An investigation plan OWNS every problem it surfaces. Probing is the work, but a catalogue is
+not a result: each of these is **fixed in-plan**, with a regression test, before the plan is
+deemed finished. Nothing here gets handed to the tracker to be somebody's later problem —
+filing is not a marker of significance, it is a deferral.
+
+| # | problem | evidence | state |
+|---|---|---|---|
+| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | open |
+| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–06, 29 | open |
+| F3 | `&` param bound from an element loses its write after a shift | probe 26 | open |
+| F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | open |
+| F5 | Copies no diagnostic accounts for — the `exists()` family | probes 10–12, 18, 19 | open (Q5 route reverted) |
+| F6 | `LOFT.md` claims a match capture is a view "whatever the field's type"; scalars copy | probe 31 | open (doc fix) |
+
+**loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
+tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
+
 ## Probe gaps — what is NOT covered yet
 
 Ordered by what would cost most to keep not knowing. Written **in full before any of it was
@@ -372,8 +391,52 @@ CONTAINER — the same "a view is not a store" invariant as #775, reached throug
 reassignment. The boundary is narrow, which is why it survived: no capture, capture into an
 owned local, and reassigning a view *outside* a loop are all safe.
 
-The remaining untested cells are `par` writes and nested-container removal (invalidators),
-and `match` captures and tuple elements (producers).
+**COMPLETE — the last four cells (probes 31–34) all pass, and the boundary is now sharp.**
+
+**Producers — which binds mint an index-pinned view:**
+
+| producer | verdict | probe |
+|---|---|---|
+| `v[i]` | **VIEW, index-pinned → breaks** | 03–05 |
+| `v[i].f` | **VIEW, index-pinned → breaks** | 06 |
+| `&` param bound from an element | **VIEW, index-pinned → breaks** | 26 |
+| `for` loop var captured out | copy — safe | 25 |
+| view stored into another record | copy — safe | 27 |
+| tuple element | copy — safe | 32 |
+| `match` capture, scalar payload | copy — safe | 31 |
+| `match` capture, text/heap payload | view, but **cannot outlive its arm** — safe | 31 |
+
+**Invalidators — what disturbs a live view:**
+
+| invalidator | verdict | probe |
+|---|---|---|
+| `v.remove(i)` | **breaks** | 03–06 |
+| `v#remove` | **breaks** | 07 |
+| removal during another view's iteration | **breaks** | 29 |
+| re-keying a `sorted` element through a view | **breaks** (unreachable by key) | 28 |
+| append `+=` | safe | 01 |
+| whole-container reassign | safe | 09 |
+| keyed-collection removal | safe | 08 |
+| removal from a NESTED container | safe | 33 |
+| `par` writes | safe | 34 |
+
+**The invariant, now measured rather than guessed: the invalidator is a POSITIONAL SHIFT
+inside one vector's own store.** Growing it, replacing it, removing from a keyed collection,
+and reshaping a container one level down are all harmless. Only an operation that renumbers
+the indices in the store the view points into breaks it — and re-keying a `sorted` element
+(28) is the same thing reached without deleting anything.
+
+**And the producer split has no marker in the source.** Three shapes alias and five copy,
+with nothing at the binding site to say which. The `match`-capture case is safe for a
+different reason from the rest — a lifetime bound (the capture dies with its arm), not a
+copy — so it would stop being safe if captures ever became holdable.
+
+Two side-findings worth keeping:
+
+- **LOFT.md overstates the match rule.** It says a destructured field is a view "whatever
+  the field's type"; measured, a **scalar** payload capture is a copy on both backends.
+- **loft#778** was filed from this matrix. Per § Must fix before close, filing it was the
+  wrong move — it is this plan's to fix, not to hand off.
 
 **Original scoping note:**
 This is #774's actual defect, it corrupts silently, and it is unfixed. Probes 01–09 cover
