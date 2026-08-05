@@ -371,12 +371,71 @@ That fix added `mark_inline_ref(elm)`. It is applied when an element is **minted
 (`OpNewRecord`) and **not** when one is **read** into a local (`OpGetVector`) — which is
 exactly the hole F1 falls through. Same invariant, same marker, one uncovered producer.
 
-**Fix direction:** mark the destination of an element-read bind as an inline ref and record
-its container dep, so the pre-Set store-free is suppressed for a borrowed destination.
-Deliberately NOT applied yet — this is the same subsystem where the Q5 one-liner looked
-right and was reverted, so it gets working bytecode proven on both backends first
-([`loft-codegen` skill](../../../../.claude/skills/loft-codegen/SKILL.md) bug-fix mode).
-Note F2 is the same missing fact seen from the read side, so one change may close both.
+### F1 + F2 design — one producer, two different questions
+
+They meet at the same bind (`c = v[i]`) and it is tempting to call them one bug. They are
+not, and conflating them is how a fix for one silently fails the other:
+
+| | question | missing fact | fixable by |
+|---|---|---|---|
+| **F1** | *who frees this store?* | "this binding is a BORROW" | a marker at the bind — ownership |
+| **F2** | *which element does it name?* | "the element moved" | nothing at the bind — identity |
+
+**F1 is closable as stated.** A dep says "borrow, don't free"; the pre-Set store-free is
+suppressed; the container survives. Native's `_own_store_k` is a working reference.
+
+**The fix has an exact precedent — P250, `parser/expressions.rs:3230`**, which repaired the
+same failure for tuple destructuring:
+
+> *"each LHS Reference element is a VIEW into the tmp's storage… Without a dep, scope
+> analysis emits an independent `OpFreeRef` for the LHS at scope exit; that free works on a
+> store_nr basis and **frees the entire tmp's underlying store**… Marking the LHS dependent
+> on tmp suppresses its independent free."*
+
+Its remedy is one line — `self.vars.depend(v_nr, tmp)` — and `create_elm`
+(`vectors.rs:2535`) does the same for minted elements. So the F1 change is
+`self.vars.depend(<lhs>, <container var>)` at the bind where the RHS is a bare element read.
+
+Note this is a dep on the **variable**, not a dep smuggled into a returned `Type` — the
+latter is a dep-space crossing and the wrong route.
+
+**Decision site it feeds:** `state/codegen.rs:1899` computes
+`owned_ref = … && tp(v).depend().is_empty() && !is_skip_free(v)`, and line 1927 emits the
+unconditional pre-Set `OpFreeRef` when `owned_ref` holds. A non-empty dep makes `owned_ref`
+false and the free never fires. `is_inline_ref` is deliberately NOT the lever here: the
+comment at `codegen.rs:1897` records that an owned `Vector` `??` subject is marked
+`inline_ref` *precisely so it keeps* that free (loft#615), so widening on that marker would
+regress it.
+
+**F2 cannot be fixed by a dep**, because the defect is not ownership. A view is a `DbRef`
+`(store, rec, pos)`; `remove` renumbers the positions; no amount of ownership information
+tells a fixed `pos` that its element moved. Only three answers exist, and picking one is a
+**semantics decision**:
+
+1. **Removal stops shifting** (tombstone / stable slots). Views stay valid, write-through
+   keeps working, and #774's documented alias survives intact. Cost: holes in the store, a
+   compaction policy, and a changed iteration/`len` contract.
+2. **Materialise the view + WARN** when it is live across a reshape. No corruption, program
+   keeps running, author is told. Cost: write-through is **lost** for that binding — probes
+   03/04/05 currently assert the write reaches the element, and they would have to assert the
+   copy instead.
+3. **Diagnose only.** Cheapest, and leaves the corruption in place. Rejected — the plan
+   exists because silence is the defect.
+
+**Recommendation: option 2**, because it is what this plan's own model already prescribes —
+constraint 2 is *"where rustc errors on a use-after-move, loft copies and warns"*, and a view
+outliving its element's position is exactly a use-after-move. It is compile-time (constraint
+5): the analysis asks whether a reshaping op on the container occurs in the binding's live
+range, and materialises only then — so the alias is kept whenever it is safe (constraint 1).
+
+Option 1 is the better *language* if the store can afford it, and it is the only one that
+keeps write-through. It is a representation change well beyond this plan, so it belongs to
+the owner rather than to me.
+
+**This is a semantics change either way, so it needs sign-off before implementation** —
+option 2 makes `c = v[i]` copy in reshape-containing scopes, and probes 03/04/05 flip from
+asserting write-through to asserting the copy. F1 does not need that sign-off and is being
+implemented first.
 
 ## Probe gaps — what is NOT covered yet
 
