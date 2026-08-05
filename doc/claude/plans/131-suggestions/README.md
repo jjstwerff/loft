@@ -53,6 +53,31 @@ h = Holder { v: [1, 2, 3] };                          // built in place — no c
 Conflating the two is the failure mode to design against. A suggestions feature that
 auto-applies a conditional rewrite is a bug generator with good intentions.
 
+## A suggestion is an entry point, not a patch
+
+The reported value of Eclipse's quick-fix was not the edit — it was that a proposal sent you
+looking: into forums, into documentation, into features you did not know existed. The fix was
+a **door**, and most of the learning happened on the other side of it.
+
+That has design consequences, and they are not cosmetic:
+
+1. **Name the concept, not just the edit.** "Delete line 4" teaches nothing. "This becomes a
+   MOVE — the value is transferred instead of copied, because nothing uses it afterwards"
+   gives the reader a term they can search. The searchable noun is the payload.
+2. **Point at where to read more.** loft already has a canonical home for this: the feature
+   catalogue (`loft-lang/features`, rendered into `doc/features/`), plus `LOFT.md` sections.
+   A suggestion should carry the link, so the door actually opens onto something.
+3. **It must read well UNAPPLIED.** If most of the value lands when the author does *not*
+   take the edit, then the explanation is the product and the diff is the illustration. That
+   argues for explain-first ordering in the output, and against a terse `--fix` that prints
+   only a patch.
+4. **Prefer the suggestion that teaches** when two are equally sound. Between "build the value
+   in place" and "drop the later use", the first introduces an idiom the author can reuse
+   everywhere; the second is a local deletion. Rank on what it teaches, not just on brevity.
+
+This also gives the feature a test that is otherwise hard to state: **a suggestion that names
+no concept and links to nothing is not finished**, however correct its diff.
+
 ## What loft can do that an IDE quick-fix historically could not: verify its own advice
 
 The compiler holds the analysis that raised the diagnostic. So a candidate rewrite can be
@@ -94,7 +119,14 @@ Ship order:
   than each formatting its own?
 - **Q3 — how is a suggestion tested?** Probably: a fixture with the diagnostic, the applied
   result, and an assertion that the diagnostic count drops and behaviour is identical. Same
-  shape as @PLN130's probes.
+  shape as @PLN130's probes. Plus the doc-link check from § entry point: assert every
+  suggestion names a concept and resolves to a real catalogue entry, so a renamed or deleted
+  feature breaks the build rather than shipping a dead door.
+- **Q5 — can the concept link be derived rather than hand-written?** The feature catalogue is
+  canonical and generated (`make features-gen`), so a suggestion could carry an `@F`/`@I` id
+  and let the renderer resolve it — one home, and a link that cannot drift from the feature it
+  describes. Hand-written URLs in diagnostics would rot exactly like the stale doc claims
+  @PLN130 F6 had to correct.
 - **Q4 — how much verification is affordable** at `--explain` time versus `--apply` time?
 
 ## See also
