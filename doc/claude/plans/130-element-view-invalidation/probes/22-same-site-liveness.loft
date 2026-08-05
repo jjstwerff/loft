@@ -16,6 +16,14 @@
 //
 // A failure here does not mean the probe is wrong — it means adoption is UNSAFE for that
 // route, and the fix must exclude it.
+//
+// PROVISIONAL — do not cite this as proof.  Every route below is swept with four
+// composition axes pinned at 1: nesting depth, the number of Sets on the returned local,
+// parameter KIND (scalars, never structs), and interleaved-caller count.  Probe 23 later
+// showed that moving all four at once is exactly what breaks adoption, so a clean result
+// here does NOT establish that E2-E6 are safe — it establishes that they are safe in the
+// one corner this probe visits.  Re-run with struct params and two interleaved callers
+// before treating it as verified (@PLN130 § Probe gaps, item 1).
 
 struct Rec { tag: integer, name: text }
 struct Holder { inner: Rec }

@@ -12,10 +12,10 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | 🟡 14 probes written + run on both backends; producer/invalidator axes not yet exhausted |
-| B — Mechanism investigation | 🟡 2 of 5 clusters verified to a code line |
-| C — Fix design | ⏸️ pending B — the model is chosen (below), the enforcement point is not |
-| D — Implementation | ⏸️ pending C |
+| A — Probe catalogue | 🟡 23 probes on both backends. Cluster II's producer × invalidator matrix is 2×2 of a much larger grid, and probe 22 needs re-running — see § Probe gaps |
+| B — Mechanism investigation | 🟡 Cluster I mechanisms verified to a code line; Q5 answered; cluster II's mechanism still hypothesised |
+| C — Fix design | ⏸️ the model is chosen (below), the enforcement point is not. The Q5 one-liner was tried and reverted — it needs an analysis, not a flag test |
+| D — Implementation | ⏸️ pending C. Nothing eliminated yet: the guard is built, the class is catalogued, no copy removed and no view fixed |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -294,9 +294,48 @@ the diagnostics change).
 | `17-secret-loop-carried.loft` | `cur = make(i)` in a loop | I | **reference** — 0 copies; contrast for 19 |
 | `18-secret-stdlib-exists.loft` | stdlib `exists()` | I | secret copy — 5 calls, 5 `File` copies |
 | `19-secret-call-bind.loft` | `f = file(path)` | I | secret copy — `InterpCallReturn` |
+| `20-q5-return-dep-discriminator.loft` | 4 callees, identical but for spelling | I | Q5 answered — `[]` adopts, `[1]` copies |
+| `21-buffer-reuse-across-iterations.loft` | loop over a `[1]`-dep callee | I | buffer VAR reused, store freed per call |
+| `22-same-site-liveness.loft` | 6 escape routes, one call site | I | **provisional — see Probe gaps** |
+| `23-chained-return-buffer.loft` | mixed literal/call Set, struct params, interleaved | I | **guard** — fails if the Q5 predicate is widened |
 
 Runner: `probes/run_set.sh [view|copy|secret|all]` — per probe, pass/uncovered/executed-copies
 on both backends.
+
+## Probe gaps — what is NOT covered yet
+
+Ordered by what would cost most to keep not knowing.
+
+**1. Re-run probe 22's escape routes with the axes probe 23 exposed. Do this first.**
+Probe 22 concluded *"every escape route yields independent values"*, and that conclusion is
+cited above as a finding. But it swept its six routes (E1–E6) with all four of the axes probe
+23 later proved live **pinned at 1**: nesting depth, the number of Sets on the returned local,
+parameter kind (scalars, never structs), and interleaved-caller count. That is the same clean
+sweep that read as proof and was not. Until it is re-run with struct params and two
+interleaved callers, **E2–E6 are unverified and the plan currently overstates them** — which
+is why probe 22's row is marked provisional. A wrong assertion costs more than a gap.
+
+**2. Cluster II's producer × invalidator matrix — the largest real hole.**
+This is #774's actual defect, it corrupts silently, and it is unfixed. Probes 01–09 cover
+**2 producers × 2 invalidators**:
+
+- *Untested producers:* a `&` param bound from an element · a `match` capture · a `for` loop
+  var held across a removal · a tuple element · a view stored into another record.
+- *Untested invalidators:* `sorted`/`index` reordering on key mutation · `par` writes ·
+  nested-container removal · removal during iteration of a **different** view of the same
+  container.
+
+Every unprobed cell is a potential live corruption nobody has looked at. Given probe 05 — a
+pure read answering a different element with no detector firing — hits are likely rather than
+hypothetical.
+
+**3. The two uncatalogued copy families.** `R666` (recursive enum payload) and `RbOuter`
+(borrow-return), both surfaced by the corpus survey and both still unprobed. Lower priority:
+cost, not corruption, and the guard already names them.
+
+**Not needed:** more probes for the copy inventory (10–20 cover it) or for the Q5 boundary
+(20/21/23 pin it). Extending the manifest to the parser's emitters is instrument work, not a
+probe gap — see Tool gaps.
 
 ## Reference ↔ problem pairings
 
