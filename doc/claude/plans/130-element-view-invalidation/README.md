@@ -5,16 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 130 — A copy nobody is told about, and a view that outlives what it names
 
-**Status — CLOSED 2026-08-05; the one finding filed out is now FIXED too.** F1, F2, F4, F5,
-F6, F8 fixed on both backends; F7 retracted; F3 was re-opened as
-[loft#779](https://github.com/loft-lang/loft/issues/779) — it had been signed off as STATED on a
-claim that measurement contradicts (§ F3), and a lost write is breakage the plan's own bar never
-allows. The `&`-semantics decision it was waiting for arrived the same day, and F9 shipped it:
-reshaping a container while a reference into it is live is now a COMPILE-TIME ERROR
+**Status — CLOSED 2026-08-05. All findings resolved; no residual defect.** F1, F2, F4, F5, F6,
+F8 fixed on both backends; F7 retracted (the doc was wrong, not the code); F3 reopened as
+[loft#779](https://github.com/loft-lang/loft/issues/779) and closed as **F9** — disturbing a
+container while a `&` reference into it is live is now a COMPILE-TIME ERROR
 ([`formal/binding.md` B-Ref-Reshape](../../formal/binding.md), design in
 [F9-amp-link-survives-reshape.md](F9-amp-link-survives-reshape.md), boundary in
 [probes/40-reshape-refusal/](probes/40-reshape-refusal/README.md)). Kept as the investigation
-record (§ Method, the probe suite, the cluster catalogue and the retraction).
+record; the contract itself lives in the reference docs below.
 
 Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 [loft#774](https://github.com/loft-lang/loft/issues/774).
@@ -25,6 +23,10 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 |---|---|
 | the view-invalidation contract (reshape / re-key / reassign → materialise + advice) | [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](../../OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not) · user-facing in [LOFT.md](../../LOFT.md) |
 | the copy/view boundary it extends | [DESIGN_DECISIONS.md § C86](../../DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule) |
+| the `&` rule — a disturbance under a live reference is refused | [formal/binding.md § B-Ref-Reshape / B-Disturb](../../formal/binding.md) · the C79 principle behind it in [DESIGN_DECISIONS.md § C79](../../DESIGN_DECISIONS.md) |
+| the copy-diagnostic model (the owner's five decisions, the three copy kinds) | [COPY_DIAGNOSTICS.md § The decided model](../../COPY_DIAGNOSTICS.md) |
+| removal renumbers a vector, and a vector stays DENSE | [formal/collections.md § Col-Remove](../../formal/collections.md) |
+| the METHOD (build the instrument before the fix) | [CODEGEN_METHOD.md](../../CODEGEN_METHOD.md) — the worked example stays below |
 | `LOFT_STRICT_STORES`, `LOFT_DEBUG_F8`, `LOFT_COPY_MANIFEST` | [DEBUG.md](../../DEBUG.md) |
 | the guards | see the probe→test mapping below |
 
@@ -43,1488 +45,142 @@ in `probes/` as landmarks:
 | F7 — the C86 copy/view boundary, 30 cells | 09–14 | `tests/scripts/201-bind-copies-projection-views.loft` |
 | F8 — a view live across a container REASSIGNMENT | 35, 36, 37 | `tests/scripts/774-view-outlives-reassigned-container.loft` |
 | the producer × invalidator boundary — which binds VIEW vs COPY, what invalidates | 25, 27, 29, 31, 32, 33, 34 | `tests/scripts/147-view-producer-invalidator-boundary.loft` |
+| F8 — the `par` / coroutine paths (measured at closure) | 37 cells E1/E2 | `tests/scripts/776-generator-heap-locals.loft` |
 | F3/F9 — a reference whose container the CALLEE reshapes | 26, 38, **40** | `tests/parse_errors.rs::b_ref_reshape_*` (the refused shapes) + `tests/scripts/149-reference-survives-callee-reshape.loft` (the ones that must still compile) |
 
 **Still-open findings, filed forward** (obligation 1: the in-plan no-file rule inverts at
-closure).  All three are residuals, not unfixed bugs, so they went to
-[QUALITY.md § Open work → Store-lifetime cluster](../../QUALITY.md#store-lifetime-cluster)
-rather than to Issues: F8's unmeasured `par`/coroutine cells, Q6's unchosen copy families, and
-the 29-site uncovered copy set.  Every finding whose FIX shipped needs no row — the fix and its
-test are the record.
+closure).  Two remain, both legitimate resting states rather than unfixed bugs, and both live in
+[COPY_DIAGNOSTICS.md § What remains open](../../COPY_DIAGNOSTICS.md) now that the model moved
+there: the per-file/per-function ACCEPT surface has no syntax yet, and the 29-site uncovered copy
+set is sized but not drained.  [QUALITY.md § Open work → Store-lifetime cluster](../../QUALITY.md)
+carries the tracking rows.
+
+The third — F8's *"unmeasured"* `par`/coroutine cells — was **measured at closure and was not
+clean**: it exposed two pre-existing native codegen defects (no generator holding a heap local
+compiled; the generator tail was silently dropped). Both fixed, both backends. That is why an
+unmeasured residual is not a resting state.
 
 **Issues this plan closed** — `loft#774` (F8, the reassignment defect), `loft#775` (a field
 alias outliving its owner) and `loft#778` (F1, the loop-var reassignment) are all fixed on both
 backends and carry `fixed-pending-merge`; they close when the branch reaches `main`.
 `loft#415`, `#426`, `#615` and `#664` were already closed and are cited as landmarks.
 
-## Status
 
-| Stage | Status |
-|---|---|
-| A — Probe catalogue | ✅ 37 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
-| B — Mechanism investigation | ✅ Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container); F8's backend divergence traced to `objects.rs:2718-2726` |
-| C — Fix design | ✅ closed — F1+F2 one analysis; F4 reuses it; F3 settled by two decisions rather than machinery |
-| D — Implementation | ✅ F1, F2, F4, F5, F6, **F8** shipped; F3 decided; **F7 RETRACTED** (the boundary it called a defect is C86, measured conformant on 30 cells, pinned by `tests/scripts/201`). F8 — the real defect behind loft#774, a view whose CONTAINER is reassigned — fixed on both backends, boundary measured on 17 cells, pinned by `tests/scripts/774`. Detector for it BUILT (`LOFT_STRICT_STORES`) |
+## Findings — what each resolved as
 
-loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
-defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
-after — an independent copy is required"*, `use_analysis.rs:1275`), and any probe that can
-*observe* copy-vs-alias must write one name and read the other, which is exactly that
-condition. The repro cannot reach the aliasing cell.
+The plan's own bar, and the reason "allowed for now" is narrow: **FIXED** where behaviour was
+wrong, **CORRECTED** where a statement was false, **STATED** only for a program that is already
+correct and merely pays a cost. Copies may rest; wrong behaviour, misinformation and silent
+copies may not.
 
-Two real defects sit underneath it, and they are the same defect seen from two sides —
-**loft decides between a copy and an alias silently, and neither answer is checked.**
-
-## Goal
-
-Make the copy/alias decision *stated*: every copy loft makes is either provably necessary
-or reported, and every alias it keeps is provably safe for as long as the binding lives —
-with the interpreter and `--native` deriving that from one shared fact.
-
-## The model (owner's decisions — design constraints, not open questions)
-
-1. **Alias whenever it is semantically possible; copy only when needed.** The fix may not
-   be "copy on every container read" — that trades a correctness bug for a blanket cost.
-2. **Follow rustc's ownership model, with loft's ending.** Where rustc *errors* on a
-   use-after-move, loft **copies and warns**. The program keeps working; the author is told
-   it cost a copy.
-3. **The copy diagnostic is default-ON, and there is no global off switch.** A diagnostic
-   nobody enables reports nothing — which is exactly the state Stage A measured. It is on
-   under normal conditions, always.
-
-   Suppression is an **acceptance in the source**, at **per-file and per-function**
-   granularity: the author states *"this copy is intended here"* and the notice goes quiet
-   for that scope only. This is deliberately not an env opt-out — an env flag silences a
-   whole run and leaves no record of who decided what, whereas an accept is reviewable, and
-   scoped to the code it excuses. `#superseded "…"` (@PLN102 arc C, `data_store.rs:313`)
-   is the existing per-definition annotation precedent; the per-file form has none yet and
-   needs designing.
-
-   Consequence — and this is NOT "drain `Avoidable` to zero first". A copy may be **allowed
-   to stand** while it is still eliminable in principle. Three kinds, and only the last
-   blocks anything:
-
-   - **Necessary** — the source survives and is mutated; no analysis will ever remove it.
-     Stated once, accepted at the site, quiet thereafter.
-   - **Allowed for now** — we *could* eliminate it with a better analysis but have not.
-     It stays, it is **stated**, and it is tracked as a future-elimination candidate. This
-     is the `Avoidable` bucket, and it is a legitimate resting state, not a debt that must
-     be paid before the plan closes. `exists()` lives here.
-   - **Unknown** — a copy no diagnostic accounts for. Never acceptable: the author cannot
-     decide about something they are not told. The manifest guard exists to keep this empty.
-
-   So default-on is livable as soon as the notices are TRUE and actionable — not once they
-   are absent. An accept then records a real decision ("intended here"), and an allowed copy
-   records a real trade-off, rather than either being noise-suppression.
-
-   **"Allowed for now" covers COPIES ONLY — never wrong behaviour.** A copy that rests is a
-   correct program paying a cost. Breakage, misinformation and silent copies are all
-   excluded, and a warning does not buy any of them off (§ Must resolve before close).
-4. **Both backends, one semantics.** `--native` is the path that must be quickest, so it may
-   not be the backend that always deep-copies. Backend parity is in scope here, not a
-   follow-up.
-5. **Everything is decided at COMPILE time. No runtime checks.** The diagnostic, the accept,
-   and the guard are all static. A compiled program carries no copy bookkeeping — when a copy
-   is genuinely needed, loft simply performs it at full speed. Consequence accepted knowingly:
-   loft can say *where* a copy happens, never *how much* it moved (a deep copy's size is
-   runtime data). That is the rustc bargain, and the author knows their own data.
-
-## Method — engineering is an information problem, so build the instrument first
-
-The principle this plan runs on, stated once because every result below came out of it:
-
-> **Most of engineering is information.** Before writing a fix, build the instrument that
-> tells you *where* the problem is — one more precise than an oracle — then use it to find
-> the real cases and code paths. Only then do you know what to actually write.
-
-### An oracle answers; an instrument localizes
-
-An **oracle** gives one bit about a case *you already constructed*: pass or fail. Its
-resolution is bounded by your imagination — it can only speak about shapes you thought to
-write down.
-
-An **instrument** reports *where*, continuously, across code nobody wrote a case for. Its
-resolution is per-site, over the whole corpus.
-
-This plan opened because an oracle-shaped thing gave a confident wrong answer. On a program
-that provably deep-copies, `--report-copies` printed *"none — every structure copy is a move,
-a literal, or already borrowed"* (probe 10). Not silence — a clean bill of health. No amount
-of writing more test cases against that oracle would have found the copies, because the
-oracle was blind to a whole *class*, not to particular inputs.
-
-### Put the instrument where the fact is created
-
-The report walked the **IR**. The copies are minted **later**, during code generation. That
-gap is not a bug in the report's logic — it is unreachable by construction, so no careful
-reading of the IR could ever have found them.
-
-The manifest instead records at the emitter, *"the one place that cannot be wrong about
-whether a copy exists"* — the branch that writes the copy. That relocation is the entire
-design, and it is why the guard is compile-time and costs a compiled program nothing.
-
-### An instrument is untrustworthy until calibrated against known answers
-
-Ours was mis-installed **twice**, and code-reading caught neither:
-
-1. `gen_set_first_ref_copy` reads exactly like the call-return emitter. Its own doc records
-   **zero fires** in the corpus — a dead path. Probe 11 stayed silent.
-2. Only first-bind emitters were instrumented, so **every reassignment copy in the language**
-   was missing — including the one in `exists()`.
-
-Both were caught by running the instrument against cases whose answer was already known:
-probes 10/11 (known uncovered) and 13/14 (known covered) are the **calibration**, not
-decoration. An instrument that has never been made to fire, and to stay quiet, on cases you
-already understand is an unread dial.
-
-### Negative results localize; confirmations do not
-
-Probes 15 and 17 were written to *demonstrate* the expression-temp and loop-carried copies.
-They measured **zero**. That refutation is what moved the cause from "the syntax at the call
-site" to "the callee's return" — and a fix aimed at expression temps would have missed
-entirely. Both are kept precisely because they failed to confirm.
-
-A probe that agrees with you teaches almost nothing. Write the one that could prove you wrong.
-
-### Survey turns a bug into a distribution
-
-Pointed at the corpus (583 `tests/scripts`), the instrument answered a question no single
-repro can: **exactly one uncovered site per compile, always the same one** — the stdlib's
-`exists()` — plus a second family at 107 hits. That is what tells you where the cost actually
-is, rather than where the first report happened to land.
-
-### The same information tells you what NOT to write
-
-Q5's answer makes a one-line change to `return_adopts_fresh_store()` look obvious. The same
-investigation surfaced the reuse hazard that gates it — and probe 17 is the exact shape that
-breaks if that hazard is real. **Knowing the cause is not permission to fix.** An instrument
-that only ever argued *for* the change would be a worse instrument.
-
-### The instrument is unfinished, and that is part of the reading
-
-Building one costs real effort, and **ours is not honed to every case yet.** Today it
-records **8** sites: the interpreter's five emit paths and native's two (one instrumented
-path turned out to be dead). The **parser's ~5 IR-level `OpCopyRecord` emitters**
-(`parser/expressions.rs`, `operators.rs`, `control.rs`, `mod.rs`) are **not instrumented**.
-Those land in the IR, so the analysis can see them *in principle* — which is why the guard
-targets the post-IR emitters first — but "in principle" is not "verified".
-
-So the reading to hold onto: **`uncovered = 0` would mean "nothing on the paths we watch",
-never "no blind spots".** A partial instrument reporting zero is the oracle that said
-`none` all over again, just with better manners. Extending coverage is remaining work
-(Tool gaps), and until it is done every number here carries that qualifier.
-
-This is also the honest limit on the method: the instrument is an **investment**. It repays
-when the class is broad, recurs, or hides where an oracle cannot look — as here. For a bug
-whose scope and root cause are already pinned, skip it and fix the bug.
-
-### The order, as a checklist
-
-1. Distrust a clean answer from an oracle that cannot see the whole class.
-2. Put the instrument where the fact is *created*, not where it is consumed.
-3. Calibrate on cases whose answer you already know — both directions.
-4. Survey the whole corpus; convert the bug into a distribution.
-5. Write the probe that could refute you; keep it when it does.
-6. Let the instrument name the gate on the fix, not just the fix.
-7. State its coverage beside its readings — an unfinished instrument reporting zero
-   is the oracle again.
-8. **Always add a probe when a new case turns up** (investigation ground rule). Every
-   case found is a case that must stay found; the suite is the only thing that
-   remembers. Probe 23 exists because the fix that probes 21/22 blessed was wrong.
-9. **Count the axes you held fixed, not just the ones you varied.** Probes 21/22 swept
-   call shape while pinning depth, Set-count, parameter kind and caller-count at 1.
-   A clean sweep over one axis reads as proof and is not — the cell that broke needed
-   all four moved at once.
-10. **Propose three or more cases? Write them all down BEFORE starting the first**
-    (investigation ground rule). Detail decays while you work: by the time case one is
-    done, the reason case three mattered has usually gone, and what gets lost is the
-    *specifics* — which axis, which shape, why it was suspected — not the headline. The
-    § Probe gaps list was written in full before any of it was worked, and that is the
-    order to keep. It also makes the list reviewable while it is still cheap to change.
-
-## Stage A finding — which copies happen with no warning
-
-This is the base of the plan: the copies loft makes today and says nothing about. Every
-row's copy is proven **by value** (an alias would give a different answer), then checked
-against `LOFT_REPORT_COPIES=1 LOFT_WARN_COPIES=1 LOFT_COPY_SURVIVAL=1` and
-`LOFT_MATERIALIZE_DUMP=1`. Identical on both backends.
-
-| Probe | Shape | Copy happens? | Internal verdict | User-facing |
-|---|---|---|---|---|
-| 13 | `Holder { v: src }`, src mutated after | yes | `bucket=forced` | **reported** — `line 5 … [forced]` |
-| 14 | `v[0] = src`, src mutated after | yes | `bucket=forced` | **reported** — with `file:line:col` |
-| 12 | `w = h.v`, `h.v` mutated after | yes | `bucket=AVOIDABLE` | **silent** |
-| 10 | `b = a` whole-record bind | yes | **no verdict at all** | **silent** |
-| 11 | `cp = ident(orig)` call return | yes | **no verdict at all** | **silent** |
-
-Probes 13/14 prove the instrument is live, so the "silent" rows are real blindness rather
-than a dead harness. Two distinct mechanisms, and they need different fixes:
-
-- **Mechanism 1 — seen, classified, then dropped (probe 12).** The analysis emits
-  `MAT fn=n_main v=2(w) src=0 verdict=Copy bucket=AVOIDABLE [source not a parameter / not
-  provably read-only local]`. `AVOIDABLE` is precisely the bucket `LOFT_WARN_COPIES` is
-  documented to warn on (`keys.rs:374`), and the report still prints `none`. The gap is
-  between the verdict and the report.
-- **Mechanism 2 — never seen (probes 10, 11).** No `MAT` row exists. The copy-vs-alias
-  analysis runs over the **IR** in `scopes::check`, but these copies are invented *later*,
-  at bytecode generation — `state/codegen.rs:2656 gen_set_first_ref_var_copy` in the
-  interpreter, `generation/dispatch.rs:578` in native. `MoveKind::Record` covers `v[i] = e`
-  and `o.f = src`, never a plain local bind. No diagnostic can reach these even in
-  principle, and each backend re-derives the decision with its own proxy.
-
-**And all of it is opt-in.** In a default build every copy is silent: `LOFT_WARN_COPIES` is
-default-OFF by design (`keys.rs:377` — *"the Avoidable set is not yet drained"*). Draining
-that set is what makes decision 2 above shippable.
-
-### The report is not merely quiet — it asserts the opposite
-
-On probe 10, a program that provably deep-copies, the report prints:
-
-```
-loft copy report — unbound structure copies (a copy the alias-default did not make silently)
-  none — every structure copy is a move, a literal, or already borrowed.
-```
-
-A blind spot that reports "none" reads as a clean bill of health. Fixing the wording is not
-the fix, but it belongs to the same change.
-
-## Stage A finding — the alias that outlives what it names
-
-The mirror of the above: where loft *keeps* an alias that is no longer safe. A binding read
-out of a container is a VIEW of an **element**, and must keep naming that element for as long
-as it is live. Today it is pinned to an **index**, and `remove` renumbers the indices without
-telling the outstanding views.
-
-| Probe | Shape | Result |
+| # | problem | resolved as |
 |---|---|---|
-| 01 | view, then `v += [..]` ×3 | pass — growth alone never disturbs a view |
-| 02 | view of `v[2]`, `remove(0)`, read | **pass by luck** — the vacated slot still holds the old bytes |
-| 03 | same, then **write** through the view | **FAIL** — write lands past the live length, silently lost |
-| 04 | `remove(0)` then `+= [Box{44,444}]`, write | **FAIL — corruption.** `e2` reads `99/444`: a **torn record**, `n` from the stray write, `tag` from the real element. The intended target `e1` is untouched |
-| 05 | same, **read only, no write anywhere** | **FAIL** — the view reads `44/444` instead of `33/333`: a *completely different element* |
-| 06 | view of a field-of-element, then `remove(0)` | **FAIL** — nesting inherits the index pinning |
-| 07 | view bound before a loop, `b#remove` inside | **FAIL** — the spelling of the removal is irrelevant |
-| 08 | keyed `hash<Entry[name]>`, remove another key | pass — keyed removal does not shift |
-| 09 | view, then whole-container reassign `v = other` | pass — the view keeps its element |
+| F1 | a view reassigned from a loop var DESTROYED the container (interp-only, silent, total) | **FIXED**, both backends |
+| F2 | index-pinned views survive a shifting removal — wrong reads and cross-element corruption | **FIXED** — materialise + advice. The first cut keyed on the CONTAINER and was order-blind, so it also copied views already DEAD at the removal: a lost write plus untrue advice, both on the bar above. Made liveness-aware in F9 step 1 |
+| F3 | a reference bound from an element loses its write after a shift | **FIXED as F9** — the program is REFUSED (B-Ref-Reshape). It had been signed off as STATED on a claim measurement contradicts; see § F3 below |
+| F4 | re-keying a keyed element through a view makes it unreachable | **FIXED** — a key-field write is a reshape, reusing F2 |
+| F5 | copies no diagnostic accounts for — the `exists()` family | **CORRECTED + STATED** — default-on advice naming the lever; measured 27/585 scripts |
+| F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | **CORRECTED** |
+| F7 | claimed `c = v[i]` aliasing was a defect and every bind must copy | **RETRACTED** — all 30 cells conform to C86. The DOC was wrong; see § F7 |
+| F8 | a view whose CONTAINER is reassigned reads the replacement — a genuine use-after-free on `--native` | **FIXED**, both backends |
+| F9 | disturbing a container while a `&` reference into it is live | **FIXED** — refused at compile time, all three disturbances |
 
-The invalidator is specifically **positional shift on vector removal** (`v.remove(i)`,
-`v#remove`) — not append, not reassignment, not keyed removal. Probe 05 is the sharpest
-form: no write anywhere, and the read answers a different element.
+### F3 — the retraction that mattered
 
-**No detector fires.** `LOFT_STORES=warn` and `LOFT_POISON=1` are silent on probes 04 and
-05. They cannot see it — nothing is freed and no store is invalid. The `DbRef` is perfectly
-live; it just names the wrong element. That is why this class survived every store-lifetime
-sweep, #775's included.
+F3 was closed as STATED on *"F2's materialise covers it"*. Measured, it does not: the cell emits
+**no advice at all** and the write vanishes. A lost write is exactly what the bar never allows,
+so the sign-off was a finding refused rather than a finding resolved. It reopened as
+[loft#779](https://github.com/loft-lang/loft/issues/779) and closed as F9.
+
+The issue's own boundary table was then wrong in turn — its row A2 says a plain parameter
+copies, and probe 40 cell X9 measures it writing 99 into the caller. So the refusal keys on the
+ALIASING relation, not on the `&` token. **A filed boundary is a hypothesis, including the cells
+it marks CONFORMANT.**
+
+### F7 — the retraction, kept because the mistake is instructive
+
+F7 proposed deleting B-View outright, on a one-cell reading. A 30-cell sweep showed every cell
+already conforming to [C86](../../DESIGN_DECISIONS.md). The code was right; the DOC was wrong.
+What stops the next one is `tests/scripts/201-bind-copies-projection-views.loft`, which pins the
+whole boundary — and the habit of grepping the decision register before reversing documented
+behaviour.
+
+## Method — the worked example
+
+The *rules* live in [CODEGEN_METHOD.md § build the instrument before the fix](../../CODEGEN_METHOD.md);
+this is the evidence they were drawn from, kept here because a worked example belongs with the
+work.
+
+**The oracle did not merely stay quiet — it asserted the opposite.** `--report-copies` said
+*"none — every structure copy is a move, a literal, or already borrowed"* on a program that
+provably deep-copies. A report that says "clean" about a broken thing is worse than no report:
+it is a false negative wearing a clean bill of health.
+
+What replaced it, and what each step actually bought:
+
+1. **Put the instrument where the fact is CREATED.** Copies are minted during emission, so
+   `LOFT_COPY_MANIFEST` records them in the branch that emits them — the one place that cannot
+   be wrong about whether a copy exists.
+2. **Calibrate in BOTH directions, on known answers.** Two mis-installations were caught this
+   way and neither by reading code: the plausibly-named `gen_set_first_ref_copy` fires zero
+   times in the whole corpus, while the real emitter is `gen_set_first_ref_call_copy`. A dead
+   path reads exactly like a live one.
+3. **Survey — turn a bug into a distribution.** One repro says a shape exists; the sweep said
+   how often and where, which was not where the first report landed.
+4. **State the instrument's own coverage.** Until it is honed to every path, "found nothing"
+   means *"nothing on the paths I watch"*.
+
+The same discipline produced this plan's later corrections: a sweep over a rule's PRODUCERS
+(not a boundary around the reported one) is what found D-bind-9, and running an "unmeasured,
+not known-broken" residual is what found that `--native` could not compile any generator holding
+a heap local.
 
 ## Cluster catalogue
 
-| ID | Cluster | Severity | Backend asymmetry | Probes | Doc |
-|---|---|---|---|---|---|
-| I | Silent copies — the inventory and its two mechanisms | wrong cost, no wrong value | both silent; native has no move at all | 10–14 | pending |
-| II | Index-pinned views survive a shifting removal | **corruption + silent wrong read** | both identical | 01–09 | pending |
-| III | Producer set — which binds mint a view | unknown | unknown | pending | pending |
-| IV | Invalidator set — what else shifts | unknown | unknown | pending | pending |
-| V | Backend parity for the alias/move decision | perf (native) | **native-only gap** | 10, 11 | pending |
+| ID | Cluster | Severity | Backend asymmetry | Probes |
+|---|---|---|---|---|
+| I | silent copies — the inventory and its two mechanisms | wrong cost, no wrong value | both silent; native has no move at all | 10–14 |
+| II | index-pinned views survive a shifting removal | **corruption + silent wrong read** | both identical | 01–09 |
+| III | producer set — which binds mint a view | resolved (F7 boundary) | none | 25, 27, 31, 32 |
+| IV | invalidator set — what else shifts | resolved (F2/F4/F8/F9) | none | 28–30, 33–35 |
+| V | backend parity for the alias/move decision | perf (native) | **native-only gap** | 10, 11 |
 
-**III — producers.** Verified: `v[i]`, `v[i].f`. Untested: `&` params bound from an element,
-`match` captures, `for` loop vars held across a removal, tuple elements, a view stored into
-another record.
-
-**IV — invalidators.** Verified: `remove(i)`, `#remove`. Untested: `sorted`/`index` reordering
-on key mutation, `par` writes, nested-container removal, removal during iteration of a
-*different* view of the same container.
-
-**V — parity.** For the whole-record bind the interpreter has a last-use move
-(`state/codegen.rs:2656`) gated on `uses(src) == 1` — a raw parse-time appearance count
-(`variables/mod.rs:1084`), far stricter than "dead after the bind". Native has **none**:
-`generation/dispatch.rs:578` emits `OpDatabase` + `OpCopyRecord` unconditionally. Under
-decision 3 native must gain the move, not the interpreter lose it.
+**V is the one that did not fully close.** The interpreter has a last-use move for the
+whole-record bind, gated on a raw parse-time appearance count; native emits `OpDatabase` +
+`OpCopyRecord` unconditionally. Under decision 3 native must GAIN the move rather than the
+interpreter lose it. Tracked as part of the uncovered copy set.
 
 ## Probe suite
 
-`probes/`, run on `--interpret` and `--native`. Probes 01–09 assert the view invariant;
-10–14 assert the copy inventory (each proves its copy by value, so it stays meaningful once
-the diagnostics change).
+`probes/` — 42 probes, every one run on **both** backends. Not CI-run (see the probe→CI mapping
+above for the ones that encode a guarantee); these are the investigation's landmarks.
 
-| File | Shape | Cluster | Status |
-|---|---|---|---|
-| `01-append-baseline.loft` | view survives growth | II | passes — baseline |
-| `02-remove-read-stale-luck.loft` | read after shift | II | passes **by luck** — contrast for 05 |
-| `03-remove-write-lost.loft` | write after shift | II | FAILS — write lost |
-| `04-remove-reoccupy-write.loft` | stale index re-occupied, write | II | FAILS — torn record |
-| `05-remove-reoccupy-read.loft` | stale index re-occupied, read only | II | FAILS — wrong element |
-| `06-nested-field-view.loft` | field-of-element view | II/III | FAILS |
-| `07-loop-remove.loft` | `#remove` invalidator | II/IV | FAILS |
-| `08-keyed-remove-baseline.loft` | keyed removal | II | passes — baseline |
-| `09-container-reassign-baseline.loft` | whole-container reassign | II | passes — baseline |
-| `10-silent-record-bind.loft` | `b = a` | I/V | asserts pass; copy **unreported, unclassified** |
-| `11-silent-call-return.loft` | `cp = ident(orig)` | I/V | asserts pass; copy **unreported, unclassified** |
-| `12-silent-field-copyfill.loft` | `w = h.v` | I | asserts pass; `AVOIDABLE`, **unreported** |
-| `13-reported-construct.loft` | `Holder { v: src }` | I | passes — the instrument fires |
-| `14-reported-elemset.loft` | `v[0] = src` | I | passes — the instrument fires |
-| `15-secret-expression-temp.loft` | `make(i).tag` | I | **reference** — 0 copies; contrast for 18 |
-| `16-secret-reassign-var.loft` | `b = a`, both live | I | secret copy — `InterpReassignVar` |
-| `17-secret-loop-carried.loft` | `cur = make(i)` in a loop | I | **reference** — 0 copies; contrast for 19 |
-| `18-secret-stdlib-exists.loft` | stdlib `exists()` | I | secret copy — 5 calls, 5 `File` copies |
-| `19-secret-call-bind.loft` | `f = file(path)` | I | secret copy — `InterpCallReturn` |
-| `20-q5-return-dep-discriminator.loft` | 4 callees, identical but for spelling | I | Q5 answered — `[]` adopts, `[1]` copies |
-| `21-buffer-reuse-across-iterations.loft` | loop over a `[1]`-dep callee | I | buffer VAR reused, store freed per call |
-| `22-same-site-liveness.loft` | 6 escape routes, all axes pinned at 1 | I | **superseded by 24** — its sweep was too narrow |
-| `24-escape-routes-axes-moved.loft` | the same routes, four axes moved | I | E3/E4 break under adoption; E2/E5/E6 hold |
-| `23-chained-return-buffer.loft` | mixed literal/call Set, struct params, interleaved | I | **guard** — fails if the Q5 predicate is widened |
-
-Runner: `probes/run_set.sh [view|copy|secret|all]` — per probe, pass/uncovered/executed-copies
-on both backends.
-
-## Must resolve before close — no deferral
-
-An investigation plan OWNS every problem it surfaces. Probing is the work, but a catalogue is
-not a result: each row below is **resolved in-plan**, with a regression test. Nothing gets
-handed to the tracker to be somebody's later problem — filing is not a marker of
-significance, it is a deferral.
-
-**The closure bar is INFORMATION — but three things are never allowed, and a warning does not
-buy them off.**
-
-| never allowed | why a diagnostic is not enough |
+| range | what it holds |
 |---|---|
-| **Breakage** — a wrong value, a lost write, corruption, data loss | telling the author their program is silently wrong does not make it right. There is nothing for them to decide |
-| **Misinformation** — a diagnostic or doc that states something false | worse than silence: it is trusted. `--report-copies` answering `none` on a copying program, and `LOFT.md`'s "whatever the field's type" |
-| **Silent copies** — a copy no diagnostic accounts for | the author cannot weigh a cost they are never shown |
-
-So the plan can close without every case *optimised*, but not with any case *broken*. Each
-finding resolves exactly one of:
-
-- **FIXED** — the program produces the right answer. Required wherever the defect is a wrong
-  value (F1, F2, F3, F4). For F2 the materialise IS the fix; the warning that rides with it
-  is information about the cost, not a substitute for correctness.
-- **CORRECTED** — a false statement is made true (F5's `none`, F6's doc).
-- **STATED** — reserved for a program that is already CORRECT and merely pays a cost. A copy
-  that is necessary, or one we could remove with a better analysis and have not. This is the
-  only category that may rest.
-
-"Allowed for now" therefore applies to **copies, never to wrong behaviour**.
-
-| # | problem | evidence | resolves as | state |
-|---|---|---|---|---|
-| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
-| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145`. The first cut keyed on the CONTAINER and was order-blind, so it also materialised views that were DEAD at the removal — a lost write plus untrue advice, both on the bar above. Made liveness-aware in F9 step 1 (probe 39, `tests/scripts/148`) |
-| F3 | `&` param bound from an element loses its write after a shift | probes 26, 38, 40 | **STATED was WRONG — this is BREAKAGE** (see § F3). A lost write is what the bar above never allows, and the claim that F2's materialise covers it is false: measured, cell A1 emits NO advice and the write vanishes silently | **FIXED as F9** — the program is REFUSED at compile time (B-Ref-Reshape). loft#779's own boundary table was wrong in turn: its row A2 says a plain param copies, and probe 40 cell X9 measures it writing through, so the refusal keys on aliasing rather than on the `&` |
-| F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
-| F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
-| F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |
-| F7 | Claimed `c = v[i]` aliasing was a defect and every bind must copy (§ F7) | 30-cell boundary sweep, both backends | **RETRACTED** — no defect: every cell conforms to C86 / `binding.md` B-Copy·B-View·B-Ref-Alias. The DOC was wrong | **DONE** — boundary pinned by `tests/scripts/201`; doc corrected |
-| **F8** | **A view whose CONTAINER is reassigned reads the replacement** — `c = bx.v[0]; bx = …;` answers 22 where it was bound to 11 | probes 35, 36 | **FIXED** required — `--native` is a genuine use-after-free (poison-confirmed), `--interpret` reuses the store in place | **OPEN — the real defect behind loft#774** |
-
-**loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
-tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
-
-### F1 mechanism — VERIFIED (this is cluster II's mechanism, no longer hypothesised)
-
-Repro + capture: `bytecode-comparisons/f1-view-loopvar-reassign.loft` / `f1-capture.txt`.
-
-**1. The bind types the view as an OWNER.** The IR for `k = a[0]`:
-
-```
-[9] k(1):ref(Box) = OpGetVector(a(1), 16i32, 0i32);
-```
-
-`k(1):ref(Box)` carries **no dep**, while every sibling does — `_elm_1(1):ref(Box)["a"]`,
-`x(3):ref(Box)["_vector_1"]`. So nothing records that `k` borrows `a`.
-
-**2. The reassignment then frees "its" store.** Bytecode for `k = x` inside the loop:
-
-```
-331: VarRef(k)
-334: FreeRef ; [store-free]      <- frees k's store, which IS a's store
-335: InitRef(k)
-338: Database(k, db_tp=65)
-349: CopyRecord(x -> k)
-```
-
-`k` is a raw pointer into `a`'s store, so the pre-Set store-free releases **the whole
-container**. `len(a)` is 0 from that instant — before any removal, and before the read that
-later answers `null(oob)`.
-
-**3. Why native escapes it:** the generated Rust declares `let mut _own_store_k: DbRef` — it
-materialises an owned store for `k` at the bind, so the free hits that instead of the
-container. One backend already implements the safe answer.
-
-**The precedent is in the tree, and names this exact failure.** `parser/vectors.rs:2522`
-(loft#664) on the element MINT path:
-
-> *"an element NEVER owns a store… That was encoded only as a DEPENDENCY on the container
-> VARIABLE, so a container with no variable left the dep list empty, and **empty reads as
-> 'owns its store': the answer came back WRONG rather than unknown**. State the fact at the
-> mint site instead, through the marker that already means 'borrow, don't allocate'."*
-
-That fix added `mark_inline_ref(elm)`. It is applied when an element is **minted**
-(`OpNewRecord`) and **not** when one is **read** into a local (`OpGetVector`) — which is
-exactly the hole F1 falls through. Same invariant, same marker, one uncovered producer.
-
-### F1 + F2 design — one producer, two different questions
-
-They meet at the same bind (`c = v[i]`) and it is tempting to call them one bug. They are
-not, and conflating them is how a fix for one silently fails the other:
-
-| | question | missing fact | fixable by |
-|---|---|---|---|
-| **F1** | *who frees this store?* | "this binding is a BORROW" | a marker at the bind — ownership |
-| **F2** | *which element does it name?* | "the element moved" | nothing at the bind — identity |
-
-**F1 is closable as stated.** A dep says "borrow, don't free"; the pre-Set store-free is
-suppressed; the container survives. Native's `_own_store_k` is a working reference.
-
-**The fix has an exact precedent — P250, `parser/expressions.rs:3230`**, which repaired the
-same failure for tuple destructuring:
-
-> *"each LHS Reference element is a VIEW into the tmp's storage… Without a dep, scope
-> analysis emits an independent `OpFreeRef` for the LHS at scope exit; that free works on a
-> store_nr basis and **frees the entire tmp's underlying store**… Marking the LHS dependent
-> on tmp suppresses its independent free."*
-
-Its remedy is one line — `self.vars.depend(v_nr, tmp)` — and `create_elm`
-(`vectors.rs:2535`) does the same for minted elements. So the F1 change is
-`self.vars.depend(<lhs>, <container var>)` at the bind where the RHS is a bare element read.
-
-Note this is a dep on the **variable**, not a dep smuggled into a returned `Type` — the
-latter is a dep-space crossing and the wrong route.
-
-**CORRECTION — the dep is not missing at the bind. It is STRIPPED later.** Measured with
-`LOFT_VAR_TABLE=main` on two programs that both bind `= a[…]`:
-
-```
-rm.loft  (safe)      c  ref(657)  def deps=[a(0)]     <- dep present
-f1 repro (destroys)  k  ref(657)  def OWNS            <- dep stripped
-```
-
-The only difference is that `k` is later reassigned. So `c = v[i]` **does** record the
-borrow; the reassignment removes it. Adding a dep at the bind would have changed nothing —
-this is why the var table was worth reading before writing the fix.
-
-**The stripper is `scopes.rs:3225`:**
-
-```rust
-// When `Set(v, Var(src))` and both are References to the same struct, codegen
-// takes gen_set_first_ref_var_copy which deep-copies src into a FRESH store
-// owned by `v`.  Strip v's declared deps so get_free_vars emits OpFreeRef.
-if let Value::Var(src) = unspanned_value && … d_nr == *src_d {
-    for d in deps { function.make_independent(v, d); }
-}
-```
-
-Its reasoning is correct for its own case: after the reassignment `v` genuinely owns a fresh
-store and genuinely needs a scope-exit free. What it does not account for is that stripping
-the dep **also re-enables the pre-Set free**, and that free runs on the value `v` held
-BEFORE the reassignment — which was the borrowed container. One strip, two consequences,
-only one of them intended.
-
-**ATTEMPTED AND REVERTED — the strip is load-bearing for native.** The obvious narrowing is
-to stop promoting a borrow: skip the strip when *both* sides are borrows, since `k = x` is
-then a pointer rebind and `v` owns nothing at either end. Measured:
-
-```
---interpret   probe 30 PASSES   (F1 fixed)
---native      probe 30 FAILS    len 0 want 3 — the same destruction, other backend
-```
-
-The emptied deps are precisely what makes the native generator materialise `_own_store_k` at
-the bind. Leave them in place and native aliases the container instead. So the strip is not
-a bug to remove — it is native's materialisation trigger wearing a misleading name, and the
-interpreter is the backend that fails to act on it.
-
-**That rules out the whole "stop promoting the borrow" family of fixes** and leaves one
-shape: materialise at the BIND, explicitly, for both backends — making native's accidental
-behaviour the deliberate behaviour of both. A comment now marks the site so the next reader
-does not re-run this experiment.
-
-**This unifies F1 and F2 into one analysis with two triggers.** Materialise an element-read
-binding when either:
-
-- **(F2)** the container is reshaped while the binding is live, or
-- **(F1)** the binding is later reassigned — it must own a store from the start, exactly as
-  native already does with `_own_store_k`.
-
-Otherwise keep the borrow. One rule, one implementation, and it is the option-2 machinery in
-both cases — materialise when the alias cannot be held, warn, keep the alias everywhere else.
-
-**Decision site it feeds:** `state/codegen.rs:1899` computes
-`owned_ref = … && tp(v).depend().is_empty() && !is_skip_free(v)`, and line 1927 emits the
-unconditional pre-Set `OpFreeRef` when `owned_ref` holds. A non-empty dep makes `owned_ref`
-false and the free never fires. `is_inline_ref` is deliberately NOT the lever here: the
-comment at `codegen.rs:1897` records that an owned `Vector` `??` subject is marked
-`inline_ref` *precisely so it keeps* that free (loft#615), so widening on that marker would
-regress it.
-
-**F2 cannot be fixed by a dep**, because the defect is not ownership. A view is a `DbRef`
-`(store, rec, pos)`; `remove` renumbers the positions; no amount of ownership information
-tells a fixed `pos` that its element moved. Only three answers exist, and picking one is a
-**semantics decision**:
-
-1. **Removal stops shifting** (tombstone / stable slots). Views stay valid, write-through
-   keeps working, and #774's documented alias survives intact. Cost: holes in the store, a
-   compaction policy, and a changed iteration/`len` contract.
-2. **Materialise the view + WARN** when it is live across a reshape. No corruption, program
-   keeps running, author is told. Cost: write-through is **lost** for that binding — probes
-   03/04/05 currently assert the write reaches the element, and they would have to assert the
-   copy instead.
-3. **Diagnose only.** Cheapest, and leaves the corruption in place. Rejected — the plan
-   exists because silence is the defect.
-
-**Recommendation: option 2**, because it is what this plan's own model already prescribes —
-constraint 2 is *"where rustc errors on a use-after-move, loft copies and warns"*, and a view
-outliving its element's position is exactly a use-after-move. It is compile-time (constraint
-5): the analysis asks whether a reshaping op on the container occurs in the binding's live
-range, and materialises only then — so the alias is kept whenever it is safe (constraint 1).
-
-Option 1 is the better *language* if the store can afford it, and it is the only one that
-keeps write-through. It is a representation change well beyond this plan, so it belongs to
-the owner rather than to me.
-
-**This is a semantics change either way, so it needs sign-off before implementation** —
-option 2 makes `c = v[i]` copy in reshape-containing scopes, and probes 03/04/05 flip from
-asserting write-through to asserting the copy. F1 does not need that sign-off and is being
-implemented first.
-
-## F4 — re-keying through a view, and the fix that reuses F2
-
-**Mechanism, verified.** `c.key = 5` emits a bare `OpSetInt(c, 0, 5)` — a raw field write
-with no re-index. The element's record is updated and the collection's index is not, so it is
-reachable at neither key while still being iterated. Measured identically on `sorted`,
-`hash` AND `index`, so it is one defect and not three:
-
-```
-hash    c.k 5  c.tag 333  |  h[5] -1   h[30] -1
-index   d.k 5  d.tag 333  |  i[5] -1   i[30] -1
-sorted  (probe 28)        |  s[5] null s[30] null,  iterate still yields 3
-```
-
-Everything the fix needs is present at the write site: `c(1):ref(Elm)["s"]` names its
-collection, and `s: sorted<Elm,[("key", true)]>` names the key field.
-
-**A true re-index is NOT the right answer here**, which is worth writing down because it is
-the obvious one. `set_keyed` (`database/search.rs:474`) already does remove-then-insert, but
-re-indexing needs the OLD key captured before the write, and — more importantly — for a
-`sorted` the record MOVES to its new position, which invalidates the very view that is doing
-the writing. F4 would then re-open F2 for its own binding. Chasing that lands back on stable
-slots, exactly like F3.
-
-**Proposed fix — reuse F2's machinery.** Treat *a write to a KEY field of an element view* as
-a reshape of that collection: the view materialises at the bind and the author is told. Then
-
-- `c` is an independent copy; `c.key = 5` changes only `c`;
-- the collection keeps its entry at the original key, consistent and reachable;
-- nothing is unreachable, so the **breakage is gone**;
-- changing a key keeps its supported spelling — `h[k] = value`, which routes through
-  `set_keyed` and re-indexes properly.
-
-That matches how databases treat a primary key, and it is a small addition:
-`collect_reshaped_containers` gains key-field writes alongside `OpRemoveVector`/`OpRemove`.
-
-**The one implementation detail that needs care:** the trigger must fire on KEY fields only.
-Widening it to any field write through an element view would take write-through away from
-keyed elements generally — a much larger semantic loss than F4 is worth. That means mapping
-the key NAME carried on the collection type to the field OFFSET the write uses, which is the
-part to get right rather than approximate.
-
-## F7 — RETRACTED: there is no defect here, and the guard that would have caught the mistake now exists
-
-**F7 claimed `c = v[i]` aliasing was "the root defect" and proposed making every bind copy.
-The claim is false.** It was written from a one-cell reading (`c = a[0]` writes through, `b = a`
-does not) without checking the decision register. Widening that reading to the whole boundary —
-30 cells, both backends — showed every cell already conforming to the written contract.
-
-**The governing decision already existed, and it says the opposite.**
-[C86](../../DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule)
-(maker's call, 2026-07-03) decided exactly this question, and
-[formal/binding.md](../../formal/binding.md) specifies it in three rules:
-
-| rule | spelling | meaning |
-|---|---|---|
-| **B-Copy** | `t = s`, `b = a`, `av = bx.v` | a whole-value bind COPIES — struct var, vector var, **vector-typed** field read |
-| **B-View** | `w = o.inner`, `c = v[i]` (struct element) | a **struct-typed projection** is a VIEW: it names an interior *place*, not a fresh whole value |
-| **B-Ref-Alias** | `d = &v`, `rv = &x.v` | `&` makes any binding a live link |
-
-C86 states the boundary deliberately — *"Projection reads stay VIEWS (`a = vv[0]` — the #426
-decided feature)"* — with a rationale, and it names the revisit route: **"if that distinction
-ever proves a recurring source of user surprise, that is a #426 revisit, not a C86 one."** F7
-was a #426 revisit smuggled into a bug plan, and it would have deleted B-View wholesale.
-
-### What the measurement actually shows
-
-Every cell conforms, on `--interpret` and `--native`, identically:
-
-| axis | cells | result |
-|---|---|---|
-| element of vector / hash / sorted / index | 4 | **VIEW** — the container kind does not change the answer |
-| struct-typed field, and chains (`v[0].inner`, `bx.v[0]`) | 3 | **VIEW** |
-| the same, reached through a parameter | 2 | **VIEW** |
-| struct var, vector var, nested struct, nested vector | 4 | **COPY**, deeply |
-| **vector-typed field read** (`av = bx.v`) | 1 | **COPY** — the one projection that does not view |
-| `&` on vector, vector field, struct field | 3 | **ALIAS** |
-| in-place write, param pass, loop var, read-only view | 4 | write through / undisturbed |
-
-The lone asymmetry is the vector-typed field read, and it is not arbitrary: **#415 made it a
-copy because the alias was a use-after-free** — `a = x.v` aliased the field's store without
-owning it, so freeing `x` dangled `a` (OWNERSHIP_MODEL.md row *field read binds without an
-owner*). Turning it back into a view is the one change that would reintroduce a known UAF.
-
-Two of F7's stated observations were confounded, and the widened sweep is what exposed them:
-
-- **`c = h[1]` does not copy.** The first sweep measured a copy because its probe made `n` the
-  *key* field and then wrote it — that is F4's rekey materialisation firing, not a container-kind
-  split. With a non-key field, hash/sorted/index all view, exactly like `vector`.
-- **Probes 25 / 27 / 32 / 31-scalar are not "exceptions to an aliasing rule".** Each has its own
-  reason under the existing rules: F1/F2's dep strip, a store *into* a record (H-Copy on the
-  write side), tuple destructuring's deep copy, and a scalar having no interior place.
-
-### The one thing F7 got right — the doc, not the code
-
-`tests/docs/08-struct.loft` (source of `doc/08-struct.html`) says of a plain struct: *"a binding
-is a live view onto the same record."* That sentence **is** wrong, but the other way round from
-F7's reading: it over-generalises B-View to *every* binding, when a whole-value bind copies.
-
-That sentence is also the direct cause of loft#774. The reporter cites it — *"`doc/08-struct.html`
-documents the aliasing one … which leaves `b = a` copying as the odd one out"* — and reasons from
-it to "they cannot both be right". **loft#774 is a documentation defect, not a semantics defect.**
-The moros use case in that ticket (`held = current; current = other;` over a `World`) has a direct
-answer: a whole-value bind deep-copies, and `held = &current` is the second name they want.
-
-### What the arc leaves behind
-
-- `tests/scripts/201-bind-copies-projection-views.loft` — the whole boundary, pinned. Nothing
-  guarded it before, so a future change could have moved a cell across silently. Same gap, and
-  same fix, as the dense-vector decision in `tests/scripts/200`.
-- **No implementation work, and none owed.** F2's and F4's machinery is *not* redundant: it
-  exists to handle a view whose container is reshaped underneath it, which B-View does not
-  address and which stays a real defect class.
-- `tests/scripts/144/145/146` keep their assertions. They protect shipped fixes.
-
-### The transferable lesson
-
-**A plan can supersede its own premise; it cannot supersede a decision register.** F7's commit
-opened *"this supersedes the premise the rest of the plan was built on"* — and the premise it
-overturned was correct, recorded, and reasoned. The check that would have cost thirty seconds
-was grepping `C86` before writing the section, and the check that settled it was widening one
-cell to a boundary. Both are the plan's own § Method rules (calibrate against known answers;
-count the axes you held fixed), applied to everything in this plan except its last section.
-
-## F8 — FIXED: the third invalidator, the CONTAINER reassigned under a live view
-
-F7's retraction cleared the ground and left the ticket's real complaint standing. loft#774
-was **not filed out of ignorance** — the reporter derived B-Copy/B-View correctly from
-measurement. Their objection was that the split is unlearnable at the use site, and their use
-case (`held = current; current = other;` over a `World`) is a shape neither shipped fix covers.
-
-Measuring that shape found a live defect. Probes 35 and 36:
-
-```loft
-bx = WithVec { v: [Box { n: 11 }], m: 1 };
-c  = bx.v[0];                 // a VIEW into bx's store — correct (B-View)
-bx = WithVec { v: [Box { n: 22 }], m: 2 };   // bx is REASSIGNED
-c.n                           // -> 22.  Bound to 11.
-```
-
-This is the **third invalidator**, and it is why the plan's earlier two did not catch it:
-
-| invalidator | what changes | covered by |
-|---|---|---|
-| the VIEW variable is reassigned | `k = a[0]; … k = x` | F1 (probe 30) |
-| the container is RESHAPED | `a.remove(0)` | F2 (probes 03–07) |
-| **the CONTAINER VARIABLE is reassigned** | `bx = …` | **F8** (probes 35–37, `tests/scripts/774`) |
-
-A fourth shape looks like a member of this table and is NOT: a FIELD reassignment
-(`d.mid = Mid{…}`) writes the new value into the place the view already names, which is C86's
-in-place path mutation, so a view seeing it is the contract. See § Open questions this closed.
-
-**The container's kind decides, which is what hid it.** A plain vector local is covered
-(`a = [Box{n:11}]; c = a[0]; a = [Box{n:22}]` answers 11 on both backends, with churn, in a
-loop, and with no leak). A view into a struct's interior is not. `container_element_base`
-already finds `bx` for `bx.v[0]`; nothing treats a whole-container *reassignment* as an
-invalidation the way `collect_reshaped_containers` treats a removal.
-
-### One wrong answer, two different mechanisms
-
-`LOFT_NO_SLOT_REUSE=1 LOFT_POISON=1` separates them, and they are not the same bug:
-
-- **`--native`: a genuine use-after-free.** With poison on, the view reads the poison pattern;
-  without it, 700 under churn — a `Wide.a` from the seventh loop iteration. The store is freed
-  and the reference outlives it.
-- **`--interpret`: an aliasing defect, not a lifetime one.** Poison changes nothing and the
-  store is never freed — the reassignment REUSES it in place, so the view is a live alias of a
-  location that now holds someone else's value. A write through it lands in the replacement
-  (`bx.v[0].n` becomes 999).
-
-Reading only the default output merges these and sends a fix at the wrong layer. This is the
-owner's read — *"we made an alias where a copy was better"* — confirmed, and it is the F7
-direction applied to the ONE case that earns it rather than to every bind.
-
-### Why the detector built for this missed it
-
-`LOFT_UAF_GEN` reports **zero** on both backends here, on a case poison proves is dangling. It
-stamps DbRefs as they are pushed on the OPERAND STACK; this view lives in a VARIABLE SLOT,
-which it never stamps. And `store()`'s existing freed-access check is `#[cfg(debug_assertions)]`
-and print-only, so the release binary every probe uses never ran it. Two guards, both aimed
-here, both blind — see § The strict store mode for what replaced them.
-
-## The strict store mode — `LOFT_STRICT_STORES=1` (built, F8)
-
-An opt-in mode that makes both store-lifetime faults **errors** instead of plausible numbers:
-
-- **use after free** — a freed store stays dead, and any read or write through a reference
-  naming it is reported AT the access;
-- **never freed** — a store still live at exit is reported too, so a probe cannot pass by
-  leaking instead of freeing;
-- non-zero exit if either fired, on **both** backends (native needed its own tail — the
-  generated binary never runs `src/main.rs`, so the reports printed and the process still
-  exited 0, which is a gate that reports and passes).
-
-**Exactness comes from implying `LOFT_NO_SLOT_REUSE`.** A slot that is never recycled cannot be
-legitimately re-occupied, so `free == true` at an access is unambiguous — no generation stamp,
-no `DbRef` widening, no false positives to explain away. That is also why it is opt-in and
-**for probes only**: never reusing a slot walks a long run off the end of the `u16` store
-space. Probes are small and each asks one lifetime question, so they can afford it.
-
-The report is deliberately **compiler-developer** detail, not a user diagnostic — the question
-it answers is *which emitter produced a reference that outlived its store*:
-
-```
-[strict-store] USE AFTER FREE (read) store #0 type=WithVec rec=4 pos=8
-  killed by the free of `var_bx(prev)`
-  created at pc=…, last legitimate op at pc=…, freed at pc=…, read now at pc=…
-```
-
-`killed by the free of \`var_bx(prev)\`` names the root cause directly: reassigning `bx` frees
-the previous value's store while `c` still points into it. Bytecode positions print only on
-`--interpret` (generated Rust has no pc), because a line of `pc=0, pc=0, pc=0` reads as data
-and is not.
-
-**Calibrated in both directions**, which is the only way a detector means anything:
-
-| direction | result |
-|---|---|
-| fires on a known fault (probe 36, `--native`) | 4 violations, exit 1 |
-| silent on clean code (40 scripts, both backends) | 0 reports, exit 0 |
-
-## What remains to close this plan
-
-Measured against this plan's own closure bar (§ Must resolve before close): **breakage is never
-allowed**, misinformation is never allowed, and only *copies* may rest as STATED.
-
-### Blocking — CLEARED
-
-**F8 is FIXED**, on both backends, with the boundary measured first and the C86 write-through
-cells pinned as controls. Nothing else was blocking, so the plan closes.
-
-**Root cause — a dep names a VARIABLE, not a store instance.** The var tables say it directly:
-
-```
-n_covered (vector local)          n_broken (struct local)
-  a    vec  deps=[__vdb_2(6)]       bx   ref  def OWNS
-  c    ref  deps=[a(0)]             c    ref  deps=[bx(0)]
-```
-
-A vector literal allocates through a hidden `__vdb_N` owner, so reassigning `a` mints a NEW
-one (`__vdb_2`) and the original store keeps its identity — `c` still reads it, and strict
-mode confirms **neither store leaks**, so the vector case is correct by construction rather
-than by luck. A struct local has no such indirection: `bx` IS the owner, so reassigning it
-changes what the name means while `c`'s dep still says "bx". The dep survives; the thing it
-named does not.
-
-**The fix is option 2, not the recommended option 1 — and the boundary is what changed the
-answer.** Option 1 was *"give a reassigned owner with live dependents a fresh store and let
-the old one die when its last dependent does"*. Its second clause needs to know, at run time,
-when the last dependent dies; decision 5 forbids runtime bookkeeping. Resolved statically it
-becomes one retire-slot per textual site, and probe 37 cell B4 (a container reassigned every
-iteration) then has to either free the store the view still needs or leak one per iteration.
-Option 2 has neither problem: the view materialises ONCE, before any reassignment, and
-iteration count stops mattering.
-
-So `scopes::collect_views_to_materialise` extends F2's arm rather than the `__vdb_N`
-mechanism. Four forms establish a store, and each was a measured-broken emitter:
-`OpDatabase(v, …)` (a literal), `Set(v, Var(src))` (the C86 whole-value bind, which codegen
-lowers to `OpDatabase` + `OpCopyRecord`), `Set(v, Call(f, …))` (a bind from a return), and
-passing `v` to a callee that reassigns that `&` parameter (`reassigned_ref_params`).
-
-**The decision that cost the most to get right is what the analysis is KEYED ON.** The first
-version asked *"is this container re-established anywhere in this function?"* — a per-FUNCTION
-proxy for a per-BINDING fact, and it broke two tests rather than merely over-copying: an
-unrolled `for pf in fields(p)` re-establishes `pf` once per field, so the proxy stripped the
-deps of the `is`-pattern subject bound from it, which put an `OpFreeRef` in a scope where the
-declaration was not visible and stopped `tests/scripts/45-field-iter.loft` compiling under
-`--native`. The invariant is *"a view is LIVE ACROSS a re-establishment of its container"*,
-and it is walked structurally: a view bound in a block is at risk from any re-establishment
-later in that same block at any depth inside it (covering an `if`-guarded reassignment and one
-in a loop body), and safe from one in a block its own has already closed. A container's first
-establishment needs no special case — it necessarily runs before any view of it exists.
-
-### Open questions this closed
-
-1. **Why do the backends use different mechanisms? — ANSWERED, and it was load-bearing.**
-   `objects.rs:2718-2726` emits `v_set(v, Null)` + `OpDatabase(v, tp)` for an owning local.
-   `--interpret` lets the allocator hand the just-nulled store straight back, so the store is
-   REUSED in place and nothing is freed; `--native` frees `var_bx(prev)`. Both print the
-   replacement's value, so the default output merges them — but they are different defects
-   (interpret aliases a live location, native dangles), and the divergence is why a fix that
-   only stopped native's free would have left interpret wrong. Probe 35 under
-   `LOFT_STRICT_STORES` is silent on both backends while probe 36 fired 4 native violations:
-   the same wrong answer, one lifetime fault and one aliasing fault.
-2. **F8's real boundary — MEASURED, and filed scope was again a fraction.** Probe 37 moved
-   container kind, chain depth, reassignment site and sibling route together: 11 of 14 cells
-   broke. BROKEN and now fixed: `hash` and `sorted` containers, a three-level chain, an
-   `if`-guarded reassignment, a loop reassignment, a swap through a temporary, a bind from a
-   return, and a callee reassigning a `&` param (native only — it read `703`, a `Wide` from an
-   unrelated later allocation, where interpret was merely stale). Already COVERED: a plain
-   vector local, a `match` capture, a plain-param reassignment (@PLN87 P2.1 makes it local),
-   and the owner leaving scope. Still not measured: `par` and coroutines.
-3. **Sibling routes — probed, and one turned out to be CONFORMANT.** The swap through a
-   temporary and handing the container to a `&`-reassigning callee were both real and are
-   fixed. **A field reassignment is not a defect**: `d.mid = Mid{…}` lowers to
-   `OpCopyRecord(<new>, OpGetField(OpGetField(d,0,66),0,65))` — the same place expression the
-   view is bound to. Nothing is reallocated; the new value is written INTO the existing place,
-   which is C86's *"in-place path mutation writes through"*. The cell was written expecting
-   `11`, the IR said otherwise, and `c.n = 77` showing up in `d.mid.inner.n` confirmed the view
-   is genuinely live. That is the distinction F8 turns on: a field write MUTATES the place a
-   view names, a container reassignment DESTROYS it. Probe 37 keeps it as a stated cell and
-   `tests/scripts/774-…` pins it as control K3.
-
-### Still open, and legitimately resting
-
-1. **`par` and coroutine paths for F8.** Not measured. Every other axis of the boundary is,
-   and each of these is a probe rather than a rewrite, but they are honestly unmeasured.
-2. **Q6 — which uncovered copy families should be silenced rather than removed.** The owner's
-   framing (an accept recorded at the site, never a blanket exemption) is written down; which
-   families qualify is not.
-3. **The uncovered copy set.** Sized, not drained: 29 distinct sites over a 90-script sample,
-   across four origins. Decision 3 makes "allowed for now" legitimate, so this is **STATED**
-   and does not block — but it is the largest known unfinished measurement.
-
-### What F8 shipped
-
-| piece | where |
-|---|---|
-| the analysis | `scopes::collect_views_to_materialise` + `established_stores` + `reassigned_ref_params` |
-| the materialise | the existing F2 arm in `scopes.rs`, now reached by either cause |
-| the advice | `copy_manifest::note_reassigned_view`; all three causes now name their FUNCTION, because the key deduped on `(binding, container)` and reported `c`/`bx` ONCE for a whole program |
-| the guard | `tests/scripts/774-view-outlives-reassigned-container.loft` — 12 defect cells + 4 C86 write-through controls, both backends |
-| the boundary | `probes/37-f8-boundary.loft` — 17 cells, including the two conformant ones |
-| the instrument | `LOFT_DEBUG_F8=1` names the views the analysis marked |
-
-### Not this plan's, though it surfaced here
-
-The `wasm32-wasip2` rlib **cannot be rebuilt** (`n_store_load_key` unresolved under
-`--no-default-features --features random`). `find_problems` rebuilds it with `-q`, so the
-failure is silent and the wasm gate has been running against a STALE library — green for a
-reason unrelated to the code under test. Adding one `loft::keys` symbol is what exposed it.
-Belongs in its own issue; recorded here only so the next reader does not re-diagnose it.
-
-## F3 — RESOLVED by two decisions, not by machinery
-
-**Decision 1 — a `vector` stays DENSE. `remove` compacts; there are no holes.**
-**VALIDATED: loft already behaves this way** — remove first/middle/last and multiple in-loop
-`#remove`s all compact, `len` tracks the live count, no in-bounds index is ever null, and
-past-the-end stays null (C80). Identical on both backends. So this decision *documents*
-existing behaviour rather than requiring a change — but nothing guarded it, so it is now
-pinned by `tests/scripts/200-vector-stays-dense.loft`.
-
-Stable slots were the last mechanism that could have let a view follow its element, and they
-are rejected:
-holes would make `v[i]` return null after an unrelated removal, and no other index type in
-loft behaves that way. Being agnostic across index types is worth more than the copy the
-compaction costs. This closes option 1 permanently — it is not deferred, it is decided.
-
-**Decision 2 — holding a view across a removal of its own container is an EDGE CASE.** It
-therefore gets a proportionate answer, not a representation change.
-
-Together those settle it: if the element genuinely moves, no reference can follow it without
-per-reference bookkeeping, and constraint 5 forbids that. So F3 takes **F2's answer** — the
-view materialises and the author is told — which is already built and shipped.
-
-> **CORRECTED 2026-08-05 — the second bullet below was FALSE, and F3's resolution rested on
-> it.** F3 does NOT take F2's materialise: measured on both backends, probe 26's shape emits **no
-> advice at all** and the write is **silently lost**. F2's analysis is per-FUNCTION, and probe 26
-> puts the `remove` in the CALLEE, one frame below the view's bind — so the materialise never
-> fires. Probe 38 localises it: with the bind and the `remove` in the SAME function (cell B1) the
-> advice *does* fire and the view *does* materialise, which is the behaviour this section
-> described; with the `remove` in the callee (cell A1) nothing happens.
->
-> That makes F3 a **lost write with no diagnostic**, which is the first row of the closure bar —
-> never allowed, and explicitly not something STATED may cover ("allowed for now applies to
-> copies, never to wrong behaviour"). It was signed off on a claim nobody measured.
->
-> Filed as [loft#779](https://github.com/loft-lang/loft/issues/779) with the boundary as cells and
-> a verified workaround. It is not fixed here because the fix needs a DECISION first: propagating
-> the reshape to the call site was tried and reverted — it does not fix A1 (the view's dep does
-> not name a `&vector` parameter, so the arm never fires) and it breaks cell C1, where the viewed
-> element does not move and the write legitimately lands. It would also make a `&` argument
-> silently become a copy whenever the callee removes from the container, which changes what `&`
-> means (@PLN87) rather than fixing a bug.
-
-The reasoning as it stood, kept because its first bullet is still true and its second is the
-mistake worth remembering:
-
-- loft **already advises against the spelling** probe 26 uses: *"`&` on parameter `target`
-  only slows it down here — field mutation already propagates to the caller without it. Drop
-  the `&` unless you REASSIGN the whole binding."* The probe leans on a discouraged idiom.
-- ~~The remaining loss is a write through a materialised view, which is **stated**, not silent.~~
-  **False** — nothing materialises and nothing is stated. No element is corrupted and none
-  becomes unreachable, which is true, but a lost write is its own row on the bar.
-
-Recorded for the next reader: the two mechanisms below were both examined and neither works,
-so nobody needs to re-derive them.
-
-## F3 — why the two obvious mechanisms both fail
-
-F3 (probe 26) needs the callee's write to **reach the caller's element**:
-
-```loft
-fn shift_then_write(target: &Box, all: &vector<Box>) {
-  all.remove(0);      // the element `target` names moves down one
-  target.n = 99;
-}
-shift_then_write(boxes[2], boxes);   // asserts boxes[1].n == 99
-```
-
-**Materialising does not work** — it is F2's fix and the opposite of what F3 needs. Give the
-callee a private copy and the write never reaches `boxes`; the lost write stays lost, for a
-new reason. F2 removes the alias, F3 depends on it surviving.
-
-**A fat `&` reference does not work either.** Carrying `(container, index)` and re-resolving
-per access sounds like it should follow the element, but the INDEX is precisely what goes
-stale:
-
-```
-boxes = [A(11), B(22), C(33)]     target = &boxes[2]  ->  (boxes, 2)
-all.remove(0)                     -> [B, C]; C is now at index 1
-target.n = 99                     resolves boxes[2] — out of range
-```
-
-Keeping a fat ref valid means renumbering outstanding references when a removal shifts —
-runtime bookkeeping, which constraint 5 excludes. And a fat ref only helps if the container
-does NOT renumber; if it does not, a plain `DbRef` is already correct and the fat ref buys
-nothing.
-
-**So F3 reduces to option 1: removal must stop renumbering** (stable slots / tombstones).
-That is the only mechanism that lets a write follow its element without per-access
-bookkeeping.
-
-Worth stating because it changes the value of the option: **stable slots would also let F2
-keep its alias.** What shipped here materialises the view and warns — correct, but it gives
-up the documented write-through. With stable slots the view stays valid, the copy becomes
-unnecessary, and F2's materialise could be REVERTED rather than kept. Option 1 is strictly
-better for both findings; it is simply much larger — a store representation with holes, a
-compaction policy, and a revised `len`/iteration contract. It belongs in its own plan.
-
-Until then F3 stays open and BROKEN, which the closure bar does not permit — so this plan
-cannot close on F3 without either that plan or an explicit de-scope.
-
-## Probe gaps — what is NOT covered yet
-
-Ordered by what would cost most to keep not knowing. Written **in full before any of it was
-worked** — see § Method rule 10: with three or more candidate cases, the specifics of the
-later ones decay while you work the first.
-
-**1. Re-run probe 22's escape routes with the axes moved — DONE (probe 24). Claim partly
-RETRACTED.** Probe 22 concluded *"every escape route yields independent values"* with all four
-axes pinned at 1. Probe 24 re-runs the same routes through a two-Set, struct-param, nested
-callee with an interleaved sibling. Measured against the widened predicate:
-
-| route | verdict |
-|---|---|
-| E2 container insert `v += [mixed(p)]` | passes — the insert deep-copies |
-| **E3 second binding `b = a`** | **FAILS** — `b.tag 501 want 901`; `b` aliases `a` |
-| **E4 struct field `Holder { inner: a }`** | **FAILS** — `h.inner.tag 901 want 1` |
-| E5 recursion | passes — each frame owns its buffer |
-| E6 return up a level | passes |
-
-So the finding stands for **E2/E5/E6** and is **false for E3 and E4**. Under adoption `a`, `b`
-and `h.inner` collapse onto one store — E4 reads `901`, the value E3's `b` was given, so the
-contamination crosses all three names rather than leaking a single write.
-
-Every cell passes on `--native`, so the widening is **interpreter-only** in its damage — the
-second independent reason it is unlandable, and a hint that native's path already handles the
-case correctly and could be read for the answer.
-
-This also sharpens what a real fix must do: it is not enough to know a buffer is freed after
-the copy (probe 21). The predicate must also know whether the adopted value will be **bound or
-stored a second time** — E3 and E4 are exactly that, and they are the routes that break.
-
-**2. Cluster II's producer × invalidator matrix — WORKED (probes 25–30). Four new failures,
-one of them a different and worse bug.**
-
-| # | cell | interp | native | result |
-|---|---|---|---|---|
-| 25 | producer: `for` loop var captured out of the loop | pass | pass | **safe** — the capture COPIES; not an index-pinned view |
-| 27 | producer: a view stored into another record | pass | pass | **safe** — the store copies |
-| 26 | producer: a `&` param bound from an element | **FAIL** | **FAIL** | write through the `&` view is lost after a shift |
-| 29 | invalidator: removal during iteration of a *different* view | **FAIL** | **FAIL** | same class as 03/07, reached with two live views |
-| 28 | invalidator: re-keying a `sorted<T[key]>` element through a view | **FAIL** | **FAIL** | see below — worse than a stale index |
-| 30 | reassigning a view from a loop var | **FAIL** | pass | **silent total data loss, interpreter-only** |
-
-**So "reading out of a container" is not one rule.** `v[i]` and `v[i].f` alias (03–06), a `&`
-param from an element aliases (26), but a captured loop var (25) and a stored view (27) copy.
-That split is not visible in the source.
-
-**Probe 28 is sharper than "the index goes stale".** After `c.key = 5` on a live element:
-`c` itself updates, `s[5]` answers **null**, `s[30]` answers **null**, and iteration still
-yields 3 elements. The element becomes **unreachable by key while remaining in the
-collection** — the write updated the record but never re-indexed. A program that keys into
-`s` loses an element it can still iterate over, with no error and a count that still looks
-right.
-
-**Probe 30 is a different bug and the most severe thing found so far — filed as [loft#778](https://github.com/loft-lang/loft/issues/778).** `k = a[0]; for x in a
-{ … k = x … }` leaves `len(a) == 0` — the container is destroyed **before any removal**, and
-`a[0]` then reads `null(oob)` rather than faulting. Interpreter-only; native is correct.
-Reproduced on the installed 2026-08-04 binary, so it is mainline. Hypothesised mechanism: the
-reassignment frees `k`'s previous store, and `k` was a *view*, so the free releases the
-CONTAINER — the same "a view is not a store" invariant as #775, reached through a loop-var
-reassignment. The boundary is narrow, which is why it survived: no capture, capture into an
-owned local, and reassigning a view *outside* a loop are all safe.
-
-**COMPLETE — the last four cells (probes 31–34) all pass, and the boundary is now sharp.**
-
-**Producers — which binds mint an index-pinned view:**
-
-| producer | verdict | probe |
-|---|---|---|
-| `v[i]` | **VIEW, index-pinned → breaks** | 03–05 |
-| `v[i].f` | **VIEW, index-pinned → breaks** | 06 |
-| `&` param bound from an element | **VIEW, index-pinned → breaks** | 26 |
-| `for` loop var captured out | copy — safe | 25 |
-| view stored into another record | copy — safe | 27 |
-| tuple element | copy — safe | 32 |
-| `match` capture, scalar payload | copy — safe | 31 |
-| `match` capture, text/heap payload | view, but **cannot outlive its arm** — safe | 31 |
-
-**Invalidators — what disturbs a live view:**
-
-| invalidator | verdict | probe |
-|---|---|---|
-| `v.remove(i)` | **breaks** | 03–06 |
-| `v#remove` | **breaks** | 07 |
-| removal during another view's iteration | **breaks** | 29 |
-| re-keying a `sorted` element through a view | **breaks** (unreachable by key) | 28 |
-| append `+=` | safe | 01 |
-| whole-container reassign | safe | 09 |
-| keyed-collection removal | safe | 08 |
-| removal from a NESTED container | safe | 33 |
-| `par` writes | safe | 34 |
-
-**The invariant, now measured rather than guessed: the invalidator is a POSITIONAL SHIFT
-inside one vector's own store.** Growing it, replacing it, removing from a keyed collection,
-and reshaping a container one level down are all harmless. Only an operation that renumbers
-the indices in the store the view points into breaks it — and re-keying a `sorted` element
-(28) is the same thing reached without deleting anything.
-
-**And the producer split has no marker in the source.** Three shapes alias and five copy,
-with nothing at the binding site to say which. The `match`-capture case is safe for a
-different reason from the rest — a lifetime bound (the capture dies with its arm), not a
-copy — so it would stop being safe if captures ever became holdable.
-
-Two side-findings worth keeping:
-
-- **LOFT.md overstated the match rule** (now FIXED, F6). It said a destructured field is a
-  view "whatever the field's type"; measured across five payload types on both backends,
-  `text`/`vector` are views while `integer`/`float`/`boolean` are copies.
-- **loft#778** was filed from this matrix. Per § Must fix before close, filing it was the
-  wrong move — it is this plan's to fix, not to hand off.
-
-**Original scoping note:**
-This is #774's actual defect, it corrupts silently, and it is unfixed. Probes 01–09 cover
-**2 producers × 2 invalidators**:
-
-- *Untested producers:* a `&` param bound from an element · a `match` capture · a `for` loop
-  var held across a removal · a tuple element · a view stored into another record.
-- *Untested invalidators:* `sorted`/`index` reordering on key mutation · `par` writes ·
-  nested-container removal · removal during iteration of a **different** view of the same
-  container.
-
-Every unprobed cell is a potential live corruption nobody has looked at. Given probe 05 — a
-pure read answering a different element with no detector firing — hits are likely rather than
-hypothetical.
-
-**3. The two uncatalogued copy families — PROBED. Both are cost, and now that is measured
-rather than assumed.** `R666` (`tests/scripts/recursive-enum-payload-mutation-666.loft`) and
-`RbOuter` (`tests/scripts/return-borrow-of-mutated-arg.loft`) were carried as "lower priority:
-cost, not corruption" without anyone having looked — the plan's own rule 8 says a named case
-gets a probe, always. Read through the manifest:
-
-- **`R666` is one mechanism, not a family.** Every site is a compiler-generated `__lift_N`
-  binding under `InterpReassignCall` — the same lift shape as the stdlib `exists()` site the
-  catalogue already names. The recursion is incidental; what copies is lifting a call result
-  into a temp.
-- **`RbOuter` is two.** The same `__lift_N` lift, plus `InterpCallReturn` on real user bindings
-  (`one`, `two`, `three`, `same`, `used`, …). That second one is **necessary**: the callee
-  returns a borrow of an argument it mutated, so `return_adopts_fresh_store()` is false and
-  adopting would alias a caller's store. It resolves **STATED**, the category that may rest.
-
-Both scripts pass on both backends, so neither family touches correctness.
-
-**A concentration hypothesis these two suggested, and the measurement REFUTED.** If the lift
-were the dominant cause, the uncovered set would be mostly one fix. Surveyed over a 90-script
-sample: **29 distinct uncovered sites**, split **21 user bindings / 8 compiler lifts** and
-spread across **four** origins (`InterpCallReturn` 14, `InterpReassignCall` 8,
-`InterpRecordBind` 4, `InterpReassignVar` 3). So the set is small but genuinely diffuse — there
-is no single emitter to fix, and anyone planning to drain it should budget for four.
-
-Note the earlier survey's *"exactly one uncovered site per compile, always the same one"* is no
-longer comparable: F1/F2/F5 instrumented more emitters afterwards (`InterpRecordBind` did not
-exist when it ran), so the rise is the instrument widening, not a regression.
-
-**Not needed:** more probes for the copy inventory (10–20 cover it) or for the Q5 boundary
-(20/21/23 pin it). Extending the manifest to the parser's emitters is instrument work, not a
-probe gap — see Tool gaps.
-
-## Reference ↔ problem pairings
-
-| Problem | Reference | What the diff reveals |
-|---|---|---|
-| 03 | 01 | removal, not growth, is the invalidator |
-| 05 | 02 | a passing read proves nothing — 02 survives only because the vacated slot was untouched |
-| 03 | 08 | keyed removal does not shift; vector compaction is the mechanism |
-| 03 | 09 | replacing the container is safe; the in-place positional shift is not |
-| 07 | 03 | the removal spelling is irrelevant — the shift is the cause |
-| 10 | 13 | both copy; only the one present in the IR at `scopes::check` is reported |
-| 12 | 13 | both are seen by the analysis; only one survives into the user report |
-
-## Open questions
-
-- **Q1 — ANSWERED: `advice`.** The recommendation held — the repo rule is *a diagnostic gates
-  iff ignoring it can produce a wrong result*, and an unwanted copy yields a correct-but-slower
-  program. F5 shipped default-on as advice; cluster II's wrong-value case is a materialise plus
-  a notice, so nothing needed `warning` and the tier rule needs no amendment.
-- **Q2 — ANSWERED: yes, and the alias default was never the thing to weaken.** F2 materialises
-  only a view whose container is RESHAPED while it is live, which leaves every other projection
-  aliasing. F7 then tested the opposite hypothesis — weaken it everywhere — and the 30-cell
-  sweep retired it (§ F7). Neither tombstoning nor re-pointing is needed: F3 decides that a
-  vector stays dense and that an edge-case view materialises with a notice.
-- **Q3 — ANSWERED: sized, and small.** F5 ran the report across the script corpus: 55 rows over
-  27 of 585 scripts, each author-resolvable. Nothing in it needed the accept mechanism to hide
-  an analysis weakness.
-- **Q4 — MOOT for this plan; still OPEN as a language question.** The per-file accept was a
-  prerequisite only for a *gating* copy diagnostic. Q1 settled the notice as `advice`, which
-  never gates and therefore needs nothing to suppress it. If a copy diagnostic is ever promoted
-  to `warning`, the syntax question returns — it belongs with @PLN102 arc C's annotation
-  surface (`#superseded "…"` is the per-definition precedent), not here.
-
-## The guard — codegen reality vs. what the diagnostic claimed
-
-The load-bearing instrument for this plan, and cheaper than it looks: **both halves already
-exist and nothing joins them.**
-
-- **Runtime ground truth** — `LOFT_COPY_DUMP=1` (`keys.rs:339`), one line per executed deep
-  structure copy. Its own doc states the intent verbatim: *"the runtime ground truth for
-  every copy + its size, so the compile-time copy-vs-borrow decision can be checked to cover
-  them all"*. The cross-check was designed for and never built.
-- **Compile-time claim** — `use_analysis::report_copies`, the classified set with positions.
-
-**The guard is the diff: an executed copy with no verdict is a blind spot.** Verified today
-on probe 10 — the `b = a` copy the static report calls `none` — `--interpret` prints
-`[copy] record line=17 tp=65`. The runtime already names the line the compiler denies.
-
-**Why the runtime, not the emitters.** Deep copies are emitted from ~15 sites across
-`src/parser/`, `state/codegen.rs` and `generation/`. Funnelling them through one registering
-helper is both a large refactor and *bypassable by the next raw emission* — the exact failure
-already recorded for `generate_call`'s `skip_free` guard. The runtime is downstream of every
-emitter, so a new emitter cannot escape it.
-
-**Split the guard by what is knowable where. A copy is DEEP, so its cost is not a
-compile-time fact — only its existence is.**
-
-*Static, and complete:* whether a copy happens at all, its site, its type, and the **flat**
-record size. The type number is already a compile-time literal in the emitted call
-(`OpCopyRecord(cell, var_a, var_b, 65_i32)`), and the flat size is a fixed per-type constant
-(`database/types.rs:2066` — `self.types[tp].size`). Native re-derives that size at runtime
-only because it ships no layout data: the generated `init()` REPLAYS the type registration
-(`db.structure("FvBool", 1)`, `db.field(…)`) — the same replay `LOFT_STRICT_SCHEMA_IDS=1`
-polices. Nothing about the *flat* size is discovered by running.
-
-*Runtime only:* the **deep** cost. `copy_claims` duplicates the record's nested vectors,
-hashes, texts and sub-records, and how much that is depends entirely on runtime data. No
-compile-time analysis can bound it.
-
-**The deep cost is reported by nothing today — on either backend.** Measured: a `Big { n,
-v }` whose vector holds **1000 elements**, copied by `b = a`, prints exactly one line and no
-magnitude:
-
-```
---interpret   [copy] record       line=9  tp=65
---native      [copy] OpCopyRecord src=#0@1,8 dst=#1@1,8 tp=65 size=12 free_src=false
-```
-
-`size=12` is the flat record. The 1000 copied elements appear nowhere. The
-`LOFT_COPY_DUMP` element-count hook lives in `vector_add` (`database/structures.rs:404`),
-the explicit-append path — and its own comment states the goal it was written for: *"the
-runtime size — the 'hundreds of MB just to be sure' the user cannot see today."* The
-`copy_claims` deep walk (`allocation.rs:2133` plus its five `_body` variants) has **no hook
-at all**, so the record-copy path — the one every probe in the inventory above runs
-through — misses exactly the case the instrument exists for. This is also precisely the
-moros shape from loft#774: `held = current` over a `World` wrapping a chunk store would
-report `size=<flat World>` and say nothing about the chunks.
-
-### The guard — BUILT (`LOFT_COPY_MANIFEST=1`)
-
-`src/copy_manifest.rs`. Each generator records every deep copy it WRITES, at the branch that
-writes it; the guard diffs that manifest against `use_analysis`'s verdicts and reports the
-copies no diagnostic accounts for. Compile-time only — nothing reaches a compiled program.
-
-Registration points (recorded *past* every early return, so a last-use move or an adopt is
-never miscounted as a copy):
-
-| Origin | Site |
-|---|---|
-| `InterpRecordBind` | `state/codegen.rs` `gen_set_first_ref_var_copy` |
-| `InterpCallReturn` | `state/codegen.rs` `gen_set_first_ref_call_copy` |
-| `InterpTupleBind` | `state/codegen.rs` `gen_set_first_ref_tuple_copy` |
-| `NativeRecordBind` | `generation/dispatch.rs`, `Value::Var(src)` arm |
-| `NativeCallReturn` | `generation/dispatch.rs`, call arm — a **may-copy** (runtime adopt-or-copy branch), rendered as such |
-
-**Mode-B gate passed:** `loft introspect` on `bytecode-comparisons/manifest-corpus.loft`
-(one function per emission path) is **byte-identical** before and after, re-checked after
-`cargo fmt`. `introspect` output was first confirmed deterministic across two runs, so the
-gate means something. Nothing emitted changed.
-
-**Validation — it flags exactly the Stage A blind spots and nothing else:**
-
-| Probe | expected | guard |
-|---|---|---|
-| 10 `b = a` | uncovered (no verdict) | **flags** `InterpRecordBind` / `NativeRecordBind` |
-| 11 `cp = ident(orig)` | uncovered (no verdict) | **flags** `InterpCallReturn` / `NativeCallReturn` |
-| 12 `w = h.v` | classified `AVOIDABLE` | quiet — correct: the analysis *did* see it; its gap is verdict→report, not the manifest |
-| 13 `Holder { v: src }` | covered | quiet |
-| 14 `v[0] = src` | covered | quiet |
-
-Two findings the probes did not contain:
-
-- **The guard caught its own mis-instrumentation.** `gen_set_first_ref_copy` looked like the
-  call-return emitter but its own doc records *zero fires* in the corpus; instrumenting it
-  left probe 11 silent. The real emitter is `gen_set_first_ref_call_copy`. A manifest built
-  by reading the code rather than by validating against known-uncovered cases would have
-  shipped that hole.
-- **A stdlib copy nothing accounts for, native only:** `fn exists` → `__lift_1` (a
-  compiler-generated binding), `NativeCallReturn`. It appears in *every* native compile. The
-  interpreter does not report it, so this is cluster V again — native emits an adopt-or-copy
-  where interp adopts outright.
-
-Consequence: the uncovered set is **not empty today**, so the guard stays opt-in
-(`LOFT_COPY_MANIFEST=1`) until it is drained. Its audience is CI and this repo — it reports a
-hole in the *compiler*, not a fault in a user's program.
-
-### The secret-copy catalogue (probes 15–19, run via `probes/run_set.sh secret`)
-
-What the guard found once pointed at the corpus. Surveyed across all **583** `tests/scripts`:
-**exactly one uncovered site per compile, always the same one** — the stdlib's `exists()`.
-
-| Family | Where | Measured |
-|---|---|---|
-| stdlib `exists()` lift | `default/02_files.loft:248` — `file(path).format` | 5 calls → **5 deep `File` copies**, both backends. Uncovered in **every** compile that loads the stdlib |
-| bind a `file()` result | `f = file(path)` | 1 copy per bind; **107** hits across the corpus — the second-largest family |
-| reassignment `b = a` | both bindings live | 1 copy; a different emitter from the first bind, which is why it was invisible |
-| enum payload / borrow-return | `R666`, `RbOuter` in the corpus | **probed** (§ Probe gaps 3): `R666` is the `__lift_N` shape again; `RbOuter` adds a NECESSARY `InterpCallReturn` copy (the callee returns a borrow of a mutated arg). Cost only — **STATED** |
-
-Each `File` copy duplicates 33 flat bytes **plus a reallocated `path` text** — `OpCopyRecord`
-duplicates owned sub-structures — to read one enum field and discard the record.
-
-**Two probes measured the opposite of what they were written to show, and that is the
-sharpest result here.** Probes 15 and 17 use the *same syntax* as 18 and 19 — an expression
-temp and a loop-carried reassignment — with a user-defined `make()` instead of `file()`.
-They copy **zero** times. So the copy is a property of the **callee's return**, not of the
-lift, the loop, the reassignment, or the field read. A fix aimed at "expression temps" would
-miss entirely. Both are kept as reference probes: if return-ownership ever tightens, they are
-the cases that silently become one copy per iteration.
-
-Reading the runner: there is an **ambient baseline of 1 uncovered site** (the `exists` one) in
-every compile, and a `--native` run reports both generators, so its column roughly doubles.
-
-## Open questions (added by the guard)
-
-- **Q5 — ANSWERED: naming the result in a local is the whole trigger.** See probe 20.
-
-  `return_adopts_fresh_store()` (`src/data.rs:3328`) is exactly: returned-type deps **empty**,
-  or the lone `[u16::MAX]` one-buffer marker → adopt; **any other dep → copy**. Four
-  observationally identical callees, measured:
-
-  | shape | returned deps | caller |
-  |---|---|---|
-  | `Rec { … }` returned **directly** | `[]` | adopts — no copy |
-  | `r = Rec { … }; r` — **unmutated** | `[1]` | **deep-copies** |
-  | bind, mutate a field, return | `[1]` | **deep-copies** |
-  | bind, mutate via a call, return (the `file()` shape) | `[1]` | **deep-copies** |
-
-  Dep `[1]` names the callee's **own hidden `__retbuf`**. So binding the result to a named
-  local before returning it — no mutation, no semantic difference, the two functions compute
-  the same value — costs a full deep copy at **every call site**. `n_file` is
-  `result = File{…}; OpGetFile(result); result` (`02_files.loft:238`), which is why `exists()`
-  copies and probe 15's `make()` does not.
-
-  **The scope is far wider than `exists`.** "Build into a named local, then return it" is the
-  idiomatic way to write a constructor-ish function, and every function written that way pays
-  a deep copy per call. `exists` is simply the instance that is compiled into every program.
-
-  **Why this looks like a mis-classification, not a real distinction:** both shapes have a
-  `__retbuf` attr — the difference is only whether the return TYPE records a dep naming it.
-  `[u16::MAX]` and `[<index of __retbuf>]` describe the *same* situation (returned via my own
-  hidden buffer, nobody else owns it), and `return_adopts_fresh_store` tests for the marker by
-  VALUE rather than asking whether the named attr *is* a hidden retbuf.
-
-  **The reuse hazard — MEASURED, and it splits in two.** The gating question was whether the
-  caller reuses that buffer before the binding dies (`gen_set_first_at_tos`: "a hidden
-  `ref_return` work-ref the caller REUSES across iterations"). Traced on native with a
-  three-iteration loop over a `[1]`-dep callee:
-
-  ```
-  keep = mk_local(100)   [copy] src=#1 dst=#0 free_src=true
-  loop i=1              [copy] src=#2 dst=#1 free_src=true
-  loop i=2              [copy] src=#2 dst=#1 free_src=true
-  loop i=3              [copy] src=#2 dst=#1 free_src=true
-  ```
-
-  - **The buffer VARIABLE is reused** — `var___ref_2` is declared once at function scope and
-    handed to all three calls, which is what the warning was about.
-  - **The STORE it names is NOT.** `free_src=true` on *every* call: `OpCopyRecord` frees the
-    source right after copying it. The constant `#2` is the allocator returning the slot it
-    just freed, not a store living across iterations.
-  - **Distinct call sites get distinct buffers** — `keep` uses `__ref_1`, the loop call uses
-    `__ref_2` — so cross-site aliasing is not a concern.
-
-  So the emitted sequence is **copy-then-free: a move implemented the expensive way.** At the
-  moment of the copy the source belongs to nobody else and is about to be discarded — which
-  is precisely the situation the `[u16::MAX]` marker path already adopts.
-
-  **The predicate this implies is sharper than "dep names a hidden attr":** adopt when the dep
-  names the callee's OWN retbuf **and** the return is not a borrowed view (`free_src` set). A
-  genuine borrowed-view return leaves the free bit clear, and there the copy is required.
-
-  **The fix was applied and REVERTED. The one-liner is wrong** — the doc comment on
-  `return_adopts_fresh_store` was right and the measurement that contradicted it was too
-  narrow. Recorded here because it looks correct from every angle probes 21/22 examined.
-
-  Widening the predicate to accept a lone hidden-attr dep eliminated exactly the copies it
-  should: probe 20's three → **0**, probe 18's `exists()` five → **0**, probe 19 one → **0**,
-  while probe 16 (a genuine copy between two live bindings) correctly stayed at 1. The
-  emitted form became byte-identical to the proven-working `mk_literal` adopt sequence. Every
-  probe passed, no leaks.
-
-  Then `tests/scripts/143-plan51-cluster3-mixed-lit-call.loft` failed on iteration 2 with a
-  stale element. **Probe 23** is the minimal form, and reproducing it needed **four**
-  ingredients at once — drop any one and it passes even when widened:
-
-  1. a callee returning a named local (dep names its own buffer),
-  2. a caller whose local is set from a **struct literal** first, then **reassigned** from
-     that call, then returned,
-  3. the callers take **struct** parameters, not scalars,
-  4. **two** such callers interleaved in one loop.
-
-  Under the widening the corruption lands on the *other* caller's value — a shared buffer
-  across two call sites — and it is **interpreter-only**, so the change also split the
-  backends. Unlandable twice over.
-
-  **Why probes 21/22 said "safe":** they varied the call SHAPE while holding nesting depth,
-  the number of Sets on the returned local, the parameter KIND, and the number of interleaved
-  callers all at **1**. Four composition axes pinned at once — the matrix could not see this
-  cell, and a clean sweep across it read as proof. The `free_src=true` reading in probe 21 was
-  accurate and still did not generalise.
-
-  **The copy stays.** `exists()` keeps copying a `File` per call. Making it not copy needs a
-  predicate that can tell a buffer that is safe to transfer from one that is about to become
-  another frame's buffer — which is a real analysis, not a flag test.
-- **Q6 — which of the uncovered families should be silenced rather than removed?** The owner's
-  framing: prevent the copy where possible, and where it is genuinely needed allow it silently
-  *but closely guarded* — i.e. an accept recorded at the site, not a blanket exemption.
-
-### Why compile-time only (owner's decision)
-
-No runtime checks, no runtime accounting, no runtime cost. **If a copy is really needed, loft
-just does it** — silently, at full speed. The deep magnitude is deliberately *not* the
-diagnostic's job, and that is the same bargain rustc makes: it tells you at compile time that
-a clone happens, never how many bytes it moved. The author knows their own data.
-
-**The guard: an emission manifest, diffed against the verdicts.** Each backend's emitter
-records every copy it writes — site, type, flat size — at the moment it writes it. The guard
-diffs that manifest against `use_analysis`'s classified set. **An emitted copy with no
-verdict is the blind spot**, and that check is entirely static: it runs at compile time, on
-both backends, and costs a compiled program nothing.
-
-This is also strictly better than threading a site-id through `OpCopyRecord`: no ABI change,
-nothing at runtime, and it carries the source position native's runtime dump does not have.
-
-Report the copy's **site and type**. Do not report the flat size as a cost — a
-12-byte-looking copy can move a megabyte, so a number that excludes the deep content teaches
-the wrong thing. Existence and location are what the author can act on.
-
-The runtime dumps (`LOFT_COPY_DUMP`, `LOFT_TRACE_COPY`) stay what they are: **developer
-debugging aids**, used to *investigate* this plan. They are not part of the guard and not
-part of the shipped diagnostic.
-
-*(Supersedes three earlier revisions: per-site attribution never needs native's runtime hook
-to carry a source position; the flat size is not the copy's cost; and the deep cost is not
-measured at all — by design.)*
-
-**Blocker the guard immediately exposes — PINNED.** Native is not missing the hook. It
-reports record copies under a **different env flag, with a different output format**. The
-documented "runtime ground truth" flag therefore covers all five copy shapes on the
-interpreter and only two on native:
-
-| copy shape | probes | `--interpret` gate | `--native` gate |
-|---|---|---|---|
-| record copy | 10, 11, 14 | `LOFT_COPY_DUMP` — `state/io.rs:1468` | **`LOFT_TRACE_COPY`** — `codegen_runtime.rs:636` |
-| vector append | 12, 13 | `LOFT_COPY_DUMP` — `database/structures.rs:404` | same hook (shared store code) |
-
-Verified as a clean diagonal across all ten cells. The interpreter's record copy runs
-`State::do_copy_record`; native's runs `codegen_runtime::OpCopyRecord`; the vector path is
-shared, which is the only reason two of the cells agree.
-
-Three consequences, all load-bearing for the guard:
-
-1. **The formats are not interchangeable, and neither is a superset.** Interp emits
-   `[copy] record line=17 tp=65` — a **source line**, no size. Native emits
-   `[copy] OpCopyRecord src=#0@1,8 dst=#1@1,8 tp=65 size=12 free_src=false` — stores and
-   size, **no source position at all**. So the guard's tier-2 per-site attribution needs
-   native's hook to *gain a position*, not merely be renamed.
-2. **Native's gate is a raw `std::env::var` per copy**, not the cached `keys::` accessor the
-   other diagnostics use — so it also pays a lookup on every copy executed.
-3. This is the same one-home-per-derived-fact failure the plan keeps meeting, now in the
-   measuring device: two instruments for one fact, grown separately. Unify before the guard
-   can gate both backends — measuring native with the documented flag reads as copy-free.
-
-*(Corrected: an earlier revision of this section recorded native as silent under both flags
-and listed three unpinned explanations. That reading came from a run whose working directory
-had been reset, so loft never opened the probe file. Native reports normally under
-`LOFT_TRACE_COPY`.)*
-
-## Tool gaps
-
-- **Manifest coverage — parser emitters now instrumented.** 12 sites recorded (interp × 5,
-  native × 2, parser × 4, one dead). The parser's materialisations come back **COVERED**:
-  they are classified `Implicit` (`MAT … bucket=implicit`), so the guard correctly says
-  nothing and the user report stays quiet by design — a model-inherent copy is not the
-  author's to fix. Worth recording that "2 copies execute while `--report-copies` says
-  `none`" is that silence working, NOT a blind spot; conflating *not shown* with *not
-  accounted for* is a mistake this plan made once and corrected.
-  Still uninstrumented: `parser/mod.rs:5530` is a RECOGNISER, not an emitter.
-- Probe-set runner: **built** — `probes/run_set.sh [view|copy|secret|all]`.
-
-Investigation-only aids (NOT shipped, NOT part of the guard — recorded so the next session
-does not mistake them for gates):
-
-- Two env flags for one runtime fact — `LOFT_COPY_DUMP` (interp record + shared vector) and
-  `LOFT_TRACE_COPY` (native record), different formats. Confusing, but dev-only.
-- Neither reports a deep copy's actual content; `copy_claims` has no hook. Left alone by
-  design — the guard does not measure cost.
-- Native's `LOFT_TRACE_COPY` gate re-reads the environment on every copy rather than using a
-  cached `keys::` accessor. Worth fixing if that path ever stays in a release build.
-
-## See also
-
-- [loft#774](https://github.com/loft-lang/loft/issues/774) — the report. **Neither half is a
-  semantics defect** (§ F7): `b = a` is B-Copy, `c = v[0]` is B-View, both as decided in C86.
-  What is real is the DOC it reasons from — `tests/docs/08-struct.loft` claimed *"a binding is
-  a live view onto the same record"*, over-generalising B-View to every binding. Corrected, and
-  the ticket's moros case (`held = current`) has a direct answer in `held = &current`. The
-  separate defect class this plan found through it — a view whose container is RESHAPED under
-  it — is F1/F2/F4, fixed.
-- [loft#775](https://github.com/loft-lang/loft/issues/775) — the sibling: a field view
-  escaping through a `&` write-back. Same "a view is not a store" invariant, different
-  invalidator (frame exit rather than container reshape). Fixed by materialising — a
-  candidate shape for cluster II.
-- `doc/claude/OWNERSHIP_MODEL.md`, `doc/claude/LIFETIME.md`,
-  `doc/claude/COPY_DIAGNOSTICS.md`.
+| 01–09 | the view invariant: growth, shift, re-occupation, nesting, keyed and reassign baselines |
+| 10–14 | the copy inventory — each proves its copy BY VALUE, so it stays meaningful when diagnostics change |
+| 15–19 | the secret-copy catalogue (`run_set.sh secret`) |
+| 20–24 | return-dep discriminators, buffer reuse, escape routes |
+| 25–36 | the producer × invalidator matrix — the plan's main boundary |
+| 37 | F8's boundary, 17 cells + the concurrency cells added at closure |
+| 38 | the cross-frame residual, characterised as cells |
+| 39 | F2's liveness boundary, 12 cells |
+| [40](probes/40-reshape-refusal/README.md) | F9's refusal boundary, 25 cells, with the *before* column measured on the pre-fix binary |
+| 41 | the `&`-alias sweep over the rule's PRODUCERS — what found D-bind-9 |
+
+## What this plan cost, and what it left
+
+Four things this investigation found that were **not** what it was opened to find, each because
+a measurement was run rather than a claim trusted:
+
+- **F7's retraction** — a doc, not the code, was wrong; the proposed "fix" would have deleted a
+  correct rule.
+- **loft#779** — a sign-off whose claim measurement contradicted, reopened and closed properly.
+- **D-bind-9** — a rule closed on one of its three producers.
+- **The native coroutine defects** — `--native` could not compile any generator holding a heap
+  local, and silently dropped every statement after the last `yield`. Both pre-existing on
+  `main`, both found by running one residual this plan had recorded as *"unmeasured, not
+  known-broken"*. Fixed; `tests/scripts/776-generator-heap-locals.loft`.
+
+The last one is the plan's own lesson turned on itself: **"no specific reason to expect
+divergence" is not a measurement.**
