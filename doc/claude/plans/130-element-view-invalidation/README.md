@@ -57,6 +57,11 @@ with the interpreter and `--native` deriving that from one shared fact.
 4. **Both backends, one semantics.** `--native` is the path that must be quickest, so it may
    not be the backend that always deep-copies. Backend parity is in scope here, not a
    follow-up.
+5. **Everything is decided at COMPILE time. No runtime checks.** The diagnostic, the accept,
+   and the guard are all static. A compiled program carries no copy bookkeeping — when a copy
+   is genuinely needed, loft simply performs it at full speed. Consequence accepted knowingly:
+   loft can say *where* a copy happens, never *how much* it moved (a deep copy's size is
+   runtime data). That is the rustc bargain, and the author knows their own data.
 
 ## Stage A finding — which copies happen with no warning
 
@@ -234,15 +239,67 @@ helper is both a large refactor and *bypassable by the next raw emission* — th
 already recorded for `generate_call`'s `skip_free` guard. The runtime is downstream of every
 emitter, so a new emitter cannot escape it.
 
-Two tiers, in order:
+**Split the guard by what is knowable where. A copy is DEEP, so its cost is not a
+compile-time fact — only its existence is.**
 
-1. **Counting gate — ship first, no op change.** Compare executed copies against classified
-   copies per run. `executed > classified` means copies nobody was told about. This fires on
-   probes 10, 11 and 12 today, and it is the check that would have prevented the report ever
-   printing `none` on a copying program.
-2. **Per-site attribution — later.** Requires `OpCopyRecord` to carry a site-id; the op
-   already carries a packed flag (`0x8000` free-source) in its type word, so a site-id is the
-   same shape. The interpreter dump already emits `line=`, so half exists.
+*Static, and complete:* whether a copy happens at all, its site, its type, and the **flat**
+record size. The type number is already a compile-time literal in the emitted call
+(`OpCopyRecord(cell, var_a, var_b, 65_i32)`), and the flat size is a fixed per-type constant
+(`database/types.rs:2066` — `self.types[tp].size`). Native re-derives that size at runtime
+only because it ships no layout data: the generated `init()` REPLAYS the type registration
+(`db.structure("FvBool", 1)`, `db.field(…)`) — the same replay `LOFT_STRICT_SCHEMA_IDS=1`
+polices. Nothing about the *flat* size is discovered by running.
+
+*Runtime only:* the **deep** cost. `copy_claims` duplicates the record's nested vectors,
+hashes, texts and sub-records, and how much that is depends entirely on runtime data. No
+compile-time analysis can bound it.
+
+**The deep cost is reported by nothing today — on either backend.** Measured: a `Big { n,
+v }` whose vector holds **1000 elements**, copied by `b = a`, prints exactly one line and no
+magnitude:
+
+```
+--interpret   [copy] record       line=9  tp=65
+--native      [copy] OpCopyRecord src=#0@1,8 dst=#1@1,8 tp=65 size=12 free_src=false
+```
+
+`size=12` is the flat record. The 1000 copied elements appear nowhere. The
+`LOFT_COPY_DUMP` element-count hook lives in `vector_add` (`database/structures.rs:404`),
+the explicit-append path — and its own comment states the goal it was written for: *"the
+runtime size — the 'hundreds of MB just to be sure' the user cannot see today."* The
+`copy_claims` deep walk (`allocation.rs:2133` plus its five `_body` variants) has **no hook
+at all**, so the record-copy path — the one every probe in the inventory above runs
+through — misses exactly the case the instrument exists for. This is also precisely the
+moros shape from loft#774: `held = current` over a `World` wrapping a chunk store would
+report `size=<flat World>` and say nothing about the chunks.
+
+### The guard is COMPILE-TIME ONLY (owner's decision)
+
+No runtime checks, no runtime accounting, no runtime cost. **If a copy is really needed, loft
+just does it** — silently, at full speed. The deep magnitude is deliberately *not* the
+diagnostic's job, and that is the same bargain rustc makes: it tells you at compile time that
+a clone happens, never how many bytes it moved. The author knows their own data.
+
+**The guard: an emission manifest, diffed against the verdicts.** Each backend's emitter
+records every copy it writes — site, type, flat size — at the moment it writes it. The guard
+diffs that manifest against `use_analysis`'s classified set. **An emitted copy with no
+verdict is the blind spot**, and that check is entirely static: it runs at compile time, on
+both backends, and costs a compiled program nothing.
+
+This is also strictly better than threading a site-id through `OpCopyRecord`: no ABI change,
+nothing at runtime, and it carries the source position native's runtime dump does not have.
+
+Report the copy's **site and type**. Do not report the flat size as a cost — a
+12-byte-looking copy can move a megabyte, so a number that excludes the deep content teaches
+the wrong thing. Existence and location are what the author can act on.
+
+The runtime dumps (`LOFT_COPY_DUMP`, `LOFT_TRACE_COPY`) stay what they are: **developer
+debugging aids**, used to *investigate* this plan. They are not part of the guard and not
+part of the shipped diagnostic.
+
+*(Supersedes three earlier revisions: per-site attribution never needs native's runtime hook
+to carry a source position; the flat size is not the copy's cost; and the deep cost is not
+measured at all — by design.)*
 
 **Blocker the guard immediately exposes — PINNED.** Native is not missing the hook. It
 reports record copies under a **different env flag, with a different output format**. The
@@ -278,14 +335,19 @@ had been reset, so loft never opened the probe file. Native reports normally und
 
 ## Tool gaps
 
-- The guard above — not built; both halves exist.
-- `--native`'s record-copy dump carries **no source position** (`codegen_runtime.rs:636`),
-  so tier-2 attribution is blocked until it gains one.
-- Two env flags for one runtime fact (`LOFT_COPY_DUMP` / `LOFT_TRACE_COPY`), different
-  formats, split by backend *and* by copy shape. Unify before either can gate.
-- Native's gate re-reads the environment on every copy instead of using a cached
-  `keys::` accessor.
+- The emission manifest — not built. Purely static; needs a registration point in each
+  emitter (`state/codegen.rs`, `generation/dispatch.rs`, and the parser-level sites).
 - No probe-set runner yet; add at ≥20 probes.
+
+Investigation-only aids (NOT shipped, NOT part of the guard — recorded so the next session
+does not mistake them for gates):
+
+- Two env flags for one runtime fact — `LOFT_COPY_DUMP` (interp record + shared vector) and
+  `LOFT_TRACE_COPY` (native record), different formats. Confusing, but dev-only.
+- Neither reports a deep copy's actual content; `copy_claims` has no hook. Left alone by
+  design — the guard does not measure cost.
+- Native's `LOFT_TRACE_COPY` gate re-reads the environment on every copy rather than using a
+  cached `keys::` accessor. Worth fixing if that path ever stays in a release build.
 
 ## See also
 
