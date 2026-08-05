@@ -577,8 +577,15 @@ part to get right rather than approximate.
 
 ## F3 — RESOLVED by two decisions, not by machinery
 
-**Decision 1 — a `vector` stays DENSE. `remove` compacts; there are no holes.** Stable slots
-were the last mechanism that could have let a view follow its element, and they are rejected:
+**Decision 1 — a `vector` stays DENSE. `remove` compacts; there are no holes.**
+**VALIDATED: loft already behaves this way** — remove first/middle/last and multiple in-loop
+`#remove`s all compact, `len` tracks the live count, no in-bounds index is ever null, and
+past-the-end stays null (C80). Identical on both backends. So this decision *documents*
+existing behaviour rather than requiring a change — but nothing guarded it, so it is now
+pinned by `tests/scripts/200-vector-stays-dense.loft`.
+
+Stable slots were the last mechanism that could have let a view follow its element, and they
+are rejected:
 holes would make `v[i]` return null after an unrelated removal, and no other index type in
 loft behaves that way. Being agnostic across index types is worth more than the copy the
 compaction costs. This closes option 1 permanently — it is not deferred, it is decided.
