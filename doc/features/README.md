@@ -85,6 +85,7 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F103](F103.md) | `deliver` / `expose` — hand a loft value to JavaScript with no copy |
 | [@F104](F104.md) | `store_reclaim()` — give a store's unused file space back |
 | [@F105](F105.md) | Custom `to_text` format hook — a type owns how it prints |
+| [@F106](F106.md) | Copy and move semantics — when two names share data, and when they do not |
 
 ## Infrastructure (`@I`)
 
