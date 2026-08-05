@@ -3,7 +3,18 @@
 
 ## Status
 
-**Open — designed, not built.** Nothing is implemented. The design was pinned by probing and by
+**Open — the FILE source is built, the DATABASE source is not.** A collection binds to a
+`.store` image and faults on a miss (arc A), tells an unreachable source from a genuine absence
+(C), pins that source so a traversal sees one world (D), releases what it holds on `= []` (E's
+blunt form), and carries a graph consumer as its gate (F) — both backends, catalogued as
+[`@F108`](https://github.com/loft-lang/features/issues/108).
+
+**What the plan is NAMED for is still open:** arcs **B / B2 / B3 / B4**, deriving the query from
+the store's own schema so the source can be a real relational database. `bind_lazy` takes a path
+or URL to an image; no query is derived anywhere yet. Read the sub-arc table below for the
+per-arc state — it is the authority, and this paragraph is a summary of it.
+
+The design was pinned by probing and by
 counting rather than by reasoning, and two of its drafts died that way: an image/page backing
 (ruled out by the owner — the database holds real rows), and a `(type, key) → rec` identity map
 (unnecessary — the resident collection already IS the cache). Both are recorded below with why,
