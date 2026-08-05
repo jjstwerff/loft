@@ -244,28 +244,47 @@ Two tiers, in order:
    already carries a packed flag (`0x8000` free-source) in its type word, so a site-id is the
    same shape. The interpreter dump already emits `line=`, so half exists.
 
-**Blocker the guard immediately exposes (Stage B).** The runtime instrument is itself
-backend-split, so it cannot gate both backends as-is:
+**Blocker the guard immediately exposes — PINNED.** Native is not missing the hook. It
+reports record copies under a **different env flag, with a different output format**. The
+documented "runtime ground truth" flag therefore covers all five copy shapes on the
+interpreter and only two on native:
 
-| Probe | copy shape | `--interpret` | `--native` |
+| copy shape | probes | `--interpret` gate | `--native` gate |
 |---|---|---|---|
-| 12, 13 | vector-append | reports | reports |
-| 10, 11, 14 | record copy | reports | **silent** |
+| record copy | 10, 11, 14 | `LOFT_COPY_DUMP` — `state/io.rs:1468` | **`LOFT_TRACE_COPY`** — `codegen_runtime.rs:636` |
+| vector append | 12, 13 | `LOFT_COPY_DUMP` — `database/structures.rs:404` | same hook (shared store code) |
 
-Native's assertions prove the copy happens (probe 10's `b` is independent there too), so the
-silence is the instrument, not the behaviour. There are also **two differently-named flags
-for one fact**: `LOFT_COPY_DUMP` (interp, `keys.rs:339`) and `LOFT_TRACE_COPY`
-(`codegen_runtime.rs:636`, different output format) — and the latter printed nothing on
-probes 10/11 either. **Unpinned:** whether native lacks the hook, uses a third path, or does
-not route these shapes through `OpCopyRecord` at all. Pin this before building the guard — it
-is cluster V's parity problem surfacing in the measuring device itself, and a guard built on
-a backend-blind instrument would certify native as copy-free.
+Verified as a clean diagonal across all ten cells. The interpreter's record copy runs
+`State::do_copy_record`; native's runs `codegen_runtime::OpCopyRecord`; the vector path is
+shared, which is the only reason two of the cells agree.
+
+Three consequences, all load-bearing for the guard:
+
+1. **The formats are not interchangeable, and neither is a superset.** Interp emits
+   `[copy] record line=17 tp=65` — a **source line**, no size. Native emits
+   `[copy] OpCopyRecord src=#0@1,8 dst=#1@1,8 tp=65 size=12 free_src=false` — stores and
+   size, **no source position at all**. So the guard's tier-2 per-site attribution needs
+   native's hook to *gain a position*, not merely be renamed.
+2. **Native's gate is a raw `std::env::var` per copy**, not the cached `keys::` accessor the
+   other diagnostics use — so it also pays a lookup on every copy executed.
+3. This is the same one-home-per-derived-fact failure the plan keeps meeting, now in the
+   measuring device: two instruments for one fact, grown separately. Unify before the guard
+   can gate both backends — measuring native with the documented flag reads as copy-free.
+
+*(Corrected: an earlier revision of this section recorded native as silent under both flags
+and listed three unpinned explanations. That reading came from a run whose working directory
+had been reset, so loft never opened the probe file. Native reports normally under
+`LOFT_TRACE_COPY`.)*
 
 ## Tool gaps
 
 - The guard above — not built; both halves exist.
-- No instrument attributes a copy *minted during codegen* to a source line on `--native`.
-- Two env flags for one runtime fact; unify before either can gate.
+- `--native`'s record-copy dump carries **no source position** (`codegen_runtime.rs:636`),
+  so tier-2 attribution is blocked until it gains one.
+- Two env flags for one runtime fact (`LOFT_COPY_DUMP` / `LOFT_TRACE_COPY`), different
+  formats, split by backend *and* by copy shape. Unify before either can gate.
+- Native's gate re-reads the environment on every copy instead of using a cached
+  `keys::` accessor.
 - No probe-set runner yet; add at ≥20 probes.
 
 ## See also
