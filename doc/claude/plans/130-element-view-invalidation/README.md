@@ -360,7 +360,7 @@ finding resolves exactly one of:
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
 | F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145` |
 | F3 | `&` param bound from an element loses its write after a shift | probe 26 | **FIXED** — needs stable slots (§ F3); materialise and fat-`&` both shown not to work | BLOCKED on a representation decision |
-| F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | **FIXED** — an unreachable live element is breakage | open |
+| F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — treat a key-field write as a reshape, reuse F2 (§ F4) | mechanism VERIFIED, uniform across sorted/hash/index; fix designed, not applied |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** (the `none` report is misinformation) + **STATED** (the copies then rest as *allowed for now*) | guard built; notice not yet default-on |
 | F6 | `LOFT.md` claims a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — misinformation in the doc | open |
 
@@ -533,6 +533,47 @@ the owner rather than to me.
 option 2 makes `c = v[i]` copy in reshape-containing scopes, and probes 03/04/05 flip from
 asserting write-through to asserting the copy. F1 does not need that sign-off and is being
 implemented first.
+
+## F4 — re-keying through a view, and the fix that reuses F2
+
+**Mechanism, verified.** `c.key = 5` emits a bare `OpSetInt(c, 0, 5)` — a raw field write
+with no re-index. The element's record is updated and the collection's index is not, so it is
+reachable at neither key while still being iterated. Measured identically on `sorted`,
+`hash` AND `index`, so it is one defect and not three:
+
+```
+hash    c.k 5  c.tag 333  |  h[5] -1   h[30] -1
+index   d.k 5  d.tag 333  |  i[5] -1   i[30] -1
+sorted  (probe 28)        |  s[5] null s[30] null,  iterate still yields 3
+```
+
+Everything the fix needs is present at the write site: `c(1):ref(Elm)["s"]` names its
+collection, and `s: sorted<Elm,[("key", true)]>` names the key field.
+
+**A true re-index is NOT the right answer here**, which is worth writing down because it is
+the obvious one. `set_keyed` (`database/search.rs:474`) already does remove-then-insert, but
+re-indexing needs the OLD key captured before the write, and — more importantly — for a
+`sorted` the record MOVES to its new position, which invalidates the very view that is doing
+the writing. F4 would then re-open F2 for its own binding. Chasing that lands back on stable
+slots, exactly like F3.
+
+**Proposed fix — reuse F2's machinery.** Treat *a write to a KEY field of an element view* as
+a reshape of that collection: the view materialises at the bind and the author is told. Then
+
+- `c` is an independent copy; `c.key = 5` changes only `c`;
+- the collection keeps its entry at the original key, consistent and reachable;
+- nothing is unreachable, so the **breakage is gone**;
+- changing a key keeps its supported spelling — `h[k] = value`, which routes through
+  `set_keyed` and re-indexes properly.
+
+That matches how databases treat a primary key, and it is a small addition:
+`collect_reshaped_containers` gains key-field writes alongside `OpRemoveVector`/`OpRemove`.
+
+**The one implementation detail that needs care:** the trigger must fire on KEY fields only.
+Widening it to any field write through an element view would take write-through away from
+keyed elements generally — a much larger semantic loss than F4 is worth. That means mapping
+the key NAME carried on the collection type to the field OFFSET the write uses, which is the
+part to get right rather than approximate.
 
 ## F3 — why the two obvious mechanisms both fail
 
