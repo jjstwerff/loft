@@ -33,6 +33,13 @@ pub enum Origin {
     InterpCallReturn,
     /// Interpreter tuple-destructuring bind.
     InterpTupleBind,
+    /// Interpreter REASSIGNMENT from a call. A lift temp inside an expression
+    /// (`__lift_N = file(path)`) compiles here, never through a first-bind path — which is
+    /// how the stdlib's `exists()` copy stayed off the manifest until a known-copying case
+    /// was measured against it.
+    InterpReassignCall,
+    /// Interpreter reassignment `v = src` between same-struct references (#306).
+    InterpReassignVar,
     /// Native whole-record bind (`generation::dispatch`, the `Value::Var(src)` arm).
     NativeRecordBind,
     /// Native call-return bind. Emits a runtime adopt-or-copy branch, so this is a *may
@@ -45,7 +52,11 @@ impl Origin {
     #[must_use]
     pub fn backend(self) -> &'static str {
         match self {
-            Self::InterpRecordBind | Self::InterpCallReturn | Self::InterpTupleBind => "interpret",
+            Self::InterpRecordBind
+            | Self::InterpCallReturn
+            | Self::InterpTupleBind
+            | Self::InterpReassignCall
+            | Self::InterpReassignVar => "interpret",
             Self::NativeRecordBind | Self::NativeCallReturn => "native",
         }
     }

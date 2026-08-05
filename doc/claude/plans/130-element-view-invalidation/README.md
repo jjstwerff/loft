@@ -183,6 +183,14 @@ the diagnostics change).
 | `12-silent-field-copyfill.loft` | `w = h.v` | I | asserts pass; `AVOIDABLE`, **unreported** |
 | `13-reported-construct.loft` | `Holder { v: src }` | I | passes — the instrument fires |
 | `14-reported-elemset.loft` | `v[0] = src` | I | passes — the instrument fires |
+| `15-secret-expression-temp.loft` | `make(i).tag` | I | **reference** — 0 copies; contrast for 18 |
+| `16-secret-reassign-var.loft` | `b = a`, both live | I | secret copy — `InterpReassignVar` |
+| `17-secret-loop-carried.loft` | `cur = make(i)` in a loop | I | **reference** — 0 copies; contrast for 19 |
+| `18-secret-stdlib-exists.loft` | stdlib `exists()` | I | secret copy — 5 calls, 5 `File` copies |
+| `19-secret-call-bind.loft` | `f = file(path)` | I | secret copy — `InterpCallReturn` |
+
+Runner: `probes/run_set.sh [view|copy|secret|all]` — per probe, pass/uncovered/executed-copies
+on both backends.
 
 ## Reference ↔ problem pairings
 
@@ -320,6 +328,41 @@ Two findings the probes did not contain:
 Consequence: the uncovered set is **not empty today**, so the guard stays opt-in
 (`LOFT_COPY_MANIFEST=1`) until it is drained. Its audience is CI and this repo — it reports a
 hole in the *compiler*, not a fault in a user's program.
+
+### The secret-copy catalogue (probes 15–19, run via `probes/run_set.sh secret`)
+
+What the guard found once pointed at the corpus. Surveyed across all **583** `tests/scripts`:
+**exactly one uncovered site per compile, always the same one** — the stdlib's `exists()`.
+
+| Family | Where | Measured |
+|---|---|---|
+| stdlib `exists()` lift | `default/02_files.loft:248` — `file(path).format` | 5 calls → **5 deep `File` copies**, both backends. Uncovered in **every** compile that loads the stdlib |
+| bind a `file()` result | `f = file(path)` | 1 copy per bind; **107** hits across the corpus — the second-largest family |
+| reassignment `b = a` | both bindings live | 1 copy; a different emitter from the first bind, which is why it was invisible |
+| enum payload / borrow-return | `R666`, `RbOuter` in the corpus | uncovered, not yet probed |
+
+Each `File` copy duplicates 33 flat bytes **plus a reallocated `path` text** — `OpCopyRecord`
+duplicates owned sub-structures — to read one enum field and discard the record.
+
+**Two probes measured the opposite of what they were written to show, and that is the
+sharpest result here.** Probes 15 and 17 use the *same syntax* as 18 and 19 — an expression
+temp and a loop-carried reassignment — with a user-defined `make()` instead of `file()`.
+They copy **zero** times. So the copy is a property of the **callee's return**, not of the
+lift, the loop, the reassignment, or the field read. A fix aimed at "expression temps" would
+miss entirely. Both are kept as reference probes: if return-ownership ever tightens, they are
+the cases that silently become one copy per iteration.
+
+Reading the runner: there is an **ambient baseline of 1 uncovered site** (the `exists` one) in
+every compile, and a `--native` run reports both generators, so its column roughly doubles.
+
+## Open questions (added by the guard)
+
+- **Q5 — what makes `file()` copy where `make()` does not?** Both report `return=Owned` in the
+  ownership dump, so that fact does not discriminate them. Until this is pinned, no fix for the
+  `exists` family can be aimed correctly. This is the top Stage-B item.
+- **Q6 — which of the uncovered families should be silenced rather than removed?** The owner's
+  framing: prevent the copy where possible, and where it is genuinely needed allow it silently
+  *but closely guarded* — i.e. an accept recorded at the site, not a blanket exemption.
 
 ### Why compile-time only (owner's decision)
 

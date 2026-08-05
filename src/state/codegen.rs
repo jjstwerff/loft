@@ -2225,6 +2225,16 @@ impl State {
                         self.code_add(free_pos);
                         stack.add_op("OpFreeRefIfDistinct", self);
                     }
+                    // @PLN130 — REASSIGNMENT from a call.  A lift temp inside an expression
+                    // (`__lift_N = file(path)`) is compiled here, not through any first-bind
+                    // path, so instrumenting only the first-bind emitters left every
+                    // reassignment copy off the manifest.
+                    crate::copy_manifest::record(
+                        stack.def_nr,
+                        v,
+                        tp_nr,
+                        crate::copy_manifest::Origin::InterpReassignCall,
+                    );
                     return;
                 }
                 // #306 — reassignment `v = src` of same-struct References must
@@ -2267,6 +2277,13 @@ impl State {
                         ],
                     );
                     self.generate(&copy_val, stack, false);
+                    // @PLN130 — reassignment `v = src`, both same-struct References (#306).
+                    crate::copy_manifest::record(
+                        stack.def_nr,
+                        v,
+                        tp_nr,
+                        crate::copy_manifest::Origin::InterpReassignVar,
+                    );
                     if stash_old_for_post_free {
                         // #330 epilogue: free the stashed old store unless
                         // the assignment kept it (witness = v's NEW DbRef;
