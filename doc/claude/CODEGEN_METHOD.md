@@ -105,6 +105,36 @@ blind: a check that reads the IR cannot see a fact the emitters invent later. Wr
 more test cases against such a check never finds the gap — it is blind to a whole
 class, not to particular inputs.
 
+### When to reach for one — and when not to
+
+**Building an instrument is not a flex.** It is not evidence of rigor and not a way to
+show the work is being taken seriously. It is a purchase: someone pays to build it,
+calibrate it, extend it to every path, and maintain it afterwards. Reach for one
+deliberately, on a trigger — never as a default move or a display.
+
+**Two triggers earn it:**
+
+1. **An oracle failed.** Not "a test went red" — that is the oracle working. This is the
+   check itself returning a confident answer that was WRONG, or one that cannot see the
+   class by construction. When the thing you would normally trust is the thing that
+   misled you, more cases against it buy nothing.
+2. **A case you assumed was solved turns up broken.** The belief is the finding. One
+   such case means your *information* about the area is wrong — not that one input is
+   wrong — and every other conclusion resting on that belief is now unsupported. This is
+   the stronger of the two signals and the easier one to explain away.
+
+A weaker third: you cannot yet write the fix because the scope is genuinely unpinned,
+and the class is broad, recurring, or hides where an oracle cannot look.
+
+**Do not reach for one when:**
+
+- **The scope and root cause are already pinned.** Then there is nothing to find. Fix it,
+  with a regression test.
+- **It is one shape, one input, already understood.** That is a test case. An instrument
+  built for it is overhead with no payer.
+- **You want to demonstrate care.** An unjustified instrument is a permanent tax charged
+  to every later reader, in exchange for a feeling.
+
 Five rules, in order:
 
 1. **Put the instrument where the fact is CREATED, not where it is consumed.** If
@@ -140,6 +170,13 @@ Worked example, with the full evidence for each rule:
 § Method — where an oracle reported *"none — every structure copy is a move, a literal,
 or already borrowed"* on a program that provably deep-copies, and the instrument that
 replaced it found the real distribution (plus two mis-installations of itself).
+
+**Both triggers fired there**, which is why it earned the cost. The oracle failed — the
+copy report did not merely stay quiet, it asserted a clean bill of health. And the area
+was *assumed solved*: the copy diagnostics had shipped, the buckets were classified, the
+Avoidable set was being managed — while `exists()` copied a whole record on every call,
+in every compile, unreported. The second signal is the one that would have been easiest
+to wave away as a one-off.
 
 ## The method — bytecode → types → code, per scale
 
