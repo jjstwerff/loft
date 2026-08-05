@@ -266,7 +266,10 @@ Set before `cargo test` (controls `tests/dumps/*.txt`; also works with `cargo ru
 `full` (default: IR+bytecode+exec+slots) · `static` (IR+bytecode only) · `minimal` (exec trace) ·
 `crash_tail:N` (last N lines, flushed on panic) · `fn:<name>` · `variables` · `ref_debug` ·
 `bridging` · `all_fns` · `type_timeline:<var>` (every write to a variable's type, naming the
-SOURCE LINE; `LOFT_TIMELINE_BT=1` adds the stack). DbRef dumps tune via `LOFT_DUMP_DEPTH` (2),
+SOURCE LINE; `LOFT_TIMELINE_BT=1` adds the stack). It traces deps being REMOVED
+(`make_independent`) as well as added — without that half it showed a borrow being created
+and never promoted to an owner, so a container-destroying free had to be hunted by reading
+every strip site by hand (@PLN130 F1). DbRef dumps tune via `LOFT_DUMP_DEPTH` (2),
 `LOFT_DUMP_ELEMENTS` (8). Separately, **`LOFT_VAR_TABLE=<fn>`** prints that function's
 variable table with every type dep resolved to `name(index)` plus its ownership flags —
 reach for it when a borrow points somewhere impossible, because the IR dump names variables

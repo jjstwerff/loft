@@ -1014,7 +1014,31 @@ impl Function {
     }
 
     /// Remove a lifetime dependency for this variable.
+    /// Remove a lifetime dependency for this variable.
+    ///
+    /// Traced under `LOFT_LOG=type_timeline:<var>` like its `depend` sibling, and naming the
+    /// caller. Without that, the timeline recorded deps being ADDED and never REMOVED — so a
+    /// borrow that gets promoted to an owner looked like a variable that was born owned, and
+    /// the promotion site could only be found by reading every `make_independent` call by
+    /// hand. That is exactly how @PLN130's F1 had to be tracked down: the container-destroying
+    /// free came from a dep strip the instrument could not show.
+    #[track_caller]
     pub fn make_independent(&mut self, var_nr: u16, remove: u16) {
+        if crate::log_config::type_timeline_target().is_some() {
+            let mut after = self.variables[var_nr as usize].type_def.clone();
+            if let Type::Reference(_, to)
+            | Type::Enum(_, _, to)
+            | Type::Vector(_, to)
+            | Type::Sorted(_, _, to)
+            | Type::Hash(_, _, to)
+            | Type::Index(_, _, to)
+            | Type::Radix(_, _, to) = &mut after
+                && let Some(pos) = to.iter().position(|x| x == &remove)
+            {
+                to.remove(pos);
+            }
+            self.trace_type_change(var_nr, &after, "make_independent");
+        }
         match &mut self.variables[var_nr as usize].type_def {
             Type::Reference(_, to)
             | Type::Enum(_, _, to)
