@@ -13,7 +13,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | Stage | Status |
 |---|---|
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
-| B — Mechanism investigation | 🟡 Cluster I mechanisms verified to a code line; Q5 answered; cluster II's mechanism still hypothesised |
+| B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
 | C — Fix design | ⏸️ the model is chosen (below), the enforcement point is not. The Q5 one-liner was tried and reverted — it needs an analysis, not a flag test |
 | D — Implementation | ⏸️ pending C. NOTHING fixed yet — see § Must fix before close (F1–F6); the plan does not close on a catalogue |
 
@@ -318,7 +318,7 @@ filing is not a marker of significance, it is a deferral.
 
 | # | problem | evidence | state |
 |---|---|---|---|
-| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | open |
+| F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **mechanism VERIFIED** — see below; fix not yet applied |
 | F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–06, 29 | open |
 | F3 | `&` param bound from an element loses its write after a shift | probe 26 | open |
 | F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | open |
@@ -327,6 +327,56 @@ filing is not a marker of significance, it is a deferral.
 
 **loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
 tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
+
+### F1 mechanism — VERIFIED (this is cluster II's mechanism, no longer hypothesised)
+
+Repro + capture: `bytecode-comparisons/f1-view-loopvar-reassign.loft` / `f1-capture.txt`.
+
+**1. The bind types the view as an OWNER.** The IR for `k = a[0]`:
+
+```
+[9] k(1):ref(Box) = OpGetVector(a(1), 16i32, 0i32);
+```
+
+`k(1):ref(Box)` carries **no dep**, while every sibling does — `_elm_1(1):ref(Box)["a"]`,
+`x(3):ref(Box)["_vector_1"]`. So nothing records that `k` borrows `a`.
+
+**2. The reassignment then frees "its" store.** Bytecode for `k = x` inside the loop:
+
+```
+331: VarRef(k)
+334: FreeRef ; [store-free]      <- frees k's store, which IS a's store
+335: InitRef(k)
+338: Database(k, db_tp=65)
+349: CopyRecord(x -> k)
+```
+
+`k` is a raw pointer into `a`'s store, so the pre-Set store-free releases **the whole
+container**. `len(a)` is 0 from that instant — before any removal, and before the read that
+later answers `null(oob)`.
+
+**3. Why native escapes it:** the generated Rust declares `let mut _own_store_k: DbRef` — it
+materialises an owned store for `k` at the bind, so the free hits that instead of the
+container. One backend already implements the safe answer.
+
+**The precedent is in the tree, and names this exact failure.** `parser/vectors.rs:2522`
+(loft#664) on the element MINT path:
+
+> *"an element NEVER owns a store… That was encoded only as a DEPENDENCY on the container
+> VARIABLE, so a container with no variable left the dep list empty, and **empty reads as
+> 'owns its store': the answer came back WRONG rather than unknown**. State the fact at the
+> mint site instead, through the marker that already means 'borrow, don't allocate'."*
+
+That fix added `mark_inline_ref(elm)`. It is applied when an element is **minted**
+(`OpNewRecord`) and **not** when one is **read** into a local (`OpGetVector`) — which is
+exactly the hole F1 falls through. Same invariant, same marker, one uncovered producer.
+
+**Fix direction:** mark the destination of an element-read bind as an inline ref and record
+its container dep, so the pre-Set store-free is suppressed for a borrowed destination.
+Deliberately NOT applied yet — this is the same subsystem where the Q5 one-liner looked
+right and was reverted, so it gets working bytecode proven on both backends first
+([`loft-codegen` skill](../../../../.claude/skills/loft-codegen/SKILL.md) bug-fix mode).
+Note F2 is the same missing fact seen from the read side, so one change may close both.
 
 ## Probe gaps — what is NOT covered yet
 
