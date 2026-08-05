@@ -202,6 +202,16 @@ After materialising, writes through the binding **no longer reach the container*
 why every one of them is reported rather than done silently. The advice names the function, the
 binding and the container.
 
+**All three require the view to be LIVE ACROSS the event — the advice's "while `c` is in use"
+is a condition, not a figure of speech.** A view whose last use comes *before* the disturbance
+keeps its alias and writes through, and so does one bound *after* it: nothing was pointing into
+the container when it changed. This is the rustc rule — a borrow that has ended is no conflict
+— and it is not a refinement, it is required. Materialising a dead view LOSES a write the
+program used to land, which is breakage, and it makes the advice state something false about a
+binding that is not in use. Both are on @PLN130's closure bar. Pinned by
+`tests/scripts/148-view-liveness-across-reshape.loft`, which asserts each edge in both
+directions on both backends.
+
 **A `&` binding is exempt — it is a live link and always writes through.** `c = &v[0]` opts
 into aliasing explicitly, so no reshape may turn it into a copy
 ([formal/binding.md](formal/binding.md) B-Ref-Alias). The three rows above are the PLAIN-bind

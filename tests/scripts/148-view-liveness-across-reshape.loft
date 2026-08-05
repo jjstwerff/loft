@@ -1,0 +1,149 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN130 F9 step 1 — a view materialises only where it is LIVE ACROSS the reshape.
+//
+// `tests/scripts/145` pins that a view live across a `remove` gets its own copy. This pins the
+// other edge of the same rule: a view whose last use comes BEFORE the removal is not at risk,
+// keeps its alias, and writes through. Getting that wrong is not a missed optimisation — it
+// costs both halves of @PLN130's closure bar at once:
+//
+//   * a LOST WRITE — the write goes to the copy, and the program answers 11 where it answered
+//     99 before the materialise existed;
+//   * UNTRUE ADVICE — "`v` is modified while `c` is in use", said of a `c` not in use.
+//
+// F2 shipped keyed on the CONTAINER (a flat per-function set of everything removed from
+// anywhere) and was therefore order-blind. `collect_views_to_materialise` now walks both
+// causes in source order: a removal only SHAKES the open views of that container, and a read
+// or write of a shaken view is what condemns it.
+//
+// The cells move order, the kind of last use, nesting and multiplicity together — a sweep over
+// one axis reads as proof and is not. Boundary: `probes/39-f2-liveness-boundary.loft`.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn three() -> vector<Box> {
+  return [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }];
+}
+
+// The view's last use is a write BEFORE the removal, so it is dead at the removal and there is
+// nothing to invalidate. The write must reach `v`.
+fn dead_before_removal() -> integer {
+  v = three();
+  c = v[0];
+  c.n = 99;
+  v.remove(2);
+  assert(len(v) == 2, "148 dead len {len(v)} want 2");
+  return v[0].n;
+}
+
+// The removal happens BEFORE the bind. Nothing was viewing `v` when it shrank, so the later
+// view is sound and its write must land.
+fn removal_before_bind() -> integer {
+  v = three();
+  v.remove(2);
+  c = v[0];
+  c.n = 99;
+  return v[0].n;
+}
+
+// The BIND sits in a block that has already CLOSED at the removal, so the view cannot be live
+// across it. This is the shape that broke `45-field-iter` when the sibling F8 analysis used a
+// per-function proxy, reached here from the reshape cause instead.
+fn bind_in_closed_block() -> integer {
+  v = three();
+  if len(v) == 3 {
+    c = v[0];
+    c.n = 99;
+  }
+  v.remove(2);
+  return v[0].n;
+}
+
+// Two views of the SAME container: `d` is dead before the removal and must write through,
+// `c` is live across it and must materialise. A per-container set cannot tell them apart —
+// it strips both. Asserted on both elements so half a fix cannot read as a pass.
+fn one_dead_one_live() -> integer {
+  v = three();
+  d = v[0];
+  d.n = 99;
+  c = v[1];
+  v.remove(2);
+  c.n = 77;
+  assert(v[0].n == 99, "148 mixed v[0] {v[0].n} want 99 (dead view must write through)");
+  assert(v[1].n == 22, "148 mixed v[1] {v[1].n} want 22 (live view must have copied)");
+  assert(c.n == 77, "148 mixed c {c.n} want 77 (the copy took the write)");
+  return v[0].n * 1000 + v[1].n;
+}
+
+// ---- the other direction: these must NOT stop materialising -----------------------
+
+// Written before the removal AND read after it, so it IS live across. It materialises at the
+// bind, which diverts the earlier write too — that cost is the stated one, and this cell keeps
+// a liveness narrowing from quietly changing it.
+fn write_before_read_after() -> integer {
+  v = three();
+  c = v[0];
+  c.n = 99;
+  v.remove(2);
+  assert(c.n == 99, "148 across c {c.n} want 99");
+  assert(v[0].n == 11, "148 across v[0] {v[0].n} want 11");
+  return c.n;
+}
+
+// The removal is inside a later `if`. It MAY run, so the view is at risk.
+fn removal_in_if() -> integer {
+  v = three();
+  c = v[0];
+  if len(v) == 3 { v.remove(2); }
+  c.n = 99;
+  return v[0].n;
+}
+
+// The removal is inside a later loop body — same answer, different nesting construct.
+fn removal_in_loop() -> integer {
+  v = three();
+  c = v[0];
+  for i in 0..1 { v.remove(2 - i); }
+  c.n = 99;
+  return v[0].n;
+}
+
+// A view held from OUTSIDE a loop and used at the TOP of its body, with the removal at the
+// bottom: on the second iteration the use follows the removal, so it is live across. The walk
+// shakes for a loop before descending into it, which is what makes this come out right.
+fn used_before_removal_inside_a_loop() -> integer {
+  v = three();
+  c = v[0];
+  for i in 0..2 {
+    c.n = 99 + i;
+    if len(v) > 1 { v.remove(len(v) - 1); }
+  }
+  return v[0].n;
+}
+
+// Bind and removal both inside ONE loop body, removal in between.
+fn bind_and_removal_in_one_body() -> integer {
+  v = [Box { n: 11 }, Box { n: 22 }, Box { n: 33 }, Box { n: 44 }];
+  for i in 0..1 {
+    c = v[0];
+    v.remove(3 - i);
+    c.n = 99;
+  }
+  return v[0].n;
+}
+
+fn main() {
+  // Dead before the disturbance: the alias survives and the write lands.
+  assert(dead_before_removal() == 99, "148 dead_before_removal");
+  assert(removal_before_bind() == 99, "148 removal_before_bind");
+  assert(bind_in_closed_block() == 99, "148 bind_in_closed_block");
+  assert(one_dead_one_live() == 99022, "148 one_dead_one_live");
+  // Live across it: the view is copied and the write stays in the copy.
+  assert(write_before_read_after() == 99, "148 write_before_read_after");
+  assert(removal_in_if() == 11, "148 removal_in_if");
+  assert(removal_in_loop() == 11, "148 removal_in_loop");
+  assert(used_before_removal_inside_a_loop() == 11, "148 used_before_removal_inside_a_loop");
+  assert(bind_and_removal_in_one_body() == 11, "148 bind_and_removal_in_one_body");
+  println("148 PASSED");
+}

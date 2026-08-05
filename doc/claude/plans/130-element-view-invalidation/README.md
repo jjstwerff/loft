@@ -33,6 +33,7 @@ in `probes/` as landmarks:
 |---|---|---|
 | F1 — a view reassigned from a loop var destroyed the container | 30 | `tests/scripts/144-view-loopvar-reassign.loft` |
 | F2 — a view live across a RESHAPE | 03–07 | `tests/scripts/145-view-materialised-on-reshape.loft` |
+| F2 — and ONLY where it is live across one (F9 step 1) | 39 | `tests/scripts/148-view-liveness-across-reshape.loft` |
 | F4 — a key-field write through a view | 28 | `tests/scripts/146-keyed-rekey-through-view.loft` |
 | F3 — a `vector` stays DENSE | 01, 02 | `tests/scripts/200-vector-stays-dense.loft` |
 | F7 — the C86 copy/view boundary, 30 cells | 09–14 | `tests/scripts/201-bind-copies-projection-views.loft` |
@@ -402,7 +403,7 @@ finding resolves exactly one of:
 | # | problem | evidence | resolves as | state |
 |---|---|---|---|---|
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
-| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145` |
+| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145`. The first cut keyed on the CONTAINER and was order-blind, so it also materialised views that were DEAD at the removal — a lost write plus untrue advice, both on the bar above. Made liveness-aware in F9 step 1 (probe 39, `tests/scripts/148`) |
 | F3 | `&` param bound from an element loses its write after a shift | probes 26, 38 | **STATED was WRONG — this is BREAKAGE** (see § F3). A lost write is what the bar above never allows, and the claim that F2's materialise covers it is false: measured, cell A1 emits NO advice and the write vanishes silently | **FILED [loft#779](https://github.com/loft-lang/loft/issues/779)** — needs a `&`-semantics decision |
 | F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |

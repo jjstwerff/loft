@@ -2264,19 +2264,19 @@ fn d_bind_8_callee_removal_under_amp_param_is_error() {
 /// The POSITIVE cell the refusal must not swallow: a link that is DEAD before the removal is
 /// no conflict.  Liveness is the condition, not existence — the rustc rule.
 ///
-/// This currently FAILS, and it is a REGRESSION @PLN130 F2 introduced on this branch rather
-/// than a pre-existing gap: the installed mainline binary (which has no materialise) answers
-/// 99, and F2 answers 11.  F2's reshape path keys on the CONTAINER and is order-blind, so it
-/// materialises any view of a container reshaped ANYWHERE in the function — even one that is
-/// dead long before the removal.  Two things follow, both on @PLN130's own closure bar:
-/// a write that used to land is LOST, and the advice claims "`v` is modified while `c` is in
-/// use" when `c` is not in use at all.
+/// FIXED (F9 step 1).  It was a REGRESSION @PLN130 F2 introduced on this branch rather than a
+/// pre-existing gap: the installed mainline binary (which has no materialise) answers 99, and
+/// F2 answered 11.  F2's reshape path keyed on the CONTAINER and was order-blind, so it
+/// materialised any view of a container reshaped ANYWHERE in the function — even one dead long
+/// before the removal.  Two things followed, both on @PLN130's own closure bar: a write that
+/// used to land was LOST, and the advice claimed "`v` is modified while `c` is in use" when
+/// `c` was not in use at all.
 ///
-/// F8 already built the liveness-aware walk this needs (`collect_views_to_materialise`, keyed
-/// on the VIEW); the reshape cause simply does not route through it yet.  Step 1 of
-/// F9-amp-link-survives-reshape.md.  Blocks this branch merging.
+/// `collect_views_to_materialise` now walks both causes in source order and condemns a view
+/// only where it is USED after the disturbance.  The boundary is
+/// `probes/39-f2-liveness-boundary.loft`; the CI form is
+/// `tests/scripts/148-view-liveness-across-reshape.loft`.
 #[test]
-#[ignore = "F2 regression: materialises a DEAD view, losing a write mainline lands (11 != 99)"]
 fn f2_dead_view_before_removal_keeps_writing_through() {
     code!(
         "struct Box { n: integer } \

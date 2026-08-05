@@ -115,22 +115,9 @@ struct Scopes {
     /// declared deps so the OWNED path deep-copies + frees the slot — otherwise the
     /// displaced owned store is orphaned and leaks. Empty when the flag is off.
     displaced_owned: HashSet<u16>,
-    /// @PLN130 F2 — container variables this function RESHAPES: the target of an
-    /// `OpRemoveVector` (`v.remove(i)`) or `OpRemove` (`e#remove`).
-    ///
-    /// A removal renumbers the positions inside the container's store, and an element view
-    /// is a `DbRef` pinned to a position — so a view that is live across one silently starts
-    /// naming a different element (probes 03-07, 29: a pure READ answered `44/444` where its
-    /// element held `33/333`, and a write tore a live record). Ownership information cannot
-    /// fix that; the only compile-time answer that keeps the program correct is to give the
-    /// binding its own copy, and say so.
-    ///
-    /// Deliberately whole-function and not live-range precise: over-materialising costs a
-    /// copy the author is TOLD about, while under-materialising is silent corruption. The
-    /// asymmetry decides the approximation.
-    reshaped_containers: HashSet<u16>,
-    /// @PLN130 F8 — view bindings live across a re-establishment of their container.
-    views_to_materialise: HashSet<u16>,
+    /// @PLN130 F2/F8 — view bindings live across a disturbance of their container, and which
+    /// disturbance it was.  See [`collect_views_to_materialise`].
+    views_to_materialise: HashMap<u16, ViewCause>,
     /// loft#721 — fn-ref variable -> the definition it was assigned, or
     /// `u32::MAX` when more than one definition reaches it.  A `CallRef`'s callee
     /// is a runtime value, so this local fact is what lets the lift ask the
@@ -180,7 +167,7 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
     }
 }
 
-/// @PLN130 F2 — every container variable this function REMOVES from.
+/// @PLN130 F2 — every container variable `code` REMOVES from.
 ///
 /// `v.remove(i)` lowers to `OpRemoveVector(v, size, index)` (container = arg 0) and the
 /// in-loop `e#remove` to `OpRemove(index, container, …)` (container = arg 1). Both renumber
@@ -197,8 +184,9 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
 /// materialise arm never fires) and it broke cell C1, where the viewed element does not move
 /// and the write legitimately lands. It would also make a `&` argument silently become a copy
 /// whenever the callee removes from the container, which changes what `&` means (@PLN87) rather
-/// than fixing a bug. Filed as its own issue; see § F2 for the reasoning.
-fn collect_reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
+/// than fixing a bug. Filed as [loft#779](https://github.com/loft-lang/loft/issues/779); the
+/// decided answer is to REFUSE that program, not to copy behind the author's back.
+fn reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
     let mut out: HashSet<u16> = HashSet::new();
     code.walk(&mut |v| {
         let Value::Call(d, args) = v else { return };
@@ -244,7 +232,34 @@ fn reassigned_ref_params(data: &Data, d_nr: u32) -> HashSet<u16> {
     out
 }
 
-/// @PLN130 F8 — every VIEW binding that is live across a re-establishment of its container.
+/// @PLN130 F2/F8 — why a view had to give up its alias.
+///
+/// The two causes read differently to an author and have different remedies, so the walk
+/// carries which one fired. A view reached by both reports the reshape: that is the cause
+/// with something to act on at the container.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ViewCause {
+    /// The container is RESHAPED — `v.remove(i)` / `e#remove` renumbers its positions (F2).
+    Reshaped,
+    /// The container VARIABLE is re-established, so the name stops meaning the store (F8).
+    Reassigned,
+}
+
+/// Record `cause` for `view`, keeping [`ViewCause::Reshaped`] when both apply.
+fn record_cause(map: &mut HashMap<u16, ViewCause>, view: u16, cause: ViewCause) {
+    let slot = map.entry(view).or_insert(cause);
+    if cause == ViewCause::Reshaped {
+        *slot = cause;
+    }
+}
+
+/// @PLN130 F2 + F8 — every VIEW binding that is live across a disturbance of its container.
+///
+/// Two disturbances, one question. A RESHAPE (`v.remove(i)`, `e#remove`) renumbers the
+/// positions inside the container's store, and a view is a `DbRef` pinned to one — so a view
+/// live across it silently starts naming a different element (probes 03-07, 29: a pure READ
+/// answered `44/444` where its element held `33/333`, and a write tore a live record). A
+/// REASSIGNMENT of the container variable is the other:
 ///
 /// A dep names a VARIABLE, not a store instance, so a view bound from `bx.v[0]` keeps
 /// reading "wherever `bx` points" — and `bx = <other value>` re-points it. The view then
@@ -264,12 +279,9 @@ fn reassigned_ref_params(data: &Data, d_nr: u32) -> HashSet<u16> {
 /// stripped that subject's deps, which put an `OpFreeRef` in a scope where the declaration
 /// was not visible and stopped `tests/scripts/45-field-iter.loft` compiling under `--native`.
 ///
-/// So a view is at risk only where a re-establishment of its container can be reached WHILE
-/// THE VIEW IS STILL LIVE. Walked structurally: a view bound in a block is at risk from any
-/// re-establishment appearing later in that same block, at any nesting depth inside it —
-/// which covers a reassignment guarded by an `if` and one inside a loop body. A
-/// re-establishment sitting in a block the view's own block has already closed cannot reach
-/// it, which is exactly the unrolled-iteration case above.
+/// So a view is at risk only where a disturbance of its container can be reached WHILE THE
+/// VIEW IS STILL LIVE. A disturbance sitting in a block the view's own block has already
+/// closed cannot reach it, which is exactly the unrolled-iteration case above.
 ///
 /// Four forms establish a store, matching the four emitters measured to break:
 ///
@@ -284,95 +296,185 @@ fn reassigned_ref_params(data: &Data, d_nr: u32) -> HashSet<u16> {
 /// A container's FIRST establishment is never a risk: it necessarily runs before any view of
 /// it can exist, so no separate "is this the definition" test is needed.
 ///
-/// Vector-typed containers are excluded — they reach their store through `__vdb_N`, so
-/// re-pointing the local cannot invalidate a view of the old store, and collecting them
-/// would buy a copy for a case that is already correct.
-fn collect_views_to_materialise(code: &Value, function: &Function, data: &Data) -> HashSet<u16> {
-    let mut out: HashSet<u16> = HashSet::new();
-    // One frame per open block: the views bound in it, and the container each one views.
-    let mut open: Vec<Vec<(u16, u16)>> = vec![Vec::new()];
-    scan_block_for_risky_views(
-        std::slice::from_ref(code),
+/// A vector-typed container can never be REASSIGNED into danger — it reaches its store
+/// through a hidden `__vdb_N` owner, so re-pointing the local leaves the old store's identity
+/// intact — and [`established_stores`] never reports one. It very much can be RESHAPED, which
+/// is the F2 half.
+///
+/// **A disturbance alone is not enough: the view must still be USED afterwards.** Keying on
+/// order alone is what F2 shipped (a flat per-function `reshaped_containers` set), and it
+/// costs both halves of this plan's closure bar — a write that mainline lands is LOST, and the
+/// advice says *"`v` is modified while `c` is in use"* of a `c` that is not in use (probe 39
+/// cells L1, L5, L8, L10). So a disturbance only SHAKES the open views of that container;
+/// a later read or write of a shaken view is what condemns it. A view whose last use precedes
+/// the disturbance keeps its alias and writes through, which is the rustc rule.
+///
+/// Known lower bound: a view bound inside a nested block that is used on a LATER iteration of
+/// an enclosing loop is not tracked, because the frame closes with the block. A disturbance
+/// anywhere inside a loop shakes every view held from outside it before the body is walked, so
+/// the ordinary loop shapes are covered; this one is not, and it keeps today's behaviour.
+fn collect_views_to_materialise(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+) -> HashMap<u16, ViewCause> {
+    let mut walk = ViewWalk {
         function,
         data,
-        &mut open,
-        &mut out,
-    );
+        open: vec![Vec::new()],
+        shaken: HashMap::new(),
+        out: HashMap::new(),
+    };
+    walk.walk_block(std::slice::from_ref(code));
+    let out = walk.out;
     if !out.is_empty() && std::env::var_os("LOFT_DEBUG_F8").is_some() {
-        let mut names: Vec<String> = out.iter().map(|v| function.name(*v).to_string()).collect();
+        let mut names: Vec<String> = out
+            .iter()
+            .map(|(v, cause)| format!("{}({cause:?})", function.name(*v)))
+            .collect();
         names.sort();
         eprintln!(
-            "[f8] views live across a container reassignment: {}",
+            "[f8] views live across a container disturbance: {}",
             names.join(" ")
         );
     }
     out
 }
 
-/// Walk one statement list in order, tracking which views are still live.
-///
-/// `open` is a stack of the enclosing blocks' pending views; a re-establishment marks
-/// matching views in EVERY open frame, because an inner block can reassign a container that
-/// a view several levels out depends on.
-fn scan_block_for_risky_views(
-    stmts: &[Value],
-    function: &Function,
-    data: &Data,
-    open: &mut Vec<Vec<(u16, u16)>>,
-    out: &mut HashSet<u16>,
-) {
-    for stmt in stmts {
-        let stmt = stmt.unspan();
-        // `Insert` is spliced into the enclosing block rather than forming its own, so its
-        // statements are siblings of this list and a view bound there stays live here.
-        if let Value::Insert(ops) = stmt {
-            scan_block_for_risky_views(ops, function, data, open, out);
-            continue;
+/// The state of [`collect_views_to_materialise`]'s in-order walk.
+struct ViewWalk<'a> {
+    function: &'a Function,
+    data: &'a Data,
+    /// One frame per open block: the views bound in it, and the container each one views.
+    /// A view bound inside a block dies when that block closes.
+    open: Vec<Vec<(u16, u16)>>,
+    /// Views whose container has been disturbed since the bind, and by what. Being shaken is
+    /// not yet a verdict — it becomes one at the next use.
+    shaken: HashMap<u16, ViewCause>,
+    /// The answer: views USED after their container was disturbed.
+    out: HashMap<u16, ViewCause>,
+}
+
+impl ViewWalk<'_> {
+    fn walk_block(&mut self, stmts: &[Value]) {
+        for stmt in stmts {
+            self.walk_stmt(stmt);
         }
-        // 1. Whatever this statement re-establishes invalidates the views bound before it.
-        let established = established_stores(stmt, function, data);
-        if !established.is_empty() {
-            for frame in open.iter() {
-                for (view, container) in frame {
-                    if established.contains(container) {
-                        out.insert(*view);
-                    }
-                }
+    }
+
+    /// Descend in SOURCE ORDER, because the whole point is which came first.
+    ///
+    /// Only the block forms listed here are descended into; anything else — a `match`, say —
+    /// is handled whole by [`Self::leaf`], which both shakes and reads uses over the entire
+    /// statement. That is deliberately coarse in both directions for a form we cannot order
+    /// internally, and it is the safety net that keeps an unrecognised construct from hiding
+    /// a removal.
+    fn walk_stmt(&mut self, stmt: &Value) {
+        match stmt.unspan() {
+            // `Insert` is spliced into the enclosing block rather than forming its own, so
+            // its statements are siblings and a view bound there stays live here.
+            Value::Insert(ops) => self.walk_block(ops),
+            Value::Block(b) => self.scoped(&b.operators),
+            Value::Loop(b) => {
+                // A loop body runs again, so a disturbance ANYWHERE inside it precedes every
+                // use inside it on the next iteration. Shaking before the body is walked is
+                // what makes a view held from OUTSIDE the loop and used at the top of the
+                // body come out live across a removal at the bottom of it.
+                self.disturb(stmt);
+                self.scoped(&b.operators);
             }
-        }
-        // 2. A nested block opens its own frame: a view bound inside one dies with it.
-        let mut nested: Vec<&[Value]> = Vec::new();
-        match stmt {
-            Value::Block(b) | Value::Loop(b) => nested.push(&b.operators),
-            Value::If(_, t, e) => {
+            Value::If(cond, t, e) => {
+                // The condition is evaluated before either branch and is not part of one.
+                self.leaf(cond);
                 for branch in [t.unspan(), e.unspan()] {
                     match branch {
-                        Value::Block(b) => nested.push(&b.operators),
-                        Value::Insert(ops) => nested.push(ops),
-                        _ => {}
+                        Value::Block(b) => self.scoped(&b.operators),
+                        Value::Insert(ops) => self.scoped(ops),
+                        other => self.leaf(other),
                     }
                 }
             }
-            _ => {}
+            other => self.leaf(other),
         }
-        for body in nested {
-            open.push(Vec::new());
-            scan_block_for_risky_views(body, function, data, open, out);
-            open.pop();
-        }
-        // 3. A view bound by this statement is live from here on. Recorded LAST, so a
-        //    statement that both re-establishes a container and binds a view of the new
-        //    value does not mark the fresh view against its own establishment.
-        if let Value::Set(v, rhs) = stmt
-            && matches!(
-                function.tp(*v),
+    }
+
+    /// Walk a nested block in its own frame: a view bound inside one dies with it.
+    fn scoped(&mut self, stmts: &[Value]) {
+        self.open.push(Vec::new());
+        self.walk_block(stmts);
+        self.open.pop();
+    }
+
+    /// Shake for everything `stmt` disturbs, at any depth inside it.
+    fn disturb(&mut self, stmt: &Value) {
+        self.shake(&reshaped_containers(stmt, self.data), ViewCause::Reshaped);
+        let established = established_stores(stmt, self.function, self.data);
+        self.shake(&established, ViewCause::Reassigned);
+    }
+
+    /// One statement, in the order its parts take effect: what it disturbs, then what it
+    /// uses, then what it (re)binds.
+    fn leaf(&mut self, stmt: &Value) {
+        self.disturb(stmt);
+        // Reading or writing a shaken view is what makes the disturbance matter.
+        self.note_uses(stmt);
+        // A `Set` REPLACES whatever the slot held, so the old binding's troubles end here and
+        // a view bound by this statement is live from here on. Both recorded LAST, so a
+        // statement that re-establishes a container and binds a view of the NEW value does
+        // not mark the fresh view against its own establishment.
+        if let Value::Set(v, rhs) = stmt.unspan() {
+            self.shaken.remove(v);
+            for frame in &mut self.open {
+                frame.retain(|(view, _)| view != v);
+            }
+            if matches!(
+                self.function.tp(*v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
-            )
-            && let Some(container) = base_container_var(rhs.unspan(), data)
-            && !matches!(function.tp(container), Type::Vector(_, _))
-            && let Some(frame) = open.last_mut()
-        {
-            frame.push((*v, container));
+            ) && let Some(container) = base_container_var(rhs.unspan(), self.data)
+                && let Some(frame) = self.open.last_mut()
+            {
+                frame.push((*v, container));
+            }
+        }
+    }
+
+    /// Mark every open view of one of `containers` as disturbed. Not a verdict yet — only a
+    /// use after this point makes the view wrong, which is what separates one that is live
+    /// across the disturbance from one that is already dead.
+    fn shake(&mut self, containers: &HashSet<u16>, cause: ViewCause) {
+        if containers.is_empty() {
+            return;
+        }
+        let hit: Vec<u16> = self
+            .open
+            .iter()
+            .flatten()
+            .filter(|(_, container)| containers.contains(container))
+            .map(|(view, _)| *view)
+            .collect();
+        for view in hit {
+            record_cause(&mut self.shaken, view, cause);
+        }
+    }
+
+    /// Condemn every shaken view this statement reads or writes.
+    ///
+    /// A `Set`'s target is a `u16` slot rather than a `Value::Var`, so a walk for `Var` nodes
+    /// already counts only genuine reads — a rebind does not read the binding it replaces.
+    fn note_uses(&mut self, stmt: &Value) {
+        if self.shaken.is_empty() {
+            return;
+        }
+        let mut used: Vec<u16> = Vec::new();
+        stmt.walk(&mut |v| {
+            if let Value::Var(x) = v {
+                used.push(*x);
+            }
+        });
+        for v in used {
+            if let Some(cause) = self.shaken.get(&v).copied() {
+                record_cause(&mut self.out, v, cause);
+            }
         }
     }
 }
@@ -517,7 +619,6 @@ fn run_scan_phase(
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         displaced_owned,
-        reshaped_containers: collect_reshaped_containers(orig_code, data),
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
     };
@@ -3532,32 +3633,33 @@ impl Scopes {
         // materialises off empty deps).  The alias is LOST for this binding, so say so —
         // constraint 2, where rustc errors on a use-after-move loft copies and warns.
         //
-        // Only fires when the container is actually reshaped somewhere in this function; a
-        // view in a function that never removes keeps its dep and still writes through.
+        // Only fires for a view that is still USED after the reshape. A view whose last use
+        // precedes it is not at risk, and materialising it would lose a write that lands
+        // today — see `collect_views_to_materialise`.
         if matches!(
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
-        ) && let Some(container) = base_container_var(unspanned_value, data)
-            && (self.reshaped_containers.contains(&container)
-                || self.views_to_materialise.contains(&v))
+        ) && let Some(cause) = self.views_to_materialise.get(&v).copied()
+            && let Some(container) = base_container_var(unspanned_value, data)
             && function.tp(v).depend().contains(&container)
         {
-            // @PLN130 F8 — the same strip, for the third invalidator: the container
-            // VARIABLE is reassigned, so the dep still names `bx` while the store it named
-            // is gone. Different cause, different way out, so a distinct advice line.
-            let reassigned = !self.reshaped_containers.contains(&container);
-            let container = &container;
             let vname = function.name(v).to_string();
-            let cname = function.name(*container).to_string();
+            let cname = function.name(container).to_string();
             let deps: Vec<u16> = function.tp(v).depend().clone();
             for d in deps {
                 function.make_independent(v, d);
             }
             let fname = data.def(self.d_nr).original_name();
-            if reassigned {
-                crate::copy_manifest::note_reassigned_view(&vname, &cname, &fname);
-            } else {
-                crate::copy_manifest::note_materialised_view(&vname, &cname, &fname);
+            match cause {
+                ViewCause::Reshaped => {
+                    crate::copy_manifest::note_materialised_view(&vname, &cname, &fname);
+                }
+                // @PLN130 F8 — the third invalidator: the container VARIABLE is reassigned,
+                // so the dep still names `bx` while the store it named is gone. Different
+                // cause, different way out, so a distinct advice line.
+                ViewCause::Reassigned => {
+                    crate::copy_manifest::note_reassigned_view(&vname, &cname, &fname);
+                }
             }
         }
         // Companion to the !adopts_fresh_store (deep-copy) branch above for the

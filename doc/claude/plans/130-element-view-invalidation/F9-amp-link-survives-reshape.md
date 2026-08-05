@@ -84,10 +84,15 @@ set is already computed. It is simply not worth it for an edge case.
 
 Each is independently landable, has its own gate, and leaves the tree green.
 
-### Step 1 — make F2's materialise LIVENESS-aware ⚑ this is a REGRESSION FIX, and it blocks merge
+### Step 1 — make F2's materialise LIVENESS-aware ✅ DONE (2026-08-05)
 
-Before any `&` work: F2's reshape path keys on the **container** and is **order-blind**. It
-materialises any view of a container reshaped anywhere in the function, even one that is dead
+**Shipped.** `collect_views_to_materialise` now answers both causes and the flat
+`reshaped_containers` set is gone; `tests/scripts/148-view-liveness-across-reshape.loft` is the
+CI guard, `probes/39-f2-liveness-boundary.loft` the 12-cell boundary. The merge blocker is
+cleared. Details in § Step 1, as shipped, below.
+
+Before any `&` work: F2's reshape path keyed on the **container** and was **order-blind**. It
+materialised any view of a container reshaped anywhere in the function, even one that is dead
 long before the removal. Measured, plain bind, both backends:
 
 ```loft
@@ -118,6 +123,51 @@ container as the event instead of a re-establishment.
   the liveness walk did not go too far the other way.
 - **Risk: low-medium.** It narrows when a copy happens, so the failure direction is a stale view
   coming back — which probes 03–07 and 29 are exactly the guard for.
+
+#### Step 1, as shipped
+
+**The design was right about the destination and wrong about the vehicle.** F8's walk is keyed
+on the VIEW and walks blocks in order, but *order is not liveness*: it marks a view bound before
+the event, which is exactly what cell L1 (`c = v[0]; c.n = 99; v.remove(2)`) is. Routing the
+reshape cause through it unchanged would have fixed L5 and L8 and left the headline regression
+in place. So the walk gained the missing half rather than merely a second caller:
+
+> A disturbance only **SHAKES** the open views of that container. A later read or write of a
+> shaken view is what **condemns** it. A view whose last use precedes the disturbance keeps its
+> alias and writes through.
+
+That is one rule for both causes, so `reshaped_containers` is deleted as a field and the
+per-statement helper feeds the same walk; `views_to_materialise` became a
+`HashMap<u16, ViewCause>` so the two advice lines still read differently (`Reshaped` wins when
+both apply). The cause split is now carried as data instead of re-derived at the strip site from
+*"is the container in the reshaped set"*, which was the thing that could disagree with itself.
+
+**One measurement decided the shape of the walk, and code-reading would not have found it.**
+The first version shook and then read uses over the WHOLE statement before recursing into it —
+so for the function's top-level block it re-scanned every statement inside, and `c.n = 99`
+(which runs *before* the removal) counted as a use *after* it. L1 stayed broken with the
+analysis "working". One env-gated print of the condemning statement named the block instantly;
+the fix is to handle uses at LEAF granularity and let the recursion carry order. Kept as the
+reason `walk_stmt` looks the way it does: the whole-statement shake survives only for `Loop`
+(where the next iteration really does put the disturbance before the body's uses) and for forms
+the walk cannot descend into (a `match` arm), where coarse-in-both-directions is the safety net.
+
+| | before | after |
+|---|---|---|
+| L1 dead before the removal | 11, write lost | **99** |
+| L5 bind in a block that closed | 11 native / 99 interp — a backend split | **99** both |
+| L8 removal before the bind | 11, write lost | **99** |
+| L10 one dead + one live view | 11022, both stripped | **99022** |
+| L2/L3/L4/L6/L7/L9 (F2's own evidence) | unchanged | unchanged |
+| advice lines emitted | 13, four of them untrue | **9**, all on views genuinely in use |
+
+Probes 03–07, 26, 28, 29, 30, 35, 36, 37 and 38 re-run clean on both backends;
+`LOFT_STRICT_STORES` reports nothing on probe 39, so no cell passes by leaking.
+
+**Known lower bound, recorded rather than papered over:** a view bound inside a nested block and
+used on a LATER iteration of an enclosing loop is not tracked, because the frame closes with the
+block. A disturbance anywhere inside a loop shakes every view held from *outside* it before the
+body is walked, so the ordinary loop shapes are covered; this one keeps today's behaviour.
 
 ### Step 2 — give `&` a representation that survives to the check (INERT)
 

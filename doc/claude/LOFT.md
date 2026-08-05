@@ -1585,6 +1585,15 @@ copy, writes through the binding no longer reach the container — which is why 
 is reported and not silent.  To keep writing through, re-read the view after the
 change (`c = bx.v[0]`).
 
+The copy happens only when you still USE the view after the change — *"while `c`
+is in use"* is meant literally.  Finish with the view first and it keeps writing
+through, so moving the last use above the removal is a second way out:
+
+```loft
+c = v[0];  c.n = 99;  v.remove(2);   // no copy — `c` is done before `v` changes
+c = v[0];  v.remove(2);  c.n = 99;   // copied — `c` is used after `v` changed
+```
+
 Overwriting a place is not ending it: `o.inner = Box{…}` writes into the place
 `o.inner` already occupies, so a view of it sees the new value and still writes
 through.  Full rule + the reasoning:
