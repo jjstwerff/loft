@@ -12,8 +12,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > τ-lvalue); the `&` belongs to the **variable's type**, fixed at its binding — it is
 > not something the expression grammar applies per use. The @PLN87 ladder (built in the
 > `loft2` worktree, branch `tuxedo-work2`) **realises this model** and landed via PR#436
-> (merged into this branch); the `&`-ladder's own deviation list is **closed (D-bind: 0
-> open)** — D-bind-7, the last residual, was fixed this cycle. This doc's SECOND axis,
+> (merged into this branch); D-bind-7, its last residual, was fixed that cycle. **D-bind: 1
+> open** — `B-Ref-Reshape` (2026-08-05) declines a container disturbance under a live `&`, and
+> the code enforces one of its three disturbances so far (`D-bind-9`). This doc's SECOND axis,
 > `const` (@PLN40, shipped), completes the binding table alongside `&`/copy/view — its
 > deviation list is now **closed (D-const: 0 open)**; D-const-1 (enum-variant enforcement
 > scope) was fixed via @PLN102 K1 (see § Deviations), unrelated to the `&`-ladder.
@@ -121,21 +122,35 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
                   IS a struct) is a VIEW that aliases WITHOUT `&` ([heap.md](heap.md)
                   H-View: `c = o.i; c.v=9` ⇒ `o.i.v==9`) — the one place aliasing is the
                   default, because a struct projection names an interior place, not a
-                  fresh whole value.
-  (B-Ref-Reshape) REMOVING from a container while a reference into it is still LIVE is
-                  a COMPILE-TIME ERROR.  `remove` renumbers the positions inside the
-                  container's store and a reference is pinned to one, so this is the
-                  single shape where B-Ref-Alias could not hold; rejecting it is what
-                  makes B-Ref-Alias unconditional with no runtime machinery.  LIVENESS
-                  is the condition, not existence — `c = &v[0]; c.n = 1; v.remove(0);`
-                  is fine, because the reference is dead at the removal.  The removal
-                  may be in this frame or in anything the frame CALLS (`f(v[i], v)`
-                  where `f` removes from its container parameter, at any depth).
-                  A plain LOCAL bind is exempt and keeps compiling: it does not alias
-                  across a reshape, because it materialises (@PLN130 F2).  A plain
-                  PARAMETER is NOT exempt — it aliases the caller's element exactly as
-                  a `&` one does, so the rule keys on the aliasing relation, not on the
-                  token.
+                  fresh whole value.  The alias lasts as long as the PLACE: where the
+                  container is DISTURBED (B-Disturb) while the view is still live, the
+                  binding MATERIALISES — it is given its own copy, taken at the bind,
+                  and the author is told — so writes through it stop reaching the
+                  container (@PLN130 F2/F4/F8).  A plain bind already copies, so this
+                  is consistent with what it meant; a `&` gets B-Ref-Reshape instead.
+  (B-Disturb)     three events END the place a reference names, and they are the same
+                  three for every rule below: REMOVING from the container (`v.remove(i)`
+                  renumbers every later position — collections.md Col-Remove),
+                  RE-KEYING an element (writing a key field: the record moves, or
+                  becomes reachable by no key), and REASSIGNING the container itself
+                  (`bx = T{…}` leaves the place with nothing to point at).  Overwriting
+                  a place is NOT disturbing it: `o.inner = Box{…}` writes INTO the place
+                  `o.inner` already occupies, so a view of it survives.
+  (B-Ref-Reshape) DISTURBING a container while a `&` reference into it is still LIVE is
+                  a COMPILE-TIME ERROR.  These are the shapes where B-Ref-Alias could
+                  not hold, and declining them is what makes B-Ref-Alias unconditional
+                  with no runtime machinery.  Taking a `&` is the author's OWNERSHIP
+                  DECISION, and this is its consequence: loft will not quietly downgrade
+                  the reference to a copy, so where it cannot honour the write it
+                  declines the program (C79, revisited 2026-08-05).  LIVENESS is the
+                  condition, not existence — `c = &v[0]; c.n = 1; v.remove(0);` is fine,
+                  because the reference is dead at the disturbance.  The disturbance may
+                  be in this frame or in anything the frame CALLS (`f(v[i], v)` where
+                  `f` removes from its container parameter, at any depth).
+                  A plain LOCAL bind is exempt and keeps compiling — it materialises
+                  (B-View).  A plain PARAMETER is NOT exempt: it aliases the caller's
+                  element exactly as a `&` one does (calls.md F-ParamHeap), so the rule
+                  keys on the aliasing relation, not on the token.
 ```
 
 **In words.** Binding copies by default — a scalar and a whole vector alike (`d = v`
@@ -143,9 +158,15 @@ gives you an independent copy). Writing `&` at the bind turns it into a live lin
 `d = &self.data; d[i] = x` writes through to the source (a game can grab a sub-vector and
 mutate it in place). The one exception is reading a *struct-typed* field or element
 (`o.inner`, `v[i]`): that is a view onto the interior, and mutating it is already
-visible — no `&` needed there. And a reference stays valid for as long as it is used,
-because the one thing that could invalidate it — removing from the container underneath
-it — does not compile.
+visible — no `&` needed there.
+
+Both kinds of alias last exactly as long as the place they name, and the three things
+that end a place are the same for both (B-Disturb). What differs is the answer. A plain
+view gets a **copy** and is told so: it already meant value semantics, so losing
+write-through is consistent. A `&` gets an **error**, because it did not — the author
+asked for a live link, and silently handing back a copy would make that request a lie.
+That is the consequence of writing `&`: it is an ownership decision, so loft declines the
+program rather than quietly changing what it means.
 
 ### `const` — the immutability axis (binding-const vs value-const, @PLN40, shipped)
 
@@ -248,11 +269,41 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **0**. The @PLN87 ladder (L1–L6), the model + doc reconciliation
-(PR#436), the residual D-bind-7 and D-bind-8 (closed below) are all verified;
-@PLN40's Const-Bind / Const-Value / Const-ScalarCollapse / Const-Compose are shipped and
-enforced for struct fields, parameters, and locals — and, since @PLN102 K1, for
-**enum-variant fields** too (their one former residual gap, D-const-1, now closed).
+OPEN: **1** — D-bind-9, below: B-Ref-Reshape is enforced for ONE of B-Disturb's three
+events. The @PLN87 ladder (L1–L6), the model + doc reconciliation (PR#436), the residual
+D-bind-7 and D-bind-8 (closed below) are all verified; @PLN40's Const-Bind / Const-Value /
+Const-ScalarCollapse / Const-Compose are shipped and enforced for struct fields, parameters,
+and locals — and, since @PLN102 K1, for **enum-variant fields** too (their one former residual
+gap, D-const-1, now closed).
+
+### D-bind-9 — a `&` reference is still silently downgraded to a COPY on two of the three disturbances ⚑
+
+- **Violates:** B-Ref-Alias (via B-Ref-Reshape — the shape that should not compile does).
+- **Where:** `scopes::def_reshape_refusals` filters the liveness walk to `ViewCause::Reshaped`,
+  so the REASSIGNMENT cause is computed and then ignored; `parser::note_key_field_write` decides
+  the RE-KEY cause on its own, parser-side, with no liveness walk and no `is_amp_link` test.
+- **Effect:** measured on both backends, each emitting *"`c` was copied out of …"* advice:
+
+```loft
+// RE-KEY — the record neither moves to the new key nor stays writable through `c`.
+c = &s[30];  c.key = 5;         // c.key==5, but s[30].tag==333 and s[5] is ABSENT
+// REASSIGNMENT — the write lands in the copy.
+c = &bx.inner;  bx = Mid { inner: Box { n: 22 } };  c.n = 99;   // c.n==99, bx.inner.n==22
+```
+
+- **Status:** OPEN. The REMOVAL event ships (@PLN130 F9, loft#779, `b_ref_reshape_*`); these two
+  were scoped out of it — the maker's sentence named removal only — and the 2026-08-05 revisit of
+  [C79](../DESIGN_DECISIONS.md) is what now covers them: *"we can decline code where we cannot
+  create a safe implementation … if a user explicitly takes a reference that is an ownership
+  decision and it has consequences."*
+- **Removal:** two independent changes, neither large.
+  - *Reassignment* — drop the `cause != Reshaped` filter in `def_reshape_refusals` and give the
+    `Reassigned` arm its own message. The walk already returns the cause, the liveness, the
+    container and the line, so no new analysis is needed.
+  - *Re-key* — at `note_key_field_write`, refuse instead of stripping the dep when the base
+    `is_amp_link`. No liveness question arises: the key write IS the use, so the reference is
+    live there by construction. Note the remedy differs — there is no "move it after the last
+    use", so the message must point at re-inserting (`s[key] = value`).
 
 > **D-bind-8 — CLOSED by adding B-Ref-Reshape (@PLN130 F9, [loft#779](https://github.com/loft-lang/loft/issues/779)).**
 >
@@ -306,10 +357,9 @@ enforced for struct fields, parameters, and locals — and, since @PLN102 K1, fo
 > `tests/scripts/149-reference-survives-callee-reshape.loft`; `tests/scripts/145-…` and `774-…`
 > pin the PLAIN-bind behaviour, which is unchanged.
 >
-> **Deliberately out of scope:** a reference across a keyed-collection RE-KEY. @PLN130 F4 treats
-> a key-field write as a reshape and materialises the view, and for a `sorted` the record
-> genuinely moves — same class, but a re-key is a *write*, not a removal, so the maker's
-> sentence does not cover it. It needs its own decision.
+> **What it did NOT close:** the other two disturbances. The maker's sentence named removal, so
+> the RE-KEY and REASSIGNMENT causes were scoped out and still downgrade a `&` to a copy — now
+> tracked as **D-bind-9** above, under the widened C79 principle rather than as an open question.
 
 > **Landed via @PLN102 K1 (verified, closed):**
 > - **D-const-1 — enum-variant `const` / value-const fields are now enforced identically

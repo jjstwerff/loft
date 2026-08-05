@@ -120,6 +120,15 @@ declared `&T` ([binding.md](binding.md)) — that is the one explicit channel. (
 in a callee ⇒ caller sees `99`; `n=n+1` on a scalar ⇒ caller unchanged; `v=[9,9]` on a plain
 vector param ⇒ caller unchanged.)
 
+**`F-ParamHeap` has a static consequence at the CALL SITE.** Because a heap parameter aliases the
+caller's argument, handing a callee both a container and a reference INTO that container
+(`f(v[i], v)`) gives it two names for the same store — and if `f` removes from the container
+parameter, the write through the other one is lost. That call does not compile
+([binding.md](binding.md) `B-Ref-Reshape`, @PLN130 F9 / loft#779). Note it is `F-ParamHeap`, not
+the `&` spelling, that makes this a hazard: a PLAIN struct parameter aliases the caller's element
+exactly as a `&` one does, so both spellings are refused. This is the only static rejection at a
+call site besides `F-Arity`.
+
 ### The return value is independent
 
 ```

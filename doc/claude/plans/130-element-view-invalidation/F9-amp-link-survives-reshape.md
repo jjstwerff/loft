@@ -287,12 +287,41 @@ and it means the stdlib is checked too.
 
 ### Step 5 — close the deviation and state the rule ✅ DONE (2026-08-05)
 
-- **B-Ref-Reshape** is now a rule in `formal/binding.md` beside B-Ref-Alias; D-bind-8 is closed
-  with its evidence, and `OPEN` is back to **0**.
+- **B-Ref-Reshape** is now a rule in `formal/binding.md` beside B-Ref-Alias, and D-bind-8 is
+  closed with its evidence. `OPEN` is **1**, not 0 — see the residual below.
 - [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](../../OWNERSHIP_MODEL.md) and
   the C86 lifetime paragraph in [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) carry the shipped
   two-row rule (plain → materialise; reference → refused) instead of the *"known gap"* wording.
 - `LOFT.md`'s user-facing paragraph gains the error and the index workaround.
+- Three gaps the formal validation surfaced and closed: `collections.md` had no removal rule at
+  all (`Col-Remove` now states the density that this whole rule rests on), and `binding.md`
+  B-View / `heap.md` H-View both asserted an UNCONDITIONAL alias that @PLN130 F2 had already
+  made conditional — the rules were incomplete, not the code, so both gained the materialise
+  qualifier (`H-Materialise`).
+
+### The residual — D-bind-9, and why `OPEN` is 1 rather than 0
+
+**The rule has three producers; the code enforces one.** B-Ref-Reshape was written from the
+maker's sentence, which named REMOVAL. `B-Disturb` names three events that end the place a
+reference points at, and the other two still silently downgrade a `&` to a copy — measured on
+both backends, each emitting *"`c` was copied out of …"*:
+
+```loft
+c = &s[30];  c.key = 5;         // RE-KEY: c.key==5, s[30].tag==333, s[5] ABSENT
+c = &bx.inner;  bx = Mid { … };  c.n = 99;   // REASSIGN: c.n==99, bx.inner.n==22
+```
+
+Closing D-bind-8 while these held was an error of accounting on this plan's part: the deviation
+named all three mechanisms of one rule, and the sign-off covered one. It is recorded as
+**D-bind-9** with both fixes named — the reassignment arm is a filter change in
+`def_reshape_refusals` (the walk already returns that cause with its liveness, container and
+line), the re-key arm is a refusal at `note_key_field_write` where `is_amp_link` holds.
+
+What made this fixable rather than an open question is the 2026-08-05 widening of
+[C79](../../DESIGN_DECISIONS.md): *"we can decline code where we cannot create a safe
+implementation. If a user explicitly takes a reference that is an ownership decision and it has
+consequences."* The earlier scoping note here — *"a re-key is a write, not a removal, so the
+maker's sentence does not cover it; needs its own decision"* — is answered by that principle.
 
 ## The compatibility question — ANSWERED 2026-08-05: cleared, and the doc urges it
 

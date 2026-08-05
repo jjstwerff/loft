@@ -1599,7 +1599,10 @@ Overwriting a place is not ending it: `o.inner = Box{…}` writes into the place
 through.
 
 **Write `&` and you get an error instead of a copy.**  `c = &v[0]` says *"I want a
-live link"*, so loft will not quietly hand you a copy — it refuses the removal:
+live link"* — an ownership decision, not a hint — so loft will not quietly hand you a
+copy.  Where it cannot honour the link, it refuses the program instead.  Today that
+covers the **removal** case; a re-key or a container reassignment under a `&` still
+copies and warns like a plain bind:
 
 ```
 error: cannot remove from `v` while `c` references an element of it — a removal

@@ -168,6 +168,17 @@ wants a live reference instead of the default copy/alias. That is the entire sur
 user-facing borrow checker is **declined** ([DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)) — it
 would fight loft's *fun-on-pickup* goal ([GOALS.md](GOALS.md)).
 
+**The one carve-out: loft DECLINES what it cannot implement safely** (C79, revisited
+2026-08-05). "Never rejects" is about programs loft *can* compile correctly — and that is
+nearly all of them, which is why the surface stays clean. It is not a promise to accept a
+program whose meaning loft cannot deliver. Writing `&` is an ownership decision by the author,
+not a hint: it asks for a live link. Disturb the place that link names while it is still in use
+and loft has no honest lowering left, so it reports a compile error instead of quietly handing
+back a copy — `formal/binding.md` **B-Ref-Reshape**. The distinction that keeps this from being
+a borrow checker by the back door: loft refuses only where *no* correct lowering exists, never
+because a correct one is hard to prove. Naive code is unaffected, and a plain bind never meets
+it at all — it gets the copy described below.
+
 ## The law — whole-value binds COPY, projections view; `&` binds a live REFERENCE
 
 > **CORRECTED (2026-07-03, C86 — maker's call).** The earlier text ("a binding to a heap

@@ -136,6 +136,14 @@ only that local's own store (see `H-Copy`) — the exact fact [capabilities.md](
                — a struct FIELD (`c = o.i`) or a struct ELEMENT of a vector (`s = v[0]`).  x is a
                VIEW: it aliases the place inside the container, so a write through x mutates the
                container (#426, ownership.md).  No store is allocated.
+  (H-Materialise)  H-View holds only while the PLACE does.  Where the container is DISTURBED
+               ([binding.md](binding.md) B-Disturb — a removal, a re-key, or a reassignment of the
+               container) while x is still LIVE, the bind takes the H-Copy step instead: x gets a
+               fresh store holding the value at the bind, and the author is told.  Writes through
+               x then stop reaching the container.  A view whose last use PRECEDES the disturbance
+               is unaffected and keeps aliasing (@PLN130 F2/F4/F8).  This is the plain-bind
+               answer; an explicit `&` is DECLINED at compile time instead (B-Ref-Reshape),
+               because a copy is not what it asked for.
 ```
 
 **In words.** Whether a bind copies or aliases depends on **what is bound** — and the two backends
@@ -152,6 +160,13 @@ agree exactly (verified):
 - **VIEW** — binding a **struct-typed projection**: a struct field (`c = o.i`) or a struct element
   of a vector (`s = v[0]`). `x` aliases the place, so a write through it mutates the container:
   `c = o.i; c.v = 9` makes `o.i.v == 9`; `s = v[0]; s.v = 9` makes `v[0].v == 9`.
+- **…and a VIEW falls back to COPY when its place is destroyed under it** (`H-Materialise`). A
+  container that is reshaped, re-keyed or reassigned while the view is still in use leaves the
+  view pointing at nothing meaningful — a removal renumbers positions, so `c` starts naming a
+  DIFFERENT element (measured: a read answered `44/444` where its element held `33/333`). The
+  bind takes the copy step instead, and says so, so `c = v[0]; v.remove(2); c.n = 99` leaves
+  `v[0].n == 11`. Order matters: `c = v[0]; c.n = 99; v.remove(2)` keeps the alias and lands the
+  99, because the view is dead before the container changes.
 
 This is the [DESIGN_DECISIONS.md C86](../DESIGN_DECISIONS.md) (`#415`) copy vs [ownership.md](ownership.md)
 `#426` view boundary, and it is **exactly** the struct-vs-vector split

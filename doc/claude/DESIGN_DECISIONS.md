@@ -1557,7 +1557,7 @@ prove an alias is safe.
 
 ### Decision
 
-**Closed (2026-06-24) — INTERNAL only.** No user-facing ownership errors, ever. The compiler
+**Closed (2026-06-24) — INTERNAL only.** No user-facing ownership errors. The compiler
 always produces a correct free/copy/move, copying when unsure; the one deliberate user-facing
 ownership concept is `&` (a live reference, opt-in shared mutation —
 [OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md), @PLN87). "Rust as the reference model"
@@ -1566,12 +1566,41 @@ Consequence: `O-Complete` ([formal/ownership.md](formal/ownership.md)) is the lo
 invariant — an incomplete fact is a miscompile / leak, not a recoverable compile error, so the
 failure to fear is *incompleteness*, not just unsoundness.
 
+**Revisited (2026-08-05) — loft may DECLINE what it cannot implement safely.** The revisit
+clause below fired, and the maker widened it past *"a single case"*:
+
+> "We can decline code where we cannot create a safe implementation. If a user explicitly takes
+> a reference that is an ownership decision and it has consequences."
+
+So the boundary is no longer *one named diagnostic* but a **principle with a precondition**:
+where loft cannot produce a lowering that honours what the author wrote, it REFUSES the program
+rather than silently substituting something else. The half that does not move is the important
+one — loft still never rejects a program it *can* compile correctly, there are still no lifetime
+annotations, no move-vs-borrow puzzles, no "cannot borrow" on ordinary naive code, and
+`O-Complete` is untouched: the analysis must still be total wherever a valid lowering exists.
+
+What changed is the answer when one does not. Writing `&` is not a performance hint, it is an
+**ownership decision**: it asks for a live link, and B-Ref-Alias promises that every write
+through it reaches the source. When the program then disturbs the place that reference names —
+removes from the container, re-keys the element, replaces the container — there are exactly
+three possible answers. Honour it with per-reference runtime arithmetic (declined: not worth it
+for an edge case). Silently downgrade the reference to a copy (**this is what the principle
+forbids** — it makes the author's explicit decision a lie, and it loses a write with no
+diagnostic). Or decline the program. loft declines.
+
+First application: **B-Ref-Reshape** ([formal/binding.md](formal/binding.md)), @PLN130 F9 /
+[loft#779](https://github.com/loft-lang/loft/issues/779), shipped for the removal disturbance;
+the other two are tracked as `D-bind-9`.
+
 ### Revisit when
 
 A concrete consumer hits a case where silently copying is a real, measured cost AND a narrow,
 *clearly-diagnosable* surface (e.g. "this reference would outlive its source") would be more
 natural than the copy — i.e. one named case earns a user-facing diagnostic. Even then: a
-single case, never the general Rust model.
+single case, never the general Rust model. **(Fired 2026-08-05 — see the revisit above, which
+generalised "one named case" to "wherever no safe implementation exists". The clause is kept
+because its bar is still the right one for any FURTHER widening: a measured cost and a narrow,
+clearly-diagnosable surface, never the general Rust model.)**
 
 ---
 

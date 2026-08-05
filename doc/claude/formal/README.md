@@ -61,9 +61,11 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 
 ## Areas
 
-The **static** areas are all at **0 open deviations** (2026-07-04) — except the newest,
-**layout.md** (2026-07-07): the store byte-layout contract, at **1 open** (`D-layout-1`, the #477
-version-guard gap, mechanism-shipped pending a durable-store consumer). The **operational** area is
+The **static** areas are at **0 open deviations** (2026-07-04) except two: **layout.md**
+(2026-07-07), the store byte-layout contract, at **1 open** (`D-layout-1`, the #477 version-guard
+gap, mechanism-shipped pending a durable-store consumer); and **binding.md** (2026-08-05), which
+re-opened at **1** when `B-Ref-Reshape` was added — the rule declines more than the code declines
+yet (`D-bind-9`). The **operational** area is
 one small-step contract split across files: the scalar core (operational.md) plus the heap,
 iteration, coroutines, concurrency, calls, matching, tuples, closures (2026-07-04), and the last
 two — **text formatting** and **interfaces/generics** (2026-07-05) — so the operational contract is
@@ -74,10 +76,10 @@ shrinks operational.md's single meta-deviation (D-op-1: conformance is *differen
 | doc | area | status |
 |---|---|---|
 | [types.md](types.md) | type system + conversion relation (incl. integer width) | **0 open** — @PLN25 value/null model landed (DN1–DN6 + D2 closed); the @PLN102 null-flow generalisation (N-Prop/N-Domain/N-Cast/N-Store incl. call-arg + DN3-Float) SHIPPED default-on, verified both backends |
-| [binding.md](binding.md) | reference types & `&` (the bind-site link law) + the `const` immutability axis | **0 open** — `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`), @PLN87 ladder L1–L6 + D-bind-7 closed; the @PLN40 two-level `const` model (Const-Bind/Value/…) shipped, and D-const-1 (enum-variant const) closed via @PLN102 K1 — enforced identically to struct fields, both backends |
+| [binding.md](binding.md) | reference types & `&` (the bind-site link law) + the `const` immutability axis | **1 open** (`D-bind-9`) — **B-Ref-Reshape** landed (@PLN130 F9, loft#779): disturbing a container while a `&` reference into it is LIVE is a compile error, the first application of C79's 2026-08-05 *decline-what-we-cannot-implement-safely* revisit. Enforced for one of `B-Disturb`'s three events (removal); the re-key and reassignment events still downgrade the reference to a copy — that is `D-bind-9`. Otherwise closed: `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`), @PLN87 ladder L1–L6 + D-bind-7 closed; the @PLN40 two-level `const` model (Const-Bind/Value/…) shipped, and D-const-1 (enum-variant const) closed via @PLN102 K1 — enforced identically to struct fields, both backends |
 | [grammar.md](grammar.md) | concrete grammar + operator precedence | **0 open** — the 12-level precedence ladder written; the prefix-`&`/infix-`&` overload + non-CFG surface resolved as decided edges (C81/C82) |
 | [operational.md](operational.md) | small-step semantics — the scalar core | **rules complete for the core, 2 open** — values/null sentinels, left-to-right order, uncomputable→null (C80) + `??`, state steps; the 2 open are the META deviation D-op-1/2 (differential-not-definitional conformance), inherited by every operational file below |
-| [heap.md](heap.md) | store steps — alloc / read / write / **copy** / free | **rules written (2026-07-04), 0 own** — the `DbRef`/`Store` model; the whole-value COPY (C86); the LIFO free discipline whose soundness is ownership.md; conformance via the oracle (D-op-1) |
+| [heap.md](heap.md) | store steps — alloc / read / write / **copy** / free | **rules written (2026-07-04), 0 own** — the `DbRef`/`Store` model; the whole-value COPY (C86); `H-Materialise` (a view falls back to a copy when its place is destroyed under it, @PLN130); the LIFO free discipline whose soundness is ownership.md; conformance via the oracle (D-op-1) |
 | [layout.md](layout.md) | the store BYTE layout — `layout(τ)` (widths, offsets, packing, the reference encoding) | **rules written (2026-07-07), 1 open** — the FORMAT counterpart to heap.md's steps (it defines the `field_offset` heap.md reads at); one format (RAM = disk); nullability is a sentinel, not a layout (`L-Null`); **D-layout-1** (no version guard on persisted bytes, #477) is **mechanism-shipped** — the golden test + the `.dschema` sidecar — pending a durable-store consumer to auto-invoke it (@PLN97) |
 | [iteration.md](iteration.md) | `for`, ranges, text iteration, the map/filter/reduce/comprehension combinators | **rules written (2026-07-04), 0 own** — index-cursor `for`, deterministic combinator order, fresh result vector; conformance via the oracle |
 | [coroutines.md](coroutines.md) | generators — `yield` / `next`, stackful suspension | **rules written (2026-07-04), 0 own** — lazy one-value-per-advance; straight-line yields lazy on both backends, but LOOP-based yields are eager on native (a DECIDED EDGE — rustc restriction, aspiration to fix); conformance via the oracle |
