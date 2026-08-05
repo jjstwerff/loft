@@ -780,7 +780,7 @@ pub fn container_element_base(data: &Data, value: &Value) -> Option<u16> {
         };
         if !matches!(
             data.def(*d).name(),
-            "OpGetVector" | "OpVectorRef" | "OpGetField"
+            "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
         ) {
             return None;
         }

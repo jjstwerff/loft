@@ -1,28 +1,31 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// @PLN130 probe 28 — cluster II matrix: invalidator = REORDERING, not removal.
+// @PLN130 probe 28 — cluster II matrix: invalidator = writing a KEY field through a view.
 //
-// The other half of the row: a KNOWN producer (`c = collection[…]`) against an untested
-// invalidator.  A `sorted<T[key]>` keeps its elements in key order, so mutating the key
-// of a live element reorders the collection — the same positional shift `remove` causes,
-// reached without deleting anything.
+// CONTRACT CHANGED (F4 — fixed by reusing F2's materialise).  Previously `c.key = 5` wrote
+// the element's record while the collection kept its old index, so the element ended up
+// reachable by NEITHER key while still being iterated:
 //
-// Hand-computed: `c` names the element whose key is 30.  Setting its key to 5 must move it
-// to the FRONT of the sorted order.  `c` must still describe that element afterwards, and
-// the collection must hold 3 elements in key order 5, 10, 20.
+//   c.key == 5   c.tag == 333      the record was updated
+//   s[5]  -> null                  not findable at its new key
+//   s[30] -> null                  not findable at its old key either
+//   iterate -> 3                   still present, so nothing was deleted
 //
-// MEASURED — FAILS identically on both backends, and the failure is sharper than "stale
-// index".  After `c.key = 5`:
+// Measured identically on `sorted`, `hash` AND `index`, so it was one defect, not three.
 //
-//   c.key   == 5     c.tag == 333    the element itself is updated
-//   s[5]    -> null                  NOT findable at its new key
-//   s[30]   -> null                  NOT findable at its old key either
-//   iterate -> 3 elements            still present, so nothing was deleted
+// A true re-index is the obvious fix and is wrong here: it needs the OLD key captured before
+// the write, and for a `sorted` the record MOVES to its new position — invalidating the very
+// view doing the writing (F2 all over again, for its own binding).
 //
-// The element becomes unreachable by key while remaining in the collection: the write
-// through the view updated the record but never told the collection to re-index.  A
-// program that keys into `s` silently loses an element it can still iterate over — no
-// error, no diagnostic, and the count still looks right.
+// So a key-field write is now treated as a RESHAPE of that collection: the view materialises
+// and the author is told —
+//
+//   advice: `c` was copied out of `s` because `key` is one of `s`'s keys — writing a key
+//   through an element would leave it reachable by no key at all. Writes through `c` no
+//   longer reach `s`; to change a key, re-insert with `s[key] = value`.
+//
+// `c` is now an independent copy, and the collection keeps a consistent, reachable entry.
+// Changing a key keeps its supported spelling, `s[key] = value`, which re-indexes properly.
 
 struct Elm { key: integer, tag: integer = 0 }
 
@@ -34,12 +37,21 @@ fn main() {
   c = s[30];
   assert(c.tag == 333, "28 pre c.tag {c.tag} want 333");
 
-  c.key = 5;                       // re-key: this element sorts to the front now
+  c.key = 5;                       // key write — `c` materialised, `s` untouched
 
-  assert(c.tag == 333, "28 c.tag {c.tag} want 333");
+  // The copy took the write.
   assert(c.key == 5, "28 c.key {c.key} want 5");
-  assert(s[5].tag == 333, "28 s[5].tag {s[5].tag} want 333");
-  assert(s[10].tag == 111, "28 s[10].tag {s[10].tag} want 111");
-  assert(s[20].tag == 222, "28 s[20].tag {s[20].tag} want 222");
-  println("probe 28 PASSED");
+  assert(c.tag == 333, "28 c.tag {c.tag} want 333");
+
+  // And nothing in the collection became unreachable — the element is still at its own key.
+  assert(s[30].tag == 333, "28 s[30].tag {s[30].tag ?? -1} want 333 (must stay reachable)");
+  assert(s[10].tag == 111, "28 s[10].tag {s[10].tag ?? -1} want 111");
+  assert(s[20].tag == 222, "28 s[20].tag {s[20].tag ?? -1} want 222");
+
+  n = 0;
+  for e in s {
+    n = n + 1;
+  }
+  assert(n == 3, "28 iterate {n} want 3");
+  println("probe 28 PASSED — key write materialised; no element became unreachable");
 }

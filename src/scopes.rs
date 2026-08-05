@@ -166,7 +166,7 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
         };
         if !matches!(
             data.def(*d).name(),
-            "OpGetVector" | "OpVectorRef" | "OpGetField"
+            "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
         ) {
             return None;
         }

@@ -15,7 +15,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
 | C — Fix design | ✅ F1+F2 shipped as one analysis, two triggers. F3 needs a different mechanism (it needs the alias to SURVIVE) |
-| D — Implementation | 🟡 F1, F2, F5, F6 DONE. F3 BLOCKED (stable slots). F4 designed. Suggestions spun out as @PLN131 |
+| D — Implementation | 🟡 F1, F2, F4, F5, F6 DONE (tests 144-146). F3 BLOCKED — needs stable slots. Suggestions spun out as @PLN131 |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -360,7 +360,7 @@ finding resolves exactly one of:
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
 | F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145` |
 | F3 | `&` param bound from an element loses its write after a shift | probe 26 | **FIXED** — needs stable slots (§ F3); materialise and fat-`&` both shown not to work | BLOCKED on a representation decision |
-| F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — treat a key-field write as a reshape, reuse F2 (§ F4) | mechanism VERIFIED, uniform across sorted/hash/index; fix designed, not applied |
+| F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
 | F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |
 

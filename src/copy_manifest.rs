@@ -131,6 +131,22 @@ pub fn note_materialised_view(var: &str, container: &str) {
     });
 }
 
+/// Note that `var` was copied out of keyed collection `coll` because a write to its KEY field
+/// `field` would otherwise leave the element unreachable (@PLN130 F4).
+///
+/// Separate message from [`note_materialised_view`]: the cause is different (a key write, not
+/// a removal) and so is the way out — re-insert with `coll[key] = value` rather than
+/// restructure the loop.
+pub fn note_rekeyed_view(var: &str, coll: &str, field: &str) {
+    MATERIALISED.with(|m| {
+        let mut m = m.borrow_mut();
+        let key = (format!("{var}\u{0}rekey\u{0}{field}"), coll.to_string());
+        if !m.contains(&key) {
+            m.push(key);
+        }
+    });
+}
+
 /// Tell the author which views lost their alias, and why. Drains.
 ///
 /// Deliberately not gated: constraint 2 of @PLN130 — where rustc errors on a use-after-move,
@@ -138,12 +154,21 @@ pub fn note_materialised_view(var: &str, container: &str) {
 pub fn report_materialised_views() {
     let rows: Vec<(String, String)> = MATERIALISED.with(|m| std::mem::take(&mut *m.borrow_mut()));
     for (var, container) in rows {
-        eprintln!(
-            "advice: `{var}` was copied out of `{container}` because `{container}` is \
-             modified while `{var}` is in use — removing an element renumbers the others, so \
-             the view could not stay valid. Writes through `{var}` no longer reach \
-             `{container}`."
-        );
+        if let Some((name, field)) = var.split_once("\u{0}rekey\u{0}") {
+            eprintln!(
+                "advice: `{name}` was copied out of `{container}` because `{field}` is one of \
+                 `{container}`'s keys — writing a key through an element would leave it \
+                 reachable by no key at all. Writes through `{name}` no longer reach \
+                 `{container}`; to change a key, re-insert with `{container}[key] = value`."
+            );
+        } else {
+            eprintln!(
+                "advice: `{var}` was copied out of `{container}` because `{container}` is \
+                 modified while `{var}` is in use — removing an element renumbers the others, \
+                 so the view could not stay valid. Writes through `{var}` no longer reach \
+                 `{container}`."
+            );
+        }
     }
 }
 

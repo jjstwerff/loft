@@ -6280,6 +6280,80 @@ impl Parser {
         self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, true)
     }
 
+    /// @PLN130 F4 — writing a KEY field through an element view re-keys the element, and a
+    /// keyed collection does not re-index itself when a record is written behind its back.
+    /// Measured on `sorted`, `hash` AND `index` alike: after `c.key = 5` the element updates,
+    /// `s[5]` answers null, `s[30]` answers null, and iteration still yields it — reachable by
+    /// no key while still in the collection.
+    ///
+    /// Treat it as a RESHAPE of that collection, which is exactly F2's situation: the view
+    /// materialises, the author is told, `c.key = 5` changes only `c`, and the collection
+    /// keeps a consistent reachable entry. Changing a key keeps its supported spelling —
+    /// `h[k] = value`, which routes through `set_keyed` and re-indexes properly. That is how
+    /// a database treats a primary key.
+    ///
+    /// Hooked at the getter->setter conversion (`call_to_set_op`), which is where a plain
+    /// `c.key = 5` actually lands — `set_field` looked like the site and is not on this path.
+    /// That leaves only the byte OFFSET (`OpSetInt(c, 0, 5)`), so each key NAME is resolved to
+    /// its offset through `self.database.types[…].parts` and compared. The parser holds a
+    /// `Stores`; `scopes::check` does not, which is why this cannot live there.
+    ///
+    /// Deliberately narrow: only a field that IS one of the collection's keys triggers it.
+    /// Widening to any field write through an element view would take write-through away from
+    /// keyed elements generally, which is a far larger loss than F4 is worth.
+    /// Byte offset of the named field within `content`'s record, via the runtime type table.
+    ///
+    /// `None` when the type is not laid out yet or the name is not a field — a missed answer
+    /// just leaves the binding alone, which is today's behaviour rather than a new one.
+    fn key_field_offset(&self, content: u32, field: &str) -> Option<i64> {
+        let idx = self
+            .data
+            .def(content)
+            .attributes()
+            .iter()
+            .position(|a| a.name == field)?;
+        let kt = self.data.def(content).known_type();
+        let parts = &self.database.types.get(kt as usize)?.parts;
+        let fields = match parts {
+            Parts::Struct(f) | Parts::EnumValue(_, f) => f,
+            _ => return None,
+        };
+        let pos = fields.get(idx)?.position;
+        if pos == u16::MAX {
+            return None;
+        }
+        Some(i64::from(pos))
+    }
+
+    pub(crate) fn note_key_field_write(&mut self, base: u16, offset: i64) {
+        if !matches!(self.vars.tp(base), Type::Reference(_, _)) {
+            return;
+        }
+        let deps: Vec<u16> = self.vars.tp(base).depend().clone();
+        for dep in deps {
+            if dep == u16::MAX || dep == base {
+                continue;
+            }
+            let (content, key_names): (u32, Vec<String>) = match self.vars.tp(dep) {
+                Type::Sorted(c, keys, _) | Type::Index(c, keys, _) => {
+                    (*c, keys.iter().map(|(k, _)| k.clone()).collect())
+                }
+                Type::Hash(c, keys, _) | Type::Radix(c, keys, _) => (*c, keys.clone()),
+                _ => continue,
+            };
+            let Some(field) = key_names
+                .into_iter()
+                .find(|k| self.key_field_offset(content, k) == Some(offset))
+            else {
+                continue;
+            };
+            let vname = self.vars.name(base).to_string();
+            let cname = self.vars.name(dep).to_string();
+            self.vars.make_independent(base, dep);
+            crate::copy_manifest::note_rekeyed_view(&vname, &cname, &field);
+        }
+    }
+
     /// Plan-06 phase 4d: emit the per-element OpSet* sequence for a
     /// tuple struct field's value.  Recurses for nested Tuple element
     /// types so `((1, 2), (3, 4))` written into a `((int, int), (int,

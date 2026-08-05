@@ -452,6 +452,16 @@ impl Parser {
         code: Value,
         _op: &str,
     ) -> Value {
+        // @PLN130 F4 — every `c.field = …` on a scalar field arrives here as a getter name
+        // plus (base, byte-offset). If that field is a KEY of a collection `c` views, the
+        // write would re-key the record without re-indexing the collection, leaving the
+        // element reachable by no key at all. Materialise the view instead and say so.
+        if let (Some(Value::Var(base)), Some(Value::Int(off))) = (
+            args.first().map(Value::unspan),
+            args.get(1).map(Value::unspan),
+        ) {
+            self.note_key_field_write(*base, i64::from(*off));
+        }
         match name {
             "OpGetInt" => {
                 // f#next = pos: seek the file AND update the stored field.
