@@ -156,13 +156,19 @@ read the failing test's dump (`tests/dumps/*.txt` — IR+bytecode+trace), narrow
 signal you haven't earned it:**
 1. Don't fix on the first read — a clean one-line story is a hypothesis.
 2. Build the matrix in throwaway `/tmp` probes on `--interpret` (`scripts/probe-matrix`), varying ONE
-   composition axis per probe, distinctive values everywhere.
+   composition axis per probe, distinctive values everywhere. But **count the axes you HELD FIXED** —
+   a sweep varying one while pinning four reads as proof and isn't (@PLN130's broken cell needed
+   nesting depth, Set-count, param kind and caller-count moved TOGETHER).
 3. **Hand-compute each cell's expected value** (agreement between two binaries is NOT a pass);
    prove the harness can fail (a no-output cell is vacuous); assert **value AND length AND leak**.
 4. Map pass/fail → find the REAL boundary (filed scope is usually wrong). Resisting a read twice →
    instrument with one env-gated `eprintln`, don't theorize.
 5. Fix at the chokepoint enforcing exactly the violated invariant — no narrower, no wider.
 6. Verify the full matrix on **BOTH backends**; graduate guarantee probes to `tests/scripts/`.
+7. **Propose 3+ cases to check → write them ALL down BEFORE working the first.** Detail decays
+   while you work: the headline of case three survives, its specifics (which axis, which shape,
+   why suspected) do not. Writing the list first also makes it reviewable while it's cheap.
+8. **A new case found = a new probe, always** — the suite is the only thing that remembers.
 
 Full flow: [DEBUG.md](doc/claude/DEBUG.md), [plans/_INVESTIGATION_TEMPLATE.md](doc/claude/plans/_INVESTIGATION_TEMPLATE.md).
 
