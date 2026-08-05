@@ -45,13 +45,25 @@ h = Holder { v: [1, 2, 3] };                          // built in place — no c
 ```
 
 - **Mechanical** — "build the value in place" is a rewrite whose meaning is determined by
-  the code alone. It can be offered as a concrete diff and applied.
+  the code alone. Safe to apply, including unattended.
 - **Conditional** — "stop using `src` afterwards" depends on whether the author still NEEDS
-  that use. loft cannot know. Offering it as a diff invites a silent behaviour change; it
-  must be phrased as a question and never auto-applied.
+  that use. loft cannot know; only the author can.
 
-Conflating the two is the failure mode to design against. A suggestions feature that
-auto-applies a conditional rewrite is a bug generator with good intentions.
+The tiers control **who may affirm the condition**, not whether a suggestion is clickable:
+
+| | interactive (one click) | unattended (`--apply`, batch, CI) |
+|---|---|---|
+| mechanical | yes | yes |
+| conditional | **yes — the click IS the affirmation**, provided the condition is stated in the line the author reads | **never** |
+
+So a conditional suggestion is still a one-click fix for a veteran: *"if `src` is not needed
+after line 12, deleting that use makes this a move"* is something they can judge instantly
+about their own code, and clicking asserts it. What is forbidden is applying it with nobody
+reading the condition.
+
+The failure mode to design against is therefore not "offering conditional suggestions" but
+**stating a condition badly** — a click that affirms something the author did not actually
+read is how a suggestions feature becomes a bug generator with good intentions.
 
 ## A suggestion is an entry point, not a patch
 
@@ -67,10 +79,19 @@ That has design consequences, and they are not cosmetic:
 2. **Point at where to read more.** loft already has a canonical home for this: the feature
    catalogue (`loft-lang/features`, rendered into `doc/features/`), plus `LOFT.md` sections.
    A suggestion should carry the link, so the door actually opens onto something.
-3. **It must read well UNAPPLIED.** If most of the value lands when the author does *not*
-   take the edit, then the explanation is the product and the diff is the illustration. That
-   argues for explain-first ordering in the output, and against a terse `--fix` that prints
-   only a patch.
+3. **It must read well UNAPPLIED** — the learner often takes the knowledge and not the edit.
+   But this must NOT be paid for by the veteran, who has the opposite need: *oops, a bug* →
+   read the resolution → agree → click apply, in seconds. Serve both by **layering**, not by
+   choosing:
+
+   - **Line 1 is the resolution**, stated so it can be judged at a glance. A veteran should
+     never read a paragraph to find the fix.
+   - **Below it**: the concept, the why, the link. Ignorable, and there for the reader who
+     wants the door.
+
+   Explain-*rich*, not explain-*first*. A terse `--fix` that prints only a patch fails the
+   learner; a verbose one that buries the edit fails the veteran, and the veteran is the one
+   using it fifty times a day.
 4. **Prefer the suggestion that teaches** when two are equally sound. Between "build the value
    in place" and "drop the later use", the first introduces an idiom the author can reuse
    everywhere; the second is a local deletion. Rank on what it teaches, not just on brevity.
@@ -103,11 +124,12 @@ a catalogue of rewrites for every diagnostic.
 
 Ship order:
 
-1. `--explain` (or `loft explain prog.loft`) expands each copy notice into: what happened,
-   why, and the candidate resolutions written in the author's own names.
-2. Mark each candidate mechanical or conditional; show conditional ones as questions.
-3. Self-verification for mechanical candidates (steps 1–2 above at minimum).
-4. `--apply` for verified mechanical candidates only.
+1. `--explain` (or `loft explain prog.loft`) expands each copy notice: **resolution line
+   first**, then the concept, the why, and the link.
+2. Mark each candidate mechanical or conditional, and state a conditional one's condition in
+   the resolution line itself — that line is what a clicking author affirms.
+3. Self-verification (apply to an in-memory copy, re-run the analysis, compare behaviour).
+4. Apply: interactive one-click for both tiers; unattended `--apply` for mechanical only.
 5. Only then consider a second diagnostic.
 
 ## Open questions
