@@ -61,13 +61,16 @@ with the interpreter and `--native` deriving that from one shared fact.
      It stays, it is **stated**, and it is tracked as a future-elimination candidate. This
      is the `Avoidable` bucket, and it is a legitimate resting state, not a debt that must
      be paid before the plan closes. `exists()` lives here.
-   - **Unknown** — a copy no diagnostic accounts for. This is the only unacceptable kind,
-     because the author cannot decide about something they are not told. The manifest guard
-     exists to keep this set empty.
+   - **Unknown** — a copy no diagnostic accounts for. Never acceptable: the author cannot
+     decide about something they are not told. The manifest guard exists to keep this empty.
 
    So default-on is livable as soon as the notices are TRUE and actionable — not once they
    are absent. An accept then records a real decision ("intended here"), and an allowed copy
    records a real trade-off, rather than either being noise-suppression.
+
+   **"Allowed for now" covers COPIES ONLY — never wrong behaviour.** A copy that rests is a
+   correct program paying a cost. Breakage, misinformation and silent copies are all
+   excluded, and a warning does not buy any of them off (§ Must resolve before close).
 4. **Both backends, one semantics.** `--native` is the path that must be quickest, so it may
    not be the backend that always deep-copies. Backend parity is in scope here, not a
    follow-up.
@@ -330,30 +333,36 @@ not a result: each row below is **resolved in-plan**, with a regression test. No
 handed to the tracker to be somebody's later problem — filing is not a marker of
 significance, it is a deferral.
 
-**The closure bar is INFORMATION, not exhaustive correctness.** This plan can close without
-every case being solved, provided a programmer has what they need to make the right decision
-for their own codebase. That is the plan's own thesis applied to itself: the defect was never
-that hard cases exist, it was that loft was **silent** about them. So each finding resolves
-one of two ways:
+**The closure bar is INFORMATION — but three things are never allowed, and a warning does not
+buy them off.**
 
-- **FIXED** — where silence is not a choice. Silent data loss and silent corruption leave the
-  author nothing to decide, so they are fixed outright (F1).
-- **STATED** — where a real trade-off exists, the author is told, precisely and at compile
-  time, and decides. A materialise-and-warn (F2), a diagnostic on a lost write (F3/F4), a
-  copy notice (F5), a corrected doc (F6). "Stated" is a resolution, not a deferral: what is
-  *not* acceptable is the program being wrong and nobody being told.
+| never allowed | why a diagnostic is not enough |
+|---|---|
+| **Breakage** — a wrong value, a lost write, corruption, data loss | telling the author their program is silently wrong does not make it right. There is nothing for them to decide |
+| **Misinformation** — a diagnostic or doc that states something false | worse than silence: it is trusted. `--report-copies` answering `none` on a copying program, and `LOFT.md`'s "whatever the field's type" |
+| **Silent copies** — a copy no diagnostic accounts for | the author cannot weigh a cost they are never shown |
 
-A row may therefore close as STATED with its underlying case still open — but never as
-"documented in the plan and left silent to users".
+So the plan can close without every case *optimised*, but not with any case *broken*. Each
+finding resolves exactly one of:
+
+- **FIXED** — the program produces the right answer. Required wherever the defect is a wrong
+  value (F1, F2, F3, F4). For F2 the materialise IS the fix; the warning that rides with it
+  is information about the cost, not a substitute for correctness.
+- **CORRECTED** — a false statement is made true (F5's `none`, F6's doc).
+- **STATED** — reserved for a program that is already CORRECT and merely pays a cost. A copy
+  that is necessary, or one we could remove with a better analysis and have not. This is the
+  only category that may rest.
+
+"Allowed for now" therefore applies to **copies, never to wrong behaviour**.
 
 | # | problem | evidence | resolves as | state |
 |---|---|---|---|---|
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | mechanism VERIFIED to a code line; fix designed, not applied |
-| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–06, 29 | **STATED** — materialise + warn (option 2, signed off) | designed; shares F1's analysis |
-| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **STATED** — diagnostic on the lost write | open |
-| F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | **STATED** — diagnostic; re-index is a separate design | open |
-| F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **STATED** — guard keeps the *unknown* set empty; the copies themselves stay as *allowed for now* | guard built; notice not yet default-on |
-| F6 | `LOFT.md` claims a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **FIXED** — correct the doc | open |
+| F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–06, 29 | **FIXED** — materialise (the warn states the cost, it is not the fix) | designed; shares F1's analysis |
+| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **FIXED** — a lost write is breakage; a diagnostic does not buy it off | open |
+| F4 | Re-keying a `sorted` element through a view makes it unreachable by key | probe 28 | **FIXED** — an unreachable live element is breakage | open |
+| F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** (the `none` report is misinformation) + **STATED** (the copies then rest as *allowed for now*) | guard built; notice not yet default-on |
+| F6 | `LOFT.md` claims a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — misinformation in the doc | open |
 
 **loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
 tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
