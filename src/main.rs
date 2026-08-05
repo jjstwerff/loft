@@ -231,6 +231,11 @@ fn print_help() {
     println!("                                run the binary (skips @EXPECT_FAIL tests)");
     println!("  --no-warnings                 suppress warnings (in run mode and --tests output)");
     println!(
+        "  --explain                     under each diagnostic that has one, print what to
+                                write instead — the fix, what it needs you to confirm,
+                                and the capability it uses.  Shows only; applies nothing."
+    );
+    println!(
         "  --deny-warnings               under --tests/`loft test`, fail any file with an
                                 unexpected warning.  LOFT_DENY_WARNINGS=1 as env equivalent.
                                 Used by extracted library chunks' CI to lock in cleanliness."
@@ -6126,6 +6131,16 @@ fn main() {
             // via a OnceLock captured on first call, so no concurrent reads are in flight.
             unsafe {
                 std::env::set_var("LOFT_REPORT_COPIES", "1");
+            }
+        } else if a == "--explain" {
+            // @PLN131 — print the FIX line(s) under each diagnostic that carries them: what
+            // to write instead, plus the concept it uses and where to read about it. Showing
+            // only; nothing is applied.
+            //
+            // SAFETY: as for --report-copies — set BEFORE any analysis runs; the gate reads
+            // it via a OnceLock captured on first call, so no concurrent reads are in flight.
+            unsafe {
+                std::env::set_var("LOFT_EXPLAIN", "1");
             }
         } else if a == "--native-emit" {
             // Optional path: consume next arg only if it looks like an output path

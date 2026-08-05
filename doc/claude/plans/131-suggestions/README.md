@@ -8,7 +8,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Tracker: [@PLN131](https://github.com/loft-lang/plans/issues/131) · starts from
 [@PLN130](https://github.com/loft-lang/plans/issues/130)'s copy notice.
 
-**Status:** future — design written, nothing built.
+**Status:** active — the prerequisite arc and ship steps 1–2 are BUILT; steps 3–5 are open.
+
+Built: diagnostic codes (7 emitting sites, index at [DIAGNOSTICS.md](../../DIAGNOSTICS.md)),
+the surviving use's location through `VerdictRow` (Q6.1), the structured `Fix` shape
+(`kind` / `title` / `condition` / `edit` / `concept` / `concept_ref` — which answers Q2 as a
+side effect), and `--explain` rendering tiered fix lines under the copy notice. Guards in
+`tests/suggestions.rs`.
+
+```
+advice[avoidable-copy]: copy of vector<integer> — `src` is still used after this point …
+  fix  build the value in place   [move · @F106]
+  fix  drop the later use of `src`   needs: `src` is used again at line 8 — you do not need that   [move · @F106]
+```
+
+Open: **3** (self-verification), **4** (apply), **5** (a second diagnostic) — and one thing
+the build learned, recorded under Q6 below: no fix currently spells an `edit`.
 
 A diagnostic tells you something is wrong. It rarely tells you what to *write instead*, and
 that second half is where most of the learning is. The model here is Eclipse's quick-fix: its
@@ -193,13 +208,20 @@ currently ships with **no** code), then the remaining sites, then the index.
   shape as @PLN130's probes. Plus the doc-link check from § entry point: assert every
   suggestion names a concept and resolves to a real catalogue entry, so a renamed or deleted
   feature breaks the build rather than shipping a dead door.
-- **Q6 — PREREQUISITES found by the fix-line prototype** ([`fix-line-prototype.md`](fix-line-prototype.md)):
-  the condition cannot name the surviving use (the analysis holds `last_use_pos` as a traversal
-  index, not a span), and the `move` concept has no catalogue entry to link to (105 entries,
-  none on move/copy/ownership). Both are prerequisites rather than polish — without the first
-  a veteran goes hunting instead of affirming; without the second the teaching half does not
-  happen. The prototype also found that the append shape has **no mechanical fix at all**, so
-  the feature must not assume every diagnostic offers one.
+- **Q6 — RESOLVED, both prerequisites** ([`fix-line-prototype.md`](fix-line-prototype.md)).
+  The condition now names the surviving use by LINE: the walker already tracked `cur_pos` for
+  the copy site, so recording it at the USE too (`last_use_loc`, kept in step with
+  `last_use_pos` so the two never describe different uses) carries it to `VerdictRow`. And
+  the `move` concept has its door — `@F106` covers copy and move semantics.
+
+  **What the build added to the prototype's finding.** The prototype said the append shape
+  has no mechanical fix; the stronger fact is that loft cannot presently tell the two shapes
+  apart at all. The IR desugars `S { f: src }` and `x.field += src` to the same
+  `OpAppendVector(OpGetField(…), src)` node, so `construct_copy` holds both. That is why no
+  fix currently spells an `edit`: a synthesised "build it in place" rewrite would be offered
+  for the append shape too, where it does not exist. **Distinguishing them at parse time is
+  the prerequisite for step 3**, and it is a bigger piece of work than Q6.1 was — the fix
+  line is still useful without it, because the title and the concept carry the teaching.
 - **Q5 — RESOLVED: anchor on the diagnostic CODE, not a catalogue id.** See § Prerequisite
   arc. A code names the diagnostic (what the suggestion belongs to); an `@F` id names a
   feature (what the concept links to). Both exist — `@F106` now covers copy/move semantics —

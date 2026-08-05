@@ -371,6 +371,22 @@ pub fn report_copies_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
 }
 
+/// `LOFT_EXPLAIN=1` (or `--explain`) — @PLN131: print the FIX line(s) under each diagnostic
+/// that carries them.
+///
+/// A diagnostic says what is WRONG; a fix says what to write INSTEAD, and that second half is
+/// where most of the learning is. Opt-in, and showing only — nothing rewrites source. The
+/// concept named on each line (`move`) is a handle onto the feature catalogue rather than an
+/// explanation inline, because the explaining belongs in the docs.
+///
+/// Off by default: the fix lines are worth reading when you are acting on a diagnostic and
+/// noise when you are not, and loft is meant to be quiet.
+#[must_use]
+pub fn explain_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_EXPLAIN").is_some())
+}
+
 /// `LOFT_COPY_MANIFEST=1` — @PLN130: the emission-manifest GUARD. Each generator records every
 /// deep copy it WRITES; this reports the ones the copy diagnostic produced no verdict for.
 ///

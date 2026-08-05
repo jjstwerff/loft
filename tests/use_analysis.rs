@@ -1629,9 +1629,12 @@ fn warn(src: &str, gated_on: bool) -> String {
 #[test]
 fn warn_copies_is_default_on_advice() {
     let off = warn(REPORT_SRC, false);
+    // @PLN131 gave the notice its code, so the level renders as `advice[avoidable-copy]:`.
+    // Matching the tag rather than a bare `advice:` is the point: the code is the frozen
+    // handle a fix and a doc section attach to, and losing it would be the regression.
     assert!(
-        off.contains("advice:") && off.contains("copy of"),
-        "the copy notice must fire with no flag set; stderr:\n{off}"
+        off.contains("advice[avoidable-copy]:") && off.contains("copy of"),
+        "the copy notice must fire with no flag set, carrying its code; stderr:\n{off}"
     );
     assert!(
         !off.contains("warning:"),

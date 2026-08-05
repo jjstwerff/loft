@@ -29,6 +29,55 @@ pub enum Level {
     Fatal,
 }
 
+/// Whether applying a [`Fix`] needs a human to affirm something the compiler cannot know.
+///
+/// @PLN131 — the tiers gate **who may affirm the condition**, not whether a fix is
+/// clickable. A conditional fix is still one click for a veteran: *"`src` is used again at
+/// line 12 — if you do not need that, this becomes a move"* is something they judge
+/// instantly about their own code, and clicking asserts it. What is forbidden is applying
+/// one with nobody reading the condition.
+///
+/// |  | interactive (one click) | unattended (batch, CI) |
+/// |---|---|---|
+/// | `Mechanical` | yes | yes |
+/// | `Conditional` | yes — the click IS the affirmation | **never** |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixKind {
+    /// The rewrite's meaning is determined by the code alone. Safe unattended.
+    Mechanical,
+    /// Correct only if `condition` holds, which only the author can decide.
+    Conditional,
+}
+
+/// What to write instead — the deliverable half of a diagnostic (@PLN131).
+///
+/// A diagnostic says what is wrong; this says what to write instead; the linked feature
+/// says why. Three homes, no repetition — a fix that re-explains the problem is duplication
+/// the reader pays for every time, and one that explains the concept inline has taken the
+/// documentation's job.
+///
+/// `concept` is a **handle, not an explanation**: `move` is the searchable noun that opens
+/// the door. `concept_ref` names the catalogue entry behind it, so the door leads somewhere
+/// real — a door onto nothing is worse than no door.
+#[derive(Debug, Clone)]
+pub struct Fix {
+    pub kind: FixKind,
+    /// The imperative, standing alone: "build it in place", "drop the later use of `src`".
+    pub title: String,
+    /// What the author affirms by applying it. Required for `Conditional` (a conditional
+    /// fix with no condition is malformed); `None` for `Mechanical`.
+    pub condition: Option<String>,
+    /// The concrete rewrite, when the compiler can spell one. `None` when the fix is a
+    /// deletion the author must place, or when the shape admits no mechanical rewrite —
+    /// the append shape has no "build it in place", and assuming every diagnostic offers
+    /// one is how a suggestions feature ships a fix that does not exist.
+    pub edit: Option<String>,
+    /// The capability this uses — the searchable noun.
+    pub concept: &'static str,
+    /// The catalogue entry `concept` opens onto, e.g. `@F106`.
+    pub concept_ref: &'static str,
+}
+
 /// One diagnostic message with optional source location.
 #[derive(Debug, Clone)]
 pub struct DiagEntry {
@@ -50,6 +99,13 @@ pub struct DiagEntry {
     /// its structured form, so `codeAction` doesn't parse the message.  Set via
     /// [`Diagnostics::suggest_last`] right after the diagnostic is emitted.
     pub suggestion: Option<String>,
+    /// @PLN131 — what to write instead. Ranked most-teaching first: between "build the
+    /// value in place" and "drop the later use", the first introduces an idiom reusable
+    /// everywhere and the second is a local deletion, so rank on what a fix opens up rather
+    /// than on how short it is. Empty when the compiler knows of no sound rewrite — which
+    /// is the honest answer, and better than one whose condition the author can see is
+    /// false. Shown by `--explain`; the LSP renders the same rows as code actions.
+    pub fixes: Vec<Fix>,
 }
 
 impl DiagEntry {
@@ -142,6 +198,7 @@ impl Diagnostics {
             col: 0,
             code: None,
             suggestion: None,
+            fixes: Vec::new(),
         });
         if level > self.level {
             self.level = level;
@@ -171,6 +228,7 @@ impl Diagnostics {
             col,
             code,
             suggestion: None,
+            fixes: Vec::new(),
         });
         if level > self.level {
             self.level = level;
@@ -183,6 +241,21 @@ impl Diagnostics {
     pub fn suggest_last(&mut self, suggestion: &str) {
         if let Some(last) = self.entries.last_mut() {
             last.suggestion = Some(suggestion.to_string());
+        }
+    }
+
+    /// @PLN131 — attach "what to write instead" to the most-recently-added diagnostic.
+    ///
+    /// A `Conditional` fix carrying no condition is dropped rather than shown: the
+    /// condition is the thing a clicking author affirms, so one that cannot state it is
+    /// malformed, and showing it would let a click affirm nothing.
+    pub fn fix_last(&mut self, fix: Fix) {
+        if fix.kind == FixKind::Conditional && fix.condition.is_none() {
+            debug_assert!(false, "a conditional fix must state its condition");
+            return;
+        }
+        if let Some(last) = self.entries.last_mut() {
+            last.fixes.push(fix);
         }
     }
 

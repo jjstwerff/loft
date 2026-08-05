@@ -278,7 +278,48 @@ pub fn render_entry_pretty(
     let display_col = display_column(&line_text, col_byte_0based);
     let caret_pad = " ".repeat(display_col);
     let _ = writeln!(out, "{pad} | {caret_pad}{color_open}^{reset}");
+    render_fixes(&mut out, entry, bold_open, reset);
     out
+}
+
+/// @PLN131 — append the fix lines under a rendered diagnostic, when `--explain` asked for
+/// them and the site carries any.
+///
+/// The layout puts the CONDITION in its own column rather than inside a sentence, because a
+/// click has to affirm it: the reader must be able to see the thing being affirmed, not
+/// extract it from a clause. That is also what gives the CLI and an LSP code action one
+/// shared shape — `title` on the lightbulb, `condition` in the confirm step.
+///
+/// ```text
+///   fix  build the value in place                                        [move · @F106]
+///   fix  drop the later use of `src`   needs: `src` is used again at …   [move · @F106]
+/// ```
+fn render_fixes(out: &mut String, entry: &DiagEntry, bold_open: &str, reset: &str) {
+    if entry.fixes.is_empty() || !crate::keys::explain_enabled() {
+        return;
+    }
+    for fix in &entry.fixes {
+        let detail = fix.edit.as_ref().map_or_else(
+            || {
+                fix.condition
+                    .as_ref()
+                    .map_or_else(String::new, |c| format!("needs: {c}"))
+            },
+            std::clone::Clone::clone,
+        );
+        // The concept is a door, not a lecture: the noun plus where to read about it, and
+        // nothing that defines it here.
+        let door = format!("[{} · {}]", fix.concept, fix.concept_ref);
+        if detail.is_empty() {
+            let _ = writeln!(out, "  {bold_open}fix{reset}  {}   {door}", fix.title);
+        } else {
+            let _ = writeln!(
+                out,
+                "  {bold_open}fix{reset}  {}   {detail}   {door}",
+                fix.title
+            );
+        }
+    }
 }
 
 /// Render an entire `Diagnostics` value as pretty output.
@@ -374,6 +415,7 @@ mod tests {
             col,
             code: None,
             suggestion: None,
+            fixes: Vec::new(),
         }
     }
 

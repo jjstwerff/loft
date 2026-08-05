@@ -80,6 +80,11 @@ pub struct VerdictRow {
     /// op carries a span. Makes a `<record>` element-set copy (no named target var)
     /// actionable in the report. `None` when the op is unspanned.
     pub loc: Option<Position>,
+    /// @PLN131 Q6.1 — where `source` is used AGAIN after the copy site, when that use carries
+    /// a position. This is the fact a conditional suggestion has to state: the copy exists
+    /// *because* of this use, so it is the one the author decides about. `None` when the
+    /// source is not a variable or the surviving use is unspanned.
+    pub source_last_use: Option<Position>,
     /// @PLN90 Step 5 — true for a SURVIVAL-SPLIT row (a construction / record copy classified by
     /// its source's fate — "you duplicated a live value"). The user-facing `report_copies` shows
     /// only these; the var-buffer / return-buffer copies (a separate elision/`__retbuf` class,
@@ -427,6 +432,15 @@ struct Uses {
     /// (a use strictly after the copy site)?" — the move-vs-copy discriminator — can be
     /// answered. See `survival_class`.
     last_use_pos: HashMap<u16, usize>,
+    /// @PLN131 Q6.1 — WHERE that last use is, kept in step with `last_use_pos`.
+    ///
+    /// `last_use_pos` is a traversal index, which answers "does the source survive?" but
+    /// cannot answer "survive *where*". A suggestion has to name the line: the difference
+    /// between "`src` is unused after here" and "`src` is used again at line 12" is the
+    /// difference between a veteran affirming a condition in one second and going hunting
+    /// for it. The walker already tracks `cur_pos` for the copy site; this records the same
+    /// thing at the USE.
+    last_use_loc: HashMap<u16, Option<Position>>,
     /// @PLN90 — field-target appends `OpAppendVector(OpGetField(rec, fld), src)`:
     /// `(base record var, source base var, copy-site-end pos, loop-survives, source location)`.
     /// This is the struct/enum-construction copy (`S { f: src }`) and `x.field += src` — the
@@ -567,6 +581,11 @@ impl Uses {
             Value::Var(v) => {
                 // @PLN90 — last use in ANY position (the survival discriminator).
                 let lu = self.last_use_pos.entry(*v).or_insert(0);
+                // @PLN131 Q6.1 — the location moves only when the position does, so the two
+                // never disagree about which use they describe.
+                if pos >= *lu {
+                    self.last_use_loc.insert(*v, self.cur_pos.clone());
+                }
                 *lu = (*lu).max(pos);
                 if ctx != Ctx::ReaderArg {
                     self.ineligible.insert(*v);
@@ -774,6 +793,7 @@ fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
         last_use_pos: HashMap::new(),
+        last_use_loc: HashMap::new(),
         construct_copy: Vec::new(),
         record_copy: Vec::new(),
     };
@@ -1026,6 +1046,7 @@ fn analyze_fn_survival(
                     // return path is not yet correct (@PLN85 P4). Eliminating it = that fix.
                     class: CopyClass::Avoidable,
                     loc: None,
+                    source_last_use: None,
                     survival: false,
                 });
             }
@@ -1150,6 +1171,7 @@ fn analyze_fn_survival(
             reason,
             class,
             loc: None,
+            source_last_use: None,
             survival: false,
         });
     }
@@ -1181,6 +1203,7 @@ fn analyze_fn_survival(
             reason,
             class,
             loc: entry.4.clone(),
+            source_last_use: src.and_then(|s| u.last_use_loc.get(&s).cloned().flatten()),
             survival: true,
         });
     }
@@ -1206,6 +1229,7 @@ fn analyze_fn_survival(
             reason,
             class,
             loc: entry.4.clone(),
+            source_last_use: src.and_then(|s| u.last_use_loc.get(&s).cloned().flatten()),
             survival: true,
         });
     }
@@ -2480,8 +2504,9 @@ pub fn warn_dead_stores(
                  not the source. For write-through, bind a live reference with `&` (`{name} = &…`). \
                  If a copy was intended, read `{name}` after the mutation."
             );
-            diags.add_at(
+            diags.add_at_coded(
                 crate::diagnostics::Level::Warning,
+                Some("lost-write"),
                 &msg,
                 def_file,
                 line,
@@ -2561,8 +2586,9 @@ pub fn c_binding_call_unsupported(
             pos.file.as_str()
         };
         let why = uncovered(data, d_nr).unwrap_or_default();
-        diags.add_at(
+        diags.add_at_coded(
             crate::diagnostics::Level::Error,
+            Some("c-binding-not-interpretable"),
             &format!(
                 "`{}` is bound to the C symbol `{}` with `#c`, which the interpreter cannot \
                  call: {why}",
@@ -2620,8 +2646,9 @@ pub fn superseded_fold_diagnostics(
             .find(|&n| n != u32::MAX)
             .unwrap_or(u32::MAX);
         if y_nr == u32::MAX {
-            diags.add_at(
+            diags.add_at_coded(
                 crate::diagnostics::Level::Error,
+                Some("superseded-unknown-successor"),
                 &format!(
                     "`#superseded \"{succ}\"` on `{shown}`: no such successor `{succ}` — a \
                      superseded symbol must name a real replacement, or a dangling steer would ship"
@@ -2645,8 +2672,9 @@ pub fn superseded_fold_diagnostics(
                 if *d == y_nr || (succ_generic && data.def(*d).display_name() == succ))
         });
         if !folds {
-            diags.add_at(
+            diags.add_at_coded(
                 crate::diagnostics::Level::Warning,
+                Some("superseded-not-folded"),
                 &format!(
                     "`{shown}` is `#superseded` by `{succ}` but its body never calls `{succ}` — \
                      fold it onto the successor (reimplement `{shown}` as a shim over `{succ}`) so \
@@ -2739,7 +2767,62 @@ pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fal
                      or build the value in place"
                 )
             };
-            diags.add_at(crate::diagnostics::Level::Advice, &msg, file, line, col);
+            // @PLN131 prerequisite arc — the copy notice gets the FIRST code, because it is
+            // the diagnostic the suggestions work builds on. The code is the frozen
+            // identity a fix attaches to; the prose above stays free to improve.
+            diags.add_at_coded(
+                crate::diagnostics::Level::Advice,
+                Some("avoidable-copy"),
+                &msg,
+                file,
+                line,
+                col,
+            );
+
+            // @PLN131 ship steps 1–2 — what to write instead. Ranked most-teaching first.
+            //
+            // Only a NAMED source gets fixes: both rewrites are about a specific variable's
+            // later use, and neither can be stated without one.
+            if r.source != u16::MAX {
+                let name = def.variables.name(r.source);
+                // Mechanical: building the value where it belongs means there was never a
+                // first copy to elide. No condition — its meaning is fixed by the code.
+                //
+                // No `edit` is spelled. The IR desugars a construction and a `+=` append to
+                // the same node, so the compiler cannot yet tell which shape it is looking
+                // at — and the prototype measured that the append shape has NO
+                // build-in-place rewrite. Offering a synthesised edit for both would emit a
+                // fix that does not exist for the second-commonest avoidable shape in the
+                // corpus, which is worse than offering the title alone.
+                diags.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: "build the value in place".to_string(),
+                    condition: None,
+                    edit: None,
+                    concept: "move",
+                    concept_ref: "@F106",
+                });
+                // Conditional: the condition NAMES the surviving use, which is the whole
+                // point of carrying its location (Q6.1). "after here" sends a veteran
+                // hunting; "at line 12" is affirmable in a second.
+                let where_used = r.source_last_use.as_ref().map_or_else(
+                    || format!("`{name}` is not needed after this point"),
+                    |p| {
+                        format!(
+                            "`{name}` is used again at line {} — you do not need that",
+                            p.line
+                        )
+                    },
+                );
+                diags.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: format!("drop the later use of `{name}`"),
+                    condition: Some(where_used),
+                    edit: None,
+                    concept: "move",
+                    concept_ref: "@F106",
+                });
+            }
         }
     }
 }

@@ -20,9 +20,34 @@ use std::process::Command;
 /// THE GOLDEN: the frozen E1 code set + a minimal program that triggers each. Adding /
 /// renaming / removing a code must update this array (a reviewed diff).
 const CODES: &[(&str, &str)] = &[
+    // @PLN131 — the copy notice is the diagnostic the suggestions work attaches to, so it
+    // got the first of this arc's codes. `s` survives the construction, so the copy is
+    // avoidable rather than forced.
+    (
+        "avoidable-copy",
+        "struct H { v: vector<integer> }\nfn u(h: H) -> integer { len(h.v) }\n\
+         fn main() { s = [1, 2, 3]; h = H { v: s }; print(\"{u(h)} {len(s)}\"); }",
+    ),
+    // @PLN107 dead-store lint. `d = s.items` COPIES (C86), so writing `d` cannot reach
+    // `s`, and `d` is never read afterwards — the write is lost.
+    (
+        "lost-write",
+        "struct D { items: vector<integer> }\n\
+         fn f(s: D) -> integer { d = s.items; d[0] = 9; return len(s.items); }\n\
+         fn main() { s = D { items: [1, 2] }; print(\"{f(s)}\"); }",
+    ),
     (
         "cast-constant-out-of-range",
         "fn main() { x = 1e30 as integer; print(\"{x}\"); }",
+    ),
+    // Over `MAX_C_ARITY` (12) C parameters — the interpreter's caller cannot reach it.
+    (
+        "c-binding-not-interpretable",
+        "fn big(a: integer, b: integer, c: integer, d: integer, e: integer, f: integer, \
+         g: integer, h: integer, i: integer, j: integer, k: integer, l: integer, \
+         m: integer) -> integer; \
+         #c \"big\" \"int(int,int,int,int,int,int,int,int,int,int,int,int,int)\"\n\
+         fn main() { print(\"{big(1,2,3,4,5,6,7,8,9,10,11,12,13)}\"); }",
     ),
     (
         "coalesce-default-type-mismatch",
@@ -32,6 +57,20 @@ const CODES: &[(&str, &str)] = &[
     (
         "shift-amount-out-of-range",
         "fn main() { x = 1 << 100; print(\"{x}\"); }",
+    ),
+    // @PLN102 arc C — a steer that would ship dangling: the named successor does not exist.
+    (
+        "superseded-unknown-successor",
+        "fn old_way(v: integer) -> integer { v + 1 }  #superseded \"no_such_fn\"\n\
+         fn main() { print(\"{old_way(1)}\"); }",
+    ),
+    // The successor exists, but the superseded body never calls it — the steer ships
+    // without its fold.
+    (
+        "superseded-not-folded",
+        "fn new_way(v: integer) -> integer { v + 1 }\n\
+         fn old_way(v: integer) -> integer { v + 2 }  #superseded \"new_way\"\n\
+         fn main() { print(\"{old_way(1)}\"); }",
     ),
     (
         "text-parse-may-fail",
@@ -176,4 +215,28 @@ fn is_kebab_code(s: &str) -> bool {
         && s.bytes().next().is_some_and(|c| c.is_ascii_lowercase())
         && s.bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+}
+
+/// @PLN131 — every pinned code has a row in `doc/claude/DIAGNOSTICS.md`.
+///
+/// A code exists so a reader can look it up; one with nothing to grep to is a dead door,
+/// and the index has to land WITH the code rather than after it, or the gap is invisible
+/// until someone hits it. This lives beside `CODES` deliberately: the pinned set is already
+/// the one home for "which codes exist", so the doc check reads from it instead of running a
+/// second scan of `src/` that can disagree with the first.
+#[test]
+fn every_pinned_code_is_documented() {
+    let index = std::fs::read_to_string(root().join("doc/claude/DIAGNOSTICS.md"))
+        .expect("doc/claude/DIAGNOSTICS.md");
+    let missing: Vec<&str> = CODES
+        .iter()
+        .map(|(code, _)| *code)
+        .filter(|code| !index.contains(&format!("`{code}`")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "code(s) with no row in doc/claude/DIAGNOSTICS.md: {}\n\
+         A code is the handle a reader searches for — add the row in the same change.",
+        missing.join(", ")
+    );
 }
