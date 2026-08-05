@@ -15,13 +15,16 @@ that second half is where most of the learning is. The model here is Eclipse's q
 lasting value was never the automation — you often did not apply the proposed fix — it was
 that each proposal **taught you a language capability you did not know existed**.
 
-So this is an *explain* feature that can optionally apply, not an auto-fixer.
+So this is a *fix-delivery* feature: the resolution is the product, and the concept it
+names is a door to the documentation rather than a lecture inside the message.
 
 ## Goal
 
 For a diagnostic loft raises, offer the concrete resolution(s) in the author's own code — the
-variable names, the line, the rewrite — so that following the suggestion is a way of learning
-the language rather than obeying the compiler. Opt-in to apply; never applied silently.
+variable names, the line, the rewrite — each carrying the NAME of the capability it uses so a
+reader who wants more has somewhere to go. Opt-in to apply; never applied silently. The
+diagnostic keeps saying what is wrong; the suggestion says what to write instead; the docs
+explain why.
 
 ## The two hard rules
 
@@ -65,39 +68,47 @@ The failure mode to design against is therefore not "offering conditional sugges
 **stating a condition badly** — a click that affirms something the author did not actually
 read is how a suggestions feature becomes a bug generator with good intentions.
 
-## A suggestion is an entry point, not a patch
+## The FIX is what we deliver — the rest is a door, not a lecture
 
-The reported value of Eclipse's quick-fix was not the edit — it was that a proposal sent you
-looking: into forums, into documentation, into features you did not know existed. The fix was
-a **door**, and most of the learning happened on the other side of it.
+The suggestion's product is **the fix**. What is *wrong* already belongs to the
+error/warning and is stated there; a suggestion that re-explains it is duplication the reader
+pays for every time. And the deeper material — what a move is, why a borrow works — belongs
+in the documentation, not inlined into a compiler message.
 
-That has design consequences, and they are not cosmetic:
+So the reported Eclipse effect (a proposal sending you off to forums and docs) is served by
+an **opening**, not by embedding the content:
 
-1. **Name the concept, not just the edit.** "Delete line 4" teaches nothing. "This becomes a
-   MOVE — the value is transferred instead of copied, because nothing uses it afterwards"
-   gives the reader a term they can search. The searchable noun is the payload.
-2. **Point at where to read more.** loft already has a canonical home for this: the feature
-   catalogue (`loft-lang/features`, rendered into `doc/features/`), plus `LOFT.md` sections.
-   A suggestion should carry the link, so the door actually opens onto something.
-3. **It must read well UNAPPLIED** — the learner often takes the knowledge and not the edit.
-   But this must NOT be paid for by the veteran, who has the opposite need: *oops, a bug* →
-   read the resolution → agree → click apply, in seconds. Serve both by **layering**, not by
-   choosing:
+```
+copy of vector<integer> — `src` is still used after this point
+  fix: build the value in place —  h = Holder { v: [1, 2, 3] }         [move · @F41]
+  fix: if `src` is unused after line 12, delete that use               [move · @F41]
+```
 
-   - **Line 1 is the resolution**, stated so it can be judged at a glance. A veteran should
-     never read a paragraph to find the fix.
-   - **Below it**: the concept, the why, the link. Ignorable, and there for the reader who
-     wants the door.
+Three homes, no repetition:
 
-   Explain-*rich*, not explain-*first*. A terse `--fix` that prints only a patch fails the
-   learner; a verbose one that buries the edit fails the veteran, and the veteran is the one
-   using it fifty times a day.
+| what | where |
+|---|---|
+| what is wrong | the diagnostic (already) |
+| what to write instead | the suggestion — the deliverable |
+| why, and what the concept means | the linked doc — followed only if wanted |
+
+Design rules that follow:
+
+1. **The fix line must stand alone.** A veteran reads it, agrees, clicks. No paragraph
+   between the problem and the resolution.
+2. **Name the concept as a handle, not an explanation.** `move` is the searchable noun; it
+   opens the door. A sentence defining a move inside the message is the lecture we are
+   avoiding — it belongs behind the link.
+3. **The link must resolve to something real.** loft has a canonical home: the feature
+   catalogue (`loft-lang/features` → `doc/features/`). A door onto nothing is worse than no
+   door (see Q5 — derive the id, never hand-write a URL).
 4. **Prefer the suggestion that teaches** when two are equally sound. Between "build the value
-   in place" and "drop the later use", the first introduces an idiom the author can reuse
-   everywhere; the second is a local deletion. Rank on what it teaches, not just on brevity.
+   in place" and "drop the later use", the first introduces an idiom reusable everywhere;
+   the second is a local deletion. Rank on what it opens up, not on brevity.
 
-This also gives the feature a test that is otherwise hard to state: **a suggestion that names
-no concept and links to nothing is not finished**, however correct its diff.
+Test that is otherwise hard to state: **a suggestion that names no concept and links nowhere
+is not finished**, however correct its diff — and a suggestion that explains the concept
+inline is not finished either, because it has taken the documentation's job.
 
 ## What loft can do that an IDE quick-fix historically could not: verify its own advice
 
@@ -124,8 +135,8 @@ a catalogue of rewrites for every diagnostic.
 
 Ship order:
 
-1. `--explain` (or `loft explain prog.loft`) expands each copy notice: **resolution line
-   first**, then the concept, the why, and the link.
+1. `--explain` (or `loft explain prog.loft`) prints the FIX line(s) under each copy notice —
+   the rewrite, plus a concept handle and its catalogue link. No inline prose.
 2. Mark each candidate mechanical or conditional, and state a conditional one's condition in
    the resolution line itself — that line is what a clicking author affirms.
 3. Self-verification (apply to an in-memory copy, re-run the analysis, compare behaviour).
