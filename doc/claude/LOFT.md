@@ -1348,22 +1348,34 @@ match shape {
 }
 ```
 
-A destructured field is a **view of the subject**, not a copy: writing through it
-updates the value being matched, whatever the field's type.
+Whether a destructured field is a **view of the subject** or a **copy** depends on the
+field's type:
+
+| payload type | writing through the binding |
+|---|---|
+| `text`, `vector`, and other heap values | updates the value being matched — a **view** |
+| `integer`, `float`, `boolean` and other scalars | changes the binding only — a **copy** |
 
 ```
 match e {
-    Holder { items } => { items += "y"; }      // `e`'s payload is now "…y"
+    Holder { items } => { items += "y"; }      // heap: `e`'s payload is now "…y"
+    _ => { }
+}
+
+match n {
+    Num { v } => { v = 9; }                    // scalar: `n` is unchanged
     _ => { }
 }
 ```
 
-This holds for a `text` payload as well as a heap one (loft#673) and through nested
-patterns (`Wrap { inner: Holder { items } }`).  A whole-value BIND is the other rule and
-still copies — `b = e.items; b += "y"` leaves `e` alone (C86); the difference is that a
-pattern binding is not a bind, and you never wrote the copy.  A subject that is a
-temporary (`match make_e() { … }`) has nothing to write back to, so a write there
-updates only the arm's own view.
+The view rule holds for a `text` payload as well as a heap one (loft#673) and through
+nested patterns (`Wrap { inner: Holder { items } }`).  To change a scalar payload, build
+the variant again (`n = Num { v: 9 }`).
+
+A whole-value BIND is a third case and always copies — `b = e.items; b += "y"` leaves
+`e` alone (C86); the difference is that a pattern binding is not a bind, and you never
+wrote the copy.  A subject that is a temporary (`match make_e() { … }`) has nothing to
+write back to, so a write there updates only the arm's own view.
 
 **Scalar match:** the subject is an integer, text, float, boolean, or character. Arms
 are literal values, ranges, `null`, or `_`:

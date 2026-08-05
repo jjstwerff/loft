@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @PLN130 probe 31 — cluster II matrix: producer = a `match` arm capture.
 //
-// LOFT.md states: "A destructured field is a **view of the subject**, not a copy: writing
-// through it updates the value being matched, **whatever the field's type**."
+// Whether a capture is a view depends on the PAYLOAD TYPE. Measured across five types, both
+// backends agreeing:
 //
-// MEASURED: the "whatever the field's type" half is wrong.  Both backends agree:
+//   text · vector  -> view  (write-through, on a local subject and on `v[0]` alike)
+//   integer · float · boolean -> COPY (the write does not reach the subject)
 //
-//   payload type   local subject      element subject `v[0]`
-//   text           write-through ✓    write-through ✓
-//   integer        COPY (no effect)   COPY (no effect)
+// LOFT.md used to claim the view rule held "whatever the field's type", which is what this
+// probe caught (@PLN130 F6). The doc now states the split, so this probe guards a rule that
+// is written down rather than contradicting one.
 //
-// A scalar payload capture is a COPY.  That is a doc/behaviour mismatch, and it also means
-// only the text/heap case is a view producer worth testing against a reshape — which is
-// what the second half of this probe does.
+// Only the heap case is a view producer worth testing against a reshape, which is what the
+// second half of this probe does.
 //
 // Hand-computed for the reshape: the subject is `es[2]`, payload "c".  The capture appends
 // "!" through the view, then `remove(0)` shifts that element to index 1, so the appended
