@@ -2643,6 +2643,13 @@ impl State {
         let tp_nr = stack.data.def(d_nr).known_type();
         self.code_add(tp_nr);
         self.generate(value, stack, false);
+        // @PLN130 — past the adopt-the-fresh-store return above: this arm deep-copies.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpCallReturn,
+        );
     }
 
     /// First-assignment reference copy from another variable of the same type.
@@ -2699,6 +2706,14 @@ impl State {
             vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
         );
         self.generate(&copy_val, stack, false);
+        // @PLN130 — recorded HERE, past the last-use-move return above, so the manifest
+        // claims a copy only where one is actually written.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpRecordBind,
+        );
     }
 
     /// First-assignment reference from tuple destructuring — deep copy.
@@ -2734,6 +2749,13 @@ impl State {
             vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
         );
         self.generate(&copy_val, stack, false);
+        // @PLN130 — tuple destructuring deep-copies unconditionally.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpTupleBind,
+        );
     }
 
     /// First-assignment reference from a call whose return is a runtime `??` JOIN —
@@ -2931,6 +2953,16 @@ impl State {
             stack.add_op("OpInitRefSentinel", self);
             self.code_add(slot_offset);
         }
+        // @PLN130 — the call-return deep copy that actually fires.  Its sibling
+        // `gen_set_first_ref_copy` handles a `Call(OpCopyRecord, [Call(inner), …])` shape the
+        // corpus never produces (its own doc records zero fires), so instrumenting that one
+        // alone left every call-return copy off the manifest.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpCallReturn,
+        );
     }
 
     pub(super) fn clear_stack(&mut self, stack: &mut Stack, loop_nr: u16) {

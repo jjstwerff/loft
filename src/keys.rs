@@ -371,6 +371,19 @@ pub fn report_copies_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
 }
 
+/// `LOFT_COPY_MANIFEST=1` — @PLN130: the emission-manifest GUARD. Each generator records every
+/// deep copy it WRITES; this reports the ones the copy diagnostic produced no verdict for.
+///
+/// Not a user diagnostic — it reports a hole in the COMPILER (a copy no analysis accounts for),
+/// so its audience is CI and this repo, not a loft author. Compile-time only: nothing it measures
+/// reaches a compiled program. Opt-in while the uncovered set is non-empty; the intent is a CI
+/// gate once it reaches zero, not a message on a user's build.
+#[must_use]
+pub fn copy_manifest_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_COPY_MANIFEST").is_some())
+}
+
 /// `LOFT_WARN_COPIES=1` — @PLN90 W5: the ENFORCED copy lint. Routes the user-facing copy report's
 /// **Avoidable** rows (a still-live structure duplicated where a borrow/move would do) through the
 /// normal `Level::Warning` diagnostics channel, so they surface as warnings during a normal compile

@@ -273,7 +273,55 @@ through — misses exactly the case the instrument exists for. This is also prec
 moros shape from loft#774: `held = current` over a `World` wrapping a chunk store would
 report `size=<flat World>` and say nothing about the chunks.
 
-### The guard is COMPILE-TIME ONLY (owner's decision)
+### The guard — BUILT (`LOFT_COPY_MANIFEST=1`)
+
+`src/copy_manifest.rs`. Each generator records every deep copy it WRITES, at the branch that
+writes it; the guard diffs that manifest against `use_analysis`'s verdicts and reports the
+copies no diagnostic accounts for. Compile-time only — nothing reaches a compiled program.
+
+Registration points (recorded *past* every early return, so a last-use move or an adopt is
+never miscounted as a copy):
+
+| Origin | Site |
+|---|---|
+| `InterpRecordBind` | `state/codegen.rs` `gen_set_first_ref_var_copy` |
+| `InterpCallReturn` | `state/codegen.rs` `gen_set_first_ref_call_copy` |
+| `InterpTupleBind` | `state/codegen.rs` `gen_set_first_ref_tuple_copy` |
+| `NativeRecordBind` | `generation/dispatch.rs`, `Value::Var(src)` arm |
+| `NativeCallReturn` | `generation/dispatch.rs`, call arm — a **may-copy** (runtime adopt-or-copy branch), rendered as such |
+
+**Mode-B gate passed:** `loft introspect` on `bytecode-comparisons/manifest-corpus.loft`
+(one function per emission path) is **byte-identical** before and after, re-checked after
+`cargo fmt`. `introspect` output was first confirmed deterministic across two runs, so the
+gate means something. Nothing emitted changed.
+
+**Validation — it flags exactly the Stage A blind spots and nothing else:**
+
+| Probe | expected | guard |
+|---|---|---|
+| 10 `b = a` | uncovered (no verdict) | **flags** `InterpRecordBind` / `NativeRecordBind` |
+| 11 `cp = ident(orig)` | uncovered (no verdict) | **flags** `InterpCallReturn` / `NativeCallReturn` |
+| 12 `w = h.v` | classified `AVOIDABLE` | quiet — correct: the analysis *did* see it; its gap is verdict→report, not the manifest |
+| 13 `Holder { v: src }` | covered | quiet |
+| 14 `v[0] = src` | covered | quiet |
+
+Two findings the probes did not contain:
+
+- **The guard caught its own mis-instrumentation.** `gen_set_first_ref_copy` looked like the
+  call-return emitter but its own doc records *zero fires* in the corpus; instrumenting it
+  left probe 11 silent. The real emitter is `gen_set_first_ref_call_copy`. A manifest built
+  by reading the code rather than by validating against known-uncovered cases would have
+  shipped that hole.
+- **A stdlib copy nothing accounts for, native only:** `fn exists` → `__lift_1` (a
+  compiler-generated binding), `NativeCallReturn`. It appears in *every* native compile. The
+  interpreter does not report it, so this is cluster V again — native emits an adopt-or-copy
+  where interp adopts outright.
+
+Consequence: the uncovered set is **not empty today**, so the guard stays opt-in
+(`LOFT_COPY_MANIFEST=1`) until it is drained. Its audience is CI and this repo — it reports a
+hole in the *compiler*, not a fault in a user's program.
+
+### Why compile-time only (owner's decision)
 
 No runtime checks, no runtime accounting, no runtime cost. **If a copy is really needed, loft
 just does it** — silently, at full speed. The deep magnitude is deliberately *not* the

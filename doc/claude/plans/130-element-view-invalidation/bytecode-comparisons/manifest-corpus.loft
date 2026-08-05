@@ -1,0 +1,73 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 — one function per deep-copy EMISSION path, so the byte-identical
+// before/after diff actually exercises every emitter the manifest instruments.
+// Mode-B gate: `loft introspect` on this file must be unchanged by the manifest.
+
+struct P { x: integer, y: integer }
+struct Holder { v: vector<integer> }
+struct Nest { inner: P }
+
+fn ident(p: P) -> P { p }
+
+// interp gen_set_first_ref_var_copy / native Value::Var(src) arm
+fn c_record_bind() -> integer {
+  a = P { x: 1, y: 2 };
+  b = a;
+  b.x = 9;
+  return a.x + b.x;
+}
+
+// interp call-return arm / native Call arm
+fn c_call_return() -> integer {
+  orig = P { x: 3, y: 4 };
+  cp = ident(orig);
+  cp.x = 9;
+  return orig.x + cp.x;
+}
+
+// construct_copy — a live local into an owning field
+fn c_construct() -> integer {
+  src = [1, 2, 3];
+  h = Holder { v: src };
+  src += [4];
+  return len(h.v) + len(src);
+}
+
+// record_copy — element set from a surviving source
+fn c_elem_set() -> integer {
+  v = [P { x: 1, y: 2 }];
+  src = P { x: 7, y: 8 };
+  v[0] = src;
+  src.x = 9;
+  return v[0].x + src.x;
+}
+
+// copy-fill from a field, source mutated after
+fn c_field_fill() -> integer {
+  h = Holder { v: [1, 2, 3] };
+  w = h.v;
+  h.v += [4];
+  return len(w) + len(h.v);
+}
+
+// a nested field read that materialises
+fn c_nested_field() -> integer {
+  n = Nest { inner: P { x: 5, y: 6 } };
+  out = n.inner;
+  out.x = 9;
+  return n.inner.x + out.x;
+}
+
+// reassignment rather than first bind
+fn c_reassign() -> integer {
+  a = P { x: 1, y: 2 };
+  b = P { x: 3, y: 4 };
+  b = a;
+  b.x = 9;
+  return a.x + b.x;
+}
+
+fn main() {
+  println("{c_record_bind()} {c_call_return()} {c_construct()} {c_elem_set()} {c_field_fill()} {c_nested_field()} {c_reassign()}");
+}

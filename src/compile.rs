@@ -119,6 +119,10 @@ pub fn byte_code_from(
             t_codegen.elapsed().as_secs_f64() * 1000.0
         );
     }
+    // @PLN130 — interpreter codegen is done, so every copy IT writes is now on the manifest.
+    // Reports (and drains) the ones no diagnostic accounts for; native generation records its
+    // own sites later and reports them separately.  A no-op unless `LOFT_COPY_MANIFEST` is set.
+    crate::copy_manifest::report(data);
 }
 
 /// Extract literal values from vector constant Block IR and build

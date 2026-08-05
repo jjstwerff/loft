@@ -9119,6 +9119,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 }
             }
         }
+        // @PLN130 — native generation is complete, so every copy IT wrote is on the
+        // manifest.  Reported here (before the `--native-emit` return) so emitting the
+        // source is checked exactly like compiling it.  A no-op unless
+        // `LOFT_COPY_MANIFEST` is set.
+        loft::copy_manifest::report(&p.data);
         if native_emit.is_some() {
             return; // --native-emit: just write the file, don't compile
         }

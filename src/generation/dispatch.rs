@@ -571,6 +571,16 @@ impl Output<'_> {
                  else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
             )?;
+            // @PLN130 — a MAY-copy site: the emitted code branches on store identity at
+            // runtime and copies on the non-adopting arm.  Recorded regardless, because the
+            // guard asks whether the diagnostic ACCOUNTS for the site, not whether this
+            // particular execution took the copying arm.
+            crate::copy_manifest::record(
+                self.def_nr,
+                var,
+                tp_nr,
+                crate::copy_manifest::Origin::NativeCallReturn,
+            );
             return Ok(());
         }
         // When assigning a reference to a reference variable, a pointer copy is not
@@ -604,6 +614,14 @@ impl Output<'_> {
                 w,
                 "OpCopyRecord(cell,var_{src_name}, var_{name}, {tp_nr}_i32)"
             )?;
+            // @PLN130 — native's whole-record bind deep-copies unconditionally (it has no
+            // last-use move; that asymmetry with the interpreter is @PLN130 cluster V).
+            crate::copy_manifest::record(
+                self.def_nr,
+                var,
+                tp_nr,
+                crate::copy_manifest::Origin::NativeRecordBind,
+            );
             return Ok(());
         }
         // For text/reference block assignments, pre-declare the variable so that
