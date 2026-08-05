@@ -111,10 +111,25 @@ thread_local! {
 }
 
 thread_local! {
-    /// @PLN130 F2 — bindings whose alias was taken away because their container is reshaped
-    /// while they are live: `(binding, container)`. Recorded by `scopes`, reported to the
-    /// author by [`report_materialised_views`].
-    static MATERIALISED: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    /// @PLN130 F2/F4/F8 — bindings whose alias was taken away because the container they view
+    /// changed under them: `(binding, container, function)`. Recorded by `scopes`, reported to
+    /// the author by [`report_materialised_views`].
+    ///
+    /// The function name is part of the key, not decoration. Entries dedupe on it, and without
+    /// it `c` copied out of `bx` reported ONCE for a whole program — every other site with the
+    /// same two names went silent, which is the one thing this diagnostic may not do.
+    static MATERIALISED: RefCell<Vec<(String, String, String)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Record one materialised view, deduped on the whole key.
+fn note(key: (String, String, String)) {
+    MATERIALISED.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.contains(&key) {
+            m.push(key);
+        }
+    });
 }
 
 /// Note that `var`'s element view was materialised because `container` is reshaped.
@@ -122,13 +137,8 @@ thread_local! {
 /// The author asked for an alias and is getting a copy, so this is not an internal detail —
 /// a write through `var` no longer reaches the container. Reported unconditionally: a silent
 /// copy is the one thing the model does not allow.
-pub fn note_materialised_view(var: &str, container: &str) {
-    MATERIALISED.with(|m| {
-        let mut m = m.borrow_mut();
-        if !m.iter().any(|(v, c)| v == var && c == container) {
-            m.push((var.to_string(), container.to_string()));
-        }
-    });
+pub fn note_materialised_view(var: &str, container: &str, function: &str) {
+    note((var.to_string(), container.to_string(), function.to_string()));
 }
 
 /// Note that `var` was copied out of keyed collection `coll` because a write to its KEY field
@@ -137,14 +147,27 @@ pub fn note_materialised_view(var: &str, container: &str) {
 /// Separate message from [`note_materialised_view`]: the cause is different (a key write, not
 /// a removal) and so is the way out — re-insert with `coll[key] = value` rather than
 /// restructure the loop.
-pub fn note_rekeyed_view(var: &str, coll: &str, field: &str) {
-    MATERIALISED.with(|m| {
-        let mut m = m.borrow_mut();
-        let key = (format!("{var}\u{0}rekey\u{0}{field}"), coll.to_string());
-        if !m.contains(&key) {
-            m.push(key);
-        }
-    });
+pub fn note_rekeyed_view(var: &str, coll: &str, field: &str, function: &str) {
+    note((
+        format!("{var}\u{0}rekey\u{0}{field}"),
+        coll.to_string(),
+        function.to_string(),
+    ));
+}
+
+/// Note that `var` was copied out of `owner` because `owner` is REASSIGNED while `var` is
+/// live (@PLN130 F8).
+///
+/// Separate message from [`note_materialised_view`] because the cause is a different one and
+/// so is the remedy: nothing about the container's shape changed — the NAME stopped meaning
+/// the store, so the fix at the use site is to bind the whole value (which copies, C86) or
+/// to take the view again after the reassignment.
+pub fn note_reassigned_view(var: &str, owner: &str, function: &str) {
+    note((
+        format!("{var}\u{0}reassign"),
+        owner.to_string(),
+        function.to_string(),
+    ));
 }
 
 /// Tell the author which views lost their alias, and why. Drains.
@@ -152,21 +175,30 @@ pub fn note_rekeyed_view(var: &str, coll: &str, field: &str) {
 /// Deliberately not gated: constraint 2 of @PLN130 — where rustc errors on a use-after-move,
 /// loft copies and warns. The copy keeps the program correct; this is what keeps it honest.
 pub fn report_materialised_views() {
-    let rows: Vec<(String, String)> = MATERIALISED.with(|m| std::mem::take(&mut *m.borrow_mut()));
-    for (var, container) in rows {
-        if let Some((name, field)) = var.split_once("\u{0}rekey\u{0}") {
+    let rows: Vec<(String, String, String)> =
+        MATERIALISED.with(|m| std::mem::take(&mut *m.borrow_mut()));
+    for (var, container, function) in rows {
+        if let Some(name) = var.strip_suffix("\u{0}reassign") {
             eprintln!(
-                "advice: `{name}` was copied out of `{container}` because `{field}` is one of \
-                 `{container}`'s keys — writing a key through an element would leave it \
-                 reachable by no key at all. Writes through `{name}` no longer reach \
-                 `{container}`; to change a key, re-insert with `{container}[key] = value`."
+                "advice: in `{function}`, `{name}` was copied out of `{container}` because \
+                 `{container}` is reassigned while `{name}` is in use — a view names a place \
+                 inside `{container}`, and giving `{container}` a new value leaves nothing for \
+                 it to point at. Writes through `{name}` no longer reach `{container}`."
+            );
+        } else if let Some((name, field)) = var.split_once("\u{0}rekey\u{0}") {
+            eprintln!(
+                "advice: in `{function}`, `{name}` was copied out of `{container}` because \
+                 `{field}` is one of `{container}`'s keys — writing a key through an element \
+                 would leave it reachable by no key at all. Writes through `{name}` no longer \
+                 reach `{container}`; to change a key, re-insert with \
+                 `{container}[key] = value`."
             );
         } else {
             eprintln!(
-                "advice: `{var}` was copied out of `{container}` because `{container}` is \
-                 modified while `{var}` is in use — removing an element renumbers the others, \
-                 so the view could not stay valid. Writes through `{var}` no longer reach \
-                 `{container}`."
+                "advice: in `{function}`, `{var}` was copied out of `{container}` because \
+                 `{container}` is modified while `{var}` is in use — removing an element \
+                 renumbers the others, so the view could not stay valid. Writes through \
+                 `{var}` no longer reach `{container}`."
             );
         }
     }

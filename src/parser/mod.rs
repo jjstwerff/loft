@@ -6350,7 +6350,8 @@ impl Parser {
             let vname = self.vars.name(base).to_string();
             let cname = self.vars.name(dep).to_string();
             self.vars.make_independent(base, dep);
-            crate::copy_manifest::note_rekeyed_view(&vname, &cname, &field);
+            let fname = self.data.def(self.context).original_name();
+            crate::copy_manifest::note_rekeyed_view(&vname, &cname, &field, &fname);
         }
     }
 

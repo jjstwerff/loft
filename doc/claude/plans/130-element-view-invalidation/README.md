@@ -12,10 +12,10 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
-| B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
+| A — Probe catalogue | ✅ 37 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
+| B — Mechanism investigation | ✅ Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container); F8's backend divergence traced to `objects.rs:2718-2726` |
 | C — Fix design | ✅ closed — F1+F2 one analysis; F4 reuses it; F3 settled by two decisions rather than machinery |
-| D — Implementation | 🟡 F1, F2, F4, F5, F6 shipped; F3 decided; **F7 RETRACTED** (the boundary it called a defect is C86, measured conformant on 30 cells, pinned by `tests/scripts/201`). **F8 OPEN** — the real defect behind loft#774: a view whose CONTAINER is reassigned. Detector for it BUILT (`LOFT_STRICT_STORES`) |
+| D — Implementation | ✅ F1, F2, F4, F5, F6, **F8** shipped; F3 decided; **F7 RETRACTED** (the boundary it called a defect is C86, measured conformant on 30 cells, pinned by `tests/scripts/201`). F8 — the real defect behind loft#774, a view whose CONTAINER is reassigned — fixed on both backends, boundary measured on 17 cells, pinned by `tests/scripts/774`. Detector for it BUILT (`LOFT_STRICT_STORES`) |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -659,7 +659,7 @@ was grepping `C86` before writing the section, and the check that settled it was
 cell to a boundary. Both are the plan's own § Method rules (calibrate against known answers;
 count the axes you held fixed), applied to everything in this plan except its last section.
 
-## F8 — the third invalidator: the CONTAINER is reassigned under a live view
+## F8 — FIXED: the third invalidator, the CONTAINER reassigned under a live view
 
 F7's retraction cleared the ground and left the ticket's real complaint standing. loft#774
 was **not filed out of ignorance** — the reporter derived B-Copy/B-View correctly from
@@ -681,7 +681,11 @@ This is the **third invalidator**, and it is why the plan's earlier two did not 
 |---|---|---|
 | the VIEW variable is reassigned | `k = a[0]; … k = x` | F1 (probe 30) |
 | the container is RESHAPED | `a.remove(0)` | F2 (probes 03–07) |
-| **the CONTAINER VARIABLE is reassigned** | `bx = …` | **nothing — F8** |
+| **the CONTAINER VARIABLE is reassigned** | `bx = …` | **F8** (probes 35–37, `tests/scripts/774`) |
+
+A fourth shape looks like a member of this table and is NOT: a FIELD reassignment
+(`d.mid = Mid{…}`) writes the new value into the place the view already names, which is C86's
+in-place path mutation, so a view seeing it is the contract. See § Open questions this closed.
 
 **The container's kind decides, which is what hid it.** A plain vector local is covered
 (`a = [Box{n:11}]; c = a[0]; a = [Box{n:22}]` answers 11 on both backends, with churn, in a
@@ -757,13 +761,12 @@ and is not.
 Measured against this plan's own closure bar (§ Must resolve before close): **breakage is never
 allowed**, misinformation is never allowed, and only *copies* may rest as STATED.
 
-### Blocking — one item, and it is breakage
+### Blocking — CLEARED
 
-**F8's fix.** Everything else is DONE, decided, or legitimately STATED. F8 is a wrong value
-with no diagnostic, which the bar forbids outright, so the plan cannot close on it.
+**F8 is FIXED**, on both backends, with the boundary measured first and the C86 write-through
+cells pinned as controls. Nothing else was blocking, so the plan closes.
 
-**Root cause, pinned today — a dep names a VARIABLE, not a store instance.** The var tables
-say it directly:
+**Root cause — a dep names a VARIABLE, not a store instance.** The var tables say it directly:
 
 ```
 n_covered (vector local)          n_broken (struct local)
@@ -778,42 +781,84 @@ than by luck. A struct local has no such indirection: `bx` IS the owner, so reas
 changes what the name means while `c`'s dep still says "bx". The dep survives; the thing it
 named does not.
 
-That makes F8 the same shape as the `deps` mistakes already catalogued — a per-VARIABLE fact
-answering a per-STORE-INSTANCE question. Two candidate fixes, and the first is cheaper and
-already proven in-tree:
+**The fix is option 2, not the recommended option 1 — and the boundary is what changed the
+answer.** Option 1 was *"give a reassigned owner with live dependents a fresh store and let
+the old one die when its last dependent does"*. Its second clause needs to know, at run time,
+when the last dependent dies; decision 5 forbids runtime bookkeeping. Resolved statically it
+becomes one retire-slot per textual site, and probe 37 cell B4 (a container reassigned every
+iteration) then has to either free the store the view still needs or leak one per iteration.
+Option 2 has neither problem: the view materialises ONCE, before any reassignment, and
+iteration count stops mattering.
 
-1. **Generalise the `__vdb_N` indirection** — give a reassigned owner with live dependents a
-   fresh store and let the old one die when its last dependent does. This is exactly what the
-   covered cell already does, so it is extending a working mechanism rather than inventing one.
-2. **Add reassignment as a third invalidation trigger** — treat `bx = …` with live views the
-   way `collect_reshaped_containers` treats `a.remove(0)`: materialise the views first, warn.
-   Reuses F2 wholesale, at the cost of copies the vector path does not pay.
+So `scopes::collect_views_to_materialise` extends F2's arm rather than the `__vdb_N`
+mechanism. Four forms establish a store, and each was a measured-broken emitter:
+`OpDatabase(v, …)` (a literal), `Set(v, Var(src))` (the C86 whole-value bind, which codegen
+lowers to `OpDatabase` + `OpCopyRecord`), `Set(v, Call(f, …))` (a bind from a return), and
+passing `v` to a callee that reassigns that `&` parameter (`reassigned_ref_params`).
 
-Prefer 1, fall back to 2 where the fresh-store route cannot be proven safe. Either way the
-gate is both backends plus `LOFT_STRICT_STORES` clean, and probes 35/36 graduate to
-`tests/scripts/`.
+**The decision that cost the most to get right is what the analysis is KEYED ON.** The first
+version asked *"is this container re-established anywhere in this function?"* — a per-FUNCTION
+proxy for a per-BINDING fact, and it broke two tests rather than merely over-copying: an
+unrolled `for pf in fields(p)` re-establishes `pf` once per field, so the proxy stripped the
+deps of the `is`-pattern subject bound from it, which put an `OpFreeRef` in a scope where the
+declaration was not visible and stopped `tests/scripts/45-field-iter.loft` compiling under
+`--native`. The invariant is *"a view is LIVE ACROSS a re-establishment of its container"*,
+and it is walked structurally: a view bound in a block is at risk from any re-establishment
+later in that same block at any depth inside it (covering an `if`-guarded reassignment and one
+in a loop body), and safe from one in a block its own has already closed. A container's first
+establishment needs no special case — it necessarily runs before any view of it exists.
 
-### Open for investigation — genuinely unknown, ordered by what it would cost to not know
+### Open questions this closed
 
-1. **Why do the backends use different mechanisms?** `--interpret` REUSES the store in place;
-   `--native` FREES it. That divergence is not explained, and a fix aimed at one may leave the
-   other. It may also be a defect in its own right — two backends disagreeing about whether a
-   reassignment frees is a store-lifetime contract question, not an implementation detail.
-2. **F8's real boundary.** Measured: vector local COVERED, struct field and element-of-field
-   BROKEN, out-of-scope COVERED. **Not** measured: a keyed collection as the container, a
-   container reassigned inside a CALLED function, a `&` parameter, deeper chains, and the
-   concurrency paths (`par`, coroutines). Filed scope is usually a tenth of the defect, and
-   this scope came from seven cells.
-3. **Sibling routes by which a name stops meaning its store.** Reassignment is one. Others not
-   yet probed: handing the container to a function that reassigns it, the owner going out of
-   scope inside a loop, a swap through a temporary, and `#remove` of the owner itself. Each is
-   a probe, per § Method rule 8.
-4. **Q6 — which uncovered copy families should be silenced rather than removed.** The owner's
+1. **Why do the backends use different mechanisms? — ANSWERED, and it was load-bearing.**
+   `objects.rs:2718-2726` emits `v_set(v, Null)` + `OpDatabase(v, tp)` for an owning local.
+   `--interpret` lets the allocator hand the just-nulled store straight back, so the store is
+   REUSED in place and nothing is freed; `--native` frees `var_bx(prev)`. Both print the
+   replacement's value, so the default output merges them — but they are different defects
+   (interpret aliases a live location, native dangles), and the divergence is why a fix that
+   only stopped native's free would have left interpret wrong. Probe 35 under
+   `LOFT_STRICT_STORES` is silent on both backends while probe 36 fired 4 native violations:
+   the same wrong answer, one lifetime fault and one aliasing fault.
+2. **F8's real boundary — MEASURED, and filed scope was again a fraction.** Probe 37 moved
+   container kind, chain depth, reassignment site and sibling route together: 11 of 14 cells
+   broke. BROKEN and now fixed: `hash` and `sorted` containers, a three-level chain, an
+   `if`-guarded reassignment, a loop reassignment, a swap through a temporary, a bind from a
+   return, and a callee reassigning a `&` param (native only — it read `703`, a `Wide` from an
+   unrelated later allocation, where interpret was merely stale). Already COVERED: a plain
+   vector local, a `match` capture, a plain-param reassignment (@PLN87 P2.1 makes it local),
+   and the owner leaving scope. Still not measured: `par` and coroutines.
+3. **Sibling routes — probed, and one turned out to be CONFORMANT.** The swap through a
+   temporary and handing the container to a `&`-reassigning callee were both real and are
+   fixed. **A field reassignment is not a defect**: `d.mid = Mid{…}` lowers to
+   `OpCopyRecord(<new>, OpGetField(OpGetField(d,0,66),0,65))` — the same place expression the
+   view is bound to. Nothing is reallocated; the new value is written INTO the existing place,
+   which is C86's *"in-place path mutation writes through"*. The cell was written expecting
+   `11`, the IR said otherwise, and `c.n = 77` showing up in `d.mid.inner.n` confirmed the view
+   is genuinely live. That is the distinction F8 turns on: a field write MUTATES the place a
+   view names, a container reassignment DESTROYS it. Probe 37 keeps it as a stated cell and
+   `tests/scripts/774-…` pins it as control K3.
+
+### Still open, and legitimately resting
+
+1. **`par` and coroutine paths for F8.** Not measured. Every other axis of the boundary is,
+   and each of these is a probe rather than a rewrite, but they are honestly unmeasured.
+2. **Q6 — which uncovered copy families should be silenced rather than removed.** The owner's
    framing (an accept recorded at the site, never a blanket exemption) is written down; which
    families qualify is not.
-5. **The uncovered copy set.** Sized, not drained: 29 distinct sites over a 90-script sample,
+3. **The uncovered copy set.** Sized, not drained: 29 distinct sites over a 90-script sample,
    across four origins. Decision 3 makes "allowed for now" legitimate, so this is **STATED**
    and does not block — but it is the largest known unfinished measurement.
+
+### What F8 shipped
+
+| piece | where |
+|---|---|
+| the analysis | `scopes::collect_views_to_materialise` + `established_stores` + `reassigned_ref_params` |
+| the materialise | the existing F2 arm in `scopes.rs`, now reached by either cause |
+| the advice | `copy_manifest::note_reassigned_view`; all three causes now name their FUNCTION, because the key deduped on `(binding, container)` and reported `c`/`bx` ONCE for a whole program |
+| the guard | `tests/scripts/774-view-outlives-reassigned-container.loft` — 12 defect cells + 4 C86 write-through controls, both backends |
+| the boundary | `probes/37-f8-boundary.loft` — 17 cells, including the two conformant ones |
+| the instrument | `LOFT_DEBUG_F8=1` names the views the analysis marked |
 
 ### Not this plan's, though it surfaced here
 

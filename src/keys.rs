@@ -828,8 +828,7 @@ thread_local! {
 /// Record where store `slot` was freed. Call only when [`strict_stores`] is on.
 pub fn strict_note_free(slot: u16, pc: u32, name: &str) {
     STRICT_FREE_SITE.with(|m| {
-        m.borrow_mut()
-            .insert(slot, (pc, name.to_string()));
+        m.borrow_mut().insert(slot, (pc, name.to_string()));
     });
 }
 
@@ -845,7 +844,10 @@ pub fn strict_free_site(slot: u16) -> Option<(u32, String)> {
 /// and the three pcs that bound the store's life, because the question this answers is
 /// "which emitter produced a reference that outlived its store", and that cannot be
 /// answered from the loft source alone. Resolve a pc to a line with `LOFT_LOG=static`.
-#[expect(clippy::too_many_arguments, reason = "one report line, one argument each")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one report line, one argument each"
+)]
 pub fn strict_store_violation(
     store_nr: u16,
     rec: u32,

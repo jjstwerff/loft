@@ -129,6 +129,8 @@ struct Scopes {
     /// copy the author is TOLD about, while under-materialising is silent corruption. The
     /// asymmetry decides the approximation.
     reshaped_containers: HashSet<u16>,
+    /// @PLN130 F8 — view bindings live across a re-establishment of their container.
+    views_to_materialise: HashSet<u16>,
     /// loft#721 — fn-ref variable -> the definition it was assigned, or
     /// `u32::MAX` when more than one definition reaches it.  A `CallRef`'s callee
     /// is a runtime value, so this local fact is what lets the lift ask the
@@ -199,6 +201,231 @@ fn collect_reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
         if let Some(Value::Var(c)) = arg.map(Value::unspan) {
             out.insert(*c);
         }
+    });
+    out
+}
+
+/// @PLN130 F8 — which `&` parameters of `d_nr` are REASSIGNED wholesale by its body.
+///
+/// A `&` param's slot is a double indirection into the caller's variable, and @PLN87 P2.2
+/// lowers `p = T{…}` on one to *"build a fresh store, write it through, free the store the
+/// caller was holding"*. So a callee doing that destroys a store the CALLER may have views
+/// into — measured on `--native` as a read of `703`, a `Wide` field belonging to an unrelated
+/// later allocation. Nothing at the call site says so, which is why the caller needs this
+/// fact about the callee rather than a guess from the argument's shape.
+///
+/// Answered from the callee's IR: a `Set` targeting an argument slot whose declared type is
+/// `RefVar`. Argument slots lead the variable numbering, so the slot number indexes the
+/// attribute list. A shape this does not recognise yields no fact and keeps today's
+/// behaviour — the same lower-bound stance as [`collect_reshaped_containers`].
+fn reassigned_ref_params(data: &Data, d_nr: u32) -> HashSet<u16> {
+    let def = data.def(d_nr);
+    let mut out: HashSet<u16> = HashSet::new();
+    def.code.walk(&mut |v| {
+        let Value::Set(slot, rhs) = v else { return };
+        if matches!(rhs.unspan(), Value::Null) {
+            return;
+        }
+        if let Some(a) = def.attributes.get(usize::from(*slot))
+            && matches!(a.typedef, Type::RefVar(_))
+        {
+            out.insert(*slot);
+        }
+    });
+    out
+}
+
+/// @PLN130 F8 — every VIEW binding that is live across a re-establishment of its container.
+///
+/// A dep names a VARIABLE, not a store instance, so a view bound from `bx.v[0]` keeps
+/// reading "wherever `bx` points" — and `bx = <other value>` re-points it. The view then
+/// answers the REPLACEMENT's value (measured 22 where its element held 11, on both
+/// backends), and on `--native` the displaced store is freed, so the read is a genuine
+/// use-after-free into whatever now occupies the space (measured 703, a `Wide` field).
+///
+/// A vector local is immune and that is what hid this: a vector literal allocates through a
+/// hidden `__vdb_N` owner, so `a = [...]` twice mints TWO stores and the first keeps its
+/// identity. A struct local has no such indirection — `bx` IS the owner.
+///
+/// The question this answers is deliberately about the VIEW, not the container. *"Is the
+/// container re-established anywhere in this function"* is a per-FUNCTION proxy for a
+/// per-BINDING fact, and it is wrong in the direction that costs correctness elsewhere: an
+/// unrolled `for pf in fields(p)` re-establishes `pf` once per field, and the `is`-pattern
+/// subject bound from it dies inside its own arm long before the next one — yet the proxy
+/// stripped that subject's deps, which put an `OpFreeRef` in a scope where the declaration
+/// was not visible and stopped `tests/scripts/45-field-iter.loft` compiling under `--native`.
+///
+/// So a view is at risk only where a re-establishment of its container can be reached WHILE
+/// THE VIEW IS STILL LIVE. Walked structurally: a view bound in a block is at risk from any
+/// re-establishment appearing later in that same block, at any nesting depth inside it —
+/// which covers a reassignment guarded by an `if` and one inside a loop body. A
+/// re-establishment sitting in a block the view's own block has already closed cannot reach
+/// it, which is exactly the unrolled-iteration case above.
+///
+/// Four forms establish a store, matching the four emitters measured to break:
+///
+/// - `OpDatabase(v, …)` — a struct literal built into `v`'s own store;
+/// - `Set(v, Var(src))` — the C86 whole-value bind, which codegen lowers to
+///   `OpDatabase` + `OpCopyRecord` into a fresh store (the `bx = other` swap);
+/// - `Set(v, Call(f, …))` — a bind from a user function's return (`bx = mk(22)`);
+/// - passing `v` as a `&` argument to a callee that reassigns that parameter wholesale
+///   ([`reassigned_ref_params`]) — the callee frees the caller's store, so from the view's
+///   point of view this is a reassignment that happens to be spelled as a call.
+///
+/// A container's FIRST establishment is never a risk: it necessarily runs before any view of
+/// it can exist, so no separate "is this the definition" test is needed.
+///
+/// Vector-typed containers are excluded — they reach their store through `__vdb_N`, so
+/// re-pointing the local cannot invalidate a view of the old store, and collecting them
+/// would buy a copy for a case that is already correct.
+fn collect_views_to_materialise(code: &Value, function: &Function, data: &Data) -> HashSet<u16> {
+    let mut out: HashSet<u16> = HashSet::new();
+    // One frame per open block: the views bound in it, and the container each one views.
+    let mut open: Vec<Vec<(u16, u16)>> = vec![Vec::new()];
+    scan_block_for_risky_views(
+        std::slice::from_ref(code),
+        function,
+        data,
+        &mut open,
+        &mut out,
+    );
+    if !out.is_empty() && std::env::var_os("LOFT_DEBUG_F8").is_some() {
+        let mut names: Vec<String> = out.iter().map(|v| function.name(*v).to_string()).collect();
+        names.sort();
+        eprintln!(
+            "[f8] views live across a container reassignment: {}",
+            names.join(" ")
+        );
+    }
+    out
+}
+
+/// Walk one statement list in order, tracking which views are still live.
+///
+/// `open` is a stack of the enclosing blocks' pending views; a re-establishment marks
+/// matching views in EVERY open frame, because an inner block can reassign a container that
+/// a view several levels out depends on.
+fn scan_block_for_risky_views(
+    stmts: &[Value],
+    function: &Function,
+    data: &Data,
+    open: &mut Vec<Vec<(u16, u16)>>,
+    out: &mut HashSet<u16>,
+) {
+    for stmt in stmts {
+        let stmt = stmt.unspan();
+        // `Insert` is spliced into the enclosing block rather than forming its own, so its
+        // statements are siblings of this list and a view bound there stays live here.
+        if let Value::Insert(ops) = stmt {
+            scan_block_for_risky_views(ops, function, data, open, out);
+            continue;
+        }
+        // 1. Whatever this statement re-establishes invalidates the views bound before it.
+        let established = established_stores(stmt, function, data);
+        if !established.is_empty() {
+            for frame in open.iter() {
+                for (view, container) in frame {
+                    if established.contains(container) {
+                        out.insert(*view);
+                    }
+                }
+            }
+        }
+        // 2. A nested block opens its own frame: a view bound inside one dies with it.
+        let mut nested: Vec<&[Value]> = Vec::new();
+        match stmt {
+            Value::Block(b) | Value::Loop(b) => nested.push(&b.operators),
+            Value::If(_, t, e) => {
+                for branch in [t.unspan(), e.unspan()] {
+                    match branch {
+                        Value::Block(b) => nested.push(&b.operators),
+                        Value::Insert(ops) => nested.push(ops),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        for body in nested {
+            open.push(Vec::new());
+            scan_block_for_risky_views(body, function, data, open, out);
+            open.pop();
+        }
+        // 3. A view bound by this statement is live from here on. Recorded LAST, so a
+        //    statement that both re-establishes a container and binds a view of the new
+        //    value does not mark the fresh view against its own establishment.
+        if let Value::Set(v, rhs) = stmt
+            && matches!(
+                function.tp(*v),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && let Some(container) = base_container_var(rhs.unspan(), data)
+            && !matches!(function.tp(container), Type::Vector(_, _))
+            && let Some(frame) = open.last_mut()
+        {
+            frame.push((*v, container));
+        }
+    }
+}
+
+/// Every variable whose store `stmt` establishes, at any depth.
+///
+/// Nested blocks are included deliberately: `if flag { bx = T{…} }` establishes `bx` as far
+/// as a view bound outside the `if` is concerned.
+fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet<u16> {
+    let mut out: HashSet<u16> = HashSet::new();
+    let note = |v: u16, out: &mut HashSet<u16>| {
+        if matches!(
+            function.tp(v),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && !function.is_compiler_generated(v)
+        {
+            out.insert(v);
+        }
+    };
+    stmt.walk(&mut |v| match v {
+        Value::Call(d, args) if data.def(*d).name() == "OpDatabase" => {
+            if let Some(Value::Var(t)) = args.first().map(Value::unspan) {
+                note(*t, &mut out);
+            }
+        }
+        // A call that reassigns one of its `&` parameters displaces the caller's store.
+        Value::Call(d, args) if data.def(*d).name.starts_with("n_") => {
+            let reassigned = reassigned_ref_params(data, *d);
+            for (i, arg) in args.iter().enumerate() {
+                if !u16::try_from(i).is_ok_and(|i| reassigned.contains(&i)) {
+                    continue;
+                }
+                // A `&` argument arrives as `OpCreateStack(Var(v))`; a bare `Var` is accepted
+                // too so a future lowering change cannot silently lose the fact.
+                let mut inner = arg.unspan();
+                if let Value::Call(cs, cargs) = inner
+                    && data.def(*cs).name() == "OpCreateStack"
+                    && let Some(first) = cargs.first()
+                {
+                    inner = first.unspan();
+                }
+                if let Value::Var(t) = inner {
+                    note(*t, &mut out);
+                }
+            }
+        }
+        Value::Set(t, rhs) => {
+            // `Set(v, Null)` is the in-place re-init prelude that PRECEDES an `OpDatabase`
+            // for the same var, not an establishment of its own.
+            let establishes = match rhs.unspan() {
+                Value::Var(src) => matches!(
+                    function.tp(*src),
+                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                ),
+                Value::Call(f, _) => data.def(*f).name.starts_with("n_"),
+                _ => false,
+            };
+            if establishes {
+                note(*t, &mut out);
+            }
+        }
+        _ => {}
     });
     out
 }
@@ -282,6 +509,7 @@ fn run_scan_phase(
         owned_refs: HashMap::new(),
         displaced_owned,
         reshaped_containers: collect_reshaped_containers(orig_code, data),
+        views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
     };
     let mut function = Function::copy(orig_vars);
@@ -3301,9 +3529,14 @@ impl Scopes {
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && let Some(container) = base_container_var(unspanned_value, data)
-            && self.reshaped_containers.contains(&container)
+            && (self.reshaped_containers.contains(&container)
+                || self.views_to_materialise.contains(&v))
             && function.tp(v).depend().contains(&container)
         {
+            // @PLN130 F8 — the same strip, for the third invalidator: the container
+            // VARIABLE is reassigned, so the dep still names `bx` while the store it named
+            // is gone. Different cause, different way out, so a distinct advice line.
+            let reassigned = !self.reshaped_containers.contains(&container);
             let container = &container;
             let vname = function.name(v).to_string();
             let cname = function.name(*container).to_string();
@@ -3311,7 +3544,12 @@ impl Scopes {
             for d in deps {
                 function.make_independent(v, d);
             }
-            crate::copy_manifest::note_materialised_view(&vname, &cname);
+            let fname = data.def(self.d_nr).original_name();
+            if reassigned {
+                crate::copy_manifest::note_reassigned_view(&vname, &cname, &fname);
+            } else {
+                crate::copy_manifest::note_materialised_view(&vname, &cname, &fname);
+            }
         }
         // Companion to the !adopts_fresh_store (deep-copy) branch above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and

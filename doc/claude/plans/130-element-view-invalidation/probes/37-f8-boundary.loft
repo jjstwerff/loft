@@ -1,0 +1,268 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 37 (F8) — F8's REAL boundary, and the sibling routes by which a name
+// stops meaning its store.
+//
+// Written BEFORE any of it is worked (§ Method rule 10).  Probe 35 measured seven cells;
+// seven cells is not a boundary, and "filed scope is a tenth of the defect" is this plan's
+// own repeated finding.  F8 is the shape `c = <view into bx>; bx = <new>;` — the question
+// each cell asks is: after the container VARIABLE stops naming the store `c` views, what
+// does `c` read?
+//
+// The contract (C86): a struct-typed projection — element (`bx.v[0]`) or field (`o.inner`)
+// — is a VIEW, and a view must stay valid for as long as its binding lives.  So every cell
+// below wants the value bound AT THE VIEW, never the replacement's value.
+//
+// Axes moved together, not one at a time (§ Method rule 2):
+//   A — the container's KIND and the chain's DEPTH
+//   B — WHERE the reassignment happens (block, loop, callee, `&` callee)
+//   C — sibling routes that are not a reassignment at all
+//   D — the write direction, which is where interpret corrupts rather than merely reads stale
+//
+// Each cell prints `want`, so a no-output cell is visibly vacuous rather than a silent pass.
+
+struct Box   { n: integer, tag: integer = 0 }
+struct Mid   { inner: Box, mtag: integer = 0 }
+struct Deep  { mid: Mid, dtag: integer = 0 }
+struct WithVec  { v: vector<Box>, m: integer = 0 }
+struct Elm      { id: integer, tag: integer = 0 }
+struct WithHash { h: hash<Elm[id]>, m: integer = 0 }
+struct WithSort { s: sorted<Elm[id]>, m: integer = 0 }
+struct Wide  { a: integer, b: integer, c: integer, d: integer }
+
+enum Payload { Empty { z: integer }, Holds { w: WithVec } }
+
+fn mkwide(x: integer) -> Wide { return Wide { a: x, b: x + 1, c: x + 2, d: x + 3 }; }
+
+// Recycles store space so a stale view reads someone else's live value rather than
+// bytes that merely happen to survive.
+fn churn() -> integer {
+  t = 0;
+  for i in 0..8 { w = mkwide(i * 100); t += w.d; }
+  return t;
+}
+
+fn ok(name: text, got: integer, want: integer) {
+  if got == want { print("37 {name}  {got}  want {want}   ok\n"); }
+  if got != want { print("37 {name}  {got}  want {want}   BROKEN\n"); }
+}
+
+// ---- A — container KIND and chain DEPTH -------------------------------------------
+
+// A1 — keyed container (hash) as the field.  A keyed lookup is a projection like an
+// element read, so it must view; the question is whether reassignment invalidates it.
+fn a1_hash_field() {
+  wh = WithHash { h: [Elm { id: 10, tag: 111 }], m: 1 };
+  c = wh.h[10];
+  wh = WithHash { h: [Elm { id: 10, tag: 222 }], m: 2 };
+  t = churn();
+  ok("A1 hash field    ", c.tag ?? -1, 111);
+}
+
+// A2 — `sorted` instead of `hash`: same shape, different container implementation.
+fn a2_sorted_field() {
+  ws = WithSort { s: [Elm { id: 10, tag: 111 }], m: 1 };
+  c = ws.s[10];
+  ws = WithSort { s: [Elm { id: 10, tag: 222 }], m: 2 };
+  t = churn();
+  ok("A2 sorted field  ", c.tag ?? -1, 111);
+}
+
+// A3 — a THREE-level chain.  Probe 35 measured one level (`o.inner`); if the fix keys on
+// the immediate base only, a deeper chain slips past it.
+fn a3_deep_chain() {
+  d = Deep { mid: Mid { inner: Box { n: 11, tag: 111 }, mtag: 1 }, dtag: 1 };
+  c = d.mid.inner;
+  d = Deep { mid: Mid { inner: Box { n: 22, tag: 222 }, mtag: 2 }, dtag: 2 };
+  t = churn();
+  ok("A3 deep chain    ", c.n, 11);
+}
+
+// A4 — element of a vector reached through two levels.
+fn a4_deep_element() {
+  p = Payload::Holds { w: WithVec { v: [Box { n: 11 }], m: 1 } };
+  c = 0;
+  match p {
+    Holds { w } => { c = w.v[0].n; },
+    Empty { z } => { c = z; }
+  }
+  ok("A4 enum payload  ", c, 11);
+}
+
+// ---- B — WHERE the reassignment happens ------------------------------------------
+
+// B1 — reassigned inside a CALLED function through a plain param.  @PLN87 P2.1 made
+// whole-binding reassignment of a heap param LOCAL, so the caller's store should be
+// untouched and this should be COVERED.  Measured, not assumed.
+fn reassign_local(bx: WithVec) -> integer {
+  bx = WithVec { v: [Box { n: 22 }], m: 2 };
+  return bx.v[0].n;
+}
+
+fn b1_callee_plain_param() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  inner = reassign_local(bx);
+  t = churn();
+  ok("B1 callee param  ", c.n, 11);
+  ok("B1 callee saw    ", inner, 22);
+}
+
+// B2 — reassigned through a `&` param.  @PLN87 P2.2 TRANSFERS the new value to the caller
+// and frees the displaced caller store — which is exactly the store `c` views.  This is
+// the cell most likely to be a genuine use-after-free rather than a stale read.
+fn reassign_ref(bx: &WithVec) {
+  bx = WithVec { v: [Box { n: 22 }], m: 2 };
+}
+
+fn b2_callee_ref_param() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  reassign_ref(bx);
+  t = churn();
+  ok("B2 & param       ", c.n, 11);
+}
+
+// B3 — the reassignment is inside a conditional block, so it is not the straight-line
+// shape the fix will most naturally pattern-match.
+fn b3_branch_reassign(flag: boolean) {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  if flag { bx = WithVec { v: [Box { n: 22 }], m: 2 }; }
+  t = churn();
+  ok("B3 branch        ", c.n, 11);
+}
+
+// B4 — reassigned repeatedly in a loop while the view is loop-carried.  Each iteration
+// retires another store; if the fix keeps them all alive this is also the cell that shows
+// what it costs.
+fn b4_loop_reassign() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  for i in 0..4 { bx = WithVec { v: [Box { n: 100 + i }], m: i }; }
+  t = churn();
+  ok("B4 loop reassign ", c.n, 11);
+}
+
+// ---- C — sibling routes: a name stops meaning its store WITHOUT a reassignment ----
+
+// C1 — a swap through a temporary.  Three binds, no literal in sight; the store `c` views
+// ends up named by a different variable, or by none.
+fn c1_swap_through_temp() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  other = WithVec { v: [Box { n: 22 }], m: 2 };
+  c = bx.v[0];
+  t = bx;
+  bx = other;
+  other = t;
+  n = churn();
+  ok("C1 swap temp     ", c.n, 11);
+}
+
+// C2 — the owner is declared INSIDE a block and the view escapes it.  Scope exit frees on
+// a different path than reassignment does.
+fn c2_owner_leaves_scope() {
+  c = Box { n: 0, tag: 0 };
+  for i in 0..1 {
+    bx = WithVec { v: [Box { n: 11 }], m: 1 };
+    c = bx.v[0];
+  }
+  t = churn();
+  ok("C2 owner scope   ", c.n, 11);
+}
+
+// C3 — the FIELD is reassigned, not the variable: `d.mid = …` with a live view of the old
+// `d.mid.inner`.
+//
+// CONFORMANT, and this cell exists to say so.  It was written expecting 11 by analogy with
+// the variable case, and the IR says otherwise: `d.mid = Mid{…}` lowers to
+// `OpCopyRecord(<new>, OpGetField(OpGetField(d,0,66),0,65))` — the same place expression
+// `c` is bound to.  Nothing is reallocated; the new value is written INTO the existing
+// place.  That is C86's *"in-place path mutation (`o.field = x`) writes through"*, so a view
+// seeing 22 is the decided contract, not a defect.  Measured both ways: `c.n = 77` before
+// the reassignment shows up in `d.mid.inner.n`, so `c` is genuinely a live view.
+//
+// The distinction that matters for F8: a field write MUTATES the place `c` names, while
+// `d = Deep{…}` DESTROYS it.  A view survives the first and cannot survive the second.
+fn c3_field_reassigned() {
+  d = Deep { mid: Mid { inner: Box { n: 11, tag: 111 }, mtag: 1 }, dtag: 1 };
+  c = d.mid.inner;
+  d.mid = Mid { inner: Box { n: 22, tag: 222 }, mtag: 2 };
+  t = churn();
+  ok("C3 field write-thru", c.n, 22);
+}
+
+// C4 — the container is reassigned from a function RETURN rather than a literal.  A return
+// arrives through NRVO / a return buffer, so it is a different emitter entirely.
+fn mk(n: integer) -> WithVec { return WithVec { v: [Box { n: n }], m: n }; }
+
+fn c4_reassign_from_return() {
+  bx = mk(11);
+  c = bx.v[0];
+  bx = mk(22);
+  t = churn();
+  ok("C4 from return   ", c.n, 11);
+}
+
+// C5 — ONE textual reassignment, executed repeatedly.  The count-the-sites reading would
+// see a single establishment and leave the view aliased; the loop makes iteration 2 displace
+// what iteration 1 established, so a textual count is not the question — an executed one is.
+// The view is bound outside the loop and NOT rebound inside it.
+fn c5_single_site_in_loop() {
+  bx = mk(11);
+  c = bx.v[0];
+  for i in 0..3 { bx = mk(100 + i); }
+  t = churn();
+  ok("C5 one site in loop", c.n, 11);
+}
+
+// ---- CONTROLS — must keep C86's write-through, or the fix is a blanket copy -------
+
+// K1 — a container that is never reassigned: the view stays LIVE and writes reach it.
+// If this cell flips, the fix has traded a correctness bug for a silent semantic change.
+fn k1_write_through_survives() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  c.n = 55;
+  ok("K1 write-through  ", bx.v[0].n, 55);
+}
+
+// K2 — same, one level up: a struct-typed field projection.
+fn k2_field_write_through() {
+  d = Deep { mid: Mid { inner: Box { n: 11, tag: 111 }, mtag: 1 }, dtag: 1 };
+  c = d.mid.inner;
+  c.n = 66;
+  ok("K2 field write-thru", d.mid.inner.n, 66);
+}
+
+// ---- D — the WRITE direction -----------------------------------------------------
+
+// D1 — write through the stale view.  A stale READ is a wrong value; a stale WRITE lands
+// in whatever now occupies the store, which is corruption of a value the author never
+// named.  `bx` must keep the replacement's 22.
+fn d1_write_through_stale() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  bx = WithVec { v: [Box { n: 22 }], m: 2 };
+  c.n = 999;
+  ok("D1 stale write bx", bx.v[0].n, 22);
+}
+
+fn main() {
+  k1_write_through_survives();
+  k2_field_write_through();
+  a1_hash_field();
+  a2_sorted_field();
+  a3_deep_chain();
+  a4_deep_element();
+  b1_callee_plain_param();
+  b2_callee_ref_param();
+  b3_branch_reassign(true);
+  b4_loop_reassign();
+  c1_swap_through_temp();
+  c2_owner_leaves_scope();
+  c3_field_reassigned();
+  c4_reassign_from_return();
+  c5_single_site_in_loop();
+  d1_write_through_stale();
+}
