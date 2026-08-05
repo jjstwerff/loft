@@ -133,6 +133,24 @@ investigation surfaced the reuse hazard that gates it — and probe 17 is the ex
 breaks if that hazard is real. **Knowing the cause is not permission to fix.** An instrument
 that only ever argued *for* the change would be a worse instrument.
 
+### The instrument is unfinished, and that is part of the reading
+
+Building one costs real effort, and **ours is not honed to every case yet.** Today it
+records **8** sites: the interpreter's five emit paths and native's two (one instrumented
+path turned out to be dead). The **parser's ~5 IR-level `OpCopyRecord` emitters**
+(`parser/expressions.rs`, `operators.rs`, `control.rs`, `mod.rs`) are **not instrumented**.
+Those land in the IR, so the analysis can see them *in principle* — which is why the guard
+targets the post-IR emitters first — but "in principle" is not "verified".
+
+So the reading to hold onto: **`uncovered = 0` would mean "nothing on the paths we watch",
+never "no blind spots".** A partial instrument reporting zero is the oracle that said
+`none` all over again, just with better manners. Extending coverage is remaining work
+(Tool gaps), and until it is done every number here carries that qualifier.
+
+This is also the honest limit on the method: the instrument is an **investment**. It repays
+when the class is broad, recurs, or hides where an oracle cannot look — as here. For a bug
+whose scope and root cause are already pinned, skip it and fix the bug.
+
 ### The order, as a checklist
 
 1. Distrust a clean answer from an oracle that cannot see the whole class.
@@ -141,6 +159,8 @@ that only ever argued *for* the change would be a worse instrument.
 4. Survey the whole corpus; convert the bug into a distribution.
 5. Write the probe that could refute you; keep it when it does.
 6. Let the instrument name the gate on the fix, not just the fix.
+7. State its coverage beside its readings — an unfinished instrument reporting zero
+   is the oracle again.
 
 ## Stage A finding — which copies happen with no warning
 
@@ -538,8 +558,9 @@ had been reset, so loft never opened the probe file. Native reports normally und
 
 ## Tool gaps
 
-- The emission manifest — not built. Purely static; needs a registration point in each
-  emitter (`state/codegen.rs`, `generation/dispatch.rs`, and the parser-level sites).
+- **The manifest is not honed to every path yet — the top instrument task.** 8 sites
+  recorded (interp × 5, native × 2, one dead); the parser's ~5 IR-level `OpCopyRecord`
+  emitters are not instrumented. Until they are, `uncovered = 0` cannot mean "complete".
 - No probe-set runner yet; add at ≥20 probes.
 
 Investigation-only aids (NOT shipped, NOT part of the guard — recorded so the next session
