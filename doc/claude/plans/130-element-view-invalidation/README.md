@@ -63,6 +63,85 @@ with the interpreter and `--native` deriving that from one shared fact.
    loft can say *where* a copy happens, never *how much* it moved (a deep copy's size is
    runtime data). That is the rustc bargain, and the author knows their own data.
 
+## Method — engineering is an information problem, so build the instrument first
+
+The principle this plan runs on, stated once because every result below came out of it:
+
+> **Most of engineering is information.** Before writing a fix, build the instrument that
+> tells you *where* the problem is — one more precise than an oracle — then use it to find
+> the real cases and code paths. Only then do you know what to actually write.
+
+### An oracle answers; an instrument localizes
+
+An **oracle** gives one bit about a case *you already constructed*: pass or fail. Its
+resolution is bounded by your imagination — it can only speak about shapes you thought to
+write down.
+
+An **instrument** reports *where*, continuously, across code nobody wrote a case for. Its
+resolution is per-site, over the whole corpus.
+
+This plan opened because an oracle-shaped thing gave a confident wrong answer. On a program
+that provably deep-copies, `--report-copies` printed *"none — every structure copy is a move,
+a literal, or already borrowed"* (probe 10). Not silence — a clean bill of health. No amount
+of writing more test cases against that oracle would have found the copies, because the
+oracle was blind to a whole *class*, not to particular inputs.
+
+### Put the instrument where the fact is created
+
+The report walked the **IR**. The copies are minted **later**, during code generation. That
+gap is not a bug in the report's logic — it is unreachable by construction, so no careful
+reading of the IR could ever have found them.
+
+The manifest instead records at the emitter, *"the one place that cannot be wrong about
+whether a copy exists"* — the branch that writes the copy. That relocation is the entire
+design, and it is why the guard is compile-time and costs a compiled program nothing.
+
+### An instrument is untrustworthy until calibrated against known answers
+
+Ours was mis-installed **twice**, and code-reading caught neither:
+
+1. `gen_set_first_ref_copy` reads exactly like the call-return emitter. Its own doc records
+   **zero fires** in the corpus — a dead path. Probe 11 stayed silent.
+2. Only first-bind emitters were instrumented, so **every reassignment copy in the language**
+   was missing — including the one in `exists()`.
+
+Both were caught by running the instrument against cases whose answer was already known:
+probes 10/11 (known uncovered) and 13/14 (known covered) are the **calibration**, not
+decoration. An instrument that has never been made to fire, and to stay quiet, on cases you
+already understand is an unread dial.
+
+### Negative results localize; confirmations do not
+
+Probes 15 and 17 were written to *demonstrate* the expression-temp and loop-carried copies.
+They measured **zero**. That refutation is what moved the cause from "the syntax at the call
+site" to "the callee's return" — and a fix aimed at expression temps would have missed
+entirely. Both are kept precisely because they failed to confirm.
+
+A probe that agrees with you teaches almost nothing. Write the one that could prove you wrong.
+
+### Survey turns a bug into a distribution
+
+Pointed at the corpus (583 `tests/scripts`), the instrument answered a question no single
+repro can: **exactly one uncovered site per compile, always the same one** — the stdlib's
+`exists()` — plus a second family at 107 hits. That is what tells you where the cost actually
+is, rather than where the first report happened to land.
+
+### The same information tells you what NOT to write
+
+Q5's answer makes a one-line change to `return_adopts_fresh_store()` look obvious. The same
+investigation surfaced the reuse hazard that gates it — and probe 17 is the exact shape that
+breaks if that hazard is real. **Knowing the cause is not permission to fix.** An instrument
+that only ever argued *for* the change would be a worse instrument.
+
+### The order, as a checklist
+
+1. Distrust a clean answer from an oracle that cannot see the whole class.
+2. Put the instrument where the fact is *created*, not where it is consumed.
+3. Calibrate on cases whose answer you already know — both directions.
+4. Survey the whole corpus; convert the bug into a distribution.
+5. Write the probe that could refute you; keep it when it does.
+6. Let the instrument name the gate on the fix, not just the fix.
+
 ## Stage A finding — which copies happen with no warning
 
 This is the base of the plan: the copies loft makes today and says nothing about. Every
