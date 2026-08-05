@@ -175,6 +175,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_lazy_error_dest", n_store_lazy_error_dest),
     ("n_store_lazy_faults", n_store_lazy_faults),
     ("n_store_lazy_clear", n_store_lazy_clear),
+    // Each `#[cfg]` here gates exactly ONE array element, so every paged-store entry needs
+    // its own. This one was missing it while its handler is `#[cfg(paged_store)]`, so the
+    // wasm32-wasip2 rlib could not build at all — and `find_problems.sh` rebuilds it with
+    // `-q`, which made that a SILENT failure: the wasm gate ran against a stale library, green
+    // for a reason unrelated to the code under test (@PLN130).
+    #[cfg(paged_store)]
     ("n_store_load_key", n_store_load_key),
     #[cfg(paged_store)]
     ("n_store_load_key_text", n_store_load_key_text),

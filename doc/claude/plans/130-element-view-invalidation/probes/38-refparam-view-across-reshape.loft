@@ -1,0 +1,125 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 38 — probe 26's residual, characterised: a view held as a PARAMETER while its
+// container is reshaped.
+//
+// Probe 26 is the one cell of this plan's matrix that still FAILS, on BOTH backends, and it was
+// carried as a known-FAIL row rather than driven to a boundary.  The write through the view is
+// silently LOST:
+//
+//   fn shift_then_write(target: &Box, all: &vector<Box>) {
+//     all.remove(0);        // the n=33 element moves from index 2 to index 1
+//     target.n = 99;        // -> lost; boxes[1] stays 33/333
+//   }
+//
+// The element itself survives the shift correctly (`tag` is still 333 at index 1), so the
+// container is fine — it is the VIEW that is stale, pinned to the vacated index 2.  Same class
+// as F2 (an index-pinned view surviving a reshape), reached through a producer F2's fix cannot
+// see: F2 materialises at a `Set(v, <projection>)` BIND SITE, and a parameter has no bind in
+// the callee.  Reproduced on the installed mainline binary, so it is not branch-local.
+//
+// This probe moves the axes that decide WHICH of those two facts matters, because "it fails
+// with `&`" is one cell and one cell is not a boundary:
+//
+//   A — the `&` itself: is a plain (non-`&`) struct param any different?
+//   B — WHERE the reshape happens: in the callee, or in the caller before the call?
+//   C — WHICH element: the one that MOVES (index 2 → 1) vs one below the removal point
+//   D — whether the write lands anywhere at all, or on the WRONG element (lost vs corrupting)
+//
+// D is the severity question and the reason to measure rather than assume: a lost write is a
+// missing update, a misdirected write corrupts a record the author never named.
+
+struct Box { n: integer, tag: integer = 0 }
+
+fn ok(name: text, got: integer, want: integer) {
+  if got == want { print("38 {name}  {got}  want {want}   ok\n"); }
+  if got != want { print("38 {name}  {got}  want {want}   BROKEN\n"); }
+}
+
+// ---- A/B — the `&` axis and the reshape-site axis ---------------------------------
+
+// A1 — probe 26 itself: `&` param, reshape in the callee.  Known BROKEN.
+fn a1_amp_reshape_in_callee(all: &vector<Box>) {
+  t = all[2];
+  a1_helper(t, all);
+}
+
+fn a1_helper(target: &Box, all: &vector<Box>) {
+  all.remove(0);
+  target.n = 99;
+}
+
+// A2 — the SAME shape with the `&` dropped from the view parameter.  loft's own advice says
+// the `&` is pointless here because field mutation already propagates, so if A2 works and A1
+// does not, the `&` is not incidental — it is the defect's carrier.
+fn a2_plain_reshape_in_callee(all: &vector<Box>) {
+  a2_helper(all[2], all);
+}
+
+fn a2_helper(target: Box, all: &vector<Box>) {
+  all.remove(0);
+  target.n = 99;
+}
+
+// B1 — reshape in the CALLER, before the call, so the callee receives an already-shifted
+// container. Isolates "the view went stale" from "the view went stale mid-call".
+//
+// CONFORMANT, and it is the cell that localises A1. Here the bind and the reshape are in the
+// SAME function, so F2's analysis sees both and materialises `target` — it reports
+// *"`target` was copied out of `all`"*, and the write correctly does NOT reach `all`. Written
+// expecting 99, which was the wrong `want`: F2's decided contract is that a materialised view
+// stops aliasing. So the container keeps 33, and A1 fails for exactly one reason — the reshape
+// happens in the CALLEE, where a per-function analysis cannot see it.
+fn b1_reshape_before_call(all: &vector<Box>) {
+  target = all[2];
+  all.remove(0);
+  b1_helper(target);
+}
+
+fn b1_helper(target: &Box) {
+  target.n = 99;
+}
+
+// ---- C — which element, relative to the removal point ----------------------------
+
+// C1 — the view is on an element BELOW the removal point, so the shift does not move it.
+// If this passes while A1 fails, the boundary is "the element moved", not "a removal happened".
+fn c1_element_not_moved(all: &vector<Box>) {
+  c1_helper(all[0], all);
+}
+
+fn c1_helper(target: &Box, all: &vector<Box>) {
+  all.remove(2);            // removes the LAST element; index 0 is untouched
+  target.n = 99;
+}
+
+fn main() {
+  // A1 — the known failure.
+  boxes = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  a1_amp_reshape_in_callee(boxes);
+  ok("A1 & callee len   ", len(boxes), 2);
+  ok("A1 & callee moved ", boxes[1].tag, 333);
+  ok("A1 & callee write ", boxes[1].n, 99);
+  // D — did the write land on the OTHER element instead of vanishing?  22 means it vanished
+  // (the surviving element is untouched); 99 would mean it corrupted an unrelated record.
+  ok("A1 D other elem   ", boxes[0].n, 22);
+
+  // A2 — same, no `&`.
+  b2 = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  a2_plain_reshape_in_callee(b2);
+  ok("A2 plain len      ", len(b2), 2);
+  ok("A2 plain moved    ", b2[1].tag, 333);
+
+  // B1 — reshape before the call.
+  b3 = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  b1_reshape_before_call(b3);
+  ok("B1 before-call len", len(b3), 2);
+  // Materialised, so the write stays in the copy: the container keeps its own value.
+  ok("B1 materialised   ", b3[1].n, 33);
+
+  // C1 — the viewed element does not move.
+  b4 = [Box { n: 11, tag: 111 }, Box { n: 22, tag: 222 }, Box { n: 33, tag: 333 }];
+  c1_element_not_moved(b4);
+  ok("C1 unmoved len    ", len(b4), 2);
+  ok("C1 unmoved write  ", b4[0].n, 99);
+}

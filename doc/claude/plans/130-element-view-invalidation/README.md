@@ -5,9 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 130 — A copy nobody is told about, and a view that outlives what it names
 
-**Status — CLOSED 2026-08-05.** All defects fixed on both backends; F7 retracted; F3 and Q6
-settled by decision. Kept as the investigation record (§ Method, the probe suite, the cluster
-catalogue and the retraction), which is what this plan's output is.
+**Status — CLOSED 2026-08-05, with ONE finding filed out rather than fixed.** F1, F2, F4, F5,
+F6, F8 fixed on both backends; F7 retracted; F3 **re-opened as [loft#779](https://github.com/loft-lang/loft/issues/779)**
+— it was signed off as STATED on a claim that measurement contradicts (§ F3), and a lost write is
+breakage the plan's own bar never allows. The remaining fix needs a `&`-semantics decision, which
+is a legitimate spinoff reason; everything else is done. Kept as the investigation record
+(§ Method, the probe suite, the cluster catalogue and the retraction).
 
 Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 [loft#774](https://github.com/loft-lang/loft/issues/774).
@@ -19,7 +22,35 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | the view-invalidation contract (reshape / re-key / reassign → materialise + advice) | [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](../../OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not) · user-facing in [LOFT.md](../../LOFT.md) |
 | the copy/view boundary it extends | [DESIGN_DECISIONS.md § C86](../../DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule) |
 | `LOFT_STRICT_STORES`, `LOFT_DEBUG_F8`, `LOFT_COPY_MANIFEST` | [DEBUG.md](../../DEBUG.md) |
-| the guards | `tests/scripts/774-…` (reassignment) · `145-…` (reshape) · `200-…` (dense) · `201-…` (C86 cells) |
+| the guards | see the probe→test mapping below |
+
+**Probe → CI test mapping** (obligation 2 of `_INVESTIGATION_TEMPLATE.md § Closing`: a probe
+encoding a correctness GUARANTEE must be CI-run, because `probes/` is not).  Characterization
+probes — the watermark counts, the secret-copy catalogue, the reference↔problem pairings — stay
+in `probes/` as landmarks:
+
+| finding | guarantee probes | CI test |
+|---|---|---|
+| F1 — a view reassigned from a loop var destroyed the container | 30 | `tests/scripts/144-view-loopvar-reassign.loft` |
+| F2 — a view live across a RESHAPE | 03–07 | `tests/scripts/145-view-materialised-on-reshape.loft` |
+| F4 — a key-field write through a view | 28 | `tests/scripts/146-keyed-rekey-through-view.loft` |
+| F3 — a `vector` stays DENSE | 01, 02 | `tests/scripts/200-vector-stays-dense.loft` |
+| F7 — the C86 copy/view boundary, 30 cells | 09–14 | `tests/scripts/201-bind-copies-projection-views.loft` |
+| F8 — a view live across a container REASSIGNMENT | 35, 36, 37 | `tests/scripts/774-view-outlives-reassigned-container.loft` |
+| the producer × invalidator boundary — which binds VIEW vs COPY, what invalidates | 25, 27, 29, 31, 32, 33, 34 | `tests/scripts/147-view-producer-invalidator-boundary.loft` |
+| F3 — a view whose container the CALLEE reshapes | 26, 38 | **none — [loft#779](https://github.com/loft-lang/loft/issues/779)**; cell A1 still fails, so the probe cannot graduate |
+
+**Still-open findings, filed forward** (obligation 1: the in-plan no-file rule inverts at
+closure).  All three are residuals, not unfixed bugs, so they went to
+[QUALITY.md § Open work → Store-lifetime cluster](../../QUALITY.md#store-lifetime-cluster)
+rather than to Issues: F8's unmeasured `par`/coroutine cells, Q6's unchosen copy families, and
+the 29-site uncovered copy set.  Every finding whose FIX shipped needs no row — the fix and its
+test are the record.
+
+**Issues this plan closed** — `loft#774` (F8, the reassignment defect), `loft#775` (a field
+alias outliving its owner) and `loft#778` (F1, the loop-var reassignment) are all fixed on both
+backends and carry `fixed-pending-merge`; they close when the branch reaches `main`.
+`loft#415`, `#426`, `#615` and `#664` were already closed and are cited as landmarks.
 
 ## Status
 
@@ -372,7 +403,7 @@ finding resolves exactly one of:
 |---|---|---|---|---|
 | F1 | View reassigned from a loop var **destroys the container** (interp-only, silent, total) | probe 30, loft#778 | **FIXED** — silence is not an option here | **DONE** — both backends; regression `tests/scripts/144` |
 | F2 | Index-pinned views survive a shifting removal — wrong reads and cross-element corruption | probes 03–07, 29 | **FIXED** — materialise + advice | **DONE** — both backends; regression `tests/scripts/145` |
-| F3 | `&` param bound from an element loses its write after a shift | probe 26 | **STATED** — edge case; takes F2's materialise + advice (§ F3). Stable slots REJECTED: vectors stay dense | decided |
+| F3 | `&` param bound from an element loses its write after a shift | probes 26, 38 | **STATED was WRONG — this is BREAKAGE** (see § F3). A lost write is what the bar above never allows, and the claim that F2's materialise covers it is false: measured, cell A1 emits NO advice and the write vanishes silently | **FILED [loft#779](https://github.com/loft-lang/loft/issues/779)** — needs a `&`-semantics decision |
 | F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
 | F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |
@@ -903,14 +934,35 @@ Together those settle it: if the element genuinely moves, no reference can follo
 per-reference bookkeeping, and constraint 5 forbids that. So F3 takes **F2's answer** — the
 view materialises and the author is told — which is already built and shipped.
 
-Two things make that the right size rather than a compromise:
+> **CORRECTED 2026-08-05 — the second bullet below was FALSE, and F3's resolution rested on
+> it.** F3 does NOT take F2's materialise: measured on both backends, probe 26's shape emits **no
+> advice at all** and the write is **silently lost**. F2's analysis is per-FUNCTION, and probe 26
+> puts the `remove` in the CALLEE, one frame below the view's bind — so the materialise never
+> fires. Probe 38 localises it: with the bind and the `remove` in the SAME function (cell B1) the
+> advice *does* fire and the view *does* materialise, which is the behaviour this section
+> described; with the `remove` in the callee (cell A1) nothing happens.
+>
+> That makes F3 a **lost write with no diagnostic**, which is the first row of the closure bar —
+> never allowed, and explicitly not something STATED may cover ("allowed for now applies to
+> copies, never to wrong behaviour"). It was signed off on a claim nobody measured.
+>
+> Filed as [loft#779](https://github.com/loft-lang/loft/issues/779) with the boundary as cells and
+> a verified workaround. It is not fixed here because the fix needs a DECISION first: propagating
+> the reshape to the call site was tried and reverted — it does not fix A1 (the view's dep does
+> not name a `&vector` parameter, so the arm never fires) and it breaks cell C1, where the viewed
+> element does not move and the write legitimately lands. It would also make a `&` argument
+> silently become a copy whenever the callee removes from the container, which changes what `&`
+> means (@PLN87) rather than fixing a bug.
+
+The reasoning as it stood, kept because its first bullet is still true and its second is the
+mistake worth remembering:
 
 - loft **already advises against the spelling** probe 26 uses: *"`&` on parameter `target`
   only slows it down here — field mutation already propagates to the caller without it. Drop
   the `&` unless you REASSIGN the whole binding."* The probe leans on a discouraged idiom.
-- The remaining loss is a write through a materialised view, which is **stated**, not silent.
-  No element is corrupted and none becomes unreachable — the two things the closure bar
-  actually forbids.
+- ~~The remaining loss is a write through a materialised view, which is **stated**, not silent.~~
+  **False** — nothing materialises and nothing is stated. No element is corrupted and none
+  becomes unreachable, which is true, but a lost write is its own row on the bar.
 
 Recorded for the next reader: the two mechanisms below were both examined and neither works,
 so nobody needs to re-derive them.

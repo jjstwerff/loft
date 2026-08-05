@@ -189,6 +189,15 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
 /// Only a container named by a plain `Var` is collected; a reshape reached through some
 /// other expression is not recognised, so the answer is a lower bound and a missed case
 /// keeps today's behaviour rather than inventing a new one.
+/// **Deliberately NOT extended across a call.** A callee that removes from a `&vector`
+/// parameter reshapes the CALLER's container, and a view the caller holds then goes stale with
+/// no diagnostic — measured, the write is silently lost (@PLN130 probe 38 cell A1, both
+/// backends, and it reproduces on mainline). Propagating the reshape to the call site was tried
+/// and reverted: it did not fix A1 (the view's dep does not name a `&vector` PARAMETER, so the
+/// materialise arm never fires) and it broke cell C1, where the viewed element does not move
+/// and the write legitimately lands. It would also make a `&` argument silently become a copy
+/// whenever the callee removes from the container, which changes what `&` means (@PLN87) rather
+/// than fixing a bug. Filed as its own issue; see § F2 for the reasoning.
 fn collect_reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
     let mut out: HashSet<u16> = HashSet::new();
     code.walk(&mut |v| {
