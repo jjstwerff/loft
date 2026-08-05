@@ -185,6 +185,43 @@ is exactly this analysis): an *optimization*, never an observable semantic.
 feature), and in-place mutation through a *path* (`o.field = x`, `o.v[i] = y`) reaches
 the source. A **scalar** binding is a by-value **copy**.
 
+### A view lasts as long as the thing it names — and loft says when it does not
+
+A projection view is only sound while the place it names still exists, so loft **materialises**
+the binding — gives it its own copy, taken at the bind — whenever it can prove the place will
+not survive the binding. Three things end a view's place, and all three are decided at COMPILE
+time (@PLN130):
+
+| what happens to the container | why the view cannot stay an alias | the copy is reported as |
+|---|---|---|
+| **RESHAPED** — `a.remove(i)` | removal renumbers the positions, so the view's pinned position starts naming a DIFFERENT element | *"`c` was copied out of `a` because `a` is modified while `c` is in use"* |
+| **RE-KEYED** — `c.key = 5` on a keyed collection | the element would be reachable by no key at all, and for a `sorted` the record MOVES, invalidating the very view doing the writing | *"… because `key` is one of `s`'s keys"* |
+| **REASSIGNED** — `bx = T{…}` | the view names a place inside `bx`, and giving `bx` a new value leaves nothing for it to point at | *"… because `bx` is reassigned while `c` is in use"* |
+
+After materialising, writes through the binding **no longer reach the container** — which is
+why every one of them is reported rather than done silently. The advice names the function, the
+binding and the container.
+
+**Mutating the place is not ending it.** `d.mid = Mid{…}` writes the new value INTO the place
+`d.mid` already occupies, so a view of `d.mid.inner` sees the update and keeps writing through:
+that is the in-place path mutation above, not an invalidation. A view survives its place being
+overwritten and cannot survive its place being destroyed.
+
+**A vector local never needed this.** `a = [...]` allocates through a hidden compiler-owned
+backing record, so re-binding `a` mints a NEW one and the original keeps its identity — a view
+of it stays valid with no copy. A struct local IS its own owner, which is why reassigning one
+is the case that had to be handled. Contract-wise both answer the value bound at the view;
+they differ only in whether a copy was needed to get there.
+
+The reassignment case also reaches across a call: handing a container to a function that
+reassigns its `&` parameter frees the caller's store (@PLN87 P2.2), so the caller's views of it
+materialise too. A **plain** (non-`&`) parameter reassignment is local to the callee (P2.1) and
+leaves the caller's views alone.
+
+Pinned by `tests/scripts/774-view-outlives-reassigned-container.loft` (the reassignment
+boundary, with the write-through cells as controls), `tests/scripts/145-view-materialised-on-reshape.loft`
+and `tests/scripts/201-bind-copies-projection-views.loft` (the C86 copy/view boundary).
+
 **`&` binds a live REFERENCE** to its source — a variable, struct field, or vector
 element. Every operation goes *through* the reference to the source: a read sees the
 source's current value, a write writes the source, a field/element mutate mutates the

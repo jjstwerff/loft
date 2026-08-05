@@ -1566,6 +1566,30 @@ Swap through scalar temps per field, rebuild into a fresh vector
 (selection sort instead of in-place insertion sort), or copy the record
 explicitly through a fresh struct literal before overwriting the slot.
 
+**A view lasts only as long as the place it names, and loft tells you when it
+stops.**  `tmp = v[j]` (and a struct-typed field read, `w = o.inner`) is a link
+into the container, so it stays valid only while that place does.  Where the
+compiler can see the place will not survive the binding, it gives `tmp` its own
+copy instead — taken at the bind, so it holds the value you bound — and says so:
+
+```
+advice: in `f`, `c` was copied out of `bx` because `bx` is reassigned while `c`
+  is in use — a view names a place inside `bx`, and giving `bx` a new value
+  leaves nothing for it to point at. Writes through `c` no longer reach `bx`.
+```
+
+Three things end the place: **removing** from the container (`v.remove(i)`
+renumbers the rest), **writing a key field** through the view on a keyed
+collection, and **reassigning the container itself** (`bx = T{…}`).  After the
+copy, writes through the binding no longer reach the container — which is why it
+is reported and not silent.  To keep writing through, re-read the view after the
+change (`c = bx.v[0]`).
+
+Overwriting a place is not ending it: `o.inner = Box{…}` writes into the place
+`o.inner` already occupies, so a view of it sees the new value and still writes
+through.  Full rule + the reasoning:
+[OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not).
+
 **Empty vectors** require a type annotation so the compiler knows the element type.
 Use `v: vector<T> = []` instead of the older `[for _ in 0..0 { default }]` pattern.
 

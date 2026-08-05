@@ -1998,6 +1998,18 @@ previously unguarded, and @PLN130 F7 proposed deleting B-View outright on a one-
 before the sweep showed all 30 cells already conforming. The decision above is what settles the
 question; the test is what stops a future change from moving a cell quietly.
 
+**A view's LIFETIME, the other half of B-View (2026-08-05, @PLN130 F2/F4/F8).** "Projection
+reads stay VIEWS" says what a binding means, not how long it may mean it. A view is sound only
+while the place it names exists, so loft materialises the binding — a copy taken at the bind,
+reported to the author — when the container is **reshaped** (`a.remove(i)` renumbers positions),
+**re-keyed** (the element would be reachable by no key), or **reassigned** (`bx = T{…}` leaves
+the view's place with nothing to point at). Reassignment was the one that shipped broken: the
+view answered the replacement's value, and on `--native` read freed memory.
+Overwriting a place is not destroying it — `d.mid = Mid{…}` writes into the place `d.mid`
+already occupies, so a view of `d.mid.inner` still sees it and still writes through. Full rule:
+[OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not);
+pinned by `tests/scripts/774-view-outlives-reassigned-container.loft`.
+
 ### Consequences
 
 - formal/ownership.md **D-own-4 reclassifies**: the #415 copy is correct; the

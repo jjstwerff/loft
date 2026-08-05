@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @F106 — GENERATED from loft-lang/features#106 by tools/features/gen.loft — DO NOT EDIT.
 struct Box { n: integer }
+struct Holder { b: Box, tag: integer }
 
 fn main() {
     a = Box { n: 1 };
@@ -13,4 +14,9 @@ fn main() {
     e = v[0];           // element read — `e` is a view of the element
     e.n = 20;
     println("{v[0].n}");           // 20   — writing `e` reached the vector
+
+    h = Holder { b: Box { n: 30 }, tag: 1 };
+    w = h.b;            // a view into `h`
+    h = Holder { b: Box { n: 40 }, tag: 2 };   // `h` reassigned — `w`'s place is gone
+    println("{w.n} {h.b.n}");      // 30 40 — `w` kept the value it was bound to
 }

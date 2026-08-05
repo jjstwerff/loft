@@ -5,8 +5,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 130 — A copy nobody is told about, and a view that outlives what it names
 
+**Status — CLOSED 2026-08-05.** All defects fixed on both backends; F7 retracted; F3 and Q6
+settled by decision. Kept as the investigation record (§ Method, the probe suite, the cluster
+catalogue and the retraction), which is what this plan's output is.
+
 Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 [loft#774](https://github.com/loft-lang/loft/issues/774).
+
+**Where the reference content lives now** — read these, not this file, for the contract:
+
+| what shipped | its home |
+|---|---|
+| the view-invalidation contract (reshape / re-key / reassign → materialise + advice) | [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](../../OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not) · user-facing in [LOFT.md](../../LOFT.md) |
+| the copy/view boundary it extends | [DESIGN_DECISIONS.md § C86](../../DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule) |
+| `LOFT_STRICT_STORES`, `LOFT_DEBUG_F8`, `LOFT_COPY_MANIFEST` | [DEBUG.md](../../DEBUG.md) |
+| the guards | `tests/scripts/774-…` (reassignment) · `145-…` (reshape) · `200-…` (dense) · `201-…` (C86 cells) |
 
 ## Status
 
