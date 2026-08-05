@@ -213,10 +213,59 @@ the diagnostics change).
   shape; nothing in the language currently scopes an annotation to a whole file. Needs a
   syntax decision before cluster I can ship.
 
+## The guard — codegen reality vs. what the diagnostic claimed
+
+The load-bearing instrument for this plan, and cheaper than it looks: **both halves already
+exist and nothing joins them.**
+
+- **Runtime ground truth** — `LOFT_COPY_DUMP=1` (`keys.rs:339`), one line per executed deep
+  structure copy. Its own doc states the intent verbatim: *"the runtime ground truth for
+  every copy + its size, so the compile-time copy-vs-borrow decision can be checked to cover
+  them all"*. The cross-check was designed for and never built.
+- **Compile-time claim** — `use_analysis::report_copies`, the classified set with positions.
+
+**The guard is the diff: an executed copy with no verdict is a blind spot.** Verified today
+on probe 10 — the `b = a` copy the static report calls `none` — `--interpret` prints
+`[copy] record line=17 tp=65`. The runtime already names the line the compiler denies.
+
+**Why the runtime, not the emitters.** Deep copies are emitted from ~15 sites across
+`src/parser/`, `state/codegen.rs` and `generation/`. Funnelling them through one registering
+helper is both a large refactor and *bypassable by the next raw emission* — the exact failure
+already recorded for `generate_call`'s `skip_free` guard. The runtime is downstream of every
+emitter, so a new emitter cannot escape it.
+
+Two tiers, in order:
+
+1. **Counting gate — ship first, no op change.** Compare executed copies against classified
+   copies per run. `executed > classified` means copies nobody was told about. This fires on
+   probes 10, 11 and 12 today, and it is the check that would have prevented the report ever
+   printing `none` on a copying program.
+2. **Per-site attribution — later.** Requires `OpCopyRecord` to carry a site-id; the op
+   already carries a packed flag (`0x8000` free-source) in its type word, so a site-id is the
+   same shape. The interpreter dump already emits `line=`, so half exists.
+
+**Blocker the guard immediately exposes (Stage B).** The runtime instrument is itself
+backend-split, so it cannot gate both backends as-is:
+
+| Probe | copy shape | `--interpret` | `--native` |
+|---|---|---|---|
+| 12, 13 | vector-append | reports | reports |
+| 10, 11, 14 | record copy | reports | **silent** |
+
+Native's assertions prove the copy happens (probe 10's `b` is independent there too), so the
+silence is the instrument, not the behaviour. There are also **two differently-named flags
+for one fact**: `LOFT_COPY_DUMP` (interp, `keys.rs:339`) and `LOFT_TRACE_COPY`
+(`codegen_runtime.rs:636`, different output format) — and the latter printed nothing on
+probes 10/11 either. **Unpinned:** whether native lacks the hook, uses a third path, or does
+not route these shapes through `OpCopyRecord` at all. Pin this before building the guard — it
+is cluster V's parity problem surfacing in the measuring device itself, and a guard built on
+a backend-blind instrument would certify native as copy-free.
+
 ## Tool gaps
 
-- No instrument attributes a copy *minted during codegen* to a source line — mechanism 2 is
-  invisible to every existing dump. Cluster I needs one before its fix can be validated.
+- The guard above — not built; both halves exist.
+- No instrument attributes a copy *minted during codegen* to a source line on `--native`.
+- Two env flags for one runtime fact; unify before either can gate.
 - No probe-set runner yet; add at ≥20 probes.
 
 ## See also
