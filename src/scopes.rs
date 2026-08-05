@@ -839,27 +839,43 @@ fn def_reshape_refusals(data: &Data, d_nr: u32, removed: &RemovedParams) -> Vec<
     let function = &def.variables;
     let file = def.position.file.clone();
     let mut out: Vec<ReshapeRefusal> = Vec::new();
-    // (1) — a `&` link this frame holds, still live where the container is reshaped.
+    // (1) — a `&` link this frame holds, still live where its container is disturbed. Every
+    // cause the walk reports is refused: each one ends the place the reference names, and a
+    // reference that cannot reach its source is not what `&` asked for.
     for (view, d) in ViewWalk::run(&def.code, function, data, Some(removed), def.position.line) {
-        if d.cause != ViewCause::Reshaped || !function.is_amp_link(view) {
+        if !function.is_amp_link(view) {
             continue;
         }
         let view_name = function.name(view);
         let container = function.name(d.container);
+        // The two causes destroy the place differently, so they read differently and have
+        // different ways out — but the verdict is the same.
+        let (what, why) = match d.cause {
+            ViewCause::Reshaped => (
+                format!("remove from `{container}`"),
+                format!(
+                    "a removal renumbers the remaining elements, so a write through \
+                     `{view_name}` would no longer reach the element it names"
+                ),
+            ),
+            ViewCause::Reassigned => (
+                format!("give `{container}` a new value"),
+                format!(
+                    "`{view_name}` names a place inside `{container}`, and replacing \
+                     `{container}` leaves that place with nothing to point at"
+                ),
+            ),
+        };
         let message = match d.via {
             Some(callee) => format!(
-                "cannot call `{}` while `{view_name}` references an element of `{container}` \
-                 — `{0}` removes from `{container}`, and a removal renumbers the remaining \
-                 elements, so a write through `{view_name}` would no longer reach the element \
-                 it names. Move the call after the last use of `{view_name}`, or bind without \
-                 `&` to work on a copy",
-                data.def(callee).original_name()
+                "cannot call `{callee_name}` while `{view_name}` references a place inside \
+                 `{container}` — `{callee_name}` would {what}, and {why}. Move the call after \
+                 the last use of `{view_name}`, or bind without `&` to work on a copy",
+                callee_name = data.def(callee).original_name()
             ),
             None => format!(
-                "cannot remove from `{container}` while `{view_name}` references an element of \
-                 it — a removal renumbers the remaining elements, so a write through \
-                 `{view_name}` would no longer reach the element it names. Move the removal \
-                 after the last use of `{view_name}`, or bind without `&` to work on a copy"
+                "cannot {what} while `{view_name}` references a place inside it — {why}. Move \
+                 it after the last use of `{view_name}`, or bind without `&` to work on a copy"
             ),
         };
         out.push(ReshapeRefusal {

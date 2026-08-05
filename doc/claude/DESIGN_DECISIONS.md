@@ -1588,9 +1588,32 @@ for an edge case). Silently downgrade the reference to a copy (**this is what th
 forbids** — it makes the author's explicit decision a lie, and it loses a write with no
 diagnostic). Or decline the program. loft declines.
 
+**Why an error and not "some defined behaviour" — the maker's reason, and it generalises.**
+2026-08-05: *"If we cannot fulfil what a programmer asks for us that should be an error instead
+of silently different semantics … otherwise we will have to support this seemingly
+undefined/strange behaviour into our future, even if we might want to introduce logic that makes
+an implementation possible for these cases."*
+
+That is a **forward-compatibility** argument, and it is the one that makes this a general method
+rather than a one-off. [COMPATIBILITY.md § The error surface is one-directional](COMPATIBILITY.md)
+says loft may always DROP an error and, after the freeze, may never ADD one. So the two options
+are not symmetric:
+
+- **ship the silent copy** → that semantics is in the contract forever. If loft later builds the
+  machinery to honour the reference properly (re-pointing the link, re-inserting the re-keyed
+  record), it cannot switch to it: programs would silently change meaning. The workaround becomes
+  permanent, and it is a workaround nobody chose;
+- **ship the error** → nothing depends on it, because nothing compiles. The day a safe
+  implementation exists, dropping the error is a pure widening — every program that compiled
+  still compiles, and the ones that did not start working.
+
+So the error is the option that **keeps the door open**. This is how loft resolves a consistency
+problem in general: where two plausible behaviours exist and neither is clearly right, refusing
+is the choice that does not commit the language to the wrong one.
+
 First application: **B-Ref-Reshape** ([formal/binding.md](formal/binding.md)), @PLN130 F9 /
-[loft#779](https://github.com/loft-lang/loft/issues/779), shipped for the removal disturbance;
-the other two are tracked as `D-bind-9`.
+[loft#779](https://github.com/loft-lang/loft/issues/779) — all three disturbances (removal,
+re-key, container reassignment).
 
 ### Revisit when
 

@@ -119,6 +119,46 @@ fn callee_reshapes_only_its_own_vector() {
   assert(len(v) == 3, "own-vector len {len(v)} want 3");
 }
 
+// ---- the other two disturbances, and what they leave alone ----------------------
+
+struct Elm { key: integer, tag: integer = 0 }
+
+// A NON-key field through a `&` reference into a keyed collection still writes through: the
+// trigger is the KEY, not the collection.  Writing the key itself is refused (there is no way
+// to honour it), and widening that to every field would take write-through away from keyed
+// elements generally.
+fn non_key_field_through_a_reference() {
+  s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }];
+  c = &s[30];
+  c.tag = 99;
+  assert(s[30].tag == 99, "keyed non-key {s[30].tag} want 99");
+  assert(s[10].tag == 111, "keyed other {s[10].tag} want 111");
+}
+
+struct Mid { inner: Box, mtag: integer = 0 }
+
+// Liveness governs the reassignment disturbance too: finished with the reference before the
+// container is replaced, and it keeps writing through.
+fn dead_reference_before_reassignment() {
+  bx = Mid { inner: Box { n: 11, tag: 111 }, mtag: 1 };
+  c = &bx.inner;
+  c.n = 99;
+  assert(bx.inner.n == 99, "dead-before-reassign {bx.inner.n} want 99");
+  bx = Mid { inner: Box { n: 22, tag: 222 }, mtag: 2 };
+  assert(bx.inner.n == 22, "after reassign {bx.inner.n} want 22");
+}
+
+// Overwriting a place is not destroying it — `m.inner = Box{…}` writes INTO the place
+// `m.inner` already occupies, so a reference to it survives and still writes through.  The
+// refusal must not mistake this for a reassignment of the container.
+fn overwriting_a_place_is_not_destroying_it() {
+  m = Mid { inner: Box { n: 11, tag: 111 } };
+  c = &m.inner;
+  m.inner = Box { n: 22, tag: 222 };
+  c.n = 99;
+  assert(m.inner.n == 99, "overwrite-in-place {m.inner.n} want 99");
+}
+
 // ---- a PLAIN bind is unchanged ---------------------------------------------------
 
 // @PLN130 F2's contract, restated here so the refusal cannot quietly replace it: a plain
@@ -142,5 +182,8 @@ fn main() {
   callee_that_never_removes();
   callee_reshapes_only_its_own_vector();
   plain_bind_still_materialises();
+  non_key_field_through_a_reference();
+  dead_reference_before_reassignment();
+  overwriting_a_place_is_not_destroying_it();
   print("149 ok\n");
 }

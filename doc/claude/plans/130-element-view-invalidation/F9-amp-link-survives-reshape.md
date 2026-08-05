@@ -288,7 +288,7 @@ and it means the stdlib is checked too.
 ### Step 5 — close the deviation and state the rule ✅ DONE (2026-08-05)
 
 - **B-Ref-Reshape** is now a rule in `formal/binding.md` beside B-Ref-Alias, and D-bind-8 is
-  closed with its evidence. `OPEN` is **1**, not 0 — see the residual below.
+  closed with its evidence; `OPEN` is **0** once step 6 below lands.
 - [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](../../OWNERSHIP_MODEL.md) and
   the C86 lifetime paragraph in [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) carry the shipped
   two-row rule (plain → materialise; reference → refused) instead of the *"known gap"* wording.
@@ -299,29 +299,46 @@ and it means the stdlib is checked too.
   made conditional — the rules were incomplete, not the code, so both gained the materialise
   qualifier (`H-Materialise`).
 
-### The residual — D-bind-9, and why `OPEN` is 1 rather than 0
+### Step 6 — the other two disturbances (D-bind-9) ✅ DONE (2026-08-05)
 
-**The rule has three producers; the code enforces one.** B-Ref-Reshape was written from the
-maker's sentence, which named REMOVAL. `B-Disturb` names three events that end the place a
-reference points at, and the other two still silently downgrade a `&` to a copy — measured on
-both backends, each emitting *"`c` was copied out of …"*:
+**The rule had three producers and the first cut enforced one.** B-Ref-Reshape was written from
+the maker's sentence, which named REMOVAL. `B-Disturb` names three events that end the place a
+reference points at, and the other two still silently downgraded a `&` to a copy. Closing
+D-bind-8 while they held was an accounting error: the deviation named all three mechanisms of one
+rule and the sign-off covered one.
+
+**What found them was a sweep, not a cell.** 14 shapes of `&` — whole struct, whole vector,
+element, field, nested, keyed non-key, keyed key, local reassign, callee reassign, `&` param
+mutate, `&` param rebind, loop, branch, overwrite-in-place — each asserting the single thing `&`
+promises: that the write reaches the source. Twelve honoured it; two did not, identically on both
+backends and each with a *"copied out of"* advice line:
 
 ```loft
-c = &s[30];  c.key = 5;         // RE-KEY: c.key==5, s[30].tag==333, s[5] ABSENT
-c = &bx.inner;  bx = Mid { … };  c.n = 99;   // REASSIGN: c.n==99, bx.inner.n==22
+c = &s[30];  c.key = 5;                                        // s[5] ABSENT
+c = &bx.inner;  bx = Mid { inner: Box { n: 22 } };  c.n = 99;   // bx.inner.n == 22
 ```
 
-Closing D-bind-8 while these held was an error of accounting on this plan's part: the deviation
-named all three mechanisms of one rule, and the sign-off covered one. It is recorded as
-**D-bind-9** with both fixes named — the reassignment arm is a filter change in
-`def_reshape_refusals` (the walk already returns that cause with its liveness, container and
-line), the re-key arm is a refusal at `note_key_field_write` where `is_amp_link` holds.
+The generalisable point: **a rule with more than one producer needs a sweep over the producers,
+not a boundary around the one that was reported.** The removal producer had a 25-cell boundary
+(probe 40) and the other two had nothing, because the issue only named the removal.
 
-What made this fixable rather than an open question is the 2026-08-05 widening of
-[C79](../../DESIGN_DECISIONS.md): *"we can decline code where we cannot create a safe
-implementation. If a user explicitly takes a reference that is an ownership decision and it has
-consequences."* The earlier scoping note here — *"a re-key is a write, not a removal, so the
-maker's sentence does not cover it; needs its own decision"* — is answered by that principle.
+Both now refuse. The reassignment arm is the same liveness walk with the cause filter dropped —
+`ViewWalk` already returned `Reassigned` with its container, line and callee, so it was a filter
+change and a second message. The re-key arm refuses at `note_key_field_write` where the base
+`is_amp_link`; it needs no liveness question, because the key write IS the use, and it needs a
+different remedy in the message, because there is no "move it later" — the write itself is what
+destroys the place, so the way out is to re-insert.
+
+**Neither needed a new decision**, and that is what the maker's 2026-08-05 principle bought:
+*"we can decline code where we cannot create a safe implementation"* covers all three producers
+at once, where the original sentence covered one. The earlier scoping note in this file —
+*"a re-key is a write, not a removal … needs its own decision"* — is answered by it.
+
+- **Gate:** the 12 honouring shapes still honour on both backends with `LOFT_STRICT_STORES`
+  clean; lock-ins `b_ref_reshape_rekey_through_amp_link_is_error` and
+  `b_ref_reshape_container_reassign_under_amp_link_is_error` plus their positive twins (a NON-key
+  field still writes through, a reference dead before the reassignment still does); probe 40's 25
+  cells unchanged; full suite green. D-bind-9 opened and closed the same day; `OPEN` is **0**.
 
 ## The compatibility question — ANSWERED 2026-08-05: cleared, and the doc urges it
 

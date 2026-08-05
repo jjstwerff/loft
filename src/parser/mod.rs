@@ -6364,6 +6364,22 @@ impl Parser {
             };
             let vname = self.vars.name(base).to_string();
             let cname = self.vars.name(dep).to_string();
+            // @PLN130 F9 — an explicit `&` is an ownership decision, so it may not be quietly
+            // downgraded to a copy: where the write cannot reach the source, REFUSE it
+            // (formal/binding.md B-Ref-Reshape, C79 revisited 2026-08-05).  Unlike the removal
+            // and reassignment causes there is no liveness question here — the key write IS the
+            // use — and no "move it later" remedy either, so the message points at re-inserting.
+            if self.vars.is_amp_link(base) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot write the key field `{field}` through `{vname}` — `{field}` is one \
+                     of `{cname}`'s keys, and changing it would leave the element reachable by \
+                     no key, so the write cannot reach `{cname}`. Re-insert with \
+                     `{cname}[key] = value`, or bind without `&` to work on a copy"
+                );
+                continue;
+            }
             self.vars.make_independent(base, dep);
             let fname = self.data.def(self.context).original_name();
             crate::copy_manifest::note_rekeyed_view(&vname, &cname, &field, &fname);

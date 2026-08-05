@@ -12,9 +12,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > τ-lvalue); the `&` belongs to the **variable's type**, fixed at its binding — it is
 > not something the expression grammar applies per use. The @PLN87 ladder (built in the
 > `loft2` worktree, branch `tuxedo-work2`) **realises this model** and landed via PR#436
-> (merged into this branch); D-bind-7, its last residual, was fixed that cycle. **D-bind: 1
+> (merged into this branch); D-bind-7, its last residual, was fixed that cycle. **D-bind: 0
 > open** — `B-Ref-Reshape` (2026-08-05) declines a container disturbance under a live `&`, and
-> the code enforces one of its three disturbances so far (`D-bind-9`). This doc's SECOND axis,
+> all three of its disturbances are enforced. This doc's SECOND axis,
 > `const` (@PLN40, shipped), completes the binding table alongside `&`/copy/view — its
 > deviation list is now **closed (D-const: 0 open)**; D-const-1 (enum-variant enforcement
 > scope) was fixed via @PLN102 K1 (see § Deviations), unrelated to the `&`-ladder.
@@ -269,41 +269,36 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **1** — D-bind-9, below: B-Ref-Reshape is enforced for ONE of B-Disturb's three
-events. The @PLN87 ladder (L1–L6), the model + doc reconciliation (PR#436), the residual
+OPEN: **0**. B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
+opened and closed 2026-08-05). The @PLN87 ladder (L1–L6), the model + doc reconciliation (PR#436), the residual
 D-bind-7 and D-bind-8 (closed below) are all verified; @PLN40's Const-Bind / Const-Value /
 Const-ScalarCollapse / Const-Compose are shipped and enforced for struct fields, parameters,
 and locals — and, since @PLN102 K1, for **enum-variant fields** too (their one former residual
 gap, D-const-1, now closed).
 
-### D-bind-9 — a `&` reference is still silently downgraded to a COPY on two of the three disturbances ⚑
-
-- **Violates:** B-Ref-Alias (via B-Ref-Reshape — the shape that should not compile does).
-- **Where:** `scopes::def_reshape_refusals` filters the liveness walk to `ViewCause::Reshaped`,
-  so the REASSIGNMENT cause is computed and then ignored; `parser::note_key_field_write` decides
-  the RE-KEY cause on its own, parser-side, with no liveness walk and no `is_amp_link` test.
-- **Effect:** measured on both backends, each emitting *"`c` was copied out of …"* advice:
-
-```loft
-// RE-KEY — the record neither moves to the new key nor stays writable through `c`.
-c = &s[30];  c.key = 5;         // c.key==5, but s[30].tag==333 and s[5] is ABSENT
-// REASSIGNMENT — the write lands in the copy.
-c = &bx.inner;  bx = Mid { inner: Box { n: 22 } };  c.n = 99;   // c.n==99, bx.inner.n==22
-```
-
-- **Status:** OPEN. The REMOVAL event ships (@PLN130 F9, loft#779, `b_ref_reshape_*`); these two
-  were scoped out of it — the maker's sentence named removal only — and the 2026-08-05 revisit of
-  [C79](../DESIGN_DECISIONS.md) is what now covers them: *"we can decline code where we cannot
-  create a safe implementation … if a user explicitly takes a reference that is an ownership
-  decision and it has consequences."*
-- **Removal:** two independent changes, neither large.
-  - *Reassignment* — drop the `cause != Reshaped` filter in `def_reshape_refusals` and give the
-    `Reassigned` arm its own message. The walk already returns the cause, the liveness, the
-    container and the line, so no new analysis is needed.
-  - *Re-key* — at `note_key_field_write`, refuse instead of stripping the dep when the base
-    `is_amp_link`. No liveness question arises: the key write IS the use, so the reference is
-    live there by construction. Note the remedy differs — there is no "move it after the last
-    use", so the message must point at re-inserting (`s[key] = value`).
+> **D-bind-9 — CLOSED same day (2026-08-05).** B-Ref-Reshape landed from the maker's sentence,
+> which named REMOVAL, so the other two of `B-Disturb`'s events kept silently downgrading a `&`
+> to a copy — measured on both backends, each with a *"copied out of"* advice line:
+>
+> ```loft
+> c = &s[30];  c.key = 5;                                     // RE-KEY: s[5] was ABSENT
+> c = &bx.inner;  bx = Mid { inner: Box { n: 22 } };  c.n = 99; // REASSIGN: bx.inner.n was 22
+> ```
+>
+> Closing D-bind-8 while these held was an accounting error: the deviation named all three
+> mechanisms of one rule and the sign-off covered one. Both now refuse, under the C79 principle
+> (*decline what we cannot implement safely*) rather than as a second special case. The
+> reassignment arm is the same liveness walk with the cause filter dropped; the re-key arm
+> refuses at `note_key_field_write` where the base `is_amp_link`, and needs no liveness question
+> because the key write IS the use. Lock-ins `b_ref_reshape_rekey_through_amp_link_is_error` and
+> `b_ref_reshape_container_reassign_under_amp_link_is_error`, with their positive twins (a
+> NON-key field still writes through; a reference dead before the reassignment still does).
+>
+> **The sweep that found them is the reusable part:** 14 shapes of `&` — whole struct, whole
+> vector, element, field, nested, keyed non-key, keyed key, local reassign, callee reassign,
+> `&` param mutate, `&` param rebind, loop, branch, overwrite-in-place — each asserting the one
+> thing `&` promises, that the write reaches the source. Twelve honoured it; these two did not.
+> A rule with more than one producer needs a sweep, not a cell.
 
 > **D-bind-8 — CLOSED by adding B-Ref-Reshape (@PLN130 F9, [loft#779](https://github.com/loft-lang/loft/issues/779)).**
 >

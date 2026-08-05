@@ -2223,10 +2223,10 @@ fn b_ref_reshape_removal_under_open_amp_link_is_error() {
            c = &v[0]; v.remove(2); c.n = 99; print(\"{v[0].n}\\n\"); }"
     )
     .error(
-        "cannot remove from `v` while `c` references an element of it — a removal renumbers \
+        "cannot remove from `v` while `c` references a place inside it — a removal renumbers \
          the remaining elements, so a write through `c` would no longer reach the element it \
-         names. Move the removal after the last use of `c`, or bind without `&` to work on a \
-         copy at b_ref_reshape_removal_under_open_amp_link_is_error:1:1",
+         names. Move it after the last use of `c`, or bind without `&` to work on a copy at \
+         b_ref_reshape_removal_under_open_amp_link_is_error:1:1",
     );
 }
 
@@ -2240,10 +2240,10 @@ fn b_ref_reshape_removal_moving_linked_element_is_error() {
            c = &v[2]; v.remove(0); c.n = 99; print(\"{v[1].n}\\n\"); }"
     )
     .error(
-        "cannot remove from `v` while `c` references an element of it — a removal renumbers \
+        "cannot remove from `v` while `c` references a place inside it — a removal renumbers \
          the remaining elements, so a write through `c` would no longer reach the element it \
-         names. Move the removal after the last use of `c`, or bind without `&` to work on a \
-         copy at b_ref_reshape_removal_moving_linked_element_is_error:1:1",
+         names. Move it after the last use of `c`, or bind without `&` to work on a copy at \
+         b_ref_reshape_removal_moving_linked_element_is_error:1:1",
     );
 }
 
@@ -2337,12 +2337,68 @@ fn b_ref_reshape_callee_removal_under_local_amp_link_is_error() {
            c = &v[0]; drop_last(v); c.n = 99; print(\"{v[0].n}\\n\"); }"
     )
     .error(
-        "cannot call `drop_last` while `c` references an element of `v` — `drop_last` removes \
-         from `v`, and a removal renumbers the remaining elements, so a write through `c` would \
-         no longer reach the element it names. Move the call after the last use of `c`, or bind \
-         without `&` to work on a copy at \
+        "cannot call `drop_last` while `c` references a place inside `v` — `drop_last` would \
+         remove from `v`, and a removal renumbers the remaining elements, so a write through \
+         `c` would no longer reach the element it names. Move the call after the last use of \
+         `c`, or bind without `&` to work on a copy at \
          b_ref_reshape_callee_removal_under_local_amp_link_is_error:1:1",
     );
+}
+
+/// B-Ref-Reshape (g) — writing a KEY field through a `&` reference into a keyed collection.
+///
+/// The third disturbance, and the odd one out: there is no liveness question (the key write IS
+/// the use) and no "move it later" remedy, because the write itself is what destroys the place.
+/// Changing a key would leave the element reachable by no key, so the write cannot reach the
+/// collection — and a `&` may not be quietly turned into a copy, so it is refused.
+#[test]
+fn b_ref_reshape_rekey_through_amp_link_is_error() {
+    code!(
+        "struct Elm { key: integer, tag: integer } \
+         fn test() { s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }]; \
+           c = &s[30]; c.key = 5; print(\"{s[5].tag}\\n\"); }"
+    )
+    .error(
+        "cannot write the key field `key` through `c` — `key` is one of `s`'s keys, and changing \
+         it would leave the element reachable by no key, so the write cannot reach `s`. \
+         Re-insert with `s[key] = value`, or bind without `&` to work on a copy at \
+         b_ref_reshape_rekey_through_amp_link_is_error:1:155",
+    );
+}
+
+/// B-Ref-Reshape (h) — REPLACING the container while a `&` reference into it is live.
+///
+/// Nothing about the container's shape changed; the NAME stopped meaning the store, so the
+/// reference points at a place that is no longer anybody's. Same verdict, different remedy
+/// wording from the removal cause.
+#[test]
+fn b_ref_reshape_container_reassign_under_amp_link_is_error() {
+    code!(
+        "struct Box { n: integer } struct Mid { inner: Box } \
+         fn test() { bx = Mid { inner: Box { n: 11 } }; c = &bx.inner; \
+           bx = Mid { inner: Box { n: 22 } }; c.n = 99; print(\"{bx.inner.n}\\n\"); }"
+    )
+    .error(
+        "cannot give `bx` a new value while `c` references a place inside it — `c` names a place \
+         inside `bx`, and replacing `bx` leaves that place with nothing to point at. Move it \
+         after the last use of `c`, or bind without `&` to work on a copy at \
+         b_ref_reshape_container_reassign_under_amp_link_is_error:1:1",
+    );
+}
+
+/// The POSITIVE cell for the re-key arm: a NON-key field written through the same `&` reference
+/// is untouched. The trigger is the key, not the collection — widening it would take
+/// write-through away from keyed elements generally.
+#[test]
+fn b_ref_reshape_non_key_field_through_amp_link_still_writes_through() {
+    code!(
+        "struct Elm { key: integer, tag: integer } \
+         fn check() -> integer { \
+           s: sorted<Elm[key]> = [Elm { key: 10, tag: 111 }, Elm { key: 30, tag: 333 }]; \
+           c = &s[30]; c.tag = 99; s[30].tag }"
+    )
+    .expr("check()")
+    .result(Value::Int(99));
 }
 
 /// The POSITIVE cell the refusal must not swallow: a link that is DEAD before the removal is

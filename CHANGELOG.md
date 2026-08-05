@@ -211,6 +211,11 @@ error: cannot remove from `v` while `c` references an element of it — a remova
   without `&` to work on a copy
 ```
 
+The same applies to the other two things that can end the place a reference names:
+**writing a key field** through it (which would leave the element reachable by no key)
+and **replacing the container** it points into. Both used to hand you a copy and a
+warning; both are now errors.
+
 It only fires while the reference is still in use — finish with it before the
 removal and nothing changes:
 
@@ -230,7 +235,15 @@ fn shift_then_write(idx: integer, all: &vector<Box>) {
 ```
 
 Plain (non-`&`) bindings are unaffected: `c = v[0]` still gets its own copy when
-the container changes underneath it, and still tells you it did.
+the container changes underneath it, and still tells you it did. The difference is
+what you asked for — a plain bind already meant "give me a value", so a copy is
+consistent with it; `&` meant "give me a live link", and quietly handing back a copy
+would make that a lie.
+
+The error is also the choice that keeps the door open. loft can always *drop* an error
+later, so if it ever gains the machinery to follow a reference through these changes,
+every program that compiles today keeps compiling and the refused ones start working.
+Shipping the silent copy instead would have made that copy permanent.
 
 ### An element taken out of a returned value stays valid
 

@@ -1600,9 +1600,9 @@ through.
 
 **Write `&` and you get an error instead of a copy.**  `c = &v[0]` says *"I want a
 live link"* — an ownership decision, not a hint — so loft will not quietly hand you a
-copy.  Where it cannot honour the link, it refuses the program instead.  Today that
-covers the **removal** case; a re-key or a container reassignment under a `&` still
-copies and warns like a plain bind:
+copy.  Where it cannot honour the link, it refuses the program instead.  All three
+things that end a place do this: removing from the container, writing a KEY field
+through the reference, and replacing the container itself.
 
 ```
 error: cannot remove from `v` while `c` references an element of it — a removal
@@ -1620,6 +1620,21 @@ and read the element again after the removal:
 ```loft
 fn shift(idx: integer, all: &vector<Box>) { all.remove(0); all[idx - 1].n = 99; }
 ```
+
+For a keyed collection the remedy is to re-insert rather than to reorder, because the
+key write IS the thing that cannot be honoured — changing a key would leave the element
+reachable by no key at all:
+
+```loft
+c = &s[30];  c.key = 5;      // refused
+s[5] = s[30];  s[30] = null; // say it directly instead
+```
+
+**Why an error rather than some defined behaviour.**  loft may always drop an error
+later, but never add one after the language freezes — so refusing keeps the door open.
+If loft one day gains the machinery to honour these references properly, every program
+that compiles today still compiles and the refused ones start working.  Had it shipped
+the silent copy instead, that copy would be the contract forever.
 
 Full rule + the reasoning:
 [OWNERSHIP_MODEL.md § A view lasts as long as the thing it names](OWNERSHIP_MODEL.md#a-view-lasts-as-long-as-the-thing-it-names--and-loft-says-when-it-does-not).
