@@ -12,7 +12,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | 🟡 23 probes on both backends. Cluster II's producer × invalidator matrix is 2×2 of a much larger grid, and probe 22 needs re-running — see § Probe gaps |
+| A — Probe catalogue | 🟡 24 probes on both backends. Gap 1 closed (probe 24 — E3/E4 retracted). Cluster II's producer × invalidator matrix is still 2×2 of a much larger grid — see § Probe gaps |
 | B — Mechanism investigation | 🟡 Cluster I mechanisms verified to a code line; Q5 answered; cluster II's mechanism still hypothesised |
 | C — Fix design | ⏸️ the model is chosen (below), the enforcement point is not. The Q5 one-liner was tried and reverted — it needs an analysis, not a flag test |
 | D — Implementation | ⏸️ pending C. Nothing eliminated yet: the guard is built, the class is catalogued, no copy removed and no view fixed |
@@ -302,7 +302,8 @@ the diagnostics change).
 | `19-secret-call-bind.loft` | `f = file(path)` | I | secret copy — `InterpCallReturn` |
 | `20-q5-return-dep-discriminator.loft` | 4 callees, identical but for spelling | I | Q5 answered — `[]` adopts, `[1]` copies |
 | `21-buffer-reuse-across-iterations.loft` | loop over a `[1]`-dep callee | I | buffer VAR reused, store freed per call |
-| `22-same-site-liveness.loft` | 6 escape routes, one call site | I | **provisional — see Probe gaps** |
+| `22-same-site-liveness.loft` | 6 escape routes, all axes pinned at 1 | I | **superseded by 24** — its sweep was too narrow |
+| `24-escape-routes-axes-moved.loft` | the same routes, four axes moved | I | E3/E4 break under adoption; E2/E5/E6 hold |
 | `23-chained-return-buffer.loft` | mixed literal/call Set, struct params, interleaved | I | **guard** — fails if the Q5 predicate is widened |
 
 Runner: `probes/run_set.sh [view|copy|secret|all]` — per probe, pass/uncovered/executed-copies
@@ -314,14 +315,30 @@ Ordered by what would cost most to keep not knowing. Written **in full before an
 worked** — see § Method rule 10: with three or more candidate cases, the specifics of the
 later ones decay while you work the first.
 
-**1. Re-run probe 22's escape routes with the axes probe 23 exposed. Do this first.**
-Probe 22 concluded *"every escape route yields independent values"*, and that conclusion is
-cited above as a finding. But it swept its six routes (E1–E6) with all four of the axes probe
-23 later proved live **pinned at 1**: nesting depth, the number of Sets on the returned local,
-parameter kind (scalars, never structs), and interleaved-caller count. That is the same clean
-sweep that read as proof and was not. Until it is re-run with struct params and two
-interleaved callers, **E2–E6 are unverified and the plan currently overstates them** — which
-is why probe 22's row is marked provisional. A wrong assertion costs more than a gap.
+**1. Re-run probe 22's escape routes with the axes moved — DONE (probe 24). Claim partly
+RETRACTED.** Probe 22 concluded *"every escape route yields independent values"* with all four
+axes pinned at 1. Probe 24 re-runs the same routes through a two-Set, struct-param, nested
+callee with an interleaved sibling. Measured against the widened predicate:
+
+| route | verdict |
+|---|---|
+| E2 container insert `v += [mixed(p)]` | passes — the insert deep-copies |
+| **E3 second binding `b = a`** | **FAILS** — `b.tag 501 want 901`; `b` aliases `a` |
+| **E4 struct field `Holder { inner: a }`** | **FAILS** — `h.inner.tag 901 want 1` |
+| E5 recursion | passes — each frame owns its buffer |
+| E6 return up a level | passes |
+
+So the finding stands for **E2/E5/E6** and is **false for E3 and E4**. Under adoption `a`, `b`
+and `h.inner` collapse onto one store — E4 reads `901`, the value E3's `b` was given, so the
+contamination crosses all three names rather than leaking a single write.
+
+Every cell passes on `--native`, so the widening is **interpreter-only** in its damage — the
+second independent reason it is unlandable, and a hint that native's path already handles the
+case correctly and could be read for the answer.
+
+This also sharpens what a real fix must do: it is not enough to know a buffer is freed after
+the copy (probe 21). The predicate must also know whether the adopted value will be **bound or
+stored a second time** — E3 and E4 are exactly that, and they are the routes that break.
 
 **2. Cluster II's producer × invalidator matrix — the largest real hole.**
 This is #774's actual defect, it corrupts silently, and it is unfixed. Probes 01–09 cover

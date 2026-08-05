@@ -1,0 +1,125 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN130 probe 24 — probe 22's escape routes, re-run with the four axes MOVED.
+//
+// Probe 22 swept six escape routes and found every one independent — with nesting depth,
+// Set-count on the returned local, parameter kind and interleaved-caller count all pinned
+// at 1.  Probe 23 then showed the breaking cell needs all four moved together, which made
+// 22's clean result unusable as proof.  This is the re-run.
+//
+// Every route below now goes through `mixed(p: P)`:
+//   * struct parameter, not a scalar                       (axis 3)
+//   * `c = Box { … }` then `c = alloc(…)` then `c`         (axis 2 — two Sets)
+//   * `alloc` itself returns a named local                 (axis 1 — nesting)
+// and `direct(q: Q)` is interleaved with it in the same loop  (axis 4).
+//
+// Routes: E2 container insert · E3 second binding · E4 struct field · E5 recursion ·
+//         E6 return up a level.  (E1, reassignment, is probe 21.)
+//
+// PASSES on the shipped COPY behaviour — the copies keep everything separate.  The value
+// is the counterfactual, measured against a build with `return_adopts_fresh_store` widened
+// to accept a hidden-attr dep:
+//
+//   E2  container insert `v += [mixed(p)]`      PASSES — the insert deep-copies
+//   E3  second binding   `b = a`                **FAILS** — b.tag 501 want 901: b aliases a
+//   E4  struct field     `Holder { inner: a }`  **FAILS** — h.inner.tag 901 want 1
+//   E5  recursion                               PASSES — each frame owns its buffer
+//   E6  return up a level                       PASSES
+//
+// So probe 22's "every escape route yields independent values" holds for E2/E5/E6 and is
+// FALSE for E3 and E4 once the axes move.  Under adoption `a`, `b` and `h.inner` collapse
+// onto one store — E4 reads 901, which is the value E3's `b` was given, so the
+// contamination crosses all three names rather than merely leaking one write.
+//
+// Interpreter-only: every cell above passes on --native, which is a second reason the
+// widening is unlandable and a hint that native's path already handles this correctly.
+//
+// Method note: E3/E4 were reached by deleting the earlier asserts in a throwaway copy —
+// `assert` aborts, so a multi-route probe reports only its FIRST failure.  Split per route
+// if this is ever used as a gate rather than a catalogue entry.
+
+struct P { tag: integer }
+struct Q { tag: integer }
+struct Box { tag: integer, data: vector<integer> = [] }
+struct Holder { inner: Box }
+
+fn alloc(n: integer, fill: integer) -> Box {
+  b = Box { tag: n };
+  for _i in 0..3 {
+    b.data += [fill];
+  }
+  b
+}
+
+// Two Sets on the returned local, struct param, nested call.
+fn mixed(p: P) -> Box {
+  c = Box { tag: 0 };
+  c = alloc(p.tag, p.tag);
+  c
+}
+
+// The interleaved sibling.
+fn direct(q: Q) -> Box {
+  c = alloc(q.tag, q.tag * 2);
+  c
+}
+
+// E5 — recursion through the same shape.
+fn deep(p: P, levels: integer) -> integer {
+  mine = mixed(p);
+  if levels > 1 {
+    inner = deep(P { tag: p.tag + 1 }, levels - 1);
+    return mine.data[0] * 1000 + inner;
+  }
+  return mine.data[0];
+}
+
+// E6 — the result leaves the frame, one level further up.
+fn relay(p: P) -> Box {
+  r = mixed(p);
+  r
+}
+
+fn main() {
+  // E2 — container insert, interleaved with `direct` each iteration.
+  v: vector<Box> = [];
+  w: vector<Box> = [];
+  for i in 0..4 {
+    v += [mixed(P { tag: i })];
+    w += [direct(Q { tag: i + 100 })];
+  }
+  for i in 0..4 {
+    assert(v[i].data[0] == i, "24 E2 v[{i}].data[0] {v[i].data[0]} want {i}");
+    assert(w[i].data[0] == (i + 100) * 2, "24 E2 w[{i}].data[0] {w[i].data[0]} want {(i + 100) * 2}");
+  }
+
+  // E3 / E4 — second binding and struct field, interleaved, in a loop.
+  for i in 0..4 {
+    a = mixed(P { tag: i });
+    d = direct(Q { tag: i + 100 });
+    b = a;                       // E3
+    b.tag = 900 + i;
+    h = Holder { inner: a };     // E4
+    a.tag = 500 + i;
+    assert(b.tag == 900 + i, "24 E3 b.tag {b.tag} want {900 + i}");
+    assert(a.tag == 500 + i, "24 E3 a.tag {a.tag} want {500 + i}");
+    assert(h.inner.tag == i, "24 E4 h.inner.tag {h.inner.tag} want {i}");
+    assert(a.data[0] == i, "24 E4 a.data[0] {a.data[0]} want {i}");
+    assert(d.data[0] == (i + 100) * 2, "24 E4 d.data[0] {d.data[0]} want {(i + 100) * 2}");
+  }
+
+  // E5 — recursion.  deep(P{0},3): mine.data[0]=0 -> 0*1000 + deep(P{1},2)
+  //                  deep(P{1},2): 1*1000 + deep(P{2},1) = 1000 + 2 = 1002
+  //                  so deep(P{0},3) = 0*1000 + 1002 = 1002
+  assert(deep(P { tag: 0 }, 3) == 1002, "24 E5 {deep(P { tag: 0 }, 3)} want 1002");
+
+  // E6 — returned up an extra level, interleaved.
+  for i in 0..4 {
+    r = relay(P { tag: i });
+    s = direct(Q { tag: i + 100 });
+    assert(r.data[0] == i, "24 E6 r.data[0] {r.data[0]} want {i}");
+    assert(s.data[0] == (i + 100) * 2, "24 E6 s.data[0] {s.data[0]} want {(i + 100) * 2}");
+  }
+
+  println("probe 24 PASSED — every escape route independent with all four axes moved");
+}
