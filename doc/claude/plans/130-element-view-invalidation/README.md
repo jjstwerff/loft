@@ -862,9 +862,33 @@ Every unprobed cell is a potential live corruption nobody has looked at. Given p
 pure read answering a different element with no detector firing — hits are likely rather than
 hypothetical.
 
-**3. The two uncatalogued copy families.** `R666` (recursive enum payload) and `RbOuter`
-(borrow-return), both surfaced by the corpus survey and both still unprobed. Lower priority:
-cost, not corruption, and the guard already names them.
+**3. The two uncatalogued copy families — PROBED. Both are cost, and now that is measured
+rather than assumed.** `R666` (`tests/scripts/recursive-enum-payload-mutation-666.loft`) and
+`RbOuter` (`tests/scripts/return-borrow-of-mutated-arg.loft`) were carried as "lower priority:
+cost, not corruption" without anyone having looked — the plan's own rule 8 says a named case
+gets a probe, always. Read through the manifest:
+
+- **`R666` is one mechanism, not a family.** Every site is a compiler-generated `__lift_N`
+  binding under `InterpReassignCall` — the same lift shape as the stdlib `exists()` site the
+  catalogue already names. The recursion is incidental; what copies is lifting a call result
+  into a temp.
+- **`RbOuter` is two.** The same `__lift_N` lift, plus `InterpCallReturn` on real user bindings
+  (`one`, `two`, `three`, `same`, `used`, …). That second one is **necessary**: the callee
+  returns a borrow of an argument it mutated, so `return_adopts_fresh_store()` is false and
+  adopting would alias a caller's store. It resolves **STATED**, the category that may rest.
+
+Both scripts pass on both backends, so neither family touches correctness.
+
+**A concentration hypothesis these two suggested, and the measurement REFUTED.** If the lift
+were the dominant cause, the uncovered set would be mostly one fix. Surveyed over a 90-script
+sample: **29 distinct uncovered sites**, split **21 user bindings / 8 compiler lifts** and
+spread across **four** origins (`InterpCallReturn` 14, `InterpReassignCall` 8,
+`InterpRecordBind` 4, `InterpReassignVar` 3). So the set is small but genuinely diffuse — there
+is no single emitter to fix, and anyone planning to drain it should budget for four.
+
+Note the earlier survey's *"exactly one uncovered site per compile, always the same one"* is no
+longer comparable: F1/F2/F5 instrumented more emitters afterwards (`InterpRecordBind` did not
+exist when it ran), so the rise is the instrument widening, not a regression.
 
 **Not needed:** more probes for the copy inventory (10–20 cover it) or for the Q5 boundary
 (20/21/23 pin it). Extending the manifest to the parser's emitters is instrument work, not a
@@ -1015,7 +1039,7 @@ What the guard found once pointed at the corpus. Surveyed across all **583** `te
 | stdlib `exists()` lift | `default/02_files.loft:248` — `file(path).format` | 5 calls → **5 deep `File` copies**, both backends. Uncovered in **every** compile that loads the stdlib |
 | bind a `file()` result | `f = file(path)` | 1 copy per bind; **107** hits across the corpus — the second-largest family |
 | reassignment `b = a` | both bindings live | 1 copy; a different emitter from the first bind, which is why it was invisible |
-| enum payload / borrow-return | `R666`, `RbOuter` in the corpus | uncovered, not yet probed |
+| enum payload / borrow-return | `R666`, `RbOuter` in the corpus | **probed** (§ Probe gaps 3): `R666` is the `__lift_N` shape again; `RbOuter` adds a NECESSARY `InterpCallReturn` copy (the callee returns a borrow of a mutated arg). Cost only — **STATED** |
 
 Each `File` copy duplicates 33 flat bytes **plus a reallocated `path` text** — `OpCopyRecord`
 duplicates owned sub-structures — to read one enum field and discard the record.
