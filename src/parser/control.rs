@@ -8974,6 +8974,14 @@ impl Parser {
             Type::Reference(td, Deps::frame1(w)),
             "materialized_view_return",
         );
+        // @PLN130 — parser-emitted materialisation: `return f.field` must publish an OWNED
+        // record, not a view into a frame-local. See `ParserMaterialise`.
+        crate::copy_manifest::record(
+            self.context,
+            w,
+            kt,
+            crate::copy_manifest::Origin::ParserMaterialise,
+        );
     }
 
     /// The work-ref that carries a return site's VALUE: for a tail call,

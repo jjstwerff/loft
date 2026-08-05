@@ -1940,6 +1940,13 @@ use a separate collection or add after the loop"
                         Type::Reference(td, crate::data::Deps::none()),
                         "nullable_unwrap_copy",
                     );
+                    // @PLN130 — parser-emitted materialisation; see `ParserMaterialise`.
+                    crate::copy_manifest::record(
+                        self.context,
+                        w,
+                        kt,
+                        crate::copy_manifest::Origin::ParserMaterialise,
+                    );
                 }
             }
         }
@@ -3968,6 +3975,15 @@ use a separate collection or add after the loop"
             ],
             Type::Reference(td, Deps::frame1(w)),
             "materialized_amp_field",
+        );
+        // @PLN130 — a NECESSARY copy that was nonetheless invisible: a program whose only
+        // copies are these executes two record copies and `--report-copies` still answers
+        // `none`. Being emitted into the IR is not the same as producing a user-facing row.
+        crate::copy_manifest::record(
+            self.context,
+            w,
+            kt,
+            crate::copy_manifest::Origin::ParserMaterialise,
         );
         false
     }

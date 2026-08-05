@@ -1074,9 +1074,14 @@ had been reset, so loft never opened the probe file. Native reports normally und
 
 ## Tool gaps
 
-- **The manifest is not honed to every path yet — the top instrument task.** 8 sites
-  recorded (interp × 5, native × 2, one dead); the parser's ~5 IR-level `OpCopyRecord`
-  emitters are not instrumented. Until they are, `uncovered = 0` cannot mean "complete".
+- **Manifest coverage — parser emitters now instrumented.** 12 sites recorded (interp × 5,
+  native × 2, parser × 4, one dead). The parser's materialisations come back **COVERED**:
+  they are classified `Implicit` (`MAT … bucket=implicit`), so the guard correctly says
+  nothing and the user report stays quiet by design — a model-inherent copy is not the
+  author's to fix. Worth recording that "2 copies execute while `--report-copies` says
+  `none`" is that silence working, NOT a blind spot; conflating *not shown* with *not
+  accounted for* is a mistake this plan made once and corrected.
+  Still uninstrumented: `parser/mod.rs:5530` is a RECOGNISER, not an emitter.
 - No probe-set runner yet; add at ≥20 probes.
 
 Investigation-only aids (NOT shipped, NOT part of the guard — recorded so the next session

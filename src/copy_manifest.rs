@@ -45,6 +45,27 @@ pub enum Origin {
     /// Native call-return bind. Emits a runtime adopt-or-copy branch, so this is a *may
     /// copy* site — still one the diagnostic must account for.
     NativeCallReturn,
+    /// A materialisation the PARSER writes into the IR: a projection copied into an owned
+    /// store, a return materialised into the caller's buffer, or a `&` write-back that must
+    /// publish an owned record rather than a view (loft#775).
+    ///
+    /// These are genuinely NECESSARY — publishing the view instead is the use-after-free
+    /// #775 fixed — and, unlike the codegen-minted copies, they ARE classified: the analysis
+    /// walks them out of the IR and buckets them `Implicit`
+    /// (`MAT fn=n_take v=2(__ref_1) verdict=Copy bucket=implicit`). The user report stays
+    /// quiet about them by design, because a model-inherent copy is not the author's to fix.
+    ///
+    /// Recorded anyway, so the guard's coverage claim covers the parser as well as the two
+    /// generators: without them the manifest could only ever say "nothing uncovered *among
+    /// the paths I watch*". They are expected to come back COVERED — a parser site appearing
+    /// in the uncovered list means the classification stopped reaching them, which is worth
+    /// hearing about.
+    ///
+    /// (Measured caution: a program whose only copies are these executes two record copies
+    /// while `--report-copies` answers `none`. That is the `Implicit` silence working as
+    /// designed, NOT a blind spot — "not shown to the user" and "not accounted for" are
+    /// different, and conflating them is how this comment first got written wrong.)
+    ParserMaterialise,
 }
 
 impl Origin {
@@ -58,6 +79,7 @@ impl Origin {
             | Self::InterpReassignCall
             | Self::InterpReassignVar => "interpret",
             Self::NativeRecordBind | Self::NativeCallReturn => "native",
+            Self::ParserMaterialise => "parser",
         }
     }
 

@@ -1064,6 +1064,14 @@ impl Parser {
                             Type::Reference(d_nr, crate::data::Deps::frame1(w)),
                             "inline ref copy",
                         );
+                        // @PLN130 — parser-emitted materialisation of a projection into a
+                        // store `w` owns; see `ParserMaterialise`.
+                        crate::copy_manifest::record(
+                            self.context,
+                            w,
+                            kt,
+                            crate::copy_manifest::Origin::ParserMaterialise,
+                        );
                     } else {
                         *code = v_block(
                             vec![v_set(w, orig), Value::Var(w)],
