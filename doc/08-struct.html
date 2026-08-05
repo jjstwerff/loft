@@ -64,7 +64,13 @@
   direction: <span class="ty"><a href="stdlib-types.html">u8</a></span>
 }</code></pre>
 <h2 id="value-structs">Value structs</h2>
-<p>Prefix a struct with <code>value</code> to give it value (copy) semantics and zero heap overhead: it is stored inline inside a record or vector element, exactly like a plain integer. Reading one out of a field or element yields an independent COPY — writing to that copy never changes the original. Use a <code>value struct</code> for small wrapper types (a point, a colour, a timestamp) that should be as cheap as the number they wrap. A plain (reference) struct, by contrast, is shared: a binding is a live view onto the same record.</p>
+<p>Prefix a struct with <code>value</code> to give it value (copy) semantics and zero heap overhead: it is stored inline inside a record or vector element, exactly like a plain integer. Reading one out of a field or element yields an independent COPY — writing to that copy never changes the original. Use a <code>value struct</code> for small wrapper types (a point, a colour, a timestamp) that should be as cheap as the number they wrap.</p>
+<p>A plain (reference) struct differs only when you read one OUT of somewhere. Two spellings look alike, so it is worth keeping them apart:</p>
+<ul>
+<li>Binding a whole value COPIES it, always. After <code>b = a</code> the two names are independent, and writing <code>b</code> never changes <code>a</code>. The copy goes all the way down, including nested structs and vectors.</li>
+<li>Reading a struct-typed field or element gives you a VIEW: <code>w = o.inner</code> and <code>c = v[i]</code> name the record in place, so <code>w.n = 42</code> changes <code>o.inner</code> too. A view is not a copy — it points at the interior of what you read it from. (A vector-typed field is a whole value, so <code>av = bx.v</code> copies.)</li>
+<li>Write <code>&amp;</code> when you want a live link where a bind would copy: <code>b = &amp;a</code> and <code>av = &amp;bx.v</code> both write through to the source.</li>
+</ul>
 <pre><code>value <span class="kw">struct</span> <span class="en">Point</span> {
   x: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   y: <span class="ty"><a href="stdlib-types.html">integer</a></span>
@@ -115,6 +121,20 @@
 <pre><code>  q.x = <span class="nm">99</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pts[<span class="nm">0</span>].x == <span class="nm">1</span>, <span class="st">"value struct copy does not write back"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(q.x == <span class="nm">99</span>, <span class="st">"the copy itself did change"</span>);</code></pre>
+<p>A PLAIN struct answers the same two questions differently, so here they are side by side. Reading one out of an element gives a view, and writing the view reaches the element.</p>
+<pre><code>  shelf =[<span class="en">Product</span> {name: <span class="st">"Pear"</span>, price: <span class="nm">90</span>, stock: <span class="nm">10</span> }];
+  item = shelf[<span class="nm">0</span>];
+  item.stock = <span class="nm">7</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(shelf[<span class="nm">0</span>].stock == <span class="nm">7</span>, <span class="st">"a plain struct element read is a view"</span>);</code></pre>
+<p>Binding the whole value copies it, so the original keeps its own stock.</p>
+<pre><code>  spare = item;
+  spare.stock = <span class="nm">3</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">7</span>, <span class="st">"a whole-value bind copies"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(spare.stock == <span class="nm">3</span>, <span class="st">"and the copy moves on its own"</span>);</code></pre>
+<p>Write <code>&amp;</code> to get a live link where a bind would otherwise copy.</p>
+<pre><code>  linked = &amp;item;
+  linked.stock = <span class="nm">1</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">1</span>, <span class="st">"'&amp;' binds a live link"</span>);</code></pre>
 <h2 id="sizeof">sizeof</h2>
 <p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (post-2c i64 storage)"</span>);

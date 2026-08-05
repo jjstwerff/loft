@@ -1962,12 +1962,17 @@ the code migrate to the written law (everything aliases), or the law to the code
 (an alias) **only when `o` is not used afterwards — the rustc rule — as an
 optimization.**  Concretely:
 
-- **Whole-value heap binds COPY** (struct, vector, and a field read bound to a local —
-  the #415 behaviour is the *correct* semantic, not a stopgap).
+- **Whole-value heap binds COPY** (struct, vector, and a **vector-typed** field read
+  bound to a local — the #415 behaviour is the *correct* semantic, not a stopgap).
+  *Read "field read" narrowly*: #415's scope is a field whose TYPE is a vector
+  (`av = bx.v`), because that is a whole value rather than an interior place. A
+  **struct**-typed field read (`w = o.inner`) is a projection and stays a view, below.
 - **The copy may be ELIDED to an alias when the source is provably dead afterwards**
   (`use_analysis::ElidePlan` — the existing last-use elision).  Elision is never
   observable: a mutated or escaping source keeps the copy.
-- **Projection reads stay VIEWS** (`a = vv[0]` — the #426 decided feature); in-place
+- **Projection reads stay VIEWS** — a **struct-typed** projection, whether an element
+  (`a = vv[0]`, the #426 decided feature; the container kind is irrelevant — vector,
+  hash, sorted and index all view) or a field (`w = o.inner`); in-place
   path mutation (`o.field = x`, `o.v[i] = y`) writes through.
 - `&` remains the explicit live-reference opt-in (@PLN87, unchanged).
 
@@ -1986,6 +1991,12 @@ carry, no spooky action at a distance.  The principle's one deliberate boundary 
 projection reads (`a = vv[0]` views, #426): an element read is understood as
 *reaching into* the container rather than *taking* from it — if that distinction ever
 proves a recurring source of user surprise, that is a #426 revisit, not a C86 one.
+
+**Guarded (2026-08-05, @PLN130 F7).** The whole boundary — B-Copy, B-View and `&` — is pinned
+cell by cell on both backends by `tests/scripts/201-bind-copies-projection-views.loft`. It was
+previously unguarded, and @PLN130 F7 proposed deleting B-View outright on a one-cell reading
+before the sweep showed all 30 cells already conforming. The decision above is what settles the
+question; the test is what stops a future change from moving a cell quietly.
 
 ### Consequences
 

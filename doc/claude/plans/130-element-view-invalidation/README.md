@@ -15,7 +15,7 @@ Tracker: [@PLN130](https://github.com/loft-lang/plans/issues/130) · opened from
 | A — Probe catalogue | ✅ 34 probes, both backends. Cluster II matrix COMPLETE: producer + invalidator sets closed, boundary measured |
 | B — Mechanism investigation | 🟡 Cluster I verified to a code line; Q5 answered; cluster II F1 mechanism VERIFIED (missing borrow fact on an element-read bind -> pre-Set store-free kills the container) |
 | C — Fix design | ✅ closed — F1+F2 one analysis; F4 reuses it; F3 settled by two decisions rather than machinery |
-| D — Implementation | 🟡 F1, F2, F4, F5, F6 shipped; F3 decided. F7 OPEN — the root defect: a whole-value bind must COPY, which deletes much of F2/F4 machinery |
+| D — Implementation | ✅ F1, F2, F4, F5, F6 shipped; F3 decided; **F7 RETRACTED** — the boundary it called a defect is C86 / `binding.md`, measured conformant on 30 cells and now pinned by `tests/scripts/201` |
 
 loft#774 asked why `b = a` copies while `c = v[0]` aliases. The copy half is **not** the
 defect — @PLN90's classifier calls that repro `Forced` (*"source survives AND is written
@@ -363,7 +363,7 @@ finding resolves exactly one of:
 | F4 | Re-keying a keyed-collection element through a view makes it unreachable | probe 28 | **FIXED** — key-field write treated as a reshape, reusing F2 | **DONE** — sorted/hash/index, both backends; regression `tests/scripts/146` |
 | F5 | Copies **no diagnostic accounts for** — the `exists()` family | probes 10–12, 18, 19 | **CORRECTED** + **STATED** — notice is default-on advice naming the lever | **DONE** — measured 27/585 scripts, 55 rows, each author-resolvable |
 | F6 | `LOFT.md` claimed a match capture is a view "whatever the field's type"; scalars copy | probe 31 | **CORRECTED** — the doc now states the split by payload type | **DONE** |
-| **F7** | **`c = v[i]` ALIASES when a whole-value bind must COPY** — `&` is the aliasing spelling (§ F7) | measured both backends | **FIXED** — make the bind copy; `&v[i]` keeps aliasing | **OPEN — the root of loft#774; supersedes F2/F4's triggers** |
+| F7 | Claimed `c = v[i]` aliasing was a defect and every bind must copy (§ F7) | 30-cell boundary sweep, both backends | **RETRACTED** — no defect: every cell conforms to C86 / `binding.md` B-Copy·B-View·B-Ref-Alias. loft#774 is a **doc** defect | **DONE** — boundary pinned by `tests/scripts/201`; doc corrected |
 
 **loft#778 was filed and should not have been** — it is F1, this plan's own finding, and the
 tracker entry defers what the plan is supposed to close. Keep it cross-linked, fix it here.
@@ -576,93 +576,87 @@ keyed elements generally — a much larger semantic loss than F4 is worth. That 
 the key NAME carried on the collection type to the field OFFSET the write uses, which is the
 part to get right rather than approximate.
 
-## F7 — the ROOT: a whole-value bind must COPY, and `&` is the aliasing spelling
+## F7 — RETRACTED: there is no defect here, and the guard that would have caught the mistake now exists
 
-**This supersedes the premise the rest of the plan was built on.** Every section above treated
-`c = v[i]` aliasing as *documented, intended* behaviour (loft#774's own analysis says so, and
-`doc/08-struct.html` states it). It is not intended. The rule is one rule:
+**F7 claimed `c = v[i]` aliasing was "the root defect" and proposed making every bind copy.
+The claim is false.** It was written from a one-cell reading (`c = a[0]` writes through, `b = a`
+does not) without checking the decision register. Widening that reading to the whole boundary —
+30 cells, both backends — showed every cell already conforming to the written contract.
 
-| spelling | meaning |
-|---|---|
-| `b = a`, `c = v[i]`, `w = s.f` | **whole-value bind — COPIES**, always, whatever the source |
-| `d = &v[i]`, `r = &s.f` | **alias** — writes reach the container |
+**The governing decision already existed, and it says the opposite.**
+[C86](../../DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule)
+(maker's call, 2026-07-03) decided exactly this question, and
+[formal/binding.md](../../formal/binding.md) specifies it in three rules:
 
-Measured on both backends — `&` is already right; the plain bind is wrong:
+| rule | spelling | meaning |
+|---|---|---|
+| **B-Copy** | `t = s`, `b = a`, `av = bx.v` | a whole-value bind COPIES — struct var, vector var, **vector-typed** field read |
+| **B-View** | `w = o.inner`, `c = v[i]` (struct element) | a **struct-typed projection** is a VIEW: it names an interior *place*, not a fresh whole value |
+| **B-Ref-Alias** | `d = &v`, `rv = &x.v` | `&` makes any binding a live link |
 
-```
-c = a[0];  c.n = 42;    ->  a[0].n 42  c.n 42     WRONG: should be 1 / 42
-d = &b[0]; d.n = 42;    ->  b[0].n 42  d.n 42     right
-```
+C86 states the boundary deliberately — *"Projection reads stay VIEWS (`a = vv[0]` — the #426
+decided feature)"* — with a rationale, and it names the revisit route: **"if that distinction
+ever proves a recurring source of user surprise, that is a #426 revisit, not a C86 one."** F7
+was a #426 revisit smuggled into a bug plan, and it would have deleted B-View wholesale.
 
-So loft#774's "same assignment, opposite semantics" is a genuine **inconsistency**, not a
-design with two halves. `b = a` is correct; `c = v[i]` is the defect. The asymmetry the
-ticket reported has one fix: make the element/field read copy like every other whole-value
-bind.
+### What the measurement actually shows
 
-### What this simplifies
+Every cell conforms, on `--interpret` and `--native`, identically:
 
-Most of the machinery built for F2 and F4 exists only to decide *when* an alias must become a
-copy. If the bind always copies, the question disappears:
+| axis | cells | result |
+|---|---|---|
+| element of vector / hash / sorted / index | 4 | **VIEW** — the container kind does not change the answer |
+| struct-typed field, and chains (`v[0].inner`, `bx.v[0]`) | 3 | **VIEW** |
+| the same, reached through a parameter | 2 | **VIEW** |
+| struct var, vector var, nested struct, nested vector | 4 | **COPY**, deeply |
+| **vector-typed field read** (`av = bx.v`) | 1 | **COPY** — the one projection that does not view |
+| `&` on vector, vector field, struct field | 3 | **ALIAS** |
+| in-place write, param pass, loop var, read-only view | 4 | write through / undisturbed |
 
-- `collect_reshaped_containers` + the reshape trigger (F2) — **unnecessary**
-- `note_key_field_write` + the key-name/offset mapping (F4) — **unnecessary**
-- `container_element_base`'s use as a materialise trigger — collapses into "this is a bind"
-- the `advice: … was copied out of …` notices — replaced by the ordinary copy notice (F5),
-  because there is nothing special left to say
+The lone asymmetry is the vector-typed field read, and it is not arbitrary: **#415 made it a
+copy because the alias was a use-after-free** — `a = x.v` aliased the field's store without
+owning it, so freeing `x` dangled `a` (OWNERSHIP_MODEL.md row *field read binds without an
+owner*). Turning it back into a view is the one change that would reintroduce a known UAF.
 
-That is a large net deletion, and it is the good kind: the special cases were compensating
-for a rule that was not being applied uniformly.
+Two of F7's stated observations were confounded, and the widened sweep is what exposed them:
 
-### What it costs, stated honestly
+- **`c = h[1]` does not copy.** The first sweep measured a copy because its probe made `n` the
+  *key* field and then wrote it — that is F4's rekey materialisation firing, not a container-kind
+  split. With a non-key field, hash/sorted/index all view, exactly like `vector`.
+- **Probes 25 / 27 / 32 / 31-scalar are not "exceptions to an aliasing rule".** Each has its own
+  reason under the existing rules: F1/F2's dep strip, a store *into* a record (H-Copy on the
+  write side), tuple destructuring's deep copy, and a scalar having no interior place.
 
-1. **This is a behaviour change for every `c = v[i]` that relies on write-through.** The
-   repo's rule is that no functioning program breaks. A program depending on the alias is
-   depending on the defect, but it is still a program that works today — so this needs the
-   deliberate-break route (`COMPATIBILITY.md`, @PLN113 contract-keying), not a quiet fix.
-2. **`tests/scripts/144/145/146` assert the alias survives** in non-reshaping scopes. Those
-   assertions become wrong and must flip — they were written to protect the very behaviour
-   this arc removes.
-3. **The copy notice (F5) will fire far more**, since every element bind becomes a copy. That
-   makes the "allowed for now" bucket much larger and makes @PLN131's suggestions more
-   valuable, not less — but the volume must be re-measured before it ships default-on.
-4. **`doc/08-struct.html` is wrong** and its source is `tests/docs/08-struct.loft`: *"A plain
-   (reference) struct, by contrast, is shared: a binding is a live view onto the same
-   record."* That sentence documents the defect. Correcting it is part of this arc, not F6.
+### The one thing F7 got right — the doc, not the code
 
-### The existing probe suite IS the implementation checklist
+`tests/docs/08-struct.loft` (source of `doc/08-struct.html`) says of a plain struct: *"a binding
+is a live view onto the same record."* That sentence **is** wrong, but the other way round from
+F7's reading: it over-generalises B-View to *every* binding, when a whole-value bind copies.
 
-This arc belongs in @PLN130 and not in a plan of its own, for a concrete reason: **the 34
-probes are the asset F7 needs.** They already say, cell by cell, what copies and what aliases,
-so F7 is not "write a new matrix" — it is "flip the few cells that encode the defect and watch
-the rest hold still". Splitting the arc off would have orphaned that.
+That sentence is also the direct cause of loft#774. The reporter cites it — *"`doc/08-struct.html`
+documents the aliasing one … which leaves `b = a` copying as the odd one out"* — and reasons from
+it to "they cannot both be right". **loft#774 is a documentation defect, not a semantics defect.**
+The moros use case in that ticket (`held = current; current = other;` over a `World`) has a direct
+answer: a whole-value bind deep-copies, and `held = &current` is the second name they want.
 
-Measured across the whole suite, only **four** assertions depend on the aliasing, and all four
-were written during @PLN130 to protect it:
+### What the arc leaves behind
 
-| where | assertion that must flip |
-|---|---|
-| `tests/scripts/144:37` | `a[2].n == 99` — "unreassigned view still aliases" |
-| `tests/scripts/145:71` | `boxes[1].n == 99` — "alias must survive" |
-| `tests/scripts/146:53` | `s[30].tag == 999` — a non-key write reaches the element |
-| `probes/08:18` | `h["c"].n == 99` — keyed element write-through |
+- `tests/scripts/201-bind-copies-projection-views.loft` — the whole boundary, pinned. Nothing
+  guarded it before, so a future change could have moved a cell across silently. Same gap, and
+  same fix, as the dense-vector decision in `tests/scripts/200`.
+- **No implementation work, and none owed.** F2's and F4's machinery is *not* redundant: it
+  exists to handle a view whose container is reshaped underneath it, which B-View does not
+  address and which stays a real defect class.
+- `tests/scripts/144/145/146` keep their assertions. They protect shipped fixes.
 
-**Probe 31 does NOT flip.** A `match` capture is a documented view of its subject, not a
-whole-value bind, so F7 leaves it alone — the distinction to hold while implementing.
+### The transferable lesson
 
-Everything else already encodes the target behaviour, and several probes stop being special
-cases: **25** (captured loop var), **27** (view stored into a record), **32** (tuple element)
-and **31**'s scalar arm each measured a COPY and were recorded as exceptions to the aliasing
-rule. Under F7 they are simply the rule — which also dissolves § cluster II's finding that
-*"the producer split has no marker in the source"*, because there is no split left.
-
-So the whole of cluster II's matrix survives F7 as-is, and becomes evidence FOR the uniform
-rule rather than a catalogue of inconsistencies.
-
-### Order
-
-Rule first, machinery second: land the copying bind, then DELETE the F2/F4 triggers it makes
-redundant, then flip the four assertions above, then re-measure F5's volume, then fix the doc.
-Deleting first would leave the corruption exposed in between.
+**A plan can supersede its own premise; it cannot supersede a decision register.** F7's commit
+opened *"this supersedes the premise the rest of the plan was built on"* — and the premise it
+overturned was correct, recorded, and reasoned. The check that would have cost thirty seconds
+was grepping `C86` before writing the section, and the check that settled it was widening one
+cell to a boundary. Both are the plan's own § Method rules (calibrate against known answers;
+count the axes you held fixed), applied to everything in this plan except its last section.
 
 ## F3 — RESOLVED by two decisions, not by machinery
 
