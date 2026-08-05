@@ -86,22 +86,31 @@ impl OpEmitter for OpFreeRefEmitter {
                 )?;
                 return Ok(());
             }
-            let var_name = if let Value::Var(v) = db_val {
-                format!(
-                    "var_{}",
-                    super::super::sanitize(
-                        ctx.output.data.def(ctx.output.def_nr).variables().name(*v)
-                    )
-                )
+            // The LABEL is the loft variable's name (it only ever appears in the debug
+            // string); the LVALUE is the Rust place being reset, which for a
+            // coroutine-persistent local is the state-machine FIELD.  Conflating the two is
+            // how emitting a generator's tail — where its scope-exit frees live — produced
+            // `cannot find value var_s in this scope` for every heap local a generator owns.
+            let (label, lvalue) = if let Value::Var(v) = db_val {
+                let n = super::super::sanitize(
+                    ctx.output.data.def(ctx.output.def_nr).variables().name(*v),
+                );
+                let label = format!("var_{n}");
+                let lvalue = if ctx.output.coroutine_persistent_vars.contains(v) {
+                    format!("self.var_{n}")
+                } else {
+                    label.clone()
+                };
+                (label, lvalue)
             } else {
-                String::new()
+                (String::new(), String::new())
             };
             write!(ctx.w, "OpFreeRef(cell,")?;
             ctx.emit(db_val)?;
-            write!(ctx.w, ", \"{var_name}\")")?;
+            write!(ctx.w, ", \"{label}\")")?;
             // Reset variable to null sentinel after free.
             if let Value::Var(_) = db_val {
-                write!(ctx.w, "; {var_name}.store_nr = u16::MAX")?;
+                write!(ctx.w, "; {lvalue}.store_nr = u16::MAX")?;
             }
         }
         Ok(())

@@ -158,8 +158,16 @@ fn contains_yield(v: &Value) -> bool {
     v.any_node(&mut |n| matches!(n, Value::Yield(_)))
 }
 
-/// Scan the top-level operators of a function body and build yield segments.
-fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
+/// Scan the top-level operators of a function body and build yield segments, plus the TAIL —
+/// the operators AFTER the last yield.
+///
+/// The tail used to be dropped on the floor: `pre` accumulated it and the function returned
+/// only `segments`.  So `--native` silently skipped every statement past the final `yield`,
+/// where `--interpret` runs them on the `next()` that exhausts the generator.  A `print` after
+/// the last yield vanished, and — because a generator's scope-exit `OpFreeRef`s live exactly
+/// there — every heap local a generator owned was leaked.  A dropped side effect is a wrong
+/// answer, not a missing optimisation, so the tail is now emitted in its own state.
+fn collect_segments(ops: &[Value]) -> (Vec<YieldSegment>, Vec<Value>) {
     let mut segments = Vec::new();
     let mut pre: Vec<Value> = Vec::new();
     for op in ops {
@@ -218,7 +226,28 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
             pre.push(op.clone());
         }
     }
-    segments
+    // The trailing `Return` is the generator's implicit end — the state machine expresses that
+    // with its exhausted sentinel, so emitting a Rust `return` of the loft value would answer
+    // the wrong thing.  UNWRAP it rather than dropping it: a void tail expression arrives as
+    // `return print(…)`, and the call still has to happen.  Dropping the whole node is how the
+    // first cut emitted a tail state containing nothing but a line marker.
+    while let Some(last) = pre.last().map(|v| v.unspan().clone()) {
+        match last {
+            Value::Null => {
+                pre.pop();
+            }
+            Value::Return(inner) if matches!(inner.unspan(), Value::Null) => {
+                pre.pop();
+            }
+            Value::Return(inner) => {
+                pre.pop();
+                pre.push(*inner);
+                break;
+            }
+            _ => break,
+        }
+    }
+    (segments, pre)
 }
 
 /// P224: collect coroutine-body locals that need to persist across
@@ -227,10 +256,21 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
 /// E0425 ("cannot find value `var_X` in this scope") at compile time
 /// (or, worse, silently lose the value when the next state runs).
 ///
-/// Conservative inclusion: every non-argument, user-named local of
-/// a primitive (Copy) or text type.  References are skipped — they
-/// would need Store-allocation cascade in the factory; not in P224
-/// scope.  Compiler-internal `__*` locals (work-text format buffers
+/// Every non-argument, user-named local of a primitive (Copy), text, or HEAP type.
+///
+/// P224 skipped the heap types — *"they would need Store-allocation cascade in the
+/// factory"* — and that was the bug this doc predicted: `--native` could not compile ANY
+/// generator holding a struct, vector or keyed-collection local, whether or not it was ever
+/// reassigned (`fn g() -> iterator<integer> { s = P { n: 11 }; yield s.n; yield s.n; }` is
+/// enough).  The E0425 named above is exactly what it produced, on every such generator.
+///
+/// No cascade turned out to be needed.  A heap local is a `DbRef` — `Copy`, and the same
+/// shape the `ForLoopBody` value buffer already stores — so the factory initialises it to
+/// `DbRef::NULL` and the body's own `OpDatabase` fills it on first use, which is precisely
+/// what the in-arm `let mut var_s: DbRef = DbRef::NULL` did before.  The store itself lives
+/// in `Stores`, which outlives the coroutine, so nothing is allocated at factory time.
+///
+/// Compiler-internal `__*` locals (work-text format buffers
 /// `__work_*`, yield-from machinery `__yf_*`, vector-literal
 /// backing `__vdb_*`, etc.) are excluded — they have their own
 /// emission paths (P218 pre-declares `__work_*` at function scope;
@@ -249,6 +289,8 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
             continue;
         }
         let tp = var_table.tp(v);
+        // The heap arm mirrors `rust_type`'s DbRef group exactly: every type that lowers
+        // to a `DbRef` is storable as a struct field, so the two lists must not drift.
         let suitable = matches!(
             tp,
             Type::Integer(_)
@@ -258,6 +300,12 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
                 | Type::Single
                 | Type::Enum(_, _, _)
                 | Type::Text(_)
+                | Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Index(_, _, _)
         );
         if !suitable {
             continue;
@@ -387,6 +435,15 @@ fn persistent_default(tp: &Type) -> String {
         Type::Boolean => "false".to_string(),
         Type::Character => "0_u32".to_string(),
         Type::Float | Type::Single => "0.0_f64".to_string(),
+        // A heap local starts as the null reference and the body's own `OpDatabase` fills
+        // it — the same initialiser the per-arm `let` used before these became fields.
+        Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::Sorted(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Radix(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Enum(_, true, _) => "DbRef::NULL".to_string(),
         _ => "0_i64".to_string(),
     }
 }
@@ -422,6 +479,7 @@ impl Output<'_> {
         w: &mut dyn Write,
         attrs: &[crate::data::Attribute],
         segments: &[YieldSegment],
+        tail: &[Value],
         has_yf: bool,
         yield_tp: &Type,
     ) -> std::io::Result<()> {
@@ -765,6 +823,46 @@ impl Output<'_> {
             }
             writeln!(w, "            }}")?;
         }
+        // The TAIL state — everything after the last yield, run ONCE on the `next()` that
+        // exhausts the generator, exactly as the interpreter does.  Advancing `state` past it
+        // is what makes it once: a later call falls through to the catch-all below, so the
+        // scope-exit `OpFreeRef`s here cannot double-free.
+        // A tail statement may only be emitted if every LOCAL it names is reachable from the
+        // state machine — a field, or a parameter.  A compiler-internal `__*` local
+        // (a closure store, a vector-literal backing record) is deliberately NOT persisted, so
+        // it lives in whichever arm declared it and the tail cannot see it.  Skipping just
+        // those statements is provably no worse than before, when the whole tail was dropped;
+        // emitting them regardless is not, and reintroduced the very E0425 this fixes.
+        let reachable = |out: &Self, op: &Value| {
+            let vars = out.data.def(out.def_nr).variables();
+            let mut ok = true;
+            op.walk(&mut |n| {
+                if let Value::Var(v) = n
+                    && !out.coroutine_persistent_vars.contains(v)
+                    && !vars.is_argument(*v)
+                {
+                    ok = false;
+                }
+            });
+            ok
+        };
+        let tail: Vec<&Value> = tail.iter().filter(|op| reachable(self, op)).collect();
+        if !tail.is_empty() {
+            let tail_state = segments.len();
+            writeln!(w, "            {tail_state} => {{")?;
+            for op in tail {
+                write!(w, "                ")?;
+                self.output_code_inner(w, op)?;
+                writeln!(w, ";")?;
+            }
+            writeln!(w, "                self.state = {};", tail_state + 1)?;
+            if has_yf {
+                writeln!(w, "                return {exhaust};")?;
+            } else {
+                writeln!(w, "                {exhaust}")?;
+            }
+            writeln!(w, "            }}")?;
+        }
         // Exhausted arm.
         if has_yf {
             writeln!(w, "            _ => return {exhaust},")?;
@@ -810,7 +908,7 @@ impl Output<'_> {
             return Ok(());
         };
 
-        let segments = collect_segments(&body_block.operators);
+        let (segments, tail) = collect_segments(&body_block.operators);
         let has_yf = segments
             .iter()
             .any(|s| matches!(s, YieldSegment::YieldFrom { .. }));
@@ -843,6 +941,7 @@ impl Output<'_> {
         // for `__yf_*` / `__vdb_*` etc., causing E0425 in the eager-collect
         // factory path.
         let prev_persistent = std::mem::take(&mut self.coroutine_persistent_vars);
+        let prev_allocated = std::mem::take(&mut self.coroutine_allocated_vars);
         self.coroutine_persistent_vars = persistent.iter().map(|(v, _)| *v).collect();
         let mut newly_declared = Vec::with_capacity(persistent.len());
         for (v, _) in &persistent {
@@ -854,9 +953,10 @@ impl Output<'_> {
             w,
             "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
         )?;
-        self.emit_next_i64(w, &attrs, &segments, has_yf, &yield_tp)?;
+        self.emit_next_i64(w, &attrs, &segments, &tail, has_yf, &yield_tp)?;
         writeln!(w, "}}\n")?;
         self.coroutine_persistent_vars = prev_persistent;
+        self.coroutine_allocated_vars = prev_allocated;
         for v in newly_declared {
             self.declared.remove(&v);
         }

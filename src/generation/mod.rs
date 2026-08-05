@@ -565,6 +565,10 @@ pub struct Output<'a> {
     /// `var_<name>`; `Value::Set(v, _)` emits `self.var_<name> = …;`.
     /// Empty outside coroutine bodies.
     pub coroutine_persistent_vars: HashSet<u16>,
+    /// Coroutine-persistent vars whose allocating initialiser has already been emitted inside
+    /// the current `impl LoftCoroutine`.  A second `Set(v, Null)` on the same field is the
+    /// @P302 in-place clear, which must NOT re-run `null_named` (that would orphan the store).
+    pub coroutine_allocated_vars: HashSet<u16>,
     /// When true, `Value::Int` emits a `(d_nr_u32, null_DbRef)` tuple
     /// instead of `d_nr_i32`.  Set during fn-ref variable assignment so
     /// if-else branches produce the correct tuple type.
@@ -1170,6 +1174,7 @@ impl<'a> Output<'a> {
             yield_collect_text: false,
             yield_collect_dbref: false,
             coroutine_persistent_vars: HashSet::new(),
+            coroutine_allocated_vars: HashSet::new(),
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,

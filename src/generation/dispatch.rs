@@ -212,6 +212,26 @@ impl Output<'_> {
         // `let mut var_X = …` shadow that arm 1+ cannot see.
         if self.coroutine_persistent_vars.contains(&var) {
             let name = sanitize(variables.name(var));
+            // A heap local's DECLARATION arrives as `Set(v, Null)` — what the non-persisted
+            // path lowers to `let mut var_x: DbRef = DbRef::NULL`.  As a field it needs no
+            // declaration (the factory already initialised it), but the IR still carries the
+            // statement, and `Null` in EXPRESSION position for a DbRef emits `()` — which is
+            // the `expected DbRef, found ()` this produced for every struct-literal local.
+            // Keyed off the lowered Rust type so it cannot drift from `rust_type`'s DbRef
+            // group, which is the same list `coroutine_persistent_locals` selects on.
+            if matches!(to.unspan(), Value::Null)
+                && rust_type(variables.tp(var), &Context::Variable) == "DbRef"
+            {
+                // A keyed-collection local has NO `OpDatabase` in the IR at all — its store is
+                // allocated by the DECLARATION, so a field that merely starts at `DbRef::NULL`
+                // is inserted into with `store_nr == u16::MAX` and panics in `keys::mut_store`.
+                // Route through the same helper the ordinary local uses, which is also what
+                // keeps the @P302 in-place `s = []` clear from leaking the old store.
+                let lv = format!("self.var_{name}");
+                let first = self.coroutine_allocated_vars.insert(var);
+                write!(w, "{lv} = ")?;
+                return self.emit_null_dbref(w, var, &name, &lv, first);
+            }
             // @PLN25: a `text?` var stores as `String` like plain `text` — peel so the literal→String
             // `.to_string()` conversion fires for an Optional(Text) local.
             let needs_to_string = matches!(variables.tp(var).base(), Type::Text(_));
@@ -855,7 +875,8 @@ impl Output<'_> {
         }
         if matches!(to, Value::Null) && rust_type(variables.tp(var), &Context::Variable) == "DbRef"
         {
-            self.emit_null_dbref(w, var, &name, first_assign)?;
+            let lv = format!("var_{name}");
+            self.emit_null_dbref(w, var, &name, &lv, first_assign)?;
         } else if to == &Value::Null {
             // Emit the null sentinel for the variable's type, not bare `()`.
             let null_val = default_native_value(variables.tp(var));
@@ -1072,11 +1093,15 @@ impl Output<'_> {
     /// clear): the slot already holds a live `DbRef`, so emit `OpDatabase`
     /// ALONE (in-place clear, reuses the store, no leak) — skip `null_named`,
     /// which would reset to a sentinel and leak the old store.
+    /// `lvalue` is the Rust place being initialised — `var_x` for an ordinary local, or
+    /// `self.var_x` for a coroutine-persistent field.  `name` stays the loft variable's name,
+    /// because it is only the debug label `null_named` records.
     fn emit_null_dbref(
         &mut self,
         w: &mut dyn Write,
         var: u16,
         name: &str,
+        lvalue: &str,
         first: bool,
     ) -> std::io::Result<()> {
         let variables = self.data.def(self.def_nr).variables();
@@ -1172,14 +1197,14 @@ impl Output<'_> {
                 self.indent(w)?;
                 write!(
                     w,
-                    "var_{name} = OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)"
+                    "{lvalue} = OpDatabase(cell,{lvalue}, {ref_buf_type_id}_i32)"
                 )?;
             } else {
                 // @P302 reassignment / `s = []` clear: the slot already holds a
                 // live DbRef → OpDatabase clears that store in place (no
                 // null_named, which would reset to a sentinel and leak the
                 // old store).  The caller already wrote the `var_{name} = `.
-                write!(w, "OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)")?;
+                write!(w, "OpDatabase(cell,{lvalue}, {ref_buf_type_id}_i32)")?;
             }
         } else {
             write!(w, "DbRef::NULL")?;

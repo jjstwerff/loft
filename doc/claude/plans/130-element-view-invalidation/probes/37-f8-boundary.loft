@@ -248,7 +248,50 @@ fn d1_write_through_stale() {
   ok("D1 stale write bx", bx.v[0].n, 22);
 }
 
+// ---- E — the CONCURRENCY paths, added at plan closure -----------------------------
+//
+// Carried as "unmeasured, not known-broken" in QUALITY.md rather than run, which is the
+// weakest kind of resting state: a claim with no reading behind it.  The fix is a
+// compile-time dep strip in `scopes.rs` with no thread-local state, so there was no
+// specific reason to expect divergence — but "no reason to expect" is not a measurement,
+// and this plan's own repeated finding is that filed scope is a tenth of the defect.
+
+// E1 — a view held across a reassignment, with a `par` between them.  `par` runs the body
+// on worker threads, so if the materialise depended on anything thread-local the copy would
+// go missing on exactly this shape.
+fn tentimes(x: integer) -> integer { return x * 10; }
+
+fn e1_par_between_view_and_reassign() {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  work = [0, 1, 2, 3];
+  total = 0;
+  for i in work par(r = tentimes(i), 2) { total += r; }
+  bx = WithVec { v: [Box { n: 22 }], m: 2 };
+  t = churn();
+  ok("E1 par + reassign", c.n + total, 71);
+}
+
+// E2 — the same shape inside a COROUTINE.  A generator's frame suspends and resumes, so a
+// view held across a `yield` outlives a frame boundary the straight-line cases never cross.
+fn e2_generator() -> iterator<integer> {
+  bx = WithVec { v: [Box { n: 11 }], m: 1 };
+  c = bx.v[0];
+  yield c.n;
+  bx = WithVec { v: [Box { n: 22 }], m: 2 };
+  yield c.n;
+}
+
+fn e2_coroutine_across_yield() {
+  g = e2_generator();
+  first = next(g) ?? -1;
+  second = next(g) ?? -1;
+  ok("E2 coroutine     ", first + second, 22);
+}
+
 fn main() {
+  e1_par_between_view_and_reassign();
+  e2_coroutine_across_yield();
   k1_write_through_survives();
   k2_field_write_through();
   a1_hash_field();
