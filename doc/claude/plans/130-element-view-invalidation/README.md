@@ -357,9 +357,42 @@ every compile, and a `--native` run reports both generators, so its column rough
 
 ## Open questions (added by the guard)
 
-- **Q5 — what makes `file()` copy where `make()` does not?** Both report `return=Owned` in the
-  ownership dump, so that fact does not discriminate them. Until this is pinned, no fix for the
-  `exists` family can be aimed correctly. This is the top Stage-B item.
+- **Q5 — ANSWERED: naming the result in a local is the whole trigger.** See probe 20.
+
+  `return_adopts_fresh_store()` (`src/data.rs:3328`) is exactly: returned-type deps **empty**,
+  or the lone `[u16::MAX]` one-buffer marker → adopt; **any other dep → copy**. Four
+  observationally identical callees, measured:
+
+  | shape | returned deps | caller |
+  |---|---|---|
+  | `Rec { … }` returned **directly** | `[]` | adopts — no copy |
+  | `r = Rec { … }; r` — **unmutated** | `[1]` | **deep-copies** |
+  | bind, mutate a field, return | `[1]` | **deep-copies** |
+  | bind, mutate via a call, return (the `file()` shape) | `[1]` | **deep-copies** |
+
+  Dep `[1]` names the callee's **own hidden `__retbuf`**. So binding the result to a named
+  local before returning it — no mutation, no semantic difference, the two functions compute
+  the same value — costs a full deep copy at **every call site**. `n_file` is
+  `result = File{…}; OpGetFile(result); result` (`02_files.loft:238`), which is why `exists()`
+  copies and probe 15's `make()` does not.
+
+  **The scope is far wider than `exists`.** "Build into a named local, then return it" is the
+  idiomatic way to write a constructor-ish function, and every function written that way pays
+  a deep copy per call. `exists` is simply the instance that is compiled into every program.
+
+  **Why this looks like a mis-classification, not a real distinction:** both shapes have a
+  `__retbuf` attr — the difference is only whether the return TYPE records a dep naming it.
+  `[u16::MAX]` and `[<index of __retbuf>]` describe the *same* situation (returned via my own
+  hidden buffer, nobody else owns it), and `return_adopts_fresh_store` tests for the marker by
+  VALUE rather than asking whether the named attr *is* a hidden retbuf.
+
+  **Not yet verified — the safety question that gates any fix:** whether adopting the `[1]`
+  case is sound depends on whether the caller REUSES that buffer before the binding dies (the
+  hazard `gen_set_first_at_tos`'s comment names: "a hidden `ref_return` work-ref the caller
+  REUSES across iterations"). Probe 17 is the shape that would break if it is reused. Answer
+  this before touching `return_adopts_fresh_store` — extending the predicate to accept a
+  hidden-attr dep is a one-line change that would silently widen aliasing if the reuse hazard
+  is real.
 - **Q6 — which of the uncovered families should be silenced rather than removed?** The owner's
   framing: prevent the copy where possible, and where it is genuinely needed allow it silently
   *but closely guarded* — i.e. an accept recorded at the site, not a blanket exemption.
