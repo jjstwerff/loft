@@ -143,6 +143,44 @@ Ship order:
 4. Apply: interactive one-click for both tiers; unattended `--apply` for mechanical only.
 5. Only then consider a second diagnostic.
 
+## Prerequisite arc — diagnostic codes (adopt what already exists)
+
+A suggestion needs a **stable identity** to attach to: the message prose changes, the
+suggestion must not. loft already decided this and built it — `Diagnostics::add_at_coded`,
+whose own doc says *"the code is the frozen identity; prose is free"* (@PLN102 arc-E E1) —
+and then never adopted it:
+
+| | count |
+|---|---|
+| coded call sites | **1** |
+| uncoded `add_at` | 15 |
+| uncoded `add` | 3 |
+
+There is also no index of codes anywhere in the docs, so nothing can be looked up.
+
+**This is the right anchor, and it beats the catalogue id in Q5.** A code names the
+*diagnostic*; a `@F` id names a *feature*. The suggestion, the doc section, the test and the
+grep all want the former. One identity, four consumers:
+
+- the message carries it, so a user can search it;
+- the suggestion attaches to it rather than to a message string that drifts;
+- `doc/claude/DIAGNOSTICS.md` is named by it — the door @PLN131 needs;
+- `grep -rn "<code>"` finds emitter, tests and docs together.
+
+loft chose **kebab slugs, not numbers** (`avoidable-copy`, not `E0142`), which is the stronger
+choice here: a slug is self-describing *and* greppable, while a number means nothing until the
+lookup table exists.
+
+Two costs to respect:
+
+1. **A code is a public surface — frozen once emitted.** The naming pass matters more than
+   the edit; a renamed code breaks every link and search that ever pointed at it.
+2. **A code with nothing to grep to is the same dead door** the prototype already rejected.
+   The index must land WITH the codes, not after.
+
+Order: code @PLN130 F5's copy notice first (it is the diagnostic this plan builds on, and it
+currently ships with **no** code), then the remaining sites, then the index.
+
 ## Open questions
 
 - **Q1 — where does a suggestion live?** Next to the diagnostic definition, or in a separate
@@ -162,11 +200,12 @@ Ship order:
   a veteran goes hunting instead of affirming; without the second the teaching half does not
   happen. The prototype also found that the append shape has **no mechanical fix at all**, so
   the feature must not assume every diagnostic offers one.
-- **Q5 — can the concept link be derived rather than hand-written?** The feature catalogue is
-  canonical and generated (`make features-gen`), so a suggestion could carry an `@F`/`@I` id
-  and let the renderer resolve it — one home, and a link that cannot drift from the feature it
-  describes. Hand-written URLs in diagnostics would rot exactly like the stale doc claims
-  @PLN130 F6 had to correct.
+- **Q5 — RESOLVED: anchor on the diagnostic CODE, not a catalogue id.** See § Prerequisite
+  arc. A code names the diagnostic (what the suggestion belongs to); an `@F` id names a
+  feature (what the concept links to). Both exist — `@F106` now covers copy/move semantics —
+  but the suggestion attaches to the code, and the code's doc entry links onward to the
+  feature. Hand-written URLs inside diagnostics are still refused: they rot exactly like the
+  stale doc claim @PLN130 F6 had to correct.
 - **Q4 — how much verification is affordable** at `--explain` time versus `--apply` time?
 
 ## See also
