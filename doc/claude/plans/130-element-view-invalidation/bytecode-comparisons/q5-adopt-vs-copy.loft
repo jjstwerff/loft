@@ -1,0 +1,37 @@
+struct Rec { tag: integer, name: text }
+
+// A: return a literal directly
+fn mk_literal(n: integer) -> Rec {
+  Rec { tag: n, name: "a" }
+}
+
+// B: bind a local, return it unmutated
+fn mk_local(n: integer) -> Rec {
+  r = Rec { tag: n, name: "b" };
+  r
+}
+
+// C: bind a local, MUTATE it via a field write, return it
+fn mk_mutated(n: integer) -> Rec {
+  r = Rec { tag: n, name: "c" };
+  r.tag = r.tag + 1;
+  r
+}
+
+// D: bind a local, pass it to a function that mutates it, return it  (the file() shape)
+fn bump(r: Rec) {
+  r.tag = r.tag + 1;
+}
+fn mk_via_call(n: integer) -> Rec {
+  r = Rec { tag: n, name: "d" };
+  bump(r);
+  r
+}
+
+fn main() {
+  a = mk_literal(1);
+  b = mk_local(2);
+  c = mk_mutated(3);
+  d = mk_via_call(4);
+  println("q5 {a.tag} {b.tag} {c.tag} {d.tag} want 1 2 4 5");
+}

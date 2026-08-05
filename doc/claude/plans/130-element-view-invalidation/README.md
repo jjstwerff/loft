@@ -161,6 +161,13 @@ whose scope and root cause are already pinned, skip it and fix the bug.
 6. Let the instrument name the gate on the fix, not just the fix.
 7. State its coverage beside its readings — an unfinished instrument reporting zero
    is the oracle again.
+8. **Always add a probe when a new case turns up** (investigation ground rule). Every
+   case found is a case that must stay found; the suite is the only thing that
+   remembers. Probe 23 exists because the fix that probes 21/22 blessed was wrong.
+9. **Count the axes you held fixed, not just the ones you varied.** Probes 21/22 swept
+   call shape while pinning depth, Set-count, parameter kind and caller-count at 1.
+   A clean sweep over one axis reads as proof and is not — the cell that broke needed
+   all four moved at once.
 
 ## Stage A finding — which copies happen with no warning
 
@@ -513,11 +520,39 @@ every compile, and a `--native` run reports both generators, so its column rough
   names the callee's OWN retbuf **and** the return is not a borrowed view (`free_src` set). A
   genuine borrowed-view return leaves the free bit clear, and there the copy is required.
 
-  **Still not verified — the one case that could still break it:** whether any shape keeps two
-  results from the SAME call site simultaneously live. Reassignment cannot (each call displaces
-  the previous binding) and a container insert deep-copies on the way in, but that is reasoning,
-  not a sweep. Enumerate it before changing `return_adopts_fresh_store` — this is the last gate,
-  and it is a bounded case analysis rather than an open question.
+  **The fix was applied and REVERTED. The one-liner is wrong** — the doc comment on
+  `return_adopts_fresh_store` was right and the measurement that contradicted it was too
+  narrow. Recorded here because it looks correct from every angle probes 21/22 examined.
+
+  Widening the predicate to accept a lone hidden-attr dep eliminated exactly the copies it
+  should: probe 20's three → **0**, probe 18's `exists()` five → **0**, probe 19 one → **0**,
+  while probe 16 (a genuine copy between two live bindings) correctly stayed at 1. The
+  emitted form became byte-identical to the proven-working `mk_literal` adopt sequence. Every
+  probe passed, no leaks.
+
+  Then `tests/scripts/143-plan51-cluster3-mixed-lit-call.loft` failed on iteration 2 with a
+  stale element. **Probe 23** is the minimal form, and reproducing it needed **four**
+  ingredients at once — drop any one and it passes even when widened:
+
+  1. a callee returning a named local (dep names its own buffer),
+  2. a caller whose local is set from a **struct literal** first, then **reassigned** from
+     that call, then returned,
+  3. the callers take **struct** parameters, not scalars,
+  4. **two** such callers interleaved in one loop.
+
+  Under the widening the corruption lands on the *other* caller's value — a shared buffer
+  across two call sites — and it is **interpreter-only**, so the change also split the
+  backends. Unlandable twice over.
+
+  **Why probes 21/22 said "safe":** they varied the call SHAPE while holding nesting depth,
+  the number of Sets on the returned local, the parameter KIND, and the number of interleaved
+  callers all at **1**. Four composition axes pinned at once — the matrix could not see this
+  cell, and a clean sweep across it read as proof. The `free_src=true` reading in probe 21 was
+  accurate and still did not generalise.
+
+  **The copy stays.** `exists()` keeps copying a `File` per call. Making it not copy needs a
+  predicate that can tell a buffer that is safe to transfer from one that is about to become
+  another frame's buffer — which is a real analysis, not a flag test.
 - **Q6 — which of the uncovered families should be silenced rather than removed?** The owner's
   framing: prevent the copy where possible, and where it is genuinely needed allow it silently
   *but closely guarded* — i.e. an accept recorded at the site, not a blanket exemption.
