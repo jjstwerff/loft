@@ -1476,6 +1476,7 @@ pub fn cached_or_build_shared_cdylib(
     stores: &Stores,
     export_set: &HashSet<u32>,
     pkg_dir: &str,
+    contributing: &[String],
 ) -> Result<Option<std::path::PathBuf>, String> {
     let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
     // #461 — the generated cdylib hardcodes type-table INDICES (e.g. `OpWriteFile`'s
@@ -1518,7 +1519,10 @@ pub fn cached_or_build_shared_cdylib(
     // does not hold the failure is silent corruption, so the cheap verification
     // is worth more than the argument.  A mismatch falls through to REBUILD,
     // which is the same thing a name miss already does.
-    if so.exists() && !source_newer_than(pkg_dir, &so) && artifact_matches_layout(&so, layout_fp) {
+    if so.exists()
+        && !source_newer_than(contributing, &so)
+        && artifact_matches_layout(&so, layout_fp)
+    {
         return Ok(Some(so));
     }
 
@@ -1535,7 +1539,10 @@ pub fn cached_or_build_shared_cdylib(
         .map_err(|e| format!("create {}: {e}", lock_path.display()))?;
     lock.lock()
         .map_err(|e| format!("lock {}: {e}", lock_path.display()))?;
-    if so.exists() && !source_newer_than(pkg_dir, &so) && artifact_matches_layout(&so, layout_fp) {
+    if so.exists()
+        && !source_newer_than(contributing, &so)
+        && artifact_matches_layout(&so, layout_fp)
+    {
         return Ok(Some(so));
     }
 
@@ -1550,12 +1557,12 @@ pub fn cached_or_build_shared_cdylib(
     // (loft#717): it can never be adopted, and letting it reach the edit-loop
     // branch below would leave a foreign artifact sitting at this name.
     if !so.exists() || !artifact_matches_layout(&so, layout_fp) {
-        crate::cache::write_run_source_hash(&out_dir, source_content_hash(pkg_dir));
+        crate::cache::write_run_source_hash(&out_dir, source_content_hash(contributing));
         return build(&out_dir);
     }
 
     // 3. Stale artifact (the library was edited) → dev-interpret-on-edit.
-    let cur = source_content_hash(pkg_dir);
+    let cur = source_content_hash(contributing);
     let stable = crate::cache::read_run_source_hash(&out_dir) == Some(cur);
     crate::cache::write_run_source_hash(&out_dir, cur);
     if stable {
@@ -1566,14 +1573,18 @@ pub fn cached_or_build_shared_cdylib(
 }
 
 /// @PLN11 Arc N / N3 (Step 4) — a content hash of every `.loft` / `loft.toml` source
-/// under `pkg_dir` (build/artifact dirs skipped, files visited in sorted order for a
+/// under `pkg_dirs` (build/artifact dirs skipped, files visited in sorted order for a
 /// stable digest).  Used to detect "did this library's source change since the last
 /// run?" — content-based, not mtime, so it is deterministic (testable) and a no-op
 /// touch doesn't trigger a rebuild.
-fn source_content_hash(pkg_dir: &str) -> u64 {
+///
+/// Spans every package that CONTRIBUTES to the artifact, not just the one that owns
+/// it, for the reason given on `source_newer_than` (loft#777).
+fn source_content_hash(pkg_dirs: &[String]) -> u64 {
     use sha2::{Digest, Sha256};
     let mut files: Vec<std::path::PathBuf> = Vec::new();
-    let mut stack = vec![std::path::PathBuf::from(pkg_dir)];
+    let mut stack: Vec<std::path::PathBuf> =
+        pkg_dirs.iter().map(std::path::PathBuf::from).collect();
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -1601,9 +1612,12 @@ fn source_content_hash(pkg_dir: &str) -> u64 {
     files.sort();
     let mut h = Sha256::new();
     for f in &files {
-        // The path relative to the package keeps the digest stable across machines
-        // while still reacting to renames; content reacts to edits.
-        let rel = f.strip_prefix(pkg_dir).unwrap_or(f);
+        // The path relative to its OWN package keeps the digest stable across
+        // machines while still reacting to renames; content reacts to edits.
+        let rel = pkg_dirs
+            .iter()
+            .find_map(|d| f.strip_prefix(d).ok())
+            .unwrap_or(f);
         h.update(rel.to_string_lossy().as_bytes());
         if let Ok(bytes) = std::fs::read(f) {
             h.update(&bytes);
@@ -1613,15 +1627,37 @@ fn source_content_hash(pkg_dir: &str) -> u64 {
     u64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8]))
 }
 
-/// Is any `.loft` / `loft.toml` source under `pkg_dir` newer than the artifact at
+/// Is any `.loft` / `loft.toml` source under `pkg_dirs` newer than the artifact at
 /// `artifact`?  (Build/artifact dirs are skipped.)  A missing/unreadable artifact
 /// mtime counts as stale.
-fn source_newer_than(pkg_dir: &str, artifact: &std::path::Path) -> bool {
+///
+/// `pkg_dirs` is every package that CONTRIBUTES code to the artifact, not just the
+/// one that owns it.  A cdylib carries its dependencies inlined — `emit_program`
+/// emits the export set *and its transitive deps*, so `hex_editor`'s cdylib holds a
+/// full copy of `hex_part::part_name_ok` — and it EXPORTS that copy under the same
+/// `loft_shared_<name>` symbol the dependency's own cdylib exports.  Whichever
+/// library loads first wins the lookup.
+///
+/// Asking only about the owning package therefore reported a dependent as fresh
+/// after its DEPENDENCY was edited: the edited library rebuilt correctly and the
+/// dependent kept serving its stale inlined copy, permanently — nothing about the
+/// dependent's own sources ever changes again (loft#777).  It read as a
+/// consumer-size effect only because you need a second library in the graph, loaded
+/// first, before anything can shadow the fresh one; the small consumer that loaded
+/// the edited library directly was always right.
+///
+/// The cost of the wider question is one `stat` walk over the loaded packages —
+/// under a millisecond for a ten-package tree, against a `rustc` invocation. It does
+/// mean a dependency edit makes every dependent stale, which is the honest answer:
+/// the dependent really does contain the edited code.  `dev-interpret-on-edit` still
+/// keeps `rustc` out of the loop until editing settles.
+fn source_newer_than(pkg_dirs: &[String], artifact: &std::path::Path) -> bool {
     let Ok(art_mtime) = artifact.metadata().and_then(|m| m.modified()) else {
         return true;
     };
     let mut newest: Option<std::time::SystemTime> = None;
-    let mut stack = vec![std::path::PathBuf::from(pkg_dir)];
+    let mut stack: Vec<std::path::PathBuf> =
+        pkg_dirs.iter().map(std::path::PathBuf::from).collect();
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;

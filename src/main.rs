@@ -7107,6 +7107,7 @@ fn main() {
                         &p.database,
                         &export,
                         &pkg_str,
+                        std::slice::from_ref(&pkg_str),
                     ) {
                         Ok(Some(so)) => {
                             // This cdylib `extern crate loft`s — it statically embeds
@@ -7728,7 +7729,13 @@ fn main() {
         let built = if force_build_fail {
             Err("LOFT_FORCE_NATIVE_BUILD_FAIL".to_string())
         } else {
-            loft::native_lib::cached_or_build_shared_cdylib(&p.data, &p.database, &export, pkg_dir)
+            loft::native_lib::cached_or_build_shared_cdylib(
+                &p.data,
+                &p.database,
+                &export,
+                pkg_dir,
+                &pending_native,
+            )
         };
         match built {
             Ok(Some(so)) => {
