@@ -137,8 +137,25 @@ identifier is a legal SQL identifier, and some of them are RESERVED words.**
 `from` is a perfectly ordinary loft field name and the natural one for a history
 row, and the query above with it in the column list does not parse on any engine.
 Since nothing distinguishes a reserved word by shape, the derivation cannot dodge
-it — the cure is quoting under a declared style (below), and until a style is
-declared the derivation emits the name verbatim.
+it — so **it quotes everything**, and the queries it really emits are
+
+```sql
+SELECT "id", "name" FROM "person" WHERE "id" = ?
+SELECT "person_id", "from", "to" FROM "spell" WHERE "person_id" = ?
+```
+
+That removes the whole class rather than one word of it: no reserved-word list to
+carry, and none to keep current as engines add words. The cost is that the quote
+CHARACTER is a dialect fact — `"x"` is an identifier in standard SQL and a string
+literal in MySQL — so it is declared (`Quoting::Double` by default, `Backtick` for
+MySQL/MariaDB, `Bare` for a caller who wants the query to read as they wrote it
+and accepts a refusal for a name that cannot be written unquoted). Placeholders
+are the same kind of fact: `?` by default, `$1`-numbered for PostgreSQL.
+
+Quoting also settles the table name: the default is the type's name **lowercased**,
+which is the spelling that means the same thing everywhere — PostgreSQL folds an
+unquoted name down, so a table created the ordinary way is already lowercase and
+`"person"` finds it. A table that really is mixed-case is what the override is for.
 
 **Two facts the derivation had to learn from the descriptor rather than from this
 document**, both found by building it:
@@ -156,5 +173,10 @@ document**, both found by building it:
 
 **What the descriptor cannot give**, and what therefore has to be declared ([BINDING.md](BINDING.md)):
 the table when it is not the type's name (`persoon` for `Person`), a column when it is not the
-field's name, and a SQL identifier when a loft field name is not a legal one. The derivation is
-the DEFAULT; the mapping is the override, and both feed one query builder rather than two paths.
+field's name, and the dialect facts above. The derivation is the DEFAULT; the mapping is the
+override, and both feed one query builder rather than two paths — an empty mapping IS the
+derivation, which is what keeps them from drifting.
+
+A mapping is checked **where it is written**: naming a type or a field that does not exist is
+refused at construction, not at query time. A typo is otherwise invisible — the derivation would
+fall back to the default and query a column nobody meant.

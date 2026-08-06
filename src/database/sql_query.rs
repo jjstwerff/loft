@@ -72,18 +72,167 @@ pub struct Sql {
     pub params: Vec<Param>,
 }
 
-/// Is this a legal unquoted SQL identifier?
+/// How this engine spells an identifier.
 ///
-/// The derivation REFUSES anything else rather than quoting it, because quoting
-/// is a dialect decision and a guess here would produce a query that is valid
-/// and wrong on some engines. A name that needs quoting is what the declared
-/// mapping is for.
+/// It has to be declared because it cannot be derived: `"person"` is an
+/// identifier in standard SQL and a string literal in MySQL, and no property of
+/// the NAME says which engine is listening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Quoting {
+    /// `"person"` — standard SQL: PostgreSQL, SQLite, DuckDB.
+    ///
+    /// The default, and it is what makes the plan's own motivating table work
+    /// unquoted-would-not: `from` and `to` are ordinary loft field names for a
+    /// history row and reserved words in every engine, so a bare identifier
+    /// produces a query that parses nowhere. Quoting everything costs nothing
+    /// and removes the whole class — no reserved-word list, and none to keep up
+    /// to date as engines add words.
+    #[default]
+    Double,
+    /// `` `person` `` — MySQL and MariaDB, unless `ANSI_QUOTES` is set.
+    Backtick,
+    /// The name verbatim. Available for a caller who knows the identifiers are
+    /// safe and wants the query to read the way they wrote it; a name that is
+    /// not a plain identifier is then REFUSED rather than emitted.
+    Bare,
+}
+
+/// How this engine spells a bound parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Placeholder {
+    /// `?` — SQLite, MySQL, MariaDB.
+    #[default]
+    Question,
+    /// `$1`, `$2`, … — PostgreSQL, numbered from one in the order they appear.
+    Numbered,
+}
+
+/// Is this a legal unquoted SQL identifier?
 fn plain_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     chars
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The names loft cannot derive, plus how this engine spells things.
+///
+/// The descriptor gives a type name and field names; the DATABASE owns the
+/// schema and owes loft neither ([BINDING.md](../../doc/claude/plans/129-lazy-database-stores/BINDING.md)).
+/// So `Person.name` may be `persoon.naam`, and that fact has to be stated
+/// somewhere. An empty mapping is exactly the derivation's default, which is why
+/// there is one builder rather than a default path and an override path.
+#[derive(Debug, Clone, Default)]
+pub struct Mapping {
+    tables: std::collections::BTreeMap<String, String>,
+    columns: std::collections::BTreeMap<(String, String), String>,
+    pub quoting: Quoting,
+    pub placeholder: Placeholder,
+}
+
+impl Mapping {
+    /// A mapping with no overrides, for `quoting` and `placeholder`.
+    #[must_use]
+    pub fn new(quoting: Quoting, placeholder: Placeholder) -> Mapping {
+        Mapping {
+            tables: std::collections::BTreeMap::new(),
+            columns: std::collections::BTreeMap::new(),
+            quoting,
+            placeholder,
+        }
+    }
+
+    /// Declare that loft type `type_name` lives in table `table`.
+    ///
+    /// # Errors
+    /// When the descriptor has no such type — a typo in a mapping is otherwise
+    /// invisible, because the derivation would simply use the default and query
+    /// a table nobody meant.
+    pub fn map_table(
+        &mut self,
+        desc: &LayoutDesc,
+        type_name: &str,
+        table: &str,
+    ) -> Result<(), String> {
+        if !desc.names.values().any(|n| n == type_name) {
+            return Err(format!("no type `{type_name}` in this schema"));
+        }
+        self.tables.insert(type_name.to_string(), table.to_string());
+        Ok(())
+    }
+
+    /// Declare that `type_name.field` is column `column`.
+    ///
+    /// # Errors
+    /// When the type is not in the descriptor, or has no such field. Checked
+    /// HERE rather than at query time, because a mapping is written once and a
+    /// query runs on a miss — the error belongs where the mistake is.
+    pub fn map_column(
+        &mut self,
+        desc: &LayoutDesc,
+        type_name: &str,
+        field: &str,
+        column: &str,
+    ) -> Result<(), String> {
+        let Some((id, _)) = desc.names.iter().find(|(_, n)| *n == type_name) else {
+            return Err(format!("no type `{type_name}` in this schema"));
+        };
+        let Some(LayoutNode::Record(fields)) = desc.nodes.get(id) else {
+            return Err(format!("type `{type_name}` is not a record"));
+        };
+        if !fields.iter().any(|f| f.is_data() && f.name == field) {
+            return Err(format!("type `{type_name}` has no field `{field}`"));
+        }
+        self.columns.insert(
+            (type_name.to_string(), field.to_string()),
+            column.to_string(),
+        );
+        Ok(())
+    }
+
+    /// The table for `type_name` — declared, or the type's own name lowercased.
+    ///
+    /// Lowercase because that is the spelling that means the same thing on every
+    /// engine: PostgreSQL folds an unquoted name down, and a table created the
+    /// ordinary way is therefore already lowercase. A table that really is
+    /// mixed-case is what the override is for.
+    fn table(&self, type_name: &str) -> String {
+        self.tables
+            .get(type_name)
+            .cloned()
+            .unwrap_or_else(|| type_name.to_lowercase())
+    }
+
+    /// The column for `type_name.field` — declared, or the field's own name.
+    fn column(&self, type_name: &str, field: &str) -> String {
+        self.columns
+            .get(&(type_name.to_string(), field.to_string()))
+            .cloned()
+            .unwrap_or_else(|| field.to_string())
+    }
+
+    /// Spell one identifier for this engine. `None` when `Bare` was asked for a
+    /// name that cannot be written bare.
+    fn quote(&self, name: &str) -> Option<String> {
+        // Doubling is how both dialects escape their own quote character, so a
+        // name containing one still round-trips rather than closing the
+        // identifier early.
+        Some(match self.quoting {
+            Quoting::Double => format!("\"{}\"", name.replace('"', "\"\"")),
+            Quoting::Backtick => format!("`{}`", name.replace('`', "``")),
+            Quoting::Bare if plain_identifier(name) => name.to_string(),
+            Quoting::Bare => return None,
+        })
+    }
+
+    /// The nth placeholder, numbered from zero.
+    fn placeholder(&self, n: usize) -> String {
+        match self.placeholder {
+            Placeholder::Question => "?".to_string(),
+            Placeholder::Numbered => format!("${}", n + 1),
+        }
+    }
 }
 
 /// Can this field be one column?
@@ -133,18 +282,24 @@ fn key_fields(it: &Iterated) -> Option<(Vec<(usize, bool)>, bool)> {
     })
 }
 
-/// Derive the `SELECT` that serves `shape` on the collection type `collection`.
+/// Derive the `SELECT` that serves `shape` on the collection type `collection`,
+/// spelling every name the way `map` says.
 ///
 /// `None` whenever the schema cannot say what the query is — a kind with no SQL
 /// shape, a range asked of an unordered kind, an element that is not a record, a
-/// field that is not a column, or a name that is not a legal unquoted identifier.
-/// A refusal is the point: a malformed query that runs is worse than one that
-/// was never built, and every refusal here has a declared mapping as its cure.
+/// field that is not a column, or (under [`Quoting::Bare`]) a name that cannot be
+/// written unquoted. A refusal is the point: a malformed query that runs is worse
+/// than one that was never built.
 ///
-/// Placeholders are `?`, which sqlite and MySQL take verbatim; a dialect that
-/// spells them differently is a mapping concern rather than a second derivation.
+/// An empty `Mapping` is the pure derivation — the default and the override feed
+/// this one builder, so the two cannot drift apart.
 #[must_use]
-pub fn derive_select(desc: &LayoutDesc, collection: u16, shape: QueryShape) -> Option<Sql> {
+pub fn derive_select(
+    desc: &LayoutDesc,
+    collection: u16,
+    shape: QueryShape,
+    map: &Mapping,
+) -> Option<Sql> {
     let LayoutNode::Iterated(it) = desc.nodes.get(&collection)? else {
         return None;
     };
@@ -163,10 +318,8 @@ pub fn derive_select(desc: &LayoutDesc, collection: u16, shape: QueryShape) -> O
         return None; // a hash has no order to range over
     }
 
-    let table = desc.names.get(&elem)?.to_lowercase();
-    if !plain_identifier(&table) {
-        return None;
-    }
+    let type_name = desc.names.get(&elem)?;
+    let table = map.quote(&map.table(type_name))?;
 
     // Only the fields the PROGRAM wrote become columns. An `index` element
     // record carries its own red-black links (`#left_1`, `#right_1`, `#color_1`)
@@ -177,11 +330,11 @@ pub fn derive_select(desc: &LayoutDesc, collection: u16, shape: QueryShape) -> O
         if !f.is_data() {
             continue;
         }
-        if !scalar_column(desc, f.content) || !plain_identifier(&f.name) {
+        if !scalar_column(desc, f.content) {
             return None;
         }
         columns.push(SelectedColumn {
-            column: f.name.clone(),
+            column: map.quote(&map.column(type_name, &f.name))?,
             field: i,
         });
     }
@@ -192,13 +345,17 @@ pub fn derive_select(desc: &LayoutDesc, collection: u16, shape: QueryShape) -> O
     let mut params = Vec::with_capacity(keys.len() + 1);
     let mut wheres = Vec::with_capacity(keys.len());
     // The trailing key is the one a range bounds; every key before it is pinned,
-    // which is what makes `index<Position[person_id, from]>` a composite range
+    // which is what makes `index<Position[person_id, started]>` a composite range
     // rather than N lookups.
     let last = keys.len() - 1;
     for (n, (field, _)) in keys.iter().enumerate() {
-        let col = &fields[*field].name;
+        let col = map.quote(&map.column(type_name, &fields[*field].name))?;
         if shape == QueryShape::Range && n == last {
-            wheres.push(format!("{col} BETWEEN ? AND ?"));
+            wheres.push(format!(
+                "{col} BETWEEN {} AND {}",
+                map.placeholder(params.len()),
+                map.placeholder(params.len() + 1)
+            ));
             params.push(Param {
                 field: *field,
                 bound: Bound::Low,
@@ -208,7 +365,7 @@ pub fn derive_select(desc: &LayoutDesc, collection: u16, shape: QueryShape) -> O
                 bound: Bound::High,
             });
         } else {
-            wheres.push(format!("{col} = ?"));
+            wheres.push(format!("{col} = {}", map.placeholder(params.len())));
             params.push(Param {
                 field: *field,
                 bound: Bound::Eq,
@@ -229,7 +386,8 @@ pub fn derive_select(desc: &LayoutDesc, collection: u16, shape: QueryShape) -> O
         use std::fmt::Write as _;
         let (field, asc) = keys[last];
         let dir = if asc { "ASC" } else { "DESC" };
-        let _ = write!(text, " ORDER BY {} {dir}", fields[field].name);
+        let col = map.quote(&map.column(type_name, &fields[field].name))?;
+        let _ = write!(text, " ORDER BY {col} {dir}");
     }
 
     Some(Sql {
