@@ -387,6 +387,14 @@ pub struct PagedReader<P: PageProvider> {
     lru: std::collections::VecDeque<u64>,
     /// Max resident pages.
     capacity: usize,
+    /// loft#785 — is `capacity` a HARD cap, or a floor the working set may raise?
+    ///
+    /// `true` only when the caller named a size (`LOFT_PAGE_CACHE_BYTES`, or
+    /// [`with_config`](PagedReader::with_config)): someone who states a memory bound gets
+    /// it. Otherwise [`warm`](PagedReader::warm) may grow the cache to hold what it
+    /// prefetches, because a prefetched page that is evicted before the walk reads it costs
+    /// TWO fetches instead of one — see that method for why the default has to be growth.
+    capped: bool,
     /// loft#729 — `resolve` calls and bytes asked for, bucketed by power-of-two
     /// size (bucket `i` is `2^i ..< 2^(i+1)`). What the traversal ASKS for is a
     /// separate fact from what the provider FETCHES, and only the first says
@@ -411,16 +419,24 @@ impl<P: PageProvider> PagedReader<P> {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(PAGE_SIZE);
-        let cache_bytes = std::env::var("LOFT_PAGE_CACHE_BYTES")
+        let asked = std::env::var("LOFT_PAGE_CACHE_BYTES")
             .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(64 * PAGE_SIZE);
-        Self::with_config(provider, ps, (cache_bytes / ps).max(1))
+            .and_then(|v| v.parse::<usize>().ok());
+        let cache_bytes = asked.unwrap_or(64 * PAGE_SIZE);
+        let mut r = Self::with_config(provider, ps, (cache_bytes / ps).max(1));
+        // loft#785 — an unasked-for default is a FLOOR, not a bound. Only a caller who
+        // named a number is held to it.
+        r.capped = asked.is_some();
+        r
     }
 
     /// A reader with an explicit page size and cache cap (both clamped to ≥ 1).
     /// The tiny-page form is for tests that want boundary-spanning reads without
     /// a 64 KiB fixture.
+    ///
+    /// The capacity given here is a HARD cap: naming a size is how a caller states a memory
+    /// bound, and [`warm`](PagedReader::warm) will trim its prefetch to fit rather than
+    /// exceed it (loft#785).
     pub fn with_config(provider: P, page_size: usize, capacity: usize) -> Self {
         Self {
             provider,
@@ -428,6 +444,7 @@ impl<P: PageProvider> PagedReader<P> {
             pages: std::collections::HashMap::new(),
             lru: std::collections::VecDeque::new(),
             capacity: capacity.max(1),
+            capped: true,
             reads: [(0, 0); 32],
         }
     }
@@ -454,6 +471,25 @@ impl<P: PageProvider> PagedReader<P> {
         self.provider.size()
     }
 
+    /// Drop least-recently-used pages until the cache is back inside `capacity`.
+    ///
+    /// loft#785 — a no-op when the capacity was never asked for. A page dropped here is a
+    /// page the walk re-fetches, and with a prefetch feeding the cache the pages evicted
+    /// are exactly the ones about to be read: on 162 scattered keys over an 87 MB store
+    /// that turned a 19.9 MB working set into 88.6 MB fetched. Residency is the reader's
+    /// only defence against re-fetching, so it is spent only against a bound someone chose.
+    /// Correctness never depended on it (the `capacity == 1` test is the proof).
+    fn evict_to_capacity(&mut self) {
+        if !self.capped {
+            return;
+        }
+        while self.pages.len() > self.capacity {
+            if let Some(old) = self.lru.pop_front() {
+                self.pages.remove(&old);
+            }
+        }
+    }
+
     /// Make page `pidx` resident (fetching on miss) and mark it most-recently
     /// used, evicting the LRU page(s) once over capacity.
     fn ensure_page(&mut self, pidx: u64) {
@@ -469,11 +505,7 @@ impl<P: PageProvider> PagedReader<P> {
             .fetch(pidx * self.page_size as u64, self.page_size);
         self.pages.insert(pidx, bytes);
         self.lru.push_back(pidx);
-        while self.pages.len() > self.capacity {
-            if let Some(old) = self.lru.pop_front() {
-                self.pages.remove(&old);
-            }
-        }
+        self.evict_to_capacity();
     }
 
     /// Fetch the pages a read needs in as few provider calls as possible: each
@@ -495,10 +527,28 @@ impl<P: PageProvider> PagedReader<P> {
     /// sequential. Warming them together turns N round trips into one, and every later
     /// `resolve` over the same bytes is a page-table hit.
     ///
-    /// It cannot make a load fetch more: a resident page is never re-fetched, and the pages
-    /// asked for are exactly the ones the demand-paged walk would have asked for anyway —
-    /// only sooner, and together. Adjacent pages coalesce into runs first, so a clustered
-    /// selection costs one range rather than one per page.
+    /// Adjacent pages coalesce into runs first, so a clustered selection costs one range
+    /// rather than one per page.
+    ///
+    /// **It must not evict what it just fetched — loft#785.** This once claimed it "cannot
+    /// make a load fetch more", and that was false the moment the warmed set did not fit
+    /// the cache: the pages land at the LRU back, push out the pages the walk is about to
+    /// read, and the walk fetches them a second time. That is strictly worse than no
+    /// prefetch at all — plain demand paging at least has locality on its side, which is
+    /// why the binary BEFORE batching did not amplify on the same 64-page cache. Measured
+    /// on 162 scattered keys over an 87 MB store: 88.6 MB fetched for a 19.9 MB working
+    /// set, 3.6× amplification, gone the moment the set fits.
+    ///
+    /// So the cache is sized to the WORK, two ways:
+    ///
+    /// - **Uncapped** (the default): grow to hold what is warmed. The bound is the working
+    ///   set the caller asked for, which it is already materialising a local copy of — you
+    ///   cannot load 162 map cells while holding fewer bytes than those cells occupy.
+    /// - **Capped** (a caller named a size): warm only what fits, and let the rest demand
+    ///   page. The bound is honoured, and the prefetch stops paying for pages it is about to
+    ///   drop — the same 162 keys under an explicit 4 MB cap went 88.6 MB → 58.3 MB. Some
+    ///   re-fetching remains, and must: a working set larger than the cache you asked for
+    ///   cannot be held, and that is the cost of naming the bound.
     pub fn warm(&mut self, ranges: &[(u64, usize)]) {
         let ps = self.page_size as u64;
         let mut want: Vec<u64> = Vec::new();
@@ -517,6 +567,16 @@ impl<P: PageProvider> PagedReader<P> {
         want.dedup();
         if want.is_empty() {
             return;
+        }
+        if self.capped {
+            // Room for the prefetch is what is left after the pages already resident. A
+            // page warmed past that is guaranteed to be evicted before it is read, so
+            // fetching it is pure waste — demand paging will get it when it is wanted.
+            let room = self.capacity.saturating_sub(self.pages.len());
+            if room == 0 {
+                return;
+            }
+            want.truncate(room);
         }
         let mut runs: Vec<(u64, u64)> = Vec::new(); // (first page, page count)
         for p in want {
@@ -540,11 +600,7 @@ impl<P: PageProvider> PagedReader<P> {
                 self.lru.push_back(start + i);
             }
         }
-        while self.pages.len() > self.capacity {
-            if let Some(old) = self.lru.pop_front() {
-                self.pages.remove(&old);
-            }
-        }
+        self.evict_to_capacity();
     }
 
     fn prefetch_run(&mut self, off: u64, len: usize) {
@@ -574,11 +630,7 @@ impl<P: PageProvider> PagedReader<P> {
                 self.pages.insert(start + i as u64, page);
                 self.lru.push_back(start + i as u64);
             }
-            while self.pages.len() > self.capacity {
-                if let Some(old) = self.lru.pop_front() {
-                    self.pages.remove(&old);
-                }
-            }
+            self.evict_to_capacity();
         }
     }
 

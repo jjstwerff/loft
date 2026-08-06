@@ -3080,6 +3080,106 @@ fn a_pointer_bearing_element_relocates_in_bulk() {
     );
 }
 
+/// loft#785 — a prefetched page must still be resident when the walk reads it.
+///
+/// loft#782's `warm()` fetches a level's pages together, at the LRU back. Once the warmed
+/// set outgrew the 64-page cache it evicted the pages the walk was ABOUT to read, and the
+/// walk fetched them again: 162 scattered keys over an 87 MB store drew 88.6 MB for a
+/// 19.9 MB working set, and a real consumer's viewport went 26.9 MB → 81.4 MB. A prefetch
+/// that does not fit is worse than no prefetch — demand paging at least has locality, which
+/// is why the binary before batching did not amplify on the same cache.
+///
+/// **`bytes_fetched` against `distinct` is the assertion**: equal exactly when nothing was
+/// fetched twice. The values are asserted first, because a loader that drops data also
+/// fetches fewer bytes and would otherwise read as a win.
+///
+/// The `LOFT_PAGE_CACHE_BYTES` arm is the control. It pins a cache below the working set,
+/// which must still amplify — someone who names a bound gets it, and re-fetching is the
+/// cost of naming it. Without that arm a green here could mean the meter never moves.
+#[test]
+fn a_prefetched_page_is_resident_when_it_is_read() {
+    let dir = scratch("page_cache_amplification_785");
+    let script = workspace_root().join("tests/scripts/785-page-cache-amplification.loft");
+    let path = dir.join("p");
+
+    let run = |mode: &str, cap: Option<&str>| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_LOADER_STATS", "1")
+            .env("LOFT_TIMEOUT", "180")
+            .current_dir(workspace_root());
+        if !mode.is_empty() {
+            cmd.env("P785_MODE", mode);
+        }
+        if let Some(bytes) = cap {
+            cmd.env("LOFT_PAGE_CACHE_BYTES", bytes);
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "mode={mode} cap={cap:?}: {all}");
+        assert!(!all.contains("FAIL"), "mode={mode}: {all}");
+        all
+    };
+
+    /// `key=N` out of the loader-stats line.
+    fn stat(out: &str, key: &str) -> u64 {
+        let at = out
+            .find(&format!("{key}="))
+            .unwrap_or_else(|| panic!("loader stats must report `{key}`: {out}"))
+            + key.len()
+            + 1;
+        let tail = &out[at..];
+        let end = tail
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(tail.len());
+        tail[..end].parse().expect("a numeric stat")
+    }
+    fn result(out: &str) -> &str {
+        out.lines()
+            .find(|l| l.starts_with("loaded="))
+            .expect("the script must report its load")
+    }
+
+    run("write", None);
+    let grown = run("", None);
+    let capped = run("", Some("4194304"));
+
+    // Correctness FIRST, and identical under both policies: residency is a performance
+    // choice, never a correctness one.
+    assert_eq!(
+        result(&grown),
+        result(&capped),
+        "how many pages stay resident must not change what a load produces"
+    );
+    assert!(
+        result(&grown).contains("loaded=120") && result(&grown).contains("verify=true"),
+        "every key must arrive and the copied heap must be sound: {}",
+        result(&grown)
+    );
+
+    let (fetched, distinct) = (stat(&grown, "bytes_fetched"), stat(&grown, "distinct"));
+    assert_eq!(
+        fetched, distinct,
+        "a page was fetched twice: {fetched} bytes fetched for a {distinct}-byte working \
+         set. The prefetch evicted what it was about to read (loft#785)."
+    );
+
+    // The control — a cache pinned below the working set MUST still amplify, or this test
+    // is measuring a meter that cannot move.
+    let (cap_fetched, cap_distinct) = (stat(&capped, "bytes_fetched"), stat(&capped, "distinct"));
+    assert!(
+        cap_fetched > cap_distinct,
+        "the capped control must re-fetch ({cap_fetched} vs {cap_distinct}) — if a 4 MB \
+         cache holds this working set, the fixture no longer exercises the defect"
+    );
+}
+
 /// loft#782 — the ROUND-TRIP DEPTH harness: `store_load_keys` issues its ranges serially.
 ///
 /// `Stores::load_keys` is `for &kv in keys_vals { load_one(…) }`, and under it

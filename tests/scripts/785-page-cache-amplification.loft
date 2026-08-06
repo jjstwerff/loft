@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — loft#785: a prefetched page must still be resident when the walk reads it.
+//
+// `warm()` (loft#782) fetches the pages a level needs TOGETHER. Its pages land at the LRU
+// back and, once the warmed set outgrew the 64-page cache, pushed out the pages the walk
+// was about to read — which the walk then fetched a second time. Strictly worse than no
+// prefetch: plain demand paging at least has locality, which is why the binary BEFORE
+// batching did not amplify on the same cache.
+//
+// The load-bearing cell is `bytes_fetched` against `distinct` — the two are equal exactly
+// when nothing was fetched twice. Values are asserted first regardless, because a loader
+// that drops data also fetches fewer bytes.
+//
+// It needs SCATTER and SIZE together: keys spread across an image big enough that their
+// pages outnumber the cache. A small store fits whole and shows nothing, which is why this
+// went unnoticed — the same batching made small stores 4–7x better.
+//
+// Driven with a scratch path because a relative path resolves against the PROGRAM's
+// directory (@PLN9) and a suite script must not write beside itself. No path, nothing to
+// do — so `loft_suite` runs this clean.
+
+struct P785Tile { tkey: integer, name: text }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  if path == "" { return }
+  entries = 120000;
+  keys = 120;
+
+  if (env_variable("P785_MODE") ?? "") == "write" {
+    src: hash<P785Tile[tkey]> = [];
+    if !store_persist_bind(src, path) { println("FAIL write-bind"); return }
+    i = 0;
+    while i < entries {
+      src += [P785Tile { tkey: i, name: "tile-{i}-padding-padding-padding-to-give-it-real-size" }];
+      i += 1;
+    }
+    println("seeded={len(src)}");
+    return
+  }
+
+  // Evenly spread across the whole key space: adjacent keys share a page, so a clustered
+  // selection would fit the cache and measure nothing.
+  step = entries / keys;
+  ks: vector<integer> = [];
+  i = 0;
+  while i < keys { ks += [i * step]; i += 1 }
+
+  local: hash<P785Tile[tkey]> = [];
+  got = store_load_keys(local, path, ks);
+  chars = 0;
+  for k in ks { e = local[k]; if e != null { chars += len(e.name) } }
+  println("loaded={got} chars={chars} verify={store_verify(local)}");
+}

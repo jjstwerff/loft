@@ -120,7 +120,19 @@ Reads are served through a page cache, not issued one-per-lookup:
 | | default | env override |
 |---|---|---|
 | page size | **64 KiB** | `LOFT_PAGE_BYTES` |
-| cache size | 64 pages (**4 MiB**) | `LOFT_PAGE_CACHE_BYTES` |
+| cache size | **the load's working set** | `LOFT_PAGE_CACHE_BYTES` |
+
+**The cache holds what the load reads, and is not bounded by default.** A page dropped
+before the walk reaches it costs a second fetch of the same bytes, so residency is what
+stops a load paying twice — and a keyed load's working set is the data you asked for, a
+local copy of which is being materialised anyway. Peak memory is therefore about the size
+of the result, not a constant.
+
+`LOFT_PAGE_CACHE_BYTES` turns it into a **hard cap** for a memory-bounded host. Expect
+re-fetching once the cap is below the working set: the bytes have to come back somehow, and
+that is the price of the bound. It was the default until loft#785, where 4 MiB against a
+20 MB working set fetched **3.6× the bytes** — the prefetch evicting the very pages it was
+about to read.
 
 Every fetch is one page-aligned range. **A page is the unit of waste and the unit
 of amortisation**: a 12-byte record costs a 64 KiB fetch, and so do the next
