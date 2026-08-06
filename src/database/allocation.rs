@@ -3658,9 +3658,42 @@ impl Stores {
         if tp == u16::MAX {
             return false;
         }
+        let tp = self.type_at(r, tp);
         let mut problems = 0u32;
         self.validate_claims(r, tp, "store_verify", &mut problems);
         problems == 0
+    }
+
+    /// loft#790 — the type of what `r` actually POINTS AT, given the type its
+    /// store was allocated for.
+    ///
+    /// A store knows one type: the record allocated into it. That is the right
+    /// answer for `store_verify(f)` and the wrong one for `store_verify(f.people)`
+    /// — a collection declared as a struct FIELD lives in the WRAPPER's store, so
+    /// the walk read the hash root as a `Firm` and reported a corruption that was
+    /// not there (the bucket rec `1701667649` is `eman`, the wrapper's `name`
+    /// text read as a pointer).
+    ///
+    /// The two are told apart by `pos`, which was there all along: a ref to the
+    /// record itself starts at the payload (8), and a ref to a field carries that
+    /// field's byte offset. So the field is looked up by offset — no guessing
+    /// which of several collections was meant, and no reliance on the wrapper
+    /// having exactly one.
+    fn type_at(&self, r: &DbRef, tp: u16) -> u16 {
+        if r.pos <= 8 {
+            return tp; // the record itself
+        }
+        let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) = &self.types[tp as usize].parts
+        else {
+            return tp;
+        };
+        let Ok(offset) = u16::try_from(r.pos - 8) else {
+            return tp;
+        };
+        fields
+            .iter()
+            .find(|f| f.position == offset && !f.name.starts_with('#'))
+            .map_or(tp, |f| f.content)
     }
 
     /// Give back the free tail of the store holding `slot` — the runtime half

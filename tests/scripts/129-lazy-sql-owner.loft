@@ -44,11 +44,9 @@ fn main() {
   store_bind_lazy(t.a, target);
   println("ambiguous={store_lazy_query(t.a, "1=1")} why_empty={store_lazy_error(t.a) == ""}");
 
-  // The OWNER, not the field: `store_verify` resolves the type from the store,
-  // and a struct-field collection's store is typed as the WRAPPER — so handing
-  // it the field ref makes it read the hash root as a `Firm` and report a
-  // corruption that is not there. Pre-existing and nothing to do with laziness
-  // (an ordinary `f.people += [...]` reports it too, on both backends and on the
-  // installed build) — filed as loft#790.
-  println("sound={store_verify(acme)}");
+  // Both the field and its owner: a partially-loaded heap has to be sound at
+  // the collection that was actually filled. Verifying the FIELD used to report
+  // a corruption that was not there (loft#790, fixed) — a control with ordinary
+  // inserts is what proved that was `store_verify`'s bug and not this arc's.
+  println("sound={store_verify(acme.people)},{store_verify(acme)}");
 }

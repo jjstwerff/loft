@@ -1,0 +1,12 @@
+// loft#788 regression fixture — package A. Declares `Chunk`, `shared` and
+// `SHARED_C`, all of which package B declares too, so a bare mention of any of
+// them means two different things depending on the order of the `use` block.
+//
+// The field sets DIFFER on purpose: with `ck_cells` here and `ck_base` there,
+// picking the wrong winner used to surface as "Unknown field" naming the struct
+// nobody meant — which is the misdirection the issue is about.
+pub struct Chunk { ck_cx: integer, ck_cz: integer, ck_cells: integer }
+
+pub fn a_only() -> integer { return 10 }
+pub fn shared() -> integer { return 1 }
+pub const SHARED_C = 11;

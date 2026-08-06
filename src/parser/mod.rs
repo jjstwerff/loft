@@ -30,10 +30,27 @@ use typedef::complete_definition;
 /// and it has to settle stdlib shadowing first (a bare `find(…)` already binds to
 /// the stdlib `find`, silently). What this removes is the dead end: the name was
 /// right, it just was not imported, and the message now says where it lives.
+/// loft#789 — the advice has to be about the packages the BUILD resolved, not
+/// the ones the registry index knows.
+///
+/// `resolved` names the packages this compilation already has, so a suggestion
+/// to import one of them can be recognised as the misdirection it is: the file
+/// says `use hex_world;` on its second line, the resolved `hex_world` came from
+/// `--lib` and has no such function, and the registry's `hex_world` is a
+/// different package that does. Telling the author to add an import they have
+/// already written sends them to check the one thing that is right.
 #[cfg(feature = "registry")]
-fn registry_fn_hint(name: &str) -> Option<String> {
+fn registry_fn_hint(name: &str, resolved: &[String]) -> Option<String> {
     let pkgs = crate::registry_index::packages_exporting_fn(name);
     let first = pkgs.first()?;
+    // The useful diagnosis when the name collides: two packages share it, and
+    // the one in this build is not the one the index describes.
+    if let Some(here) = pkgs.iter().find(|p| resolved.iter().any(|r| &r == p)) {
+        return Some(format!(
+            "Unknown function {name} — the `{here}` this build resolved does not have it, \
+             and the registry's `{here}` does. These are different packages of the same name"
+        ));
+    }
     let provider = if pkgs.len() == 1 {
         format!("the `{first}` package provides it")
     } else {
@@ -47,7 +64,7 @@ fn registry_fn_hint(name: &str) -> Option<String> {
 
 /// Registry-less build: no index to consult, so no hint (@PLN13 phase 6).
 #[cfg(not(feature = "registry"))]
-fn registry_fn_hint(_name: &str) -> Option<String> {
+fn registry_fn_hint(_name: &str, _resolved: &[String]) -> Option<String> {
     None
 }
 
@@ -369,6 +386,15 @@ pub struct Parser {
     // count snapshot compared end-of-pass-1 vs end-of-pass-2 in debug/armed
     // builds, so any future cross-pass divergence fails loud (H5).
     first_pass: bool,
+    /// loft#788 — bare names already refused as ambiguous, so the message is
+    /// printed ONCE.
+    ///
+    /// Per name rather than per site, and in whichever pass reaches it first.
+    /// Pass 2 is not reliably reached: a first-wins binding to the wrong
+    /// package's struct raises "Unknown field" in pass 1, which is the very
+    /// symptom the ambiguity explains — waiting for pass 2 would report it in
+    /// exactly the case that needs it least.
+    ambiguity_reported: std::collections::HashSet<String>,
     /// @PLN104 P3 — def_nrs the post-pass-2 oracle (`report_tret_promotions`) marks
     /// for `__tret` retbuf promotion (a frame-local text return with no buffer). Read
     /// by `do_tret_bind`'s gate on the THIRD pass so the promotion is forward-ref-safe:
@@ -791,6 +817,7 @@ impl Parser {
             default: false,
             context: u32::MAX,
             first_pass: true,
+            ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
             reverse_iterator: false,
             iterable_context: false,
@@ -3562,7 +3589,21 @@ impl Parser {
             } else {
                 &types[0]
             };
-            self.data.find_fn(source, name, dispatch_tp)
+            let d = self.data.find_fn(source, name, dispatch_tp);
+            // loft#788 — a bare CALL is ambiguous the same way a bare type is,
+            // and worse: both import orders compile and RUN, answering
+            // differently. The key is the mangled one, since that is what a
+            // function is bound under.
+            //
+            // `source == MAX` is what makes it BARE. A qualified `ra::dup_name()`
+            // has already said which package it means, and two packages
+            // deliberately exporting one name and calling it qualified is a
+            // shape that works today (#305, `n2_cdylib`) — refusing it would
+            // break a program for a collision it has already resolved.
+            if source == u16::MAX {
+                self.refuse_ambiguous_import(&format!("n_{name}"), d);
+            }
+            d
         };
         // Trace point: post-find_fn dispatch state.  Captures the most
         // common debugging vantage — what name resolved to which
@@ -3930,7 +3971,7 @@ impl Parser {
                     // `random` — so this is offered first.  Bare calls still do
                     // not resolve; this only replaces a dead end with the two
                     // ways to say what was meant.
-                    if let Some(hint) = registry_fn_hint(name) {
+                    if let Some(hint) = registry_fn_hint(name, &self.data.resolved_libraries()) {
                         diagnostic_at!(self.lexer, name_pos, Level::Error, "{hint}");
                     } else if let Some(s) = self.suggest_function_name(name) {
                         diagnostic_at!(
@@ -10172,6 +10213,50 @@ impl Parser {
             .collect();
         let candidates: Vec<&str> = candidates_owned.iter().map(String::as_str).collect();
         crate::diagnostics::suggest_similar_capped(name, &candidates).map(String::from)
+    }
+
+    /// loft#788 — refuse a bare name that two imports both bind, naming both
+    /// packages and what to write instead.
+    ///
+    /// The binding still happens (first import wins), so this is the ONLY thing
+    /// standing between a consumer and a source line whose meaning depends on
+    /// the order of the `use` block above it. Both orders compile for a function
+    /// or a constant, and they answer differently — the struct case merely
+    /// happens to error on a field the author never named.
+    ///
+    /// Reported at the USE and not at the `use`: two packages may share a name
+    /// the program never writes bare, and that program is well-defined and
+    /// compiles today (COMPATIBILITY.md — no functioning program breaks).
+    ///
+    /// Once per NAME, in whichever pass reaches it first. Not pass-2-only: a
+    /// first-wins binding to the wrong package's struct raises "Unknown field"
+    /// during pass 1 and the parse stops there, so a pass-2 check stays silent
+    /// in the case it explains.
+    pub(crate) fn refuse_ambiguous_import(&mut self, name: &str, winner: u32) {
+        if winner == u32::MAX || self.ambiguity_reported.contains(name) {
+            return;
+        }
+        let others = self.data.ambiguous_with(name);
+        if others.is_empty() {
+            return;
+        }
+        self.ambiguity_reported.insert(name.to_string());
+        // `n_` is the storage spelling of a function, never the source spelling —
+        // a message telling someone to write `pkg::n_shared` names something
+        // they cannot type.
+        let mut spellings: Vec<String> = std::iter::once(winner)
+            .chain(others.iter().copied())
+            .map(|d| self.data.qualified_type_name(d).replace("::n_", "::"))
+            .collect();
+        spellings.sort();
+        spellings.dedup();
+        let bare = name.strip_prefix("n_").unwrap_or(name);
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "`{bare}` is declared by more than one package here — write {} to say which",
+            spellings.join(" or ")
+        );
     }
 
     /// Plan-07 phase 5 suggestions.  Find a similar field name on

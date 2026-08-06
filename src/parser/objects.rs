@@ -450,6 +450,8 @@ impl Parser {
             // declaration mis-parses ("Expect token ;").  Enums / types stored
             // under their plain name still resolve here.
             let dnr = self.data.def_nr(name);
+            // loft#788 — this bare name may be one that two imports both bind.
+            self.refuse_ambiguous_import(name, dnr);
             if self.data.def_type(dnr) == DefType::Enum {
                 t = self.data.def(dnr).returned().clone();
             } else {
@@ -1298,6 +1300,13 @@ impl Parser {
         // (no enum has the variant → MAX → falls through).
         if d_nr == u32::MAX && source != u16::MAX {
             d_nr = self.data.variant_in_source(source, name);
+        }
+        // loft#788 — THE bare-name chokepoint: `source == MAX` is exactly "the
+        // author wrote the name with nothing in front of it", which is the only
+        // spelling an ambiguity can bite. A qualified `pkg::Name` took the other
+        // branch above and says which package it means.
+        if source == u16::MAX && qualifier_enum == u32::MAX {
+            self.refuse_ambiguous_import(name, d_nr);
         }
         // #493 — a QUALIFIED `Enum::UnknownVariant` (a typo like `Color::Bleu`)
         // that resolves to no variant: recover as a null enum value.  Without

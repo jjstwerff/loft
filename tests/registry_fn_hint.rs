@@ -160,3 +160,87 @@ fn no_cached_index_still_reports_the_plain_error() {
         "no index means no hint; got:\n{d}"
     );
 }
+
+// ── loft#789: the advice must be about the packages the BUILD resolved ────────
+
+/// Compile `src` against a fake registry home AND a local `--lib` package of
+/// the same name as one the index knows.
+///
+/// The collision is the whole point: `random` here is a different package that
+/// happens to share a name with the published one, which is exactly what a
+/// consumer developing against an unpublished copy has.
+fn diagnostics_with_local_random(tag: &str, src: &str) -> String {
+    let pid = std::process::id();
+    let home = std::env::temp_dir().join(format!("loft_fnhint_{tag}_{pid}"));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join(".loft/registry")).expect("mkdir registry");
+    std::fs::write(home.join(".loft/registry/index.json"), INDEX).expect("write index");
+
+    // A LOCAL `random` with a different API — no `rand`.
+    let pkg = home.join("libs/random/src");
+    std::fs::create_dir_all(&pkg).expect("mkdir pkg");
+    std::fs::write(
+        home.join("libs/random/loft.toml"),
+        "[package]\nname = \"random\"\nversion = \"0.0.1\"\nloft = \">=0.1\"\n\n\
+         [library]\nentry = \"src/random.loft\"\n",
+    )
+    .expect("write manifest");
+    std::fs::write(
+        pkg.join("random.loft"),
+        "pub fn something_else() -> integer { return 1 }\n",
+    )
+    .expect("write lib");
+
+    let prog = home.join("prog.loft");
+    std::fs::write(&prog, src).expect("write program");
+    let out = Command::new(loft_bin())
+        .args(["--interpret", "--errors=compact", "--lib"])
+        .arg(home.join("libs"))
+        .arg(&prog)
+        .env("LOFT_HOME", &home)
+        .output()
+        .expect("invoke loft");
+    let text =
+        String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&home);
+    text
+}
+
+/// loft#789 — when the suggested package is one this build already RESOLVED,
+/// the advice must not be "add `use random;`".
+///
+/// The file's first line is `use random;`. Following the old advice changed
+/// nothing, because the resolved `random` came from `--lib` and has no `rand` —
+/// the index is describing a different package of the same name. Sending the
+/// author to check an import that is already correct is a poor first suggestion
+/// when the real answer is *two packages share a name*.
+#[test]
+fn advice_does_not_send_you_to_import_what_is_already_imported() {
+    let d = diagnostics_with_local_random(
+        "resolved",
+        "use random;\n\nfn main() {\n    v = rand(1, 100);\n}\n",
+    );
+    assert!(
+        !d.contains("add `use random;`"),
+        "the file already imports it; got:\n{d}"
+    );
+    assert!(
+        d.contains("different packages of the same name"),
+        "the message must name the real diagnosis; got:\n{d}"
+    );
+    assert!(
+        d.contains("does not have it"),
+        "and say that the resolved package lacks the function; got:\n{d}"
+    );
+}
+
+/// loft#789 control — with NO local package of that name, the original advice is
+/// still the right advice and must be unchanged.
+#[test]
+fn the_plain_import_advice_survives_when_nothing_collides() {
+    let d = diagnostics_for("plain", "fn main() {\n    v = rand(1, 100);\n}\n", true);
+    assert!(
+        d.contains("add `use random;`"),
+        "an unimported package is still the answer; got:\n{d}"
+    );
+}

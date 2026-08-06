@@ -1,0 +1,11 @@
+// loft#788 control — QUALIFIED says which package is meant, so nothing here is
+// ambiguous and this must keep compiling. Two packages deliberately exporting
+// one name and calling it qualified is a shape that already works (#305).
+use dupname_a;
+use dupname_b;
+
+fn main() {
+  c = dupname_a::Chunk { ck_cx: 1, ck_cz: 2, ck_cells: 9 };
+  d = dupname_b::Chunk { ck_cx: 3, ck_cz: 4, ck_base: 5 };
+  print("{c.ck_cells} {d.ck_base} {dupname_a::shared()} {dupname_b::shared()}")
+}

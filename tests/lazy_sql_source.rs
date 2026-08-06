@@ -620,7 +620,10 @@ fn an_explicit_query_populates_the_collection_both_backends() {
             stdout.contains("bad=0 err3_empty=false"),
             "{backend}: a broken query must be reported, not read as empty: {stdout}"
         );
-        assert!(stdout.contains("sound=true"), "{backend}: {stdout}");
+        assert!(
+            stdout.contains("sound=true"),
+            "{backend}: the partially-loaded heap must be structurally sound: {stdout}"
+        );
     }
 }
 
@@ -692,7 +695,10 @@ fn a_key_range_is_one_query_both_backends() {
             stdout.contains("hash_range=0 why_empty=false"),
             "{backend}: a hash has no order to range over, and says so: {stdout}"
         );
-        assert!(stdout.contains("sound=true"), "{backend}: {stdout}");
+        assert!(
+            stdout.contains("sound=true"),
+            "{backend}: the partially-loaded heap must be structurally sound: {stdout}"
+        );
     }
 }
 
@@ -805,6 +811,9 @@ fn a_collection_field_is_an_owner_parameterised_query_both_backends() {
             "{backend}: a wrapper with two keyed fields refuses rather than \
              guessing which one a reference names: {stdout}"
         );
-        assert!(stdout.contains("sound=true"), "{backend}: {stdout}");
+        assert!(
+            stdout.contains("sound=true,true"),
+            "{backend}: the filled FIELD and its owner must both verify: {stdout}"
+        );
     }
 }
