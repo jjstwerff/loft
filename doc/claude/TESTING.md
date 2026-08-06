@@ -549,7 +549,10 @@ notation* is correct.  The other four are ordinary 1–2 ULP parser rounding.
 
 loft walks into it because **`"{v}"` renders a float as a full decimal expansion
 with no exponent**, so any float above ~1e274 becomes a 275+ character literal.
-**Write floats to SQL in exponent notation, or bind them — never as `"{v}"`.**
+**Write floats to SQL quoted (`CAST('{v}' AS DOUBLE)`), in exponent notation, or
+bound — never as a bare `"{v}"`.**  Quoting is measured at 0/500 on duckdb and
+needs no change to loft's rendering; it does NOT help sqlite, whose own
+text→REAL converter loses the same 1 in 2000 either way.
 
 **A copy in a scratchpad or a build directory is not durable.**  When it
 evaporates the duckdb cell silently drops back to `SKIP` and the local

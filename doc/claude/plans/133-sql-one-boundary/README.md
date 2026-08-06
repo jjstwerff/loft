@@ -527,6 +527,33 @@ the decimal point and truncating it costs precision rather than magnitude. A
 disproof drawn from unrepresentative cells is not a disproof. The mechanism was
 right; the reasoning on both passes was not.
 
+### The workaround, verified — duckdb stays
+
+**We are not blocked on upstream.** The fix is entirely on our side of the
+boundary, and it needs no change to loft's float rendering. Same 500 doubles,
+same loft-produced digits, three ways of writing them:
+
+| how the driver writes the float | wrong |
+|---|---|
+| `INSERT … VALUES ({v})` — bare literal, today | **19 / 500** |
+| `INSERT … VALUES (CAST('{v}' AS DOUBLE))` — **quote loft's own digits** | **0 / 500** |
+| exponent notation (`%.17g`) | **0 / 500** |
+
+Quoting fixes **both** classes — the 15 HUGEINT truncations and the 4 ULP cases —
+because a quoted value takes the string→double path instead of the literal
+tokenizer. Confirmed end to end through the real fixture, not just in C:
+`d.db_exec("INSERT INTO p3f VALUES (CAST('{v}' AS DOUBLE))")` gives **0 / 500**.
+
+**Quoting is the interim fix; binding is the design.** The same experiment on
+sqlite still loses 1 in 2000 (`CAST(text AS REAL)` runs the same imprecise
+converter its literal path does), so quoting solves duckdb completely and leaves
+sqlite's extreme-exponent ULP untouched. That one needs `sqlite3_bind_double`,
+i.e. @PLN128 E3 — which is where this lands as a *write-path* requirement rather
+than a duckdb question.
+
+**So the rule is one rule, and it was always the right one:** a driver BINDS a
+float. Until it can, it quotes. It never emits `"{v}"` as a bare literal.
+
 **What this settles for the design:** a driver must render a float in **exponent
 notation**, quote it, or bind it — never emit `"{v}"` as a bare literal. Reading
 is exact everywhere once the rendering is specified.
