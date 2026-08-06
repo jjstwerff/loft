@@ -449,16 +449,59 @@ find them through environment variables with working defaults:
 | sqlite | `libsqlite3.so.0`, no server | `:memory:` |
 | PostgreSQL | `LOFT_PG_CONN` | `dbname=loft_test_pg` |
 | MariaDB | `LOFT_MY_CONN` | `host=127.0.0.1 user=loft pass=loft db=loft_test_uni` |
-| duckdb | `libduckdb.so` on `LD_LIBRARY_PATH` — keep it in `~/.local/lib` | declared `[c] optional-libs`, so absence is not an error |
+| duckdb | `libduckdb.so` on `LD_LIBRARY_PATH` — install with `scripts/fetch-duckdb.sh` | declared `[c] optional-libs`, so absence is not an error |
 
-**Put `libduckdb.so` somewhere durable and point `LD_LIBRARY_PATH` at it**
-(`~/.local/lib` is the obvious home; nothing installs it and it is ~70 MB, which
-is exactly why it is declared optional).  It is NOT in the repo and must not be:
-`~/.loft/lib` holds loft *packages*, not native shared libraries.  A copy left in
-a scratchpad or a build directory is not durable — when it evaporates, the duckdb
-cell silently drops back to `SKIP` and the local four-backend bar quietly becomes
-a three-backend one, which is the same class of invisible coverage loss as a
-self-skipping test.
+### duckdb: where it comes from, and where to look when it breaks
+
+**`scripts/fetch-duckdb.sh` installs it into `~/.local/lib`.**  It downloads a
+PINNED upstream release, verifies a recorded `sha256` of the extracted
+`libduckdb.so`, and refuses to install anything else.  Nothing else fetches it —
+not CI, not `loft install`, not the test suite.
+
+It is **not** vendored, for two reasons worth keeping straight: duckdb is MIT
+licensed so redistribution would be legal, but the library is ~70 MB and git
+history is permanent, and upstream already publishes exactly this artifact.  It
+does not live in `~/.loft/lib` either — that holds loft *packages*, not native
+shared libraries.
+
+**The dependency chain, in the order a failure travels it:**
+
+```
+scripts/fetch-duckdb.sh   pins VERSION + EXPECT_SHA, writes ~/.local/lib/libduckdb.so
+        ↓
+LD_LIBRARY_PATH           the only thing that makes it findable — no rpath, no ldconfig
+        ↓
+[c] optional-libs         tests/fixtures/sqldb/duckdb/loft.toml declares "libduckdb.so"
+        ↓
+c_call::resolve           dlopens it on the first miss (@PLN24 arc G)
+        ↓
+src/shim.c                loft compiles this with `cc` at parse time — it names NO
+                          duckdb symbol, so it builds even where the library is absent
+        ↓
+LOFT_SQLDB_MODE=duckdb    selects the backend in uniform.loft
+```
+
+**Symptom → where to look:**
+
+| what you see | where the fault is |
+|---|---|
+| `SKIP duckdb …`, everything else green | the library was not found — `LD_LIBRARY_PATH` unset, or `~/.local/lib/libduckdb.so` gone.  Re-run `scripts/fetch-duckdb.sh`. |
+| `@PLN23 backends exercised: [...]` without `duckdb` | the same thing, seen from the driver.  **Read this line** — a green run with duckdb absent looks identical to one with duckdb passing. |
+| `sha256 mismatch … NOT installing` | upstream re-cut the release, or the pin is stale.  Decide which, then edit `EXPECT_SHA` **on purpose** — never to make the message go away. |
+| `the archive did not contain libduckdb.so` | upstream changed the zip layout.  The script prints the listing; fix the extraction, do not work around it by hand. |
+| a `cc` failure mentioning `shim.c` | not a duckdb problem at all — the shim is deliberately free of duckdb symbols so it compiles without the library.  Look at the C toolchain. |
+| duckdb answers but DIFFERS from the other three | a real finding: the `SqlDb` contract is what makes the four interchangeable.  Compare the whole line, not one field. |
+
+**One measured caveat, so it is not rediscovered** (@PLN133 P3): duckdb's own
+float round trip is exact, but it does not recover a double from the
+full-decimal-expansion literal loft's `"{v}"` produces — an ordinary `5.75e37`
+renders as a 294-character number.  A float that survives on sqlite and loses
+bits on duckdb is this, not a duckdb bug.
+
+**A copy in a scratchpad or a build directory is not durable.**  When it
+evaporates the duckdb cell silently drops back to `SKIP` and the local
+four-backend bar quietly becomes a three-backend one — the same class of
+invisible coverage loss as a self-skipping test.
 
 `LOFT_SQLDB_MODE` picks the backend for `tests/fixtures/sqldb/uniform.loft`.  A
 backend that cannot be reached prints `SKIP` on stdout and the driver in
