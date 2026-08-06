@@ -52,6 +52,27 @@ pub trait PageProvider {
     fn fetch_many(&mut self, ranges: &[(u64, usize)]) -> Vec<Vec<u8>> {
         ranges.iter().map(|&(o, l)| self.fetch(o, l)).collect()
     }
+
+    /// Can this transport serve several ranges in less time than one at a time?
+    ///
+    /// loft#787 — the answer decides whether PREFETCHING is worth its own cost.
+    /// `warm` computes a page set, sorts it, dedups it, builds runs and splits them,
+    /// and every bit of that is spent to turn N round trips into one. A transport
+    /// that issues them sequentially anyway collects none of that saving and pays
+    /// all of the work, so it is better off demand-paging exactly as it did before
+    /// batching existed.
+    ///
+    /// The wasm HTTP provider is that case, and not by accident: it has no threads
+    /// (loft#784), so its `fetch_many` is a loop. Measured on an `--html` kernel,
+    /// `warm` and its callees are 15 kB and 8 functions of code that runs during
+    /// every load and buys the browser nothing.
+    ///
+    /// Default `true`: a provider that says nothing is assumed to gain from
+    /// batching, which is the safe direction — the cost of a needless prefetch is
+    /// work, the cost of a missing one is round trips.
+    fn batches(&self) -> bool {
+        true
+    }
 }
 
 /// A local-file page provider — reads ranges from a store file on disk and
@@ -159,6 +180,18 @@ impl HttpRangeProvider {
 impl PageProvider for HttpRangeProvider {
     fn size(&self) -> u64 {
         self.size
+    }
+
+    /// Only where the ranges actually go out together. On wasm `fetch_many` below is
+    /// a sequential loop (loft#784 — a browser has no `std::thread`), so a prefetch
+    /// there computes a page set to save round trips it cannot save (loft#787).
+    #[cfg(not(target_family = "wasm"))]
+    fn batches(&self) -> bool {
+        true
+    }
+    #[cfg(target_family = "wasm")]
+    fn batches(&self) -> bool {
+        false
     }
 
     fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
@@ -580,6 +613,12 @@ impl<P: PageProvider> PagedReader<P> {
     ///   re-fetching remains, and must: a working set larger than the cache you asked for
     ///   cannot be held, and that is the cost of naming the bound.
     pub fn warm(&mut self, ranges: &[(u64, usize)]) {
+        // loft#787 — a transport that cannot batch gains nothing here and pays for
+        // the whole computation. Demand paging then fetches exactly the same pages,
+        // which is what it did before batching existed.
+        if !self.provider.batches() {
+            return;
+        }
         let ps = self.page_size as u64;
         let mut want: Vec<u64> = Vec::new();
         for &(off, len) in ranges {
@@ -1123,5 +1162,48 @@ mod tests {
             !c.lru.is_empty() && c.pages.len() <= 4,
             "a capped reader keeps its victim queue and honours the cap"
         );
+    }
+
+    /// loft#787 — a transport that cannot batch is not asked to prefetch.
+    ///
+    /// `warm` exists to turn N round trips into one. A provider whose `fetch_many` is a
+    /// sequential loop collects none of that and pays the whole computation — page set,
+    /// sort, dedup, run building, split. Asserting NO fetch happens is asserting the work
+    /// is skipped entirely; the demand path then fetches the same pages when they are
+    /// actually read, which the second half checks.
+    #[test]
+    fn a_non_batching_provider_is_not_prefetched() {
+        struct Sequential(VecProvider);
+        impl PageProvider for Sequential {
+            fn size(&self) -> u64 {
+                self.0.size()
+            }
+            fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
+                self.0.fetch(off, len)
+            }
+            fn batches(&self) -> bool {
+                false
+            }
+        }
+        let img: Vec<u8> = (0..8u8).flat_map(|p| std::iter::repeat_n(p, 16)).collect();
+        let mut r = PagedReader::with_config(Sequential(VecProvider::new(img)), 16, 999);
+        r.warm(&[(0, 8 * 16)]);
+        assert!(
+            r.pages.is_empty(),
+            "a non-batching provider must not be prefetched — the work buys it nothing"
+        );
+        // …and the pages still arrive, on demand, with the right bytes.
+        for p in 0..8u8 {
+            assert_eq!(r.resolve(u64::from(p) * 16, 16), vec![p; 16]);
+        }
+    }
+
+    /// …while a batching one still is, or the round-trip saving is lost everywhere.
+    #[test]
+    fn a_batching_provider_is_still_prefetched() {
+        let img: Vec<u8> = (0..8u8).flat_map(|p| std::iter::repeat_n(p, 16)).collect();
+        let mut r = PagedReader::with_config(VecProvider::new(img), 16, 999);
+        r.warm(&[(0, 8 * 16)]);
+        assert_eq!(r.pages.len(), 8, "a batching provider keeps its prefetch");
     }
 }
