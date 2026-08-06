@@ -494,18 +494,48 @@ impl<P: PageProvider> PagedReader<P> {
     /// used, evicting the LRU page(s) once over capacity.
     fn ensure_page(&mut self, pidx: u64) {
         if self.pages.contains_key(&pidx) {
-            if let Some(p) = self.lru.iter().position(|&x| x == pidx) {
-                self.lru.remove(p);
-            }
-            self.lru.push_back(pidx);
+            self.touch(pidx);
             return;
         }
         let bytes = self
             .provider
             .fetch(pidx * self.page_size as u64, self.page_size);
         self.pages.insert(pidx, bytes);
-        self.lru.push_back(pidx);
+        self.note_resident(pidx);
         self.evict_to_capacity();
+    }
+
+    /// Mark a RESIDENT page most-recently-used.
+    ///
+    /// A no-op when nothing evicts (loft#787). The recency order exists only so
+    /// `evict_to_capacity` can pick a victim; with no cap there is no victim, so
+    /// maintaining it buys nothing — and it is not free. The hit path scanned the
+    /// deque (`iter().position`) and then shifted it (`VecDeque::remove`), both
+    /// O(n), on EVERY page touch. That cost was bounded while the cache was 64
+    /// pages; loft#785 removed the cap, so n became the whole working set and the
+    /// scan grew with it, on the hottest path in the reader.
+    ///
+    /// Native barely noticed — a round-trip-bound load hides it, and the same
+    /// change removed real round trips. The BROWSER pays it undisguised: it is
+    /// sequential by design (loft#784), so there is nothing to hide behind, and a
+    /// throttled phone multiplies it. That asymmetry is why this was reported as a
+    /// browser regression against a native win.
+    fn touch(&mut self, pidx: u64) {
+        if !self.capped {
+            return;
+        }
+        if let Some(p) = self.lru.iter().position(|&x| x == pidx) {
+            self.lru.remove(p);
+        }
+        self.lru.push_back(pidx);
+    }
+
+    /// Record a NEWLY resident page. Same reasoning as [`touch`](Self::touch): the
+    /// list is only a victim queue, so an uncapped reader keeps none.
+    fn note_resident(&mut self, pidx: u64) {
+        if self.capped {
+            self.lru.push_back(pidx);
+        }
     }
 
     /// Fetch the pages a read needs in as few provider calls as possible: each
@@ -591,13 +621,18 @@ impl<P: PageProvider> PagedReader<P> {
             .collect();
         let bodies = self.provider.fetch_many(&reqs);
         for (&(start, n), bytes) in runs.iter().zip(bodies) {
+            // Copy ONE page, not the remainder of the run. `bytes[lo..].to_vec()`
+            // followed by `truncate` copied every byte after `lo` and threw most of
+            // it away, so an n-page run copied n(n+1)/2 pages to keep n — quadratic
+            // in run length, and pure CPU. `prefetch_run` (loft#729) already did
+            // this correctly with `chunks`; this site is the one that drifted.
             for i in 0..n {
                 let lo = usize::try_from(i).unwrap_or(0) * self.page_size;
-                let mut page = bytes.get(lo..).unwrap_or(&[]).to_vec();
-                page.truncate(self.page_size);
+                let hi = (lo + self.page_size).min(bytes.len());
+                let mut page = bytes.get(lo..hi).unwrap_or(&[]).to_vec();
                 page.resize(self.page_size, 0); // the last page zero-pads past EOF
                 self.pages.insert(start + i, page);
-                self.lru.push_back(start + i);
+                self.note_resident(start + i);
             }
         }
         self.evict_to_capacity();
@@ -628,7 +663,7 @@ impl<P: PageProvider> PagedReader<P> {
                 let mut page = chunk.to_vec();
                 page.resize(self.page_size, 0); // the last page zero-pads past EOF
                 self.pages.insert(start + i as u64, page);
-                self.lru.push_back(start + i as u64);
+                self.note_resident(start + i as u64);
             }
             self.evict_to_capacity();
         }
@@ -1031,5 +1066,62 @@ mod tests {
         let mut r = PagedReader::with_config(VecProvider::new(img), 16, 64);
         assert_eq!(r.u32_at(3, 4), 0xDEAD_BEEF);
         assert_eq!(r.i64_at(5, 0), -1_234_567_890_123i64);
+    }
+
+    /// loft#787 — a run is split into pages by COPYING one page each.
+    ///
+    /// `bytes[lo..].to_vec()` followed by `truncate` copied every byte after `lo` and threw
+    /// most of it away, so an n-page run copied n(n+1)/2 pages to keep n. The values were
+    /// right, which is why it survived: only the volume was wrong. This pins the values a
+    /// multi-page run yields, so a future rewrite of the split cannot silently mis-slice.
+    #[test]
+    fn a_multi_page_run_yields_the_right_page_contents() {
+        // 6 pages of 16 bytes, each filled with its own page index.
+        let img: Vec<u8> = (0..6u8).flat_map(|p| std::iter::repeat_n(p, 16)).collect();
+        let mut r = PagedReader::with_config(VecProvider::new(img), 16, 999);
+        r.warm(&[(0, 6 * 16)]);
+        for p in 0..6u8 {
+            let got = r.resolve(u64::from(p) * 16, 16);
+            assert_eq!(
+                got,
+                vec![p; 16],
+                "page {p} must hold its own bytes after a 6-page run was split"
+            );
+        }
+    }
+
+    /// loft#787 — an UNCAPPED reader keeps no recency list, because nothing evicts.
+    ///
+    /// The list is a victim queue and nothing else. With no cap there is no victim, so every
+    /// entry is dead weight — and maintaining it cost an O(n) scan plus an O(n) deque
+    /// remove on EVERY page hit, on the reader's hottest path. Bounded while the cache was
+    /// 64 pages; loft#785 removed the cap and n became the working set.
+    ///
+    /// Asserting the list stays empty is asserting the work is not done at all — a timing
+    /// test would be noise, and the point is the absence of an operation, not its speed.
+    #[test]
+    fn an_uncapped_reader_keeps_no_recency_list() {
+        let img: Vec<u8> = (0..64u8).flat_map(|p| std::iter::repeat_n(p, 16)).collect();
+        let mut r = PagedReader::new(VecProvider::new(img));
+        assert!(!r.capped, "the default reader is uncapped (loft#785)");
+        for p in 0..8u64 {
+            r.resolve(p * 16, 16);
+            r.resolve(p * 16, 16); // a HIT: the path that used to scan
+        }
+        assert!(
+            r.lru.is_empty(),
+            "an uncapped reader must not maintain recency — nothing consumes it"
+        );
+
+        // …and a capped one still does, or eviction has nothing to choose by.
+        let img2: Vec<u8> = (0..64u8).flat_map(|p| std::iter::repeat_n(p, 16)).collect();
+        let mut c = PagedReader::with_config(VecProvider::new(img2), 16, 4);
+        for p in 0..8u64 {
+            c.resolve(p * 16, 16);
+        }
+        assert!(
+            !c.lru.is_empty() && c.pages.len() <= 4,
+            "a capped reader keeps its victim queue and honours the cap"
+        );
     }
 }
