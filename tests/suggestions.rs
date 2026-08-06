@@ -530,3 +530,59 @@ fn fix_all_leaves_conditional_fixes_alone() {
         "fix-all must leave the buffer untouched here"
     );
 }
+
+/// @PLN131 — an UNMASKED error is not one the fix caused.
+///
+/// `parse_source` returns early when pass 1 errors, so a truncated parse reports no pass-2
+/// diagnostic at all. Fixing the pass-1 blocker lets the next parse reach them, and a plain
+/// set-difference read every one as damage the rewrite did — which made `--apply` and
+/// fix-all refuse any file whose fix was not its ONLY error.
+///
+/// Both orderings are pinned, and the second is the one that matters: the hidden cast sits
+/// ABOVE the brace, so a rule that compared POSITIONS would still reject it. The mechanism
+/// is the phase, not the line.
+#[test]
+fn a_masked_error_does_not_count_against_the_fix() {
+    for (name, src) in [
+        (
+            "hidden below",
+            "fn main() {\n  println(\"a } b\");\n  x = 1e30 as integer;\n  println(\"{x}\");\n}\n",
+        ),
+        (
+            "hidden above",
+            "fn main() {\n  x = 1e30 as integer;\n  println(\"a } b\");\n  println(\"{x}\");\n}\n",
+        ),
+    ] {
+        let path = probe(src);
+        let out = fix_cmd(&path, false);
+        assert!(
+            out.contains("double the brace") && out.contains("[verified]"),
+            "[{name}] a fix must not be blamed for an error it merely UNCOVERED; \
+             output:\n{out}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// …and the gate still bites where the rewrite genuinely breaks something.
+///
+/// This is the assertion that keeps the loosening honest. `x: integer = "5" as integer?`
+/// fails in the SAME phase the original reached, so the two parses are comparable and the
+/// verdict must still be a refusal. Without this, "ignore new errors" would have quietly
+/// become "ignore all errors".
+#[test]
+fn a_genuinely_broken_rewrite_is_still_refused() {
+    let path = probe("fn main() { x: integer = \"5\" as integer; println(\"{x}\"); }\n");
+    let before = std::fs::read_to_string(&path).expect("probe");
+    let out = fix_cmd(&path, true);
+    assert!(
+        out.contains("REJECTED"),
+        "a same-phase regression must still be refused; output:\n{out}"
+    );
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&path).expect("probe"),
+        "and must not reach the file; output:\n{out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

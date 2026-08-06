@@ -248,15 +248,25 @@ The `codeDescription` link targets `main`, so it resolves from a release and 404
 branch that has not merged this file yet. That coupling is deliberate — a user reaches the
 binary through a release cut from `main`, the same commit that carries this page.
 
-**A known narrowness in fix-all: a MASKED error reads as a new one.** Verification refuses a
-rewrite that leaves an error the original did not have, and an error can be *unmasked* rather
-than caused — fixing an unescaped brace lets the parse continue and reach a cast error it had
-aborted before. The set-difference cannot tell those apart, so fix-all currently applies only
-when the fix's own diagnostic is the file's sole error. That is the safe direction to be
-wrong in, and it is worth narrowing: the shape of a better rule is to weigh a new error's
-position against how far the original parse actually got, since nothing past the abort point
-was ever examined. Not done, because loosening a soundness gate deserves its own measurement
-rather than a plausible argument.
+**An UNMASKED error is not one the fix caused.** `parse_source` returns early when pass 1
+errors, so a truncated parse reports no pass-2 diagnostic at all — casts, shifts, most
+semantic lints. Fixing the pass-1 blocker lets the next parse reach them, and a plain
+set-difference reads every one as damage the rewrite did. That made `--apply` and fix-all
+refuse any file whose fix was not its only error.
+
+Verification therefore compares the two parses only when they are **comparable**: when the
+original got as far as the rewrite did. Where it did not, the fix is judged on its own
+diagnostic alone — it cleared the blocker, and what the deeper pass then finds was always
+there. Which is what a person does: fix the syntax error, then read the type errors.
+
+Judging this by POSITION would have been wrong, and measuring said so before any code
+changed: an unescaped brace hides a bad cast three lines below it *and* another two lines
+above. The mechanism is the phase, not the line.
+
+The gate still bites where a rewrite genuinely breaks something, because that failure lands
+in the same phase the original reached: `x: integer = "5" as integer?` is still refused.
+`a_genuinely_broken_rewrite_is_still_refused` is what keeps "ignore unmasked errors" from
+becoming "ignore all errors".
 
 ## Adding a code
 

@@ -137,12 +137,30 @@ pub fn verify_fix(
     if rewritten == source {
         return Verdict::Unspellable;
     }
-    let after = crate::lsp::diagnose(&rewritten, name, stdlib_dir);
+    // The BEFORE parse is re-run for its reach, not for its diagnostics: `before` was
+    // produced by the caller and may have come from a parse whose reach is unknown here.
+    let (_, before_reached) = crate::lsp::diagnose_reach(source, name, stdlib_dir);
+    let (after, after_reached) = crate::lsp::diagnose_reach(&rewritten, name, stdlib_dir);
 
-    let was = errors_of(before);
-    for e in errors_of(&after) {
-        if !was.contains(&e) {
-            return Verdict::Breaks;
+    // A new error only counts against the fix when the two parses are COMPARABLE.
+    //
+    // `parse_source` returns early when pass 1 errors, so a truncated parse reports no
+    // pass-2 diagnostic at all — casts, shifts, most semantic lints. Fixing the pass-1
+    // blocker lets the next parse reach them, and a plain set-difference reads every one as
+    // damage the rewrite did. Measured: an unescaped brace hid a bad cast three lines
+    // BELOW it and another two lines ABOVE, which is what rules out judging this by
+    // position — the mechanism is the phase, not the line.
+    //
+    // So the comparison is only made when the original got as far as the rewrite did.
+    // Where it did not, the fix is judged on its own diagnostic alone: it cleared the
+    // blocker, and what the deeper pass then finds was always there. That is also what a
+    // person does — fix the syntax error, then read the type errors.
+    if before_reached || !after_reached {
+        let was = errors_of(before);
+        for e in errors_of(&after) {
+            if !was.contains(&e) {
+                return Verdict::Breaks;
+            }
         }
     }
     let still_there = after

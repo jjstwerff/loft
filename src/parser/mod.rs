@@ -2278,6 +2278,17 @@ impl Parser {
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
+    /// Did this parse reach the SECOND pass?
+    ///
+    /// `parse_source` returns early when pass 1 produced an `Error`/`Fatal`, so every
+    /// pass-2 diagnostic — casts, shifts, and most semantic lints — is structurally absent
+    /// from a parse that stopped there. A caller comparing two parses has to know that, or
+    /// it reads an UNMASKED diagnostic as one the change caused (@PLN131).
+    #[must_use]
+    pub fn reached_second_pass(&self) -> bool {
+        !self.first_pass
+    }
+
     /// Session-scope snippet parse (#350, live-reload): like
     /// [`parse_str`](Self::parse_str) but KEEPS the session's import scoping —
     /// `use_names` and the applied imports survive, and both passes run under
