@@ -3785,8 +3785,13 @@ impl Stores {
     /// root claim in both the image and the target. So descend to the field at
     /// `local.pos` whose type is a keyed collection. `u16::MAX` when `tp` is a
     /// struct with no keyed-collection field there (a genuinely wrong shape).
-    #[cfg(paged_store)]
-    fn paged_collection_type(&self, tp: u16) -> u16 {
+    pub(crate) fn collection_type_of_store(&self, tp: u16) -> u16 {
+        // An untyped store has nothing to descend from, and `u16::MAX` is not an
+        // index. The paged callers happened to check first; @PLN129's do not,
+        // and a guard in the caller is a guard someone can forget.
+        if tp == u16::MAX || tp as usize >= self.types.len() {
+            return u16::MAX;
+        }
         // `Ordered` is the PROMOTED form of `Sorted` (`finish()` renames a
         // sorted collection whose element is shared by >1 container), so a
         // collection that is `Sorted` in a small program is `Ordered` in one where
@@ -4052,7 +4057,7 @@ impl Stores {
             Self::refuse_paged(path, "the target collection's store has no recorded type");
             return false;
         }
-        let tp = self.paged_collection_type(root_tp); // field form → the field's hash (#632)
+        let tp = self.collection_type_of_store(root_tp); // field form → the field's hash (#632)
         let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
             let reason = self.wrong_collection_reason(root_tp, "a hash");
             Self::refuse_paged(path, &reason);
@@ -4098,7 +4103,7 @@ impl Stores {
             Self::refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
-        let tp = self.paged_collection_type(root_tp);
+        let tp = self.collection_type_of_store(root_tp);
         // SAFE REFUSAL (3b.1) — `load_one` can copy an entry whose fields are
         // inline-scalar (raw word-copy) or `text` (relocated string, 3b.2). A
         // vector / nested / reference field still needs the recursive relocating

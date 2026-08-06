@@ -737,3 +737,74 @@ fn test() {{
     // write the traversal unless there is a better one.
     assert_eq!(spent, 3, "1 range query + 2 one-off schema probes");
 }
+
+// ── B4's shape: a collection-valued field as an owner-parameterised query ─────
+
+/// @PLN129 arc B4 — `company.people` is `WHERE company_id = <this company>`,
+/// and it needs no new language surface: the explicit query spells it.
+///
+/// What it DID need is for a collection declared as a struct FIELD to resolve to
+/// its own type rather than the wrapper's — the same resolution the paged loader
+/// made for #632, now shared rather than duplicated.
+#[test]
+fn a_collection_field_is_an_owner_parameterised_query_both_backends() {
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
+        eprintln!("SKIP: libsqlite3.so.0 not installed");
+        return;
+    }
+    let path = scratch("owner").with_file_name("hands.db");
+    seed(
+        &path,
+        "CREATE TABLE sqhand(id INTEGER PRIMARY KEY, name TEXT, company_id INTEGER); \
+         INSERT INTO sqhand VALUES (1,'ada',7),(2,'grace',7),(3,'alan',7),(4,'edsger',9); \
+         CREATE INDEX ix_hand_company ON sqhand(company_id)",
+    );
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/scripts/129-lazy-sql-owner.loft");
+
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_SQL_TARGET", format!("sqlite:{}", path.display()))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("failed to invoke loft");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            eprintln!(
+                "{backend} stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        assert!(out.status.success(), "{backend}: {stdout}");
+
+        assert!(stdout.contains("bound=true"), "{backend}: {stdout}");
+        assert!(
+            stdout.contains("added=3 resident=3 err=[]"),
+            "{backend}: Acme's three, and only Acme's: {stdout}"
+        );
+        assert!(
+            stdout.contains("who=ada grace alan "),
+            "{backend}: {stdout}"
+        );
+        // Per COLLECTION, not per store: two fields of one type over one table,
+        // each holding its owner's rows.
+        assert!(
+            stdout.contains("other=1 resident=1 acme_unchanged=3"),
+            "{backend}: a second field is a separate binding: {stdout}"
+        );
+        // A row the query already brought in is a HIT, not a fetch.
+        assert!(
+            stdout.contains("keyed=alan resident_after=3"),
+            "{backend}: a lookup finds what the query populated: {stdout}"
+        );
+        assert!(
+            stdout.contains("ambiguous=0 why_empty=false"),
+            "{backend}: a wrapper with two keyed fields refuses rather than \
+             guessing which one a reference names: {stdout}"
+        );
+        assert!(stdout.contains("sound=true"), "{backend}: {stdout}");
+    }
+}

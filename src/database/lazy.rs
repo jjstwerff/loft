@@ -198,10 +198,18 @@ impl Stores {
         };
         // The collection's TYPE, from the store it was allocated into — a
         // `reference` argument carries no type, and every derived name comes
-        // from this one.
-        let db = self.allocations[coll.store_nr as usize].known_type;
-        if db == u16::MAX || !matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
-            return self.lazy_refuse(slot, "an explicit query serves a `hash` collection");
+        // from this one. Through the same resolver the paged loader uses, so a
+        // collection declared as a struct FIELD (`struct Firm { people:
+        // hash<Worker[id]> }`) resolves to the field's type rather than to the
+        // wrapper's — which is what makes `company.people` an
+        // owner-parameterised query rather than an unreachable shape (#632).
+        let db = self.collection_type_of_store(self.allocations[coll.store_nr as usize].known_type);
+        if db == u16::MAX {
+            return self.lazy_refuse(
+                slot,
+                "this collection has no type to derive a query from — a struct \
+                 wrapping several keyed collections cannot say which one this is",
+            );
         }
         let desc = self.layout_descriptor(&[db]);
         let shape = QueryShape::Filter(condition.to_string());
@@ -270,7 +278,7 @@ impl Stores {
         let LazySource::Sql(driver, target) = LazySource::of(&source) else {
             return self.lazy_refuse(slot, &format!("`{source}` is not a database source"));
         };
-        let db = self.allocations[coll.store_nr as usize].known_type;
+        let db = self.collection_type_of_store(self.allocations[coll.store_nr as usize].known_type);
         if db == u16::MAX {
             return self.lazy_refuse(slot, "this collection has no type to derive a query from");
         }

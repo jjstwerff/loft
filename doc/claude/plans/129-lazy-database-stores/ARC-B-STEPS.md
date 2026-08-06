@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 arc B — the implementation sequence
 
-**Progress: steps 0–9 and 11 are shipped; 10 is open, and so is step 8's implicit half.** A `sqlite:<path>` binding faults on a
+**Progress: steps 0–9 and 11 are shipped, and step 10's shape with them; what is open is step
+8's implicit half and step 10's DECLARED form.** A `sqlite:<path>` binding faults on a
 miss, derives its own SELECT, materialises the row into the collection and passes arc F's graph
 gate on both backends. What each step ANSWERED, where it differed from what it expected, and the
 three findings that changed the design are at the bottom (§ What the steps answered).
@@ -296,10 +297,19 @@ grow, and `--native` was correct all along.
 - **A composite range.** `store_lazy_range(coll, lo, hi)` cannot say which value pins a composite
   key's leading column. `store_lazy_query` covers it verbatim until there is a shape that carries
   the pinned prefix.
-- **B4, collection-valued fields** (`company.people`). This one is not an implementation gap: it
-  needs a way to DECLARE a field whose value is a query parameterised by its owner, and no such
-  declaration exists in the language. Building the runtime first would settle the surface by
+- **B4's DECLARED form.** The SHAPE ships and needed no new surface —
+  `store_lazy_query(firm.people, "company_id = {firm.id}")` IS the owner-parameterised query, and
+  it works per collection, so two firms' fields hold their own rows. What is open is the field
+  knowing its own foreign key so that no call is written at all, and that needs a way to DECLARE
+  it. Building the runtime for a declaration nobody has designed would settle the surface by
   accident, which is the opposite of how the rest of this arc was built.
+
+  Making the shape work did surface a real defect next door, filed rather than patched over:
+  `store_verify` on a struct-FIELD collection reads the hash root as the WRAPPER struct and
+  reports a corruption that is not there ([loft#790](https://github.com/loft-lang/loft/issues/790)).
+  It reproduces with ordinary inserts and no laziness anywhere, on both backends and on the
+  installed build — and the control that proved that is what kept it from being read as this
+  arc's bug.
 - **B3's compile-time half** — the `T: DbKeyed` bound and the mapping's loft-source spelling. The
   mapping VALUE is built and feeds the one builder; how an author writes it is a surface question,
   and BINDING.md's answer depends on @PLN125's associated types for composite keys.
