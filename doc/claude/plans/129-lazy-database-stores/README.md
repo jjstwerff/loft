@@ -3,16 +3,22 @@
 
 ## Status
 
-**Open — the FILE source is built, the DATABASE source is not.** A collection binds to a
-`.store` image and faults on a miss (arc A), tells an unreachable source from a genuine absence
-(C), pins that source so a traversal sees one world (D), releases what it holds on `= []` (E's
-blunt form), and carries a graph consumer as its gate (F) — both backends, catalogued as
-[`@F108`](https://github.com/loft-lang/features/issues/108).
+**Open — both sources exist; the database one serves a KEYED lookup on a `hash`.** A collection
+binds to a `.store` image or to `sqlite:<path>` and faults on a miss (arc A), tells an unreachable
+source from a genuine absence (C), pins that source so a traversal sees one world (D), releases
+what it holds on `= []` (E's blunt form), and carries a graph consumer as its gate (F) — both
+backends, catalogued as [`@F108`](https://github.com/loft-lang/features/issues/108).
 
-**What the plan is NAMED for is still open:** arcs **B / B2 / B3 / B4**, deriving the query from
-the store's own schema so the source can be a real relational database. `bind_lazy` takes a path
-or URL to an image; no query is derived anywhere yet. Read the sub-arc table below for the
-per-arc state — it is the authority, and this paragraph is a summary of it.
+**What the plan is NAMED for now works for one query shape.** The derivation reads the store's own
+schema (`src/database/sql_query.rs`) and covers equality, ranges and composites; the fetch path
+wires the EQUALITY shape on a `hash`, and arc F's traversal passes over SQL on both backends with
+the counts it proved over a file. What is still open: the range shape wired to a slice (step 8),
+the explicit query (B2), the mapping's loft-source spelling and the bind-time schema check (B3),
+and collection-valued fields (B4). Read the sub-arc table below for the per-arc state — it is the
+authority, and this paragraph is a summary of it.
+
+The implementation sequence and what each step is allowed to leave undone:
+[ARC-B-STEPS.md](ARC-B-STEPS.md).
 
 The design was pinned by probing and by
 counting rather than by reasoning, and two of its drafts died that way: an image/page backing
@@ -315,9 +321,9 @@ an eager read with extra steps.
 | Item | Status |
 |---|---|
 | **A** — the miss path: a bound collection fetches on a miss (`store_bind_lazy`) | **shipped** — file source, both backends |
-| **B** — schema→query from `LayoutDesc`: equality from `hash`, ranges from `sorted`, composite+ordered from `index`; nothing enumerated ahead of time | Open |
+| **B** — schema→query from `LayoutDesc`: equality from `hash`, ranges from `sorted`, composite+ordered from `index`; nothing enumerated ahead of time | **shipped for EQUALITY on a `hash`** — the derivation covers ranges and composites too and is tested, but only the equality shape is wired to a fetch; a `sorted`/`index` binding is refused rather than served wrongly (step 8) |
 | **B2** — the explicit escape hatch: run a query, materialise rows INTO the collection (what the keys cannot express) | Open |
-| **B3** — the declared mapping + the `T: DbKeyed` bound + the bind-time schema/index check ([BINDING.md](BINDING.md)) | Open |
+| **B3** — the declared mapping + the `T: DbKeyed` bound + the bind-time schema/index check ([BINDING.md](BINDING.md)) | **partly** — the mapping VALUE exists and feeds the one builder (`Mapping`: table/column overrides, quoting, placeholder style); how it is WRITTEN in loft source, the `DbKeyed` bound and the bind-time check are open |
 | **B4** — collection-valued fields as owner-parameterised queries (`company.people`) | Open |
 | **C** — the C80-compatible failure channel (`store_lazy_error` / `_faults` / `_clear`), and `len`/iteration honesty | **shipped** — unreachable told from absent, faults STICKY across a later success, both backends; `len` settled as the resident count |
 | **D** — a pinned source, so a traversal sees one consistent world | **shipped** for a file source: pinned at bind, drift REFUSED and reported through arc C. A database source pins a transaction instead — the one case where consistency can be provided rather than checked |
@@ -345,8 +351,16 @@ an eager read with extra steps.
    out. Falsified by making every lookup re-fetch: the counts went red, the values did not — which
    is exactly why the counts are the assertions that matter.
 
-   What this does NOT yet prove is the same traversal over SQL, which is arc B's implementation.
-   The shape is proven; the source is not.
+   **And now over SQL**, same script, same counts, both backends
+   (`tests/scripts/129-lazy-sql-graph.loft`): one hop fetches one person and one company, the
+   second person at Acme leaves `c=1` and `c1 == c2`, Globex is fetched, and edsger/Initech —
+   never asked for — stay out. The query COUNT is asserted separately in
+   `tests/lazy_sql_source.rs`: three lookups that reach the source cost three queries, and the
+   repeat lookup costs none.
+
+   Falsified both ways. Disabling the resident short-circuit so every lookup re-fetches turns the
+   counts red while the values stay right, which is exactly why the counts are the assertions that
+   matter.
 
 ## Open design questions
 

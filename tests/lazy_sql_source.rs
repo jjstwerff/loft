@@ -11,6 +11,11 @@
 
 #![cfg(all(feature = "native-extensions", unix))]
 
+mod common;
+extern crate loft;
+
+use common::cached_default;
+
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
 fn declare_sqlite() {
@@ -114,7 +119,7 @@ fn probe_core_can_drive_sqlite_through_resolve() {
 
 // ── Step 4: the source that executes ──────────────────────────────────────────
 
-use loft::database::sql_source::{Cell, Driver, SqlConn, driver_of};
+use loft::database::sql_source::{Cell, Driver, SqlConn, driver_of, queries_run};
 
 /// A scratch database seeded through sqlite's own CLI-free path: the connection
 /// core opens is READ-ONLY, so the fixture is written with the raw symbols the
@@ -292,4 +297,259 @@ fn the_connection_is_read_only_and_a_bad_query_says_why() {
     // An unreachable database is unreachable, not empty.
     let missing = SqlConn::open(Driver::Sqlite, "/nonexistent/dir/nope.db");
     assert!(missing.is_err());
+}
+
+// ── Step 6: the miss path is wired, and the COUNTS are the assertion ───────────
+
+/// Run one loft program in-process, the way the test harness does, so the query
+/// counter can be read afterwards.
+fn run_loft(src: &str) {
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(src, "lazy_sql_count", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "the program did not compile: {:?}",
+        p.diagnostics.lines()
+    );
+    loft::scopes::check(&mut p.data);
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    if let Some(err) = state.database.runtime_error.take() {
+        panic!("{}", err.message);
+    }
+}
+
+#[test]
+fn a_keyed_lookup_costs_exactly_one_query_and_a_hit_costs_none() {
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
+        eprintln!("SKIP: libsqlite3.so.0 not installed");
+        return;
+    }
+    let path = scratch("counts");
+    seed(
+        &path,
+        "CREATE TABLE cperson(id INTEGER PRIMARY KEY, name TEXT); \
+         INSERT INTO cperson VALUES (1,'ada'),(42,'grace'),(7,'alan')",
+    );
+    let src = format!(
+        r#"
+struct CPerson {{ id: integer, name: text }}
+
+fn test() {{
+  people: hash<CPerson[id]> = [];
+  assert(store_bind_lazy(people, "sqlite:{}"), "bind");
+  p = people[42];
+  assert(p.name == "grace", "first fetch: {{p.name}}");
+  assert(people.len() == 1, "one record touched, one resident");
+  q = people[42];
+  assert(p == q, "one record, however it is reached");
+  assert(people.len() == 1, "a hit adds nothing");
+  r = people[7];
+  assert(r.name == "alan", "second fetch");
+  assert(people.len() == 2, "two touched");
+  assert(people[999] == null, "absent is absent");
+  assert(store_lazy_error(people) == "", "an absence is not a failure");
+}}
+"#,
+        path.to_string_lossy()
+    );
+
+    let target = path.to_string_lossy().to_string();
+    let before = queries_run(&target);
+    run_loft(&src);
+    let spent = queries_run(&target) - before;
+    // Three lookups reach the source — 42, 7, and the absent 999 — and the
+    // SECOND lookup of 42 must not, because it hit the working set. This is the
+    // assertion that separates a lazy read from an eager one: the values above
+    // would be identical either way.
+    //
+    // Plus TWO for step 7's schema check (`PRAGMA table_info` and `EXPLAIN QUERY
+    // PLAN`), and the fact that the total is 5 rather than 9 is the assertion
+    // that it runs ONCE per binding: a check repeated per fault would triple the
+    // cost of the feature to re-learn something that cannot change.
+    assert_eq!(
+        spent, 5,
+        "3 lookups that reach the source + 2 one-off schema probes"
+    );
+}
+
+// ── Step 11: arc F's gate, over SQL ───────────────────────────────────────────
+
+/// @PLN129 arc B step 11 — the graph traversal arc F proved against a file,
+/// now against a database.
+///
+/// Two assertions carry it and neither is a value. **Identity**: two persons at
+/// the same company must reach ONE company record. **Count**: `c=1` after the
+/// second hop is what proves the hop HIT the working set — every value here
+/// would pass under an eager load, and only the counts would not.
+#[test]
+fn the_graph_traverses_lazily_over_sql_both_backends() {
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
+        eprintln!("SKIP: libsqlite3.so.0 not installed");
+        return;
+    }
+    let dir = scratch("graph");
+    let persons = dir.with_file_name("persons.db");
+    let companies = dir.with_file_name("companies.db");
+    seed(
+        &companies,
+        "CREATE TABLE sqcompany(id INTEGER PRIMARY KEY, name TEXT); \
+         INSERT INTO sqcompany VALUES (7,'Acme'),(9,'Globex'),(11,'Initech')",
+    );
+    seed(
+        &persons,
+        "CREATE TABLE sqpersong(id INTEGER PRIMARY KEY, name TEXT, employer INTEGER); \
+         INSERT INTO sqpersong VALUES (1,'ada',7),(2,'grace',7),(3,'alan',9),(4,'edsger',11)",
+    );
+
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/scripts/129-lazy-sql-graph.loft");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_SQL_PERSONS", format!("sqlite:{}", persons.display()))
+            .env(
+                "LOFT_SQL_COMPANIES",
+                format!("sqlite:{}", companies.display()),
+            )
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("failed to invoke loft");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            eprintln!(
+                "{backend} stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        assert!(out.status.success(), "{backend}: {stdout}");
+
+        // The control: both collections start empty, so the counts mean something.
+        assert!(stdout.contains("start p=0 c=0"), "{backend}: {stdout}");
+        assert!(
+            stdout.contains("hop1 ada@Acme p=1 c=1"),
+            "{backend}: one hop fetches one person and one company: {stdout}"
+        );
+        assert!(
+            stdout.contains("hop2 grace@Acme p=2 c=1"),
+            "{backend}: a second person at the SAME company must NOT re-fetch it: {stdout}"
+        );
+        assert!(
+            stdout.contains("identity=true"),
+            "{backend}: two paths to one company must give ONE record — if this \
+             fails the design is wrong: {stdout}"
+        );
+        assert!(
+            stdout.contains("hop3 alan@Globex p=3 c=2"),
+            "{backend}: a different company IS fetched: {stdout}"
+        );
+        assert!(
+            stdout.contains("touched=5"),
+            "{backend}: 3 persons + 2 companies — edsger and Initech were never \
+             asked for and must not be resident: {stdout}"
+        );
+        assert!(
+            stdout.contains("sound=true,true"),
+            "{backend}: both partially-loaded heaps must be structurally sound: {stdout}"
+        );
+        assert!(
+            stdout.contains("healthy=\n"),
+            "{backend}: a clean traversal reports NO fault, and the two error \
+             channels concatenated must therefore be empty: {stdout}"
+        );
+    }
+}
+
+// ── Step 7: the schema check, and the failure that does not announce itself ────
+
+/// The refusal a lookup reports for this database, or `""` when the fetch worked.
+fn bind_and_look(db_path: &std::path::Path, program: &std::path::Path) -> String {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--interpret")
+        .arg(program)
+        .env("LOFT_SQL_TARGET", format!("sqlite:{}", db_path.display()))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("failed to invoke loft");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn a_schema_that_cannot_serve_the_lookup_is_refused_and_says_why() {
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
+        eprintln!("SKIP: libsqlite3.so.0 not installed");
+        return;
+    }
+    let program = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/scripts/129-lazy-sql-schema.loft");
+
+    // The control: a table with an indexed key and matching types FETCHES.
+    let good = scratch("schema_ok").with_file_name("good.db");
+    seed(
+        &good,
+        "CREATE TABLE sqchecked(id INTEGER PRIMARY KEY, name TEXT); \
+         INSERT INTO sqchecked VALUES (42,'grace')",
+    );
+    let out = bind_and_look(&good, &program);
+    assert!(out.contains("value=grace"), "control must fetch: {out}");
+    assert!(out.contains("why=[]"), "control must report healthy: {out}");
+
+    // A column the type declares and the table does not.
+    let missing = scratch("schema_col").with_file_name("missing.db");
+    seed(
+        &missing,
+        "CREATE TABLE sqchecked(id INTEGER PRIMARY KEY, naam TEXT); \
+         INSERT INTO sqchecked VALUES (42,'grace')",
+    );
+    let out = bind_and_look(&missing, &program);
+    assert!(
+        out.contains("value=null"),
+        "a refused bind answers null: {out}"
+    );
+    assert!(
+        out.contains("no column `name`"),
+        "the refusal must NAME what is wrong: {out}"
+    );
+
+    // A column whose affinity cannot hold the field: `name` is loft `text` and
+    // the column is INTEGER, so every fetch would reinterpret someone's data.
+    let wrong = scratch("schema_type").with_file_name("wrong.db");
+    seed(
+        &wrong,
+        "CREATE TABLE sqchecked(id INTEGER PRIMARY KEY, name INTEGER); \
+         INSERT INTO sqchecked VALUES (42,7)",
+    );
+    let out = bind_and_look(&wrong, &program);
+    assert!(out.contains("value=null"), "{out}");
+    assert!(
+        out.contains("affinity"),
+        "the refusal must name the type: {out}"
+    );
+
+    // The one that does NOT announce itself: no index on the key. Every answer
+    // stays right and every fault reads the whole table — a working feature and
+    // a catastrophic one, which is why this is measured rather than assumed.
+    let unindexed = scratch("schema_scan").with_file_name("scan.db");
+    seed(
+        &unindexed,
+        "CREATE TABLE sqchecked(id INTEGER, name TEXT); \
+         INSERT INTO sqchecked VALUES (42,'grace')",
+    );
+    let out = bind_and_look(&unindexed, &program);
+    assert!(
+        out.contains("value=null"),
+        "an unindexed bind must be refused, not served slowly: {out}"
+    );
+    assert!(
+        out.contains("no index") && out.contains("SCAN"),
+        "the refusal must quote the plan that proves it: {out}"
+    );
 }

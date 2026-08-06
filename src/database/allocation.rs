@@ -3848,6 +3848,9 @@ impl Stores {
             crate::database::LazyBinding {
                 source: source.to_string(),
                 pin,
+                // @PLN129 arc B step 7 — a rebind re-decides the schema too: it
+                // says "a different world now", and the schema is part of it.
+                check: crate::database::SchemaCheck::Unchecked,
             },
         );
     }
@@ -3963,7 +3966,6 @@ impl Stores {
 
     /// The fetch half of [`find_or_fetch`], split out so the resident path stays
     /// a plain `find` with one comparison after it.
-    #[cfg(paged_store)]
     fn fetch_missing(&mut self, data: &DbRef, db: u16, key: &[crate::keys::Content]) -> DbRef {
         let Some(source) = self.lazy_source(data) else {
             return DbRef {
@@ -3999,7 +4001,7 @@ impl Stores {
         // outcomes whatever it is.
         let src = crate::database::lazy::LazySource::of(&source);
         let slot = (data.store_nr, data.rec, data.pos);
-        match self.fetch_from_source(data, &src, key) {
+        match self.fetch_from_source(data, db, &src, key) {
             // NOT cleared. A success says nothing about what an earlier failure
             // already lost, and reporting "healthy" after a partial traversal is
             // exactly the silent-wrong-answer this channel exists to prevent.
@@ -4024,17 +4026,6 @@ impl Stores {
                     pos: 0,
                 }
             }
-        }
-    }
-
-    /// Without the paged reader there is no source to consult, so a miss stays a
-    /// miss — the binding is inert rather than a build error.
-    #[cfg(not(paged_store))]
-    fn fetch_missing(&mut self, data: &DbRef, _db: u16, _key: &[crate::keys::Content]) -> DbRef {
-        DbRef {
-            store_nr: data.store_nr,
-            rec: 0,
-            pos: 0,
         }
     }
 

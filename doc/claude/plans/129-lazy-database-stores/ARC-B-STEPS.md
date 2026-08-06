@@ -1,6 +1,11 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 arc B — the implementation sequence
 
+**Progress: steps 0–6 and 11 are shipped; 7–10 are open.** A `sqlite:<path>` binding faults on a
+miss, derives its own SELECT, materialises the row into the collection and passes arc F's graph
+gate on both backends. What each step ANSWERED, where it differed from what it expected, and the
+three findings that changed the design are at the bottom (§ What the steps answered).
+
 How B / B2 / B3 / B4 get built in steps that each land GREEN and each answer one question.
 Companion to [README.md](README.md) (the model), [QUERIES.md](QUERIES.md) (what a binding can
 ask) and [BINDING.md](BINDING.md) (the schema contract). Those three say what to build; this
@@ -238,6 +243,45 @@ Named now so a later step can be recognised as a symptom rather than a surprise.
   file by identity; a database pins a transaction. If the C surface cannot hold one open
   across faults, consistency degrades to detection, and that is a design change to arc D
   rather than a step here.
+
+## What the steps answered
+
+Written after building them, because the answers are what the next reader needs.
+
+| step | answer |
+|---|---|
+| **0** — the C surface | **Yes.** Core resolves sqlite through `c_call::resolve` and calls it from Rust with no rustc, no loft frame, no re-entrancy. Typed `extern "C"` pointers rather than the u64 trampoline ladder — core knows the signature at compile time, so it gets the ABI by construction the way `--native` does. Graduated into a test rather than deleted: the answer can regress, and it would surface as a fetch that mysteriously finds nothing. |
+| **1** — the seam | `LazySource` + `Fetched`. No test moved, which was the claim. The three outcomes it returns (`Inserted` / `Absent` / `Unreachable`) are the distinction arc C already made. |
+| **2** — the derivation | The descriptor carries enough. It also carried two things this plan did not know — below. |
+| **3** — the mapping | `Mapping` holds table/column overrides plus the two dialect facts core must spell (quoting, placeholders). An empty mapping IS the derivation, so there is one builder rather than two paths. |
+| **4** — the source | `SqlConn` connects read-only, runs the string, returns rows with `NULL` / `''` / value kept distinct. |
+| **5+6** — row→record, wired | `record_new` + `hash::add` — the same pair `coll += [x]` uses, so a SQL arrival and an ordinary insert end in the same place. |
+| **11** — the gate | Passes over SQL on both backends with the counts arc F proved over a file. |
+
+### Three findings that changed the design
+
+1. **The `Position` worked example was not valid SQL.** `from` and `to` are ordinary loft field
+   names for a history row and reserved words in every engine. Nothing distinguishes a reserved
+   word by shape, so the derivation quotes everything — no list to carry and none to keep current.
+2. **Quoting has a price on SQLite, and it is the worst kind.** A double-quoted name that resolves
+   to no identifier is accepted as a STRING LITERAL: `SELECT "naam" FROM "person"` returns the text
+   `naam` once per row. A renamed column would have been materialised into the record. The
+   connection turns it off (`SQLITE_DBCONFIG_DQS_DML`/`_DDL`); an SQLite older than 3.29 does not
+   know the option, so **step 7 is a requirement rather than a guard.**
+3. **An `index` element record carries its own red-black links** (`#left_1`, `#right_1`,
+   `#color_1`) and `#color_1` is an ordinary boolean — so a column filter written on field TYPE
+   selected a column no table has. `LayoutField::is_data` now has one home, shared with
+   `read_via_descriptor` and the browser delivery.
+
+### What is deliberately refused, and why that is not a gap in the invariant
+
+Each of these answers `store_lazy_error` rather than a wrong record:
+
+- a `sorted` / `index` / `spatial` collection — the derivation handles the first two, but INSERTING
+  into them is not `hash::add`, and an insert done the wrong way corrupts rather than fails;
+- a narrow integer field (`i32`, `u8`, `size(2)`) — four encodings and their null sentinels, plus a
+  different setter again when nullable, so it waits for a cell that can be checked;
+- a nested struct, a vector or a stored pointer as a field — another table's rows, not a column.
 
 ## See also
 

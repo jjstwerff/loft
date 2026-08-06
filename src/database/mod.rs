@@ -258,6 +258,28 @@ pub struct LazyBinding {
     /// same second. Nanoseconds catch an in-place rewrite; the inode catches a
     /// rename-replace, which does not touch the new file's mtime at all.
     pub pin: Option<(u64, u64, u64)>,
+    /// @PLN129 arc B step 7 — whether this source's schema can serve this
+    /// collection, decided once.
+    pub check: SchemaCheck,
+}
+
+/// @PLN129 arc B step 7 — the verdict on a database schema loft does not own.
+///
+/// Decided on the FIRST fetch rather than at bind, because that is the first
+/// moment the collection's TYPE is known — a bind takes a reference, and a
+/// reference does not carry one. Still before any answer a program could
+/// believe, which is the property the check exists for.
+///
+/// Re-decided by a rebind: a rebind is a caller saying "this is a different
+/// world now", and the schema is part of that world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SchemaCheck {
+    Unchecked,
+    Ok,
+    /// The bind cannot be served, and this says why. Sticky for the life of the
+    /// binding: nothing about the schema changes between two lookups, so
+    /// re-asking would cost a round trip per fault to get the same answer.
+    Refused(String),
 }
 
 #[allow(clippy::struct_excessive_bools)]

@@ -527,11 +527,26 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 // and two collections of one type can bind differently. Binding replaces, and may
 // be done before the collection holds anything.
 //
-// `source` is what `store_load_key` accepts — a local `.store` image or an
-// `http(s)://` URL served with Range. Returns false for a null collection.
+// `source` is either an IMAGE — what `store_load_key` accepts: a local `.store`
+// file or an `http(s)://` URL served with Range — or a DATABASE, named by a
+// driver prefix. Returns false for a null collection.
 //   persons: hash<Person[id]> = []
 //   store_bind_lazy(persons, "people.store")
 //   p = persons[42]        // fetches exactly entry 42, then holds it
+//
+// @PLN129 arc B — `sqlite:<path>` binds to a table instead, and the query is
+// DERIVED from the collection's own type: the table is the element type's name
+// lowercased, the columns are its fields, and the `WHERE` is the collection's
+// key. Nothing is written down twice.
+//   persons: hash<Person[id]> = []              // struct Person { id: integer, name: text }
+//   store_bind_lazy(persons, "sqlite:people.db")
+//   p = persons[42]        // SELECT "id","name" FROM "person" WHERE "id" = 42
+//
+// Read-only, and the connection enforces it. A binding whose type cannot become
+// a query — a collection that is not a `hash`, a field that is not a column —
+// is REFUSED rather than served wrongly, and says so through
+// `store_lazy_error`. sqlite is opened on the first fault, so a program that
+// binds no database loads nothing.
 pub fn store_bind_lazy(local: reference, source: text) -> boolean;
 #rust"{{ let r = @local; let ok = r.rec != 0; if ok {{ stores.bind_lazy(&r, @source); }} ok }}"
 

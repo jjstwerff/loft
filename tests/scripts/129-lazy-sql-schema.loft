@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc B step 7 — one lookup against one database, reporting the value
+// and the refusal. Driven from tests/lazy_sql_source.rs, which supplies the
+// schema being tested.
+
+struct SqChecked { id: integer, name: text }
+
+fn main() {
+  target = env_variable("LOFT_SQL_TARGET") ?? "";
+  if target == "" { return }
+  xs: hash<SqChecked[id]> = [];
+  store_bind_lazy(xs, target);
+  x = xs[42];
+  if x == null { println("value=null") } else { println("value={x.name}") }
+  println("why=[{store_lazy_error(xs)}]");
+}

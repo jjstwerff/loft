@@ -105,15 +105,41 @@ struct SqliteApi {
     db_config: DbConfig,
 }
 
+/// The sonames SQLite ships under. Windows FIRST and by the name Windows
+/// actually uses: a `.so` soname translates to a `.dll` guess (`sqlite3.dll`),
+/// and on Windows the first `sqlite3.dll` on PATH belongs to whichever vendor
+/// put one there — it loads, exports the symbol, and faults when called
+/// (loft#770). Windows' own is `winsqlite3.dll`, which no stem rule derives.
+const SQLITE_SONAMES: [&str; 2] = ["winsqlite3.dll", "libsqlite3.so.0"];
+
 impl SqliteApi {
+    /// Make SQLite's symbols resolvable, if they are not already.
+    ///
+    /// A `sqlite:` source string IS the declaration — the program named the
+    /// engine where it named the database, so requiring a second `[c]
+    /// optional-libs` entry for the same fact would be a trap. Loading happens
+    /// on the first fault rather than at startup, so a program that binds no
+    /// database still maps nothing (@PLN24 arc G's property, kept).
+    fn ensure_loaded() {
+        if crate::c_call::resolve("sqlite3_open_v2").is_some() {
+            return;
+        }
+        for name in SQLITE_SONAMES {
+            if crate::extensions::load_c_library(name, "") {
+                return;
+            }
+        }
+    }
+
     fn resolve() -> Result<SqliteApi, String> {
+        Self::ensure_loaded();
         macro_rules! sym {
             ($name:literal, $ty:ty) => {{
                 let Some(p) = crate::c_call::resolve($name) else {
                     return Err(format!(
-                        "sqlite is not available — `{}` did not resolve; declare it with \
-                         `[c] optional-libs = \"libsqlite3.so.0\"`",
-                        $name
+                        "sqlite is not installed — `{}` did not resolve (looked for {})",
+                        $name,
+                        SQLITE_SONAMES.join(", ")
                     ));
                 };
                 let f: $ty = unsafe { std::mem::transmute(p) };
@@ -152,6 +178,32 @@ impl SqliteApi {
 /// (`SQLITE_THREADSAFE=1`), so the handle itself tolerates the sharing; the
 /// mutex here is what orders loft's own use of it.
 static CONNECTIONS: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
+
+/// How many queries have been sent to each target.
+///
+/// The matrix's load-bearing row is *queries issued == records touched*, and a
+/// count is the only thing that can check it: a lazy read that fetches the
+/// transitive closure returns exactly the same VALUES as one that fetches a row
+/// (README § the count row). Residency proves a record arrived; this proves
+/// nothing was asked twice.
+///
+/// Per TARGET rather than per process, because a process-wide total is not a
+/// measurement of anything when two databases are open at once — which is the
+/// ordinary case for a graph (persons and companies) and was measured the hard
+/// way: as one counter it read 11 where 3 were spent, having also counted every
+/// other query in the process.
+static QUERIES: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+
+/// Queries sent to `target` since the process started.
+#[must_use]
+pub fn queries_run(target: &str) -> u64 {
+    QUERIES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(|t| t.get(target).copied())
+        .unwrap_or(0)
+}
 
 /// A live connection to one database, and the symbols to drive it.
 pub struct SqlConn {
@@ -237,6 +289,12 @@ impl SqlConn {
     /// carries the engine's own text.
     pub fn query(&self, sql: &str, args: &[Cell]) -> Result<Vec<Row>, String> {
         let api = &self.api;
+        *QUERIES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .entry(self.target.clone())
+            .or_insert(0) += 1;
         let Ok(text) = CString::new(sql) else {
             return Err("the derived query contains a NUL byte".to_string());
         };
@@ -315,6 +373,85 @@ impl SqlConn {
         }
         (api.finalize)(st);
         Ok(rows)
+    }
+}
+
+impl SqlConn {
+    /// @PLN129 arc B step 7 — can this schema serve this query? `Ok(())` or the
+    /// reason it cannot.
+    ///
+    /// Two failures, and the second is the one
+    /// [BINDING.md](../../doc/claude/plans/129-lazy-database-stores/BINDING.md)
+    /// calls the main risk surface. A missing column or table is an ERROR and
+    /// announces itself. **A missing index is not**: every lookup silently
+    /// becomes a table scan, every answer stays right, and the feature degrades
+    /// from lazy to catastrophic without one wrong result. A consumer that runs
+    /// green over a table scan will be believed.
+    ///
+    /// So the index half is measured rather than inferred: `EXPLAIN QUERY PLAN`
+    /// on the derived query says `SEARCH` when an index serves it and `SCAN`
+    /// when the engine reads the table. That asks the property directly —
+    /// whether THIS query is served by an index — instead of reconstructing it
+    /// from catalogue rows and hoping the reconstruction matches the planner.
+    ///
+    /// # Errors
+    /// Never — the refusal is the `Ok` value. The signature is `Result` only
+    /// where the connection itself fails.
+    pub fn plan_is_indexed(&self, sql: &str) -> Result<(), String> {
+        let rows = self.query(&format!("EXPLAIN QUERY PLAN {sql}"), &[])?;
+        for row in &rows {
+            for cell in row.iter().flatten() {
+                if let Cell::Text(detail) = cell
+                    && detail.starts_with("SCAN")
+                {
+                    return Err(format!(
+                        "the source has no index for this lookup — `{detail}`. Every fault \
+                         would read the whole table, which is a working feature and a \
+                         catastrophic one"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The declared type of each column of `table`, by name.
+    ///
+    /// # Errors
+    /// When the table cannot be interrogated.
+    pub fn columns_of(&self, table: &str) -> Result<Vec<(String, String)>, String> {
+        let rows = self.query(&format!("PRAGMA table_info({table})"), &[])?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| match (r.get(1), r.get(2)) {
+                (Some(Some(Cell::Text(name))), Some(Some(Cell::Text(tp)))) => {
+                    Some((name.clone(), tp.clone()))
+                }
+                (Some(Some(Cell::Text(name))), _) => Some((name.clone(), String::new())),
+                _ => None,
+            })
+            .collect())
+    }
+}
+
+/// SQLite's own type AFFINITY rule, applied to a declared column type.
+///
+/// A column's declared type is advisory in SQLite — the affinity it implies is
+/// what the engine actually uses — so a compatibility check has to speak in
+/// affinities or it is checking a string.
+#[must_use]
+pub fn affinity(declared: &str) -> &'static str {
+    let d = declared.to_ascii_uppercase();
+    if d.contains("INT") {
+        "INTEGER"
+    } else if d.contains("CHAR") || d.contains("CLOB") || d.contains("TEXT") {
+        "TEXT"
+    } else if d.contains("BLOB") || d.is_empty() {
+        "BLOB"
+    } else if d.contains("REAL") || d.contains("FLOA") || d.contains("DOUB") {
+        "REAL"
+    } else {
+        "NUMERIC"
     }
 }
 

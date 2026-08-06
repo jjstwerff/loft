@@ -237,23 +237,20 @@ impl Mapping {
 
 /// Can this field be one column?
 ///
-/// Scalars, narrow integers and `text` are columns. Everything else is not: a
-/// nested struct is another table's row, a vector is many rows, and a stored
-/// pointer is meaningless outside this process. A reference at this boundary is
-/// a foreign KEY — an ordinary integer or text field — so it is covered here,
-/// and following it is another lookup rather than a join (README § the traversal
-/// IS the join).
+/// The seed scalars and `text` are columns. Everything else is not: a nested
+/// struct is another table's row, a vector is many rows, and a stored pointer is
+/// meaningless outside this process. A reference at this boundary is a foreign
+/// KEY — an ordinary integer or text field — so it is covered here, and following
+/// it is another lookup rather than a join (README § the traversal IS the join).
+///
+/// **A narrow integer (`i32`, `u8`, `size(2)`) is refused, and that is a named
+/// gap rather than an oversight.** Writing one back means choosing between four
+/// encodings and their null sentinels, and a nullable narrow field is written
+/// through a different setter again — so it waits for a cell that can be checked
+/// rather than being guessed at now. Refusing is loud; guessing would put wrong
+/// numbers in the record.
 fn scalar_column(desc: &LayoutDesc, content: u16) -> bool {
-    matches!(
-        desc.nodes.get(&content),
-        Some(
-            LayoutNode::Base(_)
-                | LayoutNode::Byte { .. }
-                | LayoutNode::Short { .. }
-                | LayoutNode::Int { .. }
-                | LayoutNode::ShortRaw { .. }
-        )
-    )
+    matches!(desc.nodes.get(&content), Some(LayoutNode::Base(_)))
 }
 
 /// The key fields of a collection, as `(field index, ascending)` pairs, plus
