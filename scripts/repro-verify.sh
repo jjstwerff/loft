@@ -117,6 +117,14 @@ if [ ! -f "$info" ]; then
 fi
 RUSTC_VER=$(sed -n 's/^rustc = //p' "$info" | sed 's/ .*//')
 [ -n "$RUSTC_VER" ] || die "BUILD-INFO names no rustc"
+# The commit the release baked into LOFT_BUILD_ID.  The rebuild has no `.git` (it is
+# an unpacked source archive), so without this it would stamp a TIMESTAMP and differ
+# from the release on every run — a difference the verifier caused, reported as one
+# the source has.  Absent → exit 3, the same honest "cannot verify" a release without
+# BUILD-INFO gets.
+BUILD_COMMIT=$(sed -n 's/^commit = //p' "$info" | tr -d '\r')
+[ -n "$BUILD_COMMIT" ] && [ "$BUILD_COMMIT" != "unknown" ] \
+  || die "v$VERSION records no build commit — its LOFT_BUILD_ID cannot be reproduced"
 # A release cut before the build stopped embedding its machine's absolute paths
 # cannot be reproduced anywhere else — it carried ~193 of them
 # (`/home/<user>/.cargo/registry/...`), and those strings differ, and differ in
@@ -150,7 +158,8 @@ rustup toolchain install "$RUSTC_VER" --profile minimal --target "$TARGET" >/dev
 # 4. Rebuild, exactly as make-release.sh does.
 echo "   building $TARGET"
 ( cd "$SRC" && . "$SRC/scripts/repro-flags.sh" \
-    && CARGO_INCREMENTAL=0 rustup run "$RUSTC_VER" cargo build --release --bin loft --target "$TARGET" ) \
+    && LOFT_BUILD_ID="$BUILD_COMMIT" CARGO_INCREMENTAL=0 \
+       rustup run "$RUSTC_VER" cargo build --release --bin loft --target "$TARGET" ) \
   || die "the rebuild failed"
 
 exe="loft"; case "$TARGET" in *windows*) exe="loft.exe" ;; esac

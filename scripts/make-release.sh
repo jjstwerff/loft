@@ -133,6 +133,11 @@ QS
     # verify" rather than as a difference, because calling it a difference would
     # blame the source for the toolchain's behaviour.
     echo "reproducible-paths = yes"
+    # The commit `build.rs` baked into LOFT_BUILD_ID.  Without it a verifier cannot
+    # reproduce the stamp: it rebuilds from the source ARCHIVE, which has no `.git`,
+    # so `git rev-parse` there falls through to a timestamp and the binary can never
+    # match.  A release that omits this line is unverifiable, not different.
+    echo "commit = $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   } > "$stage/BUILD-INFO"
 
   ( cd "$stage" && find . -type f ! -name SHA256SUMS | sort | sed 's|^\./||' | xargs $SHA256 > SHA256SUMS )
