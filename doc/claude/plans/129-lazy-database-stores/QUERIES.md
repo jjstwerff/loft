@@ -145,8 +145,21 @@ SELECT "person_id", "from", "to" FROM "spell" WHERE "person_id" = ?
 ```
 
 That removes the whole class rather than one word of it: no reserved-word list to
-carry, and none to keep current as engines add words. The cost is that the quote
-CHARACTER is a dialect fact — `"x"` is an identifier in standard SQL and a string
+carry, and none to keep current as engines add words.
+
+**But quoting has a price on SQLite, and it was measured rather than reasoned
+about.** SQLite accepts a double-quoted name that resolves to no identifier as a
+STRING LITERAL. Against a table with a `name` column, `SELECT "naam" FROM
+"person"` does not fail — it returns the text `naam`, once per row. Since the
+derived query quotes *every* identifier, a renamed column would have materialised
+its own name into the record: failure path 9 in its cruellest form, a wrong answer
+that looks like data. The connection turns the misfeature off
+(`SQLITE_DBCONFIG_DQS_DML` / `_DDL`), which is one call on the handle core owns
+and makes an unresolvable name raise. An SQLite older than 3.29 does not know the
+option, and there the bind-time schema check (step 7) is the backstop — which is
+part of why that check is mandatory rather than a guard.
+
+The other cost is that the quote CHARACTER is a dialect fact — `"x"` is an identifier in standard SQL and a string
 literal in MySQL — so it is declared (`Quoting::Double` by default, `Backtick` for
 MySQL/MariaDB, `Bare` for a caller who wants the query to read as they wrote it
 and accepts a refusal for a name that cannot be written unquoted). Placeholders

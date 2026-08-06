@@ -13,6 +13,7 @@ pub mod lazy;
 mod search;
 pub mod snapshot;
 pub mod sql_query;
+pub mod sql_source;
 mod structures;
 mod types;
 
