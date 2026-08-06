@@ -147,6 +147,40 @@ that is the price of the bound. It was the default until loft#785, where 4 MiB a
 20 MB working set fetched **3.6× the bytes** — the prefetch evicting the very pages it was
 about to read.
 
+### What a single read costs
+
+Two guarantees, because a paged traversal performs them by the hundred thousand — one
+viewport in a real consumer issues ~800 000 four-byte index reads (loft#783):
+
+| a resident read of 1–8 bytes | |
+|---|---|
+| allocations | **0** |
+| page-map lookups | **1** |
+
+Neither was true before loft#787. `resolve` returned an owning `Vec`, so a four-byte index
+word cost a malloc and a free; and the read hashed its page key **twice**, once to ask
+whether the page was resident and once to index it. Both are per-READ costs, both are
+invisible in a profile that attributes by function, and both hid completely on native builds
+because glibc's per-thread cache serves a 4-byte request in ~15 ns. In a browser — dlmalloc
+on the linear heap, no thread-local fast path — the same code was 1.14× slower on a keyed
+paged load while issuing FEWER requests and fewer bytes, which is the signature of a cost
+that scales with reads rather than with round trips.
+
+Measured end-to-end by the consumer that reported it, one viewport, medians, arms
+interleaved:
+
+```
+pre-arc baseline    169 ms / 763 ms (CPU 1x / 4x)   411 reads   26.9 MB
+as filed            254 ms / 1018 ms                369 reads   26.7 MB
+fixed               173 ms /  694 ms                369 reads   26.7 MB
+```
+
+Faster than before the work started, with 42 fewer reads. `tests/paged_read_alloc.rs` pins
+both counts, asserting them as SCALING properties (the same range read 200 and 300 000 times
+must cost the same) so a legitimate per-page or per-record allocation can never be mistaken
+for a per-read one. The span read that relocates a record body still owns one buffer — per
+RECORD, which is the right unit.
+
 Every fetch is one page-aligned range. **A page is the unit of waste and the unit
 of amortisation**: a 12-byte record costs a 64 KiB fetch, and so do the next
 thousand records beside it. That is why *what sits next to what* in the file is

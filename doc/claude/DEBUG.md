@@ -1323,3 +1323,12 @@ was always readable. `tests/paged_read_alloc.rs` is the pattern:
   breaking.
 
 Reach for the target's own harness only for the part that is genuinely a price.
+
+**How it ended, because the sequence is the lesson.** The reported ratio went
+`1.5x` (un-interleaved, withdrawn by the reporter) → `1.14x` (interleaved, real) →
+`1.03x` and, on the headline workload, **694 ms against a 763 ms pre-arc baseline** — faster
+than before the work started, with 42 fewer reads. Two per-read costs did it: an allocation
+per read, and hashing the page key twice per read. Both were found by counting, both were
+invisible to three native wall-clock probes, and the browser A/B built to see them could not
+resolve either — every rung of that ladder landed inside its own noise floor. **The counts
+were exact on the first try.**
