@@ -180,3 +180,153 @@ fn the_concept_door_resolves_to_a_real_catalogue_entry() {
         "@F106 is the door the copy fixes open onto — it must exist in the catalogue"
     );
 }
+
+// ── steps 3–4: verifying a fix, and applying it ──────────────────────────────
+
+/// A program whose one fix is mechanical, spelled, and placeable: a literal `}` in a
+/// format string. Line 2 is the offence.
+const BRACE: &str = "fn main() {\n  println(\"a } b\");\n}\n";
+
+/// Run `loft fix` (report) or `loft fix --apply` on a file, returning stdout+stderr.
+fn fix_cmd(path: &std::path::Path, apply: bool) -> String {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg("fix");
+    if apply {
+        cmd.arg("--apply");
+    }
+    let out = cmd
+        .arg(path)
+        .env("LOFT_TIMEOUT", "120")
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("spawn loft fix");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// Step 3 — a fix is CHECKED by running it, not by looking plausible.
+///
+/// The compiler holds the analysis that raised the diagnostic, so a candidate rewrite can
+/// be applied to an in-memory copy and the analysis re-run. That is what separates a
+/// suggestion that has been tried from one that was pattern-matched, and it is the whole
+/// reason `--apply` can be trusted to run unattended.
+#[test]
+fn a_fix_is_verified_by_running_it() {
+    let path = probe(BRACE);
+    let out = fix_cmd(&path, false);
+    assert!(
+        out.contains("double the brace") && out.contains("[verified]"),
+        "a mechanical fix that clears its diagnostic must report as verified; output:\n{out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Reporting must not write. `loft fix` without `--apply` is a read-only question.
+#[test]
+fn reporting_a_fix_does_not_touch_the_file() {
+    let path = probe(BRACE);
+    let before = std::fs::read_to_string(&path).expect("probe");
+    let out = fix_cmd(&path, false);
+    let after = std::fs::read_to_string(&path).expect("probe");
+    assert_eq!(
+        before, after,
+        "`loft fix` without `--apply` must change nothing; output:\n{out}"
+    );
+    assert!(
+        !out.contains("[applied]"),
+        "a report that claims an edit it did not make is the one output a reader cannot \
+         check; output:\n{out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Step 4 — `--apply` writes the fix, and the result actually compiles and runs.
+///
+/// Asserting the file merely CHANGED would pass for a rewrite that broke the program, which
+/// is the failure this feature exists to avoid. So the applied program is run, and its
+/// output is the one the author was trying to write: a literal `}`.
+#[test]
+fn applying_a_fix_produces_a_program_that_runs() {
+    let path = probe(BRACE);
+    let out = fix_cmd(&path, true);
+    assert!(
+        out.contains("[applied]"),
+        "the mechanical fix must be written; output:\n{out}"
+    );
+    let src = std::fs::read_to_string(&path).expect("probe");
+    assert!(
+        src.contains("a }} b"),
+        "the brace must be doubled in place; got:\n{src}"
+    );
+    let run = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--interpret"])
+        .arg(&path)
+        .env("LOFT_TIMEOUT", "120")
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("run the fixed program");
+    assert!(
+        run.status.success(),
+        "the applied fix must leave a program that compiles: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("a } b"),
+        "the fixed program must print the literal brace the author wanted: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Applying twice is a no-op — the second run has nothing left to fix.
+///
+/// An applier that re-applies its own output doubles the brace again on every run, which is
+/// the classic way a quick-fix corrupts a file nobody was watching.
+#[test]
+fn applying_twice_changes_nothing_the_second_time() {
+    let path = probe(BRACE);
+    fix_cmd(&path, true);
+    let once = std::fs::read_to_string(&path).expect("probe");
+    fix_cmd(&path, true);
+    let twice = std::fs::read_to_string(&path).expect("probe");
+    assert_eq!(once, twice, "a second `--apply` must find nothing to do");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A rewrite that would introduce a NEW error is refused, not written.
+///
+/// `x: integer = "5" as integer` is offered the checked cast like any other failing parse,
+/// but `as integer?` in that slot yields `integer?` into a non-null `integer` — the fix
+/// does not survive its own verification. This is step 3 paying for itself: the suggestion
+/// is plausible, the measurement is what says no.
+#[test]
+fn a_fix_that_would_break_the_program_is_refused() {
+    let path = probe("fn main() { x: integer = \"5\" as integer; println(\"{x}\"); }\n");
+    let before = std::fs::read_to_string(&path).expect("probe");
+    let out = fix_cmd(&path, true);
+    assert!(
+        out.contains("REJECTED"),
+        "a rewrite that introduces an error must be refused; output:\n{out}"
+    );
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&path).expect("probe"),
+        "a refused fix must not reach the file; output:\n{out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Nothing to fix, nothing to say — loft is BORING when there is no work.
+#[test]
+fn a_clean_file_reports_nothing() {
+    let path = probe("fn main() { println(\"ok\"); }\n");
+    let out = fix_cmd(&path, false);
+    assert!(
+        out.trim().is_empty(),
+        "a file with no fixes must print nothing; output:\n{out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

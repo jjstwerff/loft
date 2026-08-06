@@ -133,7 +133,55 @@ idiom and "use an amount inside `0..=63`" teaches nothing, but a constant out-of
 is nearly always a wrong amount, so the escape ranks second. Teaching first is a tiebreak
 between sound fixes, not a licence to paper over a bug with the better lesson.
 
-Nothing is ever applied. `--explain` shows; the author decides.
+`--explain` never applies anything. `loft fix` is where a fix gets checked and written.
+
+## Checking a fix by running it — `loft fix`
+
+The compiler holds the analysis that raised the diagnostic, so a candidate rewrite can be
+**applied to an in-memory copy and the analysis re-run**. That is what an IDE quick-fix
+historically could not do, and it turns "this fix is sound" from an assertion into a
+measurement.
+
+```
+$ loft fix prog.loft
+prog.loft
+  prog.loft:2  double the brace        [verified]
+  prog.loft:7  make the cast checked   [REJECTED (the rewrite introduces an error)]
+
+$ loft fix --apply prog.loft
+prog.loft
+  prog.loft:2  double the brace        [applied]
+  wrote 1 fix(es) to prog.loft
+```
+
+A fix `Clears` only when the diagnostic's **code** is gone from the re-analysis *and* no
+error appeared that the original did not have. Both halves are needed: a rewrite that
+silences one error by causing another is not a fix, and that is exactly what a
+pattern-matched suggestion produces. Matching on the code rather than the message is why the
+code index landed first — prose is free to change, the code is not.
+
+`--apply` writes a fix only when all three hold:
+
+| gate | rejects |
+|---|---|
+| `Mechanical` | a fix whose correctness rests on a condition — an unattended run has nobody to affirm it |
+| spells an `edit` | a fix that knows the rewrite but not where it goes |
+| verifies | a fix that does not clear its own diagnostic, or that breaks something else |
+
+**The program is never run.** The design asked for a behaviour comparison across both
+backends; that would mean executing the author's code as a side effect of their asking what
+to write — code that may write files, take a network turn, or not terminate. Verification is
+static, and stops where acting on the author's behalf would begin.
+
+`text-parse-may-fail` is the standing example of the third gate paying for itself.
+`x: integer = "5" as integer` is offered the checked cast like any other failing parse, and
+`as integer?` there yields `integer?` into a non-null slot — plausible, and refused by the
+measurement. The same fix verifies where the target is not annotated.
+
+An editor gets the same fixes as code actions (`data.fixes` on the published diagnostic, with
+each fix's own span). Both tiers are offered, because a click IS the affirmation — a
+conditional fix's title carries `— only if …` so the condition cannot be missed, and only
+mechanical fixes are marked `isPreferred`, since a "fix all" gesture has nobody reading.
 
 ## Adding a code
 

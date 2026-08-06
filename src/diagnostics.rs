@@ -49,6 +49,26 @@ pub enum FixKind {
     Conditional,
 }
 
+/// A rewrite the compiler can PLACE: replace `len` bytes at `line`:`col` with `text`.
+///
+/// @PLN131 steps 3–4 — an edit without a span is not applicable, only readable. The
+/// diagnostic's own position cannot stand in for one: by detection time the lexer has often
+/// drifted past the statement terminator (the same drift `diagnostic_at!` exists for), so a
+/// cast reported at column 33 ends at column 31. A site that cannot state where its rewrite
+/// goes must leave `edit` as `None` — a fix may only spell an edit it can also place, and
+/// "drop the `#superseded` attribute" is the standing example of one that knows the rewrite
+/// and not the span.
+///
+/// `len == 0` is an INSERTION at `col` (how `as τ` becomes `as τ?`); the columns are
+/// 1-based, matching [`DiagEntry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    pub line: u32,
+    pub col: u32,
+    pub len: u32,
+    pub text: String,
+}
+
 /// What to write instead — the deliverable half of a diagnostic (@PLN131).
 ///
 /// A diagnostic says what is wrong; this says what to write instead; the linked feature
@@ -67,11 +87,12 @@ pub struct Fix {
     /// What the author affirms by applying it. Required for `Conditional` (a conditional
     /// fix with no condition is malformed); `None` for `Mechanical`.
     pub condition: Option<String>,
-    /// The concrete rewrite, when the compiler can spell one. `None` when the fix is a
-    /// deletion the author must place, or when the shape admits no mechanical rewrite —
-    /// the append shape has no "build it in place", and assuming every diagnostic offers
-    /// one is how a suggestions feature ships a fix that does not exist.
-    pub edit: Option<String>,
+    /// The concrete rewrite, when the compiler can spell AND place one. `None` when the fix
+    /// is a deletion the author must place, when the shape admits no mechanical rewrite (the
+    /// append shape has no "build it in place"), or when the span is unknown — see [`Edit`].
+    /// Assuming every diagnostic offers one is how a suggestions feature ships a fix that
+    /// does not exist.
+    pub edit: Option<Edit>,
     /// The capability this uses — the searchable noun.
     pub concept: &'static str,
     /// The catalogue entry `concept` opens onto, e.g. `@F106`.

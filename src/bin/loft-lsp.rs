@@ -436,11 +436,45 @@ fn lsp_diagnostic(e: &DiagEntry, text: &str) -> Parsed {
     // Round-trip the structured suggestion on the diagnostic's `data` — the
     // editor echoes it back in a `codeAction` request, so the quick-fix needs no
     // re-parse (step A→B).
-    if let Some(suggestion) = &e.suggestion {
-        fields.push((
-            "data",
-            obj(vec![("suggestion", Parsed::Str(suggestion.clone()))]),
-        ));
+    // @PLN131 step 4 — the same round-trip for FIXES. Each carries its own span, so a
+    // quick-fix edits where the rewrite belongs rather than where the squiggle is: the two
+    // differ (a cast is reported past the statement terminator and inserts its `?` at the
+    // type's end), and using the diagnostic's range would write to the wrong place.
+    //
+    // The `condition` rides along so the editor can show what a click AFFIRMS. That is the
+    // whole of the interactive tier rule: a conditional fix is clickable — the click is the
+    // affirmation — provided the condition is in the line the author reads.
+    let fixes: Vec<Parsed> = e
+        .fixes
+        .iter()
+        .filter_map(|f| {
+            let ed = f.edit.as_ref()?;
+            let (l0, c0) = (ed.line.saturating_sub(1), ed.col.saturating_sub(1));
+            let mut row = vec![
+                ("title", Parsed::Str(f.title.clone())),
+                ("range", range_of(l0, c0, c0 + ed.len)),
+                ("newText", Parsed::Str(ed.text.clone())),
+                (
+                    "mechanical",
+                    Parsed::Bool(f.kind == loft::diagnostics::FixKind::Mechanical),
+                ),
+                ("concept", Parsed::Str(f.concept.into())),
+            ];
+            if let Some(c) = &f.condition {
+                row.push(("condition", Parsed::Str(c.clone())));
+            }
+            Some(obj(row))
+        })
+        .collect();
+    if e.suggestion.is_some() || !fixes.is_empty() {
+        let mut data = Vec::new();
+        if let Some(suggestion) = &e.suggestion {
+            data.push(("suggestion", Parsed::Str(suggestion.clone())));
+        }
+        if !fixes.is_empty() {
+            data.push(("fixes", Parsed::Array(fixes)));
+        }
+        fields.push(("data", obj(data)));
     }
     obj(fields)
 }
@@ -566,6 +600,8 @@ fn code_actions(
                 .iter()
                 .filter_map(|d| quickfix_from_diagnostic(d, &uri)),
         );
+        // @PLN131 step 4 — one quick-fix per spelled fix, both tiers.
+        actions.extend(diags.iter().flat_map(|d| fix_actions(d, &uri)));
     }
     // E4 (extract-function) — on a MULTI-LINE selection (a real statement selection,
     // never a bare cursor or a single-line diagnostic range, so a quick-fix request is
@@ -597,6 +633,43 @@ fn quickfix_from_diagnostic(d: &Parsed, uri: &str) -> Option<Parsed> {
         ("isPreferred", Parsed::Bool(true)),
         ("edit", obj(vec![("changes", changes)])),
     ]))
+}
+
+/// @PLN131 step 4 — the quick-fixes a diagnostic's `data.fixes` carries.
+///
+/// Both tiers are offered, which is the plan's rule and not an oversight: a conditional fix
+/// is one click for a veteran, because the click IS the affirmation. What makes that safe is
+/// that the condition is in the title they read before clicking, so the thing being affirmed
+/// cannot be missed. `isPreferred` is reserved for mechanical fixes — an editor may apply a
+/// preferred action from a "fix all" gesture, and nobody would be reading a condition then.
+fn fix_actions(d: &Parsed, uri: &str) -> Vec<Parsed> {
+    let Some(Parsed::Array(fixes)) = obj_get(d, "data").and_then(|x| obj_get(x, "fixes")) else {
+        return Vec::new();
+    };
+    fixes
+        .iter()
+        .filter_map(|f| {
+            let title = obj_str(f, "title")?;
+            let new_text = obj_str(f, "newText")?;
+            let range = obj_get(f, "range")?.clone();
+            let mechanical = matches!(obj_get(f, "mechanical"), Some(Parsed::Bool(true)));
+            // The condition belongs in the TITLE, not beside it: a code-action list shows
+            // titles, so a condition anywhere else is a condition the clicker never saw.
+            let label = match obj_str(f, "condition") {
+                Some(c) if !mechanical => format!("{title} — only if {c}"),
+                _ => title,
+            };
+            let edit = obj(vec![("range", range), ("newText", Parsed::Str(new_text))]);
+            let changes = Parsed::Object(vec![(uri.to_string(), 0, Parsed::Array(vec![edit]))]);
+            Some(obj(vec![
+                ("title", Parsed::Str(label)),
+                ("kind", Parsed::Str("quickfix".into())),
+                ("diagnostics", Parsed::Array(vec![d.clone()])),
+                ("isPreferred", Parsed::Bool(mechanical)),
+                ("edit", obj(vec![("changes", changes)])),
+            ]))
+        })
+        .collect()
 }
 
 /// True when a `Range` spans more than one line — the E0 discriminator for a real

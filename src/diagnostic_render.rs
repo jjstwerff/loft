@@ -303,7 +303,16 @@ fn render_fixes(out: &mut String, entry: &DiagEntry, bold_open: &str, reset: &st
         // one shape where dropping either is unsafe: the edit is what gets applied and the
         // condition is what the click affirms, so showing only the edit would let a reader
         // apply a rewrite whose precondition they never saw.
-        let mut detail = fix.edit.clone().unwrap_or_default();
+        // An edit renders as the TEXT it writes, not as its span: the span is for an
+        // applier, and a reader wants to see what would appear in their source. An
+        // insertion (`len == 0`) says so, because a bare `?` on its own reads as noise.
+        let mut detail = fix.edit.as_ref().map_or_else(String::new, |e| {
+            if e.len == 0 {
+                format!("insert `{}`", e.text)
+            } else {
+                format!("write `{}`", e.text)
+            }
+        });
         if let Some(c) = &fix.condition {
             if !detail.is_empty() {
                 detail.push_str("   ");

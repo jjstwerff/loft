@@ -8,8 +8,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Tracker: [@PLN131](https://github.com/loft-lang/plans/issues/131) · starts from
 [@PLN130](https://github.com/loft-lang/plans/issues/130)'s copy notice.
 
-**Status:** active — the prerequisite arc and ship steps 1–2 and **5** are BUILT; steps 3–4
-are open.
+**Status:** active — the prerequisite arc and ship steps **1–5** are BUILT. What remains is
+coverage (more fixes spelling a placeable edit), not machinery.
 
 Built: diagnostic codes (index at [DIAGNOSTICS.md](../../DIAGNOSTICS.md)), the surviving
 use's location through `VerdictRow` (Q6.1), the structured `Fix` shape (`kind` / `title` /
@@ -26,11 +26,39 @@ error[format-unescaped-brace]: a literal `}` in a format string must be written 
   fix  double the brace   }}   [interpolation · @F35]
 ```
 
-Open: **3** (self-verification) and **4** (apply). Both wait on the same thing, recorded
-under Q6: too few fixes spell an `edit`. Step 5 raised that count from zero to one —
-`format-unescaped-brace` is the first fix whose rewrite the code alone settles, and
-`as T?` on the two cast codes is the second and third — which is what finally makes 3 and 4
-testable on something.
+**Steps 3–4 — `loft fix`.** A fix is checked by APPLYING it to an in-memory copy and
+re-running the analysis; `--apply` writes the ones that are mechanical and verified.
+
+```
+$ loft fix --apply prog.loft
+prog.loft
+  prog.loft:2  double the brace        [applied]
+  prog.loft:7  make the cast checked   [REJECTED (the rewrite introduces an error)]
+  wrote 1 fix(es) to prog.loft
+```
+
+Three things the build settled that the design had not:
+
+1. **An edit needs a SPAN, and that was the real prerequisite** — not the count of fixes
+   spelling one. `Fix.edit` was a bare string with no idea where it went, and the
+   diagnostic's own position cannot stand in: by detection time the lexer has drifted past
+   the statement terminator, so a cast reported at column 33 ends at 31. `Edit { line, col,
+   len, text }` now carries it, captured where the parser knows it — for a cast, right after
+   the type parses, which is the only moment the lookahead has not moved on.
+2. **Verification pays for itself immediately.** `text-parse-may-fail` offers the checked
+   cast, and on `x: integer = "5" as integer` that yields `integer?` into a non-null slot —
+   plausible, and REJECTED by the measurement. A pattern-matched suggestion would have
+   shipped it. This is the plan's thesis holding on the first real case rather than in
+   principle.
+3. **The behaviour half of step 3 is refused, not deferred.** The design asked to compare
+   behaviour on both backends; that means running the author's code as a side effect of
+   asking what to write — code that may write files, take a network turn, or not terminate.
+   Verification stops where acting on the author's behalf begins: the diagnostic must
+   disappear and no new error may appear.
+
+Open now is COVERAGE, not machinery: only three fixes spell a placeable edit
+(`format-unescaped-brace`, and `as τ?` on the two cast codes). The copy notice still cannot,
+for the reason under Q6 — the IR desugars construction and append to the same node.
 
 **The three-homes rule was only half-applied until the prose moved too.** Attaching fixes
 left every message still carrying its own cure, so `--explain` printed the advice twice. The

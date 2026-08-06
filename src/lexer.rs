@@ -1701,11 +1701,21 @@ impl Lexer {
             "format-unescaped-brace",
             "a literal `}` in a format string — `}` closes an interpolation hole, and none is open",
         );
+        // The scanners all consume the `}` before reporting, so the diagnostic sits ONE
+        // column past it and the brace to replace is at `col - 1`. Placeable because that
+        // offset is a property of this code path rather than of the input — which is what
+        // makes this the one fix an applier can run unattended today (@PLN131 step 4).
+        let (line, col) = (self.position.line, self.position.pos);
         self.fix_last(Fix {
             kind: FixKind::Mechanical,
             title: "double the brace".to_string(),
             condition: None,
-            edit: Some("}}".to_string()),
+            edit: Some(crate::diagnostics::Edit {
+                line,
+                col: col.saturating_sub(1).max(1),
+                len: 1,
+                text: "}}".to_string(),
+            }),
             concept: "interpolation",
             concept_ref: "@F35",
         });

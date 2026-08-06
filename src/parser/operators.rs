@@ -2323,6 +2323,15 @@ impl Parser {
                     diagnostic!(self.lexer, Level::Error, "Expect type");
                     return Some(Type::Null);
                 };
+                // @PLN131 step 4 — where a `?` would go to make this cast checked, captured
+                // HERE because it is the only moment the parser knows it: the lookahead has
+                // not moved past the type yet, and by the time either cast diagnostic fires
+                // the cursor has drifted beyond the statement terminator. Both fixes spell
+                // `as τ?`, and an edit that cannot be placed must not be spelled at all.
+                let type_end = {
+                    let p = self.lexer.peek_pos();
+                    (p.line, p.pos)
+                };
                 let nullable_cast = self.lexer.has_token("?");
                 // @PLN25 DN4/DN5 — a scalar cast target has a DOMAIN: its integer value
                 // RANGE, and (when it is a plain non-null scalar) that domain EXCLUDES null.
@@ -2441,7 +2450,12 @@ impl Parser {
                                 kind: crate::diagnostics::FixKind::Mechanical,
                                 title: "make the cast checked".to_string(),
                                 condition: None,
-                                edit: Some(format!("as {tps}?")),
+                                edit: Some(crate::diagnostics::Edit {
+                                    line: type_end.0,
+                                    col: type_end.1,
+                                    len: 0,
+                                    text: "?".to_string(),
+                                }),
                                 concept: "checked cast",
                                 concept_ref: "@F5",
                             });
@@ -2534,7 +2548,12 @@ impl Parser {
                                 kind: crate::diagnostics::FixKind::Mechanical,
                                 title: "make the cast checked".to_string(),
                                 condition: None,
-                                edit: Some(format!("as {tps}?")),
+                                edit: Some(crate::diagnostics::Edit {
+                                    line: type_end.0,
+                                    col: type_end.1,
+                                    len: 0,
+                                    text: "?".to_string(),
+                                }),
                                 concept: "checked cast",
                                 concept_ref: "@F5",
                             });

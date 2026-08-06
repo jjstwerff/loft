@@ -236,6 +236,12 @@ fn print_help() {
                                 and the capability it uses.  Shows only; applies nothing."
     );
     println!(
+        "  fix [--apply] <file…>         check each suggested fix by APPLYING it and re-running
+                                the analysis, and report what that measured.  --apply writes
+                                the ones that are mechanical and verified; a fix resting on a
+                                condition only you can affirm is reported, never written."
+    );
+    println!(
         "  --deny-warnings               under --tests/`loft test`, fail any file with an
                                 unexpected warning.  LOFT_DENY_WARNINGS=1 as env equivalent.
                                 Used by extracted library chunks' CI to lock in cleanliness."
@@ -5402,6 +5408,88 @@ fn run_layout_command(sub: &str, file: &str) -> i32 {
     }
 }
 
+/// `loft fix [--apply] <file…>` — @PLN131 steps 3–4: check each suggested fix by running
+/// it, and write the ones that are safe unattended.
+///
+/// Without `--apply` this reports and changes nothing: each fix is applied to an in-memory
+/// copy, the analysis is re-run, and the fix is labelled by what that measured. A
+/// suggestion that has been TRIED is a different class of artefact from one that was
+/// pattern-matched, and this is the command that tells them apart.
+///
+/// `--apply` writes only fixes that are **mechanical** and **verified**. A conditional one
+/// is never written here however sound it looks: its correctness rests on something only
+/// the author can affirm, and an unattended run has nobody to affirm it. Those stay in the
+/// report with their condition, for a human or an editor's quick-fix to accept.
+fn run_fix_command(args: &[String]) -> i32 {
+    let mut apply = false;
+    let mut files: Vec<String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--apply" => apply = true,
+            s if s.starts_with('-') => {
+                eprintln!("loft fix: unknown option `{s}`");
+                return 1;
+            }
+            s => files.push(s.to_string()),
+        }
+    }
+    if files.is_empty() {
+        eprintln!("loft fix: usage: loft fix [--apply] <file…>");
+        return 1;
+    }
+
+    // Same stdlib resolution as `run_fmt_command`: beside the binary in a release layout,
+    // else the source tree.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let default_dir = exe_dir.join("../default");
+    let default_str = if default_dir.exists() {
+        default_dir.to_string_lossy().to_string()
+    } else {
+        format!("{}/default", project_dir())
+    };
+
+    let mut exit = 0;
+    for file in &files {
+        let src = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("loft fix: cannot read {file}: {e}");
+                exit = 1;
+                continue;
+            }
+        };
+        let diags = loft::lsp::diagnose(&src, file, &default_str);
+        let (rewritten, report) = loft::fix_apply::apply_fixes(&src, file, &default_str, &diags);
+        if report.is_empty() {
+            continue; // Nothing to say. loft is BORING when there is no work.
+        }
+        println!("{file}");
+        for r in &report {
+            // Without `--apply` nothing is written, so nothing may SAY it was: a report
+            // that claims an edit it did not make is the one output a reader cannot check.
+            let mark = if r.written && apply {
+                "applied"
+            } else {
+                r.verdict.tag()
+            };
+            println!("  {}:{}  {}  [{mark}]", file, r.line, r.title);
+        }
+        if apply && rewritten != src {
+            if let Err(e) = std::fs::write(file, &rewritten) {
+                eprintln!("loft fix: cannot write {file}: {e}");
+                exit = 1;
+                continue;
+            }
+            let n = report.iter().filter(|r| r.written).count();
+            println!("  wrote {n} fix(es) to {file}");
+        }
+    }
+    exit
+}
+
 /// `loft fmt [--check|--write] <file…>` — the parser-driven formatter, written in
 /// loft (`tools/fmt/whole.loft`) and invoked via the `loft::host` call API.  Default
 /// prints the formatted source; `--write` rewrites in place (reporting changes);
@@ -6819,6 +6907,10 @@ fn main() {
         } else if a == "fmt" {
             // Parser-driven formatter (loft-written, via the host-call API).
             std::process::exit(run_fmt_command(&argv[i..]));
+        } else if a == "fix" {
+            // @PLN131 steps 3–4 — verify each fix against the analysis, and write the
+            // mechanical ones on `--apply`.
+            std::process::exit(run_fix_command(&argv[i..]));
         } else if a == "symbols" {
             // @PLN63 — code-intelligence queries over the loft::lsp accessors.
             std::process::exit(run_symbols_command(&argv[i..]));

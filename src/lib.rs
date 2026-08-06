@@ -155,6 +155,7 @@ pub mod database;
 pub mod debugger;
 pub mod diagnostic_render;
 pub mod ffi_deliver;
+pub mod fix_apply;
 pub mod hash;
 pub mod ir_node;
 pub mod ir_read;
