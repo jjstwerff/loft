@@ -4253,7 +4253,7 @@ impl Stores {
                 || matches!(self.types[ftp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
             {
                 // Flat sub-record pointer (text / vector<scalar>).
-                let src_sub = reader.u32_at(src_rec, src_off);
+                let src_sub = self.src_ptr(reader, dst_rec, dst_off, src_rec, src_off, store_nr);
                 if src_sub != 0 {
                     // `text` is one byte per unit; a vector<scalar> is its element.
                     let esz = if ftp == 5 {
@@ -4274,13 +4274,41 @@ impl Stores {
                 self.relocate_ptr_fields(reader, dst_rec, dst_off, src_rec, src_off, ftp, store_nr);
             } else if let Parts::Vector(elem_tp) = self.types[ftp as usize].parts {
                 // vector<struct>: copy the inner record + recurse each element.
-                let src_sub = reader.u32_at(src_rec, src_off);
+                let src_sub = self.src_ptr(reader, dst_rec, dst_off, src_rec, src_off, store_nr);
                 if src_sub != 0 {
                     let new_sub = self.copy_vector_of_struct(reader, src_sub, elem_tp, store_nr);
                     self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
                 }
             }
         }
+    }
+
+    /// The SOURCE pointer stored in a field, read from the local copy rather than
+    /// re-fetched over the reader (loft#783).
+    ///
+    /// Every caller of [`relocate_ptr_fields`](Stores::relocate_ptr_fields) flat-copies the
+    /// element's bytes into `dst` BEFORE relocating its pointers, and a pointer word is
+    /// part of those bytes — so the value is already in local memory, and asking the reader
+    /// for it again is a 4-byte paged request for something we hold. That request is one
+    /// per pointer field per ELEMENT: on a 100×250 `vector<Named>` it was 25 000 of the
+    /// 75 893 four-byte reads a load issued.
+    ///
+    /// `LOFT_LOADER_WORDWISE=1` takes the old route, so the two can be compared on one
+    /// binary — the same escape hatch loft#729's bulk-body read kept.
+    #[cfg(paged_store)]
+    fn src_ptr<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        dst_rec: u32,
+        dst_off: u32,
+        src_rec: u32,
+        src_off: u32,
+        store_nr: u16,
+    ) -> u32 {
+        if std::env::var_os("LOFT_LOADER_WORDWISE").is_some() {
+            return reader.u32_at(src_rec, src_off);
+        }
+        self.allocations[store_nr as usize].get_u32_raw(dst_rec, dst_off)
     }
 
     /// Copy a FLAT record (a string or a `vector<scalar>` inner record — no
@@ -4294,7 +4322,13 @@ impl Stores {
         store_nr: u16,
         elem_size: u32,
     ) -> u32 {
-        let ssz = reader.record_words(src_rec);
+        // loft#783 — the size word (fld 0) and the length (fld 4) are ADJACENT, and every
+        // flat sub-record needs both. Read as ONE 8-byte request instead of two 4-byte
+        // ones: on a 100×250 `vector<Named>` that was 25 000 requests, the second of the
+        // three this path issued per element. Same bytes, same page, half the calls.
+        let head = reader.resolve(u64::from(src_rec) * 8, 8);
+        let ssz = u32::from_ne_bytes([head[0], head[1], head[2], head[3]]);
+        let head_len = u32::from_ne_bytes([head[4], head[5], head[6], head[7]]);
         // loft#729 — claim what the LENGTH needs, not what the source's CAPACITY
         // is.
         //
@@ -4316,7 +4350,7 @@ impl Stores {
         // `min(ssz)` because the source is the authority on what can be read: a
         // length that disagrees with the record size must never widen the copy.
         let want = if elem_size > 0 {
-            let len = u64::from(reader.u32_at(src_rec, 4));
+            let len = u64::from(head_len);
             let bytes = 8 + len * u64::from(elem_size);
             u32::try_from(bytes.div_ceil(8)).unwrap_or(ssz).min(ssz)
         } else {

@@ -2942,3 +2942,106 @@ fn run_graph(
     }
     (stdout, out.status.code().unwrap_or(-1))
 }
+
+/// loft#783 — a pointer-bearing vector element relocates in BULK, not field-at-a-time.
+///
+/// `store_load_keys` bulk-read a `vector<Pt>` element block in one request, then fell off
+/// that path the moment an element carried a POINTER: a `text` or a nested vector cost ~3
+/// extra four-byte reads PER ELEMENT. Measured on a 100×250 `vector<Named>`, 25 000
+/// elements drew **75 893** four-byte reads. In the consumer that filed it, one viewport
+/// issued 804 313 of them — 175 ms of pure CPU with the bytes already in a prefetch buffer,
+/// and ~1.3 s projected for a cold view. It was never bytes; it was call count.
+///
+/// Two of the three were avoidable and both are now gone: the field's POINTER word was
+/// re-fetched over the reader although the caller had just flat-copied it into the local
+/// record, and the sub-record's size and length words were fetched separately although
+/// they are adjacent.
+///
+/// **The read counts are the assertion.** Every arm loaded the right values before the fix
+/// too, so a value-only test says nothing about the defect — but the values are asserted
+/// as well, because a relocation that dropped the strings would otherwise read as a win.
+/// `LOFT_LOADER_WORDWISE=1` is the pre-fix route on the same binary: the control that
+/// proves the count can move, so a green here is not a harness that measures nothing.
+#[test]
+fn a_pointer_bearing_element_relocates_in_bulk() {
+    let dir = scratch("ptr_element_reads_783");
+    let script = workspace_root().join("tests/scripts/783-ptr-element-reads.loft");
+    let path = dir.join("p");
+
+    let run = |mode: &str, wordwise: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_LOADER_STATS", "1")
+            .env("LOFT_TIMEOUT", "180")
+            .current_dir(workspace_root());
+        if !mode.is_empty() {
+            cmd.env("P783_MODE", mode);
+        }
+        if wordwise {
+            cmd.env("LOFT_LOADER_WORDWISE", "1");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.status.success(),
+            "mode={mode} wordwise={wordwise}: {all}"
+        );
+        assert!(!all.contains("FAIL"), "mode={mode}: {all}");
+        all
+    };
+
+    /// The count in the 4-byte bucket of `reads=[(2, N, bytes), …]` — one entry per
+    /// power-of-two size class, so bucket 2 is exactly the word-at-a-time traffic.
+    fn four_byte_reads(out: &str) -> u64 {
+        let at = out.find("reads=[").expect("loader stats must report reads");
+        let rest = &out[at..];
+        let open = rest.find("(2, ").map_or(usize::MAX, |i| i + 4);
+        assert_ne!(open, usize::MAX, "no 4-byte bucket in: {rest}");
+        let tail = &rest[open..];
+        let end = tail.find(',').expect("a count then a comma");
+        tail[..end].trim().parse().expect("a numeric read count")
+    }
+    /// The one result line, so the two routes can be compared value for value.
+    fn result(out: &str) -> &str {
+        out.lines()
+            .find(|l| l.starts_with("loaded="))
+            .expect("the script must report its load")
+    }
+
+    run("write", false);
+    let fast = run("", false);
+    let slow = run("", true);
+
+    // Correctness FIRST: fewer reads that lose data is not a fix.
+    assert_eq!(
+        result(&fast),
+        result(&slow),
+        "the bulk route must load exactly what the word-at-a-time route does"
+    );
+    assert!(
+        result(&fast).contains("elements=1000") && result(&fast).contains("chars=2800"),
+        "every element and every string must survive the relocation: {}",
+        result(&fast)
+    );
+
+    let (fast_reads, slow_reads) = (four_byte_reads(&fast), four_byte_reads(&slow));
+    // The control: the pre-fix route really is word-at-a-time, so this test can fail.
+    assert!(
+        slow_reads > 1000,
+        "the wordwise control must still be word-at-a-time ({slow_reads} reads) — if it is \
+         not, this test is measuring nothing"
+    );
+    // 1000 elements. The defect was ~3 four-byte reads EACH; the bound is deliberately
+    // loose (well under one per element) so it pins the CLASS rather than today's count.
+    assert!(
+        fast_reads < 500,
+        "a pointer-bearing element must not cost a four-byte read each: {fast_reads} reads \
+         for 1000 elements (wordwise control: {slow_reads})"
+    );
+}

@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — loft#783: a pointer-bearing vector element relocates in BULK, not field-at-a-time.
+//
+// A `vector<Pt>` (scalars only) came across as one big read; the moment an element
+// carried a POINTER — a `text` or a nested vector — the same payload cost ~3 extra
+// four-byte reads PER ELEMENT. Not vectors and not records: the pointer.
+//
+// The load-bearing cells are the READ COUNTS, not the values: every arm here loaded the
+// right data before the fix too, so a value-only test asserts nothing about the defect.
+// The driver (`tests/store_persist_loft.rs`) reads them off `LOFT_LOADER_STATS` and also
+// runs the `LOFT_LOADER_WORDWISE=1` route, which is the pre-fix behaviour on the same
+// binary — the control that proves the counts can move at all.
+//
+// Driven with a scratch path because a relative path resolves against the PROGRAM's
+// directory (@PLN9) and a suite script must not write beside itself. No path, nothing to
+// do — so `loft_suite` runs this clean.
+
+struct P783Named { x: integer, y: integer, name: text }
+struct P783Cell { id: integer, items: vector<P783Named> }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  if path == "" { return }
+  mode = env_variable("P783_MODE") ?? "";
+
+  if mode == "write" {
+    src: hash<P783Cell[id]> = [];
+    if !store_persist_bind(src, path) { println("FAIL write-bind"); return }
+    for c in 0..20 {
+      its: vector<P783Named> = [];
+      for i in 0..50 { its += [P783Named { x: i, y: c, name: "n{i}" }] }
+      src += [P783Cell { id: c, items: its }];
+    }
+    println("seeded={src.len()}");
+    return
+  }
+
+  local: hash<P783Cell[id]> = [];
+  keys: vector<integer> = [];
+  for c in 0..20 { keys += [c] }
+  loaded = store_load_keys(local, path, keys);
+
+  // Walk EVERY element and both of its halves — the scalar fields and the text behind
+  // the pointer. A count alone would pass on a relocation that dropped the strings.
+  elements = 0;
+  chars = 0;
+  coords = 0;
+  for cell in local {
+    for e in cell.items {
+      elements += 1;
+      chars += len(e.name);
+      coords += e.x + e.y;
+    }
+  }
+  println("loaded={loaded} elements={elements} chars={chars} coords={coords}");
+}
