@@ -449,7 +449,16 @@ find them through environment variables with working defaults:
 | sqlite | `libsqlite3.so.0`, no server | `:memory:` |
 | PostgreSQL | `LOFT_PG_CONN` | `dbname=loft_test_pg` |
 | MariaDB | `LOFT_MY_CONN` | `host=127.0.0.1 user=loft pass=loft db=loft_test_uni` |
-| duckdb | `libduckdb.so` on `LD_LIBRARY_PATH` | declared `[c] optional-libs`, so absence is not an error |
+| duckdb | `libduckdb.so` on `LD_LIBRARY_PATH` — keep it in `~/.local/lib` | declared `[c] optional-libs`, so absence is not an error |
+
+**Put `libduckdb.so` somewhere durable and point `LD_LIBRARY_PATH` at it**
+(`~/.local/lib` is the obvious home; nothing installs it and it is ~70 MB, which
+is exactly why it is declared optional).  It is NOT in the repo and must not be:
+`~/.loft/lib` holds loft *packages*, not native shared libraries.  A copy left in
+a scratchpad or a build directory is not durable — when it evaporates, the duckdb
+cell silently drops back to `SKIP` and the local four-backend bar quietly becomes
+a three-backend one, which is the same class of invisible coverage loss as a
+self-skipping test.
 
 `LOFT_SQLDB_MODE` picks the backend for `tests/fixtures/sqldb/uniform.loft`.  A
 backend that cannot be reached prints `SKIP` on stdout and the driver in
