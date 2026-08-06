@@ -459,7 +459,18 @@ impl<P: PageProvider> PagedReader<P> {
         let mut r = Self::with_config(provider, ps, (cache_bytes / ps).max(1));
         // loft#785 — an unasked-for default is a FLOOR, not a bound. Only a caller who
         // named a number is held to it.
-        r.capped = asked.is_some();
+        //
+        // …EXCEPT on wasm (loft#787), where the trade inverts. Uncapping is worth it when
+        // an eviction costs a network ROUND TRIP: never evicting then removes a 3.6x read
+        // amplification, which is what loft#785 measured. In a browser an eviction costs a
+        // copy out of a buffer the host already holds — cheap — while the memory is not:
+        // holding the whole working set puts hundreds of 64 KiB pages across linear memory
+        // instead of 64, and every `resolve` pays that locality on a phone.
+        //
+        // wasm also has no env, so `asked` is always None there and the uncapped default
+        // applied unconditionally — the browser got a policy chosen for the transport it
+        // does not use. Bounded there, uncapped natively, same as the batching split above.
+        r.capped = asked.is_some() || cfg!(target_family = "wasm");
         r
     }
 
@@ -1205,5 +1216,28 @@ mod tests {
         let mut r = PagedReader::with_config(VecProvider::new(img), 16, 999);
         r.warm(&[(0, 8 * 16)]);
         assert_eq!(r.pages.len(), 8, "a batching provider keeps its prefetch");
+    }
+
+    /// loft#787 — the residency policy follows the price of an EVICTION, and that price is
+    /// per-transport, not universal.
+    ///
+    /// Native: an eviction costs a network round trip, so never evicting is worth the
+    /// memory — that is loft#785's 3.6x amplification fix, and it must stay.
+    /// wasm: an eviction costs a copy out of a buffer the host already holds, while the
+    /// memory is the scarce thing; holding the whole working set spreads hundreds of 64 KiB
+    /// pages across linear memory and every read pays the locality.
+    ///
+    /// wasm has no env either, so the uncapped default applied there unconditionally — the
+    /// browser inherited a policy chosen for a transport it does not use.
+    #[test]
+    fn the_default_residency_policy_follows_the_target() {
+        let img = vec![7u8; 4096];
+        let r = PagedReader::new(VecProvider::new(img));
+        assert_eq!(
+            r.capped,
+            cfg!(target_family = "wasm"),
+            "wasm caps by default (an eviction is a buffer copy); native does not (an \
+             eviction is a round trip)"
+        );
     }
 }

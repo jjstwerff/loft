@@ -122,11 +122,20 @@ Reads are served through a page cache, not issued one-per-lookup:
 | page size | **64 KiB** | `LOFT_PAGE_BYTES` |
 | cache size | **the load's working set** | `LOFT_PAGE_CACHE_BYTES` |
 
-**The cache holds what the load reads, and is not bounded by default.** A page dropped
-before the walk reaches it costs a second fetch of the same bytes, so residency is what
-stops a load paying twice — and a keyed load's working set is the data you asked for, a
-local copy of which is being materialised anyway. Peak memory is therefore about the size
-of the result, not a constant.
+**Natively the cache holds what the load reads, and is not bounded by default; in the
+browser it is bounded.** The policy follows the price of an EVICTION, which is per-transport:
+natively an eviction costs a network round trip, so never evicting removes a 3.6× read
+amplification (loft#785). In a browser it costs a copy out of a buffer the host already
+holds — cheap — while the memory is not, and holding a whole working set spreads hundreds of
+64 KiB pages across linear memory for every read to pay (loft#787). Prefetching splits the
+same way: `warm` exists to turn N round trips into one, so a transport whose `fetch_many` is
+sequential (wasm, no threads) declines it rather than paying the computation for a saving it
+cannot collect.
+
+Natively, then: a page dropped before the walk reaches it costs a second fetch of the same
+bytes, so residency is what stops a load paying twice — and a keyed load's working set is the
+data you asked for, a local copy of which is being materialised anyway. Peak memory there is
+about the size of the result, not a constant.
 
 `LOFT_PAGE_CACHE_BYTES` turns it into a **hard cap** for a memory-bounded host. Expect
 re-fetching once the cap is below the working set: the bytes have to come back somehow, and
