@@ -262,12 +262,18 @@ Written after building them, because the answers are what the next reader needs.
 | **9** (B2) — the explicit query | `store_lazy_query(coll, condition)`. Only the WHERE comes from the caller; the table and columns are still derived, which is what makes a row arriving this way the same as one arriving by key. A row already resident is SKIPPED, so `LIKE` and a keyed lookup reach one record. |
 | **11** — the gate | Passes over SQL on both backends with the counts arc F proved over a file. |
 
-**A new stdlib builtin needs three edits, and two of them are silent.** `store_lazy_query`'s
+**A new stdlib builtin needs a second edit, and RUNNING it will not tell you.** `store_lazy_query`'s
 `#rust` body serves `--native` only; the interpreter dispatches through `src/native.rs`'s
-`FUNCTIONS` table, and `src/fill.rs` is GENERATED (`cargo test regen_fill_rs -- --ignored`). With
-the registry entry missing, the interpreter returned a plausible number — 8322 — from an
-uninitialised slot, and nothing reported anything: the count was wrong, the collection did not
-grow, and `--native` was correct all along.
+`FUNCTIONS` table. With the entry missing, the interpreter returned a plausible number — 8322 —
+from an uninitialised slot: the count was wrong, the collection did not grow, and `--native` was
+correct all along.
+
+**The repo already guards it, and checking that was worth more than the anecdote.**
+`tests/issues.rs::native_rs_functions_up_to_date` fails with *"src/native.rs is missing 1
+function(s) from default/*.loft: n_store_lazy_query"* — verified by removing the entry again on
+purpose. So the omission is caught by the suite and only slipped past because the binary was run
+by hand first. The transferable part is the ordering, not a thing to remember: **run the gate
+before believing an ad-hoc run**, because the gate names what the run only garbles.
 
 ### Three findings that changed the design
 
