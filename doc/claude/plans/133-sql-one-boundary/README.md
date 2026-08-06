@@ -606,6 +606,26 @@ is exact everywhere once the rendering is specified.
   string in every context, not just SQL, and `5e-324` is 326. That is what walks
   loft into the above, and it is worth deciding on its own merits.
 
+### What the guard found next door — loft#791
+
+Chasing why one cell of the float guard behaved differently per backend led out of
+SQL entirely: **a `vector` declared inside a GENERIC function reads correctly at
+index 0 and garbage from index 1 onward**, silently for numbers and as a CRASH for
+`text`, on both backends. Passing the same vector to a non-generic helper reads
+every element perfectly in the same call, and `len()` is right throughout — so the
+data is fine and the access inside the generic is not.
+
+Ruled out: the backend (identical corruption on both), generics as such (a local
+1-method and a local 14-method interface bound are both correct), and a
+library-declared interface as such (a freshly written two-line library does not
+reproduce). The trigger is something specific to the `tests/fixtures/sqldb`
+library set that is not yet isolated. Filed as
+[loft#791](https://github.com/loft-lang/loft/issues/791).
+
+**Worth noting how it presented:** as a database inconsistency — one backend
+disagreeing with three on a float cell. It is a language bug. That is the second
+time in this probe series that a SQL-shaped symptom had a non-SQL cause.
+
 ### P4 — can a fault inside the nested fetch be contained? **YES, but it leaks.**
 
 Containment is save-run-take-restore: run the nested frame while
