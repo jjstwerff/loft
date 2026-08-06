@@ -188,11 +188,14 @@ more surface to maintain.
 symbol `Y` (a **bare name**, e.g. `#superseded "write_through"`). Three things follow, all built:
 
 - **The steer.** A call to X *from owned source* — the entry project being compiled, never a
-  re-parsed dependency or the stdlib — emits `warning: `X` is superseded — use `Y` (the old form
-  keeps working)`. This caller-provenance gate means the steer reaches only whoever can act on it:
+  re-parsed dependency or the stdlib — emits `advice: `X` is superseded — use `Y` (the old form
+  keeps working)`. It is `advice`, not `warning`, and the tier rule says why: ignoring it cannot
+  produce a wrong result, because the old form goes on behaving identically
+  ([DIAGNOSTICS.md](DIAGNOSTICS.md) — a diagnostic gates CI iff ignoring it can be wrong).
+  This caller-provenance gate means the steer reaches only whoever can act on it:
   the author of the *calling* code, never a consumer nagged about a dependency's internal idiom.
   Default-on; **`LOFT_NO_STEER`** opts out. The old form keeps working, identically, forever — a
-  signpost, never a removal.
+  signpost, never a removal. The capability's catalogue entry is `@F109`.
 - **The fold, enforced.** A lint (`superseded_fold_diagnostics`, run on every compile and in
   `make ci`) checks each `#superseded "Y"` symbol in owned source: `Y` must resolve — an
   unresolvable successor is a **hard compile error**, so a *dangling* steer never ships — and X's

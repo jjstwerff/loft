@@ -88,21 +88,16 @@ fn root() -> PathBuf {
 
 /// @PLN131 — codes whose fix is BLOCKED, each with what blocks it.
 ///
-/// A code earns a place here only when the resolution is known but cannot be offered
-/// soundly.  Both entries name the same missing piece: a fix must open onto a real
-/// catalogue entry, and the `#superseded` steer has none — the identical prerequisite that
-/// `move` had before `@F106` existed.  Emptying this list is the whole of the remaining
-/// work; adding to it needs a reason of the same kind.
-const FIX_BLOCKED: &[(&str, &str)] = &[
-    (
-        "superseded-unknown-successor",
-        "the concept is `#superseded` itself, which has no @F catalogue entry to link to",
-    ),
-    (
-        "superseded-not-folded",
-        "the concept is `#superseded` itself, which has no @F catalogue entry to link to",
-    ),
-];
+/// **Currently empty: every code says what to write instead.** The list stays because the
+/// alternative to a listed exception is a silent one — a code that quietly ships without a
+/// fix looks exactly like a code that does not need one.  A row earns its place only when
+/// the resolution is KNOWN but cannot be offered soundly, and it carries the reason so the
+/// next reader can tell whether the blocker still holds.
+///
+/// The two rows this held were the `superseded-*` pair, blocked because their concept is
+/// `#superseded` itself and the feature catalogue had no entry for it — a fix that links
+/// nowhere is not finished.  `@F109` cleared that, exactly as `@F106` had for `move`.
+const FIX_BLOCKED: &[(&str, &str)] = &[];
 
 /// Run `prog` on the interpreter with compact errors (so a typed diagnostic surfaces as
 /// its stable `[code]` tag), returning stdout+stderr.

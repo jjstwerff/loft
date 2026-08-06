@@ -14,7 +14,7 @@ are open.
 Built: diagnostic codes (index at [DIAGNOSTICS.md](../../DIAGNOSTICS.md)), the surviving
 use's location through `VerdictRow` (Q6.1), the structured `Fix` shape (`kind` / `title` /
 `condition` / `edit` / `concept` / `concept_ref` — which answers Q2 as a side effect),
-`--explain` rendering tiered fix lines, and fixes on **8 of the 10 codes**. Guards in
+`--explain` rendering tiered fix lines, and fixes on **all 10 codes**. Guards in
 `tests/suggestions.rs` (the copy notice) and `tests/e1_code_set.rs` (every code).
 
 ```
@@ -39,11 +39,18 @@ resolutions the author meant — so both are `Conditional`. A tier assigned from
 rewrite LOOKS rather than from what the analysis KNOWS is how the unattended lane
 (step 4) would apply a guess.
 
-Two codes are **blocked**, both on the same missing piece: `superseded-unknown-successor`
-and `superseded-not-folded` have `#superseded` itself as the concept, and the feature
-catalogue has no entry for it. This is exactly the Q6.2 prerequisite that `@F106` cleared
-for `move`. `FIX_BLOCKED` in `tests/e1_code_set.rs` is the live list; filing the catalogue
-entry empties it.
+Step 5 hit Q6.2's prerequisite a second time and cleared it the same way. The
+`superseded-*` pair has `#superseded` itself as the concept, and the catalogue had no entry
+for it — a fix that links nowhere is not finished, so both were held back rather than
+shipped with a dead door. `@F109` now covers the steer, exactly as `@F106` did for `move`,
+and both codes carry their fixes. `FIX_BLOCKED` in `tests/e1_code_set.rs` is empty but
+stays: the alternative to a listed exception is a silent one.
+
+That is now twice that the blocker was a missing catalogue entry rather than anything about
+the compiler — worth expecting for the next diagnostic rather than rediscovering. **Check
+the concept has a door before building the fix**, since filing the entry is the long pole
+(an issue, `make features-fetch`, `make features-gen`, and a runnable example) while
+`fix_last` itself is minutes.
 
 A diagnostic tells you something is wrong. It rarely tells you what to *write instead*, and
 that second half is where most of the learning is. The model here is Eclipse's quick-fix: its

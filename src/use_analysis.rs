@@ -2703,6 +2703,30 @@ pub fn superseded_fold_diagnostics(
                 pos.line,
                 pos.pos,
             );
+            // @PLN131 — neither spells an `edit`, for two different reasons. The successor
+            // name is the thing the compiler just failed to find, so any spelling it
+            // offered would be a guess. And dropping the attribute is a deletion it cannot
+            // PLACE: the diagnostic sits at the definition, not at the attribute's span, so
+            // an edit here would tell an applier to delete the function.
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("name a successor that exists, in place of `{succ}`"),
+                condition: Some(format!(
+                    "`{shown}` really is superseded — the successor is a bare symbol name, so \
+                     a renamed or not-yet-written `{succ}` reads the same as a wrong one"
+                )),
+                edit: None,
+                concept: "superseded",
+                concept_ref: "@F109",
+            });
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("drop the `#superseded` attribute from `{shown}`"),
+                condition: Some(format!("`{shown}` is not actually superseded by anything")),
+                edit: None,
+                concept: "superseded",
+                concept_ref: "@F109",
+            });
             continue;
         }
         // (b) the shim check — X's body must CALL Y (fold the old form onto the new).
@@ -2730,6 +2754,30 @@ pub fn superseded_fold_diagnostics(
                 pos.line,
                 pos.pos,
             );
+            // @PLN131 — the fold LEADS, because it is what makes the steer true: an
+            // un-folded pair is two implementations of one idea, and they drift. Dropping
+            // the attribute is sound but gives up the steer, so it ranks second.
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("reimplement `{shown}` as a shim that calls `{succ}`"),
+                condition: Some(format!(
+                    "`{succ}` can express what `{shown}` does — a successor that CANNOT is not \
+                     a supersession, and belongs behind a contract bump instead"
+                )),
+                edit: None,
+                concept: "superseded",
+                concept_ref: "@F109",
+            });
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("drop the `#superseded` attribute from `{shown}`"),
+                condition: Some(format!(
+                    "`{shown}` is meant to stay an independent implementation, not a shim"
+                )),
+                edit: None,
+                concept: "superseded",
+                concept_ref: "@F109",
+            });
         }
     }
 }
