@@ -447,9 +447,57 @@ find them through environment variables with working defaults:
 | backend | how it is reached | default |
 |---|---|---|
 | sqlite | `libsqlite3.so.0`, no server | `:memory:` |
-| PostgreSQL | `LOFT_PG_CONN` | `dbname=loft_test_pg` |
-| MariaDB | `LOFT_MY_CONN` | `host=127.0.0.1 user=loft pass=loft db=loft_test_uni` |
+| PostgreSQL | `LOFT_PG_CONN` — set up with `scripts/setup-test-databases.sh --pg` | `dbname=loft_test_pg` |
+| MariaDB | `LOFT_MY_CONN` — set up with `scripts/setup-test-databases.sh --maria` | `host=127.0.0.1 user=loft pass=loft db=loft_test_uni` |
 | duckdb | `libduckdb.so` on `LD_LIBRARY_PATH` — install with `scripts/fetch-duckdb.sh` | declared `[c] optional-libs`, so absence is not an error |
+
+### PostgreSQL and MariaDB: the setup, and where to look when it breaks
+
+**`scripts/setup-test-databases.sh` creates both.**  It is idempotent, never
+drops anything, and **checks before it escalates** — on a box that is already set
+up it needs no `sudo` at all and acts as a verifier.  Run `--pg` or `--maria` for
+one half.
+
+| | PostgreSQL | MariaDB |
+|---|---|---|
+| measured against | 16.14 | 10.11.14 |
+| service | ordinary system service, port 5432 | ordinary system service, port 3306 |
+| database | `loft_test_pg` | `loft_test_uni` |
+| identity | **the OS user**, via unix-socket peer auth | `loft@localhost` / `loft@127.0.0.1`, password `loft` |
+| override | `LOFT_PG_CONN` | `LOFT_MY_CONN` |
+
+**The two servers authenticate differently, and that is not an accident of this
+box.**  The fixture's PostgreSQL default is `dbname=loft_test_pg` — no user, no
+host — so it is a peer connection as whoever runs the tests, and the role to
+create is *that person*, not a shared `loft` role.  MariaDB is reached over TCP
+with an explicit user and password, which is why one has a credential in the
+fixture and the other does not.
+
+**The MariaDB user is SCOPED on purpose**: `GRANT ALL ON \`loft\_test%\`.*` and
+nothing else, so anything outside `loft_test*` answers `ERROR 1044`.  A suite that
+can drop a developer's other schemas is one bad `DROP` away from a very bad day.
+The setup script **verifies** this by trying to create a database outside the
+pattern and expecting refusal — the GRANT text saying the right thing is not the
+same as the server enforcing it.
+
+The password is `loft`, in the clear, in `uniform.loft`.  That is deliberate and
+safe **only** because of the scoping above: it is a local test credential for a
+user that can reach nothing but `loft_test*`.  Do not reuse the pattern for a
+user with wider rights.
+
+**Symptom → where to look:**
+
+| what you see | where the fault is |
+|---|---|
+| `SKIP postgres …` / `SKIP maria …` | the server is down, or the database/role is missing.  Run the setup script — it will tell you which. |
+| `@PLN23 backends exercised:` missing one | same thing from the driver.  **Read this line**; green with three backends absent looks exactly like green with four passing. |
+| `ERROR 1044` from MariaDB | the scope working as designed.  The test wanted a schema outside `loft_test*` — fix the test, do not widen the grant. |
+| `peer authentication failed` on PostgreSQL | the OS user has no role.  `sudo -u postgres createuser --createdb $(id -un)`. |
+| PostgreSQL passes but floats differ | check `extra_float_digits` — it must be ≥ 1, and it defaulted to 0 before PG12 (@PLN133 P3). |
+| both servers fine, results differ between them | a real finding: the `SqlDb` contract is what makes the four interchangeable.  Compare the whole line. |
+
+**CI has neither server** and is not expected to.  Nothing here is reproduced by
+a green CI run.
 
 ### duckdb: where it comes from, and where to look when it breaks
 
