@@ -623,3 +623,117 @@ fn an_explicit_query_populates_the_collection_both_backends() {
         assert!(stdout.contains("sound=true"), "{backend}: {stdout}");
     }
 }
+
+// ── Step 8: a range is ONE query ─────────────────────────────────────────────
+
+/// @PLN129 arc B step 8 — the batching claim, and the ordered kinds.
+///
+/// The COUNT is the assertion: five records for one query is what makes lazy
+/// reading usable, and the same five values would come back from five lookups.
+#[test]
+fn a_key_range_is_one_query_both_backends() {
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
+        eprintln!("SKIP: libsqlite3.so.0 not installed");
+        return;
+    }
+    let path = scratch("range").with_file_name("events.db");
+    let rows: Vec<String> = (1..=20).map(|i| format!("({i},'e{i}')")).collect();
+    seed(
+        &path,
+        &format!(
+            "CREATE TABLE sqevent(at INTEGER PRIMARY KEY, what TEXT); \
+             INSERT INTO sqevent VALUES {}",
+            rows.join(",")
+        ),
+    );
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/scripts/129-lazy-sql-range.loft");
+
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_SQL_TARGET", format!("sqlite:{}", path.display()))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("failed to invoke loft");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            eprintln!(
+                "{backend} stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        assert!(out.status.success(), "{backend}: {stdout}");
+
+        // A keyed lookup on an ORDERED collection — the hash-only restriction is
+        // gone, because materialising goes through the same `record_finish`
+        // every insert does.
+        assert!(
+            stdout.contains("keyed=e12 resident=1"),
+            "{backend}: {stdout}"
+        );
+        assert!(
+            stdout.contains("added=5 resident=6 err=[]"),
+            "{backend}: one range, five records: {stdout}"
+        );
+        // Placed by KEY, not appended in arrival order: 12 was fetched first and
+        // must sort after 9.
+        assert!(
+            stdout.contains("order=5 6 7 8 9 12 "),
+            "{backend}: an ordered collection places what it materialises: {stdout}"
+        );
+        assert!(
+            stdout.contains("again=2 resident=8"),
+            "{backend}: an overlapping range adds only what is new: {stdout}"
+        );
+        assert!(
+            stdout.contains("hash_range=0 why_empty=false"),
+            "{backend}: a hash has no order to range over, and says so: {stdout}"
+        );
+        assert!(stdout.contains("sound=true"), "{backend}: {stdout}");
+    }
+}
+
+#[test]
+fn a_range_of_five_records_costs_one_query() {
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
+        eprintln!("SKIP: libsqlite3.so.0 not installed");
+        return;
+    }
+    let path = scratch("range_count").with_file_name("evcount.db");
+    let rows: Vec<String> = (1..=20).map(|i| format!("({i},'e{i}')")).collect();
+    seed(
+        &path,
+        &format!(
+            "CREATE TABLE sqcounted(at INTEGER PRIMARY KEY, what TEXT); \
+             INSERT INTO sqcounted VALUES {}",
+            rows.join(",")
+        ),
+    );
+    let src = format!(
+        r#"
+struct SqCounted {{ at: integer, what: text }}
+
+fn test() {{
+  events: sorted<SqCounted[at]> = [];
+  assert(store_bind_lazy(events, "sqlite:{}"), "bind");
+  assert(store_lazy_range(events, 5, 9) == 5, "five records");
+  assert(events.len() == 5, "five resident");
+}}
+"#,
+        path.to_string_lossy()
+    );
+
+    let target = path.to_string_lossy().to_string();
+    let before = queries_run(&target);
+    run_loft(&src);
+    let spent = queries_run(&target) - before;
+    // ONE query for five records, plus the two one-off schema probes. Five
+    // lookups would have cost five, and that difference is the whole reason the
+    // range form exists — N+1 is not a slow path, it is the natural way to
+    // write the traversal unless there is a better one.
+    assert_eq!(spent, 3, "1 range query + 2 one-off schema probes");
+}

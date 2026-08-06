@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 arc B — the implementation sequence
 
-**Progress: steps 0–7, 9 and 11 are shipped; 8 and 10 are open.** A `sqlite:<path>` binding faults on a
+**Progress: steps 0–9 and 11 are shipped; 10 is open, and so is step 8's implicit half.** A `sqlite:<path>` binding faults on a
 miss, derives its own SELECT, materialises the row into the collection and passes arc F's graph
 gate on both backends. What each step ANSWERED, where it differed from what it expected, and the
 three findings that changed the design are at the bottom (§ What the steps answered).
@@ -257,6 +257,7 @@ Written after building them, because the answers are what the next reader needs.
 | **4** — the source | `SqlConn` connects read-only, runs the string, returns rows with `NULL` / `''` / value kept distinct. |
 | **5+6** — row→record, wired | `record_new` + `hash::add` — the same pair `coll += [x]` uses, so a SQL arrival and an ordinary insert end in the same place. |
 | **7** — the schema check | On the FIRST FETCH, not at bind: a bind takes a reference and a reference carries no type. Still before any answer a program could believe. Two probe queries once per binding — the count test asserts 5 rather than 9, which is what proves it does not repeat. |
+| **8** — ranges | `store_lazy_range(coll, lo, hi)` — one query, many rows, and the count test asserts 1 rather than 5. It also turned out to make the ORDERED kinds work for free: materialising through `record_finish` rather than `hash::add` dispatches per kind, so a keyed lookup on a `sorted`/`index` collection stopped being refused. What it does NOT do is below. |
 | **9** (B2) — the explicit query | `store_lazy_query(coll, condition)`. Only the WHERE comes from the caller; the table and columns are still derived, which is what makes a row arriving this way the same as one arriving by key. A row already resident is SKIPPED, so `LIKE` and a keyed lookup reach one record. |
 | **11** — the gate | Passes over SQL on both backends with the counts arc F proved over a file. |
 
@@ -282,15 +283,37 @@ grow, and `--native` was correct all along.
    selected a column no table has. `LayoutField::is_data` now has one home, shared with
    `read_via_descriptor` and the browser delivery.
 
+### What is still open, and the reason each one waits
+
+- **The IMPLICIT range** — step 8 as written wires the range shape "to the slice operation", so
+  that `xs[lo..hi]` fetches. It ships as an EXPLICIT call instead, and the reason is a conflict
+  inside the plan rather than a shortcut: failure path 2 settled that a lazily-bound collection
+  answers *"what have I got"*, so a slice that silently consults the source makes `len` and
+  iteration mean two different things depending on how the collection was reached. Hooking it is
+  also a bytecode change on a path both backends derive separately — DATABASE.md's own warning.
+  The batching claim, which is what step 8 exists for, is fully delivered by the explicit form:
+  one query, many rows, asserted by count.
+- **A composite range.** `store_lazy_range(coll, lo, hi)` cannot say which value pins a composite
+  key's leading column. `store_lazy_query` covers it verbatim until there is a shape that carries
+  the pinned prefix.
+- **B4, collection-valued fields** (`company.people`). This one is not an implementation gap: it
+  needs a way to DECLARE a field whose value is a query parameterised by its owner, and no such
+  declaration exists in the language. Building the runtime first would settle the surface by
+  accident, which is the opposite of how the rest of this arc was built.
+- **B3's compile-time half** — the `T: DbKeyed` bound and the mapping's loft-source spelling. The
+  mapping VALUE is built and feeds the one builder; how an author writes it is a surface question,
+  and BINDING.md's answer depends on @PLN125's associated types for composite keys.
+
 ### What is deliberately refused, and why that is not a gap in the invariant
 
 Each of these answers `store_lazy_error` rather than a wrong record:
 
-- a `sorted` / `index` / `spatial` collection — the derivation handles the first two, but INSERTING
-  into them is not `hash::add`, and an insert done the wrong way corrupts rather than fails;
+- a `spatial` collection — Morton order over coordinates has no SQL shape that means the same
+  thing, and a bounding-box scan would look like a lazy fetch while reading the table;
 - a narrow integer field (`i32`, `u8`, `size(2)`) — four encodings and their null sentinels, plus a
   different setter again when nullable, so it waits for a cell that can be checked;
-- a nested struct, a vector or a stored pointer as a field — another table's rows, not a column.
+- a nested struct, a vector or a stored pointer as a field — another table's rows, not a column;
+- a range asked of a `hash`, or of a composite key.
 
 ## See also
 

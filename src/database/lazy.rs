@@ -124,16 +124,6 @@ impl Stores {
         use crate::database::sql_query::{Mapping, QueryShape, derive_select};
         use crate::database::sql_source::SqlConn;
 
-        // Only a hash materialises today. A `sorted`/`index` collection derives
-        // its query fine (`sql_query.rs`) but is INSERTED into differently, and
-        // an insert done the wrong way corrupts the structure rather than
-        // failing — so the kind is refused here until step 8 wires its own.
-        if !matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
-            return Fetched::Unreachable(format!(
-                "a `sqlite:` source serves `hash` collections; `{}` is not one",
-                self.types[db as usize].name
-            ));
-        }
         let desc = self.layout_descriptor(&[db]);
         let Some(sql) = derive_select(&desc, db, &QueryShape::Equality, &Mapping::default()) else {
             return Fetched::Unreachable(format!(
@@ -256,6 +246,82 @@ impl Stores {
         added
     }
 
+    /// @PLN129 arc B step 8 — fetch a KEY RANGE from this collection's bound
+    /// source in ONE query. Returns how many records the collection gained.
+    ///
+    /// This is the cure for N+1, and it is a cure rather than an optimisation:
+    /// walking 500 employers one lookup at a time is 500 round trips, and that
+    /// makes the natural way to write a traversal the pathological one (README
+    /// failure path 8). One range slice is one query returning many rows.
+    ///
+    /// The collection has to be ORDERED (`sorted` / `index`) — a hash has no
+    /// order to range over — and keyed on ONE column, because two numbers cannot
+    /// say which value pins a composite key's leading column. A composite range
+    /// is the explicit query's job until there is a shape that can carry it.
+    #[cfg(feature = "native-extensions")]
+    pub fn lazy_range(&mut self, coll: &DbRef, lo: i64, hi: i64) -> i64 {
+        use crate::database::sql_query::{Mapping, QueryShape, derive_select};
+        use crate::database::sql_source::{Cell, SqlConn};
+
+        let slot = (coll.store_nr, coll.rec, coll.pos);
+        let Some(source) = self.lazy_source(coll) else {
+            return self.lazy_refuse(slot, "this collection is not bound to a source");
+        };
+        let LazySource::Sql(driver, target) = LazySource::of(&source) else {
+            return self.lazy_refuse(slot, &format!("`{source}` is not a database source"));
+        };
+        let db = self.allocations[coll.store_nr as usize].known_type;
+        if db == u16::MAX {
+            return self.lazy_refuse(slot, "this collection has no type to derive a query from");
+        }
+        let desc = self.layout_descriptor(&[db]);
+        let Some(sql) = derive_select(&desc, db, &QueryShape::Range, &Mapping::default()) else {
+            return self.lazy_refuse(
+                slot,
+                &format!(
+                    "`{}` has no range to fetch — an ordered collection is what \
+                     derives one",
+                    self.types[db as usize].name
+                ),
+            );
+        };
+        if sql.params.len() != 2 {
+            return self.lazy_refuse(
+                slot,
+                "a range fetch takes ONE key column; a composite key needs an \
+                 explicit query",
+            );
+        }
+        let conn = match SqlConn::open(driver, &target) {
+            Ok(c) => c,
+            Err(why) => return self.lazy_refuse(slot, &why),
+        };
+        if let Some(why) = self.schema_refusal(coll, db, &desc, &sql, &conn) {
+            return self.lazy_refuse(slot, &why);
+        }
+        let rows = match conn.query(&sql.text, &[Cell::Int(lo), Cell::Int(hi)]) {
+            Ok(r) => r,
+            Err(why) => return self.lazy_refuse(slot, &why),
+        };
+        let mut added = 0i64;
+        for row in rows {
+            if row.len() != sql.columns.len() {
+                return self.lazy_refuse(slot, "the source answered a different column count");
+            }
+            let Some(key) = self.row_key(db, &desc, &sql, &row) else {
+                return self.lazy_refuse(slot, "a row arrived without the collection's key");
+            };
+            // The collection first, on this path too: a range overlapping what
+            // is already resident must not duplicate it.
+            if self.find(coll, db, &key).rec != 0 {
+                continue;
+            }
+            self.materialise(coll, db, &sql, &row);
+            added += 1;
+        }
+        added
+    }
+
     /// Record why an explicit query could not run, and answer "nothing arrived".
     ///
     /// Through arc C's channel rather than a return code: a count cannot carry a
@@ -283,14 +349,32 @@ impl Stores {
     ) -> Option<Vec<Content>> {
         use crate::database::LayoutNode;
         use crate::database::sql_source::Cell;
-        let Parts::Hash(elem, key_fields) = &self.types[db as usize].parts else {
-            return None;
+        // Every keyed kind, spelled out: an omission here does not read as a
+        // missing feature, it silently builds the wrong key and duplicates a
+        // record the collection already holds.
+        let (elem, key_fields): (u16, Vec<u16>) = match &self.types[db as usize].parts {
+            Parts::Hash(c, keys) | Parts::Radix(c, keys) => (*c, keys.clone()),
+            Parts::Sorted(c, keys) | Parts::Ordered(c, keys) | Parts::Index(c, keys, _) => {
+                (*c, keys.iter().map(|(k, _)| *k).collect())
+            }
+            Parts::Base
+            | Parts::Struct(_)
+            | Parts::Enum(_)
+            | Parts::EnumValue(_, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::Int(_, _)
+            | Parts::ShortRaw(_, _)
+            | Parts::Vector(_)
+            | Parts::Array(_)
+            | Parts::DbRef
+            | Parts::ChildRec(_) => return None,
         };
-        let LayoutNode::Record(fields) = desc.nodes.get(elem)? else {
+        let LayoutNode::Record(fields) = desc.nodes.get(&elem)? else {
             return None;
         };
         let mut key = Vec::with_capacity(key_fields.len());
-        for k in key_fields {
+        for k in &key_fields {
             let at = sql.columns.iter().position(|c| c.field == *k as usize)?;
             let cell = row.get(at)?.as_ref();
             key.push(match fields.get(*k as usize)?.content {
@@ -405,9 +489,17 @@ impl Stores {
     /// Write one fetched row into a fresh element record and link it into the
     /// collection.
     ///
-    /// Through `record_new` + `hash::add` — the same pair `coll += [x]` uses —
-    /// so a SQL arrival and an ordinary loft insert end in the same place, which
-    /// is what makes "one record however it arrived" true rather than intended.
+    /// Through `record_new` + `record_finish` — the pair `coll += [x]` and
+    /// `coll[k] = v` both use — so a SQL arrival and an ordinary loft insert end
+    /// in the same place, which is what makes "one record however it arrived"
+    /// true rather than intended.
+    ///
+    /// `record_finish` is also what makes the KIND someone else's problem: it
+    /// dispatches to `hash::add` / the sorted placement / `tree::add`, so a
+    /// `sorted` or `index` collection materialises without a second insert path
+    /// here — and there is no per-kind list for a new collection kind to go
+    /// missing from ([DATABASE.md § Adding or changing a collection
+    /// kind](../../doc/claude/DATABASE.md)).
     #[cfg(feature = "native-extensions")]
     fn materialise(
         &mut self,
@@ -432,12 +524,7 @@ impl Stores {
                 row[col].as_ref(),
             );
         }
-        crate::hash::add(
-            data,
-            &entry,
-            &mut self.allocations,
-            &self.types[db as usize].keys,
-        );
+        self.record_finish(data, &entry, db, u16::MAX);
     }
 }
 

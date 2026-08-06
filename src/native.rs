@@ -174,6 +174,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_bind_lazy", n_store_bind_lazy),
     #[cfg(feature = "native-extensions")]
     ("n_store_lazy_query", n_store_lazy_query),
+    #[cfg(feature = "native-extensions")]
+    ("n_store_lazy_range", n_store_lazy_range),
     ("n_store_lazy_error_dest", n_store_lazy_error_dest),
     ("n_store_lazy_faults", n_store_lazy_faults),
     ("n_store_lazy_clear", n_store_lazy_clear),
@@ -1329,6 +1331,18 @@ fn n_store_lazy_query(stores: &mut Stores, stack: &mut DbRef) {
     let v_condition = *stores.get::<Str>(stack);
     let coll = *stores.get::<DbRef>(stack);
     let added = stores.lazy_query(&coll, v_condition.str());
+    stores.put(stack, added);
+}
+
+/// Interpreter handler for `store_lazy_range` — @PLN129 arc B step 8.  Pull a
+/// whole key range from the bound DATABASE source in ONE query; answers how many
+/// records the collection gained.  Args pop in reverse: hi, lo, local.
+#[cfg(feature = "native-extensions")]
+fn n_store_lazy_range(stores: &mut Stores, stack: &mut DbRef) {
+    let v_hi = *stores.get::<i64>(stack);
+    let v_lo = *stores.get::<i64>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    let added = stores.lazy_range(&coll, v_lo, v_hi);
     stores.put(stack, added);
 }
 

@@ -6830,6 +6830,15 @@ The rows land IN the collection, not in a separate result: a person reached by t
 `condition` is SQL, sent as written (the connection is read-only). Answers 0 both when nothing matched and when the query could not run; `store\_lazy\_error` tells those apart.
 
 ```rust
+pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer
+```
+
+\@PLN129 arc B step 8 — pull a whole KEY RANGE from this collection's bound DATABASE source in ONE query. Answers how many records the collection gained.
+This is what keeps lazy reading usable rather than merely correct. Fetching 500 records one lookup at a time is 500 round trips; the same 500 as a range is one. So when you know the span you want, ask for the span:
+store\_lazy\_range(events, 100, 199);   // one query, up to 100 records for e in events { ... }               // all resident, no further fetching
+The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order to range over — and keyed on ONE column, since two numbers cannot say which value pins a composite key's leading column; use `store\_lazy\_query` for that. Both bounds are inclusive, in the collection's own key order. A record already resident is left alone. Answers 0 when nothing matched AND when the query could not run; `store\_lazy\_error` tells those apart.
+
+```rust
 pub fn store_lazy_error(local: reference) -> text
 ```
 

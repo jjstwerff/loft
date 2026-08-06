@@ -191,6 +191,13 @@
 <p>`condition` is SQL, sent as written (the connection is read-only). Answers 0 both when nothing matched and when the query could not run; `store_lazy_error` tells those apart.</p>
 </div>
 <div class="item">
+<pre><code>pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -&gt; integer</code></pre>
+<p>@PLN129 arc B step 8 — pull a whole KEY RANGE from this collection's bound DATABASE source in ONE query. Answers how many records the collection gained.</p>
+<p>This is what keeps lazy reading usable rather than merely correct. Fetching 500 records one lookup at a time is 500 round trips; the same 500 as a range is one. So when you know the span you want, ask for the span:</p>
+<p>store_lazy_range(events, 100, 199);   // one query, up to 100 records for e in events { ... }               // all resident, no further fetching</p>
+<p>The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order to range over — and keyed on ONE column, since two numbers cannot say which value pins a composite key's leading column; use `store_lazy_query` for that. Both bounds are inclusive, in the collection's own key order. A record already resident is left alone. Answers 0 when nothing matched AND when the query could not run; `store_lazy_error` tells those apart.</p>
+</div>
+<div class="item">
 <pre><code>pub fn store_lazy_error(local: reference) -&gt; text</code></pre>
 <p>@PLN129 arc C — why the last lazy fetch could not REACH this collection's source, or &quot;&quot; when it is healthy.</p>
 <p>A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:</p>
