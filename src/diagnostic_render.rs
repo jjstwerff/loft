@@ -299,14 +299,17 @@ fn render_fixes(out: &mut String, entry: &DiagEntry, bold_open: &str, reset: &st
         return;
     }
     for fix in &entry.fixes {
-        let detail = fix.edit.as_ref().map_or_else(
-            || {
-                fix.condition
-                    .as_ref()
-                    .map_or_else(String::new, |c| format!("needs: {c}"))
-            },
-            std::clone::Clone::clone,
-        );
+        // Both columns when both exist. A conditional fix that also spells an edit is the
+        // one shape where dropping either is unsafe: the edit is what gets applied and the
+        // condition is what the click affirms, so showing only the edit would let a reader
+        // apply a rewrite whose precondition they never saw.
+        let mut detail = fix.edit.clone().unwrap_or_default();
+        if let Some(c) = &fix.condition {
+            if !detail.is_empty() {
+                detail.push_str("   ");
+            }
+            let _ = write!(detail, "needs: {c}");
+        }
         // The concept is a door, not a lecture: the noun plus where to read about it, and
         // nothing that defines it here.
         let door = format!("[{} · {}]", fix.concept, fix.concept_ref);

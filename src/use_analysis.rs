@@ -2512,6 +2512,30 @@ pub fn warn_dead_stores(
                 line,
                 col,
             );
+            // @PLN131 — both ways out are Conditional, and that is the honest tier: the
+            // diagnostic proves the write is lost, not which of the two the author meant.
+            // `&` write-through leads, because it is the idiom that generalises; reading
+            // the local back is a local repair of one binding.
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("bind a live reference: `{name} = &…`"),
+                condition: Some(format!(
+                    "the write is meant to reach the source `{name}` was bound from"
+                )),
+                edit: None,
+                concept: "reference",
+                concept_ref: "@F21",
+            });
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("read `{name}` after the mutation"),
+                condition: Some(format!(
+                    "a copy WAS intended — then the mutated `{name}` is what should be read"
+                )),
+                edit: None,
+                concept: "copy",
+                concept_ref: "@F106",
+            });
         }
     }
 }
@@ -2599,6 +2623,28 @@ pub fn c_binding_call_unsupported(
             pos.line,
             pos.pos,
         );
+        // @PLN131 — neither fix spells an `edit`: one is C the compiler cannot write, the
+        // other is not a source change at all.  The shim leads because it resolves the
+        // binding wherever it runs; `--native` only sidesteps the interpreter.
+        diags.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: format!(
+                "wrap it in an ANSI-C shim taking at most {} parameters",
+                crate::c_signature::MAX_C_ARITY
+            ),
+            condition: None,
+            edit: None,
+            concept: "direct C binding",
+            concept_ref: "@F92",
+        });
+        diags.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: "run it on `--native`, which can make the call as written".to_string(),
+            condition: None,
+            edit: None,
+            concept: "native backend",
+            concept_ref: "@F53",
+        });
     }
 }
 

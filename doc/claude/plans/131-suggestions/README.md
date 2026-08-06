@@ -8,22 +8,42 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Tracker: [@PLN131](https://github.com/loft-lang/plans/issues/131) · starts from
 [@PLN130](https://github.com/loft-lang/plans/issues/130)'s copy notice.
 
-**Status:** active — the prerequisite arc and ship steps 1–2 are BUILT; steps 3–5 are open.
+**Status:** active — the prerequisite arc and ship steps 1–2 and **5** are BUILT; steps 3–4
+are open.
 
-Built: diagnostic codes (7 emitting sites, index at [DIAGNOSTICS.md](../../DIAGNOSTICS.md)),
-the surviving use's location through `VerdictRow` (Q6.1), the structured `Fix` shape
-(`kind` / `title` / `condition` / `edit` / `concept` / `concept_ref` — which answers Q2 as a
-side effect), and `--explain` rendering tiered fix lines under the copy notice. Guards in
-`tests/suggestions.rs`.
+Built: diagnostic codes (index at [DIAGNOSTICS.md](../../DIAGNOSTICS.md)), the surviving
+use's location through `VerdictRow` (Q6.1), the structured `Fix` shape (`kind` / `title` /
+`condition` / `edit` / `concept` / `concept_ref` — which answers Q2 as a side effect),
+`--explain` rendering tiered fix lines, and fixes on **8 of the 10 codes**. Guards in
+`tests/suggestions.rs` (the copy notice) and `tests/e1_code_set.rs` (every code).
 
 ```
 advice[avoidable-copy]: copy of vector<integer> — `src` is still used after this point …
   fix  build the value in place   [move · @F106]
   fix  drop the later use of `src`   needs: `src` is used again at line 8 — you do not need that   [move · @F106]
+
+error[format-unescaped-brace]: a literal `}` in a format string must be written `}}`
+  fix  double the brace   }}   [interpolation · @F35]
 ```
 
-Open: **3** (self-verification), **4** (apply), **5** (a second diagnostic) — and one thing
-the build learned, recorded under Q6 below: no fix currently spells an `edit`.
+Open: **3** (self-verification) and **4** (apply). Both wait on the same thing, recorded
+under Q6: too few fixes spell an `edit`. Step 5 raised that count from zero to one —
+`format-unescaped-brace` is the first fix whose rewrite the code alone settles, and
+`as T?` on the two cast codes is the second and third — which is what finally makes 3 and 4
+testable on something.
+
+Step 5's finding: **the tier is a property of the diagnostic's evidence, not of the fix's
+shape.** `lost-write` reads like it has a mechanical fix (`d = &s.items` is a one-token
+edit), but the analysis proves only that the write is lost, never which of the two
+resolutions the author meant — so both are `Conditional`. A tier assigned from how the
+rewrite LOOKS rather than from what the analysis KNOWS is how the unattended lane
+(step 4) would apply a guess.
+
+Two codes are **blocked**, both on the same missing piece: `superseded-unknown-successor`
+and `superseded-not-folded` have `#superseded` itself as the concept, and the feature
+catalogue has no entry for it. This is exactly the Q6.2 prerequisite that `@F106` cleared
+for `move`. `FIX_BLOCKED` in `tests/e1_code_set.rs` is the live list; filing the catalogue
+entry empties it.
 
 A diagnostic tells you something is wrong. It rarely tells you what to *write instead*, and
 that second half is where most of the learning is. The model here is Eclipse's quick-fix: its
@@ -203,11 +223,17 @@ currently ships with **no** code), then the remaining sites, then the index.
 - **Q2 — what is the IDE surface?** The eventual target is an LSP code action. Does the
   compiler emit structured suggestions (JSON) that both the CLI and the LSP render, rather
   than each formatting its own?
-- **Q3 — how is a suggestion tested?** Probably: a fixture with the diagnostic, the applied
-  result, and an assertion that the diagnostic count drops and behaviour is identical. Same
-  shape as @PLN130's probes. Plus the doc-link check from § entry point: assert every
-  suggestion names a concept and resolves to a real catalogue entry, so a renamed or deleted
-  feature breaks the build rather than shipping a dead door.
+- **Q3 — how is a suggestion tested?** The doc-link half is RESOLVED and generalised:
+  `every_offered_door_resolves_to_a_catalogue_entry` reads every `@F` door out of every
+  pinned code's `--explain` output and checks it against the catalogue snapshot, so a
+  renumbered or deleted feature breaks the build whichever fix pointed at it — and
+  `every_pinned_code_offers_a_fix` makes a code with no fix red rather than merely
+  unfinished. Both live beside `CODES` in `tests/e1_code_set.rs`, for the reason the
+  doc-index check does: the pinned set is the one home for "which codes exist", and a second
+  scan can disagree with the first.
+
+  Still open is the half that needs step 3: a fixture with the diagnostic, the applied
+  result, and an assertion that the diagnostic count drops and behaviour is identical.
 - **Q6 — RESOLVED, both prerequisites** ([`fix-line-prototype.md`](fix-line-prototype.md)).
   The condition now names the surviving use by LINE: the walker already tracked `cur_pos` for
   the copy site, so recording it at the USE too (`last_use_loc`, kept in step with
@@ -222,6 +248,12 @@ currently ships with **no** code), then the remaining sites, then the index.
   for the append shape too, where it does not exist. **Distinguishing them at parse time is
   the prerequisite for step 3**, and it is a bigger piece of work than Q6.1 was — the fix
   line is still useful without it, because the title and the concept carry the teaching.
+
+  **What step 5 changed.** That finding is about the copy notice, not about fixes in
+  general: three of the eight now spell an `edit`. `format-unescaped-brace` spells `}}`,
+  which the code alone settles completely, and the two cast codes spell `as T?`. So steps 3
+  and 4 no longer wait on the IR shape split to have anything to run against — they can be
+  built and proved on the brace fix first, and the copy notice joins when the split lands.
 - **Q5 — RESOLVED: anchor on the diagnostic CODE, not a catalogue id.** See § Prerequisite
   arc. A code names the diagnostic (what the suggestion belongs to); an `@F` id names a
   feature (what the concept links to). Both exist — `@F106` now covers copy/move semantics —

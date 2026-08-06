@@ -6,7 +6,7 @@
 //! It is possible to link to the current position in the lexer (link) and return to it (revert)
 //! when the parser has to try a certain path and might dismiss this later.
 
-use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
+use crate::diagnostics::{Diagnostics, Fix, FixKind, Level, diagnostic_format};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
@@ -665,6 +665,14 @@ impl Lexer {
         self.diagnostics.suggest_last(suggestion);
     }
 
+    /// @PLN131 — attach "what to write instead" to the diagnostic just emitted.  Call it
+    /// immediately after the `diagnostic!` that raised the problem, so the fix and its
+    /// diagnostic stay one unit: a suggestion that has drifted from its diagnostic is
+    /// misinformation.
+    pub fn fix_last(&mut self, fix: Fix) {
+        self.diagnostics.fix_last(fix);
+    }
+
     /// Emit a diagnostic carrying a stable `code` (kebab-case kind slug).
     /// @PLN102 arc-E E1 — the code is the frozen identity; prose is free.
     pub fn diagnostic_coded(&mut self, level: Level, code: &'static str, message: &str) {
@@ -1042,11 +1050,7 @@ impl Lexer {
                 if let Some('}') = self.iter.peek() {
                     res.push(c);
                 } else {
-                    self.err_coded(
-                        Level::Error,
-                        "format-unescaped-brace",
-                        "a literal `}` in a format string must be written `}}`",
-                    );
+                    self.unescaped_brace();
                 }
             } else {
                 // With interpolation off (configs), `{` / `}` fall here as literal
@@ -1153,11 +1157,7 @@ impl Lexer {
                 } else {
                     // Reached only with no hole open in THIS string — the outer
                     // `}` is consumed by the token path, never here.
-                    self.err_coded(
-                        Level::Error,
-                        "format-unescaped-brace",
-                        "a literal `}` in a format string must be written `}}`",
-                    );
+                    self.unescaped_brace();
                 }
             } else {
                 res.push(c);
@@ -1273,11 +1273,7 @@ impl Lexer {
                     if let Some('}') = self.iter.peek() {
                         cur.push('}');
                     } else {
-                        self.err_coded(
-                            Level::Error,
-                            "format-unescaped-brace",
-                            "a literal `}` in a format string must be written `}}`",
-                        );
+                        self.unescaped_brace();
                     }
                 }
                 Some(&'\\') => {
@@ -1343,11 +1339,7 @@ impl Lexer {
                     if let Some('}') = self.iter.peek() {
                         cur.push('}');
                     } else {
-                        self.err_coded(
-                            Level::Error,
-                            "format-unescaped-brace",
-                            "a literal `}` in a format string must be written `}}`",
-                        );
+                        self.unescaped_brace();
                     }
                 }
                 Some(&'\\') => {
@@ -1694,6 +1686,29 @@ impl Lexer {
     /// Like [`err`], but carries a stable diagnostic `code` (@PLN102 arc-E E1).
     fn err_coded(&mut self, level: Level, code: &'static str, error: &str) {
         diagnostic!(self, level, code = code, "{error}");
+    }
+
+    /// A literal `}` where a format string expects a hole to close.
+    ///
+    /// The four string scanners (plain, nested, and the two backtick forms) all reach this
+    /// same conclusion, and @PLN131 gives it a fix — so it gets ONE home rather than four
+    /// copies that can drift apart in either half.  The rewrite is fully determined by the
+    /// code: a literal brace is spelled `}}` and nothing else, which is what makes it the
+    /// one fix here that is `Mechanical` with a real `edit`.
+    fn unescaped_brace(&mut self) {
+        self.err_coded(
+            Level::Error,
+            "format-unescaped-brace",
+            "a literal `}` in a format string must be written `}}`",
+        );
+        self.fix_last(Fix {
+            kind: FixKind::Mechanical,
+            title: "double the brace".to_string(),
+            condition: None,
+            edit: Some("}}".to_string()),
+            concept: "interpolation",
+            concept_ref: "@F35",
+        });
     }
 
     /// Debug feature to check the amount of currently in use links

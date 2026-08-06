@@ -25,18 +25,27 @@ loft uses **slugs, not numbers** (`avoidable-copy`, not `E0142`). A slug is self
 
 ## The codes
 
-| code | level | what it says | what to write instead |
-|---|---|---|---|
-| `avoidable-copy` | advice | A structure was deep-copied because its source is still used after the copy site, so it could not be moved. | Build the value in place, or stop using the source afterwards. Both take the copy to zero — see `@F106`. |
-| `lost-write` | warning | A local was mutated but never read. A whole-value bind COPIES the heap value (C86), so the mutation landed in the copy and the write is LOST. | Bind a live reference with `&` for write-through, or read the local after the mutation if a copy was intended. |
-| `text-parse-may-fail` | error | A text parsed `as <numeric>` can fail, and the result was typed non-null. | `as T?` for a checked cast, `?? <default>` for a fallback, or `(… as T?)?` for the type's default. |
-| `cast-constant-out-of-range` | error | A constant does not fit the type it is bare-cast to, and a bare cast asserts that it does. | `as T?` for a checked cast, or `?? <default>` for a fallback. |
-| `format-unescaped-brace` | error | A literal `}` inside a format string, where `}` closes a hole. | Write it `}}`. |
-| `coalesce-default-type-mismatch` | error | A `??` default is not assignable where the value's type is expected. | Cast the default, or give it a matching type. |
-| `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. |
-| `c-binding-not-interpretable` | error | A function bound to a C symbol with `#c` was called on the interpreter, which cannot make that call. | Run it on `--native`, or give the binding an interpretable path. |
-| `superseded-unknown-successor` | error | `#superseded "X"` names a symbol that does not exist, so the steer would ship dangling. | Name a real replacement, or drop the attribute. |
-| `superseded-not-folded` | warning | A `#superseded` symbol's body never calls its successor, so the steer ships without its fold. | Reimplement the superseded symbol as a shim over the successor. |
+The **fix** column says what `--explain` offers at that code: `M` a mechanical fix, `C` a
+conditional one (each is one fix line), and the concept door they open onto.
+
+| code | level | what it says | what to write instead | fix |
+|---|---|---|---|---|
+| `avoidable-copy` | advice | A structure was deep-copied because its source is still used after the copy site, so it could not be moved. | Build the value in place, or stop using the source afterwards. Both take the copy to zero — see `@F106`. | M C · `@F106` |
+| `lost-write` | warning | A local was mutated but never read. A whole-value bind COPIES the heap value (C86), so the mutation landed in the copy and the write is LOST. | Bind a live reference with `&` for write-through, or read the local after the mutation if a copy was intended. | C C · `@F21` `@F106` |
+| `text-parse-may-fail` | error | A text parsed `as <numeric>` can fail, and the result was typed non-null. | `as T?` for a checked cast, `?? <default>` for a fallback, or `(… as T?)?` for the type's default. | M C C · `@F5` `@F2` `@F96` |
+| `cast-constant-out-of-range` | error | A constant does not fit the type it is bare-cast to, and a bare cast asserts that it does. | `as T?` for a checked cast, or `?? <default>` for a fallback. | M C · `@F5` `@F2` |
+| `format-unescaped-brace` | error | A literal `}` inside a format string, where `}` closes a hole. | Write it `}}`. | M · `@F35` |
+| `coalesce-default-type-mismatch` | error | A `??` default is not assignable where the value's type is expected. | Cast the default, or give it a matching type. | C · `@F2` |
+| `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. | C C · `@F37` `@F2` |
+| `c-binding-not-interpretable` | error | A function bound to a C symbol with `#c` was called on the interpreter, which cannot make that call. | Run it on `--native`, or give the binding an interpretable path. | M M · `@F92` `@F53` |
+| `superseded-unknown-successor` | error | `#superseded "X"` names a symbol that does not exist, so the steer would ship dangling. | Name a real replacement, or drop the attribute. | **blocked** |
+| `superseded-not-folded` | warning | A `#superseded` symbol's body never calls its successor, so the steer ships without its fold. | Reimplement the superseded symbol as a shim over the successor. | **blocked** |
+
+The two blocked rows are blocked on the same thing: the concept each fix uses **is**
+`#superseded`, and the feature catalogue has no entry for it. A fix that links nowhere is
+not finished, so neither is offered — the same prerequisite `move` had before `@F106`
+existed. `FIX_BLOCKED` in `tests/e1_code_set.rs` is the live list, and emptying it is the
+rest of the work; every other code is asserted to carry a fix.
 
 ## Fix lines — `--explain`
 
@@ -81,6 +90,20 @@ fix that does not exist. And a site whose condition an author can see is false s
 **nothing** — suppressing a bad suggestion matters more than emitting a good one, because
 credibility is what makes the click safe.
 
+Three of the codes show what that costs in practice. `coalesce-default-type-mismatch` has an
+obvious-looking rewrite — cast the default — that is **not** offered as an `edit`, because
+`"x" as integer` is a text parse that can fail, so synthesising it would answer one error
+with another. `c-binding-not-interpretable` offers two fixes and spells neither: one is C the
+compiler cannot write, and the other is not a source change at all. And `lost-write`'s two
+ways out are BOTH conditional — the analysis proves the write is lost, never which of the
+two the author meant, and a mechanical tier there would be a guess wearing the safe label.
+
+**Ranking is on what a fix opens up, not on brevity — except when the two are not equally
+sound.** `shift-amount-out-of-range` is the exception in the set: `?? <default>` teaches an
+idiom and "use an amount inside `0..=63`" teaches nothing, but a constant out-of-range shift
+is nearly always a wrong amount, so the escape ranks second. Teaching first is a tiebreak
+between sound fixes, not a licence to paper over a bug with the better lesson.
+
 Nothing is ever applied. `--explain` shows; the author decides.
 
 ## Adding a code
@@ -89,8 +112,11 @@ Nothing is ever applied. `--explain` shows; the author decides.
    uncoded `add_at`.
 2. Add the row to the table above **in the same change**. A code with nothing to grep to is
    the same dead door as a concept with no catalogue entry.
-3. If the diagnostic has a known resolution, attach it with `Diagnostics::fix_last` — and
-   give the concept a `@F` entry that exists.
+3. Attach the resolution with `Diagnostics::fix_last`, and give the concept a `@F` entry that
+   exists. This is not optional: `every_pinned_code_offers_a_fix` fails a code that renders
+   none, and `every_offered_door_resolves_to_a_catalogue_entry` fails a `@F` that is not in
+   the catalogue. If the fix genuinely cannot be offered yet, add a row to `FIX_BLOCKED`
+   naming what blocks it — a listed exception, never a silent one.
 
 ## See also
 

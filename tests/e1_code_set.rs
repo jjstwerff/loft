@@ -16,6 +16,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// THE GOLDEN: the frozen E1 code set + a minimal program that triggers each. Adding /
 /// renaming / removing a code must update this array (a reviewed diff).
@@ -85,6 +86,24 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// @PLN131 — codes whose fix is BLOCKED, each with what blocks it.
+///
+/// A code earns a place here only when the resolution is known but cannot be offered
+/// soundly.  Both entries name the same missing piece: a fix must open onto a real
+/// catalogue entry, and the `#superseded` steer has none — the identical prerequisite that
+/// `move` had before `@F106` existed.  Emptying this list is the whole of the remaining
+/// work; adding to it needs a reason of the same kind.
+const FIX_BLOCKED: &[(&str, &str)] = &[
+    (
+        "superseded-unknown-successor",
+        "the concept is `#superseded` itself, which has no @F catalogue entry to link to",
+    ),
+    (
+        "superseded-not-folded",
+        "the concept is `#superseded` itself, which has no @F catalogue entry to link to",
+    ),
+];
+
 /// Run `prog` on the interpreter with compact errors (so a typed diagnostic surfaces as
 /// its stable `[code]` tag), returning stdout+stderr.
 fn compact_output(prog: &str) -> String {
@@ -103,6 +122,108 @@ fn compact_output(prog: &str) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     )
+}
+
+/// Run `prog` with `--explain`, in the PRETTY renderer — the only one that carries fix
+/// lines (the compact form is a single line by definition).
+fn explain_output(prog: &str) -> String {
+    // Per-probe unique name: these tests run concurrently in one process, so a
+    // pid-only path has two of them writing and deleting the same file — which fails as
+    // "no such file", i.e. as a missing fix rather than as the collision it is.
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "loft_e1_fix_{}_{}.loft",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, prog).unwrap();
+    let out = Command::new(loft_bin())
+        .args(["--interpret", "--check", "--explain"])
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_TIMEOUT", "60")
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&path);
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// Every `@FNN` door offered anywhere in `out`.
+fn doors(out: &str) -> Vec<u32> {
+    let mut v = Vec::new();
+    for at in match_positions(out, "· @F") {
+        let digits: String = out[at..].chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(n) = digits.parse() {
+            v.push(n);
+        }
+    }
+    v
+}
+
+/// @PLN131 ship step 5 — every pinned code says what to write instead.
+///
+/// The suggestion is the deliverable half of a diagnostic, so a code that only says what is
+/// wrong is half-built.  The exceptions are listed rather than tolerated: `FIX_BLOCKED`
+/// names each one and what blocks it, which is what stops "no fix yet" from quietly
+/// becoming "no fix ever".
+#[test]
+fn every_pinned_code_offers_a_fix() {
+    for (code, prog) in CODES {
+        let blocked = FIX_BLOCKED.iter().find(|(c, _)| c == code);
+        let out = explain_output(prog);
+        let has_fix = out.contains("  fix  ");
+        match blocked {
+            Some((_, why)) => assert!(
+                !has_fix,
+                "`{code}` is listed in FIX_BLOCKED ({why}) but now offers a fix — drop its \
+                 row from that list.\ngot:\n{out}"
+            ),
+            None => assert!(
+                has_fix,
+                "`{code}` renders no fix line under `--explain`. A diagnostic says what is \
+                 wrong; a fix says what to write instead, and that is the half a reader \
+                 acts on. Attach one with `fix_last`, or add a row to FIX_BLOCKED saying \
+                 what blocks it.\nprog: {prog}\ngot:\n{out}"
+            ),
+        }
+    }
+}
+
+/// @PLN131 — every door a fix opens onto is a real catalogue entry.
+///
+/// A door onto nothing is worse than no door, and a fix names its concept precisely so a
+/// reader who wants the *why* has somewhere to go.  Checking every offered door (rather
+/// than one pinned `@F`) means a renumbered or deleted feature breaks the build on the day
+/// it happens, whichever fix pointed at it.
+#[test]
+fn every_offered_door_resolves_to_a_catalogue_entry() {
+    let snapshot =
+        std::fs::read_to_string(root().join("index/features.json")).expect("features snapshot");
+    for (code, prog) in CODES {
+        let found_doors = doors(&explain_output(prog));
+        for n in &found_doors {
+            let listed = snapshot.contains(&format!("\"number\": {n}"))
+                || snapshot.contains(&format!("\"number\":{n}"));
+            assert!(
+                listed,
+                "`{code}` offers a fix whose door is `@F{n}`, which is not in the feature \
+                 catalogue — a door onto nothing is worse than no door."
+            );
+        }
+        // Per code, not summed across them: a total lets one code's three doors cover
+        // another's zero, which is exactly the gap this is meant to catch.
+        if !FIX_BLOCKED.iter().any(|(c, _)| c == code) {
+            assert!(
+                !found_doors.is_empty(),
+                "`{code}` offers a fix that names no door. The concept is the handle a \
+                 reader searches for; a fix without one has taken the teaching half away."
+            );
+        }
+    }
 }
 
 /// Tooth 1 — every pinned code renders its `[slug]` tag.

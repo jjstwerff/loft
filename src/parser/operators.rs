@@ -1820,15 +1820,30 @@ impl Parser {
             // here in the parser closes ALL of that on BOTH backends. Falsified over the
             // whole corpus/scripts/libs: zero valid `??` fires this (widen-int, `float?`←int
             // widening, `?? null`, `?? []`, checked-narrow all `convert` cleanly above).
+            let (given, wanted) = (rhs_type.name(&self.data), result_type.name(&self.data));
             diagnostic!(
                 self.lexer,
                 Level::Error,
                 code = "coalesce-default-type-mismatch",
-                "`??` default of type `{}` is not assignable to `{}` — a default must be \
-                 usable where the value's type is expected (cast it, or use a matching type)",
-                rhs_type.name(&self.data),
-                result_type.name(&self.data),
+                "`??` default of type `{given}` is not assignable to `{wanted}` — a default \
+                 must be usable where the value's type is expected (cast it, or use a \
+                 matching type)",
             );
+            // @PLN131 — ONE fix, and no `edit`.  The obvious rewrite (`… as {wanted}`) is
+            // not sound to spell: `"x" as integer` is a text parse that can fail, so
+            // synthesising it here would answer one error with another.  Which SIDE is
+            // wrong is the author's to say, and that is what the condition asks.
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("give the default a value of type `{wanted}`"),
+                condition: Some(format!(
+                    "the `??` is meant to produce `{wanted}` — if it should produce \
+                     `{given}`, the VALUE's type is what to change instead"
+                )),
+                edit: None,
+                concept: "null coalescing",
+                concept_ref: "@F2",
+            });
         }
         // `convert(value → result_type)` widens the value branch when widen_ints,
         // and is a no-op otherwise (result_type == lhs_type).
@@ -2420,6 +2435,29 @@ impl Parser {
                                  asserts the value fits; use `{tps}?` for a checked cast \
                                  (value or null), or `?? d` for a fallback",
                             );
+                            // @PLN131 — the checked cast leads: it is the idiom that works
+                            // for every cast that can fail, not just this constant, and its
+                            // meaning is settled by the code alone.  The program does not
+                            // compile as written, so no working behaviour can change.
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Mechanical,
+                                title: "make the cast checked".to_string(),
+                                condition: None,
+                                edit: Some(format!("as {tps}?")),
+                                concept: "checked cast",
+                                concept_ref: "@F5",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "give the cast a fallback: `?? <default>`".to_string(),
+                                condition: Some(format!(
+                                    "`<default>` is the right value when {f} does not fit \
+                                     `{tps}`"
+                                )),
+                                edit: None,
+                                concept: "null coalescing",
+                                concept_ref: "@F2",
+                            });
                         }
                     }
                     // @PLN99 Arc C — clear the owned-conversion signal, then let `convert`
@@ -2490,6 +2528,42 @@ impl Parser {
                                  (value or null), `?? <default>` for a fallback, or \
                                  `(… as {tps}?)?` for the type's default",
                             );
+                            // @PLN131 — three sound ways out, ranked on what each opens up.
+                            // The checked cast is the general idiom (and the only one whose
+                            // meaning the code alone settles); `??` needs a value only the
+                            // author knows; `x?` needs no value but silently accepts the
+                            // type's default, so it states that as its condition.
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Mechanical,
+                                title: "make the cast checked".to_string(),
+                                condition: None,
+                                edit: Some(format!("as {tps}?")),
+                                concept: "checked cast",
+                                concept_ref: "@F5",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "give the parse a fallback: `?? <default>`".to_string(),
+                                condition: Some(
+                                    "`<default>` is the right value when the text does not \
+                                     parse"
+                                        .to_string(),
+                                ),
+                                edit: None,
+                                concept: "null coalescing",
+                                concept_ref: "@F2",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: format!("fall back to the type's default: `(… as {tps}?)?`"),
+                                condition: Some(format!(
+                                    "an unparseable text becoming the `{tps}` default is the \
+                                     result you want"
+                                )),
+                                edit: None,
+                                concept: "default fallback",
+                                concept_ref: "@F96",
+                            });
                         }
                         // Keep `rt` non-null (the asserted target) to bound the cascade.
                     } else {
@@ -2952,6 +3026,29 @@ impl Parser {
                         "shift by {amt} is out of the valid range 0..=63 — a constant \
                          out-of-range shift has no defined result",
                     );
+                    // @PLN131 — the in-range amount leads, and the teaching rule does NOT
+                    // promote `??` over it here: the two are not equally sound.  A constant
+                    // out-of-range shift is nearly always a wrong amount, so offering the
+                    // escape first would teach an idiom by papering over a bug.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "shift by an amount inside `0..=63`".to_string(),
+                        condition: Some(format!("{amt} is not the amount you meant")),
+                        edit: None,
+                        concept: "shift operators",
+                        concept_ref: "@F37",
+                    });
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "give the shift a fallback: `?? <default>`".to_string(),
+                        condition: Some(format!(
+                            "shifting by {amt} is deliberate and `<default>` is the right \
+                             result when it has none"
+                        )),
+                        edit: None,
+                        concept: "null coalescing",
+                        concept_ref: "@F2",
+                    });
                 }
             }
             if !self.first_pass && matches!(operator, "+" | "-" | "*" | "/" | "%" | "<<" | ">>") {
