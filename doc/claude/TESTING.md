@@ -492,11 +492,15 @@ LOFT_SQLDB_MODE=duckdb    selects the backend in uniform.loft
 | a `cc` failure mentioning `shim.c` | not a duckdb problem at all — the shim is deliberately free of duckdb symbols so it compiles without the library.  Look at the C toolchain. |
 | duckdb answers but DIFFERS from the other three | a real finding: the `SqlDb` contract is what makes the four interchangeable.  Compare the whole line, not one field. |
 
-**One measured caveat, so it is not rediscovered** (@PLN133 P3): duckdb's own
-float round trip is exact, but it does not recover a double from the
-full-decimal-expansion literal loft's `"{v}"` produces — an ordinary `5.75e37`
-renders as a 294-character number.  A float that survives on sqlite and loses
-bits on duckdb is this, not a duckdb bug.
+**One measured caveat, so it is not rediscovered** (@PLN133 P3): a float written
+through this fixture round-trips exactly on PostgreSQL and MariaDB, and fails
+19 times in 500 on duckdb — while duckdb's OWN round trip
+(`v = CAST(CAST(v AS VARCHAR) AS DOUBLE)`) is exact.  **The cause is not
+diagnosed.**  It is not simply the length of the literal loft's `"{v}"` produces,
+though those are long: literals of 252, 294 and 303 characters round-trip fine
+when fed directly.  Do not assume a float survives being written as a decimal
+literal, and do not repeat the long-literal explanation — it was checked and it
+is wrong.
 
 **A copy in a scratchpad or a build directory is not durable.**  When it
 evaporates the duckdb cell silently drops back to `SKIP` and the local

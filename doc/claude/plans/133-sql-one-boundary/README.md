@@ -460,7 +460,7 @@ driven through the loft fixture).
 | PostgreSQL 16 | **`extra_float_digits = 1` (the modern default) or `3`** | **0 / 2000** |
 | MariaDB 10.11 | **plain `v`, or `CAST(v AS CHAR)`** | **0 / 2000** |
 | MariaDB 10.11 | `FORMAT(v, 17)` | 1144 / 2000 |
-| duckdb | plain `v` / `CAST(v AS VARCHAR)`, **through loft's literal** | **19 / 500** |
+| duckdb | plain `v` / `CAST(v AS VARCHAR)`, **through loft's literal** | **19 / 500 — cause UNDIAGNOSED, see below** |
 
 **Each engine renders exactly once told to.** PostgreSQL and MariaDB are exact on
 BOTH sides — their parsers are correctly rounded, so a decimal literal makes the
@@ -469,18 +469,30 @@ round trip. Two rules fall out, and neither is a default you can lean on:
 a session can change it), and `FORMAT()` is a locale formatter, not a renderer.
 
 **duckdb's own round trip is exact** — `v = CAST(CAST(v AS VARCHAR) AS DOUBLE)`
-answered `yes` for every failing case. The 19 are lost in the **hand-off**, and
-that is a loft-side finding: **`"{v}"` renders a float as a full decimal
-expansion with no exponent**, so an ordinary `5.75e37` becomes a **294-character**
-literal and `5e-324` a 326-character one. duckdb's parser does not recover the
-original double from those; sqlite's mostly does, which is why sqlite showed 1 in
-2000 and duckdb 19 in 500.
+answered `yes` for every failing case, so the loss is in the hand-off between loft
+and duckdb, not inside the engine.
 
-**So the requirement is sharper than "parse text as float".** A driver must never
-build a float literal out of `"{v}"`. It either binds the value or renders
-exponent notation itself. Reading is exact everywhere once the rendering is
-specified; **writing** is where sqlite and duckdb lose bits, and where
-`sqlite3_bind_double` (@PLN128 E3) earns its keep.
+**The CAUSE is not yet diagnosed, and an earlier version of this section named
+the wrong one.** It claimed the long literals were to blame — loft's `"{v}"` does
+render a float as a full decimal expansion with no exponent, so `5e-324` becomes a
+326-character literal — but that is **not** the mechanism: feeding duckdb literals
+of 252, 294 and 303 characters directly round-trips them EXACTLY. The failing
+inputs render to 281–294 characters and duckdb answers with a plausible nearby
+number, which rules out a simple rejection but not much else. The remaining
+suspects are the fixture's single-connection static shim slots and the statement
+path, neither of which has been isolated.
+
+**So this cell is MEASURED but UNEXPLAINED**, and it must not be leaned on until
+it has a proper matrix: vary literal length, magnitude and the statement path
+independently, against the hand-computed expectation. It is recorded here rather
+than smoothed over because a wrong explanation of a real 19/500 failure is worse
+than an honest gap.
+
+**What the cell does establish**, whatever the mechanism turns out to be: a driver
+must not assume a float survives being written as a decimal literal, so it should
+BIND the value. Reading is exact everywhere once the rendering is specified;
+writing is where sqlite and duckdb lose bits, and where `sqlite3_bind_double`
+(@PLN128 E3) earns its keep.
 
 ### P4 — can a fault inside the nested fetch be contained? **YES, but it leaks.**
 
