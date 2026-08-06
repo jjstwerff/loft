@@ -28,21 +28,34 @@
 
 use loft::paged_reader::{PageProvider, PagedReader};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// Counts allocations while armed. Arming is a single flag rather than a
-/// per-thread counter because the measured window below is a tight loop that
-/// calls nothing else — and the test binary is single-threaded through it.
+/// Counts allocations made **by the arming thread**, while armed.
+///
+/// ⚠ Thread-local, and that is not fastidiousness. A pair of shared statics reads as
+/// obviously fine and is not: `cargo test` runs the tests in this binary on parallel
+/// THREADS, so a sibling test building its fixture allocates inside another test's armed
+/// window and the count comes back wrong — non-deterministically, and only when the whole
+/// file runs, so it passes when you re-run the failing test alone. Which is exactly what it
+/// did here before this comment existed.
+///
+/// `Cell<usize>` with a `const` initialiser: no destructor and no allocation, so the
+/// allocator cannot re-enter itself through its own counter.
 struct Counting;
 
-static ALLOCS: AtomicUsize = AtomicUsize::new(0);
-static ARMED: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static ALLOCS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        // `try_with`: during thread teardown the TLS is gone, and a panic in the
+        // allocator is not recoverable.
+        let _ = ARMED.try_with(|a| {
+            if a.get() {
+                let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            }
+        });
         unsafe { System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
@@ -71,11 +84,11 @@ impl PageProvider for Resident {
 }
 
 fn armed<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    ALLOCS.store(0, Ordering::Relaxed);
-    ARMED.store(true, Ordering::Relaxed);
+    ALLOCS.with(|c| c.set(0));
+    ARMED.with(|a| a.set(true));
     let out = f();
-    ARMED.store(false, Ordering::Relaxed);
-    (out, ALLOCS.load(Ordering::Relaxed))
+    ARMED.with(|a| a.set(false));
+    (out, ALLOCS.with(std::cell::Cell::get))
 }
 
 /// **A resident small read does not allocate, and the count does not grow with reads.**
@@ -159,5 +172,37 @@ fn a_span_read_may_still_allocate_once() {
     assert_eq!(
         allocs, 1,
         "a span read owns its buffer — exactly one allocation, not one per field"
+    );
+}
+
+/// **And the other per-read cost: how many times the page map is hashed.**
+///
+/// The allocation was one of two per-read costs on this path; the second was that the read
+/// hashed the SAME key twice. `ensure_page` asked `contains_key(&pidx)` and returned
+/// nothing, so the caller indexed `self.pages[&pidx]` for the page it had just confirmed —
+/// two hashes and two table probes to carry four bytes. The `entry` API answers both halves
+/// of "is it there, and if not put it there" with one hash, which is the question the read
+/// path was asking all along.
+///
+/// Counted, not reasoned about: `page_ops` is bumped at every map operation in the module,
+/// so this is the whole cost and not the part that was remembered.
+#[test]
+fn a_resident_read_hashes_the_page_key_once() {
+    let img: Vec<u8> = (0..64u32 * 1024).map(|i| (i % 251) as u8).collect();
+    let mut r = PagedReader::new(Resident(img));
+    let _ = r.u32_at(0, 0); // fault the page; below is hits only
+
+    let before = r.page_ops();
+    let mut sum = 0u64;
+    for rec in 0..1_000u32 {
+        sum += u64::from(r.u32_at(rec, 0));
+    }
+    let per_read = (r.page_ops() - before) as f64 / 1_000.0;
+
+    assert_ne!(sum, 0, "the reads must actually happen");
+    assert!(
+        (per_read - 1.0).abs() < f64::EPSILON,
+        "a resident small read costs {per_read} page-map operations, not 1 — the read path \
+         is hashing the same key more than once (loft#787)"
     );
 }

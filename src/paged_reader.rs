@@ -433,6 +433,13 @@ pub struct PagedReader<P: PageProvider> {
     /// separate fact from what the provider FETCHES, and only the first says
     /// whether a span-shaped optimisation has anything to bite on.
     reads: [(u64, u64); 32],
+    /// loft#787 — operations on the page map, which is the other per-READ cost besides
+    /// the allocation `read_into` removed. Every one of them hashes a `u64` key and probes
+    /// a table, and the hot path used to do TWO for a single four-byte read: `ensure_page`
+    /// asked `contains_key`, then the read indexed the map again for the same key. Counted
+    /// rather than reasoned about, because "how many times do we hash" is exactly the kind
+    /// of claim that reads as obvious and measures otherwise (see `page_ops`).
+    page_ops: u64,
 }
 
 impl<P: PageProvider> PagedReader<P> {
@@ -493,6 +500,7 @@ impl<P: PageProvider> PagedReader<P> {
             capacity: capacity.max(1),
             capped: true,
             reads: [(0, 0); 32],
+            page_ops: 0,
         }
     }
 
@@ -532,6 +540,7 @@ impl<P: PageProvider> PagedReader<P> {
         }
         while self.pages.len() > self.capacity {
             if let Some(old) = self.lru.pop_front() {
+                self.page_ops += 1;
                 self.pages.remove(&old);
             }
         }
@@ -540,16 +549,68 @@ impl<P: PageProvider> PagedReader<P> {
     /// Make page `pidx` resident (fetching on miss) and mark it most-recently
     /// used, evicting the LRU page(s) once over capacity.
     fn ensure_page(&mut self, pidx: u64) {
+        self.page_ops += 1;
         if self.pages.contains_key(&pidx) {
             self.touch(pidx);
             return;
         }
+        self.page_ops += 1;
         let bytes = self
             .provider
             .fetch(pidx * self.page_size as u64, self.page_size);
         self.pages.insert(pidx, bytes);
         self.note_resident(pidx);
         self.evict_to_capacity();
+    }
+
+    /// Make page `pidx` resident and hand it back — hashing the key **once**.
+    ///
+    /// ⚠ **THE READ PATH USED TO HASH THE SAME KEY TWICE.** `ensure_page` asked
+    /// `contains_key(&pidx)`, returned nothing, and the caller then wrote
+    /// `&self.pages[&pidx]` — a second hash and a second probe for the page it
+    /// had just confirmed. Two map operations to read four bytes, on the path
+    /// that runs ~800 000 times per viewport in the consumer of loft#787.
+    ///
+    /// This is the sibling of the allocation that `read_into` removed, and it is
+    /// the same shape of mistake: a cost that is per-READ, invisible in a
+    /// profile that attributes by function, and obvious only once counted. The
+    /// `entry` API answers "is it there, and if not put it there" with one hash,
+    /// which is exactly the question the read path is asking.
+    ///
+    /// The bounded mode keeps the old two-op route deliberately. Its LRU
+    /// bookkeeping needs the membership answer *before* the read in order to
+    /// mark recency, and it is opt-in (`LOFT_PAGE_CACHE_BYTES`), so the caller
+    /// who asked for a memory bound is the only one who pays for maintaining it.
+    fn page(&mut self, pidx: u64) -> &[u8] {
+        if self.capped {
+            self.ensure_page(pidx);
+            self.page_ops += 1;
+            return &self.pages[&pidx];
+        }
+        // Split the borrow so the miss arm can reach the provider from inside
+        // `or_insert_with` — without this the closure would hold `&mut self`.
+        let Self {
+            pages,
+            provider,
+            page_size,
+            page_ops,
+            ..
+        } = self;
+        *page_ops += 1;
+        let ps = *page_size;
+        pages
+            .entry(pidx)
+            .or_insert_with(|| provider.fetch(pidx * ps as u64, ps))
+    }
+
+    /// Page-map operations so far — every `contains_key` / `entry` / index /
+    /// `insert` / `remove`, each of which hashes a key and probes the table.
+    ///
+    /// Exposed because it is the honest unit for the read path's remaining
+    /// per-read cost: a duration measures the machine, this measures the work.
+    #[must_use]
+    pub fn page_ops(&self) -> u64 {
+        self.page_ops
     }
 
     /// Mark a RESIDENT page most-recently-used.
@@ -641,6 +702,7 @@ impl<P: PageProvider> PagedReader<P> {
             }
             let (first, last) = (off / ps, (off + len as u64 - 1) / ps);
             for p in first..=last {
+                self.page_ops += 1;
                 if !self.pages.contains_key(&p) {
                     want.push(p);
                 }
@@ -684,6 +746,7 @@ impl<P: PageProvider> PagedReader<P> {
                 let hi = (lo + self.page_size).min(bytes.len());
                 let mut page = bytes.get(lo..hi).unwrap_or(&[]).to_vec();
                 page.resize(self.page_size, 0); // the last page zero-pads past EOF
+                self.page_ops += 1;
                 self.pages.insert(start + i, page);
                 self.note_resident(start + i);
             }
@@ -699,12 +762,16 @@ impl<P: PageProvider> PagedReader<P> {
         let (first, last) = (off / ps, (off + len as u64 - 1) / ps);
         let mut p = first;
         while p <= last {
+            self.page_ops += 1;
             if self.pages.contains_key(&p) {
                 p += 1;
                 continue;
             }
             let start = p;
-            while p <= last && !self.pages.contains_key(&p) {
+            while p <= last && {
+                self.page_ops += 1;
+                !self.pages.contains_key(&p)
+            } {
                 p += 1;
             }
             let count = usize::try_from(p - start).unwrap_or(1);
@@ -715,6 +782,7 @@ impl<P: PageProvider> PagedReader<P> {
             for (i, chunk) in bytes.chunks(self.page_size).enumerate().take(count) {
                 let mut page = chunk.to_vec();
                 page.resize(self.page_size, 0); // the last page zero-pads past EOF
+                self.page_ops += 1;
                 self.pages.insert(start + i as u64, page);
                 self.note_resident(start + i as u64);
             }
@@ -774,8 +842,8 @@ impl<P: PageProvider> PagedReader<P> {
         // loop, one bounds check, one copy.
         if len <= self.page_size - in_page {
             let pidx = off / self.page_size as u64;
-            self.ensure_page(pidx);
-            buf.copy_from_slice(&self.pages[&pidx][in_page..in_page + len]);
+            let page = self.page(pidx);
+            buf.copy_from_slice(&page[in_page..in_page + len]);
             return;
         }
         self.prefetch_run(off, len);
@@ -785,8 +853,7 @@ impl<P: PageProvider> PagedReader<P> {
             let pidx = abs / self.page_size as u64;
             let in_page = (abs % self.page_size as u64) as usize;
             let take = (self.page_size - in_page).min(len - done);
-            self.ensure_page(pidx);
-            let page = &self.pages[&pidx];
+            let page = self.page(pidx);
             buf[done..done + take].copy_from_slice(&page[in_page..in_page + take]);
             done += take;
         }
