@@ -21,11 +21,31 @@
 // else (logging) must go to stderr, or the transport corrupts.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use loft::diagnostics::{DiagEntry, Level};
 use loft::json::{self, Parsed};
+
+/// @PLN131 — where a diagnostic code's documentation lives, as the `codeDescription` link
+/// an editor renders on the code itself.
+///
+/// The GitHub blob URL rather than the docs site: `loft-lang.org/loft/` publishes
+/// `doc/*.html` (the generated stdlib reference) and has no diagnostics page, so pointing
+/// there would open onto something real but unrelated — which is the weaker half of a door
+/// onto nothing.
+///
+/// It targets `main`, and `DIAGNOSTICS.md` is not on `main` until this work merges — so the
+/// link 404s from a branch build and resolves from a release. That is the right coupling
+/// rather than a hazard: a user reaches this binary through a release cut from `main`, which
+/// is the same commit that carries the file. `the_code_links_to_an_anchor_that_exists` pins
+/// the `#the-codes` anchor against the local copy, which is the half that can rot silently.
+///
+/// One URL for every code — the table is in-page searchable, which is what a
+/// self-describing SLUG is for.
+const DIAGNOSTIC_DOC_URL: &str =
+    "https://github.com/loft-lang/loft/blob/main/doc/claude/DIAGNOSTICS.md#the-codes";
 
 const SERVER_NAME: &str = "loft-lsp";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -410,7 +430,7 @@ fn diagnose_text(text: &str, uri: &str, stdlib_dir: &str) -> Vec<Parsed> {
         // tier invisible in the one place it is most useful, and the deprecation steer
         // (its main occupant) would silently stop being offered.  Debug stays excluded.
         .filter(|e| e.level >= Level::Advice)
-        .map(|e| lsp_diagnostic(e, text))
+        .map(|e| lsp_diagnostic(e, text, uri))
         .collect()
 }
 
@@ -419,7 +439,7 @@ fn diagnose_text(text: &str, uri: &str, stdlib_dir: &str) -> Vec<Parsed> {
 /// loft records a single point, so the range underlines the identifier at that
 /// point (its extent read from `text`) — a visible squiggle under the token,
 /// not a zero-width caret.
-fn lsp_diagnostic(e: &DiagEntry, text: &str) -> Parsed {
+fn lsp_diagnostic(e: &DiagEntry, text: &str, uri: &str) -> Parsed {
     let line0 = e.line.saturating_sub(1);
     let col0 = e.col.saturating_sub(1);
     let end_col = col0 + token_len_at(text, line0, col0);
@@ -432,15 +452,89 @@ fn lsp_diagnostic(e: &DiagEntry, text: &str) -> Parsed {
     ];
     if let Some(code) = e.code {
         fields.push(("code", Parsed::Str(code.into())));
+        // @PLN131 — the DOOR, as a link the editor renders on the code itself (LSP 3.16
+        // `codeDescription`). The concept handle was CLI text until now; here it is one
+        // click. Every code has a row in that table, and `every_pinned_code_is_documented`
+        // is what keeps that true, so this cannot become the dead door the plan refuses.
+        fields.push((
+            "codeDescription",
+            obj(vec![("href", Parsed::Str(DIAGNOSTIC_DOC_URL.into()))]),
+        ));
+    }
+    // @PLN131 — every fix as `relatedInformation`, which is where an editor shows detail
+    // that is not itself a problem.
+    //
+    // This is the half the code-action path CANNOT carry: a quick-fix needs an `edit`, and
+    // 57 of 62 fixes have none — they name a rewrite the compiler cannot place. Without
+    // this the editor shows a message that (since the prose trim) deliberately no longer
+    // says what to write, and the cure lives only in the CLI. The condition rides along for
+    // the same reason it does everywhere else: it is what a reader affirms.
+    if !e.fixes.is_empty() {
+        let related: Vec<Parsed> = e
+            .fixes
+            .iter()
+            .map(|f| {
+                let mut msg = format!("fix: {}", f.title);
+                if let Some(c) = &f.condition {
+                    let _ = write!(msg, " — only if {c}");
+                }
+                let _ = write!(msg, "  [{} · {}]", f.concept, f.concept_ref);
+                obj(vec![
+                    (
+                        "location",
+                        obj(vec![
+                            ("uri", Parsed::Str(uri.to_string())),
+                            ("range", range_of(line0, col0, end_col)),
+                        ]),
+                    ),
+                    ("message", Parsed::Str(msg)),
+                ])
+            })
+            .collect();
+        fields.push(("relatedInformation", Parsed::Array(related)));
     }
     // Round-trip the structured suggestion on the diagnostic's `data` — the
     // editor echoes it back in a `codeAction` request, so the quick-fix needs no
     // re-parse (step A→B).
-    if let Some(suggestion) = &e.suggestion {
-        fields.push((
-            "data",
-            obj(vec![("suggestion", Parsed::Str(suggestion.clone()))]),
-        ));
+    // @PLN131 step 4 — the same round-trip for FIXES. Each carries its own span, so a
+    // quick-fix edits where the rewrite belongs rather than where the squiggle is: the two
+    // differ (a cast is reported past the statement terminator and inserts its `?` at the
+    // type's end), and using the diagnostic's range would write to the wrong place.
+    //
+    // The `condition` rides along so the editor can show what a click AFFIRMS. That is the
+    // whole of the interactive tier rule: a conditional fix is clickable — the click is the
+    // affirmation — provided the condition is in the line the author reads.
+    let fixes: Vec<Parsed> = e
+        .fixes
+        .iter()
+        .filter_map(|f| {
+            let ed = f.edit.as_ref()?;
+            let (l0, c0) = (ed.line.saturating_sub(1), ed.col.saturating_sub(1));
+            let mut row = vec![
+                ("title", Parsed::Str(f.title.clone())),
+                ("range", range_of(l0, c0, c0 + ed.len)),
+                ("newText", Parsed::Str(ed.text.clone())),
+                (
+                    "mechanical",
+                    Parsed::Bool(f.kind == loft::diagnostics::FixKind::Mechanical),
+                ),
+                ("concept", Parsed::Str(f.concept.into())),
+            ];
+            if let Some(c) = &f.condition {
+                row.push(("condition", Parsed::Str(c.clone())));
+            }
+            Some(obj(row))
+        })
+        .collect();
+    if e.suggestion.is_some() || !fixes.is_empty() {
+        let mut data = Vec::new();
+        if let Some(suggestion) = &e.suggestion {
+            data.push(("suggestion", Parsed::Str(suggestion.clone())));
+        }
+        if !fixes.is_empty() {
+            data.push(("fixes", Parsed::Array(fixes)));
+        }
+        fields.push(("data", obj(data)));
     }
     obj(fields)
 }
@@ -490,6 +584,11 @@ fn range_of(line: u32, start_char: u32, end_char: u32) -> Parsed {
         ("start", position(line, start_char)),
         ("end", position(line, end_char)),
     ])
+}
+
+/// An LSP `Range` spanning lines — the whole-document form a full replacement needs.
+fn range_of2(sl: u32, sc: u32, el: u32, ec: u32) -> Parsed {
+    obj(vec![("start", position(sl, sc)), ("end", position(el, ec))])
 }
 
 /// An LSP `InlayHint` JSON object (kind 1 = Type) for a resolved hint.  The `line`
@@ -561,11 +660,30 @@ fn code_actions(
     if let Some(Parsed::Array(diags)) =
         obj_get(params, "context").and_then(|c| obj_get(c, "diagnostics"))
     {
+        // The legacy `data.suggestion` quickfix, ONLY where the diagnostic carries no
+        // structured fix. Every `suggest_last` site now also emits a `Fix` (@PLN131's
+        // did-you-mean arc), and offering both put the same rename in the list twice under
+        // two different titles. `fixes` wins because it is the one that carries a tier, a
+        // concept and a door — `suggestion` is a replacement token and nothing else.
         actions.extend(
             diags
                 .iter()
+                .filter(|d| {
+                    !matches!(
+                        obj_get(d, "data").and_then(|x| obj_get(x, "fixes")),
+                        Some(Parsed::Array(f)) if !f.is_empty()
+                    )
+                })
                 .filter_map(|d| quickfix_from_diagnostic(d, &uri)),
         );
+        // @PLN131 step 4 — one quick-fix per spelled fix, both tiers.
+        actions.extend(diags.iter().flat_map(|d| fix_actions(d, &uri)));
+    }
+    // @PLN131 — one `source.fixAll` over everything mechanical AND verified in the buffer.
+    if let Some(text) = documents.get(&uri)
+        && let Some(action) = fix_all_action(&uri, text, stdlib_dir)
+    {
+        actions.push(action);
     }
     // E4 (extract-function) — on a MULTI-LINE selection (a real statement selection,
     // never a bare cursor or a single-line diagnostic range, so a quick-fix request is
@@ -595,6 +713,78 @@ fn quickfix_from_diagnostic(d: &Parsed, uri: &str) -> Option<Parsed> {
         ("kind", Parsed::Str("quickfix".into())),
         ("diagnostics", Parsed::Array(vec![d.clone()])),
         ("isPreferred", Parsed::Bool(true)),
+        ("edit", obj(vec![("changes", changes)])),
+    ]))
+}
+
+/// @PLN131 step 4 — the quick-fixes a diagnostic's `data.fixes` carries.
+///
+/// Both tiers are offered, which is the plan's rule and not an oversight: a conditional fix
+/// is one click for a veteran, because the click IS the affirmation. What makes that safe is
+/// that the condition is in the title they read before clicking, so the thing being affirmed
+/// cannot be missed. `isPreferred` is reserved for mechanical fixes — an editor may apply a
+/// preferred action from a "fix all" gesture, and nobody would be reading a condition then.
+fn fix_actions(d: &Parsed, uri: &str) -> Vec<Parsed> {
+    let Some(Parsed::Array(fixes)) = obj_get(d, "data").and_then(|x| obj_get(x, "fixes")) else {
+        return Vec::new();
+    };
+    fixes
+        .iter()
+        .filter_map(|f| {
+            let title = obj_str(f, "title")?;
+            let new_text = obj_str(f, "newText")?;
+            let range = obj_get(f, "range")?.clone();
+            let mechanical = matches!(obj_get(f, "mechanical"), Some(Parsed::Bool(true)));
+            // The condition belongs in the TITLE, not beside it: a code-action list shows
+            // titles, so a condition anywhere else is a condition the clicker never saw.
+            let label = match obj_str(f, "condition") {
+                Some(c) if !mechanical => format!("{title} — only if {c}"),
+                _ => title,
+            };
+            let edit = obj(vec![("range", range), ("newText", Parsed::Str(new_text))]);
+            let changes = Parsed::Object(vec![(uri.to_string(), 0, Parsed::Array(vec![edit]))]);
+            Some(obj(vec![
+                ("title", Parsed::Str(label)),
+                ("kind", Parsed::Str("quickfix".into())),
+                ("diagnostics", Parsed::Array(vec![d.clone()])),
+                ("isPreferred", Parsed::Bool(mechanical)),
+                ("edit", obj(vec![("changes", changes)])),
+            ]))
+        })
+        .collect()
+}
+
+/// @PLN131 — the `source.fixAll` action: every mechanical, verified fix in one edit.
+///
+/// It delegates to `fix_apply::apply_fixes`, the same function behind `loft fix --apply`, so
+/// the editor and the CLI cannot drift — an editor that applied a different set would be a
+/// second implementation of "which fixes are safe", which is the one thing this must not be.
+/// All three gates come with it: mechanical only, spells a placeable edit, and VERIFIES —
+/// each candidate is applied to an in-memory copy and the analysis re-run before it counts.
+///
+/// The edit replaces the WHOLE document, as a formatter's does. Verification already
+/// re-parsed the buffer, so the rewritten text is a known-good artefact; emitting it whole
+/// is what makes editor output byte-identical to the CLI's, rather than merely equivalent.
+///
+/// Cost is real — one re-parse per candidate fix — and acceptable here for a reason it would
+/// not be on `didChange`: fix-all is a deliberate gesture, not something that runs per
+/// keystroke. `None` when nothing would change, so the action never appears as a no-op.
+fn fix_all_action(uri: &str, text: &str, stdlib_dir: &str) -> Option<Parsed> {
+    let diags = loft::lsp::diagnose(text, "buf.loft", stdlib_dir);
+    let (rewritten, report) = loft::fix_apply::apply_fixes(text, "buf.loft", stdlib_dir, &diags);
+    if rewritten == *text {
+        return None;
+    }
+    let n = report.iter().filter(|r| r.written).count();
+    let (end_l, end_c) = doc_end(text);
+    let edit = obj(vec![
+        ("range", range_of2(0, 0, end_l, end_c)),
+        ("newText", Parsed::Str(rewritten)),
+    ]);
+    let changes = Parsed::Object(vec![(uri.to_string(), 0, Parsed::Array(vec![edit]))]);
+    Some(obj(vec![
+        ("title", Parsed::Str(format!("Apply {n} verified fix(es)"))),
+        ("kind", Parsed::Str("source.fixAll".into())),
         ("edit", obj(vec![("changes", changes)])),
     ]))
 }
@@ -1260,6 +1450,10 @@ fn initialize_result() -> Parsed {
                 Parsed::Array(vec![
                     Parsed::Str("quickfix".into()),
                     Parsed::Str("refactor.extract".into()),
+                    // @PLN131 — "fix all" over the MECHANICAL, VERIFIED fixes. Editors bind
+                    // this to fix-on-save, so it runs unattended: exactly the lane a
+                    // conditional fix is barred from.
+                    Parsed::Str("source.fixAll".into()),
                 ]),
             )]),
         ),

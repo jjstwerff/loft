@@ -221,6 +221,184 @@ fn store_load_key_pages_over_the_browser_fetch_bridge() {
     );
 }
 
+/// loft#784 — the BATCHED loader over the same bridge.
+///
+/// `store_load_key` above never exercises this: one key resolves to one range at a time, and
+/// `fetch_many` returns early on a single range. So when loft#782 gave the multi-range path
+/// its own implementation — one `std::thread::spawn` per range — the browser gate stayed
+/// green while the browser stopped working. A target with no threads never completed the
+/// read, and it failed as a STALL: no error, no trap, a consumer's app sitting at
+/// `hud="loading map…"` forever.
+///
+/// Hence the two shapes of this test. It uses `store_load_keys` with keys spread across the
+/// image so the loader has genuinely independent ranges to issue, and it runs the browser
+/// under a hard `timeout` — because the failure being guarded against is a hang, and a hang
+/// in a test that waits forever takes the whole suite with it instead of reporting.
+#[test]
+fn store_load_keys_batched_pages_over_the_browser_fetch_bridge() {
+    if !which("node") {
+        eprintln!("SKIP: node not installed");
+        return;
+    }
+    if !which("timeout") {
+        eprintln!("SKIP: coreutils `timeout` not installed — a hang could not be bounded");
+        return;
+    }
+    if !wasm32_installed() {
+        eprintln!("SKIP: wasm32-unknown-unknown target/rlib not built");
+        return;
+    }
+    if !loft_bin().exists() {
+        eprintln!("SKIP: target/release/loft not built");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join("loft_paged_browser_batch");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).expect("create test dir");
+    let store = tmp.join("block.store");
+
+    // 1. The same fixture as the single-key gate: big enough that a bounded read is a real
+    //    claim rather than an artefact of a small image.
+    let writer = tmp.join("write.loft");
+    std::fs::write(
+        &writer,
+        format!(
+            "struct Tile {{ tkey: integer not null, name: text not null }}\n\
+             fn main() {{\n\
+             \x20 path = env_variable(\"LOFT_PAGED_WRITE_PATH\");\n\
+             \x20 t: hash<Tile[tkey]> = [];\n\
+             \x20 i = 0;\n\
+             \x20 while i < {ENTRIES} {{ t += Tile {{ tkey: i, name: \"tile-{{i}}-padding-to-give-the-image-some-size\" }}; i += 1 }}\n\
+             \x20 if !store_persist_bind(t, path) {{ println(\"FAIL write-bind\"); return }}\n\
+             \x20 println(\"write ok len={{len(t)}}\");\n\
+             }}\n"
+        ),
+    )
+    .expect("write writer script");
+
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&writer)
+        .env("LOFT_PAGED_WRITE_PATH", &store)
+        .current_dir(repo_root())
+        .output()
+        .expect("invoke loft to write the store");
+    let so = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        so.contains(&format!("write ok len={ENTRIES}")),
+        "fixture store not written: {so} / {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let file_len = std::fs::metadata(&store).expect("store metadata").len();
+
+    // 2. Six keys, spread across the key space so they cannot all share a page — the point
+    //    is that the loader has several INDEPENDENT ranges to issue in one call.
+    let src = tmp.join("paged_keys.loft");
+    std::fs::write(
+        &src,
+        "struct Tile { tkey: integer not null, name: text not null }\n\
+         fn main() {\n\
+         \x20 tiles: hash<Tile[tkey]> = [];\n\
+         \x20 keys = [137, 6011, 12907, 21001, 30011, 39002];\n\
+         \x20 got = store_load_keys(tiles, \"http://127.0.0.1:1/block.store\", keys);\n\
+         \x20 println(\"browser got={got} len={len(tiles)}\");\n\
+         \x20 for k in keys { e = tiles[k]; println(\"browser k={k} name={if e == null { \"null\" } else { e.name }}\") }\n\
+         \x20 println(\"browser verify={store_verify(tiles)}\");\n\
+         }\n",
+    )
+    .expect("write browser script");
+
+    let html = tmp.join("paged_keys.html");
+    let status = Command::new(loft_bin())
+        .args([
+            "--html",
+            html.to_str().unwrap(),
+            "--path",
+            &format!("{}/", repo_root().display()),
+        ])
+        .arg(src.to_str().unwrap())
+        .current_dir(repo_root())
+        .status()
+        .expect("invoke loft --html");
+    assert!(status.success(), "loft --html must build store_load_keys");
+
+    let page = std::fs::read_to_string(&html).expect("read html");
+    let marker = "const wasmB64=\"";
+    let start = page.find(marker).expect("wasmB64 marker") + marker.len();
+    let end = start + page[start..].find('"').expect("wasmB64 closing quote");
+    let wasm = tmp.join("paged_keys.wasm");
+    std::fs::write(&wasm, loft::base64::decode(&page[start..end])).expect("write wasm");
+
+    // 3. Run it BOUNDED. `timeout` exits 124 when it has to kill the child, which is what
+    //    the unconditional `thread::spawn` produced — and is why the assertion below names
+    //    a stall specifically rather than reporting a generic non-zero exit.
+    let run = Command::new("timeout")
+        .arg("180")
+        .arg("node")
+        .arg(repo_root().join("tools/paged_range_host.mjs"))
+        .arg(&wasm)
+        .env("LOFT_PAGED_FILE", &store)
+        .current_dir(repo_root())
+        .output()
+        .expect("invoke node harness under timeout");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+    assert_ne!(
+        run.status.code(),
+        Some(124),
+        "the batched browser read STALLED (killed at 180 s). A browser has no \
+         `std::thread::spawn`, so a multi-range `fetch_many` never completes — loft#784.\n  \
+         stdout:\n{stdout}\n  stderr:\n{stderr}"
+    );
+    assert!(
+        run.status.success(),
+        "browser run failed\n  stdout:\n{stdout}\n  stderr:\n{stderr}"
+    );
+
+    // Every key arrived, each carrying its own relocated text — a batch that silently
+    // dropped ranges would still report a count, so the NAMES are what pins it.
+    assert!(
+        stdout.contains("browser got=6 len=6"),
+        "all six keys must load in one batched call\n  stdout:\n{stdout}"
+    );
+    for k in [137, 6011, 12907, 21001, 30011, 39002] {
+        assert!(
+            stdout.contains(&format!(
+                "browser k={k} name=tile-{k}-padding-to-give-the-image-some-size"
+            )),
+            "key {k} must arrive with its own text, not another key's\n  stdout:\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("browser verify=true"),
+        "the batched paged copy must produce a structurally sound heap\n  stdout:\n{stdout}"
+    );
+
+    // …and it still PAGED. Six keys cost more than one, but nothing like the whole image.
+    let paged = stdout
+        .lines()
+        .find(|l| l.starts_with("PAGED "))
+        .unwrap_or_else(|| panic!("harness must report its fetch total\n{stdout}"));
+    let field = |k: &str| -> u64 {
+        paged
+            .split_whitespace()
+            .find_map(|f| f.strip_prefix(k))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("malformed harness line: {paged}"))
+    };
+    assert_eq!(
+        field("file="),
+        file_len,
+        "the harness must be serving the fixture it was given: {paged}"
+    );
+    assert!(
+        field("bytes_fetched=") <= 6 * PAGE_BUDGET,
+        "six keyed lookups must stay a bounded multiple of one — a whole-file fallback \
+         looks exactly like this assertion failing: {paged}"
+    );
+}
+
 /// loft#678 sibling — `store_load_url` (the SHA-VERIFIED whole-image loader) was still
 /// browser-unavailable after the paged family was bridged, for a reason that had nothing
 /// to do with what it needs: its hash check lived in the `registry`-gated module, and a

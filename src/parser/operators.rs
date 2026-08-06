@@ -1563,9 +1563,18 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Warning,
+                code = "redundant-coalesce",
                 "Redundant null coalescing — '{}' is 'not null', default is never used",
                 self.expr_not_null_name,
             );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Mechanical,
+                title: "delete the `?? <default>`".to_string(),
+                condition: None,
+                edit: None,
+                concept: "null coalescing",
+                concept_ref: "@F2",
+            });
         }
         self.expr_not_null = false;
         // Plan-07 phase 4h — if the `??` LHS is the just-emitted
@@ -1820,15 +1829,29 @@ impl Parser {
             // here in the parser closes ALL of that on BOTH backends. Falsified over the
             // whole corpus/scripts/libs: zero valid `??` fires this (widen-int, `float?`←int
             // widening, `?? null`, `?? []`, checked-narrow all `convert` cleanly above).
+            let (given, wanted) = (rhs_type.name(&self.data), result_type.name(&self.data));
             diagnostic!(
                 self.lexer,
                 Level::Error,
                 code = "coalesce-default-type-mismatch",
-                "`??` default of type `{}` is not assignable to `{}` — a default must be \
-                 usable where the value's type is expected (cast it, or use a matching type)",
-                rhs_type.name(&self.data),
-                result_type.name(&self.data),
+                "`??` default of type `{given}` is not assignable to `{wanted}` — a default \
+                 must be usable where the value's type is expected",
             );
+            // @PLN131 — ONE fix, and no `edit`.  The obvious rewrite (`… as {wanted}`) is
+            // not sound to spell: `"x" as integer` is a text parse that can fail, so
+            // synthesising it here would answer one error with another.  Which SIDE is
+            // wrong is the author's to say, and that is what the condition asks.
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("give the default a value of type `{wanted}`"),
+                condition: Some(format!(
+                    "the `??` is meant to produce `{wanted}` — if it should produce \
+                     `{given}`, the VALUE's type is what to change instead"
+                )),
+                edit: None,
+                concept: "null coalescing",
+                concept_ref: "@F2",
+            });
         }
         // `convert(value → result_type)` widens the value branch when widen_ints,
         // and is a no-op otherwise (result_type == lhs_type).
@@ -2067,9 +2090,18 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Warning,
+                code = "redundant-default-fallback",
                 "Redundant `?` — '{}' is 'not null', so the type default is never used",
                 self.expr_not_null_name,
             );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Mechanical,
+                title: "delete the `?`".to_string(),
+                condition: None,
+                edit: None,
+                concept: "default fallback",
+                concept_ref: "@F96",
+            });
         }
         self.expr_not_null = false;
         // `a.b?` defends the `b` read (the default handles a null), so the not-null
@@ -2309,6 +2341,15 @@ impl Parser {
                     diagnostic!(self.lexer, Level::Error, "Expect type");
                     return Some(Type::Null);
                 };
+                // @PLN131 step 4 — where a `?` would go to make this cast checked, captured
+                // HERE because it is the only moment the parser knows it: the lookahead has
+                // not moved past the type yet, and by the time either cast diagnostic fires
+                // the cursor has drifted beyond the statement terminator. Both fixes spell
+                // `as τ?`, and an edit that cannot be placed must not be spelled at all.
+                let type_end = {
+                    let p = self.lexer.peek_pos();
+                    (p.line, p.pos)
+                };
                 let nullable_cast = self.lexer.has_token("?");
                 // @PLN25 DN4/DN5 — a scalar cast target has a DOMAIN: its integer value
                 // RANGE, and (when it is a plain non-null scalar) that domain EXCLUDES null.
@@ -2417,9 +2458,43 @@ impl Parser {
                                 Level::Error,
                                 code = "cast-constant-out-of-range",
                                 "the constant {f} is out of range for `{tps}` — a bare cast \
-                                 asserts the value fits; use `{tps}?` for a checked cast \
-                                 (value or null), or `?? d` for a fallback",
+                                 asserts the value fits",
                             );
+                            // @PLN131 — the ALWAYS-sound fix leads, and the better idiom does
+                            // not. `as τ?` makes the expression nullable, which a target
+                            // declared non-null rejects — and the parser cannot see that
+                            // target, because applying the fix changes what pass 1 INFERS,
+                            // so only a re-parse knows. Ranking is on soundness first and
+                            // teaching only as a tiebreak between fixes that both hold.
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "give the cast a fallback: `?? <default>`".to_string(),
+                                condition: Some(format!(
+                                    "`<default>` is the right value when {f} does not fit \
+                                     `{tps}`"
+                                )),
+                                edit: None,
+                                concept: "null coalescing",
+                                concept_ref: "@F2",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "make the cast checked".to_string(),
+                                condition: Some(
+                                    "the result may be nullable here — if the target is \
+                                     declared non-null (`x: \u{3c4}`), widen it or take the \
+                                     fix above instead"
+                                        .to_string(),
+                                ),
+                                edit: Some(crate::diagnostics::Edit {
+                                    line: type_end.0,
+                                    col: type_end.1,
+                                    len: 0,
+                                    text: "?".to_string(),
+                                }),
+                                concept: "checked cast",
+                                concept_ref: "@F5",
+                            });
                         }
                     }
                     // @PLN99 Arc C — clear the owned-conversion signal, then let `convert`
@@ -2486,10 +2561,59 @@ impl Parser {
                                 self.lexer,
                                 Level::Error,
                                 code = "text-parse-may-fail",
-                                "a text parse `as {tps}` may fail — use `{tps}?` for a checked cast \
-                                 (value or null), `?? <default>` for a fallback, or \
-                                 `(… as {tps}?)?` for the type's default",
+                                "a text parse `as {tps}` may fail, and a bare cast asserts \
+                                 it cannot",
                             );
+                            // @PLN131 — three ways out, ranked on SOUNDNESS first. The two
+                            // discharging forms hold wherever this diagnostic fires,
+                            // measured in both shapes; the checked cast does not, because
+                            // `as τ?` makes the expression nullable and a target declared
+                            // non-null rejects that. The parser cannot see the target —
+                            // applying the fix changes what pass 1 INFERS, so only a
+                            // re-parse knows — which is why it ships as a condition the
+                            // author can check in a second rather than as a rewrite that
+                            // works three times in four.
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "give the parse a fallback: `?? <default>`".to_string(),
+                                condition: Some(
+                                    "`<default>` is the right value when the text does not \
+                                     parse"
+                                        .to_string(),
+                                ),
+                                edit: None,
+                                concept: "null coalescing",
+                                concept_ref: "@F2",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: format!("fall back to the type's default: `(… as {tps}?)?`"),
+                                condition: Some(format!(
+                                    "an unparseable text becoming the `{tps}` default is the \
+                                     result you want"
+                                )),
+                                edit: None,
+                                concept: "default fallback",
+                                concept_ref: "@F96",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "make the cast checked".to_string(),
+                                condition: Some(
+                                    "the result may be nullable here — if the target is \
+                                     declared non-null (`x: \u{3c4}`), widen it or take one of \
+                                     the fixes above instead"
+                                        .to_string(),
+                                ),
+                                edit: Some(crate::diagnostics::Edit {
+                                    line: type_end.0,
+                                    col: type_end.1,
+                                    len: 0,
+                                    text: "?".to_string(),
+                                }),
+                                concept: "checked cast",
+                                concept_ref: "@F5",
+                            });
                         }
                         // Keep `rt` non-null (the asserted target) to bound the cascade.
                     } else {
@@ -2555,8 +2679,28 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
+                        code = "redundant-null-check",
                         "Redundant null check — '{lhs_not_null_name}' is 'not null', comparison is always {always}",
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "delete the check — its answer is already known".to_string(),
+                        condition: None,
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "compare the VALUE instead (`x == 0`)".to_string(),
+                        condition: Some(
+                            "you meant to test what the value IS, not whether it is present"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
                 } else if *ctp == Type::Null
                     && self.expr_not_null
                     && !matches!(second_type, Type::Optional(_))
@@ -2566,9 +2710,29 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
+                        code = "redundant-null-check",
                         "Redundant null check — '{}' is 'not null', comparison is always {always}",
                         self.expr_not_null_name,
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "delete the check — its answer is already known".to_string(),
+                        condition: None,
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "compare the VALUE instead (`x == 0`)".to_string(),
+                        condition: Some(
+                            "you meant to test what the value IS, not whether it is present"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
                 }
             }
             self.expr_not_null = false;
@@ -2814,6 +2978,7 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
+                    code = "divide-by-constant-zero",
                     "{} by constant zero — result is always null",
                     if operator == "/" {
                         "Division"
@@ -2821,6 +2986,17 @@ impl Parser {
                         "Modulo"
                     }
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: "divide by a value that can be non-zero".to_string(),
+                    condition: Some(
+                        "the zero is a mistake — a deliberate null is better written as `null`"
+                            .to_string(),
+                    ),
+                    edit: None,
+                    concept: "arithmetic safety",
+                    concept_ref: "@F38",
+                });
             }
             // @PLN25 (N-Arith) range-tracking — capture the operand bounds BEFORE
             // call_op consumes them, so the result range of `&`/`%` can be narrowed
@@ -2952,6 +3128,29 @@ impl Parser {
                         "shift by {amt} is out of the valid range 0..=63 — a constant \
                          out-of-range shift has no defined result",
                     );
+                    // @PLN131 — the in-range amount leads, and the teaching rule does NOT
+                    // promote `??` over it here: the two are not equally sound.  A constant
+                    // out-of-range shift is nearly always a wrong amount, so offering the
+                    // escape first would teach an idiom by papering over a bug.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "shift by an amount inside `0..=63`".to_string(),
+                        condition: Some(format!("{amt} is not the amount you meant")),
+                        edit: None,
+                        concept: "shift operators",
+                        concept_ref: "@F37",
+                    });
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "give the shift a fallback: `?? <default>`".to_string(),
+                        condition: Some(format!(
+                            "shifting by {amt} is deliberate and `<default>` is the right \
+                             result when it has none"
+                        )),
+                        edit: None,
+                        concept: "null coalescing",
+                        concept_ref: "@F2",
+                    });
                 }
             }
             if !self.first_pass && matches!(operator, "+" | "-" | "*" | "/" | "%" | "<<" | ">>") {
@@ -3154,13 +3353,20 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Advice,
+                code = "slow-reference-parameter",
                 "`&` on parameter `{}` only slows it down here — a `&`-reference is \
-                 double-indirect (slower on every access), and field mutation already \
-                 propagates to the caller without it. Drop the `&` unless you REASSIGN \
-                 the whole binding (`{} = …`), which is the one thing `&` is for.",
-                a.name,
+                 double-indirect on every access, and field mutation already propagates \
+                 to the caller without it",
                 a.name,
             );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "drop the `&`".to_string(),
+                condition: Some("you never REASSIGN the whole binding (`x = …`), which is the one thing `&` is for".to_string()),
+                edit: None,
+                concept: "reference",
+                concept_ref: "@F21",
+            });
         }
     }
 

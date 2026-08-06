@@ -236,6 +236,7 @@ impl RuntimeError {
             col,
             code: None,
             suggestion: None,
+            fixes: Vec::new(),
         }
     }
 }

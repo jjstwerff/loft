@@ -274,10 +274,14 @@ pub fn check_generated_with(src: &str, poison: bool) -> Result<(), String> {
     let _ = std::fs::remove_file(&tmp);
 
     let rejected = !p.diagnostics.is_empty()
-        && p.diagnostics
-            .lines()
-            .iter()
-            .any(|l| !l.starts_with("Warning:") && !l.starts_with("Debug:"));
+        && p.diagnostics.lines().iter().any(|l| {
+            // "not a warning" means "an error" here, so a coded diagnostic that no
+            // prefix match recognised used to read as a REJECTION (@PLN131).
+            !matches!(
+                crate::diagnostics::compact_level(l),
+                Some(crate::diagnostics::Level::Warning | crate::diagnostics::Level::Debug)
+            )
+        });
     if rejected {
         return Err(format!(
             "GENERATOR BUG (rejected): {}\n--- program ---\n{src}",

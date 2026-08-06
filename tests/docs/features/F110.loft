@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @F110 — GENERATED from loft-lang/features#110 by tools/features/gen.loft — DO NOT EDIT.
+struct Tile { name: text }
+
+fn main() {
+    t = Tile { name: "grass" };
+    // `t.name` is never null, so this default can never be used — loft says so,
+    // and `--explain` shows the fix: delete it.
+    shown = t.name ?? "none";
+    println("{shown}");
+}

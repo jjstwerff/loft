@@ -72,6 +72,12 @@ on every target including the browser (`--html`). Nothing in the program changes
 when the data moves from disk to a CDN — which is what makes "develop against a
 local file, ship against a URL" work.
 
+There is a third way, for when the program should not have to say which entries it
+wants: `store_bind_lazy` binds a collection to one of these sources once, and every
+lookup that MISSES fetches its own entry ([STDLIB.md § Lazy store
+binding](STDLIB.md), `@F108`). Same reader, same pages — driven by the lookups
+instead of by a call.
+
 ```loft
 // The whole dataset is 800 MB on a CDN. This reads a few pages of it.
 parts: hash<Part[id]> = [];
@@ -114,7 +120,19 @@ Reads are served through a page cache, not issued one-per-lookup:
 | | default | env override |
 |---|---|---|
 | page size | **64 KiB** | `LOFT_PAGE_BYTES` |
-| cache size | 64 pages (**4 MiB**) | `LOFT_PAGE_CACHE_BYTES` |
+| cache size | **the load's working set** | `LOFT_PAGE_CACHE_BYTES` |
+
+**The cache holds what the load reads, and is not bounded by default.** A page dropped
+before the walk reaches it costs a second fetch of the same bytes, so residency is what
+stops a load paying twice — and a keyed load's working set is the data you asked for, a
+local copy of which is being materialised anyway. Peak memory is therefore about the size
+of the result, not a constant.
+
+`LOFT_PAGE_CACHE_BYTES` turns it into a **hard cap** for a memory-bounded host. Expect
+re-fetching once the cap is below the working set: the bytes have to come back somehow, and
+that is the price of the bound. It was the default until loft#785, where 4 MiB against a
+20 MB working set fetched **3.6× the bytes** — the prefetch evicting the very pages it was
+about to read.
 
 Every fetch is one page-aligned range. **A page is the unit of waste and the unit
 of amortisation**: a 12-byte record costs a 64 KiB fetch, and so do the next
@@ -149,6 +167,20 @@ A range request is dominated by its round trip until it gets big. So:
   reader once and reuses its cache, so a batch is not N independent reads.
 
 If a cold read feels slow, count the requests before you count the bytes.
+
+**In the browser the ranges still go one at a time.** Native builds issue a batch's
+independent ranges concurrently, so a batch costs about one round trip. A browser has no
+threads, and the bytes arrive through a synchronous host bridge, so `--html` spends one
+round trip per range — correct, and as fast as it was before batching existed, but the
+concurrency win is not there. Budget browser paging by round-trip *count*, and lean harder
+on fetching fewer, larger ranges.
+
+**If you run a local Range server for testing, raise its listen backlog.** Concurrent
+ranges arrive together, and a small backlog drops the excess SYNs — each dropped one costs
+a ~1 s TCP retransmit, so a batch that should take 30 ms takes over a second and reads as a
+loft problem. Python's `socketserver` defaults to a backlog of **5**; set
+`request_queue_size = 128`. Measured on a real harness: 1066/1285/1075 ms at the default,
+27–40 ms at 128.
 
 ## Choosing whole vs paged
 

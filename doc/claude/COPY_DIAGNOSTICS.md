@@ -134,6 +134,16 @@ ways this feature dies — **silent copies** (a copy with no warning) and **fals
 positives** (a warning where no copy happens, e.g. warning on a match arm that actually
 borrows). Both are excluded *by construction* when the warning hangs off the verdict.
 
+**A third way it dies is the location.** The copy op carries no span of its own, so it
+borrows the nearest span or the enclosing line marker — and a line marker is a line
+number with an EMPTY file. The file that line belongs to is the one the **definition**
+was parsed from, never the entry file: pairing a dependency's line number with the
+consumer's path yields a real line in the wrong file, so the notice echoes whatever
+happens to sit there. Measured before the fix, 29 of one consumer's 67 notices pointed at
+a comment, a blank line or a `const` (loft#781). A notice that is default-on and 43%
+misplaced is worse than one that is off, because the misses train the reader to skip the
+hits.
+
 ## The silent/indicate line: bound vs unbound (not the syntactic construct)
 
 The one rule that decides *silent vs indicated* is a property of the copy's **source**, not

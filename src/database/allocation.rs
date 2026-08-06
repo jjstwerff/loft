@@ -4128,15 +4128,83 @@ impl Stores {
         }
         let keys = self.keys(tp).to_vec();
 
+        // loft#782 — WARM the addresses already known, so round trips stop scaling with the
+        // key count.
+        //
+        // The reads only LOOK sequential. A bucket slot is arithmetic from the key's hash
+        // (the table's `claim`/`elms`/`seed` are the same for every key), and once the
+        // lookups return, every entry's address is known and the bodies are independent.
+        // Three batched fetches replace ~2N demand-paged ones.
+        //
+        // Measured on a 7.2 MB image with a scattered 40-key selection over a 15 ms/request
+        // link, which is the shape that makes depth visible — a selection covering most of
+        // the file has nothing to batch, because `prefetch_run` already coalesced it.
+        //
+        // It cannot make a load wrong or fetch more: warming only fills the page table with
+        // pages the walk would have fetched anyway, and a resident page is never re-fetched.
+        let key_sets: Vec<Vec<crate::keys::Content>> = keys_vals
+            .iter()
+            .map(|&kv| vec![crate::keys::Content::Long(kv)])
+            .collect();
+        let addrs =
+            crate::paged_reader::hash_bucket_addrs(&mut reader, local.rec, local.pos, &key_sets);
+        reader.warm(&addrs);
+
+        // The candidate entries, warmed BEFORE the lookups rather than after.
+        //
+        // This is the step that actually moves the clock, and leaving it out is why an
+        // earlier attempt measured nothing: `find_hash_entry` reads the entry record to
+        // COMPARE the key, so locating already pulls each entry's page — one serial round
+        // trip per key — and a warm placed after the lookups finds every page resident and
+        // does nothing. The bucket slots are warm now, so reading the candidate record
+        // numbers out of them is free, and those pages can go in one batch.
+        let cands: Vec<(u64, usize)> = addrs
+            .iter()
+            .filter_map(|&(off, _)| {
+                let b = reader.resolve(off, 4);
+                let rec = u32::from_ne_bytes([b[0], b[1], b[2], b[3]]);
+                (rec != 0).then(|| (u64::from(rec) * 8, crate::paged_reader::PAGE_SIZE.min(4096)))
+            })
+            .collect();
+        reader.warm(&cands);
+
+        // Pass 1 — locate. Independent per key, now against warm bucket pages.
+        let found: Vec<u32> = key_sets
+            .iter()
+            .map(|k| {
+                crate::paged_reader::find_hash_entry(&mut reader, local.rec, local.pos, k, &keys)
+            })
+            .collect();
+
+        // Two EXACT warms rather than one speculative one: headers first (the size word
+        // says how long a record is), then exactly those bodies. Guessing a page per entry
+        // was tried and reverted — it fetched a page the walk did not need, and loft#729
+        // already established that buying depth with bytes just moves the cost.
+        let hdrs: Vec<(u64, usize)> = found
+            .iter()
+            .filter(|&&m| m != 0)
+            .map(|&m| (u64::from(m) * 8, 8))
+            .collect();
+        reader.warm(&hdrs);
+        let bodies: Vec<(u64, usize)> = found
+            .iter()
+            .filter(|&&m| m != 0)
+            .filter_map(|&m| {
+                let size = reader.record_words(m);
+                (size >= 2).then(|| {
+                    (
+                        u64::from(m) * 8 + 8,
+                        usize::try_from((size * 8).saturating_sub(8)).unwrap_or(0),
+                    )
+                })
+            })
+            .collect();
+        reader.warm(&bodies);
+
+        // Pass 2 — materialise.
         let mut loaded = 0i64;
-        for &kv in keys_vals {
-            if self.load_one(
-                &mut reader,
-                local,
-                content_tp,
-                &keys,
-                &[crate::keys::Content::Long(kv)],
-            ) {
+        for (k, &matched) in key_sets.iter().zip(&found) {
+            if matched != 0 && self.load_one(&mut reader, local, content_tp, &keys, k) {
                 loaded += 1;
             }
         }
@@ -4145,10 +4213,11 @@ impl Stores {
         // keys touch O(N) pages, not O(file). Off unless asked.
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
             eprintln!(
-                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} distinct={} file={} reads={:?}",
+                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} depth={} distinct={} file={} reads={:?}",
                 keys_vals.len(),
                 reader.provider().bytes_fetched(),
                 reader.provider().requests(),
+                reader.provider().round_trips(),
                 reader.provider().distinct_bytes(),
                 reader.size(),
                 reader.read_histogram()
@@ -4253,7 +4322,7 @@ impl Stores {
                 || matches!(self.types[ftp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
             {
                 // Flat sub-record pointer (text / vector<scalar>).
-                let src_sub = reader.u32_at(src_rec, src_off);
+                let src_sub = self.src_ptr(reader, dst_rec, dst_off, src_rec, src_off, store_nr);
                 if src_sub != 0 {
                     // `text` is one byte per unit; a vector<scalar> is its element.
                     let esz = if ftp == 5 {
@@ -4274,13 +4343,81 @@ impl Stores {
                 self.relocate_ptr_fields(reader, dst_rec, dst_off, src_rec, src_off, ftp, store_nr);
             } else if let Parts::Vector(elem_tp) = self.types[ftp as usize].parts {
                 // vector<struct>: copy the inner record + recurse each element.
-                let src_sub = reader.u32_at(src_rec, src_off);
+                let src_sub = self.src_ptr(reader, dst_rec, dst_off, src_rec, src_off, store_nr);
                 if src_sub != 0 {
                     let new_sub = self.copy_vector_of_struct(reader, src_sub, elem_tp, store_nr);
                     self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
                 }
             }
         }
+    }
+
+    /// loft#782 — the SOURCE addresses of every sub-record an element points at, read out
+    /// of the already-copied local bytes.
+    ///
+    /// This is the phase that dominates a keyed load's depth once the lookups are batched:
+    /// a `text` or nested vector is one round trip EACH, discovered while walking. loft#783
+    /// is what makes batching them possible — the element block is copied locally first,
+    /// pointers included, so every address is known before the walk rather than during it.
+    ///
+    /// Walks exactly the shape `relocate_ptr_fields` walks, so the two cannot disagree
+    /// about which pointers exist; a null contributes nothing.
+    #[cfg(paged_store)]
+    fn collect_sub_records(
+        &self,
+        dst_rec: u32,
+        dst_fb: u32,
+        tp: u16,
+        store_nr: u16,
+        out: &mut Vec<(u64, usize)>,
+    ) {
+        let fields = match &self.types[tp as usize].parts {
+            Parts::Struct(f) | Parts::EnumValue(_, f) => f.clone(),
+            _ => return,
+        };
+        for f in fields {
+            let dst_off = dst_fb + u32::from(f.position);
+            let ftp = f.content;
+            if matches!(
+                self.types[ftp as usize].parts,
+                Parts::Struct(_) | Parts::EnumValue(_, _)
+            ) {
+                self.collect_sub_records(dst_rec, dst_off, ftp, store_nr, out);
+            } else if ftp == 5 || matches!(self.types[ftp as usize].parts, Parts::Vector(_)) {
+                let sub = self.allocations[store_nr as usize].get_u32_raw(dst_rec, dst_off);
+                if sub != 0 {
+                    out.push((u64::from(sub) * 8, 8));
+                }
+            }
+        }
+    }
+
+    /// The SOURCE pointer stored in a field, read from the local copy rather than
+    /// re-fetched over the reader (loft#783).
+    ///
+    /// Every caller of [`relocate_ptr_fields`](Stores::relocate_ptr_fields) flat-copies the
+    /// element's bytes into `dst` BEFORE relocating its pointers, and a pointer word is
+    /// part of those bytes — so the value is already in local memory, and asking the reader
+    /// for it again is a 4-byte paged request for something we hold. That request is one
+    /// per pointer field per ELEMENT: on a 100×250 `vector<Named>` it was 25 000 of the
+    /// 75 893 four-byte reads a load issued.
+    ///
+    /// `LOFT_LOADER_WORDWISE=1` takes the old route, so the two can be compared on one
+    /// binary — the same escape hatch loft#729's bulk-body read kept.
+    #[cfg(paged_store)]
+    fn src_ptr<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        dst_rec: u32,
+        dst_off: u32,
+        src_rec: u32,
+        src_off: u32,
+        store_nr: u16,
+    ) -> u32 {
+        if std::env::var_os("LOFT_LOADER_WORDWISE").is_some() {
+            return reader.u32_at(src_rec, src_off);
+        }
+        self.allocations[store_nr as usize].get_u32_raw(dst_rec, dst_off)
     }
 
     /// Copy a FLAT record (a string or a `vector<scalar>` inner record — no
@@ -4294,7 +4431,13 @@ impl Stores {
         store_nr: u16,
         elem_size: u32,
     ) -> u32 {
-        let ssz = reader.record_words(src_rec);
+        // loft#783 — the size word (fld 0) and the length (fld 4) are ADJACENT, and every
+        // flat sub-record needs both. Read as ONE 8-byte request instead of two 4-byte
+        // ones: on a 100×250 `vector<Named>` that was 25 000 requests, the second of the
+        // three this path issued per element. Same bytes, same page, half the calls.
+        let head = reader.resolve(u64::from(src_rec) * 8, 8);
+        let ssz = u32::from_ne_bytes([head[0], head[1], head[2], head[3]]);
+        let head_len = u32::from_ne_bytes([head[4], head[5], head[6], head[7]]);
         // loft#729 — claim what the LENGTH needs, not what the source's CAPACITY
         // is.
         //
@@ -4316,7 +4459,7 @@ impl Stores {
         // `min(ssz)` because the source is the authority on what can be read: a
         // length that disagrees with the record size must never widen the copy.
         let want = if elem_size > 0 {
-            let len = u64::from(reader.u32_at(src_rec, 4));
+            let len = u64::from(head_len);
             let bytes = 8 + len * u64::from(elem_size);
             u32::try_from(bytes.div_ceil(8)).unwrap_or(ssz).min(ssz)
         } else {
@@ -4370,6 +4513,21 @@ impl Stores {
         if esize == 0 {
             return new_inner;
         }
+        // loft#782 — warm every element's sub-record in ONE batch before relocating, so the
+        // walk stops paying a round trip per element. The addresses come from the local
+        // copy (loft#783), so collecting them costs the reader nothing.
+        //
+        // Headers only, deliberately. Warming the BODIES too needs each sub-record's size
+        // word, and reading 1 000 of those put back the per-element four-byte read that
+        // loft#783 had just removed (109 → 1 222 on the guard) while measuring no further
+        // depth win — the bodies were already on the warmed pages. A batch that costs a
+        // read per element to save a page nobody needed is the trade in reverse.
+        let mut heads = Vec::new();
+        for i in 0..length {
+            self.collect_sub_records(new_inner, 8 + i * esize, elem_tp, store_nr, &mut heads);
+        }
+        reader.warm(&heads);
+
         for i in 0..length {
             // element i's data starts at byte 8 + i·esize in BOTH the copied
             // inner record and the source (this is a copy, so same offsets).

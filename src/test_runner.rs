@@ -605,13 +605,21 @@ pub(crate) fn run_tests(
                 advice: Vec::new(),
                 errors: Vec::new(),
             };
+            // The level, tolerating the `[code]` tag a coded diagnostic renders
+            // (`Advice[superseded-call]: …`).  Matching `"Advice:"` alone sent every CODED
+            // warning and advice into `errors`, so the file failed with "(parse errors)" —
+            // giving a diagnostic its stable identity silently turned it into a build
+            // break.  Anything unrecognised still counts as an error: a diagnostic this
+            // cannot classify must not be quietly dropped.
             for line in p.diagnostics.lines() {
-                if line.starts_with("Warning:") {
-                    file_result.warnings.push(line.clone());
-                } else if line.starts_with("Advice:") {
-                    file_result.advice.push(line.clone());
-                } else {
-                    file_result.errors.push(line.clone());
+                match loft::diagnostics::compact_level(&line) {
+                    Some(loft::diagnostics::Level::Warning) => {
+                        file_result.warnings.push(line.clone());
+                    }
+                    Some(loft::diagnostics::Level::Advice) => {
+                        file_result.advice.push(line.clone());
+                    }
+                    _ => file_result.errors.push(line.clone()),
                 }
             }
             // @PLN86 / #631 — an admission violation fails the file, exactly as a

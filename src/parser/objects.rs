@@ -907,10 +907,21 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
-                        "f#read({n}) as vector<T> counts BYTES, and {n} is not a multiple of the {elem}-byte element width; this drops the trailing {} byte(s) and reads {} element(s) — pass the byte length (element_count * {elem})",
+                        code = "read-size-not-element-multiple",
+                        "f#read({n}) as vector<T> counts BYTES, and {n} is not a multiple of \
+                         the {elem}-byte element width; this drops the trailing {} byte(s) \
+                         and reads {} element(s)",
                         n % elem,
                         n / elem
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: format!("pass the byte length — `element_count * {elem}`"),
+                        condition: None,
+                        edit: None,
+                        concept: "file I/O",
+                        concept_ref: "@F40",
+                    });
                 }
             }
             let mut ls = Vec::new();
@@ -1143,12 +1154,22 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
-                    "`f += <integer>` without a width cast writes 8 bytes; \
-                     for binary files (BigEndian / LittleEndian) add `as i8` \
-                     / `as i16` / `as i32` / `as u8` / `as u16` / `as u32` to \
-                     pick the exact byte width.  Use `as integer` to silence \
-                     this warning when 8-byte writes are intentional"
+                    code = "file-write-width",
+                    "`f += <integer>` without a width cast writes 8 bytes, and a binary \
+                     file (BigEndian / LittleEndian) usually wants an exact width"
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: "cast to the width you mean (`as i32`, `as u8`, …)".to_string(),
+                    condition: Some(
+                        "8 bytes is not the record width the reader expects — `as integer` \
+                         says the 8-byte write is deliberate"
+                            .to_string(),
+                    ),
+                    edit: None,
+                    concept: "file I/O",
+                    concept_ref: "@F40",
+                });
             }
             self.get_type(val_type)
         };
@@ -1581,11 +1602,27 @@ impl Parser {
                         self.lexer,
                         pos,
                         Level::Error,
+                        code = "unknown-variable",
                         "Unknown variable '{}' — did you mean '{}'?",
                         name,
                         s
                     );
                     self.lexer.suggest_last(s);
+                    // `pos` is the name's START (unlike the field site, which reports at
+                    // the cursor), so the span is the name exactly.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: format!("rename to `{s}`"),
+                        condition: None,
+                        edit: Some(crate::diagnostics::Edit {
+                            line: pos.line,
+                            col: pos.pos,
+                            len: u32::try_from(name.len()).unwrap_or(0),
+                            text: s.to_string(),
+                        }),
+                        concept: "declarations",
+                        concept_ref: "@F16",
+                    });
                 } else {
                     diagnostic_at!(self.lexer, pos, Level::Error, "Unknown variable '{}'", name);
                 }
@@ -2612,8 +2649,18 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
-                    "empty `{{}}` is not a collection literal; use `[]` for an empty collection"
+                    code = "empty-braces-not-collection",
+                    "empty `{{}}` is not a collection literal"
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: "write `[]` for an empty collection".to_string(),
+                    condition: None,
+                    edit: None,
+                    concept: "vector",
+                    concept_ref: "@F6",
+                });
+
                 td.clone()
             } else {
                 self.parse_operators(&td, &mut value, &mut parent_tp, 0)

@@ -1226,11 +1226,27 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Warning,
+            code = "text-index-char-bound",
             "index `{iname}` walks `0..len(text)` (a character count) but `byte_at({iname})` \
              reads bytes — this truncates by one byte per multi-byte character and is silent \
-             on ASCII; use `0..size(text)` for a byte walk, or iterate with `for c in text` \
-             (@PLN110 strict-index)"
+             on ASCII"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "walk bytes with `0..size(text)`".to_string(),
+            condition: Some("you meant BYTES, not characters".to_string()),
+            edit: None,
+            concept: "len vs size",
+            concept_ref: "@F97",
+        });
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: "iterate the characters with `for c in text`".to_string(),
+            condition: None,
+            edit: None,
+            concept: "len vs size",
+            concept_ref: "@F97",
+        });
     }
 
     /// Advice: this function's cognitive complexity has passed [`crate::keys::COMPLEXITY_ADVICE_AT`]
@@ -1267,11 +1283,18 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Advice,
+            code = "function-complexity",
             "`{name}` scores {score} for control-flow complexity (nudge at {at}) — its \
-             deepest nesting is {depth} levels, at line {line}. Nesting is what the score \
-             charges, so lifting the innermost part into its own function buys the most; a \
-             long flat sequence of branches costs almost nothing"
+             deepest nesting is {depth} levels, at line {line}"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: format!("lift the innermost part at line {line} into its own function"),
+            condition: Some("nesting is what the score charges — a long flat sequence of branches costs almost nothing".to_string()),
+            edit: None,
+            concept: "functions",
+            concept_ref: "@F16",
+        });
     }
 
     /// Advice: this function asks its callers for too many separate things.
@@ -1301,11 +1324,26 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Advice,
+            code = "too-many-parameters",
             "`{name}` takes {required} required parameters (nudge at {at}) — every caller \
-             has to get all {required} right, in order. Parameters that travel together are \
-             usually one thing: group them into a struct, or give the optional ones defaults \
-             so callers can leave them out"
+             has to get all {required} right, in order"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "group the parameters that travel together into a struct".to_string(),
+            condition: Some("some of them are one thing the caller already has".to_string()),
+            edit: None,
+            concept: "struct records",
+            concept_ref: "@F12",
+        });
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "give the optional ones defaults so callers can leave them out".to_string(),
+            condition: Some("some have a value that is right most of the time".to_string()),
+            edit: None,
+            concept: "default parameters",
+            concept_ref: "@F17",
+        });
     }
 
     /// Advice: these trailing boolean parameters want defaults.
@@ -1344,12 +1382,20 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Advice,
+            code = "trailing-boolean-parameters",
             "`{name}` ends with {trailing} boolean parameters — a call reading \
-             `{name}(…, true, false)` says nothing about which flag is which. Give them \
-             defaults (`loud: boolean = false`) so callers pass only what they are changing. \
-             Adding a default never breaks a caller: existing calls pass the value and keep \
-             working, new ones may leave it out"
+             `{name}(…, true, false)` says nothing about which flag is which"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title:
+                "give them defaults (`loud: boolean = false`) so callers pass only what they change"
+                    .to_string(),
+            condition: None,
+            edit: None,
+            concept: "default parameters",
+            concept_ref: "@F17",
+        });
     }
 
     /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
@@ -2230,6 +2276,17 @@ impl Parser {
         // @PLN130 F9 (loft#779) — see `parse`.
         self.check_reshape_under_reference();
         self.diagnostics.fill(self.lexer.diagnostics());
+    }
+
+    /// Did this parse reach the SECOND pass?
+    ///
+    /// `parse_source` returns early when pass 1 produced an `Error`/`Fatal`, so every
+    /// pass-2 diagnostic — casts, shifts, and most semantic lints — is structurally absent
+    /// from a parse that stopped there. A caller comparing two parses has to know that, or
+    /// it reads an UNMASKED diagnostic as one the change caused (@PLN131).
+    #[must_use]
+    pub fn reached_second_pass(&self) -> bool {
+        !self.first_pass
     }
 
     /// Session-scope snippet parse (#350, live-reload): like
@@ -3659,9 +3716,23 @@ impl Parser {
                     self.lexer,
                     name_pos,
                     Level::Error,
+                    code = "unknown-function",
                     "Unknown function {name} — did you mean '{s}'?"
                 );
                 self.lexer.suggest_last(&s);
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: format!("rename to `{s}`"),
+                    condition: None,
+                    edit: Some(crate::diagnostics::Edit {
+                        line: name_pos.line,
+                        col: name_pos.pos,
+                        len: u32::try_from(name.len()).unwrap_or(0),
+                        text: s.clone(),
+                    }),
+                    concept: "functions",
+                    concept_ref: "@F16",
+                });
             } else {
                 diagnostic_at!(
                     self.lexer,
@@ -3866,9 +3937,23 @@ impl Parser {
                             self.lexer,
                             name_pos,
                             Level::Error,
+                            code = "unknown-function",
                             "Unknown function {name} — did you mean '{s}'?"
                         );
                         self.lexer.suggest_last(&s);
+                        self.lexer.fix_last(crate::diagnostics::Fix {
+                            kind: crate::diagnostics::FixKind::Mechanical,
+                            title: format!("rename to `{s}`"),
+                            condition: None,
+                            edit: Some(crate::diagnostics::Edit {
+                                line: name_pos.line,
+                                col: name_pos.pos,
+                                len: u32::try_from(name.len()).unwrap_or(0),
+                                text: s.clone(),
+                            }),
+                            concept: "functions",
+                            concept_ref: "@F16",
+                        });
                     } else {
                         diagnostic_at!(
                             self.lexer,
@@ -7377,20 +7462,57 @@ impl Parser {
                 // "Change to `Y`" quick-fix (step B).  Without a name position (method /
                 // operator path) keep the cursor caret and no suggestion — a quick-fix
                 // there could replace the wrong token.
+                // ADVICE on both paths (loft#785-era audit, @PLN131). This used to be
+                // Advice with a name position and Warning without one — the same condition
+                // at two levels, decided by whether the compiler happened to know where the
+                // call name sat, which is an implementation detail and not a property of
+                // the program. It was load-bearing: a library calling a superseded METHOD
+                // failed `--tests --deny-warnings` while the identical call to a FUNCTION
+                // passed, so the never-break signpost broke a build. The tier rule settles
+                // it — a diagnostic gates iff ignoring it can produce a wrong result, and
+                // ignoring a steer cannot: the old form keeps working, identically, forever.
+                let msg =
+                    format!("`{shown}` is superseded — use `{succ}` (the old form keeps working)");
                 if let Some(pos) = name_pos {
+                    let (line, col) = (pos.line, pos.pos);
                     diagnostic_at!(
                         self.lexer,
                         pos,
                         Level::Advice,
-                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                        code = "superseded-call",
+                        "{msg}"
                     );
                     self.lexer.suggest_last(&succ);
+                    // The one fix in the set whose rewrite the diagnostic already names:
+                    // the successor is in the message, and `name_pos` is the identifier to
+                    // replace. Mechanical — swapping a call for its shim changes nothing a
+                    // program can observe, which is the whole promise of a fold.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: format!("call `{succ}` instead"),
+                        condition: None,
+                        edit: Some(crate::diagnostics::Edit {
+                            line,
+                            col,
+                            len: u32::try_from(shown.len()).unwrap_or(0),
+                            text: succ.clone(),
+                        }),
+                        concept: "superseded",
+                        concept_ref: "@F109",
+                    });
                 } else {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Warning,
-                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
-                    );
+                    diagnostic!(self.lexer, Level::Advice, code = "superseded-call", "{msg}");
+                    // No `name_pos`, so no edit: a method or operator call reaches here
+                    // with the cursor somewhere after the name, and a rewrite placed there
+                    // would replace the wrong token. The title still carries the fix.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: format!("call `{succ}` instead"),
+                        condition: None,
+                        edit: None,
+                        concept: "superseded",
+                        concept_ref: "@F109",
+                    });
                 }
             }
         }
@@ -9691,8 +9813,24 @@ impl Parser {
                         diagnostic!(
                             self.lexer,
                             Level::Warning,
-                            "Package '{id}' was tested against loft contract <= {tested_max} but this loft is contract {cur} — a breaking change since then may make it misbehave; ask its author to republish against contract {cur}"
+                            code = "package-contract-drifted",
+                            "Package '{id}' was tested against loft contract <= {tested_max} \
+                             but this loft is contract {cur} — a breaking change since then \
+                             may make it misbehave"
                         );
+                        self.lexer.fix_last(crate::diagnostics::Fix {
+                            kind: crate::diagnostics::FixKind::Conditional,
+                            title: format!(
+                                "ask its author to republish `{id}` against contract {cur}"
+                            ),
+                            condition: Some(
+                                "you depend on behaviour a contract bump could have changed"
+                                    .to_string(),
+                            ),
+                            edit: None,
+                            concept: "package management",
+                            concept_ref: "@F55",
+                        });
                     }
                     manifest::ContractCheck::Malformed(why) => {
                         diagnostic!(
@@ -10425,9 +10563,18 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
+                        code = "needless-reference-parameter",
                         "Parameter '{}' does not need to be a reference",
                         a.name
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "drop the `&`".to_string(),
+                        condition: None,
+                        edit: None,
+                        concept: "reference",
+                        concept_ref: "@F21",
+                    });
                 } else {
                     diagnostic!(
                         self.lexer,
@@ -10458,10 +10605,19 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
+                    code = "needless-const-parameter",
                     "Parameter '{}' is const but is never modified; \
                      'const' has no effect on an unmodified primitive parameter",
                     a.name
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: "drop the `const`".to_string(),
+                    condition: None,
+                    edit: None,
+                    concept: "const parameters",
+                    concept_ref: "@F18",
+                });
             }
         }
     }

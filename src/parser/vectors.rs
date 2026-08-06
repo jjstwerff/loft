@@ -342,11 +342,22 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
+                    code = "redundant-null-negation",
                     "'!' on a 'not null' {} is always false — '!x' tests whether x \
-                     is null, and a 'not null' value is never null; compare \
-                     explicitly (e.g. 'x == 0') if you meant a value check",
+                     is null, and a 'not null' value is never null",
                     t.name(&self.data)
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: "compare the VALUE instead (`x == 0`)".to_string(),
+                    condition: Some(
+                        "you meant to test what the value IS, not whether it is present"
+                            .to_string(),
+                    ),
+                    edit: None,
+                    concept: "nullable values",
+                    concept_ref: "@F1",
+                });
             }
             let arg = val.clone();
             self.call_op(val, "Not", &[arg], &[t])
@@ -379,10 +390,18 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
+                    code = "unary-minus-binds-tighter",
                     "`-x ** y` parses as `(-x) ** y` — the leading `-` binds to `x` as a sign \
-                     (tighter than `**`), not `-(x ** y)`; parenthesise if you meant to negate \
-                     the power"
+                     (tighter than `**`), not `-(x ** y)`"
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: "parenthesise as `-(x ** y)`".to_string(),
+                    condition: Some("you meant to negate the POWER, not the base".to_string()),
+                    edit: None,
+                    concept: "operators",
+                    concept_ref: "@F37",
+                });
             }
             let arg = val.clone();
             self.call_op(val, "Min", &[arg], &[t])

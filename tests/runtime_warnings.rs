@@ -55,10 +55,20 @@ fn run_with_warnings(name: &str, source: &str) -> (String, String, Option<i32>) 
 /// `&`-reference is double-indirect and materially slower, so users see it without
 /// opting in. `LOFT_NO_WARN_RUNTIME=1` silences it (the runtime-warning family switch).
 fn run_with_w4(name: &str, source: &str) -> (String, String, Option<i32>) {
+    run_with_w4_env(name, source, false)
+}
+
+/// Same, with `--explain` when asked — @PLN131 moved this lint's "unless you REASSIGN"
+/// clause into its fix's condition, so a test that pins it has to look there.
+fn run_with_w4_env(name: &str, source: &str, explain: bool) -> (String, String, Option<i32>) {
     let script_path = std::env::temp_dir().join(format!("loft_w4_{name}.loft"));
     std::fs::write(&script_path, source).expect("write temp script");
-    let out = Command::new(loft_bin())
-        .arg("--interpret")
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg("--interpret");
+    if explain {
+        cmd.arg("--explain");
+    }
+    let out = cmd
         .arg(&script_path)
         .current_dir(workspace_root())
         .env("LOFT_WARN_REDUNDANT_AMP", "1")
@@ -1226,8 +1236,16 @@ fn main() { a = Obj { x: 0 }; f(&a); print(\"{a.x}\\n\"); }
 ";
     let (_stdout, diag, _code) = run_with_w4("w4_redundant", source);
     assert!(
-        diag.contains("only slows it down") && diag.contains("REASSIGN"),
+        diag.contains("only slows it down"),
         "redundant & must warn (W4); got stderr={diag:?}"
+    );
+    // @PLN131 — "unless you REASSIGN" is the fix's CONDITION now, not message prose. The
+    // assertion follows it there rather than being dropped: what it pins is that the one
+    // legitimate use of `&` is still named.
+    let (_o2, explained, _c2) = run_with_w4_env("w4_redundant_explain", source, true);
+    assert!(
+        explained.contains("REASSIGN"),
+        "the fix must still name the one thing `&` is for; got stderr={explained:?}"
     );
 }
 

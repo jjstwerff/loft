@@ -38,6 +38,20 @@ pub trait PageProvider {
     /// Return exactly `len` bytes starting at `off`. Bytes at or past
     /// [`size`](PageProvider::size) read as zero.
     fn fetch(&mut self, off: u64, len: usize) -> Vec<u8>;
+
+    /// Fetch several INDEPENDENT ranges, returning them in the order given.
+    ///
+    /// loft#782 — a keyed load DISCOVERS what it needs by walking, so its reads look
+    /// sequential even where they are not: once the entries are located, their pages do not
+    /// depend on each other at all. Handing the provider the whole set lets a transport with
+    /// concurrency spend one round trip instead of N, and over a link the round trip is the
+    /// entire cost — a 1-byte and a 64 kB range measure the same ~45 ms.
+    ///
+    /// The default loops, so a provider with nothing to gain (a local file, where a round
+    /// trip is a `seek`) needs no code and behaves exactly as before.
+    fn fetch_many(&mut self, ranges: &[(u64, usize)]) -> Vec<Vec<u8>> {
+        ranges.iter().map(|&(o, l)| self.fetch(o, l)).collect()
+    }
 }
 
 /// A local-file page provider — reads ranges from a store file on disk and
@@ -49,6 +63,10 @@ pub struct LocalFileProvider {
     size: u64,
     /// Every `(off, len)` this provider was asked to fetch, in order.
     pub fetches: Vec<(u64, usize)>,
+    /// loft#782 — SEQUENTIAL provider invocations: the round-trip DEPTH. One `fetch` is
+    /// one; one `fetch_many` is one however many ranges it carries. `fetches.len()` counts
+    /// ranges and so cannot tell a batch from a queue — which is the entire question here.
+    pub depth: usize,
 }
 
 impl LocalFileProvider {
@@ -64,6 +82,7 @@ impl LocalFileProvider {
             file,
             size,
             fetches: Vec::new(),
+            depth: 0,
         })
     }
 
@@ -82,6 +101,7 @@ impl PageProvider for LocalFileProvider {
     fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
         use std::io::{Read, Seek, SeekFrom};
         self.fetches.push((off, len));
+        self.depth += 1;
         let mut buf = vec![0u8; len];
         if off < self.size {
             // Read what actually exists; anything past EOF stays zero.
@@ -109,6 +129,8 @@ pub struct HttpRangeProvider {
     size: u64,
     /// Every `(off, len)` fetched — for the "bytes fetched ≪ file" assertion.
     pub fetches: Vec<(u64, usize)>,
+    /// loft#782 — SEQUENTIAL round trips. See [`LocalFileProvider::depth`].
+    pub depth: usize,
 }
 
 impl HttpRangeProvider {
@@ -123,6 +145,7 @@ impl HttpRangeProvider {
             url: url.to_string(),
             size,
             fetches: Vec::new(),
+            depth: 0,
         })
     }
 
@@ -140,6 +163,7 @@ impl PageProvider for HttpRangeProvider {
 
     fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
         self.fetches.push((off, len));
+        self.depth += 1;
         let mut buf = vec![0u8; len];
         if off >= self.size {
             return buf; // wholly past EOF — zero
@@ -155,6 +179,67 @@ impl PageProvider for HttpRangeProvider {
         // caller cannot tell them apart, which is why every loader re-checks the
         // copy with `store_verify` rather than trusting the bytes.
         buf
+    }
+
+    /// loft#782 — issue the ranges CONCURRENTLY, one thread each, reassembled in order.
+    ///
+    /// This is where the win is. Measured on a 7.2 MB image with a scattered 40-key
+    /// selection over a 15 ms/request link: 60 serial round trips cost ~1035 ms, and the
+    /// same 60 ranges issued together cost about one.
+    ///
+    /// `fetches` is still recorded in the caller's order, so the "bytes fetched ≪ file"
+    /// assertions read exactly as before — going parallel changes when bytes arrive, never
+    /// which. A single range takes the direct path: a thread would cost more than it saves.
+    ///
+    /// **On wasm the ranges go one at a time** (loft#784). A browser has no
+    /// `std::thread::spawn`, and the batched path used it unconditionally, so a
+    /// multi-range read never completed — `loft --html` stalled with no error and no trap,
+    /// which is the worst way for this to fail. There is no browser-side concurrency to
+    /// substitute: the bytes arrive through the synchronous `loft_host_http_*` bridge, and
+    /// making that concurrent would change the host contract. So the target without threads
+    /// gets the sequential loop, which is exactly what it did before the batching landed —
+    /// correct, and slower by the round trips the batch would have saved.
+    fn fetch_many(&mut self, ranges: &[(u64, usize)]) -> Vec<Vec<u8>> {
+        // Each `fetch` records its own range and bumps `depth`, so the sequential path
+        // reports the round-trip depth it genuinely spends. Reporting one batch here
+        // would make the instrument agree with the native build and describe nothing.
+        #[cfg(target_family = "wasm")]
+        {
+            return ranges.iter().map(|&(o, l)| self.fetch(o, l)).collect();
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if ranges.len() <= 1 {
+                return ranges.iter().map(|&(o, l)| self.fetch(o, l)).collect();
+            }
+            for &r in ranges {
+                self.fetches.push(r);
+            }
+            self.depth += 1; // ONE round trip, however many ranges ride in it
+            let (url, size) = (self.url.clone(), self.size);
+            let handles: Vec<_> = ranges
+                .iter()
+                .map(|&(off, len)| {
+                    let url = url.clone();
+                    std::thread::spawn(move || {
+                        let mut buf = vec![0u8; len];
+                        if off >= size {
+                            return buf;
+                        }
+                        let want = usize::try_from((size - off).min(len as u64)).unwrap_or(len);
+                        if let Ok(got) = crate::net::fetch_range(&url, off, want) {
+                            let n = got.len().min(buf.len());
+                            buf[..n].copy_from_slice(&got[..n]);
+                        }
+                        buf
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_default())
+                .collect()
+        }
     }
 }
 
@@ -207,6 +292,19 @@ impl PageSource {
         }
     }
 
+    /// loft#782 — sequential round trips, which is the cost over a link.
+    ///
+    /// Distinct from [`requests`](PageSource::requests): that counts RANGES, so a batch of
+    /// 27 issued together and 27 issued one after another look identical to it. They are
+    /// the difference between 15 ms and 400 ms.
+    #[must_use]
+    pub fn round_trips(&self) -> usize {
+        match self {
+            PageSource::Local(p) => p.depth,
+            PageSource::Http(p) => p.depth,
+        }
+    }
+
     #[must_use]
     pub fn distinct_bytes(&self) -> usize {
         let log = match self {
@@ -232,6 +330,20 @@ impl PageProvider for PageSource {
         match self {
             PageSource::Local(p) => p.fetch(off, len),
             PageSource::Http(p) => p.fetch(off, len),
+        }
+    }
+
+    /// Forward the BATCH to the concrete provider.
+    ///
+    /// Without this the trait default applies here — a loop over `PageSource::fetch`, which
+    /// dispatches one range at a time and throws away the whole point. An enum that
+    /// implements a trait by delegation has to delegate every method that has a default,
+    /// because the default is silently correct and silently slow: the batch still returns
+    /// the right bytes, so nothing fails, and the win simply does not happen (loft#782).
+    fn fetch_many(&mut self, ranges: &[(u64, usize)]) -> Vec<Vec<u8>> {
+        match self {
+            PageSource::Local(p) => p.fetch_many(ranges),
+            PageSource::Http(p) => p.fetch_many(ranges),
         }
     }
 }
@@ -275,6 +387,14 @@ pub struct PagedReader<P: PageProvider> {
     lru: std::collections::VecDeque<u64>,
     /// Max resident pages.
     capacity: usize,
+    /// loft#785 — is `capacity` a HARD cap, or a floor the working set may raise?
+    ///
+    /// `true` only when the caller named a size (`LOFT_PAGE_CACHE_BYTES`, or
+    /// [`with_config`](PagedReader::with_config)): someone who states a memory bound gets
+    /// it. Otherwise [`warm`](PagedReader::warm) may grow the cache to hold what it
+    /// prefetches, because a prefetched page that is evicted before the walk reads it costs
+    /// TWO fetches instead of one — see that method for why the default has to be growth.
+    capped: bool,
     /// loft#729 — `resolve` calls and bytes asked for, bucketed by power-of-two
     /// size (bucket `i` is `2^i ..< 2^(i+1)`). What the traversal ASKS for is a
     /// separate fact from what the provider FETCHES, and only the first says
@@ -299,16 +419,24 @@ impl<P: PageProvider> PagedReader<P> {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(PAGE_SIZE);
-        let cache_bytes = std::env::var("LOFT_PAGE_CACHE_BYTES")
+        let asked = std::env::var("LOFT_PAGE_CACHE_BYTES")
             .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(64 * PAGE_SIZE);
-        Self::with_config(provider, ps, (cache_bytes / ps).max(1))
+            .and_then(|v| v.parse::<usize>().ok());
+        let cache_bytes = asked.unwrap_or(64 * PAGE_SIZE);
+        let mut r = Self::with_config(provider, ps, (cache_bytes / ps).max(1));
+        // loft#785 — an unasked-for default is a FLOOR, not a bound. Only a caller who
+        // named a number is held to it.
+        r.capped = asked.is_some();
+        r
     }
 
     /// A reader with an explicit page size and cache cap (both clamped to ≥ 1).
     /// The tiny-page form is for tests that want boundary-spanning reads without
     /// a 64 KiB fixture.
+    ///
+    /// The capacity given here is a HARD cap: naming a size is how a caller states a memory
+    /// bound, and [`warm`](PagedReader::warm) will trim its prefetch to fit rather than
+    /// exceed it (loft#785).
     pub fn with_config(provider: P, page_size: usize, capacity: usize) -> Self {
         Self {
             provider,
@@ -316,6 +444,7 @@ impl<P: PageProvider> PagedReader<P> {
             pages: std::collections::HashMap::new(),
             lru: std::collections::VecDeque::new(),
             capacity: capacity.max(1),
+            capped: true,
             reads: [(0, 0); 32],
         }
     }
@@ -342,6 +471,25 @@ impl<P: PageProvider> PagedReader<P> {
         self.provider.size()
     }
 
+    /// Drop least-recently-used pages until the cache is back inside `capacity`.
+    ///
+    /// loft#785 — a no-op when the capacity was never asked for. A page dropped here is a
+    /// page the walk re-fetches, and with a prefetch feeding the cache the pages evicted
+    /// are exactly the ones about to be read: on 162 scattered keys over an 87 MB store
+    /// that turned a 19.9 MB working set into 88.6 MB fetched. Residency is the reader's
+    /// only defence against re-fetching, so it is spent only against a bound someone chose.
+    /// Correctness never depended on it (the `capacity == 1` test is the proof).
+    fn evict_to_capacity(&mut self) {
+        if !self.capped {
+            return;
+        }
+        while self.pages.len() > self.capacity {
+            if let Some(old) = self.lru.pop_front() {
+                self.pages.remove(&old);
+            }
+        }
+    }
+
     /// Make page `pidx` resident (fetching on miss) and mark it most-recently
     /// used, evicting the LRU page(s) once over capacity.
     fn ensure_page(&mut self, pidx: u64) {
@@ -357,11 +505,7 @@ impl<P: PageProvider> PagedReader<P> {
             .fetch(pidx * self.page_size as u64, self.page_size);
         self.pages.insert(pidx, bytes);
         self.lru.push_back(pidx);
-        while self.pages.len() > self.capacity {
-            if let Some(old) = self.lru.pop_front() {
-                self.pages.remove(&old);
-            }
-        }
+        self.evict_to_capacity();
     }
 
     /// Fetch the pages a read needs in as few provider calls as possible: each
@@ -376,6 +520,89 @@ impl<P: PageProvider> PagedReader<P> {
     ///
     /// A run is fetched only where pages are ABSENT, so a read straddling
     /// resident pages still costs nothing for the parts already held.
+    /// loft#782 — fetch every page these ranges touch that is not resident, in ONE batched
+    /// provider call.
+    ///
+    /// The caller knows these addresses ahead of the walk, so the reads only LOOK
+    /// sequential. Warming them together turns N round trips into one, and every later
+    /// `resolve` over the same bytes is a page-table hit.
+    ///
+    /// Adjacent pages coalesce into runs first, so a clustered selection costs one range
+    /// rather than one per page.
+    ///
+    /// **It must not evict what it just fetched — loft#785.** This once claimed it "cannot
+    /// make a load fetch more", and that was false the moment the warmed set did not fit
+    /// the cache: the pages land at the LRU back, push out the pages the walk is about to
+    /// read, and the walk fetches them a second time. That is strictly worse than no
+    /// prefetch at all — plain demand paging at least has locality on its side, which is
+    /// why the binary BEFORE batching did not amplify on the same 64-page cache. Measured
+    /// on 162 scattered keys over an 87 MB store: 88.6 MB fetched for a 19.9 MB working
+    /// set, 3.6× amplification, gone the moment the set fits.
+    ///
+    /// So the cache is sized to the WORK, two ways:
+    ///
+    /// - **Uncapped** (the default): grow to hold what is warmed. The bound is the working
+    ///   set the caller asked for, which it is already materialising a local copy of — you
+    ///   cannot load 162 map cells while holding fewer bytes than those cells occupy.
+    /// - **Capped** (a caller named a size): warm only what fits, and let the rest demand
+    ///   page. The bound is honoured, and the prefetch stops paying for pages it is about to
+    ///   drop — the same 162 keys under an explicit 4 MB cap went 88.6 MB → 58.3 MB. Some
+    ///   re-fetching remains, and must: a working set larger than the cache you asked for
+    ///   cannot be held, and that is the cost of naming the bound.
+    pub fn warm(&mut self, ranges: &[(u64, usize)]) {
+        let ps = self.page_size as u64;
+        let mut want: Vec<u64> = Vec::new();
+        for &(off, len) in ranges {
+            if len == 0 {
+                continue;
+            }
+            let (first, last) = (off / ps, (off + len as u64 - 1) / ps);
+            for p in first..=last {
+                if !self.pages.contains_key(&p) {
+                    want.push(p);
+                }
+            }
+        }
+        want.sort_unstable();
+        want.dedup();
+        if want.is_empty() {
+            return;
+        }
+        if self.capped {
+            // Room for the prefetch is what is left after the pages already resident. A
+            // page warmed past that is guaranteed to be evicted before it is read, so
+            // fetching it is pure waste — demand paging will get it when it is wanted.
+            let room = self.capacity.saturating_sub(self.pages.len());
+            if room == 0 {
+                return;
+            }
+            want.truncate(room);
+        }
+        let mut runs: Vec<(u64, u64)> = Vec::new(); // (first page, page count)
+        for p in want {
+            match runs.last_mut() {
+                Some((start, n)) if *start + *n == p => *n += 1,
+                _ => runs.push((p, 1)),
+            }
+        }
+        let reqs: Vec<(u64, usize)> = runs
+            .iter()
+            .map(|&(start, n)| (start * ps, usize::try_from(n).unwrap_or(1) * self.page_size))
+            .collect();
+        let bodies = self.provider.fetch_many(&reqs);
+        for (&(start, n), bytes) in runs.iter().zip(bodies) {
+            for i in 0..n {
+                let lo = usize::try_from(i).unwrap_or(0) * self.page_size;
+                let mut page = bytes.get(lo..).unwrap_or(&[]).to_vec();
+                page.truncate(self.page_size);
+                page.resize(self.page_size, 0); // the last page zero-pads past EOF
+                self.pages.insert(start + i, page);
+                self.lru.push_back(start + i);
+            }
+        }
+        self.evict_to_capacity();
+    }
+
     fn prefetch_run(&mut self, off: u64, len: usize) {
         if len <= self.page_size {
             return; // at most two pages, and `ensure_page` handles those
@@ -403,11 +630,7 @@ impl<P: PageProvider> PagedReader<P> {
                 self.pages.insert(start + i as u64, page);
                 self.lru.push_back(start + i as u64);
             }
-            while self.pages.len() > self.capacity {
-                if let Some(old) = self.lru.pop_front() {
-                    self.pages.remove(&old);
-                }
-            }
+            self.evict_to_capacity();
         }
     }
 
@@ -510,6 +733,44 @@ pub fn find_hash_entry<P: PageProvider>(
         rec = reader.u32_at(claim, 16 + index * 4);
     }
     0
+}
+
+/// loft#782 — the byte address of each key's FIRST bucket slot, without a read per key.
+///
+/// The hash walk looks sequential and mostly is not: `claim`, `elms` and the `seed` are
+/// properties of the TABLE, identical for every key, so once they are known each key's slot
+/// is `key_hash(key, seed) % elms` — arithmetic. The whole set of first probes is therefore
+/// knowable up front and can be fetched in one round trip instead of N.
+///
+/// Empty when the table is absent or malformed; the caller then simply walks as before. A
+/// probe that collides still costs its own read — this warms the first slot, which is the
+/// one every lookup takes.
+pub fn hash_bucket_addrs<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    root_rec: u32,
+    root_pos: u32,
+    key_sets: &[Vec<crate::keys::Content>],
+) -> Vec<(u64, usize)> {
+    let claim = reader.u32_at(root_rec, root_pos);
+    if claim == 0 {
+        return Vec::new();
+    }
+    let room = reader.record_words(claim);
+    if room < 2 {
+        return Vec::new();
+    }
+    let elms = (room - 2) * 2;
+    if elms == 0 {
+        return Vec::new();
+    }
+    let seed = reader.i64_at(claim, 8) as u64; // SEED_FLD
+    key_sets
+        .iter()
+        .map(|k| {
+            let index = (crate::keys::key_hash(k, seed) % u64::from(elms)) as u32;
+            (u64::from(claim) * 8 + u64::from(16 + index * 4), 4)
+        })
+        .collect()
 }
 
 /// Read the string at string-record `rec` over the paged reader (fld 4 = length,

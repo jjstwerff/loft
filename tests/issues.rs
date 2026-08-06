@@ -11391,8 +11391,7 @@ fn json_escape(s: text) -> text { s }"
     // to pin.
     .warning(
         "a text slice ends at `len(text)` (a character count) but slice bounds are byte \
-         offsets — this stops short on multi-byte text; use `size(text)` for the byte \
-         length, or `text[i..]` for the rest (@PLN110 strict-index) at \
+         offsets — this stops short on multi-byte text at \
          p279_forward_fn_via_intermediate_local:10:36",
     )
     .result(Value::Null);

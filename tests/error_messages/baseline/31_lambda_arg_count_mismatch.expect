@@ -7,10 +7,12 @@ error: Function reference 'add' expects 2 argument(s), got 1
 3 |   result = add(1);
   |                   ^
 
-warning: Variable add is never read
+warning[never-read]: Variable add is never read
   --> <cases>/31_lambda_arg_count_mismatch.loft:2:8
   |
 2 |   add = fn(a: integer, b: integer) -> integer { a + b };
   |        ^
+
+note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
 
 error: aborting due to 1 previous error

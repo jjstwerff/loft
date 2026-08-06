@@ -59,9 +59,16 @@ fn calling_a_user_function_in_a_constant_warns() {
         err.contains("make()"),
         "it must name the call that re-runs, not just the constant: {err}"
     );
+    // @PLN131 moved the idiom out of the message and into the fix line, so it is asserted
+    // where it now lives — the reader's next question is still answered, just not twice.
+    let explained = stderr_of(
+        "user_explain",
+        "fn make() -> integer { 7 }\nX = make();\nfn main() { println(\"{X}\"); }\n",
+        &[("LOFT_EXPLAIN", "1")],
+    );
     assert!(
-        err.contains("caches it"),
-        "it must give the idiom, since the reader's next question is what to do: {err}"
+        explained.contains("caches"),
+        "it must give the idiom, since the reader's next question is what to do: {explained}"
     );
 }
 

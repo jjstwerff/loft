@@ -1298,6 +1298,13 @@ fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
 /// Interpreter handler for `store_bind_lazy` — @PLN129 arc A.  Bind a COLLECTION
 /// to a lazy source, so a lookup that misses fetches that one entry instead of
 /// answering absent.  Args pop in reverse: source, local.
+///
+/// Gated to match its registry entry above: the fetch a miss performs is the
+/// paged reader, so without `paged_store` there is nothing to bind TO.  The two
+/// must carry the same `#[cfg]` — an entry without its handler fails the wasm
+/// build outright, and a handler without its entry is this silent dead-code
+/// warning, visible only in a `--no-default-features` build.
+#[cfg(paged_store)]
 fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
     let v_source = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);

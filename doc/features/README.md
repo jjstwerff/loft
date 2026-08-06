@@ -86,6 +86,10 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F104](F104.md) | `store_reclaim()` — give a store's unused file space back |
 | [@F105](F105.md) | Custom `to_text` format hook — a type owns how it prints |
 | [@F106](F106.md) | Copy and move semantics — when two names share data, and when they do not |
+| [@F107](F107.md) | Type reflection — the declared shape of a type, as data |
+| [@F108](F108.md) | Lazy store binding — a collection fetches on a miss |
+| [@F109](F109.md) | `#superseded` — steer callers to a newer form without breaking the old one |
+| [@F110](F110.md) | Diagnostic suggestions — what to write instead, checked by running it |
 
 ## Infrastructure (`@I`)
 

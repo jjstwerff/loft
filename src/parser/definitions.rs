@@ -25,9 +25,25 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Advice,
-                    "`not null` is deprecated and has no effect — a type is non-null by \
-                     default now; delete `not null` (write `T?` if the type should allow null)"
+                    code = "not-null-deprecated",
+                    "`not null` is deprecated and has no effect — a type is non-null by default now"
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: "delete `not null`".to_string(),
+                    condition: None,
+                    edit: None,
+                    concept: "struct records",
+                    concept_ref: "@F12",
+                });
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: "write `T?` instead".to_string(),
+                    condition: Some("the type SHOULD allow null — `not null` was hiding that it already did not".to_string()),
+                    edit: None,
+                    concept: "nullable values",
+                    concept_ref: "@F1",
+                });
             }
             true
         } else {
@@ -869,8 +885,19 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Advice,
-                        "constant '{id}' is re-evaluated at EVERY reference — a file-scope constant is an inlined expression, not a once-computed value, so `{callee}` runs again for each use.  For an expensive or effectful initialiser, use a function that computes the value once and caches it: `fn {fn_name}() -> … {{ … }}`"
+                        code = "const-reevaluated",
+                        "constant '{id}' is re-evaluated at EVERY reference — a file-scope \
+                         constant is an inlined expression, not a once-computed value, so \
+                         `{callee}` runs again for each use"
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: format!("compute it once in a function that caches: `fn {fn_name}() -> … {{ … }}`"),
+                        condition: Some("the initialiser is expensive or has an effect you want to happen once".to_string()),
+                        edit: None,
+                        concept: "const",
+                        concept_ref: "@F18",
+                    });
                 }
             }
             if self.first_pass {

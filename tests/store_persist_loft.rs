@@ -28,72 +28,106 @@ use std::thread;
 /// the remote store the `store_load_key` HTTP path (Phase 5) fetches from.
 /// Returns the URL; the server thread is detached (ends with the test binary).
 fn serve_ranges(store: Vec<u8>, sidecar: Option<Vec<u8>>) -> String {
+    serve_ranges_tuned(store, sidecar, 0, None).0
+}
+
+/// loft#782 — the same server, with the two knobs a ROUND-TRIP claim needs.
+///
+/// `delay_ms` is injected per request, and every connection is handled on its own thread,
+/// so a client that issues its ranges concurrently finishes in ~one delay while a serial
+/// one pays `requests × delay`. Both matter: with the single-threaded server the socket
+/// would serialise a concurrent client anyway, and the harness would report "no win" for a
+/// fix that worked.
+///
+/// `counter` counts requests served, which is the DETERMINISTIC half — wall-clock is
+/// suggestive and flaky, but round-trip depth is exact and is what the defect is about.
+fn serve_ranges_tuned(
+    store: Vec<u8>,
+    sidecar: Option<Vec<u8>>,
+    delay_ms: u64,
+    counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
+    let hits =
+        counter.unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+    let out = std::sync::Arc::clone(&hits);
+    let store = std::sync::Arc::new(store);
+    let sidecar = std::sync::Arc::new(sidecar);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { break };
-            let mut buf = [0u8; 2048];
-            let n = s.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]);
-            // Path-aware (real servers 404 a missing sidecar): serve the layout
-            // sidecar whole at `/store.dschema` (or 404 when absent), so the
-            // @PLN97 3b.5 gate fetches a REAL sidecar, not the store bytes.
-            let req_path = req
-                .lines()
-                .next()
-                .and_then(|l| l.split_whitespace().nth(1))
-                .unwrap_or("/");
-            if req_path.ends_with(".dschema") {
-                match &sidecar {
-                    Some(sc) => {
-                        let hdr = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            sc.len()
-                        );
-                        let _ = s.write_all(hdr.as_bytes());
-                        let _ = s.write_all(sc);
-                    }
-                    None => {
-                        let _ = s.write_all(
+            let store = std::sync::Arc::clone(&store);
+            let sidecar = std::sync::Arc::clone(&sidecar);
+            let hits = std::sync::Arc::clone(&hits);
+            thread::spawn(move || {
+                let (store, sidecar) = (&*store, &*sidecar);
+                hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if delay_ms > 0 {
+                    thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                // Path-aware (real servers 404 a missing sidecar): serve the layout
+                // sidecar whole at `/store.dschema` (or 404 when absent), so the
+                // @PLN97 3b.5 gate fetches a REAL sidecar, not the store bytes.
+                let req_path = req
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                if req_path.ends_with(".dschema") {
+                    match &sidecar {
+                        Some(sc) => {
+                            let hdr = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                sc.len()
+                            );
+                            let _ = s.write_all(hdr.as_bytes());
+                            let _ = s.write_all(sc);
+                        }
+                        None => {
+                            let _ = s.write_all(
                             b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                         );
+                        }
                     }
+                    return; // the sidecar path is answered; this connection is done
                 }
-                continue;
-            }
-            let total = store.len();
-            let range = req.lines().find_map(|l| {
-                l.trim()
-                    .strip_prefix("Range: bytes=")
-                    .or_else(|| l.trim().strip_prefix("range: bytes="))
-            });
-            if let Some(r) = range {
-                let (a, b) = r.split_once('-').unwrap_or(("0", ""));
-                let a: usize = a.trim().parse().unwrap_or(0);
-                let b: usize = b
-                    .trim()
-                    .parse()
-                    .unwrap_or(total.saturating_sub(1))
-                    .min(total.saturating_sub(1));
-                let body = if a <= b { &store[a..=b] } else { &store[0..0] };
-                let hdr = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{total}\r\n\
+                let total = store.len();
+                let range = req.lines().find_map(|l| {
+                    l.trim()
+                        .strip_prefix("Range: bytes=")
+                        .or_else(|| l.trim().strip_prefix("range: bytes="))
+                });
+                if let Some(r) = range {
+                    let (a, b) = r.split_once('-').unwrap_or(("0", ""));
+                    let a: usize = a.trim().parse().unwrap_or(0);
+                    let b: usize = b
+                        .trim()
+                        .parse()
+                        .unwrap_or(total.saturating_sub(1))
+                        .min(total.saturating_sub(1));
+                    let body = if a <= b { &store[a..=b] } else { &store[0..0] };
+                    let hdr = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{total}\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = s.write_all(hdr.as_bytes());
-                let _ = s.write_all(body);
-            } else {
-                let hdr = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
-                );
-                let _ = s.write_all(hdr.as_bytes());
-                let _ = s.write_all(&store);
-            }
+                        body.len()
+                    );
+                    let _ = s.write_all(hdr.as_bytes());
+                    let _ = s.write_all(body);
+                } else {
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = s.write_all(hdr.as_bytes());
+                    let _ = s.write_all(store);
+                }
+            });
         }
     });
-    format!("http://127.0.0.1:{port}/store")
+    (format!("http://127.0.0.1:{port}/store"), out)
 }
 
 fn loft_bin() -> PathBuf {
@@ -2941,4 +2975,314 @@ fn run_graph(
         );
     }
     (stdout, out.status.code().unwrap_or(-1))
+}
+
+/// loft#783 — a pointer-bearing vector element relocates in BULK, not field-at-a-time.
+///
+/// `store_load_keys` bulk-read a `vector<Pt>` element block in one request, then fell off
+/// that path the moment an element carried a POINTER: a `text` or a nested vector cost ~3
+/// extra four-byte reads PER ELEMENT. Measured on a 100×250 `vector<Named>`, 25 000
+/// elements drew **75 893** four-byte reads. In the consumer that filed it, one viewport
+/// issued 804 313 of them — 175 ms of pure CPU with the bytes already in a prefetch buffer,
+/// and ~1.3 s projected for a cold view. It was never bytes; it was call count.
+///
+/// Two of the three were avoidable and both are now gone: the field's POINTER word was
+/// re-fetched over the reader although the caller had just flat-copied it into the local
+/// record, and the sub-record's size and length words were fetched separately although
+/// they are adjacent.
+///
+/// **The read counts are the assertion.** Every arm loaded the right values before the fix
+/// too, so a value-only test says nothing about the defect — but the values are asserted
+/// as well, because a relocation that dropped the strings would otherwise read as a win.
+/// `LOFT_LOADER_WORDWISE=1` is the pre-fix route on the same binary: the control that
+/// proves the count can move, so a green here is not a harness that measures nothing.
+#[test]
+fn a_pointer_bearing_element_relocates_in_bulk() {
+    let dir = scratch("ptr_element_reads_783");
+    let script = workspace_root().join("tests/scripts/783-ptr-element-reads.loft");
+    let path = dir.join("p");
+
+    let run = |mode: &str, wordwise: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_LOADER_STATS", "1")
+            .env("LOFT_TIMEOUT", "180")
+            .current_dir(workspace_root());
+        if !mode.is_empty() {
+            cmd.env("P783_MODE", mode);
+        }
+        if wordwise {
+            cmd.env("LOFT_LOADER_WORDWISE", "1");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.status.success(),
+            "mode={mode} wordwise={wordwise}: {all}"
+        );
+        assert!(!all.contains("FAIL"), "mode={mode}: {all}");
+        all
+    };
+
+    /// The count in the 4-byte bucket of `reads=[(2, N, bytes), …]` — one entry per
+    /// power-of-two size class, so bucket 2 is exactly the word-at-a-time traffic.
+    fn four_byte_reads(out: &str) -> u64 {
+        let at = out.find("reads=[").expect("loader stats must report reads");
+        let rest = &out[at..];
+        let open = rest.find("(2, ").map_or(usize::MAX, |i| i + 4);
+        assert_ne!(open, usize::MAX, "no 4-byte bucket in: {rest}");
+        let tail = &rest[open..];
+        let end = tail.find(',').expect("a count then a comma");
+        tail[..end].trim().parse().expect("a numeric read count")
+    }
+    /// The one result line, so the two routes can be compared value for value.
+    fn result(out: &str) -> &str {
+        out.lines()
+            .find(|l| l.starts_with("loaded="))
+            .expect("the script must report its load")
+    }
+
+    run("write", false);
+    let fast = run("", false);
+    let slow = run("", true);
+
+    // Correctness FIRST: fewer reads that lose data is not a fix.
+    assert_eq!(
+        result(&fast),
+        result(&slow),
+        "the bulk route must load exactly what the word-at-a-time route does"
+    );
+    assert!(
+        result(&fast).contains("elements=1000") && result(&fast).contains("chars=2800"),
+        "every element and every string must survive the relocation: {}",
+        result(&fast)
+    );
+
+    let (fast_reads, slow_reads) = (four_byte_reads(&fast), four_byte_reads(&slow));
+    // The control: the pre-fix route really is word-at-a-time, so this test can fail.
+    assert!(
+        slow_reads > 1000,
+        "the wordwise control must still be word-at-a-time ({slow_reads} reads) — if it is \
+         not, this test is measuring nothing"
+    );
+    // 1000 elements. The defect was ~3 four-byte reads EACH; the bound is deliberately
+    // loose (well under one per element) so it pins the CLASS rather than today's count.
+    assert!(
+        fast_reads < 500,
+        "a pointer-bearing element must not cost a four-byte read each: {fast_reads} reads \
+         for 1000 elements (wordwise control: {slow_reads})"
+    );
+}
+
+/// loft#785 — a prefetched page must still be resident when the walk reads it.
+///
+/// loft#782's `warm()` fetches a level's pages together, at the LRU back. Once the warmed
+/// set outgrew the 64-page cache it evicted the pages the walk was ABOUT to read, and the
+/// walk fetched them again: 162 scattered keys over an 87 MB store drew 88.6 MB for a
+/// 19.9 MB working set, and a real consumer's viewport went 26.9 MB → 81.4 MB. A prefetch
+/// that does not fit is worse than no prefetch — demand paging at least has locality, which
+/// is why the binary before batching did not amplify on the same cache.
+///
+/// **`bytes_fetched` against `distinct` is the assertion**: equal exactly when nothing was
+/// fetched twice. The values are asserted first, because a loader that drops data also
+/// fetches fewer bytes and would otherwise read as a win.
+///
+/// The `LOFT_PAGE_CACHE_BYTES` arm is the control. It pins a cache below the working set,
+/// which must still amplify — someone who names a bound gets it, and re-fetching is the
+/// cost of naming it. Without that arm a green here could mean the meter never moves.
+#[test]
+fn a_prefetched_page_is_resident_when_it_is_read() {
+    let dir = scratch("page_cache_amplification_785");
+    let script = workspace_root().join("tests/scripts/785-page-cache-amplification.loft");
+    let path = dir.join("p");
+
+    let run = |mode: &str, cap: Option<&str>| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_LOADER_STATS", "1")
+            .env("LOFT_TIMEOUT", "180")
+            .current_dir(workspace_root());
+        if !mode.is_empty() {
+            cmd.env("P785_MODE", mode);
+        }
+        if let Some(bytes) = cap {
+            cmd.env("LOFT_PAGE_CACHE_BYTES", bytes);
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "mode={mode} cap={cap:?}: {all}");
+        assert!(!all.contains("FAIL"), "mode={mode}: {all}");
+        all
+    };
+
+    /// `key=N` out of the loader-stats line.
+    fn stat(out: &str, key: &str) -> u64 {
+        let at = out
+            .find(&format!("{key}="))
+            .unwrap_or_else(|| panic!("loader stats must report `{key}`: {out}"))
+            + key.len()
+            + 1;
+        let tail = &out[at..];
+        let end = tail
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(tail.len());
+        tail[..end].parse().expect("a numeric stat")
+    }
+    fn result(out: &str) -> &str {
+        out.lines()
+            .find(|l| l.starts_with("loaded="))
+            .expect("the script must report its load")
+    }
+
+    run("write", None);
+    let grown = run("", None);
+    let capped = run("", Some("4194304"));
+
+    // Correctness FIRST, and identical under both policies: residency is a performance
+    // choice, never a correctness one.
+    assert_eq!(
+        result(&grown),
+        result(&capped),
+        "how many pages stay resident must not change what a load produces"
+    );
+    assert!(
+        result(&grown).contains("loaded=120") && result(&grown).contains("verify=true"),
+        "every key must arrive and the copied heap must be sound: {}",
+        result(&grown)
+    );
+
+    let (fetched, distinct) = (stat(&grown, "bytes_fetched"), stat(&grown, "distinct"));
+    assert_eq!(
+        fetched, distinct,
+        "a page was fetched twice: {fetched} bytes fetched for a {distinct}-byte working \
+         set. The prefetch evicted what it was about to read (loft#785)."
+    );
+
+    // The control — a cache pinned below the working set MUST still amplify, or this test
+    // is measuring a meter that cannot move.
+    let (cap_fetched, cap_distinct) = (stat(&capped, "bytes_fetched"), stat(&capped, "distinct"));
+    assert!(
+        cap_fetched > cap_distinct,
+        "the capped control must re-fetch ({cap_fetched} vs {cap_distinct}) — if a 4 MB \
+         cache holds this working set, the fixture no longer exercises the defect"
+    );
+}
+
+/// loft#782 — the ROUND-TRIP DEPTH harness: `store_load_keys` issues its ranges serially.
+///
+/// `Stores::load_keys` is `for &kv in keys_vals { load_one(…) }`, and under it
+/// `PageProvider::fetch` is synchronous and single-range. So a keyed load costs one
+/// sequential round trip per page it discovers it needs, and over a real link the round
+/// trip is the entire cost — the consumer that filed this measured a 1-byte range and a
+/// 64 kB range at the SAME ~45 ms, with 764 serial reads making a cold viewport's 16–26 s
+/// wait. It is depth, not bytes.
+///
+/// **This test is the gate, not the fix.** It exists so a batching change can be proved
+/// rather than asserted, and it is written to measure the two things such a change moves:
+///
+/// - `requests` — how many round trips the load takes. Deterministic, and the real metric.
+/// - wall time under injected per-request latency — the consequence, and the reason to care.
+///
+/// The server handles each connection on its own thread deliberately: with the
+/// single-threaded one a concurrent client would be serialised by the socket, and this
+/// harness would report "no improvement" for a fix that worked. That failure mode is worth
+/// more care than the assertion itself.
+///
+/// What it pins today is the SHAPE: with N keys the load takes multiple round trips, and
+/// wall time tracks `requests × latency`. When phase batching lands, the depth becomes
+/// roughly constant in N and this test tightens to say so.
+#[test]
+fn store_load_keys_round_trip_depth_is_measurable() {
+    let dir = scratch("load_keys_depth_782");
+    let path = dir.join("world.store");
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+
+    let sidecar = fs::read(format!("{}.dschema", path.display())).ok();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let delay_ms = 20;
+    let (url, served) = serve_ranges_tuned(
+        fs::read(&path).unwrap(),
+        sidecar,
+        delay_ms,
+        Some(std::sync::Arc::clone(&hits)),
+    );
+
+    // Run the binary directly rather than through `run_mode_backend`: the loader stats —
+    // and `depth=`, the number this test exists for — go to stderr, which that helper
+    // discards.
+    let started = std::time::Instant::now();
+    let raw = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(load_script())
+        .env("LOFT_PERSIST_TEST_PATH", &url)
+        .env("LOFT_PERSIST_TEST_MODE", "loadkey")
+        .env("LOFT_LOADER_STATS", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let elapsed = started.elapsed();
+    let out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&raw.stdout),
+        String::from_utf8_lossy(&raw.stderr)
+    );
+    let code = raw.status.code().unwrap_or(-1);
+    assert_eq!(code, 0, "http loadkey exit: {out:?}");
+    assert!(
+        out.contains("loadkey verify=true"),
+        "the working set fetched over http must be sound: {out:?}"
+    );
+
+    let depth: u64 = out
+        .lines()
+        .find_map(|l| l.split("depth=").nth(1))
+        .and_then(|t| t.split_whitespace().next())
+        .and_then(|t| t.parse().ok())
+        .expect("loader stats must report round-trip depth");
+    let requests = served.load(std::sync::atomic::Ordering::Relaxed);
+    // Report the measurement: this test's job is to make depth VISIBLE, so the numbers
+    // belong in the output whether it passes or fails.
+    eprintln!(
+        "loft#782 depth harness: depth={depth} requests={requests} latency={delay_ms}ms \
+         wall={elapsed:?}"
+    );
+    // DEPTH is the metric, not the range count. A batch of 27 issued together and 27 issued
+    // one after another look identical to `requests`, and are the difference between 15 ms
+    // and 400 ms — which is why the loader reports both and this asserts on the former.
+    assert!(
+        depth as usize <= requests,
+        "round-trip depth {depth} exceeds the {requests} ranges served — impossible unless \
+         the counter is wrong"
+    );
+    // The harness must actually be measuring something: no requests means the store came
+    // from somewhere else and every number below is meaningless.
+    assert!(
+        requests > 0,
+        "the load issued no HTTP requests — this harness is measuring nothing"
+    );
+    // Latency is REACHING the client: with requests served serially, the floor is
+    // `requests × delay`. Generous (half) because a warm page costs nothing and the
+    // request count includes the sidecar; the point is that depth is visible in the clock,
+    // not a precise timing claim.
+    let floor = std::time::Duration::from_millis(delay_ms * (requests as u64) / 2);
+    assert!(
+        elapsed >= floor,
+        "wall time {elapsed:?} is below {floor:?} for {requests} requests at {delay_ms}ms — \
+         the injected latency is not reaching the loader, so this harness cannot show a \
+         batching win either"
+    );
 }

@@ -278,7 +278,60 @@ pub fn render_entry_pretty(
     let display_col = display_column(&line_text, col_byte_0based);
     let caret_pad = " ".repeat(display_col);
     let _ = writeln!(out, "{pad} | {caret_pad}{color_open}^{reset}");
+    render_fixes(&mut out, entry, bold_open, reset);
     out
+}
+
+/// @PLN131 — append the fix lines under a rendered diagnostic, when `--explain` asked for
+/// them and the site carries any.
+///
+/// The layout puts the CONDITION in its own column rather than inside a sentence, because a
+/// click has to affirm it: the reader must be able to see the thing being affirmed, not
+/// extract it from a clause. That is also what gives the CLI and an LSP code action one
+/// shared shape — `title` on the lightbulb, `condition` in the confirm step.
+///
+/// ```text
+///   fix  build the value in place                                        [move · @F106]
+///   fix  drop the later use of `src`   needs: `src` is used again at …   [move · @F106]
+/// ```
+fn render_fixes(out: &mut String, entry: &DiagEntry, bold_open: &str, reset: &str) {
+    if entry.fixes.is_empty() || !crate::keys::explain_enabled() {
+        return;
+    }
+    for fix in &entry.fixes {
+        // Both columns when both exist. A conditional fix that also spells an edit is the
+        // one shape where dropping either is unsafe: the edit is what gets applied and the
+        // condition is what the click affirms, so showing only the edit would let a reader
+        // apply a rewrite whose precondition they never saw.
+        // An edit renders as the TEXT it writes, not as its span: the span is for an
+        // applier, and a reader wants to see what would appear in their source. An
+        // insertion (`len == 0`) says so, because a bare `?` on its own reads as noise.
+        let mut detail = fix.edit.as_ref().map_or_else(String::new, |e| {
+            if e.len == 0 {
+                format!("insert `{}`", e.text)
+            } else {
+                format!("write `{}`", e.text)
+            }
+        });
+        if let Some(c) = &fix.condition {
+            if !detail.is_empty() {
+                detail.push_str("   ");
+            }
+            let _ = write!(detail, "needs: {c}");
+        }
+        // The concept is a door, not a lecture: the noun plus where to read about it, and
+        // nothing that defines it here.
+        let door = format!("[{} · {}]", fix.concept, fix.concept_ref);
+        if detail.is_empty() {
+            let _ = writeln!(out, "  {bold_open}fix{reset}  {}   {door}", fix.title);
+        } else {
+            let _ = writeln!(
+                out,
+                "  {bold_open}fix{reset}  {}   {detail}   {door}",
+                fix.title
+            );
+        }
+    }
 }
 
 /// Render an entire `Diagnostics` value as pretty output.
@@ -328,6 +381,7 @@ pub fn render_pretty_all(
 
     let mut out = String::new();
     let mut error_count = 0u32;
+    let mut fixable = 0u32;
     let mut first = true;
     for (i, entry) in entries.iter().enumerate() {
         if entry.level == Level::Debug {
@@ -344,6 +398,29 @@ pub fn render_pretty_all(
         if entry.level >= Level::Error {
             error_count += 1;
         }
+        if !entry.fixes.is_empty() {
+            fixable += 1;
+        }
+    }
+
+    // @PLN131 — ONCE per run, never per diagnostic.
+    //
+    // The messages hand "what to write instead" to the fix lines, which are opt-in — so
+    // without this a reader who does not already know about `--explain` is simply told less
+    // than before. A per-diagnostic pointer would pay for that with a doubled line count on
+    // a file with fifty copy notices, which is the noise the opt-in exists to avoid. One
+    // line naming the count is the whole cost.
+    if fixable > 0 && !crate::keys::explain_enabled() {
+        let bold_open = if color.resolved() { ANSI_BOLD } else { "" };
+        let reset = if color.resolved() { ANSI_RESET } else { "" };
+        let plural = if fixable == 1 { "" } else { "s" };
+        out.push('\n');
+        let _ = writeln!(
+            out,
+            "{bold_open}note{reset}: {fixable} diagnostic{plural} above suggest{} what to write \
+             instead — re-run with `--explain`",
+            if fixable == 1 { "s" } else { "" }
+        );
     }
 
     if error_count > 0 {
@@ -374,6 +451,7 @@ mod tests {
             col,
             code: None,
             suggestion: None,
+            fixes: Vec::new(),
         }
     }
 

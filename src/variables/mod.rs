@@ -1157,9 +1157,19 @@ impl Function {
             diagnostic!(
                 lexer,
                 Level::Warning,
+                code = "dead-assignment",
                 "Dead assignment — '{}' is overwritten before being read",
                 name,
             );
+            lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "delete the assignment, or read it before the next one".to_string(),
+                condition: Some("nothing between the two writes needs the first value".to_string()),
+                edit: None,
+                concept: "dead-code lint",
+                concept_ref: "@F100",
+            });
+
             lexer.to(here);
         }
         let var = &mut self.variables[var_nr as usize];
@@ -1946,6 +1956,7 @@ impl Function {
                 diagnostic!(
                     lexer,
                     Level::Warning,
+                    code = "never-read",
                     "{} {} is never read",
                     if var.argument {
                         "Parameter"
@@ -1954,6 +1965,28 @@ impl Function {
                     },
                     var.name,
                 );
+                // A parameter and a local are the same lint but not the same fix: deleting
+                // a parameter changes the signature every caller wrote, so that one is the
+                // author's call in a way deleting a local is not.
+                lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: if var.argument {
+                        format!(
+                            "drop the parameter `{}` — and its callers' argument",
+                            var.name
+                        )
+                    } else {
+                        format!("delete `{}`", var.name)
+                    },
+                    condition: Some(if var.argument {
+                        "the parameter is not part of a signature you must keep".to_string()
+                    } else {
+                        "computing it has no effect you are relying on".to_string()
+                    }),
+                    edit: None,
+                    concept: "dead-code lint",
+                    concept_ref: "@F100",
+                });
             }
         }
     }
@@ -2010,11 +2043,26 @@ impl Function {
             diagnostic!(
                 lexer,
                 Level::Advice,
-                "Variable '{}' is UPPER_CASE — that style is reserved for constants.  \
-                 Declare with `const {} = …` to make it immutable, or rename to lower_case.",
+                code = "upper-case-local",
+                "Variable '{}' is UPPER_CASE — that style is reserved for constants",
                 var.name,
-                var.name
             );
+            lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "declare it `const` to make it immutable".to_string(),
+                condition: Some("the value never changes after this point".to_string()),
+                edit: None,
+                concept: "const",
+                concept_ref: "@F18",
+            });
+            lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Mechanical,
+                title: "rename it to lower_case".to_string(),
+                condition: None,
+                edit: None,
+                concept: "const",
+                concept_ref: "@F18",
+            });
         }
     }
 

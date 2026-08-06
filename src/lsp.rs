@@ -60,8 +60,20 @@ fn parse_lsp_buffer(text: &str, name: &str, stdlib_dir: &str) -> Parser {
 /// caller resolves `stdlib_dir` (a deployment concern the binary owns, exactly
 /// as the `loft` CLI does), so this stays a pure function of its inputs.
 pub fn diagnose(text: &str, name: &str, stdlib_dir: &str) -> Diagnostics {
+    diagnose_reach(text, name, stdlib_dir).0
+}
+
+/// [`diagnose`], plus whether the parse reached its SECOND pass.
+///
+/// The flag is what makes two parses comparable. Pass 1 stopping on an error means every
+/// pass-2 diagnostic is missing, so a later parse that gets further reports things the
+/// earlier one could not have — new to the comparison, but not new to the program
+/// (@PLN131's masking rule).
+#[must_use]
+pub fn diagnose_reach(text: &str, name: &str, stdlib_dir: &str) -> (Diagnostics, bool) {
     let mut p = parse_lsp_buffer(text, name, stdlib_dir);
-    std::mem::take(&mut p.diagnostics)
+    let reached = p.reached_second_pass();
+    (std::mem::take(&mut p.diagnostics), reached)
 }
 
 /// @PLN115 S3 — the parse-time resolution index for a buffer: every identifier
