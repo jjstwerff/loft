@@ -159,6 +159,74 @@ fn count_x <D: SqlDb> (d: D) -> integer {
   return n;
 }
 
+// --- floats: a bound double must come back BIT-IDENTICAL ---------------------
+//
+// A float reaches SQL as TEXT on every backend here, because no `#c` path
+// carries a `double` by value (@PLN128 E3).  So every one of them is relying on
+// its server's text→double conversion being correctly rounded, and that is a
+// property to MEASURE rather than assume: `CAST(v AS TEXT)` on sqlite loses the
+// low bits of 94% of random doubles, and duckdb reads a long BARE literal as a
+// HUGEINT and silently truncates it (@PLN133 P3).
+//
+// The values are chosen for the ways this breaks, not for looking hard:
+//   0.1                     the classic non-representable decimal
+//   1/3                     a full 17-significant-digit mantissa
+//   -5.196972490273514e-183 the value sqlite's own parser rounds a ULP wrong
+//   5.754124332515439e293   inside duckdb's HUGEINT-literal window
+//
+// Equality is the assertion because it is the only honest one: a float that
+// comes back "nearly" right is a wrong answer that looks like data.  Bound is
+// the path under test — the same one the drivers use — so a backend that starts
+// inlining values fails here rather than in a consumer.
+// `read` is the per-backend expression that renders the column at FULL
+// precision, and it has to be a parameter for the same reason `create` is:
+// there is no portable spelling.  sqlite's default text rendering is `%!.15g`
+// and drops the low bits of most doubles; PostgreSQL obeys `extra_float_digits`
+// (>= 1 since PG12); MariaDB and duckdb render shortest-round-trip already.
+// Reading with the naive `v` therefore measures the SERVER'S RENDERING, not the
+// round trip — which is the trap this cell exists to document.
+fn floats <D: SqlDb> (d: D, create: text, read: text) -> text {
+  _ = d.db_exec("DROP TABLE IF EXISTS loft_f");
+  if !d.db_exec(create) { return "FAIL ddl {d.db_last_error()}" }
+
+  vals: vector<float> = [
+    0.1, 1.0 / 3.0, -5.196972490273514e-183, 5.754124332515439e293,
+    2.718281828459045, 0.0, -0.5,
+  ];
+  kept = 0;
+  for v in vals {
+    q: SqlText = "INSERT INTO loft_f VALUES ({v#count}, {v})";
+    if !d.db_run(q) { return "FAIL insert {d.db_last_error()}" }
+    kept += 1;
+  }
+
+  // The READ goes through `db_select` rather than a bound statement, because
+  // `read` is an EXPRESSION and only a `SqlIdent` may be inline in a `SqlText` —
+  // `ident` refuses `printf('%!.17g', v)`, exactly as it should.  Both parts
+  // interpolated here are author-written (the fixture's own expression and its
+  // own loop counter), which is the case `db_exec`/`db_select` are documented
+  // for.  A VALUE would still have to be bound.
+  same = 0;
+  for v in vals {
+    if !d.db_select("SELECT {read} FROM loft_f WHERE id = {v#count}") {
+      return "FAIL select {d.db_last_error()}"
+    }
+    back = 0.0;
+    while d.db_next() { back = ((d.db_col(0) ?? "") as float?) ?? 0.0 }
+    if back == v { same += 1 }
+  }
+  // And the CALLER-side hole, closed by `inline_value_fault`: the same float
+  // written straight into a raw statement is refused, because that path neither
+  // binds it nor protects it.  Ordinary author SQL with small numbers in it must
+  // still pass, or the guard would be useless in exchange for being safe.
+  hard = 5.754124332515439e293;        // 294 digits once loft renders it
+  inlined = d.db_exec("INSERT INTO loft_f VALUES (99, {hard})");
+  ordinary = d.db_exec("INSERT INTO loft_f VALUES (98, 42)");
+
+  _ = d.db_exec("DROP TABLE IF EXISTS loft_f");
+  return "wrote={kept} exact={same}/{len(vals)} inlined={inlined} plain={ordinary}";
+}
+
 fn transact <D: SqlDb> (d: D, create: text) -> text {
   _ = d.db_exec("DROP TABLE IF EXISTS loft_x");
   if !d.db_exec(create) { return "FAIL create {d.db_last_error()}" }
@@ -267,6 +335,7 @@ fn main() {
     println("sqlite bound {bound(ds, "CREATE TABLE loft_p (id INTEGER PRIMARY KEY, name TEXT)")}");
     println("sqlite tx {transact(ds, "CREATE TABLE loft_x (id INTEGER PRIMARY KEY)")}");
     println("sqlite proc {procedures(ds, "CREATE TABLE loft_q (id INTEGER PRIMARY KEY, name TEXT)")}");
+    println("sqlite float {floats(ds, "CREATE TABLE loft_f (id INTEGER PRIMARY KEY, v REAL)", "printf('%!.17g', v)")}");
     ds.db_shut();
     return
   }
@@ -283,6 +352,7 @@ fn main() {
     println("postgres bound {bound(dp, "CREATE TABLE loft_p (id INT PRIMARY KEY, name TEXT)")}");
     println("postgres tx {transact(dp, "CREATE TABLE loft_x (id INT PRIMARY KEY)")}");
     println("postgres proc {procedures(dp, "CREATE TABLE loft_q (id INT PRIMARY KEY, name TEXT)")}");
+    println("postgres float {floats(dp, "CREATE TABLE loft_f (id INT PRIMARY KEY, v DOUBLE PRECISION)", "v")}");
     _ = dp.db_exec("DROP TABLE loft_u");
     dp.db_shut();
     return
@@ -300,6 +370,7 @@ fn main() {
     println("maria bound {bound(dm, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR(2000))")}");
     println("maria tx {transact(dm, "CREATE TABLE loft_x (id BIGINT PRIMARY KEY) ENGINE=InnoDB")}");
     println("maria proc {procedures(dm, "CREATE TABLE loft_q (id BIGINT PRIMARY KEY, name VARCHAR(32)) ENGINE=InnoDB")}");
+    println("maria float {floats(dm, "CREATE TABLE loft_f (id BIGINT PRIMARY KEY, v DOUBLE) ENGINE=InnoDB", "v")}");
     _ = dm.db_exec("DROP TABLE loft_u");
     dm.db_shut();
     return
@@ -323,6 +394,7 @@ fn main() {
     println("duckdb bound {bound(dd, "CREATE TABLE loft_p (id BIGINT PRIMARY KEY, name VARCHAR)")}");
     println("duckdb tx {transact(dd, "CREATE TABLE loft_x (id BIGINT PRIMARY KEY)")}");
     println("duckdb proc {procedures(dd, "CREATE TABLE loft_q (id BIGINT PRIMARY KEY, name VARCHAR)")}");
+    println("duckdb float {floats(dd, "CREATE TABLE loft_f (id BIGINT PRIMARY KEY, v DOUBLE)", "v")}");
     dd.db_shut();
     return
   }

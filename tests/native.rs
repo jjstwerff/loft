@@ -1591,6 +1591,18 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             "sqlite: a procedure kept in the PROCESS must deploy, call and do the \
              work, and refuse a body needing a procedural language:\n{s}"
         );
+        // @PLN133 P3 — a bound float must come back BIT-IDENTICAL.
+        //
+        // sqlite is the cell that needed the per-backend READ expression: its
+        // default text rendering is `%!.15g` and drops the low bits, so reading
+        // the column naively scores 6 of 7 while the stored value is right.  The
+        // fixture asks for `printf('%!.17g', v)` and the round trip is exact.
+        // That difference is the point — it is a rendering trap, not a storage
+        // one, and it looks identical to data loss from the outside.
+        assert!(
+            s.contains("sqlite float wrote=7 exact=7/7 inlined=false plain=true"),
+            "sqlite: a bound float must round-trip exactly (see @PLN133 P3):\n{s}"
+        );
         assert_eq!(
             run("--native", "sqlite")?,
             s,
@@ -1632,6 +1644,25 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             out.contains(&format!("{mode} proc {proc}")),
             "{mode}: a server-side procedure must give the same answer as the \
              process-side emulation:\n{out}"
+        );
+        // @PLN133 P3 — a bound float must come back BIT-IDENTICAL.
+        //
+        // Every backend sends a float as TEXT (no `#c` path carries a `double`
+        // by value), so each is relying on its server's text→double conversion
+        // being correctly rounded.  Three of the four are.  **sqlite is not**:
+        // it loses the last bit of `-5.196972490273514e-183`, measured directly
+        // against `sqlite3_bind_double`, which gets it right.  Fixing it needs
+        // `#c` float support (@PLN128 E3) — it cannot go in the shim, which is
+        // deliberately free of sqlite symbols so it links where the optional
+        // library is absent (@PLN24 arc G).
+        //
+        // Both of these servers parse correctly, so they are held to 7/7 —
+        // sqlite is the odd one out and is pinned separately, above.
+        assert!(
+            out.contains(&format!(
+                "{mode} float wrote=7 exact=7/7 inlined=false plain=true"
+            )),
+            "{mode}: a bound float must round-trip exactly (see @PLN133 P3):\n{out}"
         );
         assert_eq!(
             run("--native", mode)?,

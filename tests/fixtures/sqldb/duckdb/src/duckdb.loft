@@ -110,6 +110,11 @@ pub fn db_open(self: Duck, target: text) -> boolean {
 // Run a statement for its effect. The result still has to be destroyed — duckdb
 // allocates one for every query, including a DDL statement that returns no rows.
 pub fn db_exec(self: Duck, sql: text) -> boolean {
+  // The `db_exec`/`db_select` contract is "author-written SQL with no values in
+  // it".  A value written INTO the text is neither bound nor protected, and a
+  // long digit run is the shape that says one was (`sql::inline_value_fault`).
+  why = inline_value_fault(sql);
+  if why != null { self.err = why ?? ""; return false }
   if self.conn == 0 { return false }
   ok = ddb_query(self.conn, sql, result_buf()) == 0;
   if !ok { self.err = ddb_result_error(result_buf()) ?? "query failed" }
@@ -121,6 +126,11 @@ pub fn db_exec(self: Duck, sql: text) -> boolean {
 // than a step function. `db_next` is called BEFORE the first read, so the index
 // starts one behind and the first call moves it to row 0.
 pub fn db_select(self: Duck, sql: text) -> boolean {
+  // The `db_exec`/`db_select` contract is "author-written SQL with no values in
+  // it".  A value written INTO the text is neither bound nor protected, and a
+  // long digit run is the shape that says one was (`sql::inline_value_fault`).
+  why = inline_value_fault(sql);
+  if why != null { self.err = why ?? ""; return false }
   if self.conn == 0 { return false }
   if self.live { ddb_destroy_result(result_buf()); self.live = false }
   if ddb_query(self.conn, sql, result_buf()) != 0 {

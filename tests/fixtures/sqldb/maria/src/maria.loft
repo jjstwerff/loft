@@ -115,9 +115,21 @@ pub fn db_open(self: Maria, target: text) -> boolean {
   return my_connect(self.conn, h, u, p, d, 3306, 0, 0) != 0;
 }
 
-pub fn db_exec(self: Maria, sql: text) -> boolean { return my_query(self.conn, sql) == 0; }
+pub fn db_exec(self: Maria, sql: text) -> boolean {
+  // The `db_exec`/`db_select` contract is "author-written SQL with no values in
+  // it".  A value written INTO the text is neither bound nor protected, and a
+  // long digit run is the shape that says one was (`sql::inline_value_fault`).
+  why = inline_value_fault(sql);
+  if why != null { self.err = why ?? ""; return false }
+  return my_query(self.conn, sql) == 0;
+}
 
 pub fn db_select(self: Maria, sql: text) -> boolean {
+  // The `db_exec`/`db_select` contract is "author-written SQL with no values in
+  // it".  A value written INTO the text is neither bound nor protected, and a
+  // long digit run is the shape that says one was (`sql::inline_value_fault`).
+  why = inline_value_fault(sql);
+  if why != null { self.err = why ?? ""; return false }
   if my_query(self.conn, sql) != 0 { return false }
   self.res = my_store(self.conn);
   return self.res != 0;
