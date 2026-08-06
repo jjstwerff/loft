@@ -121,15 +121,38 @@ So for `persons: hash<Person[id]>` where `Person { const id: integer, name: text
 SELECT id, name FROM person WHERE id = ?
 ```
 
-and for `positions: index<Position[person_id, from]>` walked as a range:
+and for `positions: index<Position[person_id, started]>` walked as a range:
 
 ```sql
-SELECT person_id, company_id, from, to FROM position
- WHERE person_id = ? AND from BETWEEN ? AND ?
- ORDER BY from ASC
+SELECT person_id, company_id, started, ended FROM position
+ WHERE person_id = ? AND started BETWEEN ? AND ?
+ ORDER BY started ASC
 ```
 
 — the `ASC` from the key's own direction bit, not from a convention.
+
+**This example said `from` and `to` until step 2 built it**, which is worth
+keeping because the correction is a rule rather than a typo: **every loft
+identifier is a legal SQL identifier, and some of them are RESERVED words.**
+`from` is a perfectly ordinary loft field name and the natural one for a history
+row, and the query above with it in the column list does not parse on any engine.
+Since nothing distinguishes a reserved word by shape, the derivation cannot dodge
+it — the cure is quoting under a declared style (below), and until a style is
+declared the derivation emits the name verbatim.
+
+**Two facts the derivation had to learn from the descriptor rather than from this
+document**, both found by building it:
+
+- **An `index` element record carries its own tree links.** `Position` comes back
+  with `#left_1`, `#right_1` and `#color_1` after its declared fields — the
+  red-black bookkeeping, stored INSIDE the element. `#color_1` is an ordinary
+  boolean, so a column filter written on field TYPE selects it and the SELECT
+  names a column no table has. The non-data predicate (`enum`, no position,
+  `#`-prefixed) is `LayoutField::is_data`, one home shared with
+  `read_via_descriptor` and the browser delivery.
+- **A key is an INDEX into the full field list**, synthetic fields included, so
+  the key list and the column list are numbered in the same space and must not be
+  re-based on the filtered columns.
 
 **What the descriptor cannot give**, and what therefore has to be declared ([BINDING.md](BINDING.md)):
 the table when it is not the type's name (`persoon` for `Person`), a column when it is not the

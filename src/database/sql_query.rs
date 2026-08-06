@@ -1,0 +1,240 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN129 arc B — deriving the query from the store's own schema.
+//
+// The plan is named for this: a lookup that misses fetches exactly that record,
+// from a query nobody wrote. The descriptor carries the type name, the field
+// names and offsets, and — because loft's collection KINDS are query shapes —
+// which fields are the key and in which direction they are ordered. That is a
+// SELECT, and nothing here is enumerated ahead of time.
+//
+// Pure and unwired by design: it reads a `LayoutDesc` and returns a string, so
+// it is testable with no database, no connection and no store.
+
+use crate::database::{Iterated, LayoutDesc, LayoutNode};
+
+/// What the caller is ASKING for, which is not always what the collection kind
+/// can serve.
+///
+/// A keyed lookup on a `sorted` collection is an equality query; a slice of the
+/// same collection is a range. The kind decides what is POSSIBLE — a `hash` has
+/// no order, so it can never serve a range — and this decides which of the
+/// possible shapes is wanted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryShape {
+    /// Every key field pinned: at most one row (`WHERE id = ?`).
+    Equality,
+    /// The leading key fields pinned and the last one bounded, in key order
+    /// (`WHERE person_id = ? AND from BETWEEN ? AND ?  ORDER BY from ASC`).
+    ///
+    /// This is also the answer to the N+1 pattern: one query returning many rows
+    /// instead of a lookup per row (README failure path 8).
+    Range,
+}
+
+/// How one placeholder is bound — which key field, and which end of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bound {
+    Eq,
+    Low,
+    High,
+}
+
+/// One `?` in the derived SQL, in the order the placeholders appear.
+///
+/// `field` indexes the element's record fields, which is the same numbering the
+/// collection's own key list uses — so a caller holding a key in collection
+/// order binds positionally and cannot misalign the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Param {
+    pub field: usize,
+    pub bound: Bound,
+}
+
+/// One selected column and the record field it fills.
+///
+/// Carried rather than re-derived: the SELECT's column order and the field order
+/// a row is written back into are the same fact, and deriving it twice is how
+/// they drift.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedColumn {
+    pub column: String,
+    pub field: usize,
+}
+
+/// A derived query: the text, what its placeholders want, and where its columns
+/// land.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sql {
+    pub text: String,
+    pub columns: Vec<SelectedColumn>,
+    pub params: Vec<Param>,
+}
+
+/// Is this a legal unquoted SQL identifier?
+///
+/// The derivation REFUSES anything else rather than quoting it, because quoting
+/// is a dialect decision and a guess here would produce a query that is valid
+/// and wrong on some engines. A name that needs quoting is what the declared
+/// mapping is for.
+fn plain_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Can this field be one column?
+///
+/// Scalars, narrow integers and `text` are columns. Everything else is not: a
+/// nested struct is another table's row, a vector is many rows, and a stored
+/// pointer is meaningless outside this process. A reference at this boundary is
+/// a foreign KEY — an ordinary integer or text field — so it is covered here,
+/// and following it is another lookup rather than a join (README § the traversal
+/// IS the join).
+fn scalar_column(desc: &LayoutDesc, content: u16) -> bool {
+    matches!(
+        desc.nodes.get(&content),
+        Some(
+            LayoutNode::Base(_)
+                | LayoutNode::Byte { .. }
+                | LayoutNode::Short { .. }
+                | LayoutNode::Int { .. }
+                | LayoutNode::ShortRaw { .. }
+        )
+    )
+}
+
+/// The key fields of a collection, as `(field index, ascending)` pairs, plus
+/// whether the kind has an ORDER at all.
+///
+/// Spelled out per kind rather than closed with `_`: a kind whose query shape
+/// nobody decided must not silently inherit another kind's
+/// ([DATABASE.md § Adding or changing a collection kind](../../doc/claude/DATABASE.md)).
+fn key_fields(it: &Iterated) -> Option<(Vec<(usize, bool)>, bool)> {
+    Some(match it {
+        Iterated::Hash { keys, .. } => (keys.iter().map(|k| (*k as usize, true)).collect(), false),
+        Iterated::Sorted { keys, .. } | Iterated::Ordered { keys, .. } => (
+            keys.iter().map(|(k, asc)| (*k as usize, *asc)).collect(),
+            true,
+        ),
+        Iterated::Index { keys, .. } => (
+            keys.iter().map(|(k, asc)| (*k as usize, *asc)).collect(),
+            true,
+        ),
+        // A spatial index is a Morton-order structure over coordinates, and SQL
+        // has no shape that means the same thing. Refusing is the honest answer:
+        // the alternative is a bounding-box scan that looks like a lazy fetch and
+        // reads the table (README matrix — "a kind with no mapping must refuse
+        // rather than scan").
+        Iterated::Radix { .. } => return None,
+    })
+}
+
+/// Derive the `SELECT` that serves `shape` on the collection type `collection`.
+///
+/// `None` whenever the schema cannot say what the query is — a kind with no SQL
+/// shape, a range asked of an unordered kind, an element that is not a record, a
+/// field that is not a column, or a name that is not a legal unquoted identifier.
+/// A refusal is the point: a malformed query that runs is worse than one that
+/// was never built, and every refusal here has a declared mapping as its cure.
+///
+/// Placeholders are `?`, which sqlite and MySQL take verbatim; a dialect that
+/// spells them differently is a mapping concern rather than a second derivation.
+#[must_use]
+pub fn derive_select(desc: &LayoutDesc, collection: u16, shape: QueryShape) -> Option<Sql> {
+    let LayoutNode::Iterated(it) = desc.nodes.get(&collection)? else {
+        return None;
+    };
+    let elem = it.elem();
+    // A `__nullable<S>` element keys through its `Some` payload, so its node is
+    // not a record and it lands here. Refusing is right until the mapping can
+    // say what the column of a nullable element is.
+    let LayoutNode::Record(fields) = desc.nodes.get(&elem)? else {
+        return None;
+    };
+    let (keys, ordered) = key_fields(it)?;
+    if keys.is_empty() || keys.iter().any(|(k, _)| *k >= fields.len()) {
+        return None;
+    }
+    if shape == QueryShape::Range && !ordered {
+        return None; // a hash has no order to range over
+    }
+
+    let table = desc.names.get(&elem)?.to_lowercase();
+    if !plain_identifier(&table) {
+        return None;
+    }
+
+    // Only the fields the PROGRAM wrote become columns. An `index` element
+    // record carries its own red-black links (`#left_1`, `#right_1`, `#color_1`)
+    // and `#color_1` is an ordinary boolean, so filtering by field TYPE alone
+    // would have selected a column no table has (`LayoutField::is_data`).
+    let mut columns = Vec::with_capacity(fields.len());
+    for (i, f) in fields.iter().enumerate() {
+        if !f.is_data() {
+            continue;
+        }
+        if !scalar_column(desc, f.content) || !plain_identifier(&f.name) {
+            return None;
+        }
+        columns.push(SelectedColumn {
+            column: f.name.clone(),
+            field: i,
+        });
+    }
+    if columns.is_empty() {
+        return None;
+    }
+
+    let mut params = Vec::with_capacity(keys.len() + 1);
+    let mut wheres = Vec::with_capacity(keys.len());
+    // The trailing key is the one a range bounds; every key before it is pinned,
+    // which is what makes `index<Position[person_id, from]>` a composite range
+    // rather than N lookups.
+    let last = keys.len() - 1;
+    for (n, (field, _)) in keys.iter().enumerate() {
+        let col = &fields[*field].name;
+        if shape == QueryShape::Range && n == last {
+            wheres.push(format!("{col} BETWEEN ? AND ?"));
+            params.push(Param {
+                field: *field,
+                bound: Bound::Low,
+            });
+            params.push(Param {
+                field: *field,
+                bound: Bound::High,
+            });
+        } else {
+            wheres.push(format!("{col} = ?"));
+            params.push(Param {
+                field: *field,
+                bound: Bound::Eq,
+            });
+        }
+    }
+
+    let cols = columns
+        .iter()
+        .map(|c| c.column.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut text = format!("SELECT {cols} FROM {table} WHERE {}", wheres.join(" AND "));
+    if shape == QueryShape::Range {
+        // Only the ranged key is ordered. The keys before it are pinned to one
+        // value each, so ordering by them says nothing — and the direction comes
+        // from the collection's own declaration, never from a convention.
+        use std::fmt::Write as _;
+        let (field, asc) = keys[last];
+        let dir = if asc { "ASC" } else { "DESC" };
+        let _ = write!(text, " ORDER BY {} {dir}", fields[field].name);
+    }
+
+    Some(Sql {
+        text,
+        columns,
+        params,
+    })
+}

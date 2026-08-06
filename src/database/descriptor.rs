@@ -88,6 +88,27 @@ pub struct LayoutField {
     pub nullable: bool,
 }
 
+impl LayoutField {
+    /// Is this a field the PROGRAM wrote, rather than bookkeeping the layout
+    /// added?
+    ///
+    /// Three kinds of field are not data and every walk over a record has to
+    /// skip all three: the struct-enum discriminant, a field with no position,
+    /// and the `#`-prefixed synthetics — an `index` element carries its own
+    /// red-black links (`#left_1` / `#right_1` / `#color_1`) INSIDE the record,
+    /// and `#color_1` is an ordinary boolean, so a walk that filters by type
+    /// alone lets it through.
+    ///
+    /// One home because the answer is one fact: `read_via_descriptor`, the
+    /// browser delivery and @PLN129's query derivation all ask it, and a walk
+    /// that disagreed with the others would not look wrong — it would emit one
+    /// extra column, or one fewer value.
+    #[must_use]
+    pub fn is_data(&self) -> bool {
+        self.name != "enum" && self.position != u16::MAX && !self.name.starts_with('#')
+    }
+}
+
 /// The five keyed-collection kinds `read_data` refuses to serialize (store-internal
 /// references). Delivered as `Iterated` so a foreign reader knows to walk them by
 /// cursor, never as a byte layout. Key lists are kept verbatim so the descriptor
@@ -684,9 +705,9 @@ impl Stores {
             LayoutNode::Choices(_) => out.push(store.get_byte(r.rec, r.pos, 0) as u8),
             LayoutNode::Record(fields) | LayoutNode::EnumValue(_, fields) => {
                 for f in fields {
-                    // Skip non-data fields: the enum discriminant, absent fields, and `#`-prefixed
-                    // synthetic fields (e.g. an index node's #left/#right/#color tree bookkeeping).
-                    if f.name == "enum" || f.position == u16::MAX || f.name.starts_with('#') {
+                    // The enum discriminant, absent fields, and an index node's
+                    // `#left`/`#right`/`#color` tree bookkeeping are not data.
+                    if !f.is_data() {
                         continue;
                     }
                     let field_r = DbRef {

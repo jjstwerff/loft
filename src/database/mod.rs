@@ -12,6 +12,7 @@ pub mod journal;
 pub mod lazy;
 mod search;
 pub mod snapshot;
+pub mod sql_query;
 mod structures;
 mod types;
 
