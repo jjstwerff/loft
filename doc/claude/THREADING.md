@@ -218,6 +218,23 @@ scaling, UI responsiveness, and the `loft --html` bundle, each against the value
 interpreter produces.  In CI a gate that SKIPs for a missing prerequisite **fails**
 (`scripts/par_gates.sh --ci`): the one way this could rot is by quietly not running.
 
+**The nightly toolchain here is a long-term dependency, not a temporary one — do not plan
+a stable-only migration around it.**  A threaded browser bundle needs std rebuilt with
+`+atomics`, which needs `-Z build-std`, which is nightly.  Checked 2026-08-06: `build-std`
+is an accepted 2026 project goal whose scope for the cycle is only *accept the RFCs
+([#3874](https://github.com/rust-lang/rfcs/pull/3874) / #3875) and begin implementation*,
+with the stabilisation PR still an open task on
+[rust#155363](https://github.com/rust-lang/rust/issues/155363) and Cargo-team review
+bandwidth named as a delivery risk.  And that goal targets custom / tier-three targets and
+targets with **no** pre-compiled std — not our case, which is rebuilding a tier-2 target's
+shipped std to flip one target feature.  The mechanism that would cover it (`build-std.when`,
+rebuilding when a *target modifier* changes) is a follow-up to those RFCs, so it sits behind
+them.  Treat `+atomics` on stable as years out, and keep the nightly leg budgeted.
+
+Note also that stabilisation would not, by itself, buy loft anything: `std::thread::spawn`
+does not become a Web Worker under the atomics feature ([WASM.md](WASM.md) § Threading), so
+the threads would still have to come from the host — which is what @PLN117 already built.
+
 ---
 
 ## Compiler Validation Summary
