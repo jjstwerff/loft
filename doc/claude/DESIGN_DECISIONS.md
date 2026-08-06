@@ -2703,3 +2703,43 @@ suggestion is a table (`data::builtin_type_alias`), not a distance.
   suggestion is the reversible experiment; an alias is not.
 - Owner-directed 2026-07-24; T0.3 of the first-contact work
   ([FIRST_CONTACT.md](FIRST_CONTACT.md)). Tests: `tests/parse_errors.rs` (`t03_*`).
+
+---
+
+## C104 — a slice on a lazily-bound collection never fetches; a range is an explicit call
+
+**Catalogue:** @F108 (lazy store binding)
+
+### Context
+
+A collection bound to a database derives its query from its own kind: a `hash` gives
+equality, a `sorted`/`index` gives a range. Wiring the range shape to the SLICE operation
+is the obvious next step — write `events[100..199]` and the rows arrive. It is not built,
+and the reason is a conflict inside the model rather than a missing week of work.
+
+A lazily-bound collection answers **"what have I got"**, never "what exists"
+([LAZY_STORES.md](LAZY_STORES.md) § `len` and iteration). `len` is the resident count and
+iteration walks what has been touched. A slice that silently consulted the source would
+make those two answers depend on HOW the collection was reached: `xs[0..10]` would see
+rows that `for x in xs` on the next line does not, and `len(xs)` would disagree with both.
+The honesty rule that makes a working set comprehensible is the thing the implicit form
+breaks.
+
+It is also a bytecode change on a path the interpreter and `--native` derive SEPARATELY
+(`DATABASE.md § Adding or changing a collection kind`), where an omission does not read as
+a missing feature.
+
+### Decision
+
+- **Closed 2026-08-06.** A slice reads the resident set, like every other read. The range
+  is `store_lazy_range(c, lo, hi)` — explicit, visible in the source, and the batching
+  claim is fully delivered by it: one query, many rows, asserted by count in
+  `tests/lazy_sql_source.rs`.
+- This matches the escape hatch beside it. `store_lazy_query` is explicit for the same
+  reason — what the collection's kind cannot derive is written down where a reader sees
+  the cost, and never inferred from an ordinary-looking read.
+- **Revisit when** a consumer shows the explicit call is a real burden in practice AND the
+  honesty question has an answer — for example a lazily-bound collection that is
+  *streaming* rather than a working set, where iteration and `len` mean something
+  different by declaration rather than by accident. Ergonomics alone does not reopen it;
+  the model question is the blocker.

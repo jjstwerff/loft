@@ -1,9 +1,13 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 — What a lazy binding can ASK
 
+> **This is the design record, kept for its reasoning.** What is TRUE of the built system —
+> the derivation, the quoting, the dialect facts, who executes — is in
+> [LAZY_STORES.md](../../LAZY_STORES.md). Read this one for why it took that shape.
+
 How a query is derived, what the collection kinds express, what they cannot, and the
 requirement that one record is one record however it arrived. Companion to
-[README.md](README.md) (the model) and [BINDING.md](BINDING.md) (the schema contract).
+[README.md](README.md) (the closure record) and [BINDING.md](BINDING.md) (the schema contract).
 
 ## What queries this model can express — the collection KIND is the query shape
 

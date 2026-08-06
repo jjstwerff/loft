@@ -18,21 +18,84 @@ use common::cached_default;
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
+/// The library name to `dlopen`, spelled the way each platform spells it — the
+/// versioned `.so.0` on Linux, the plain `.dylib` macOS ships in its shared
+/// cache.  One name for both would not fail; it would SKIP, which is the outcome
+/// a whole platform's coverage disappears into.
+const SQLITE_LIB: &str = if cfg!(target_os = "macos") {
+    "libsqlite3.dylib"
+} else {
+    "libsqlite3.so.0"
+};
+
 fn declare_sqlite() {
     loft::c_call::set_declared_libraries(vec![loft::data::CLibrary {
-        name: "libsqlite3.so.0".to_string(),
+        name: SQLITE_LIB.to_string(),
         pkg_dir: String::new(),
         optional: true,
     }]);
 }
 
+/// Serialises every test in this file, because they share one process-wide fact.
+///
+/// `c_call::register` REPLACES the declared-library list with the program's own
+/// — an EMPTY list for a script that declares no `#c` bindings, which is every
+/// script here.  So a test that merely RUNS a loft program wipes the sqlite
+/// declaration its neighbour is standing on, and the neighbour's `resolve` then
+/// answers `None` for a library that is installed.  The per-source query
+/// counters are the same kind of fact.
+///
+/// Under nextest (a process per test) that cannot happen and this lock costs
+/// nothing.  Under `cargo test`, which runs a binary's tests as threads in ONE
+/// process, it is the difference between a suite and a coin toss.
+static SQLITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The gate every test here opens with: take the process to ourselves, declare
+/// the library, and say whether this machine can run the test at all.
+///
+/// A developer box with no sqlite SKIPS — the courtesy the rest of the suite
+/// already extends to a missing node or chrome.  But a skip and a pass are
+/// indistinguishable in a summary, and these tests are the ONLY coverage the
+/// lazy database source has: let them self-skip unremarked and a runner image
+/// that drops the library retires the whole suite without turning anything red.
+///
+/// So the skip is never silent.  It is recorded in the environmental-skip
+/// ledger, which CI drains into annotations and a job summary; and where the
+/// library is expected rather than hoped for, `LOFT_REQUIRE_SQLITE=1` turns the
+/// skip into a failure.  CI installs sqlite and sets it, so a green CI run means
+/// these tests RAN.
+fn sqlite_guard(test: &str) -> Option<std::sync::MutexGuard<'static, ()>> {
+    let held = SQLITE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_some() {
+        return Some(held);
+    }
+    assert!(
+        std::env::var("LOFT_REQUIRE_SQLITE").as_deref() != Ok("1"),
+        "LOFT_REQUIRE_SQLITE=1 but {SQLITE_LIB} did not resolve.  These tests are the \
+         only coverage the lazy database source has, so skipping them here would report \
+         a green run for a suite that never executed."
+    );
+    eprintln!("SKIP: {SQLITE_LIB} not installed");
+    common::record_env_skips(
+        "lazy_sql_source",
+        "no-libsqlite3",
+        &[(
+            test.to_string(),
+            format!("{SQLITE_LIB} did not resolve — the lazy database source went untested"),
+        )],
+    );
+    None
+}
+
 #[test]
 fn probe_core_can_drive_sqlite_through_resolve() {
-    declare_sqlite();
-    let Some(open) = loft::c_call::resolve("sqlite3_open") else {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("probe_core_can_drive_sqlite_through_resolve") else {
         return;
     };
+    let open = loft::c_call::resolve("sqlite3_open").expect("sqlite3_open");
     let exec = loft::c_call::resolve("sqlite3_exec").expect("sqlite3_exec");
     let prepare = loft::c_call::resolve("sqlite3_prepare_v2").expect("sqlite3_prepare_v2");
     let step = loft::c_call::resolve("sqlite3_step").expect("sqlite3_step");
@@ -179,11 +242,9 @@ fn a_source_string_names_its_driver() {
 
 #[test]
 fn the_derived_query_runs_and_its_columns_come_back() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("the_derived_query_runs_and_its_columns_come_back") else {
         return;
-    }
+    };
     let path = scratch("exec");
     seed(
         &path,
@@ -257,11 +318,9 @@ fn the_derived_query_runs_and_its_columns_come_back() {
 
 #[test]
 fn the_connection_is_read_only_and_a_bad_query_says_why() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("the_connection_is_read_only_and_a_bad_query_says_why") else {
         return;
-    }
+    };
     let path = scratch("readonly");
     seed(
         &path,
@@ -325,11 +384,10 @@ fn run_loft(src: &str) {
 
 #[test]
 fn a_keyed_lookup_costs_exactly_one_query_and_a_hit_costs_none() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("a_keyed_lookup_costs_exactly_one_query_and_a_hit_costs_none")
+    else {
         return;
-    }
+    };
     let path = scratch("counts");
     seed(
         &path,
@@ -389,11 +447,9 @@ fn test() {{
 /// would pass under an eager load, and only the counts would not.
 #[test]
 fn the_graph_traverses_lazily_over_sql_both_backends() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("the_graph_traverses_lazily_over_sql_both_backends") else {
         return;
-    }
+    };
     let dir = scratch("graph");
     let persons = dir.with_file_name("persons.db");
     let companies = dir.with_file_name("companies.db");
@@ -483,11 +539,11 @@ fn bind_and_look(db_path: &std::path::Path, program: &std::path::Path) -> String
 
 #[test]
 fn a_schema_that_cannot_serve_the_lookup_is_refused_and_says_why() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) =
+        sqlite_guard("a_schema_that_cannot_serve_the_lookup_is_refused_and_says_why")
+    else {
         return;
-    }
+    };
     let program = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/scripts/129-lazy-sql-schema.loft");
 
@@ -560,11 +616,10 @@ fn a_schema_that_cannot_serve_the_lookup_is_refused_and_says_why() {
 /// found by `LIKE` and the same person found by key are one record.
 #[test]
 fn an_explicit_query_populates_the_collection_both_backends() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("an_explicit_query_populates_the_collection_both_backends")
+    else {
         return;
-    }
+    };
     let path = scratch("b2").with_file_name("liked.db");
     seed(
         &path,
@@ -635,11 +690,9 @@ fn an_explicit_query_populates_the_collection_both_backends() {
 /// reading usable, and the same five values would come back from five lookups.
 #[test]
 fn a_key_range_is_one_query_both_backends() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("a_key_range_is_one_query_both_backends") else {
         return;
-    }
+    };
     let path = scratch("range").with_file_name("events.db");
     let rows: Vec<String> = (1..=20).map(|i| format!("({i},'e{i}')")).collect();
     seed(
@@ -704,11 +757,9 @@ fn a_key_range_is_one_query_both_backends() {
 
 #[test]
 fn a_range_of_five_records_costs_one_query() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) = sqlite_guard("a_range_of_five_records_costs_one_query") else {
         return;
-    }
+    };
     let path = scratch("range_count").with_file_name("evcount.db");
     let rows: Vec<String> = (1..=20).map(|i| format!("({i},'e{i}')")).collect();
     seed(
@@ -754,11 +805,11 @@ fn test() {{
 /// made for #632, now shared rather than duplicated.
 #[test]
 fn a_collection_field_is_an_owner_parameterised_query_both_backends() {
-    declare_sqlite();
-    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
-        eprintln!("SKIP: libsqlite3.so.0 not installed");
+    let Some(_sqlite) =
+        sqlite_guard("a_collection_field_is_an_owner_parameterised_query_both_backends")
+    else {
         return;
-    }
+    };
     let path = scratch("owner").with_file_name("hands.db");
     seed(
         &path,

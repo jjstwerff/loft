@@ -337,9 +337,16 @@ jobs:
       # display so the GL-render golden
       # (graphics_gold::crystal_editor_gl_matches_gold) can run; the canvas
       # goldens need no display.
-      - name: Install mold + ALSA + headless GL (Linux only)
+      # `libsqlite3-0` is what the lazy DATABASE source (@F108) is tested
+      # against: `tests/lazy_sql_source.rs` drives it through `c_call::resolve`,
+      # so it needs the shared library at runtime and no headers.  It is
+      # installed rather than assumed because those tests SELF-SKIP when the
+      # library is absent — a runner image that stopped shipping it would retire
+      # that whole suite without turning anything red.  The Linux test step
+      # pairs this with `LOFT_REQUIRE_SQLITE=1`, which makes that skip a failure.
+      - name: Install mold + ALSA + headless GL + sqlite (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
+        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri libsqlite3-0
 
       # The native-fixture binary cache lives in `target/loft-native-cache`
       # (keyed INSIDE loft on the libloft.rlib content hash — see
@@ -542,6 +549,14 @@ jobs:
         # in `changes`).  The previous per-PR Windows focused-subset is gone with
         # the per-PR Windows leg: there is no Windows PR run left to trim.
         shell: bash
+        env:
+          # Linux installs libsqlite3 above, so the lazy database source's tests
+          # have no excuse to self-skip there — and this turns the skip into a
+          # failure, which is what makes a green Linux run EVIDENCE that they
+          # ran rather than evidence that nothing complained.  Not set on
+          # macOS/Windows: those resolve the library differently (or not at all),
+          # and a skip there is surfaced by the ledger rather than enforced.
+          LOFT_REQUIRE_SQLITE: ${{ runner.os == 'Linux' && '1' || '' }}
         run: |
           FILTER="not binary(index_hygiene) and not binary(viewer_markdown)"
           # The Chrome + SwiftShader browser-render tests (html_render, and the

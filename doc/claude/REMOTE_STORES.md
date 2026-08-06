@@ -80,13 +80,12 @@ instead of by a call.
 
 That binding also takes a source these functions do not: **`sqlite:<path>`**, where
 the entries are rows in a relational table rather than pages of a loft image, and
-the `SELECT` is derived from the collection's own type (@PLN129 arc B —
-[plans/129-lazy-database-stores](plans/129-lazy-database-stores/README.md)). Worth
-keeping the two apart while reading this document: everything below is about an
-image, whose bytes are loft's own, so `len`, ordering and identity are correct by
-construction. A foreign table owes loft none of that, which is why the database
-source is read-only, serves a keyed lookup on a `hash`, and refuses anything it
-cannot derive rather than approximating it.
+the `SELECT` is derived from the collection's own type
+([LAZY_STORES.md](LAZY_STORES.md)). Worth keeping the two apart while reading this
+document: everything below is about an image, whose bytes are loft's own, so `len`,
+ordering and identity are correct by construction. A foreign table owes loft none of
+that, which is why the database source is read-only and refuses anything it cannot
+derive rather than approximating it.
 
 ```loft
 // The whole dataset is 800 MB on a CDN. This reads a few pages of it.

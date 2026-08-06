@@ -1,11 +1,14 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 arc B — the implementation sequence
 
-**Progress: steps 0–9 and 11 are shipped, and step 10's shape with them; what is open is step
-8's implicit half and step 10's DECLARED form.** A `sqlite:<path>` binding faults on a
-miss, derives its own SELECT, materialises the row into the collection and passes arc F's graph
-gate on both backends. What each step ANSWERED, where it differed from what it expected, and the
-three findings that changed the design are at the bottom (§ What the steps answered).
+**Complete.** A `sqlite:<path>` binding faults on a miss, derives its own SELECT, materialises
+the row into the collection and passes arc F's graph gate on both backends. What each step
+ANSWERED, where it differed from what it expected, and the three findings that changed the design
+are at the bottom (§ What the steps answered).
+
+Step 8's implicit half is **declined**, not pending —
+[DESIGN_DECISIONS.md § C104](../../DESIGN_DECISIONS.md). The remaining tails are open work on the
+built system and live in [LAZY_STORES.md § Open work](../../LAZY_STORES.md).
 
 How B / B2 / B3 / B4 get built in steps that each land GREEN and each answer one question.
 Companion to [README.md](README.md) (the model), [QUERIES.md](QUERIES.md) (what a binding can
@@ -290,35 +293,35 @@ before believing an ad-hoc run**, because the gate names what the run only garbl
    selected a column no table has. `LayoutField::is_data` now has one home, shared with
    `read_via_descriptor` and the browser delivery.
 
-### What is still open, and the reason each one waits
+### What the steps did NOT settle
+
+The tails below live in [LAZY_STORES.md § Open work](../../LAZY_STORES.md), which is where a
+reader of the built system will look for them. What belongs here is why each one was left rather
+than finished, because that reasoning is about the sequence:
 
 - **The IMPLICIT range** — step 8 as written wires the range shape "to the slice operation", so
-  that `xs[lo..hi]` fetches. It ships as an EXPLICIT call instead, and the reason is a conflict
-  inside the plan rather than a shortcut: failure path 2 settled that a lazily-bound collection
-  answers *"what have I got"*, so a slice that silently consults the source makes `len` and
-  iteration mean two different things depending on how the collection was reached. Hooking it is
-  also a bytecode change on a path both backends derive separately — DATABASE.md's own warning.
-  The batching claim, which is what step 8 exists for, is fully delivered by the explicit form:
-  one query, many rows, asserted by count.
-- **A composite range.** `store_lazy_range(coll, lo, hi)` cannot say which value pins a composite
-  key's leading column. `store_lazy_query` covers it verbatim until there is a shape that carries
-  the pinned prefix.
-- **B4's DECLARED form.** The SHAPE ships and needed no new surface —
-  `store_lazy_query(firm.people, "company_id = {firm.id}")` IS the owner-parameterised query, and
-  it works per collection, so two firms' fields hold their own rows. What is open is the field
-  knowing its own foreign key so that no call is written at all, and that needs a way to DECLARE
-  it. Building the runtime for a declaration nobody has designed would settle the surface by
-  accident, which is the opposite of how the rest of this arc was built.
+  that `xs[lo..hi]` fetches. It ships as an EXPLICIT call instead, and that is now a **decision**
+  rather than a tail ([C104](../../DESIGN_DECISIONS.md)): failure path 2 settled that a lazily-bound
+  collection answers *"what have I got"*, so a slice that silently consults the source makes `len`
+  and iteration mean two different things depending on how the collection was reached. The
+  batching claim, which is what step 8 exists for, is fully delivered by the explicit form: one
+  query, many rows, asserted by count.
+- **A composite range** and **B4's DECLARED form** are both blocked on a SURFACE nobody has
+  designed — a call shape that carries a pinned key prefix, and a way for a field to declare its
+  own foreign key. Building a runtime for a declaration nobody has designed would settle the
+  surface by accident, which is the opposite of how the rest of this arc was built. B4's SHAPE
+  ships and needed no new surface: `store_lazy_query(firm.people, "company_id = {firm.id}")` IS
+  the owner-parameterised query, per collection, so two firms' fields hold their own rows.
 
-  Making the shape work did surface a real defect next door, filed rather than patched over:
+  Making that work surfaced a real defect next door, filed rather than patched over:
   `store_verify` on a struct-FIELD collection reads the hash root as the WRAPPER struct and
   reports a corruption that is not there ([loft#790](https://github.com/loft-lang/loft/issues/790)).
   It reproduces with ordinary inserts and no laziness anywhere, on both backends and on the
   installed build — and the control that proved that is what kept it from being read as this
   arc's bug.
-- **B3's compile-time half** — the `T: DbKeyed` bound and the mapping's loft-source spelling. The
-  mapping VALUE is built and feeds the one builder; how an author writes it is a surface question,
-  and BINDING.md's answer depends on @PLN125's associated types for composite keys.
+- **B3's compile-time half** — the `T: DbKeyed` bound and the mapping's loft-source spelling — is
+  a stated dependency, not a shortcut: BINDING.md's answer needs @PLN125's associated types for
+  composite keys. The mapping VALUE is built and feeds the one builder.
 
 ### What is deliberately refused, and why that is not a gap in the invariant
 

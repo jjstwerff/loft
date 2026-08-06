@@ -214,7 +214,9 @@ the bug-filing policy above). It never blocks.
 
 **Runtime / memory:** [DATABASE.md](doc/claude/DATABASE.md) stores/DbRef ·
 [REMOTE_STORES.md](doc/claude/REMOTE_STORES.md) serving static data over HTTP range (paged
-`store_load_key*`, no server-side code) · [LIFETIME.md](doc/claude/LIFETIME.md) deps/freeing ·
+`store_load_key*`, no server-side code) · [LAZY_STORES.md](doc/claude/LAZY_STORES.md) a collection
+bound to an image or `sqlite:` fetches on a MISS, query derived from its own type ·
+[LIFETIME.md](doc/claude/LIFETIME.md) deps/freeing ·
 [OWNERSHIP_MODEL.md](doc/claude/OWNERSHIP_MODEL.md) the deps north-star (borrow system) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
 [BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).

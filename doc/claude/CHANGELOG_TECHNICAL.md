@@ -9,6 +9,57 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Lazy stores — the fault is the collection's MISS path, and a SQL source drives it (2026-08-06)
+
+`store_bind_lazy(c, source)` binds a collection to a store image or to
+`sqlite:<path>`; a lookup that misses consults the source, materialises the record
+and retries. Both backends. The model, the derivation and what is refused are in
+[LAZY_STORES.md](LAZY_STORES.md); what matters here is where the hook went and why.
+
+**Not at `Store::addr`, which counted better.** All 14 typed getters funnel through
+it behind `valid()`, and the native `#rust` bodies call the same accessors, so one
+site would have served both backends. But `valid()` is unconditionally `true` in
+release — every check inside it is a `debug_assert!` — so the "one site" does not
+exist yet, and creating it puts a branch on the hottest path in the language, paid
+by every program. The hook is `Stores::find`'s miss path instead, which already
+spells a miss as `rec: 0` and already has exactly two call sites (`State::get_record`
+and `codegen_runtime`'s lookup), both holding `&mut Stores`.
+
+**Residency needs no representation.** It is absence from the collection. No third
+block state, no cost in `valid()`, and the resident set doubles as the cache — which
+is what makes identity fall out of the ordinary lookup instead of a `(type, key) → rec`
+map that could diverge from the store.
+
+New modules: `database/sql_query.rs` (the derivation + `Mapping`),
+`database/sql_source.rs` (the connection, through `c_call::resolve` with typed
+`extern "C"` pointers — no rustc, no loft frame, no re-entrancy),
+`database/lazy.rs` (the `LazySource` seam and the materialiser, which reuses
+`record_new` + `record_finish` so a SQL arrival and `coll += [x]` end in the same
+place).
+
+Three findings worth carrying:
+
+- **The derivation quotes every identifier**, because `from` is an ordinary loft
+  field name and a reserved word everywhere. Quoting removes the class rather than
+  one word of it.
+- **SQLite reads an unresolvable double-quoted name as a STRING LITERAL** —
+  `SELECT "naam" FROM "person"` returns the text `naam` once per row, so a renamed
+  column would have been materialised into the record. The connection disables it
+  (`SQLITE_DBCONFIG_DQS_DML`/`_DDL`); versions before 3.29 do not know the option,
+  which is why the schema check is a requirement rather than a guard.
+- **An `index` element carries its own red-black links** (`#left_1`, `#right_1`,
+  `#color_1`), and `#color_1` is an ordinary boolean — so a column filter written on
+  field TYPE named a column no table has. `LayoutField::is_data` now has one home,
+  shared with `read_via_descriptor` and the browser delivery.
+
+The tests need `libsqlite3` at runtime and self-skip without it, which is a skip
+that reads as a pass. CI now installs it and sets `LOFT_REQUIRE_SQLITE=1`, which
+turns the skip into a failure; elsewhere the skip is recorded in the
+environmental-skip ledger and surfaced as an annotation. `tests/lazy_sql_source.rs`
+also serialises on one mutex: `c_call::register` REPLACES the declared-library list
+with the running program's own, so a test that merely runs a loft script was wiping
+its neighbour's sqlite declaration.
+
 ### The IR store holds a block BY REFERENCE — `Node` shrinks 48 → 28 bytes (2026-08-04)
 
 `NdBlock` / `NdLoop` inlined a whole `Block`, and `NdParFor` a whole

@@ -2430,7 +2430,7 @@ fn native_library_suite() -> std::io::Result<()> {
         )));
     }
     if !env_skips.is_empty() {
-        record_env_skips("native_library_suite", "LNK1181", &env_skips);
+        common::record_env_skips("native_library_suite", "LNK1181", &env_skips);
         println!(
             "native_library_suite: {ran} passed, {} skipped (environmental — LNK1181)",
             env_skips.len()
@@ -2537,33 +2537,6 @@ fn imaging_fixture_png_roundtrip_both_backends() -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Record environmental skips (tests that PASSED-by-skipping for a
-/// toolchain/OS reason, not a code reason) to a side-channel ledger so they
-/// survive nextest's success-output suppression.  Without this a green run
-/// hides reduced coverage — a regression of the underlying fix (e.g. G2's
-/// Windows native link) would look identical to a clean pass.  A CI step
-/// (`Surface environmental test skips`) drains the ledger into annotations +
-/// a job summary.  No-op unless `LOFT_SKIP_LEDGER` (a directory) is set, so
-/// local runs are unaffected.  One file per test process (pid-named) avoids
-/// cross-process write races.
-fn record_env_skips(suite: &str, reason: &str, skips: &[(String, String)]) {
-    let Ok(dir) = std::env::var("LOFT_SKIP_LEDGER") else {
-        return;
-    };
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let path = std::path::Path::new(&dir).join(format!("{suite}-{}.tsv", std::process::id()));
-    let body: String = skips
-        .iter()
-        .map(|(entry, detail)| {
-            let clean = |s: &str| s.replace(['\t', '\n'], " ");
-            format!("{suite}\t{reason}\t{}\t{}\n", clean(entry), clean(detail))
-        })
-        .collect();
-    let _ = std::fs::write(path, body);
 }
 
 /// loft#742 — a NESTED vector field must reference the content type the
