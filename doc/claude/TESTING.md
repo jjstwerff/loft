@@ -415,6 +415,61 @@ output, not a self-satisfying assert.
 
 ---
 
+## Database backends: sqlite gates CI, all four are the local bar
+
+loft binds four SQL backends through `#c` — **sqlite, PostgreSQL, MariaDB and
+duckdb** — behind one `SqlDb` interface, and the property worth testing is that a
+generic routine gives the *same* answer on all four.  Only one of them can be a
+gate.
+
+**The rule:**
+
+- **Every routine is CI-checked against sqlite.**  It needs no server and no
+  install, so a skip there is never environmental — it means the library went
+  missing or the availability question broke.  `tests/native.rs` asserts sqlite
+  ran on Linux for exactly that reason.
+- **All four are runnable LOCALLY, and that is the real bar.**  PostgreSQL and
+  MariaDB need a live server, duckdb a 70 MB library no distribution ships;
+  none of that belongs in CI.  Before landing anything that touches the SQL
+  layer, run all four locally.
+
+**CI cannot cover the other three, and the docs must not imply it does.**  A
+green CI run means "sqlite agreed", never "the four agree".  The cross-backend
+claim is a local measurement, and when it matters it should be re-run and the
+result written into the plan or the commit message rather than assumed to have
+held since last time.
+
+### Running the other three
+
+Both servers run as ordinary system services on a development box; the fixtures
+find them through environment variables with working defaults:
+
+| backend | how it is reached | default |
+|---|---|---|
+| sqlite | `libsqlite3.so.0`, no server | `:memory:` |
+| PostgreSQL | `LOFT_PG_CONN` | `dbname=loft_test_pg` |
+| MariaDB | `LOFT_MY_CONN` | `host=127.0.0.1 user=loft pass=loft db=loft_test_uni` |
+| duckdb | `libduckdb.so` on `LD_LIBRARY_PATH` | declared `[c] optional-libs`, so absence is not an error |
+
+`LOFT_SQLDB_MODE` picks the backend for `tests/fixtures/sqldb/uniform.loft`.  A
+backend that cannot be reached prints `SKIP` on stdout and the driver in
+`tests/native.rs` **recognises a skip as a skip** — it is never counted as a
+pass, and the set that actually ran is printed (`@PLN23 backends exercised: […]`).
+Read that line: it is the only thing distinguishing "four agreed" from "sqlite
+agreed and three were absent".
+
+**The test databases are scoped on purpose.**  The MariaDB `loft` user reaches
+only `loft_test*`; anything else answers `ERROR 1044`.  A test suite that can
+drop a developer's other schemas is a bug waiting for a bad `DROP`.
+
+**A measured caveat worth carrying into any float work here** (@PLN133 P3): the
+four engines do not render a `double` to text the same way, and the obvious
+spelling loses precision on two of them — `CAST(v AS TEXT)` on sqlite is inexact
+for 94% of random doubles.  Do not assume a value survives a text round trip;
+measure it per backend, with a sweep rather than a handful of hand-picked values.
+
+---
+
 ## Generated Test Files (`tests/generated/`)
 
 Generated files are written only in **debug builds** (`#[cfg(debug_assertions)]`). They are produced inside `Test::generate_code`, called from `Drop::drop`.

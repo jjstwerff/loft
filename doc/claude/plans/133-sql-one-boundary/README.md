@@ -445,6 +445,69 @@ range were inexact. The failure lives at extreme exponents (the mismatch was
   and its parser is `strtod`, so it is expected to be exact. **Expected, not
   measured** — the gate must check it.
 
+### P3 — the float round trip on all FOUR backends. **The loss is on the WRITE side.**
+
+Run locally against live servers (PostgreSQL 16.14, MariaDB 10.11.14, duckdb via
+`LD_LIBRARY_PATH`), 2000 random bit-pattern doubles each except duckdb (500,
+driven through the loft fixture).
+
+| backend | rendering | inexact |
+|---|---|---|
+| sqlite 3.45 | `CAST(v AS TEXT)` | 1887 / 2000 |
+| sqlite 3.45 | `printf('%.17g', v)` | 928 / 2000 |
+| sqlite 3.45 | **`printf('%!.17g', v)`** | **1 / 2000** |
+| PostgreSQL 16 | `extra_float_digits = 0` | 1887 / 2000 |
+| PostgreSQL 16 | **`extra_float_digits = 1` (the modern default) or `3`** | **0 / 2000** |
+| MariaDB 10.11 | **plain `v`, or `CAST(v AS CHAR)`** | **0 / 2000** |
+| MariaDB 10.11 | `FORMAT(v, 17)` | 1144 / 2000 |
+| duckdb | plain `v` / `CAST(v AS VARCHAR)`, **through loft's literal** | **19 / 500** |
+
+**Each engine renders exactly once told to.** PostgreSQL and MariaDB are exact on
+BOTH sides — their parsers are correctly rounded, so a decimal literal makes the
+round trip. Two rules fall out, and neither is a default you can lean on:
+`extra_float_digits` must be SET by the driver (it defaulted to 0 before PG12, and
+a session can change it), and `FORMAT()` is a locale formatter, not a renderer.
+
+**duckdb's own round trip is exact** — `v = CAST(CAST(v AS VARCHAR) AS DOUBLE)`
+answered `yes` for every failing case. The 19 are lost in the **hand-off**, and
+that is a loft-side finding: **`"{v}"` renders a float as a full decimal
+expansion with no exponent**, so an ordinary `5.75e37` becomes a **294-character**
+literal and `5e-324` a 326-character one. duckdb's parser does not recover the
+original double from those; sqlite's mostly does, which is why sqlite showed 1 in
+2000 and duckdb 19 in 500.
+
+**So the requirement is sharper than "parse text as float".** A driver must never
+build a float literal out of `"{v}"`. It either binds the value or renders
+exponent notation itself. Reading is exact everywhere once the rendering is
+specified; **writing** is where sqlite and duckdb lose bits, and where
+`sqlite3_bind_double` (@PLN128 E3) earns its keep.
+
+### P4 — can a fault inside the nested fetch be contained? **YES, but it leaks.**
+
+Containment is save-run-take-restore: run the nested frame while
+`database.runtime_error` is none; if the callee raised, TAKE the error, truncate
+the call stack to the saved depth, restore `call_depth` / `stack_pos` /
+`code_pos`, clear `had_fatal`, and hand the reason back as a value.
+
+Measured with a fetch function that overflows the call stack on its first call
+and succeeds on its second:
+
+- the fault was **contained** — `contained fault: call stack overflow`;
+- the lookup answered **null**, which is the C80 / arc C shape;
+- the outer program **continued** with every local intact;
+- a **later** nested call succeeded and delivered its record;
+- exit status 0.
+
+**The caveat, and it is the finding: `Warning: 1 stores not freed at program
+exit`.** Truncating the call stack abandons whatever the faulting callee had
+allocated. A control run of the same probe without the fault leaks nothing, so
+the leak is the contained fault's.
+
+Containment therefore needs an unwind that RELEASES what the aborted callee held,
+not just a stack truncation — otherwise a traversal over an unreachable source
+leaks once per failed fetch, which is exactly the long-running case arc C's
+sticky fault counter exists for. Recorded as the first thing S8 must solve.
+
 ## Implementation steps — small, safe, each one green
 
 Ordered by **risk, not dependency**: the two unknowns are probed before anything
@@ -464,8 +527,8 @@ swap causes.
 |---|---|---|
 | **P1** | ~~a nested loft call from inside a lookup~~ | **DONE 2026-08-06 — PASSES.** Option B is viable. See § Probe results. |
 | **P2** | ~~float through a text round trip~~ | **DONE 2026-08-06 — reads exact, sqlite writes lose one ULP at extreme exponents.** See § Probe results. |
-| **P3** | The same float round trip against a live PostgreSQL and MariaDB. | P2 covered sqlite only; the other two are expectation, not measurement. |
-| **P4** | Contain a fault inside the nested run (failure path 10) and convert it to arc C's channel. | Whether B can hold C80, which it does not today. |
+| **P3** | ~~the float round trip on all four backends~~ | **DONE 2026-08-06.** Reads exact everywhere once the rendering is SPECIFIED; writes lose bits on sqlite and duckdb. |
+| **P4** | ~~contain a fault inside the nested run~~ | **DONE 2026-08-06 — contained, but it LEAKS.** Needs a releasing unwind, not a stack truncation. |
 
 ### Inert — pure values and pure functions, nothing calls them
 
@@ -495,6 +558,12 @@ swap causes.
 | **S12** | Present → `reconcile`, refusing through arc C's channel with the column or index NAMED. | a foreign database becomes usable with no rewrite |
 | **S13** | `insert(TableDef)` and the ORM write path (@PLN23 S5). | |
 | **S14** | **The gate** (below), run twice. | |
+
+**Every step's cross-backend claim is a LOCAL measurement.** CI gates sqlite only;
+PostgreSQL, MariaDB and duckdb are run locally and their results written down
+where they were measured — see [TESTING.md § Database backends](../../TESTING.md).
+A step that says "all four agree" without a local run beside it has not been
+checked, and that is exactly the gap P3 found in the float rendering.
 
 **What each wiring step must NOT do:** S8 must not touch the sqlite path (that is
 what makes it revertible); S9 must not change the counts (that is what makes it
