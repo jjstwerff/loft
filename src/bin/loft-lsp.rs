@@ -586,6 +586,11 @@ fn range_of(line: u32, start_char: u32, end_char: u32) -> Parsed {
     ])
 }
 
+/// An LSP `Range` spanning lines — the whole-document form a full replacement needs.
+fn range_of2(sl: u32, sc: u32, el: u32, ec: u32) -> Parsed {
+    obj(vec![("start", position(sl, sc)), ("end", position(el, ec))])
+}
+
 /// An LSP `InlayHint` JSON object (kind 1 = Type) for a resolved hint.  The `line`
 /// and `col` are 1-based; LSP positions are 0-based.
 fn inlay_hint_json(h: &loft::lsp::InlayHint) -> Parsed {
@@ -663,6 +668,12 @@ fn code_actions(
         // @PLN131 step 4 — one quick-fix per spelled fix, both tiers.
         actions.extend(diags.iter().flat_map(|d| fix_actions(d, &uri)));
     }
+    // @PLN131 — one `source.fixAll` over everything mechanical AND verified in the buffer.
+    if let Some(text) = documents.get(&uri)
+        && let Some(action) = fix_all_action(&uri, text, stdlib_dir)
+    {
+        actions.push(action);
+    }
     // E4 (extract-function) — on a MULTI-LINE selection (a real statement selection,
     // never a bare cursor or a single-line diagnostic range, so a quick-fix request is
     // unaffected), offer `refactor.extract` with the WorkspaceEdit the data-flow
@@ -730,6 +741,41 @@ fn fix_actions(d: &Parsed, uri: &str) -> Vec<Parsed> {
             ]))
         })
         .collect()
+}
+
+/// @PLN131 — the `source.fixAll` action: every mechanical, verified fix in one edit.
+///
+/// It delegates to `fix_apply::apply_fixes`, the same function behind `loft fix --apply`, so
+/// the editor and the CLI cannot drift — an editor that applied a different set would be a
+/// second implementation of "which fixes are safe", which is the one thing this must not be.
+/// All three gates come with it: mechanical only, spells a placeable edit, and VERIFIES —
+/// each candidate is applied to an in-memory copy and the analysis re-run before it counts.
+///
+/// The edit replaces the WHOLE document, as a formatter's does. Verification already
+/// re-parsed the buffer, so the rewritten text is a known-good artefact; emitting it whole
+/// is what makes editor output byte-identical to the CLI's, rather than merely equivalent.
+///
+/// Cost is real — one re-parse per candidate fix — and acceptable here for a reason it would
+/// not be on `didChange`: fix-all is a deliberate gesture, not something that runs per
+/// keystroke. `None` when nothing would change, so the action never appears as a no-op.
+fn fix_all_action(uri: &str, text: &str, stdlib_dir: &str) -> Option<Parsed> {
+    let diags = loft::lsp::diagnose(text, "buf.loft", stdlib_dir);
+    let (rewritten, report) = loft::fix_apply::apply_fixes(text, "buf.loft", stdlib_dir, &diags);
+    if rewritten == *text {
+        return None;
+    }
+    let n = report.iter().filter(|r| r.written).count();
+    let (end_l, end_c) = doc_end(text);
+    let edit = obj(vec![
+        ("range", range_of2(0, 0, end_l, end_c)),
+        ("newText", Parsed::Str(rewritten)),
+    ]);
+    let changes = Parsed::Object(vec![(uri.to_string(), 0, Parsed::Array(vec![edit]))]);
+    Some(obj(vec![
+        ("title", Parsed::Str(format!("Apply {n} verified fix(es)"))),
+        ("kind", Parsed::Str("source.fixAll".into())),
+        ("edit", obj(vec![("changes", changes)])),
+    ]))
 }
 
 /// True when a `Range` spans more than one line — the E0 discriminator for a real
@@ -1393,6 +1439,10 @@ fn initialize_result() -> Parsed {
                 Parsed::Array(vec![
                     Parsed::Str("quickfix".into()),
                     Parsed::Str("refactor.extract".into()),
+                    // @PLN131 — "fix all" over the MECHANICAL, VERIFIED fixes. Editors bind
+                    // this to fix-on-save, so it runs unattended: exactly the lane a
+                    // conditional fix is barred from.
+                    Parsed::Str("source.fixAll".into()),
                 ]),
             )]),
         ),

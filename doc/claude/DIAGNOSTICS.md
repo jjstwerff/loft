@@ -236,6 +236,7 @@ Three surfaces, and they carry different halves:
 | `codeAction` | a quick-fix per fix that spells an `edit` — both tiers, since a click IS the affirmation. A conditional fix's title carries `— only if …` so the condition cannot be missed, and only mechanical ones are `isPreferred`, because a "fix all" gesture has nobody reading. |
 | `relatedInformation` | **every** fix — title, condition, concept and door — as text under the diagnostic |
 | `codeDescription` | the code's row in this file, as a link the editor renders on the code itself |
+| `source.fixAll` | one edit applying every mechanical, VERIFIED fix — delegated to `fix_apply::apply_fixes`, the same function behind `loft fix --apply`, so the two lanes cannot drift |
 
 **`relatedInformation` is the one that matters most, and it is easy to think redundant.** A
 quick-fix needs an `edit`, and only 5 of 62 fixes have one — the rest name a rewrite the
@@ -246,6 +247,16 @@ live in the CLI alone, and the editor would be strictly worse off than before th
 The `codeDescription` link targets `main`, so it resolves from a release and 404s from a
 branch that has not merged this file yet. That coupling is deliberate — a user reaches the
 binary through a release cut from `main`, the same commit that carries this page.
+
+**A known narrowness in fix-all: a MASKED error reads as a new one.** Verification refuses a
+rewrite that leaves an error the original did not have, and an error can be *unmasked* rather
+than caused — fixing an unescaped brace lets the parse continue and reach a cast error it had
+aborted before. The set-difference cannot tell those apart, so fix-all currently applies only
+when the fix's own diagnostic is the file's sole error. That is the safe direction to be
+wrong in, and it is worth narrowing: the shape of a better rule is to weigh a new error's
+position against how far the original parse actually got, since nothing past the abort point
+was ever examined. Not done, because loosening a soundness gate deserves its own measurement
+rather than a plausible argument.
 
 ## Adding a code
 

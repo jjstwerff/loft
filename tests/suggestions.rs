@@ -468,3 +468,65 @@ fn the_superseded_steer_offers_the_successor_as_a_fix() {
         "the fix must name the successor AND spell the rewrite; output:\n{out}"
     );
 }
+
+/// @PLN131 — `source.fixAll` applies exactly what `loft fix --apply` would, and no more.
+///
+/// The editor must not become a second implementation of "which fixes are safe": it
+/// delegates to `fix_apply::apply_fixes`, so both lanes carry the same three gates
+/// (mechanical, spells a placeable edit, verifies). Asserting the OUTPUT rather than the
+/// action's presence is what pins that — an editor applying a different set would still
+/// produce an action.
+#[test]
+fn fix_all_matches_what_the_cli_would_write() {
+    let src = "fn main() {\n  println(\"a } b\");\n}\n";
+    let stdlib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default");
+    let dir = stdlib.to_string_lossy().to_string();
+    let diags = loft::lsp::diagnose(src, "buf.loft", &dir);
+    let (rewritten, report) = loft::fix_apply::apply_fixes(src, "buf.loft", &dir, &diags);
+    assert_eq!(
+        report.iter().filter(|r| r.written).count(),
+        1,
+        "the brace fix is mechanical, placeable and verifies — it must be written"
+    );
+    assert!(
+        rewritten.contains("a }} b"),
+        "fix-all must produce the doubled brace: {rewritten}"
+    );
+
+    // …and the same path through the CLI lands the identical bytes on disk.
+    let path = probe(src);
+    fix_cmd(&path, true);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("probe"),
+        rewritten,
+        "the editor's fix-all and `loft fix --apply` must not drift"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A conditional fix is never part of fix-all, however applicable it looks.
+///
+/// Editors bind `source.fixAll` to fix-on-save, so it is the unattended lane by definition —
+/// the one place a condition has nobody to affirm it. The cast fix spells a real edit and
+/// still must not be written.
+#[test]
+fn fix_all_leaves_conditional_fixes_alone() {
+    let src = "fn main() { x = 1e30 as integer; println(\"{x}\"); }\n";
+    let stdlib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default");
+    let dir = stdlib.to_string_lossy().to_string();
+    let diags = loft::lsp::diagnose(src, "buf.loft", &dir);
+    let (rewritten, report) = loft::fix_apply::apply_fixes(src, "buf.loft", &dir, &diags);
+    assert!(
+        report.iter().any(|r| r.title.contains("checked")),
+        "the checked-cast fix must be considered at all: {:?}",
+        report.iter().map(|r| &r.title).collect::<Vec<_>>()
+    );
+    assert!(
+        report.iter().all(|r| !r.written),
+        "no conditional fix may be written unattended"
+    );
+    assert_eq!(
+        rewritten, src,
+        "fix-all must leave the buffer untouched here"
+    );
+}
