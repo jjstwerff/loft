@@ -330,3 +330,58 @@ fn a_clean_file_reports_nothing() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// A fix that does not hold in every shape must not lead — soundness outranks teaching.
+///
+/// `as τ?` is the better idiom and it makes the expression NULLABLE, which a target declared
+/// non-null rejects. The parser cannot see that target: applying the fix changes what pass 1
+/// infers, so only a re-parse knows. It therefore ships as a CONDITION the author can check
+/// in a second, ranked below the two discharging forms that hold wherever this diagnostic
+/// fires — "prefer the fix that teaches" is a tiebreak between EQUALLY SOUND fixes, never a
+/// licence to lead with one that works three times in four.
+#[test]
+fn a_fix_that_does_not_always_hold_ranks_below_ones_that_do() {
+    let out = run(
+        "fn main() { x: integer = \"5\" as integer; println(\"{x}\"); }\n",
+        true,
+    );
+    let Some(fallback) = out.find("give the parse a fallback") else {
+        panic!("the always-sound discharge must be offered; output:\n{out}");
+    };
+    let Some(checked) = out.find("make the cast checked") else {
+        panic!("the checked cast must still be offered; output:\n{out}");
+    };
+    assert!(
+        fallback < checked,
+        "a fix that holds in every shape must rank above one that does not; output:\n{out}"
+    );
+    assert!(
+        out.contains("declared non-null"),
+        "the checked cast must state the condition its soundness rests on, so the author \
+         can check their own declaration; output:\n{out}"
+    );
+}
+
+/// A conditional fix WITH an edit: verified, reported, and never written unattended.
+///
+/// This is the shape the tier split exists for, and until the cast fixes were re-tiered
+/// nothing shipped it — the rule was pinned only by a unit test. `loft fix` must say the
+/// rewrite works AND that the judgement stays with the author: "you must decide" and "it
+/// would not have compiled anyway" are different answers.
+#[test]
+fn a_conditional_fix_is_verified_but_left_to_the_author() {
+    let path = probe("fn main() { x = \"5\" as integer; println(\"{x}\"); }\n");
+    let before = std::fs::read_to_string(&path).expect("probe");
+    let out = fix_cmd(&path, true);
+    assert!(
+        out.contains("make the cast checked") && out.contains("yours to accept"),
+        "a conditional fix that verifies must say so, and say it is still yours; \
+         output:\n{out}"
+    );
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&path).expect("probe"),
+        "`--apply` must not write a conditional fix, however well it verifies; output:\n{out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

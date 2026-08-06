@@ -33,6 +33,10 @@ pub enum Verdict {
     Breaks,
     /// Nothing to check — the fix spells no edit, so there is nothing to apply.
     Unspellable,
+    /// It clears, and it is still yours to accept: a `Conditional` fix rests on something
+    /// only the author can affirm, so an unattended run never writes it however well it
+    /// verifies. Reported so a reader knows the rewrite WORKS and the judgement remains.
+    NeedsYou,
 }
 
 impl Verdict {
@@ -44,6 +48,7 @@ impl Verdict {
             Verdict::Remains => "UNVERIFIED (the diagnostic remains)",
             Verdict::Breaks => "REJECTED (the rewrite introduces an error)",
             Verdict::Unspellable => "not applicable (no edit)",
+            Verdict::NeedsYou => "verified — yours to accept (see the condition)",
         }
     }
 }
@@ -187,10 +192,14 @@ pub fn apply_fixes(
     let mut edits: Vec<Edit> = Vec::new();
     for (entry, fix) in spelled(diags) {
         let mechanical = fix.kind == FixKind::Mechanical;
-        let verdict = if mechanical {
-            verify_fix(source, name, stdlib_dir, diags, entry, fix)
-        } else {
-            Verdict::Unspellable
+        // Every spelled fix is checked, both tiers. A conditional one is not written, but a
+        // reader still needs to know whether the rewrite WORKS — "you must decide" and "it
+        // would not have compiled anyway" are different answers, and collapsing them into
+        // one label hides the second.
+        let checked = verify_fix(source, name, stdlib_dir, diags, entry, fix);
+        let verdict = match (mechanical, checked) {
+            (false, Verdict::Clears) => Verdict::NeedsYou,
+            (_, v) => v,
         };
         let written = mechanical && verdict == Verdict::Clears;
         if written && let Some(e) = &fix.edit {

@@ -2442,23 +2442,12 @@ impl Parser {
                                 "the constant {f} is out of range for `{tps}` — a bare cast \
                                  asserts the value fits",
                             );
-                            // @PLN131 — the checked cast leads: it is the idiom that works
-                            // for every cast that can fail, not just this constant, and its
-                            // meaning is settled by the code alone.  The program does not
-                            // compile as written, so no working behaviour can change.
-                            self.lexer.fix_last(crate::diagnostics::Fix {
-                                kind: crate::diagnostics::FixKind::Mechanical,
-                                title: "make the cast checked".to_string(),
-                                condition: None,
-                                edit: Some(crate::diagnostics::Edit {
-                                    line: type_end.0,
-                                    col: type_end.1,
-                                    len: 0,
-                                    text: "?".to_string(),
-                                }),
-                                concept: "checked cast",
-                                concept_ref: "@F5",
-                            });
+                            // @PLN131 — the ALWAYS-sound fix leads, and the better idiom does
+                            // not. `as τ?` makes the expression nullable, which a target
+                            // declared non-null rejects — and the parser cannot see that
+                            // target, because applying the fix changes what pass 1 INFERS,
+                            // so only a re-parse knows. Ranking is on soundness first and
+                            // teaching only as a tiebreak between fixes that both hold.
                             self.lexer.fix_last(crate::diagnostics::Fix {
                                 kind: crate::diagnostics::FixKind::Conditional,
                                 title: "give the cast a fallback: `?? <default>`".to_string(),
@@ -2469,6 +2458,24 @@ impl Parser {
                                 edit: None,
                                 concept: "null coalescing",
                                 concept_ref: "@F2",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "make the cast checked".to_string(),
+                                condition: Some(
+                                    "the result may be nullable here — if the target is \
+                                     declared non-null (`x: \u{3c4}`), widen it or take the \
+                                     fix above instead"
+                                        .to_string(),
+                                ),
+                                edit: Some(crate::diagnostics::Edit {
+                                    line: type_end.0,
+                                    col: type_end.1,
+                                    len: 0,
+                                    text: "?".to_string(),
+                                }),
+                                concept: "checked cast",
+                                concept_ref: "@F5",
                             });
                         }
                     }
@@ -2539,24 +2546,15 @@ impl Parser {
                                 "a text parse `as {tps}` may fail, and a bare cast asserts \
                                  it cannot",
                             );
-                            // @PLN131 — three sound ways out, ranked on what each opens up.
-                            // The checked cast is the general idiom (and the only one whose
-                            // meaning the code alone settles); `??` needs a value only the
-                            // author knows; `x?` needs no value but silently accepts the
-                            // type's default, so it states that as its condition.
-                            self.lexer.fix_last(crate::diagnostics::Fix {
-                                kind: crate::diagnostics::FixKind::Mechanical,
-                                title: "make the cast checked".to_string(),
-                                condition: None,
-                                edit: Some(crate::diagnostics::Edit {
-                                    line: type_end.0,
-                                    col: type_end.1,
-                                    len: 0,
-                                    text: "?".to_string(),
-                                }),
-                                concept: "checked cast",
-                                concept_ref: "@F5",
-                            });
+                            // @PLN131 — three ways out, ranked on SOUNDNESS first. The two
+                            // discharging forms hold wherever this diagnostic fires,
+                            // measured in both shapes; the checked cast does not, because
+                            // `as τ?` makes the expression nullable and a target declared
+                            // non-null rejects that. The parser cannot see the target —
+                            // applying the fix changes what pass 1 INFERS, so only a
+                            // re-parse knows — which is why it ships as a condition the
+                            // author can check in a second rather than as a rewrite that
+                            // works three times in four.
                             self.lexer.fix_last(crate::diagnostics::Fix {
                                 kind: crate::diagnostics::FixKind::Conditional,
                                 title: "give the parse a fallback: `?? <default>`".to_string(),
@@ -2579,6 +2577,24 @@ impl Parser {
                                 edit: None,
                                 concept: "default fallback",
                                 concept_ref: "@F96",
+                            });
+                            self.lexer.fix_last(crate::diagnostics::Fix {
+                                kind: crate::diagnostics::FixKind::Conditional,
+                                title: "make the cast checked".to_string(),
+                                condition: Some(
+                                    "the result may be nullable here — if the target is \
+                                     declared non-null (`x: \u{3c4}`), widen it or take one of \
+                                     the fixes above instead"
+                                        .to_string(),
+                                ),
+                                edit: Some(crate::diagnostics::Edit {
+                                    line: type_end.0,
+                                    col: type_end.1,
+                                    len: 0,
+                                    text: "?".to_string(),
+                                }),
+                                concept: "checked cast",
+                                concept_ref: "@F5",
                             });
                         }
                         // Keep `rt` non-null (the asserted target) to bound the cascade.

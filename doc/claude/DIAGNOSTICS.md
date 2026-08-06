@@ -32,8 +32,8 @@ conditional one (each is one fix line), and the concept door they open onto.
 |---|---|---|---|---|
 | `avoidable-copy` | advice | A structure was deep-copied because its source is still used after the copy site, so it could not be moved. | Build the value in place, or stop using the source afterwards. Both take the copy to zero — see `@F106`. | M C · `@F106` |
 | `lost-write` | warning | A local was mutated but never read. A whole-value bind COPIES the heap value (C86), so the mutation landed in the copy and the write is LOST. | Bind a live reference with `&` for write-through, or read the local after the mutation if a copy was intended. | C C · `@F21` `@F106` |
-| `text-parse-may-fail` | error | A text parsed `as <numeric>` can fail, and the result was typed non-null. | `as T?` for a checked cast, `?? <default>` for a fallback, or `(… as T?)?` for the type's default. | M C C · `@F5` `@F2` `@F96` |
-| `cast-constant-out-of-range` | error | A constant does not fit the type it is bare-cast to, and a bare cast asserts that it does. | `as T?` for a checked cast, or `?? <default>` for a fallback. | M C · `@F5` `@F2` |
+| `text-parse-may-fail` | error | A text parsed `as <numeric>` can fail, and the result was typed non-null. | `?? <default>` for a fallback, `(… as T?)?` for the type's default, or `as T?` for a checked cast. | C C C · `@F2` `@F96` `@F5` |
+| `cast-constant-out-of-range` | error | A constant does not fit the type it is bare-cast to, and a bare cast asserts that it does. | `?? <default>` for a fallback, or `as T?` for a checked cast. | C C · `@F2` `@F5` |
 | `format-unescaped-brace` | error | A literal `}` inside a format string, where `}` closes a hole. | Write it `}}`. | M · `@F35` |
 | `coalesce-default-type-mismatch` | error | A `??` default is not assignable where the value's type is expected. | Cast the default, or give it a matching type. | C · `@F2` |
 | `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. | C C · `@F37` `@F2` |
@@ -127,11 +127,27 @@ knows exactly, but the diagnostic sits at the **definition**, not at the attribu
 so an `edit` there would tell an applier to delete the function. A fix may only spell an edit
 it can also **place**.
 
-**Ranking is on what a fix opens up, not on brevity — except when the two are not equally
-sound.** `shift-amount-out-of-range` is the exception in the set: `?? <default>` teaches an
-idiom and "use an amount inside `0..=63`" teaches nothing, but a constant out-of-range shift
-is nearly always a wrong amount, so the escape ranks second. Teaching first is a tiebreak
-between sound fixes, not a licence to paper over a bug with the better lesson.
+**Ranking is on SOUNDNESS first; teaching is the tiebreak between fixes that both hold.**
+Two codes make the distinction concrete.
+
+`shift-amount-out-of-range` — `?? <default>` teaches an idiom and "use an amount inside
+`0..=63`" teaches nothing, but a constant out-of-range shift is nearly always a wrong amount,
+so the escape ranks second. The better lesson does not get to paper over a bug.
+
+The two cast codes are the sharper case, and they cost a tier. `as τ?` is the idiom that
+generalises, and it makes the expression **nullable** — which a target declared non-null
+rejects, so `x: integer = "5" as integer?` does not compile. The parser cannot see that
+target: applying the fix changes what pass 1 INFERS, so the same source that reads
+`x: integer` before the rewrite reads `x: integer?` after, and only a re-parse knows. That
+makes the checked cast **conditional**, not mechanical — its meaning is not settled by the
+code alone — and it ranks below the discharging forms that hold wherever the diagnostic
+fires. `loft fix` confirms it either way: `verified — yours to accept` where it holds,
+`REJECTED` where it does not.
+
+This is the general shape, and it is worth stating once: **a fix's tier is a property of the
+evidence, not of how short the rewrite looks.** `lost-write`'s `d = &s.items` is one token
+and still conditional, because the analysis proves the write is lost and never which
+resolution was meant.
 
 `--explain` never applies anything. `loft fix` is where a fix gets checked and written.
 
@@ -176,7 +192,9 @@ static, and stops where acting on the author's behalf would begin.
 `text-parse-may-fail` is the standing example of the third gate paying for itself.
 `x: integer = "5" as integer` is offered the checked cast like any other failing parse, and
 `as integer?` there yields `integer?` into a non-null slot — plausible, and refused by the
-measurement. The same fix verifies where the target is not annotated.
+measurement. The same fix verifies where the target is not annotated, which is why it is
+CONDITIONAL and ranked last rather than removed: it is the right rewrite most of the time,
+and the author can tell in a second whether their own declaration allows it.
 
 An editor gets the same fixes as code actions (`data.fixes` on the published diagnostic, with
 each fix's own span). Both tiers are offered, because a click IS the affirmation — a
