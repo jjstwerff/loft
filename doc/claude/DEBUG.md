@@ -1289,3 +1289,37 @@ steady-state runtime.
 - [SLOTS.md](SLOTS.md) — Slot assignment design (for the slots-dump enhancement)
 - [LIFETIME.md](LIFETIME.md) — Dep tracking and scope-based freeing (for the dep-graph enhancement)
 - [SLOTS.md](SLOTS.md) — Variable scoping and slot assignment details
+
+## Count it before you time it
+
+**A symptom that appears only on one target usually has a target-INDEPENDENT count behind
+it.** What code does — ranges fetched, bytes, pages resident, allocator calls — is a
+property of the algorithm and is the same everywhere. Only the *price* of each operation is
+target-specific. So when a defect is reported somewhere you cannot easily run, ask first
+*what does this change the count of?* and assert that count here.
+
+loft#787 was a browser-only 1.14x on a paged load. Three native probes saw nothing, so a
+CDP harness was built — three served roots, rotating arms, a cold browser per sample, four
+kernels. Every rung of that ladder landed inside a +/-100 ms noise floor. A counting
+`GlobalAlloc` over a one-page read range settled the same question in 20 ms:
+
+| | 200 reads | 300 000 reads |
+|---|---|---|
+| before | 4 | 300 011 |
+| after | 0 | 0 |
+
+One allocation per read (`resolve` returned an owning `Vec`, so a 4-byte index word cost a
+malloc and a free). Invisible natively only because glibc's tcache is ~15 ns — the *count*
+was always readable. `tests/paged_read_alloc.rs` is the pattern:
+
+- **A counting `#[global_allocator]`** in the test binary, armed around a tight window.
+- **Assert a SCALING property, never a bare zero.** Same work at 200 and 300 000 iterations,
+  counts must be EQUAL. A pinned zero breaks the day a read range widens by a page and says
+  nothing about the defect; the defect was that the count tracked reads.
+- **Run the control.** Restore the pre-fix file, watch it fail, restore. A harness not shown
+  to fail has asserted nothing (`CLAUDE.md` matrix rule 3).
+- **Say what stays non-zero and why.** A span read still owns one buffer per *record* — the
+  right unit — and a test states that, so a later "drive it to zero" knows what it is
+  breaking.
+
+Reach for the target's own harness only for the part that is genuinely a price.
