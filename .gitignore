@@ -1,5 +1,12 @@
 target/
-Cargo.lock
+# Cargo.lock is COMMITTED, deliberately: loft ships binaries, and a release that
+# resolves its dependencies fresh cannot be reproduced. Ignoring it made every
+# `repro-build` run red — the verifier's rebuild resolved 185 packages against the
+# release's 182, so the bytes could never match and the diff blamed the source.
+# Locks for crates that are NOT part of a release stay ignored: the fuzz targets and
+# the test-fixture cdylibs are built on demand, never shipped.
+fuzz/Cargo.lock
+tests/fixtures/**/Cargo.lock
 result.txt
 tests/dumps
 tests/generated
