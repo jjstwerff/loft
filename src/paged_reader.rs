@@ -190,37 +190,56 @@ impl PageProvider for HttpRangeProvider {
     /// `fetches` is still recorded in the caller's order, so the "bytes fetched ≪ file"
     /// assertions read exactly as before — going parallel changes when bytes arrive, never
     /// which. A single range takes the direct path: a thread would cost more than it saves.
+    ///
+    /// **On wasm the ranges go one at a time** (loft#784). A browser has no
+    /// `std::thread::spawn`, and the batched path used it unconditionally, so a
+    /// multi-range read never completed — `loft --html` stalled with no error and no trap,
+    /// which is the worst way for this to fail. There is no browser-side concurrency to
+    /// substitute: the bytes arrive through the synchronous `loft_host_http_*` bridge, and
+    /// making that concurrent would change the host contract. So the target without threads
+    /// gets the sequential loop, which is exactly what it did before the batching landed —
+    /// correct, and slower by the round trips the batch would have saved.
     fn fetch_many(&mut self, ranges: &[(u64, usize)]) -> Vec<Vec<u8>> {
-        if ranges.len() <= 1 {
+        // Each `fetch` records its own range and bumps `depth`, so the sequential path
+        // reports the round-trip depth it genuinely spends. Reporting one batch here
+        // would make the instrument agree with the native build and describe nothing.
+        #[cfg(target_family = "wasm")]
+        {
             return ranges.iter().map(|&(o, l)| self.fetch(o, l)).collect();
         }
-        for &r in ranges {
-            self.fetches.push(r);
-        }
-        self.depth += 1; // ONE round trip, however many ranges ride in it
-        let (url, size) = (self.url.clone(), self.size);
-        let handles: Vec<_> = ranges
-            .iter()
-            .map(|&(off, len)| {
-                let url = url.clone();
-                std::thread::spawn(move || {
-                    let mut buf = vec![0u8; len];
-                    if off >= size {
-                        return buf;
-                    }
-                    let want = usize::try_from((size - off).min(len as u64)).unwrap_or(len);
-                    if let Ok(got) = crate::net::fetch_range(&url, off, want) {
-                        let n = got.len().min(buf.len());
-                        buf[..n].copy_from_slice(&got[..n]);
-                    }
-                    buf
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if ranges.len() <= 1 {
+                return ranges.iter().map(|&(o, l)| self.fetch(o, l)).collect();
+            }
+            for &r in ranges {
+                self.fetches.push(r);
+            }
+            self.depth += 1; // ONE round trip, however many ranges ride in it
+            let (url, size) = (self.url.clone(), self.size);
+            let handles: Vec<_> = ranges
+                .iter()
+                .map(|&(off, len)| {
+                    let url = url.clone();
+                    std::thread::spawn(move || {
+                        let mut buf = vec![0u8; len];
+                        if off >= size {
+                            return buf;
+                        }
+                        let want = usize::try_from((size - off).min(len as u64)).unwrap_or(len);
+                        if let Ok(got) = crate::net::fetch_range(&url, off, want) {
+                            let n = got.len().min(buf.len());
+                            buf[..n].copy_from_slice(&got[..n]);
+                        }
+                        buf
+                    })
                 })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_default())
-            .collect()
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_default())
+                .collect()
+        }
     }
 }
 

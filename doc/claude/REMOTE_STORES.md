@@ -156,6 +156,20 @@ A range request is dominated by its round trip until it gets big. So:
 
 If a cold read feels slow, count the requests before you count the bytes.
 
+**In the browser the ranges still go one at a time.** Native builds issue a batch's
+independent ranges concurrently, so a batch costs about one round trip. A browser has no
+threads, and the bytes arrive through a synchronous host bridge, so `--html` spends one
+round trip per range — correct, and as fast as it was before batching existed, but the
+concurrency win is not there. Budget browser paging by round-trip *count*, and lean harder
+on fetching fewer, larger ranges.
+
+**If you run a local Range server for testing, raise its listen backlog.** Concurrent
+ranges arrive together, and a small backlog drops the excess SYNs — each dropped one costs
+a ~1 s TCP retransmit, so a batch that should take 30 ms takes over a second and reads as a
+loft problem. Python's `socketserver` defaults to a backlog of **5**; set
+`request_queue_size = 128`. Measured on a real harness: 1066/1285/1075 ms at the default,
+27–40 ms at 128.
+
 ## Choosing whole vs paged
 
 Paging is not automatically better, and a small file is the case where it loses:
