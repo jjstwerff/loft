@@ -260,6 +260,90 @@ Two costs to respect:
 Order: code @PLN130 F5's copy notice first (it is the diagnostic this plan builds on, and it
 currently ships with **no** code), then the remaining sites, then the index.
 
+## Coverage — what is still uncovered
+
+Measured 2026-08-06 by scanning every emission form in `src/` (`diagnostic!`,
+`diagnostic_at!`, `specific!`, `add_at{,_coded}`, `add`, `self.err{,_coded}`), excluding
+`#[cfg(test)]` modules. **567 user-facing sites; 10 carry a code.**
+
+| level | coded | total | |
+|---|---|---|---|
+| advice | 1 | 10 | 10% |
+| warning | 2 | 27 | 7% |
+| error | 7 | 515 | 1% |
+| fatal | 0 | 15 | 0% |
+| **all** | **10** | **567** | **1.8%** |
+
+The machinery is finished and the surface is 2%. Two things follow.
+
+**Warnings and advice are where the value is, and there are only 35 of them.** An error
+stops the build, so its reader is already acting; a warning fires on a program that WORKS
+and can be ignored forever. That is the reader a fix changes the behaviour of — and the
+whole set is small enough to finish. The complete list, grouped by what a fix would say:
+
+*Null-model redundancy* — the fix is a deletion, and each already knows the exact span:
+| site | what it says |
+|---|---|
+| `operators.rs:1563` | redundant `??` — the value is `not null`, the default is never used |
+| `operators.rs:2081` | redundant `?` — the value is `not null` |
+| `operators.rs:2661`, `:2672` | redundant null check — comparison is always the same |
+| `vectors.rs:342` | `!` on a `not null` value is always false |
+
+*Units confusion (char vs byte)* — @PLN110's family; the fix is `size()` for `len()`, or
+iterate directly:
+| site | what it says |
+|---|---|
+| `fields.rs:1264` | a text slice ends at `len(text)` but slice bounds are byte offsets |
+| `fields.rs:1341` | `0..len(text)` indexed with `text[i]`, which is byte-indexed |
+| `mod.rs:1226` | the same for `byte_at(i)` |
+| `fields.rs:1114` | an index bounded by `len()` of a DIFFERENT vector |
+| `objects.rs:907` | `f#read(n) as vector<T>` counts bytes, `n` is not a multiple of the element |
+
+*Dead code* — `@F100`'s family, fix is a deletion or a read:
+| site | what it says |
+|---|---|
+| `variables/mod.rs:1157` | dead assignment — overwritten before being read |
+| `variables/mod.rs:1946` | never read |
+| `control.rs:630` | unreachable code |
+| `control.rs:3473` | unreachable match arm |
+| `control.rs:12604` | empty `par` block |
+
+*Signature and style* — the fix is a declaration edit:
+| site | what it says |
+|---|---|
+| `mod.rs:10425` | parameter does not need to be a reference |
+| `mod.rs:10458` | `const` parameter is never modified |
+| `operators.rs:3283` | `&` on this parameter only slows it down |
+| `variables/mod.rs:2010` | UPPER_CASE local — `const` is the reserved style |
+| `definitions.rs:25` | `not null` is deprecated and inert |
+| `definitions.rs:869` | a file-scope `const` is re-evaluated at every reference |
+| `mod.rs:1267`, `:1301`, `:1344` | complexity / parameter-count / trailing-boolean advice |
+
+*The rest*, one of a kind: `lexer.rs:1460` (digit separators off the thousands boundary),
+`control.rs:1322` (not all paths return), `control.rs:11845` (`store_persist_bind` on a
+field-reached collection), `objects.rs:1143` (`f += <integer>` writes 8 bytes),
+`objects.rs:2612` (`{}` is not an empty collection literal), `operators.rs:2920` (by
+constant zero), `vectors.rs:379` (`-x ** y` binds the sign tighter), `mod.rs:9691` (package
+tested against an older contract).
+
+**One of these is an oversight worth fixing first.** `mod.rs:7381`/`:7389` is the
+`#superseded` STEER — *"`X` is superseded — use `Y`"* — and it has no code, even though the
+two `superseded-*` fold lints it belongs with do. It is the one diagnostic in the set whose
+successor is already named in the message, so the fix writes itself: replace the call with
+`Y`, mechanical, span known, door `@F109`.
+
+**The 530 errors are a different problem and should not be batch-coded.** A code is a frozen
+public surface, so 530 of them is 530 names that can never change — and most are one-line
+parse complaints (`Expect token )`) whose "fix" is already the message. The rule that keeps
+this honest is the one the plan already states: a code exists so a suggestion can attach to
+it. Code an error when it gets a fix, not before. The count by file is a map of where they
+live, not a work-list: `control.rs` 93, `definitions.rs` 87, `collections.rs` 67,
+`mod.rs` 53, `lexer.rs` 44, `objects.rs` 34, `expressions.rs` 32, `fields.rs` 31,
+`builtins.rs` 29, `operators.rs` 25, `vectors.rs` 23.
+
+**Regenerate this with** `python3 tools/diag_inventory.py` — the numbers above are a
+snapshot, and a snapshot in a doc is a claim that rots.
+
 ## Open questions
 
 - **Q1 — where does a suggestion live?** Next to the diagnostic definition, or in a separate
