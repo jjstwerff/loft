@@ -458,19 +458,22 @@ impl<P: PageProvider> PagedReader<P> {
         let cache_bytes = asked.unwrap_or(64 * PAGE_SIZE);
         let mut r = Self::with_config(provider, ps, (cache_bytes / ps).max(1));
         // loft#785 — an unasked-for default is a FLOOR, not a bound. Only a caller who
-        // named a number is held to it.
+        // named a number is held to it. **On every target, including wasm.**
         //
-        // …EXCEPT on wasm (loft#787), where the trade inverts. Uncapping is worth it when
-        // an eviction costs a network ROUND TRIP: never evicting then removes a 3.6x read
-        // amplification, which is what loft#785 measured. In a browser an eviction costs a
-        // copy out of a buffer the host already holds — cheap — while the memory is not:
-        // holding the whole working set puts hundreds of 64 KiB pages across linear memory
-        // instead of 64, and every `resolve` pays that locality on a phone.
+        // ⚠ A wasm-only cap was tried here and MEASURED WORSE, so the reasoning that led to
+        // it is worth keeping as a warning. It ran: an eviction costs a round trip natively
+        // but only a copy in a browser, so the browser should bound its cache and buy back
+        // the locality of holding hundreds of 64 KiB pages in linear memory. Every step of
+        // that is true and the conclusion still did not hold, because it never priced the
+        // RE-FETCH. Against a 5.6 MB working set the 4 MiB default evicted pages the walk
+        // had not reached yet: range reads 71 → 115 and bytes 5.7 → 8.5 MB — a smaller copy
+        // of the exact amplification loft#785 removed — to save 1 MB of a 17 MB heap.
+        // Measured in a real browser, on the app that reported loft#787, arms interleaved.
         //
-        // wasm also has no env, so `asked` is always None there and the uncapped default
-        // applied unconditionally — the browser got a policy chosen for the transport it
-        // does not use. Bounded there, uncapped natively, same as the batching split above.
-        r.capped = asked.is_some() || cfg!(target_family = "wasm");
+        // The rule that survives: **residency policy follows the price of an eviction, and
+        // that price is a re-fetch on every transport.** What differs per transport is
+        // PREFETCH, not retention — see `batches` above.
+        r.capped = asked.is_some();
         r
     }
 
@@ -735,10 +738,47 @@ impl<P: PageProvider> PagedReader<P> {
     /// to 4 KiB. Sharing is the whole value of the page, and the amplification
     /// #729 reports is not the reader's to give back.
     pub fn resolve(&mut self, off: u64, len: usize) -> Vec<u8> {
+        let mut out = vec![0u8; len];
+        self.read_into(off, &mut out);
+        out
+    }
+
+    /// The same read as [`resolve`], into a buffer the caller already has.
+    ///
+    /// ⚠ **THE ALLOCATION WAS THE READ'S DOMINANT COST, AND ONLY OFF-NATIVE.**
+    /// Every typed accessor below asks for 1, 2, 4 or 8 bytes, and each one used
+    /// to `vec![0u8; len]` to carry them — one malloc and one free to return a
+    /// `u32`. A single viewport does ~800 000 of those reads (loft#783), so it
+    /// did ~800 000 allocations of four bytes.
+    ///
+    /// Natively that is invisible: glibc serves a 4-byte request out of the
+    /// thread's tcache in tens of nanoseconds, which is why every probe taken on
+    /// the native path — three of them, on this issue — measured nothing. In the
+    /// browser the allocator is dlmalloc compiled to wasm, on the linear heap,
+    /// with no thread-local fast path, and the cost is per READ rather than per
+    /// request: it tracks the read count and not the byte count or the round
+    /// trips. That is the shape loft#787 reported (a keyed paged load 1.14x
+    /// slower with FEWER requests and fewer bytes, while pure compute was
+    /// unchanged at 0.98x) and it is the shape a policy knob cannot explain.
+    ///
+    /// So the small read now borrows the page instead of buying a buffer for it.
+    /// `resolve` keeps the owning signature for the span reads that genuinely
+    /// need one (a record body being relocated).
+    pub fn read_into(&mut self, off: u64, buf: &mut [u8]) {
+        let len = buf.len();
         self.reads[(usize::BITS - len.max(1).leading_zeros() - 1) as usize % 32].0 += 1;
         self.reads[(usize::BITS - len.max(1).leading_zeros() - 1) as usize % 32].1 += len as u64;
+        let in_page = (off % self.page_size as u64) as usize;
+        // The overwhelmingly common case: the whole read sits inside one page.
+        // No `prefetch_run` (it returns immediately for anything this small), no
+        // loop, one bounds check, one copy.
+        if len <= self.page_size - in_page {
+            let pidx = off / self.page_size as u64;
+            self.ensure_page(pidx);
+            buf.copy_from_slice(&self.pages[&pidx][in_page..in_page + len]);
+            return;
+        }
         self.prefetch_run(off, len);
-        let mut out = vec![0u8; len];
         let mut done = 0usize;
         while done < len {
             let abs = off + done as u64;
@@ -747,10 +787,9 @@ impl<P: PageProvider> PagedReader<P> {
             let take = (self.page_size - in_page).min(len - done);
             self.ensure_page(pidx);
             let page = &self.pages[&pidx];
-            out[done..done + take].copy_from_slice(&page[in_page..in_page + take]);
+            buf[done..done + take].copy_from_slice(&page[in_page..in_page + take]);
             done += take;
         }
-        out
     }
 
     // --- typed reads at (rec, fld), byte = rec·8 + fld, native-endian ---
@@ -759,8 +798,9 @@ impl<P: PageProvider> PagedReader<P> {
 
     /// 4-byte unsigned read (bucket slots, record size headers, ptrs).
     pub fn u32_at(&mut self, rec: u32, fld: u32) -> u32 {
-        let b = self.resolve(u64::from(rec) * 8 + u64::from(fld), 4);
-        u32::from_ne_bytes([b[0], b[1], b[2], b[3]])
+        let mut b = [0u8; 4];
+        self.read_into(u64::from(rec) * 8 + u64::from(fld), &mut b);
+        u32::from_ne_bytes(b)
     }
 
     /// 4-byte signed read.
@@ -770,8 +810,9 @@ impl<P: PageProvider> PagedReader<P> {
 
     /// 8-byte signed read (`integer` / `long` key fields, the seed halves).
     pub fn i64_at(&mut self, rec: u32, fld: u32) -> i64 {
-        let b = self.resolve(u64::from(rec) * 8 + u64::from(fld), 8);
-        i64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+        let mut b = [0u8; 8];
+        self.read_into(u64::from(rec) * 8 + u64::from(fld), &mut b);
+        i64::from_ne_bytes(b)
     }
 
     /// The record's size header (word 0) = its word count (`room`).
@@ -893,16 +934,19 @@ fn key_compare_reader<P: PageProvider>(
             (Content::Long(v), 1 | 2) => v.cmp(&reader.i64_at(rec, p)),
             (Content::Long(v), 8) => v.cmp(&i64::from(reader.i32_at(rec, p))),
             (Content::Long(v), 9) => {
-                let b = reader.resolve(u64::from(rec) * 8 + u64::from(p), 2);
-                v.cmp(&i64::from(i16::from_ne_bytes([b[0], b[1]])))
+                let mut b = [0u8; 2];
+                reader.read_into(u64::from(rec) * 8 + u64::from(p), &mut b);
+                v.cmp(&i64::from(i16::from_ne_bytes(b)))
             }
             (Content::Long(v), 10) => {
-                let b = reader.resolve(u64::from(rec) * 8 + u64::from(p), 1);
+                let mut b = [0u8; 1];
+                reader.read_into(u64::from(rec) * 8 + u64::from(p), &mut b);
                 v.cmp(&i64::from(b[0] as i8))
             }
             (Content::Long(v), 11) => {
-                let b = reader.resolve(u64::from(rec) * 8 + u64::from(p), 2);
-                v.cmp(&i64::from(u16::from_ne_bytes([b[0], b[1]]) as i16))
+                let mut b = [0u8; 2];
+                reader.read_into(u64::from(rec) * 8 + u64::from(p), &mut b);
+                v.cmp(&i64::from(u16::from_ne_bytes(b) as i16))
             }
             // text key (3b.6): the field holds a `u32` pointer to a string record
             // (fld 4 = length, fld 8.. = UTF-8 bytes). Read it over the reader and
@@ -1140,6 +1184,52 @@ mod tests {
         }
     }
 
+    /// loft#787 — the alloc-free small read must answer exactly what `resolve` answers.
+    ///
+    /// `read_into` splits on whether the read fits inside one page, and the typed accessors
+    /// take the fast branch for 1/2/4/8 bytes. A boundary error there would be invisible on
+    /// most offsets and wrong on a few — the worst failure shape available — so this sweeps
+    /// EVERY offset across a page seam at every accessor width and compares against the
+    /// owning path. Tiny pages (16 B) put a seam every other read; the real 64 KiB page would
+    /// hide the bug behind alignment.
+    #[test]
+    fn the_alloc_free_read_agrees_with_the_owning_one_across_a_page_seam() {
+        let img: Vec<u8> = (0..96u8).collect();
+        for len in [1usize, 2, 4, 8, 12, 20] {
+            for off in 0..(96 - len as u64) {
+                let mut fast = PagedReader::with_config(VecProvider::new(img.clone()), 16, 999);
+                let mut slow = PagedReader::with_config(VecProvider::new(img.clone()), 16, 999);
+                let mut buf = vec![0u8; len];
+                fast.read_into(off, &mut buf);
+                assert_eq!(
+                    buf,
+                    slow.resolve(off, len),
+                    "read_into({off}, {len}) must equal resolve — page size 16, seam at {}",
+                    off % 16
+                );
+            }
+        }
+        // …and the typed accessors, which is where the fast path is actually taken.
+        let mut r = PagedReader::with_config(VecProvider::new(img.clone()), 16, 999);
+        let mut plain = PagedReader::with_config(VecProvider::new(img), 16, 999);
+        for rec in 0..10u32 {
+            for fld in [0u32, 4] {
+                let b = plain.resolve(u64::from(rec) * 8 + u64::from(fld), 4);
+                assert_eq!(
+                    r.u32_at(rec, fld),
+                    u32::from_ne_bytes([b[0], b[1], b[2], b[3]]),
+                    "u32_at({rec}, {fld})"
+                );
+            }
+            let b = plain.resolve(u64::from(rec) * 8, 8);
+            assert_eq!(
+                r.i64_at(rec, 0),
+                i64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
+                "i64_at({rec}, 0)"
+            );
+        }
+    }
+
     /// loft#787 — an UNCAPPED reader keeps no recency list, because nothing evicts.
     ///
     /// The list is a victim queue and nothing else. With no cap there is no victim, so every
@@ -1218,26 +1308,26 @@ mod tests {
         assert_eq!(r.pages.len(), 8, "a batching provider keeps its prefetch");
     }
 
-    /// loft#787 — the residency policy follows the price of an EVICTION, and that price is
-    /// per-transport, not universal.
+    /// loft#787 — the default is UNCAPPED on every target, wasm included.
     ///
-    /// Native: an eviction costs a network round trip, so never evicting is worth the
-    /// memory — that is loft#785's 3.6x amplification fix, and it must stay.
-    /// wasm: an eviction costs a copy out of a buffer the host already holds, while the
-    /// memory is the scarce thing; holding the whole working set spreads hundreds of 64 KiB
-    /// pages across linear memory and every read pays the locality.
+    /// This test asserted the opposite for one commit, and the measurement that reversed it
+    /// is the thing worth pinning. The argument for a wasm-only cap was that an eviction
+    /// there costs only a copy out of a host buffer, while linear memory is the scarce
+    /// resource — true, and still the wrong conclusion, because it priced the eviction and
+    /// not the RE-FETCH that follows it. In a real browser, on the app that reported this
+    /// issue: 4 MiB of cache against a 5.6 MB working set took range reads from 71 to 115
+    /// and bytes from 5.7 MB to 8.5 MB, and saved 1 MB of a 17 MB heap.
     ///
-    /// wasm has no env either, so the uncapped default applied there unconditionally — the
-    /// browser inherited a policy chosen for a transport it does not use.
+    /// So the cap stays opt-in, and a future "the browser should hold less" proposal has to
+    /// answer the re-fetch count before it lands.
     #[test]
-    fn the_default_residency_policy_follows_the_target() {
+    fn the_default_is_uncapped_on_every_target() {
         let img = vec![7u8; 4096];
         let r = PagedReader::new(VecProvider::new(img));
-        assert_eq!(
-            r.capped,
-            cfg!(target_family = "wasm"),
-            "wasm caps by default (an eviction is a buffer copy); native does not (an \
-             eviction is a round trip)"
+        assert!(
+            !r.capped,
+            "an unasked-for default is a floor, not a bound (loft#785) — and a wasm-only \
+             cap re-fetches more than it saves (loft#787)"
         );
     }
 }

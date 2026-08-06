@@ -122,20 +122,24 @@ Reads are served through a page cache, not issued one-per-lookup:
 | page size | **64 KiB** | `LOFT_PAGE_BYTES` |
 | cache size | **the load's working set** | `LOFT_PAGE_CACHE_BYTES` |
 
-**Natively the cache holds what the load reads, and is not bounded by default; in the
-browser it is bounded.** The policy follows the price of an EVICTION, which is per-transport:
-natively an eviction costs a network round trip, so never evicting removes a 3.6× read
-amplification (loft#785). In a browser it costs a copy out of a buffer the host already
-holds — cheap — while the memory is not, and holding a whole working set spreads hundreds of
-64 KiB pages across linear memory for every read to pay (loft#787). Prefetching splits the
-same way: `warm` exists to turn N round trips into one, so a transport whose `fetch_many` is
-sequential (wasm, no threads) declines it rather than paying the computation for a saving it
-cannot collect.
+**The cache holds what the load reads, and is not bounded by default — on every target.**
+An eviction costs a RE-FETCH, and that is true whatever the transport, so never evicting is what
+removes a 3.6× read amplification (loft#785).
 
-Natively, then: a page dropped before the walk reaches it costs a second fetch of the same
-bytes, so residency is what stops a load paying twice — and a keyed load's working set is the
-data you asked for, a local copy of which is being materialised anyway. Peak memory there is
-about the size of the result, not a constant.
+A wasm-only cap was tried and measured worse (loft#787). The reasoning was that a browser
+eviction costs only a copy out of a buffer the host already holds, while linear memory is the
+scarce resource — every step true, and the conclusion still wrong, because it priced the eviction
+and not the re-fetch after it: 4 MiB against a 5.6 MB working set took range reads from 71 to 115
+and bytes from 5.7 to 8.5 MB, to save 1 MB of a 17 MB heap.
+
+**What DOES split per transport is prefetching, not retention.** `warm` exists to turn N round
+trips into one, so a transport whose `fetch_many` is sequential (wasm, no threads) declines it
+rather than paying the computation for a saving it cannot collect.
+
+A page dropped before the walk reaches it costs a second fetch of the same bytes, so residency is
+what stops a load paying twice — and a keyed load's working set is the data you asked for, a local
+copy of which is being materialised anyway. Peak memory is about the size of the result, not a
+constant.
 
 `LOFT_PAGE_CACHE_BYTES` turns it into a **hard cap** for a memory-bounded host. Expect
 re-fetching once the cap is below the working set: the bytes have to come back somehow, and
