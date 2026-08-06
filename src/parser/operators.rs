@@ -1563,9 +1563,18 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Warning,
+                code = "redundant-coalesce",
                 "Redundant null coalescing — '{}' is 'not null', default is never used",
                 self.expr_not_null_name,
             );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Mechanical,
+                title: "delete the `?? <default>`".to_string(),
+                condition: None,
+                edit: None,
+                concept: "null coalescing",
+                concept_ref: "@F2",
+            });
         }
         self.expr_not_null = false;
         // Plan-07 phase 4h — if the `??` LHS is the just-emitted
@@ -2081,9 +2090,18 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Warning,
+                code = "redundant-default-fallback",
                 "Redundant `?` — '{}' is 'not null', so the type default is never used",
                 self.expr_not_null_name,
             );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Mechanical,
+                title: "delete the `?`".to_string(),
+                condition: None,
+                edit: None,
+                concept: "default fallback",
+                concept_ref: "@F96",
+            });
         }
         self.expr_not_null = false;
         // `a.b?` defends the `b` read (the default handles a null), so the not-null
@@ -2661,8 +2679,28 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
+                        code = "redundant-null-check",
                         "Redundant null check — '{lhs_not_null_name}' is 'not null', comparison is always {always}",
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "delete the check — its answer is already known".to_string(),
+                        condition: None,
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "compare the VALUE instead (`x == 0`)".to_string(),
+                        condition: Some(
+                            "you meant to test what the value IS, not whether it is present"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
                 } else if *ctp == Type::Null
                     && self.expr_not_null
                     && !matches!(second_type, Type::Optional(_))
@@ -2672,9 +2710,29 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
+                        code = "redundant-null-check",
                         "Redundant null check — '{}' is 'not null', comparison is always {always}",
                         self.expr_not_null_name,
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "delete the check — its answer is already known".to_string(),
+                        condition: None,
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "compare the VALUE instead (`x == 0`)".to_string(),
+                        condition: Some(
+                            "you meant to test what the value IS, not whether it is present"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "nullable values",
+                        concept_ref: "@F1",
+                    });
                 }
             }
             self.expr_not_null = false;
@@ -2920,6 +2978,7 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
+                    code = "divide-by-constant-zero",
                     "{} by constant zero — result is always null",
                     if operator == "/" {
                         "Division"
@@ -2927,6 +2986,17 @@ impl Parser {
                         "Modulo"
                     }
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: "divide by a value that can be non-zero".to_string(),
+                    condition: Some(
+                        "the zero is a mistake — a deliberate null is better written as `null`"
+                            .to_string(),
+                    ),
+                    edit: None,
+                    concept: "arithmetic safety",
+                    concept_ref: "@F38",
+                });
             }
             // @PLN25 (N-Arith) range-tracking — capture the operand bounds BEFORE
             // call_op consumes them, so the result range of `&`/`%` can be narrowed
@@ -3283,13 +3353,20 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Advice,
+                code = "slow-reference-parameter",
                 "`&` on parameter `{}` only slows it down here — a `&`-reference is \
-                 double-indirect (slower on every access), and field mutation already \
-                 propagates to the caller without it. Drop the `&` unless you REASSIGN \
-                 the whole binding (`{} = …`), which is the one thing `&` is for.",
-                a.name,
+                 double-indirect on every access, and field mutation already propagates \
+                 to the caller without it",
                 a.name,
             );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "drop the `&`".to_string(),
+                condition: Some("you never REASSIGN the whole binding (`x = …`), which is the one thing `&` is for".to_string()),
+                edit: None,
+                concept: "reference",
+                concept_ref: "@F21",
+            });
         }
     }
 

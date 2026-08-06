@@ -1470,10 +1470,21 @@ impl Lexer {
             && !val.starts_with("0o")
             && (int_groups[0] > 3 || int_groups[1..].iter().any(|&g| g != 3))
         {
-            self.err(
+            self.err_coded(
                 Level::Warning,
+                "digit-separator-grouping",
                 "Digit separators '_' are not on thousands boundaries (expected groups of 3)",
             );
+            self.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "regroup the separators in threes".to_string(),
+                condition: Some(
+                    "you meant thousands — a different grouping may be deliberate".to_string(),
+                ),
+                edit: None,
+                concept: "numeric literals",
+                concept_ref: "@F3",
+            });
         }
         let mut f = false;
         // P195: when the previous emitted token was a `.` (field

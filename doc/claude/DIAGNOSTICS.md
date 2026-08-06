@@ -39,6 +39,36 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. | C C · `@F37` `@F2` |
 | `c-binding-not-interpretable` | error | A function bound to a C symbol with `#c` was called on the interpreter, which cannot make that call. | Run it on `--native`, or give the binding an interpretable path. | M M · `@F92` `@F53` |
 | `superseded-call` | advice | A call to a `#superseded` symbol, from source you own. The old form keeps working — this is a signpost, never a removal. | Call the successor instead. | M · `@F109` |
+| `redundant-coalesce` | warning | A `??` whose left side is a non-null field — the default can never be used. | Delete the `?? <default>`. | M · `@F2` |
+| `redundant-default-fallback` | warning | A `?` on a non-null field — the type default can never be used. | Delete the `?`. | M · `@F96` |
+| `redundant-null-check` | warning | A comparison against `null` on a non-null field: the answer is fixed. | Delete the check, or compare the value you meant. | M C · `@F1` |
+| `redundant-null-negation` | warning | `!x` on a non-null value — `!` tests presence, so it is always false. | Compare the value (`x == 0`) if that is what you meant. | C · `@F1` |
+| `dead-assignment` | warning | A local is overwritten before it is read. | Delete the assignment, or read it before the next. | C · `@F100` |
+| `never-read` | warning | A local or parameter is never read. | Delete it — for a parameter, that changes the signature. | C · `@F100` |
+| `upper-case-local` | advice | An UPPER_CASE local — that style is reserved for constants. | Declare it `const`, or rename to lower_case. | C M · `@F18` |
+| `unreachable-code` | warning | Statements after a terminator can never run. | Delete them. | M · `@F16` |
+| `unreachable-match-arm` | warning | A match arm an earlier arm already matches. | Delete the arm. | M · `@F29` |
+| `empty-parallel-block` | warning | A `parallel` block with no arms. | Delete it. | M · `@F33` |
+| `text-slice-char-bound` | warning | A text slice ends at `len(text)` — a character count where a byte offset is wanted, so it stops short on multi-byte text. | `size(text)` for the byte length, or `text[i..]` for the rest. | M M · `@F97` |
+| `text-index-char-bound` | warning | An index walks `0..len(text)` (characters) but reads bytes — silent on ASCII, wrong elsewhere. | Iterate `for c in text`, or walk bytes with `0..size(text)`. | M C · `@F97` |
+| `index-bounds-other-vector` | warning | A loop bounded by `len()` of one vector indexes a different one — typed non-null, reads null on overrun. Opt-in (`LOFT_LINT_STRICT_INDEX`). | Bound the loop by the vector it indexes. | C · `@F6` |
+| `function-complexity` | advice | A function's control-flow complexity passed the nudge, naming its deepest nesting line. | Lift the innermost part into its own function. | C · `@F16` |
+| `too-many-parameters` | advice | A function takes many required parameters — every caller has to get them all right, in order. | Group the ones that travel together into a struct, or give the optional ones defaults. | C C · `@F12` `@F17` |
+| `trailing-boolean-parameters` | advice | A function ends with booleans, so a call reads `f(…, true, false)`. | Give them defaults so callers pass only what they change. | M · `@F17` |
+| `needless-reference-parameter` | warning | A `&` on a tuple parameter that is never written. | Drop the `&`. | M · `@F21` |
+| `needless-const-parameter` | warning | `const` on a primitive parameter that is never modified. | Drop the `const`. | M · `@F18` |
+| `slow-reference-parameter` | advice | A `&` parameter that is only read — double-indirect on every access, and field mutation already propagates without it. | Drop the `&` unless you reassign the whole binding. | C · `@F21` |
+| `not-null-deprecated` | advice | `not null` is inert — a type is non-null by default now. | Delete it, or write `T?` if the type should allow null. | M C · `@F12` `@F1` |
+| `const-reevaluated` | advice | A file-scope `const` is an inlined expression, so its initialiser runs at every reference. | Compute it once in a function that caches. | C · `@F18` |
+| `digit-separator-grouping` | warning | Digit separators that are not on thousands boundaries. | Regroup in threes. | C · `@F3` |
+| `empty-braces-not-collection` | warning | An empty `{}` where a collection literal was meant. | Write `[]`. | M · `@F6` |
+| `divide-by-constant-zero` | warning | Division or modulo by a constant zero — the result is always null. | Divide by a value that can be non-zero. | C · `@F38` |
+| `unary-minus-binds-tighter` | warning | `-x ** y` parses as `(-x) ** y` — the sign binds tighter than `**`. | Parenthesise as `-(x ** y)`. | C · `@F37` |
+| `read-size-not-element-multiple` | warning | `f#read(n) as vector<T>` counts bytes, and `n` is not a multiple of the element width, so the tail is dropped. | Pass `element_count * <width>`. | M · `@F40` |
+| `file-write-width` | warning | `f += <integer>` with no width cast writes 8 bytes; a binary file usually wants an exact width. | Cast to the width you mean (`as i32`, `as u8`, …). | M · `@F40` |
+| `persist-bind-through-field` | advice | `store_persist_bind` on a collection reached through a field writes the whole container's store, which will not load back into a bare collection. | Bind a local of the collection's own type. | C · `@F40` |
+| `missing-return-path` | warning | A function declared `-> T not null` has a path that returns nothing. Currently unreachable — a hard error fires first. | Return a value on every path, or declare `T?`. | C · `@F16` |
+| `package-contract-drifted` | warning | A package was tested against an older loft contract than this one. | Ask its author to republish against the current contract. | C · `@F55` |
 | `superseded-unknown-successor` | error | `#superseded "X"` names a symbol that does not exist, so the steer would ship dangling. | Name a real replacement, or drop the attribute. | C C · `@F109` |
 | `superseded-not-folded` | warning | A `#superseded` symbol's body never calls its successor, so the steer ships without its fold. | Reimplement the superseded symbol as a shim over the successor. | C C · `@F109` |
 

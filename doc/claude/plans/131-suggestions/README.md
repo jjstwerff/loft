@@ -262,104 +262,35 @@ currently ships with **no** code), then the remaining sites, then the index.
 
 ## Coverage — what is still uncovered
 
-Measured 2026-08-06 by scanning every emission form in `src/` (`diagnostic!`,
-`diagnostic_at!`, `specific!`, `add_at{,_coded}`, `add`, `self.err{,_coded}`), excluding
-`#[cfg(test)]` modules. **567 user-facing sites; 12 carry a code.**
+Measured by scanning every emission form in `src/` (`diagnostic!`, `diagnostic_at!`,
+`specific!`, `add_at{,_coded}`, `add`, `self.err{,_coded}`), excluding `#[cfg(test)]`
+modules.
 
 | level | coded | total | |
 |---|---|---|---|
-| advice | 3 | 11 | 27% |
-| warning | 2 | 26 | 8% |
+| advice | 11 | 11 | **100%** |
+| warning | 26 | 26 | **100%** |
 | error | 7 | 515 | 1% |
 | fatal | 0 | 15 | 0% |
-| **all** | **12** | **567** | **2.1%** |
 
-Counted per SITE, not per code: 11 distinct codes across 12 emission points, because
-`superseded-call` fires from two branches. The advice/warning split moved by one when that
-diagnostic stopped being a Warning on one of them.
+**Every warning and every advice now carries a code and offers a fix.** That was the set
+worth finishing, and not because it was small: an ERROR stops the build, so its reader is
+already acting on it, while a warning fires on a program that WORKS and can be ignored
+forever. That reader is the one a suggestion changes the behaviour of.
 
-The machinery is finished and the surface is 2%. Two things follow.
+Two of the 37 have no single-file trigger and are listed in `NO_MINIMAL_TRIGGER` with the
+reason — `package-contract-drifted` needs an installed manifest, and `missing-return-path`
+turns out to be **unreachable**: it is gated on the deprecated `not null` return spelling AND
+pre-empted by a hard error ("expected integer, got void on return from block") that fires
+first. Kept and documented rather than deleted, since the warning is the friendlier of the
+two if that error is ever relaxed.
 
-**Warnings and advice are where the value is, and there are only 35 of them.** An error
-stops the build, so its reader is already acting; a warning fires on a program that WORKS
-and can be ignored forever. That is the reader a fix changes the behaviour of — and the
-whole set is small enough to finish. The complete list, grouped by what a fix would say:
-
-*Null-model redundancy* — the fix is a deletion, and each already knows the exact span:
-| site | what it says |
-|---|---|
-| `operators.rs:1563` | redundant `??` — the value is `not null`, the default is never used |
-| `operators.rs:2081` | redundant `?` — the value is `not null` |
-| `operators.rs:2661`, `:2672` | redundant null check — comparison is always the same |
-| `vectors.rs:342` | `!` on a `not null` value is always false |
-
-*Units confusion (char vs byte)* — @PLN110's family; the fix is `size()` for `len()`, or
-iterate directly:
-| site | what it says |
-|---|---|
-| `fields.rs:1264` | a text slice ends at `len(text)` but slice bounds are byte offsets |
-| `fields.rs:1341` | `0..len(text)` indexed with `text[i]`, which is byte-indexed |
-| `mod.rs:1226` | the same for `byte_at(i)` |
-| `fields.rs:1114` | an index bounded by `len()` of a DIFFERENT vector |
-| `objects.rs:907` | `f#read(n) as vector<T>` counts bytes, `n` is not a multiple of the element |
-
-*Dead code* — `@F100`'s family, fix is a deletion or a read:
-| site | what it says |
-|---|---|
-| `variables/mod.rs:1157` | dead assignment — overwritten before being read |
-| `variables/mod.rs:1946` | never read |
-| `control.rs:630` | unreachable code |
-| `control.rs:3473` | unreachable match arm |
-| `control.rs:12604` | empty `par` block |
-
-*Signature and style* — the fix is a declaration edit:
-| site | what it says |
-|---|---|
-| `mod.rs:10425` | parameter does not need to be a reference |
-| `mod.rs:10458` | `const` parameter is never modified |
-| `operators.rs:3283` | `&` on this parameter only slows it down |
-| `variables/mod.rs:2010` | UPPER_CASE local — `const` is the reserved style |
-| `definitions.rs:25` | `not null` is deprecated and inert |
-| `definitions.rs:869` | a file-scope `const` is re-evaluated at every reference |
-| `mod.rs:1267`, `:1301`, `:1344` | complexity / parameter-count / trailing-boolean advice |
-
-*The rest*, one of a kind: `lexer.rs:1460` (digit separators off the thousands boundary),
-`control.rs:1322` (not all paths return), `control.rs:11845` (`store_persist_bind` on a
-field-reached collection), `objects.rs:1143` (`f += <integer>` writes 8 bytes),
-`objects.rs:2612` (`{}` is not an empty collection literal), `operators.rs:2920` (by
-constant zero), `vectors.rs:379` (`-x ** y` binds the sign tighter), `mod.rs:9691` (package
-tested against an older contract).
-
-**The first of these is DONE, and it cost two bugs.** `mod.rs:7381`/`:7389` was the
-`#superseded` STEER — *"`X` is superseded — use `Y`"* — uncoded, though the two
-`superseded-*` fold lints it belongs with had codes from the start. The one a user actually
-meets was the one without an identity. It is now `superseded-call`, with the fix its own
-message already names: replace the call with `Y`, mechanical, span known, door `@F109`.
-
-Coding it surfaced two defects, and the second is the one to remember:
-
-1. **The same condition emitted at two levels.** Advice when the compiler knew the call
-   name's position, Warning when it did not — an implementation detail, not a property of
-   the program. Load-bearing, not cosmetic: a library calling a superseded METHOD failed
-   `--tests --deny-warnings` while the identical call to a FUNCTION passed, so a
-   never-break signpost broke a build. Both are Advice now, which is what the tier rule
-   said all along — ignoring a steer cannot produce a wrong result.
-2. **Giving a diagnostic a code turned it into a build break.** `loft test` classified by
-   rendered prefix (`"Advice:"`), and a coded diagnostic renders `Advice[superseded-call]:`
-   — matching neither arm and falling through to `errors`, so the file failed with "(parse
-   errors)". **This trap fires on the exact step this section asks for**, and 35 uncoded
-   warnings are queued behind it, so it would have been met 35 more times. Fixed in
-   `test_runner.rs` to tolerate the tag, with a guard that also pins the converse: a real
-   warning must still gate, or a classifier could "pass" by calling everything advice.
-
-**The 530 errors are a different problem and should not be batch-coded.** A code is a frozen
-public surface, so 530 of them is 530 names that can never change — and most are one-line
-parse complaints (`Expect token )`) whose "fix" is already the message. The rule that keeps
-this honest is the one the plan already states: a code exists so a suggestion can attach to
-it. Code an error when it gets a fix, not before. The count by file is a map of where they
-live, not a work-list: `control.rs` 93, `definitions.rs` 87, `collections.rs` 67,
-`mod.rs` 53, `lexer.rs` 44, `objects.rs` 34, `expressions.rs` 32, `fields.rs` 31,
-`builtins.rs` 29, `operators.rs` 25, `vectors.rs` 23.
+**The 530 errors are explicitly NOT next.** A code is a frozen public surface, so
+batch-coding them mints 530 names that can never change — most for one-line parse complaints
+whose "fix" is already the message. Code an error when it gets a fix, not before. The
+per-file counts are a map of where they live: `control.rs` 93, `definitions.rs` 87,
+`collections.rs` 67, `mod.rs` 53, `lexer.rs` 44, `objects.rs` 34, `expressions.rs` 32,
+`fields.rs` 31, `builtins.rs` 29, `operators.rs` 25, `vectors.rs` 23.
 
 **Regenerate this with** `python3 tools/diag_inventory.py` — the numbers above are a
 snapshot, and a snapshot in a doc is a claim that rots.

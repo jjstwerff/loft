@@ -1226,11 +1226,27 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Warning,
+            code = "text-index-char-bound",
             "index `{iname}` walks `0..len(text)` (a character count) but `byte_at({iname})` \
              reads bytes — this truncates by one byte per multi-byte character and is silent \
-             on ASCII; use `0..size(text)` for a byte walk, or iterate with `for c in text` \
-             (@PLN110 strict-index)"
+             on ASCII"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "walk bytes with `0..size(text)`".to_string(),
+            condition: Some("you meant BYTES, not characters".to_string()),
+            edit: None,
+            concept: "len vs size",
+            concept_ref: "@F97",
+        });
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: "iterate the characters with `for c in text`".to_string(),
+            condition: None,
+            edit: None,
+            concept: "len vs size",
+            concept_ref: "@F97",
+        });
     }
 
     /// Advice: this function's cognitive complexity has passed [`crate::keys::COMPLEXITY_ADVICE_AT`]
@@ -1267,11 +1283,18 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Advice,
+            code = "function-complexity",
             "`{name}` scores {score} for control-flow complexity (nudge at {at}) — its \
-             deepest nesting is {depth} levels, at line {line}. Nesting is what the score \
-             charges, so lifting the innermost part into its own function buys the most; a \
-             long flat sequence of branches costs almost nothing"
+             deepest nesting is {depth} levels, at line {line}"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: format!("lift the innermost part at line {line} into its own function"),
+            condition: Some("nesting is what the score charges — a long flat sequence of branches costs almost nothing".to_string()),
+            edit: None,
+            concept: "functions",
+            concept_ref: "@F16",
+        });
     }
 
     /// Advice: this function asks its callers for too many separate things.
@@ -1301,11 +1324,26 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Advice,
+            code = "too-many-parameters",
             "`{name}` takes {required} required parameters (nudge at {at}) — every caller \
-             has to get all {required} right, in order. Parameters that travel together are \
-             usually one thing: group them into a struct, or give the optional ones defaults \
-             so callers can leave them out"
+             has to get all {required} right, in order"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "group the parameters that travel together into a struct".to_string(),
+            condition: Some("some of them are one thing the caller already has".to_string()),
+            edit: None,
+            concept: "struct records",
+            concept_ref: "@F12",
+        });
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "give the optional ones defaults so callers can leave them out".to_string(),
+            condition: Some("some have a value that is right most of the time".to_string()),
+            edit: None,
+            concept: "default parameters",
+            concept_ref: "@F17",
+        });
     }
 
     /// Advice: these trailing boolean parameters want defaults.
@@ -1344,12 +1382,20 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Advice,
+            code = "trailing-boolean-parameters",
             "`{name}` ends with {trailing} boolean parameters — a call reading \
-             `{name}(…, true, false)` says nothing about which flag is which. Give them \
-             defaults (`loud: boolean = false`) so callers pass only what they are changing. \
-             Adding a default never breaks a caller: existing calls pass the value and keep \
-             working, new ones may leave it out"
+             `{name}(…, true, false)` says nothing about which flag is which"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title:
+                "give them defaults (`loud: boolean = false`) so callers pass only what they change"
+                    .to_string(),
+            condition: None,
+            edit: None,
+            concept: "default parameters",
+            concept_ref: "@F17",
+        });
     }
 
     /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
@@ -9728,8 +9774,24 @@ impl Parser {
                         diagnostic!(
                             self.lexer,
                             Level::Warning,
-                            "Package '{id}' was tested against loft contract <= {tested_max} but this loft is contract {cur} — a breaking change since then may make it misbehave; ask its author to republish against contract {cur}"
+                            code = "package-contract-drifted",
+                            "Package '{id}' was tested against loft contract <= {tested_max} \
+                             but this loft is contract {cur} — a breaking change since then \
+                             may make it misbehave"
                         );
+                        self.lexer.fix_last(crate::diagnostics::Fix {
+                            kind: crate::diagnostics::FixKind::Conditional,
+                            title: format!(
+                                "ask its author to republish `{id}` against contract {cur}"
+                            ),
+                            condition: Some(
+                                "you depend on behaviour a contract bump could have changed"
+                                    .to_string(),
+                            ),
+                            edit: None,
+                            concept: "package management",
+                            concept_ref: "@F55",
+                        });
                     }
                     manifest::ContractCheck::Malformed(why) => {
                         diagnostic!(
@@ -10462,9 +10524,18 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
+                        code = "needless-reference-parameter",
                         "Parameter '{}' does not need to be a reference",
                         a.name
                     );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "drop the `&`".to_string(),
+                        condition: None,
+                        edit: None,
+                        concept: "reference",
+                        concept_ref: "@F21",
+                    });
                 } else {
                     diagnostic!(
                         self.lexer,
@@ -10495,10 +10566,19 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
+                    code = "needless-const-parameter",
                     "Parameter '{}' is const but is never modified; \
                      'const' has no effect on an unmodified primitive parameter",
                     a.name
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: "drop the `const`".to_string(),
+                    condition: None,
+                    edit: None,
+                    concept: "const parameters",
+                    concept_ref: "@F18",
+                });
             }
         }
     }

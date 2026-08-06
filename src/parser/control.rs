@@ -627,7 +627,20 @@ impl Parser {
             // Warn about unreachable code after an unconditional terminator.
             if let Some(kind) = terminated {
                 if !self.first_pass {
-                    diagnostic!(self.lexer, Level::Warning, "Unreachable code after {kind}");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        code = "unreachable-code",
+                        "Unreachable code after {kind}"
+                    );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "delete the unreachable statements".to_string(),
+                        condition: None,
+                        edit: None,
+                        concept: "functions",
+                        concept_ref: "@F16",
+                    });
                 }
                 // Only warn once per terminator
                 terminated = None;
@@ -1322,8 +1335,17 @@ impl Parser {
                         diagnostic!(
                             self.lexer,
                             Level::Warning,
+                            code = "missing-return-path",
                             "Not all code paths return a value — function '{fn_name}' may return null",
                         );
+                        self.lexer.fix_last(crate::diagnostics::Fix {
+                            kind: crate::diagnostics::FixKind::Conditional,
+                            title: "return a value on every path".to_string(),
+                            condition: Some("if returning null there is intended, declare the return type `T?` instead".to_string()),
+                            edit: None,
+                            concept: "functions",
+                            concept_ref: "@F16",
+                        });
                     }
                 } else {
                     self.validate_convert(context, t, result, tail_pos);
@@ -3473,9 +3495,18 @@ impl Parser {
                         diagnostic!(
                             self.lexer,
                             Level::Warning,
+                            code = "unreachable-match-arm",
                             "unreachable arm: {} already matched",
                             pattern_name
                         );
+                        self.lexer.fix_last(crate::diagnostics::Fix {
+                            kind: crate::diagnostics::FixKind::Mechanical,
+                            title: "delete the arm — an earlier one already matches".to_string(),
+                            condition: None,
+                            edit: None,
+                            concept: "pattern matching",
+                            concept_ref: "@F29",
+                        });
                     }
                 } else {
                     covered.insert(variant_def_nr);
@@ -11846,13 +11877,20 @@ impl Parser {
             self.lexer,
             &pos,
             Level::Advice,
+            code = "persist-bind-through-field",
             "store_persist_bind persists the whole store this collection lives in, and a \
              collection reached through a field shares its container's store — so the file \
              is written for the container (with every sibling collection in it) and will \
-             not load back into a bare collection of this type.  That is fine when the same \
-             container reads it back; bind a local of the collection's own type if \
-             another program loads this file"
+             not load back into a bare collection of this type"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "bind a local of the collection\'s own type".to_string(),
+            condition: Some("another program loads this file — it is fine as-is when the same container reads it back".to_string()),
+            edit: None,
+            concept: "durable store binding",
+            concept_ref: "@F40",
+        });
     }
 
     /// Dispatch a parsed call to the appropriate handler: diagnostics, special
@@ -12601,7 +12639,20 @@ impl Parser {
         self.lexer.token("}");
         if !self.first_pass {
             if arms.is_empty() {
-                diagnostic!(self.lexer, Level::Warning, "Empty parallel block");
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    code = "empty-parallel-block",
+                    "Empty parallel block"
+                );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: "delete the empty `parallel` block".to_string(),
+                    condition: None,
+                    edit: None,
+                    concept: "par",
+                    concept_ref: "@F33",
+                });
             }
             self.reject_unsound_parallel_captures(&arms, &enclosing);
         }

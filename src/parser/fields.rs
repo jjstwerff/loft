@@ -1114,10 +1114,18 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Warning,
+                code = "index-bounds-other-vector",
                 "index `{iname}` is bounded by `len(...)` of a different vector than the one \
-                 indexed here — a mismatched-vector index is typed non-null but reads null on \
-                 overrun (@PLN102 strict-index)"
+                 indexed here — the index is typed non-null but reads null on overrun"
             );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "bound the loop by the vector it indexes".to_string(),
+                condition: Some("the two vectors are not guaranteed the same length".to_string()),
+                edit: None,
+                concept: "vector",
+                concept_ref: "@F6",
+            });
         }
         if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {
             diagnostic!(
@@ -1264,10 +1272,26 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Warning,
+            code = "text-slice-char-bound",
             "a text slice ends at `len(text)` (a character count) but slice bounds are \
-             byte offsets — this stops short on multi-byte text; use `size(text)` for the \
-             byte length, or `text[i..]` for the rest (@PLN110 strict-index)"
+             byte offsets — this stops short on multi-byte text"
         );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: "use `size(text)` for the byte length".to_string(),
+            condition: None,
+            edit: None,
+            concept: "len vs size",
+            concept_ref: "@F97",
+        });
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: "take the rest with `text[i..]`".to_string(),
+            condition: None,
+            edit: None,
+            concept: "len vs size",
+            concept_ref: "@F97",
+        });
     }
 
     pub(crate) fn parse_text_index(
@@ -1341,10 +1365,26 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
+                    code = "text-index-char-bound",
                     "index `{iname}` walks `0..len(text)` (a character count) but `text[{iname}]` \
-                     is byte-indexed — this under-runs / misreads multi-byte text; iterate with \
-                     `for c in text`, or use `0..size(text)` for a byte walk (@PLN110 strict-index)"
+                     is byte-indexed — this under-runs / misreads multi-byte text"
                 );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: "iterate the characters with `for c in text`".to_string(),
+                    condition: None,
+                    edit: None,
+                    concept: "len vs size",
+                    concept_ref: "@F97",
+                });
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Conditional,
+                    title: "walk bytes with `0..size(text)`".to_string(),
+                    condition: Some("you meant BYTES, not characters".to_string()),
+                    edit: None,
+                    concept: "len vs size",
+                    concept_ref: "@F97",
+                });
             }
             *code = self.cl("OpTextCharacter", &[code.clone(), p.clone()]);
             Type::Character

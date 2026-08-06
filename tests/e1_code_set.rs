@@ -86,6 +86,171 @@ const CODES: &[(&str, &str)] = &[
         "text-parse-may-fail",
         "fn main() { x: integer = \"5\" as integer; print(\"{x}\"); }",
     ),
+    (
+        "redundant-coalesce",
+        "struct S { a: integer }\n\
+         fn main() { s = S { a: 1 }; print(\"{s.a ?? 0}\"); }",
+    ),
+    (
+        "redundant-default-fallback",
+        "struct S { a: integer }\n\
+         fn main() { s = S { a: 1 }; print(\"{s.a?}\"); }",
+    ),
+    (
+        "redundant-null-check",
+        "struct S { a: integer }\n\
+         fn main() { s = S { a: 1 }; if s.a == null { print(\"n\") } }",
+    ),
+    (
+        "redundant-null-negation",
+        "struct S { a: integer }\n\
+         fn main() { s = S { a: 1 }; if !s.a { print(\"n\") } }",
+    ),
+    (
+        "dead-assignment",
+        "fn main() { x = 1; x = 2; print(\"{x}\"); }",
+    ),
+    ("never-read", "fn main() { x = 1; print(\"hi\"); }"),
+    (
+        "upper-case-local",
+        "fn main() { FOO = 1; print(\"{FOO}\"); }",
+    ),
+    (
+        "unreachable-code",
+        "fn f() -> integer { return 1; return 2 }\n\
+         fn main() { print(\"{f()}\"); }",
+    ),
+    (
+        "unreachable-match-arm",
+        "enum E { A, B }\n\
+         fn main() { e: E = A; match e { A => print(\"a\"), A => print(\"a2\"), B => print(\"b\") } }",
+    ),
+    ("empty-parallel-block", "fn main() { parallel { } }"),
+    (
+        "text-slice-char-bound",
+        "fn main() { s = \"ab\"; print(\"{s[0..len(s)]}\"); }",
+    ),
+    (
+        "text-index-char-bound",
+        "fn main() { s = \"ab\"; for i in 0..len(s) { print(\"{s[i]}\") } }",
+    ),
+    (
+        "index-bounds-other-vector",
+        "fn main() { a = [1]; b = [2]; for i in 0..len(a) { print(\"{b[i]}\") } }",
+    ),
+    (
+        "function-complexity",
+        "fn main() {\n\
+           x = 0;\n\
+           for a in 0..3 { for b in 0..3 { for c in 0..3 { for d in 0..3 { for e in 0..3 {\n\
+             if a > 0 { if b > 0 { if c > 0 { if d > 0 { if e > 0 { x += 1 } } } } }\n\
+           } } } } }\n\
+           print(\"{x}\");\n\
+         }",
+    ),
+    (
+        "too-many-parameters",
+        "fn f(a: integer, b: integer, c: integer, d: integer, e: integer, g: integer, h: integer, i: integer) -> integer { a+b+c+d+e+g+h+i }\n\
+         fn main() { print(\"{f(1,2,3,4,5,6,7,8)}\"); }",
+    ),
+    (
+        "trailing-boolean-parameters",
+        "fn f(a: integer, b: boolean, c: boolean) -> integer { if b { a } else if c { a } else { 0 } }\n\
+         fn main() { print(\"{f(1,true,false)}\"); }",
+    ),
+    (
+        "needless-reference-parameter",
+        "fn f(x: &(integer, integer)) -> integer { x.0 }\n\
+         fn main() { v = (1, 2); print(\"{f(&v)}\"); }",
+    ),
+    (
+        "needless-const-parameter",
+        "fn f(a: const integer) -> integer { a }\n\
+         fn main() { print(\"{f(1)}\"); }",
+    ),
+    // The `&` must be FIELD-MUTATED: a read-only `&` raises an error at the same position,
+    // and the pretty renderer's cascade dedup then suppresses the advice this pins.
+    (
+        "slow-reference-parameter",
+        "struct S { a: integer }\n\
+         fn f(s: &S) { s.a = 1 }\n\
+         fn main() { v = S { a: 0 }; f(v); print(\"{v.a}\"); }",
+    ),
+    (
+        "not-null-deprecated",
+        "struct S { a: integer not null }\n\
+         fn main() { s = S { a: 1 }; print(\"{s.a}\"); }",
+    ),
+    (
+        "const-reevaluated",
+        "fn mk() -> integer { 7 }\n\
+         const K = mk();\n\
+         fn main() { print(\"{K}\"); }",
+    ),
+    (
+        "digit-separator-grouping",
+        "fn main() { x = 1_00; print(\"{x}\"); }",
+    ),
+    (
+        "empty-braces-not-collection",
+        "struct S { v: vector<integer> }\n\
+         fn main() { s = S { v: {} }; print(\"{len(s.v)}\"); }",
+    ),
+    (
+        "divide-by-constant-zero",
+        "fn main() { print(\"{1 / 0}\"); }",
+    ),
+    (
+        "unary-minus-binds-tighter",
+        "fn main() { x = 2; print(\"{-x ** 2}\"); }",
+    ),
+    (
+        "read-size-not-element-multiple",
+        "fn main() { f = file(\"loft_trig.bin\"); f#format = LittleEndian; v = f#read(6) as vector<i32>; print(\"{len(v)}\"); }",
+    ),
+    (
+        "file-write-width",
+        "fn main() { f = file(\"loft_trig.bin\"); f#format = LittleEndian; f += 1; }",
+    ),
+    // Listed in `NO_MINIMAL_TRIGGER` — pinned so the set stays complete; the program is
+    // the closest shape and is not run.
+    (
+        "missing-return-path",
+        "fn f(c: boolean) -> integer not null { if c { return 1 } }\n\
+         fn main() { print(\"{f(true)}\"); }",
+    ),
+    (
+        "package-contract-drifted",
+        "fn main() { print(\"needs an installed package manifest\"); }",
+    ),
+    (
+        "persist-bind-through-field",
+        "struct Inner { k: integer }\n\
+         struct Outer { items: hash<Inner[k]> }\n\
+         fn main() { o = Outer { items: [] }; store_persist_bind(o.items, \"loft_trig.store\"); }",
+    ),
+];
+
+/// @PLN131 — codes with no MINIMAL trigger, each with why.
+///
+/// A code here is still coded and still documented; what is missing is a one-file program
+/// that fires it, so tooth 1 cannot cover it. Listed rather than silently skipped, because
+/// "no trigger" and "no code" look identical in a green run.
+const NO_MINIMAL_TRIGGER: &[(&str, &str)] = &[
+    (
+        // Needs a package whose manifest records an older tested contract — not expressible
+        // as a single source file.
+        "package-contract-drifted",
+        "requires an installed package manifest",
+    ),
+    (
+        // Gated on the DEPRECATED `not null` return spelling, and the fall-through it warns
+        // about is already a hard error ("expected integer, got void on return from block"),
+        // which fires first. Reachable only if that error is ever relaxed — worth revisiting
+        // rather than deleting, since the warning is the friendlier of the two.
+        "missing-return-path",
+        "pre-empted by a hard error, and gated on a deprecated spelling",
+    ),
 ];
 
 fn loft_bin() -> PathBuf {
@@ -117,6 +282,9 @@ fn compact_output(prog: &str) -> String {
         .arg("--interpret")
         .arg(&path)
         .env("LOFT_ERRORS", "compact")
+        // @PLN102 case-D's index lint is opt-in, and one pinned code needs it. Harmless
+        // elsewhere: it only fires on a loop bounded by another vector's `len`.
+        .env("LOFT_LINT_STRICT_INDEX", "1")
         .env("LOFT_TIMEOUT", "60")
         .output()
         .expect("failed to invoke loft binary");
@@ -145,6 +313,7 @@ fn explain_output(prog: &str) -> String {
         .args(["--interpret", "--check", "--explain"])
         .arg(&path)
         .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_LINT_STRICT_INDEX", "1")
         .env("LOFT_TIMEOUT", "60")
         .output()
         .expect("failed to invoke loft binary");
@@ -177,6 +346,11 @@ fn doors(out: &str) -> Vec<u32> {
 #[test]
 fn every_pinned_code_offers_a_fix() {
     for (code, prog) in CODES {
+        // A code with no minimal trigger renders nothing, so there is nothing to read a
+        // fix or a door out of. Skipped by NAME, listed with its reason.
+        if NO_MINIMAL_TRIGGER.iter().any(|(c, _)| c == code) {
+            continue;
+        }
         let blocked = FIX_BLOCKED.iter().find(|(c, _)| c == code);
         let out = explain_output(prog);
         let has_fix = out.contains("  fix  ");
@@ -208,6 +382,11 @@ fn every_offered_door_resolves_to_a_catalogue_entry() {
     let snapshot =
         std::fs::read_to_string(root().join("index/features.json")).expect("features snapshot");
     for (code, prog) in CODES {
+        // A code with no minimal trigger renders nothing, so there is nothing to read a
+        // fix or a door out of. Skipped by NAME, listed with its reason.
+        if NO_MINIMAL_TRIGGER.iter().any(|(c, _)| c == code) {
+            continue;
+        }
         let found_doors = doors(&explain_output(prog));
         for n in &found_doors {
             let listed = snapshot.contains(&format!("\"number\": {n}"))
@@ -234,6 +413,9 @@ fn every_offered_door_resolves_to_a_catalogue_entry() {
 #[test]
 fn every_e1_code_renders_its_slug() {
     for (code, prog) in CODES {
+        if NO_MINIMAL_TRIGGER.iter().any(|(c, _)| c == code) {
+            continue;
+        }
         let out = compact_output(prog);
         assert!(
             out.contains(&format!("[{code}]")),

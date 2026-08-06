@@ -476,8 +476,7 @@ fn undefined_enum() {
     code!("enum E1 { V1 }\nfn test(v: E1) -> boolean { v > V2 }")
         .error("Unknown variable 'V2' — did you mean 'v'? at undefined_enum:2:33")
         .advice(
-            "Variable 'V2' is UPPER_CASE — that style is reserved for constants.  \
-             Declare with `const V2 = …` to make it immutable, or rename to lower_case. \
+            "Variable 'V2' is UPPER_CASE — that style is reserved for constants \
              at undefined_enum:2:37",
         );
 }
@@ -491,8 +490,7 @@ fn unknown_sizeof() {
         .error("Expect a variable or type after sizeof at unknown_sizeof:1:22")
         .error("Unknown variable 'C' at unknown_sizeof:1:20")
         .advice(
-            "Variable 'C' is UPPER_CASE — that style is reserved for constants.  \
-             Declare with `const C = …` to make it immutable, or rename to lower_case. \
+            "Variable 'C' is UPPER_CASE — that style is reserved for constants \
              at unknown_sizeof:1:22",
         );
 }
@@ -851,7 +849,7 @@ fn missing_return_not_null() {
 fn test() { classify(1); }"
     )
     .advice(
-        "`not null` is deprecated and has no effect — a type is non-null by default now; delete `not null` (write `T?` if the type should allow null) at missing_return_not_null:1:43",
+        "`not null` is deprecated and has no effect — a type is non-null by default now at missing_return_not_null:1:43",
     )
     .warning(
         "Not all code paths return a value — function 'classify' may return null at missing_return_not_null:4:3",
@@ -1642,11 +1640,9 @@ fn emit_repro_produces_runnable_loft_file() {
 #[test]
 fn binary_write_bare_integer_warns() {
     code!("fn test() {\n  f = file(\"/tmp/lint_a.bin\");\n  f += 42;\n}").warning(
-        "`f += <integer>` without a width cast writes 8 bytes; for binary \
-             files (BigEndian / LittleEndian) add `as i8` / `as i16` / `as i32` \
-             / `as u8` / `as u16` / `as u32` to pick the exact byte width.  Use \
-             `as integer` to silence this warning when 8-byte writes are \
-             intentional at binary_write_bare_integer_warns:3:11",
+        "`f += <integer>` without a width cast writes 8 bytes, and a binary file \
+             (BigEndian / LittleEndian) usually wants an exact width at \
+             binary_write_bare_integer_warns:3:11",
     );
 }
 
@@ -1703,12 +1699,11 @@ fn gh253_bang_on_not_null_warns() {
     // value being non-null), so it KEEPS `not null` and asserts the deprecation too.
     code!("fn test() { h: integer not null = 3; if !h { h = 4; } }")
         .advice(
-            "`not null` is deprecated and has no effect — a type is non-null by default now; delete `not null` (write `T?` if the type should allow null) at gh253_bang_on_not_null_warns:1:34",
+            "`not null` is deprecated and has no effect — a type is non-null by default now at gh253_bang_on_not_null_warns:1:34",
         )
         .warning(
             "'!' on a 'not null' integer is always false — '!x' tests whether x \
-             is null, and a 'not null' value is never null; compare explicitly \
-             (e.g. 'x == 0') if you meant a value check at \
+             is null, and a 'not null' value is never null at \
              gh253_bang_on_not_null_warns:1:45",
         );
 }
@@ -2265,10 +2260,9 @@ fn b_ref_reshape_callee_removal_under_amp_param_is_error() {
          after the removal at b_ref_reshape_callee_removal_under_amp_param_is_error:1:1",
     )
     .advice(
-        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
-         (slower on every access), and field mutation already propagates to the caller without \
-         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
-         thing `&` is for. at b_ref_reshape_callee_removal_under_amp_param_is_error:1:70",
+        "`&` on parameter `target` only slows it down here — a `&`-reference is \
+         double-indirect on every access, and field mutation already propagates to \
+         the caller without it at b_ref_reshape_callee_removal_under_amp_param_is_error:1:70",
     );
 }
 
@@ -2317,10 +2311,9 @@ fn b_ref_reshape_removal_two_frames_down_is_error() {
          after the removal at b_ref_reshape_removal_two_frames_down_is_error:1:1",
     )
     .advice(
-        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
-         (slower on every access), and field mutation already propagates to the caller without \
-         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
-         thing `&` is for. at b_ref_reshape_removal_two_frames_down_is_error:1:117",
+        "`&` on parameter `target` only slows it down here — a `&`-reference is \
+         double-indirect on every access, and field mutation already propagates to \
+         the caller without it at b_ref_reshape_removal_two_frames_down_is_error:1:117",
     );
 }
 
@@ -2427,10 +2420,9 @@ fn b_ref_reshape_reference_into_other_container_still_compiles() {
     )
     .expr("check()")
     .advice(
-        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
-         (slower on every access), and field mutation already propagates to the caller without \
-         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
-         thing `&` is for. at b_ref_reshape_reference_into_other_container_still_compiles:1:70",
+        "`&` on parameter `target` only slows it down here — a `&`-reference is \
+         double-indirect on every access, and field mutation already propagates to \
+         the caller without it at b_ref_reshape_reference_into_other_container_still_compiles:1:70",
     )
     .result(Value::Int(99));
 }
@@ -2448,10 +2440,9 @@ fn b_ref_reshape_callee_local_removal_still_compiles() {
     )
     .expr("check()")
     .advice(
-        "`&` on parameter `target` only slows it down here — a `&`-reference is double-indirect \
-         (slower on every access), and field mutation already propagates to the caller without \
-         it. Drop the `&` unless you REASSIGN the whole binding (`target = …`), which is the one \
-         thing `&` is for. at b_ref_reshape_callee_local_removal_still_compiles:1:49",
+        "`&` on parameter `target` only slows it down here — a `&`-reference is \
+         double-indirect on every access, and field mutation already propagates to \
+         the caller without it at b_ref_reshape_callee_local_removal_still_compiles:1:49",
     )
     .result(Value::Int(154));
 }

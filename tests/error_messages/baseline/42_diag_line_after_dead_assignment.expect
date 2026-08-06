@@ -1,13 +1,13 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-warning: Dead assignment — 'c' is overwritten before being read
+warning[dead-assignment]: Dead assignment — 'c' is overwritten before being read
   --> <cases>/42_diag_line_after_dead_assignment.loft:16:9
    |
 16 |   c = 1;
    |         ^
 
-warning: Dead assignment — 'c' is overwritten before being read
+warning[dead-assignment]: Dead assignment — 'c' is overwritten before being read
   --> <cases>/42_diag_line_after_dead_assignment.loft:17:9
    |
 17 |   c = 2;
@@ -18,5 +18,7 @@ error: Unknown function printt — did you mean 'print'?
    |
 19 |   printt("x");
    |   ^
+
+note: 2 diagnostics above suggest what to write instead — re-run with `--explain`
 
 error: aborting due to 1 previous error
