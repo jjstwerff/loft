@@ -701,6 +701,19 @@ impl Lexer {
             .add_at(level, message, &pos.file, pos.line, pos.pos);
     }
 
+    /// Like [`pos_diagnostic`], but carrying a stable `code` — the explicit-position twin of
+    /// [`diagnostic_coded`](Lexer::diagnostic_coded).
+    pub fn pos_diagnostic_coded(
+        &mut self,
+        level: Level,
+        pos: &Position,
+        code: &'static str,
+        message: &str,
+    ) {
+        self.diagnostics
+            .add_at_coded(level, Some(code), message, &pos.file, pos.line, pos.pos);
+    }
+
     pub fn diagnostics(&self) -> &Diagnostics {
         &self.diagnostics
     }

@@ -264,15 +264,19 @@ currently ships with **no** code), then the remaining sites, then the index.
 
 Measured 2026-08-06 by scanning every emission form in `src/` (`diagnostic!`,
 `diagnostic_at!`, `specific!`, `add_at{,_coded}`, `add`, `self.err{,_coded}`), excluding
-`#[cfg(test)]` modules. **567 user-facing sites; 10 carry a code.**
+`#[cfg(test)]` modules. **567 user-facing sites; 12 carry a code.**
 
 | level | coded | total | |
 |---|---|---|---|
-| advice | 1 | 10 | 10% |
-| warning | 2 | 27 | 7% |
+| advice | 3 | 11 | 27% |
+| warning | 2 | 26 | 8% |
 | error | 7 | 515 | 1% |
 | fatal | 0 | 15 | 0% |
-| **all** | **10** | **567** | **1.8%** |
+| **all** | **12** | **567** | **2.1%** |
+
+Counted per SITE, not per code: 11 distinct codes across 12 emission points, because
+`superseded-call` fires from two branches. The advice/warning split moved by one when that
+diagnostic stopped being a Warning on one of them.
 
 The machinery is finished and the surface is 2%. Two things follow.
 
@@ -326,11 +330,27 @@ field-reached collection), `objects.rs:1143` (`f += <integer>` writes 8 bytes),
 constant zero), `vectors.rs:379` (`-x ** y` binds the sign tighter), `mod.rs:9691` (package
 tested against an older contract).
 
-**One of these is an oversight worth fixing first.** `mod.rs:7381`/`:7389` is the
-`#superseded` STEER — *"`X` is superseded — use `Y`"* — and it has no code, even though the
-two `superseded-*` fold lints it belongs with do. It is the one diagnostic in the set whose
-successor is already named in the message, so the fix writes itself: replace the call with
-`Y`, mechanical, span known, door `@F109`.
+**The first of these is DONE, and it cost two bugs.** `mod.rs:7381`/`:7389` was the
+`#superseded` STEER — *"`X` is superseded — use `Y`"* — uncoded, though the two
+`superseded-*` fold lints it belongs with had codes from the start. The one a user actually
+meets was the one without an identity. It is now `superseded-call`, with the fix its own
+message already names: replace the call with `Y`, mechanical, span known, door `@F109`.
+
+Coding it surfaced two defects, and the second is the one to remember:
+
+1. **The same condition emitted at two levels.** Advice when the compiler knew the call
+   name's position, Warning when it did not — an implementation detail, not a property of
+   the program. Load-bearing, not cosmetic: a library calling a superseded METHOD failed
+   `--tests --deny-warnings` while the identical call to a FUNCTION passed, so a
+   never-break signpost broke a build. Both are Advice now, which is what the tier rule
+   said all along — ignoring a steer cannot produce a wrong result.
+2. **Giving a diagnostic a code turned it into a build break.** `loft test` classified by
+   rendered prefix (`"Advice:"`), and a coded diagnostic renders `Advice[superseded-call]:`
+   — matching neither arm and falling through to `errors`, so the file failed with "(parse
+   errors)". **This trap fires on the exact step this section asks for**, and 35 uncoded
+   warnings are queued behind it, so it would have been met 35 more times. Fixed in
+   `test_runner.rs` to tolerate the tag, with a guard that also pins the converse: a real
+   warning must still gate, or a classifier could "pass" by calling everything advice.
 
 **The 530 errors are a different problem and should not be batch-coded.** A code is a frozen
 public surface, so 530 of them is 530 names that can never change — and most are one-line

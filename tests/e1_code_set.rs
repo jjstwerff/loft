@@ -59,6 +59,15 @@ const CODES: &[(&str, &str)] = &[
         "shift-amount-out-of-range",
         "fn main() { x = 1 << 100; print(\"{x}\"); }",
     ),
+    // @PLN102 arc C step 3 — the STEER itself: a call to a superseded symbol. Coded late
+    // (@PLN131 coverage audit) although the two declaration-side lints below had codes from
+    // the start — the one a user actually meets was the one without an identity.
+    (
+        "superseded-call",
+        "fn scaled(v: integer, by: integer) -> integer { v * by }\n\
+         fn doubled(v: integer) -> integer { scaled(v, 2) }  #superseded \"scaled\"\n\
+         fn main() { print(\"{doubled(21)}\"); }",
+    ),
     // @PLN102 arc C — a steer that would ship dangling: the named successor does not exist.
     (
         "superseded-unknown-successor",

@@ -872,9 +872,15 @@ fn check_diagnostics(
     let mut unexpected: Vec<&str> = Vec::new();
 
     for diag in diagnostics {
-        if diag.starts_with("Debug: ") {
+        if matches!(
+            loft::diagnostics::compact_level(diag),
+            Some(loft::diagnostics::Level::Debug)
+        ) {
             continue;
-        } else if diag.starts_with("Warning: ") || diag.starts_with("Advice: ") {
+        } else if matches!(
+            loft::diagnostics::compact_level(diag),
+            Some(loft::diagnostics::Level::Warning | loft::diagnostics::Level::Advice)
+        ) {
             // Advice counts for `// #warn` / `@EXPECT_WARNING` the same as a warning:
             // the declaration asserts a diagnostic FIRED, not which tier it landed in.
             // Without this an `Advice:` line falls to the error branch below and a
@@ -1086,7 +1092,14 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     p.parse(&path, false);
     let had_errors = !p.diagnostics.is_empty()
         && p.diagnostics.lines().iter().any(|l| {
-            !l.starts_with("Warning:") && !l.starts_with("Debug:") && !l.starts_with("Advice:")
+            !matches!(
+                loft::diagnostics::compact_level(l),
+                Some(
+                    loft::diagnostics::Level::Warning
+                        | loft::diagnostics::Level::Debug
+                        | loft::diagnostics::Level::Advice
+                )
+            )
         });
     if !p.diagnostics.is_empty() {
         check_diagnostics(

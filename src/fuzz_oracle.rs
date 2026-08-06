@@ -134,10 +134,14 @@ pub fn classify_source_with(src: &[u8], poison: bool) -> Outcome {
     // A graceful diagnostic rejection is the common, clean case (F1 feeds
     // garbage). Warning/Debug lines are not rejections.
     let rejected = !p.diagnostics.is_empty()
-        && p.diagnostics
-            .lines()
-            .iter()
-            .any(|l| !l.starts_with("Warning:") && !l.starts_with("Debug:"));
+        && p.diagnostics.lines().iter().any(|l| {
+            // "not a warning" means "an error" here, so a coded diagnostic that no
+            // prefix match recognised used to read as a REJECTION (@PLN131).
+            !matches!(
+                crate::diagnostics::compact_level(l),
+                Some(crate::diagnostics::Level::Warning | crate::diagnostics::Level::Debug)
+            )
+        });
     if rejected {
         return Outcome::Rejected;
     }

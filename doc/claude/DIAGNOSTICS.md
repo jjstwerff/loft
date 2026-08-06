@@ -38,6 +38,7 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `coalesce-default-type-mismatch` | error | A `??` default is not assignable where the value's type is expected. | Cast the default, or give it a matching type. | C · `@F2` |
 | `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. | C C · `@F37` `@F2` |
 | `c-binding-not-interpretable` | error | A function bound to a C symbol with `#c` was called on the interpreter, which cannot make that call. | Run it on `--native`, or give the binding an interpretable path. | M M · `@F92` `@F53` |
+| `superseded-call` | advice | A call to a `#superseded` symbol, from source you own. The old form keeps working — this is a signpost, never a removal. | Call the successor instead. | M · `@F109` |
 | `superseded-unknown-successor` | error | `#superseded "X"` names a symbol that does not exist, so the steer would ship dangling. | Name a real replacement, or drop the attribute. | C C · `@F109` |
 | `superseded-not-folded` | warning | A `#superseded` symbol's body never calls its successor, so the steer ships without its fold. | Reimplement the superseded symbol as a shim over the successor. | C C · `@F109` |
 

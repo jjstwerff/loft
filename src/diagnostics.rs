@@ -148,6 +148,50 @@ impl DiagEntry {
     }
 }
 
+/// The level a [`to_string_compact`](DiagEntry::to_string_compact) line reports — tolerating
+/// the `[code]` tag, which is the whole reason this exists.
+///
+/// Seven places classified diagnostics by writing `line.starts_with("Advice:")` themselves,
+/// and a coded diagnostic renders `Advice[superseded-call]:` — matching none of them. The
+/// effect was not a mislabel but a REVERSAL: each of those sites treats "not a warning" as
+/// "an error", so giving a diagnostic its stable identity turned it into a build failure in
+/// the test runner, the wrap harness and both fuzz oracles at once. @PLN131 asks for that
+/// identity 35 more times, so the classifier lives next to the renderer that produces the
+/// string, where the two cannot drift.
+#[must_use]
+pub fn compact_level(line: &str) -> Option<Level> {
+    for (name, level) in [
+        ("Fatal", Level::Fatal),
+        ("Error", Level::Error),
+        ("Warning", Level::Warning),
+        ("Advice", Level::Advice),
+        ("Debug", Level::Debug),
+    ] {
+        if let Some(rest) = line.strip_prefix(name)
+            && (rest.starts_with(':') || (rest.starts_with('[') && rest.contains("]:")))
+        {
+            return Some(level);
+        }
+    }
+    None
+}
+
+/// The same line with its `[code]` tag removed, for comparing against prose written before
+/// the code existed (`@EXPECT_WARNING` text, goldens). Returns `line` unchanged when there
+/// is no tag.
+#[must_use]
+pub fn strip_compact_code(line: &str) -> String {
+    for name in ["Fatal", "Error", "Warning", "Advice", "Debug"] {
+        if let Some(rest) = line.strip_prefix(name)
+            && rest.starts_with('[')
+            && let Some(close) = rest.find("]:")
+        {
+            return format!("{name}{}", &rest[close + 1..]);
+        }
+    }
+    line.to_string()
+}
+
 pub struct Diagnostics {
     entries: Vec<DiagEntry>,
     level: Level,
@@ -346,6 +390,10 @@ macro_rules! specific {
 /// position at parse time and point the caret there.
 #[macro_export]
 macro_rules! diagnostic_at {
+    // Coded form, mirroring `diagnostic!`.  This arm must precede the uncoded one.
+    ($lexer:expr, $pos:expr, $level:expr, code = $code:expr, $($arg:tt)+) => (
+        $lexer.pos_diagnostic_coded($level.clone(), $pos, $code, &diagnostic_format($level, format_args!($($arg)+)))
+    );
     ($lexer:expr, $pos:expr, $level:expr, $($arg:tt)+) => (
         $lexer.pos_diagnostic($level.clone(), $pos, &diagnostic_format($level, format_args!($($arg)+)))
     )

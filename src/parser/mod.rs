@@ -7377,20 +7377,57 @@ impl Parser {
                 // "Change to `Y`" quick-fix (step B).  Without a name position (method /
                 // operator path) keep the cursor caret and no suggestion — a quick-fix
                 // there could replace the wrong token.
+                // ADVICE on both paths (loft#785-era audit, @PLN131). This used to be
+                // Advice with a name position and Warning without one — the same condition
+                // at two levels, decided by whether the compiler happened to know where the
+                // call name sat, which is an implementation detail and not a property of
+                // the program. It was load-bearing: a library calling a superseded METHOD
+                // failed `--tests --deny-warnings` while the identical call to a FUNCTION
+                // passed, so the never-break signpost broke a build. The tier rule settles
+                // it — a diagnostic gates iff ignoring it can produce a wrong result, and
+                // ignoring a steer cannot: the old form keeps working, identically, forever.
+                let msg =
+                    format!("`{shown}` is superseded — use `{succ}` (the old form keeps working)");
                 if let Some(pos) = name_pos {
+                    let (line, col) = (pos.line, pos.pos);
                     diagnostic_at!(
                         self.lexer,
                         pos,
                         Level::Advice,
-                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                        code = "superseded-call",
+                        "{msg}"
                     );
                     self.lexer.suggest_last(&succ);
+                    // The one fix in the set whose rewrite the diagnostic already names:
+                    // the successor is in the message, and `name_pos` is the identifier to
+                    // replace. Mechanical — swapping a call for its shim changes nothing a
+                    // program can observe, which is the whole promise of a fold.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: format!("call `{succ}` instead"),
+                        condition: None,
+                        edit: Some(crate::diagnostics::Edit {
+                            line,
+                            col,
+                            len: u32::try_from(shown.len()).unwrap_or(0),
+                            text: succ.clone(),
+                        }),
+                        concept: "superseded",
+                        concept_ref: "@F109",
+                    });
                 } else {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Warning,
-                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
-                    );
+                    diagnostic!(self.lexer, Level::Advice, code = "superseded-call", "{msg}");
+                    // No `name_pos`, so no edit: a method or operator call reaches here
+                    // with the cursor somewhere after the name, and a rewrite placed there
+                    // would replace the wrong token. The title still carries the fix.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: format!("call `{succ}` instead"),
+                        condition: None,
+                        edit: None,
+                        concept: "superseded",
+                        concept_ref: "@F109",
+                    });
                 }
             }
         }

@@ -385,3 +385,86 @@ fn a_conditional_fix_is_verified_but_left_to_the_author() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// Giving a diagnostic a code must not turn it into a build break.
+///
+/// `loft test` classified its diagnostics by rendered prefix — `"Advice:"` and `"Warning:"`
+/// — and a CODED one renders `Advice[superseded-call]:`, matching neither. Every coded
+/// warning and advice therefore fell through to `errors`, and the file failed with
+/// "(parse errors)". The trap is that it fires the moment a diagnostic gains its stable
+/// identity, which is the one change @PLN131 asks everyone to make: 35 uncoded warnings are
+/// queued behind exactly this step.
+///
+/// Both directions are asserted. Advice must NOT gate even under `--deny-warnings` (the old
+/// form keeps working, so ignoring the steer cannot produce a wrong result), and a real
+/// warning must still gate — a classifier that files everything as advice would pass the
+/// first assertion and break the lint that pays for the feature.
+#[test]
+fn a_coded_advice_does_not_fail_the_test_runner() {
+    let steer = "fn scaled(v: integer, by: integer) -> integer { v * by }\n\
+         fn doubled(v: integer) -> integer { scaled(v, 2) }  #superseded \"scaled\"\n\
+         fn test_it() { assert(doubled(21) == 42, \"ok\"); }\n";
+    let path = probe(steer);
+    for deny in [false, true] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+        cmd.args(["--interpret", "--tests"]);
+        if deny {
+            cmd.arg("--deny-warnings");
+        }
+        let out = cmd
+            .arg(&path)
+            .env("LOFT_TIMEOUT", "120")
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("spawn loft --tests");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.status.success() && !all.contains("parse errors"),
+            "a coded ADVICE must not fail `loft test` (deny={deny}); output:\n{all}"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+
+    // The control: a real warning still gates, so the classifier cannot have been "fixed"
+    // by calling everything advice.
+    let warn = probe(
+        "fn f(v: integer) -> integer { d = v; d = 9; return v; }\n\
+         fn test_w() { assert(f(1) == 1, \"ok\"); }\n",
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--interpret", "--tests", "--deny-warnings"])
+        .arg(&warn)
+        .env("LOFT_TIMEOUT", "120")
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("spawn loft --tests");
+    let all = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        all.contains("--deny-warnings:"),
+        "a real warning must still gate under --deny-warnings; output:\n{all}"
+    );
+    let _ = std::fs::remove_file(&warn);
+}
+
+/// The steer names its successor in the message, so its fix writes itself.
+#[test]
+fn the_superseded_steer_offers_the_successor_as_a_fix() {
+    let out = run(
+        "fn scaled(v: integer, by: integer) -> integer { v * by }\n\
+         fn doubled(v: integer) -> integer { scaled(v, 2) }  #superseded \"scaled\"\n\
+         fn main() { println(\"{doubled(21)}\"); }\n",
+        true,
+    );
+    assert!(
+        out.contains("advice[superseded-call]"),
+        "the steer must carry its code; output:\n{out}"
+    );
+    assert!(
+        out.contains("call `scaled` instead") && out.contains("write `scaled`"),
+        "the fix must name the successor AND spell the rewrite; output:\n{out}"
+    );
+}

@@ -26,15 +26,9 @@ use std::io::Write;
 /// `[...]` sitting between a known level word and the first `:` is stripped, so
 /// brackets elsewhere in a message are untouched.
 fn strip_diag_code(s: &str) -> String {
-    for level in ["Error", "Warning", "Fatal", "Debug"] {
-        if let Some(after) = s.strip_prefix(level)
-            && after.starts_with('[')
-            && let Some(close) = after.find("]:")
-        {
-            return format!("{level}{}", &after[close + 1..]);
-        }
-    }
-    s.to_string()
+    // The shared stripper, not a local copy: this one omitted `Advice`, so a coded advice
+    // kept its tag and no `@EXPECT_WARNING` prose could ever match it (@PLN131).
+    loft::diagnostics::strip_compact_code(s)
 }
 
 fn normalize_loft_loc(s: &str) -> String {
