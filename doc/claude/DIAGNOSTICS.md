@@ -227,10 +227,25 @@ measurement. The same fix verifies where the target is not annotated, which is w
 CONDITIONAL and ranked last rather than removed: it is the right rewrite most of the time,
 and the author can tell in a second whether their own declaration allows it.
 
-An editor gets the same fixes as code actions (`data.fixes` on the published diagnostic, with
-each fix's own span). Both tiers are offered, because a click IS the affirmation — a
-conditional fix's title carries `— only if …` so the condition cannot be missed, and only
-mechanical fixes are marked `isPreferred`, since a "fix all" gesture has nobody reading.
+## In an editor
+
+Three surfaces, and they carry different halves:
+
+| LSP field | what it carries |
+|---|---|
+| `codeAction` | a quick-fix per fix that spells an `edit` — both tiers, since a click IS the affirmation. A conditional fix's title carries `— only if …` so the condition cannot be missed, and only mechanical ones are `isPreferred`, because a "fix all" gesture has nobody reading. |
+| `relatedInformation` | **every** fix — title, condition, concept and door — as text under the diagnostic |
+| `codeDescription` | the code's row in this file, as a link the editor renders on the code itself |
+
+**`relatedInformation` is the one that matters most, and it is easy to think redundant.** A
+quick-fix needs an `edit`, and only 5 of 62 fixes have one — the rest name a rewrite the
+compiler cannot place. Without this row an editor shows a message that, since the messages
+stopped carrying their own cure, deliberately no longer says what to write: the cure would
+live in the CLI alone, and the editor would be strictly worse off than before the trim.
+
+The `codeDescription` link targets `main`, so it resolves from a release and 404s from a
+branch that has not merged this file yet. That coupling is deliberate — a user reaches the
+binary through a release cut from `main`, the same commit that carries this page.
 
 ## Adding a code
 

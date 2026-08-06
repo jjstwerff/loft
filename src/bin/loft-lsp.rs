@@ -21,11 +21,31 @@
 // else (logging) must go to stderr, or the transport corrupts.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use loft::diagnostics::{DiagEntry, Level};
 use loft::json::{self, Parsed};
+
+/// @PLN131 — where a diagnostic code's documentation lives, as the `codeDescription` link
+/// an editor renders on the code itself.
+///
+/// The GitHub blob URL rather than the docs site: `loft-lang.org/loft/` publishes
+/// `doc/*.html` (the generated stdlib reference) and has no diagnostics page, so pointing
+/// there would open onto something real but unrelated — which is the weaker half of a door
+/// onto nothing.
+///
+/// It targets `main`, and `DIAGNOSTICS.md` is not on `main` until this work merges — so the
+/// link 404s from a branch build and resolves from a release. That is the right coupling
+/// rather than a hazard: a user reaches this binary through a release cut from `main`, which
+/// is the same commit that carries the file. `the_code_links_to_an_anchor_that_exists` pins
+/// the `#the-codes` anchor against the local copy, which is the half that can rot silently.
+///
+/// One URL for every code — the table is in-page searchable, which is what a
+/// self-describing SLUG is for.
+const DIAGNOSTIC_DOC_URL: &str =
+    "https://github.com/loft-lang/loft/blob/main/doc/claude/DIAGNOSTICS.md#the-codes";
 
 const SERVER_NAME: &str = "loft-lsp";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -410,7 +430,7 @@ fn diagnose_text(text: &str, uri: &str, stdlib_dir: &str) -> Vec<Parsed> {
         // tier invisible in the one place it is most useful, and the deprecation steer
         // (its main occupant) would silently stop being offered.  Debug stays excluded.
         .filter(|e| e.level >= Level::Advice)
-        .map(|e| lsp_diagnostic(e, text))
+        .map(|e| lsp_diagnostic(e, text, uri))
         .collect()
 }
 
@@ -419,7 +439,7 @@ fn diagnose_text(text: &str, uri: &str, stdlib_dir: &str) -> Vec<Parsed> {
 /// loft records a single point, so the range underlines the identifier at that
 /// point (its extent read from `text`) — a visible squiggle under the token,
 /// not a zero-width caret.
-fn lsp_diagnostic(e: &DiagEntry, text: &str) -> Parsed {
+fn lsp_diagnostic(e: &DiagEntry, text: &str, uri: &str) -> Parsed {
     let line0 = e.line.saturating_sub(1);
     let col0 = e.col.saturating_sub(1);
     let end_col = col0 + token_len_at(text, line0, col0);
@@ -432,6 +452,46 @@ fn lsp_diagnostic(e: &DiagEntry, text: &str) -> Parsed {
     ];
     if let Some(code) = e.code {
         fields.push(("code", Parsed::Str(code.into())));
+        // @PLN131 — the DOOR, as a link the editor renders on the code itself (LSP 3.16
+        // `codeDescription`). The concept handle was CLI text until now; here it is one
+        // click. Every code has a row in that table, and `every_pinned_code_is_documented`
+        // is what keeps that true, so this cannot become the dead door the plan refuses.
+        fields.push((
+            "codeDescription",
+            obj(vec![("href", Parsed::Str(DIAGNOSTIC_DOC_URL.into()))]),
+        ));
+    }
+    // @PLN131 — every fix as `relatedInformation`, which is where an editor shows detail
+    // that is not itself a problem.
+    //
+    // This is the half the code-action path CANNOT carry: a quick-fix needs an `edit`, and
+    // 57 of 62 fixes have none — they name a rewrite the compiler cannot place. Without
+    // this the editor shows a message that (since the prose trim) deliberately no longer
+    // says what to write, and the cure lives only in the CLI. The condition rides along for
+    // the same reason it does everywhere else: it is what a reader affirms.
+    if !e.fixes.is_empty() {
+        let related: Vec<Parsed> = e
+            .fixes
+            .iter()
+            .map(|f| {
+                let mut msg = format!("fix: {}", f.title);
+                if let Some(c) = &f.condition {
+                    let _ = write!(msg, " — only if {c}");
+                }
+                let _ = write!(msg, "  [{} · {}]", f.concept, f.concept_ref);
+                obj(vec![
+                    (
+                        "location",
+                        obj(vec![
+                            ("uri", Parsed::Str(uri.to_string())),
+                            ("range", range_of(line0, col0, end_col)),
+                        ]),
+                    ),
+                    ("message", Parsed::Str(msg)),
+                ])
+            })
+            .collect();
+        fields.push(("relatedInformation", Parsed::Array(related)));
     }
     // Round-trip the structured suggestion on the diagnostic's `data` — the
     // editor echoes it back in a `codeAction` request, so the quick-fix needs no

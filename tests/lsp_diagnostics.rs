@@ -125,3 +125,63 @@ fn superseded_steer_carries_a_structured_suggestion_on_the_call_name() {
         e.col
     );
 }
+
+// ── @PLN131: the fix reaches the editor, and the code links to its documentation ──
+
+/// A fix with no `edit` must still be VISIBLE in an editor.
+///
+/// A quick-fix needs an `edit`, and most fixes have none — they name a rewrite the compiler
+/// cannot place. Those used to reach the CLI's `--explain` and nowhere else, which became a
+/// real regression once the messages stopped carrying their own cure: the editor showed a
+/// diagnostic that deliberately no longer said what to write. `relatedInformation` is where
+/// an editor shows detail that is not itself a problem, so that is where they go — with the
+/// condition, which is the thing a reader affirms.
+#[test]
+fn a_fix_without_an_edit_still_reaches_the_editor() {
+    // A `??` on a non-null field — `redundant-coalesce`, whose one fix names the rewrite
+    // ("delete the `?? <default>`") and cannot place it, so no quick-fix can carry it.
+    let src = "struct S { a: integer }\n\
+               fn main() { s = S { a: 1 }; println(\"{s.a ?? 0}\"); }\n";
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).expect("load stdlib");
+    p.parse_source(src, "buf.loft", false);
+    let entry = p
+        .diagnostics
+        .entries()
+        .iter()
+        .find(|e| e.code == Some("redundant-coalesce"))
+        .expect("the redundant-coalesce lint must fire");
+    assert!(
+        !entry.fixes.is_empty(),
+        "the diagnostic must carry fixes for the editor to show"
+    );
+    assert!(
+        entry.fixes.iter().all(|f| f.edit.is_none()),
+        "this fixture is chosen BECAUSE neither fix spells an edit — if that changes, it \
+         stops testing the path that has no quick-fix"
+    );
+    assert!(
+        entry
+            .fixes
+            .iter()
+            .all(|f| !f.concept.is_empty() && !f.concept_ref.is_empty()),
+        "each fix must name its concept and door, since that is what the editor renders"
+    );
+}
+
+/// Every coded diagnostic points at documentation that exists.
+///
+/// `codeDescription` is what turns the concept handle from CLI text into one click. The
+/// anchor is asserted against the local file rather than the network: a door onto nothing is
+/// what this plan refuses, and a URL nobody checks is exactly how one appears.
+#[test]
+fn the_code_links_to_an_anchor_that_exists() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("doc/claude/DIAGNOSTICS.md"),
+    )
+    .expect("DIAGNOSTICS.md");
+    assert!(
+        doc.contains("\n## The codes\n"),
+        "the `#the-codes` anchor the LSP links to must exist in DIAGNOSTICS.md"
+    );
+}
