@@ -3,12 +3,13 @@
 
 ## Status
 
-**Design only — nothing built.** Every measurement below is from the current tree
-and is cited so it can be re-checked rather than believed.
+**Design only — nothing built. BOTH GATING PROBES ARE RUN, and both answered
+2026-08-06** (§ Probe results). P1 **passes**, so **option B is viable** and the
+architecture is decided. P2 **passes for reads and fails for writes on sqlite**,
+which is a bounded, documented limit rather than a blocker.
 
-Two unknowns are **probes, not opinions**, and they gate everything: whether the
-interpreter can call loft re-entrantly (P1, which decides the architecture) and
-whether a float survives a text round trip (P2).
+Every measurement below is from the current tree and is cited so it can be
+re-checked rather than believed.
 
 **Issue:** [loft-lang/plans#133](https://github.com/loft-lang/plans/issues/133).
 
@@ -95,16 +96,20 @@ cross the `#c` boundary (the interpreter's trampolines are integer-class), which
 why the library binds floats as TEXT — and reading it as text and parsing it is a
 conversion like any other. So:
 
-- `@PLN128`'s E3 float refusal stops being a **prerequisite** and becomes an
-  **optimisation**: worth having for speed, not needed for correctness. That
-  removes the sharpest cost option B had.
+- **Measured (P2): reading is exact**, with `printf('%!.17g', …)`. So @PLN128's
+  E3 float refusal is **not** a prerequisite for the read path, which is the whole
+  of the lazy loader.
+- **Measured (P2): writing is not**, on sqlite, for extreme-exponent values —
+  its decimal parser can store a literal one ULP off, and more digits do not fix
+  it. **E3 therefore pays for the WRITE path on sqlite specifically**, and
+  nowhere else. 0 of 3000 values in the ±1e6 range were affected.
 - On PostgreSQL this is not even a workaround — the wire protocol returns every
-  value as text already, so "parse it" is the native path.
+  value as text already, so "parse it" is the native path. **Expected to be exact;
+  not measured** (no server), and the gate must check it.
 - What replaces the capability requirement is a **contract**: a float written by
-  loft and read back by loft must compare EQUAL. Each backend chooses how to get
-  there (enough significant digits on the way out), and the round trip is the
-  test. A rendering that loses the low bits is a wrong value, and it must fail a
-  probe rather than be discovered by a consumer.
+  loft and read back by loft must compare EQUAL. A rendering that loses the low
+  bits is a wrong value, and P2 shows the obvious spelling (`CAST(v AS TEXT)`)
+  loses it 94% of the time.
 
 The same asymmetry retires a second refusal for free: @PLN129 today refuses a
 **narrow integer field** (`i32`, `u8`, `size(2)`) because there are four encodings
@@ -334,12 +339,111 @@ architecture, so nothing else should be built first.
    commit, or make the pin re-establishable on demand.** Whichever is chosen has
    to be written down, because both are defensible and they differ in what a
    long-running traversal sees.
+10. **A fault inside the nested fetch must not halt the program — MEASURED, and
+   it does today.** P1c ran a loft fetch function that overflowed the call stack:
+   the fault propagated and the program halted, and the caller read a garbage
+   value. For an ordinary call that is right; for a fetch it violates C80, where a
+   failed fetch reports through `store_lazy_error` and the lookup answers null.
+   So the nested run must CONTAIN the fault and convert it into arc C's channel —
+   otherwise moving the source from Rust to loft turns a class of source bug into
+   a program halt, which is a regression against what @PLN129 ships today.
 9. **Lazy stays READ-ONLY, and requirement 2 does not change that.** The write
    goes through the ORM/client; the lazy binding remains a read path that refuses
    writes loudly (@PLN129 failure path 4). "Write then read lazily" is two
    operations on one database, not a read-write collection. Making the binding
    writable would reopen the exact divergence-from-source-of-truth failure the
    whole design exists to avoid.
+
+## Probe results — run 2026-08-06
+
+Both gating probes were built as throwaways, run, and the code reverted. The
+scripts are in this directory's history only; what matters is the answers.
+
+### P1 — can the interpreter run loft re-entrantly from a lookup? **YES.**
+
+**The mechanism already existed.** `State::execute_at` runs a loft function to
+completion from Rust for the `par` workers — push a frame, run the dispatch loop,
+read the result. The probe reused the ORDINARY call machinery instead: `fn_call`
+pushes the frame and stores the return address, then the loop runs until that
+frame pops. So the callee returns through exactly the path every other call uses.
+
+**The borrow dissolves as predicted.** `Stores::find` RETURNS a value, so the
+`&mut self.database` borrow ends before the nested call. The split in
+`State::get_record` is three lines:
+
+```rust
+let first = self.database.find(&data, db_tp, &key);
+if first.rec == 0 { /* nested loft call here */ self.database.find(&data, db_tp, &key) }
+else { first }
+```
+
+| cell | result |
+|---|---|
+| a zero-arg loft fn called from inside `get_record`'s miss path | ran, returned its value (`6` from `3+2+1`) |
+| that fn making its own nested + recursive calls | fine, 3 deep |
+| outer locals across the nested run (`integer`, `text`, `vector`) | **all intact** — `a=111`, `b=outer-text`, `v=7,8,9` |
+| repeated, including inside a `while` loop | 3 invocations, all clean |
+| a resident HIT | no nested call — the miss path is the only entry |
+| **the fetch shape**: the nested fn receives the COLLECTION, allocates text and INSERTS into the very collection the outer lookup is walking | **the outer retry finds the inserted record**; a second lookup is a resident hit with no nested call; the pre-existing entry is intact; no leak under `LOFT_STORES=warn` |
+
+**So @PLN129's "far larger than this arc" was right about the shape it
+considered and wrong about the one needed.** It assumed a callback *inside* the
+lookup; what the design needs is a nested run at the CALLER, and the retry it
+requires is already how `find_or_fetch` works.
+
+**P1c found a failure path the prose had not listed.** When the nested function
+FAULTS (runaway recursion → call-stack overflow), the fault propagates and
+**halts the program**, and the probe read a garbage value off the stack. For an
+ordinary call that is correct. For a FETCH it is not: @PLN129's contract is C80 —
+a failed fetch reports through `store_lazy_error`, never a halt. So a buggy or
+unlucky loft fetch function would turn a lookup into a program halt where the
+Rust source reported through the channel.
+
+**That is a requirement on the design, not a defect in the probe:** the nested
+call must be run with the fault CONTAINED and converted into arc C's channel.
+Recorded as failure path 10.
+
+### P2 — does a float survive a text round trip? **READS yes, WRITES no (sqlite).**
+
+Measured with sqlite 3.45.1, 2000 uniformly random bit-pattern doubles plus 3000
+in the ±1e6 range.
+
+| rendering | inexact, of 2000 random doubles |
+|---|---|
+| `CAST(v AS TEXT)` — the obvious choice | **1887** |
+| `printf('%.17g', v)` | **928** |
+| `printf('%!.17g', v)` — note the `!` | **1** |
+
+**loft's own half is exact.** `float → "{v}" → as float` round-tripped 12/12
+hand-picked hard cases on BOTH backends: loft renders the shortest form that
+round-trips.
+
+**`CAST(v AS TEXT)` is the trap**, and it is the spelling anyone would reach for
+first: it renders `%!.15g`, so `123456789012345.6` comes back as
+`123456789012346.0` — a different number, not a rounding artefact. `%.17g`
+*without* the bang looks fine on hand-picked values and still loses 46% of random
+ones, which is exactly why this was swept rather than sampled.
+
+**The one remaining failure is at INSERT, not SELECT.** Isolated: sqlite's own
+round trip (`v = CAST(printf('%!.17g', v) AS REAL)`) is **exact 2000/2000**, so
+the reader is sound. The single mismatch is sqlite's decimal PARSER storing a
+value one ULP from the literal it was given — and **more digits does not fix it**
+(shortest, 20-digit and 25-digit forms all store the same wrong double).
+
+**Bounded, and the boundary is worth knowing:** 0 of 3000 values in the ±1e6
+range were inexact. The failure lives at extreme exponents (the mismatch was
+`-5.196972490273514e-183`). So:
+
+- **Reading is exact** with `printf('%!.17g', …)`, which the sqlite driver's
+  SELECT must wrap float columns in. Use `printf`, not `format` — `format()` is
+  sqlite 3.38+, `printf()` is 3.8.3+.
+- **Writing an extreme-exponent float through a decimal literal can lose one
+  ULP.** The exact fix is `sqlite3_bind_double`, which is the `#c` float
+  capability — so **@PLN128 E3 pays for the WRITE path on sqlite**, and only
+  there. It stays out of the critical path for everything else.
+- PostgreSQL is unverified without a server; its wire protocol is text already
+  and its parser is `strtod`, so it is expected to be exact. **Expected, not
+  measured** — the gate must check it.
 
 ## Implementation steps — small, safe, each one green
 
@@ -358,8 +462,10 @@ swap causes.
 
 | # | do | answers |
 |---|---|---|
-| **P1** | `State::run_until_return`: push a frame, run the existing loop to the entry depth, take the value. Call one trivial loft `fn` from inside an opcode handler. Throwaway. | **Decides A vs B.** If the eval stack, `raise` unwinding or `par` cannot survive re-entry, stop and take A. |
-| **P2** | Write a float, read it back through text, require EQUAL. sqlite first, then any reachable server. | Whether the conversion contract holds, or a backend needs `#c` float after all. |
+| **P1** | ~~a nested loft call from inside a lookup~~ | **DONE 2026-08-06 — PASSES.** Option B is viable. See § Probe results. |
+| **P2** | ~~float through a text round trip~~ | **DONE 2026-08-06 — reads exact, sqlite writes lose one ULP at extreme exponents.** See § Probe results. |
+| **P3** | The same float round trip against a live PostgreSQL and MariaDB. | P2 covered sqlite only; the other two are expectation, not measurement. |
+| **P4** | Contain a fault inside the nested run (failure path 10) and convert it to arc C's channel. | Whether B can hold C80, which it does not today. |
 
 ### Inert — pure values and pure functions, nothing calls them
 
