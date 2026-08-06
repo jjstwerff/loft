@@ -22,8 +22,8 @@ advice[avoidable-copy]: copy of vector<integer> — `src` is still used after th
   fix  build the value in place   [move · @F106]
   fix  drop the later use of `src`   needs: `src` is used again at line 8 — you do not need that   [move · @F106]
 
-error[format-unescaped-brace]: a literal `}` in a format string must be written `}}`
-  fix  double the brace   }}   [interpolation · @F35]
+error[format-unescaped-brace]: a literal `}` in a format string — `}` closes an interpolation hole, and none is open
+  fix  double the brace   write `}}`   [interpolation · @F35]
 ```
 
 **Steps 3–4 — `loft fix`.** A fix is checked by APPLYING it to an in-memory copy and
