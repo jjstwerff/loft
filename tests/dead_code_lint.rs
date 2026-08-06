@@ -108,12 +108,23 @@ fn assert_default(backend: &str) {
             "[{backend}] the dead store on `{v}` must fire\n{diag}"
         );
     }
-    // @PLN102 alias-where-correct step 6 — the message is the arc-C write-through steer: it points at
+    // @PLN102 alias-where-correct step 6 — the lint is the arc-C write-through steer: it points at
     // the explicit `&` fix AND offers the read-back alternative. The write-through is never inferred
     // (copy stays the semantics), so the lint teaching `&` is how the intent is recovered.
+    //
+    // @PLN131 moved both out of the message and into fix lines, so the steer is asserted where it
+    // now lives — behind `--explain`. What is checked is unchanged: BOTH ways out are still offered,
+    // because dropping either would leave the author with one option and no way to see the other.
+    let (_, explained, _) = run_env(backend, &spec_path(), &[("LOFT_EXPLAIN", "1")]);
     assert!(
-        diag.contains("`d = &…`") && diag.contains("read `d` after"),
-        "[{backend}] the dead-store message must steer to `&` (write-through) + offer read-back\n{diag}"
+        explained.contains("`d = &…`") && explained.contains("read `d` after"),
+        "[{backend}] the dead-store fix must steer to `&` (write-through) + offer read-back\n{explained}"
+    );
+    // …and the message itself must NOT repeat them: a reader pays for that duplication on every
+    // diagnostic, which is the whole reason the resolution moved.
+    assert!(
+        !diag.contains("`d = &…`"),
+        "[{backend}] the message must say what is WRONG; the fix says what to write instead\n{diag}"
     );
     // Load-bearing guard: a reference-struct alias (`al`) has the SAME (reads=0, write_targets=1)
     // signal as a value-struct copy, but the write PROPAGATES to the source, so it must stay

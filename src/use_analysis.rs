@@ -2501,8 +2501,7 @@ pub fn warn_dead_stores(
             let msg = format!(
                 "'{name}' is mutated but its value is never read — the write is LOST. A whole-value \
                  bind (`{name} = …`) COPIES the heap value (C86), so the mutation lands in the copy, \
-                 not the source. For write-through, bind a live reference with `&` (`{name} = &…`). \
-                 If a copy was intended, read `{name}` after the mutation."
+                 not the source."
             );
             diags.add_at_coded(
                 crate::diagnostics::Level::Warning,
@@ -2589,8 +2588,7 @@ pub fn c_binding_call_unsupported(
         };
         if sig.params.len() > crate::c_signature::MAX_C_ARITY {
             return Some(format!(
-                "it takes {} C arguments and the interpreter's caller covers 0..={} — wrap it in \
-                 an ANSI-C shim with fewer parameters",
+                "it takes {} C arguments and the interpreter's caller covers 0..={}",
                 sig.params.len(),
                 crate::c_signature::MAX_C_ARITY
             ));
@@ -2696,8 +2694,8 @@ pub fn superseded_fold_diagnostics(
                 crate::diagnostics::Level::Error,
                 Some("superseded-unknown-successor"),
                 &format!(
-                    "`#superseded \"{succ}\"` on `{shown}`: no such successor `{succ}` — a \
-                     superseded symbol must name a real replacement, or a dangling steer would ship"
+                    "`#superseded \"{succ}\"` on `{shown}`: no such successor `{succ}` — the \
+                     steer would ship dangling"
                 ),
                 file,
                 pos.line,
@@ -2747,8 +2745,7 @@ pub fn superseded_fold_diagnostics(
                 Some("superseded-not-folded"),
                 &format!(
                     "`{shown}` is `#superseded` by `{succ}` but its body never calls `{succ}` — \
-                     fold it onto the successor (reimplement `{shown}` as a shim over `{succ}`) so \
-                     the steer ships with its fold"
+                     two implementations of one idea, and they will drift"
                 ),
                 file,
                 pos.line,
@@ -2849,6 +2846,10 @@ pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fal
                 format!(" `{}`", def.variables.name(r.source))
             };
             let msg = if src_name.is_empty() {
+                // No named source, so no fix attaches below — this branch KEEPS its
+                // resolution in the prose. Handing the fix to `--explain` only works where
+                // there is a fix to hand it to; stripping it here would leave the reader
+                // with nothing at all (@PLN131).
                 format!(
                     "copy of {ty}{where_} — the value is still in use after this point, so it \
                      could not be moved. Build it in place, or stop using the source \
@@ -2857,8 +2858,7 @@ pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fal
             } else {
                 format!(
                     "copy of {ty}{where_} —{src_name} is still used after this point, so it \
-                     could not be moved. If it does not need to be, the copy becomes a move; \
-                     or build the value in place"
+                     could not be moved"
                 )
             };
             // @PLN131 prerequisite arc — the copy notice gets the FIRST code, because it is

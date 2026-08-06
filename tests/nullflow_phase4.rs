@@ -17,6 +17,22 @@ fn workspace_root() -> std::path::PathBuf {
 }
 
 fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, String) {
+    run_inner(body, backend, nullflow, tag, false)
+}
+
+/// Same, with `--explain` — so a test can assert the FIX a diagnostic offers (@PLN131),
+/// which is where "what to write instead" now lives.
+fn run_explained(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, String) {
+    run_inner(body, backend, nullflow, tag, true)
+}
+
+fn run_inner(
+    body: &str,
+    backend: &str,
+    nullflow: bool,
+    tag: &str,
+    explain: bool,
+) -> (bool, String, String) {
     let script = std::env::temp_dir().join(format!("loft_nf4_{}_{tag}.loft", std::process::id()));
     std::fs::write(&script, body).expect("write script");
     let mut cmd = Command::new(loft_bin());
@@ -24,6 +40,9 @@ fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, S
         .arg(&script)
         .current_dir(workspace_root())
         .env("LOFT_TIMEOUT", "120");
+    if explain {
+        cmd.arg("--explain");
+    }
     // @PLN102 flip — the null-flow model is default-ON; the OFF case opts out with LOFT_NO_NULLFLOW.
     if nullflow {
         cmd.env_remove("LOFT_NO_NULLFLOW");
@@ -56,9 +75,15 @@ fn bare_text_cast_off_is_auto_nullable() {
 fn bare_text_cast_on_is_a_compile_error() {
     let (ok, _o, err) = run(BARE, "--interpret", true, "bare_on");
     assert!(!ok, "ON: a bare `text as float` must be a compile error");
+    assert!(err.contains("may fail"), "stderr: {err}");
+    // @PLN131 moved the second half of this assertion, and it is worth keeping rather than
+    // dropping: "the error DIRECTS to the checked form" is the contract this module's header
+    // states. The message now says only what is wrong, and `--explain` says what to write
+    // instead — so the direction is asserted where it now lives.
+    let (_ok, _o, explained) = run_explained(BARE, "--interpret", true, "bare_on_explain");
     assert!(
-        err.contains("may fail") && err.contains("float?"),
-        "stderr: {err}"
+        explained.contains("as float?"),
+        "the error must still direct to the checked cast, now via its fix line: {explained}"
     );
 }
 #[test]

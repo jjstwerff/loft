@@ -376,7 +376,7 @@ fn pln102_const_shift_negative() {
 #[test]
 fn pln102_const_cast_over_range() {
     code!("fn test() { x = 1e30 as integer; }")
-        .error("the constant 1000000000000000000000000000000 is out of range for `integer` — a bare cast asserts the value fits; use `integer?` for a checked cast (value or null), or `?? d` for a fallback at pln102_const_cast_over_range:1:33")
+        .error("the constant 1000000000000000000000000000000 is out of range for `integer` — a bare cast asserts the value fits at pln102_const_cast_over_range:1:33")
         .warning("Variable x is never read at pln102_const_cast_over_range:1:16");
 }
 
@@ -389,21 +389,21 @@ fn pln102_const_cast_over_range() {
 #[test]
 fn qq_coalesce_ref_default_mismatch() {
     code!("struct Row { v: integer } fn test() { o: Row? = null; b = o ?? -1; }")
-        .error("`??` default of type `integer` is not assignable to `Row` — a default must be usable where the value's type is expected (cast it, or use a matching type) at qq_coalesce_ref_default_mismatch:1:67")
+        .error("`??` default of type `integer` is not assignable to `Row` — a default must be usable where the value's type is expected at qq_coalesce_ref_default_mismatch:1:67")
         .warning("Variable b is never read at qq_coalesce_ref_default_mismatch:1:58");
 }
 
 #[test]
 fn qq_coalesce_numeric_default_mismatch() {
     code!("fn test() { n: integer? = null; b = n ?? 2.5; }")
-        .error("`??` default of type `float` is not assignable to `integer` — a default must be usable where the value's type is expected (cast it, or use a matching type) at qq_coalesce_numeric_default_mismatch:1:46")
+        .error("`??` default of type `float` is not assignable to `integer` — a default must be usable where the value's type is expected at qq_coalesce_numeric_default_mismatch:1:46")
         .warning("Variable b is never read at qq_coalesce_numeric_default_mismatch:1:36");
 }
 
 #[test]
 fn qq_coalesce_crosstype_default_mismatch() {
     code!("fn test() { n: integer? = null; b = n ?? \"x\"; }")
-        .error("`??` default of type `text` is not assignable to `integer` — a default must be usable where the value's type is expected (cast it, or use a matching type) at qq_coalesce_crosstype_default_mismatch:1:46")
+        .error("`??` default of type `text` is not assignable to `integer` — a default must be usable where the value's type is expected at qq_coalesce_crosstype_default_mismatch:1:46")
         .warning("Variable b is never read at qq_coalesce_crosstype_default_mismatch:1:36");
 }
 

@@ -1826,8 +1826,7 @@ impl Parser {
                 Level::Error,
                 code = "coalesce-default-type-mismatch",
                 "`??` default of type `{given}` is not assignable to `{wanted}` — a default \
-                 must be usable where the value's type is expected (cast it, or use a \
-                 matching type)",
+                 must be usable where the value's type is expected",
             );
             // @PLN131 — ONE fix, and no `edit`.  The obvious rewrite (`… as {wanted}`) is
             // not sound to spell: `"x" as integer` is a text parse that can fail, so
@@ -2432,8 +2431,7 @@ impl Parser {
                                 Level::Error,
                                 code = "cast-constant-out-of-range",
                                 "the constant {f} is out of range for `{tps}` — a bare cast \
-                                 asserts the value fits; use `{tps}?` for a checked cast \
-                                 (value or null), or `?? d` for a fallback",
+                                 asserts the value fits",
                             );
                             // @PLN131 — the checked cast leads: it is the idiom that works
                             // for every cast that can fail, not just this constant, and its
@@ -2524,9 +2522,8 @@ impl Parser {
                                 self.lexer,
                                 Level::Error,
                                 code = "text-parse-may-fail",
-                                "a text parse `as {tps}` may fail — use `{tps}?` for a checked cast \
-                                 (value or null), `?? <default>` for a fallback, or \
-                                 `(… as {tps}?)?` for the type's default",
+                                "a text parse `as {tps}` may fail, and a bare cast asserts \
+                                 it cannot",
                             );
                             // @PLN131 — three sound ways out, ranked on what each opens up.
                             // The checked cast is the general idiom (and the only one whose

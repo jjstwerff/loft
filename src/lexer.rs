@@ -1699,7 +1699,7 @@ impl Lexer {
         self.err_coded(
             Level::Error,
             "format-unescaped-brace",
-            "a literal `}` in a format string must be written `}}`",
+            "a literal `}` in a format string — `}` closes an interpolation hole, and none is open",
         );
         self.fix_last(Fix {
             kind: FixKind::Mechanical,

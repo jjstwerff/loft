@@ -69,6 +69,28 @@ the reader pays for every time; one that explains the concept inline has taken t
 documentation's job. The concept (`move`) is a **handle** — the searchable noun that opens
 the door — and `@F106` is the door.
 
+**The rule cuts both ways, and the second cut is the one that costs.** A message may not
+carry its own cure either. Most of these diagnostics used to (*"use `T?` for a checked cast,
+or `?? d` for a fallback"*), so `--explain` printed the same advice twice. Moving it out is
+what makes the three homes real — but it means a plain run now says only what is wrong, and
+a reader who has never heard of `--explain` would simply be told less than before. One line
+per RUN closes that:
+
+```
+error[cast-constant-out-of-range]: the constant 1e30 is out of range for `integer` — a bare cast asserts the value fits
+
+note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
+```
+
+Per **run**, not per diagnostic: a pointer under each one would double the output on a file
+with fifty copy notices, which is the noise the opt-in exists to avoid. It disappears once
+`--explain` is on — nobody needs to be told about a flag they just used.
+
+**A message may only hand its cure away if a fix is there to catch it.** The copy notice
+shows both sides: with a named source it has two fixes and the prose says only what is wrong,
+and with no named source it has NO fix — so that branch keeps its resolution inline. The
+alternative is a reader left with nothing at all.
+
 **Two tiers, and they gate who may affirm the condition, not whether a fix is clickable:**
 
 | | interactive (one click) | unattended (batch, CI) |
@@ -116,7 +138,8 @@ Nothing is ever applied. `--explain` shows; the author decides.
 ## Adding a code
 
 1. Emit through `Diagnostics::add_at_coded` (or `diagnostic!(… code = "…", …)`), never the
-   uncoded `add_at`.
+   uncoded `add_at`. Write the message as what is **wrong** — no "use X instead" clause; that
+   is the fix's job, and a message carrying both is the duplication above.
 2. Add the row to the table above **in the same change**. A code with nothing to grep to is
    the same dead door as a concept with no catalogue entry.
 3. Attach the resolution with `Diagnostics::fix_last`, and give the concept a `@F` entry that

@@ -119,6 +119,47 @@ fn the_condition_names_the_surviving_use_by_line() {
     );
 }
 
+/// Three homes, no repetition: the message says what is WRONG and nothing about the cure.
+///
+/// The diagnostics used to carry their own resolution inline, so `--explain` printed the same
+/// advice twice — the duplication a reader pays for on every diagnostic. What makes this
+/// checkable rather than a matter of taste is the fix's own words: if the message contains the
+/// imperative the fix line offers, the two homes have merged again.
+#[test]
+fn the_message_does_not_repeat_its_own_fix() {
+    let quiet = run(AVOIDABLE, false);
+    for cure in ["build the value in place", "drop the later use"] {
+        assert!(
+            !quiet.contains(cure),
+            "the message repeats its fix (\"{cure}\") — what is wrong belongs to the \
+             diagnostic, what to write instead belongs to the fix; output:\n{quiet}"
+        );
+    }
+}
+
+/// Moving the cure out of the message must not leave a reader with LESS than before.
+///
+/// Fix lines are opt-in, so a plain run now says only what is wrong — and someone who has
+/// never heard of `--explain` would simply be told less. One line per RUN closes that, and it
+/// has to be per run: a pointer under each diagnostic would double the output on a file with
+/// fifty copy notices, which is the noise the opt-in exists to avoid.
+#[test]
+fn a_quiet_run_says_where_the_fixes_are_exactly_once() {
+    let quiet = run(AVOIDABLE, false);
+    assert_eq!(
+        quiet.matches("re-run with `--explain`").count(),
+        1,
+        "a quiet run must point at `--explain` exactly once — not per diagnostic, and not \
+         never; output:\n{quiet}"
+    );
+    // …and it must not nag the reader who already asked.
+    let explained = run(AVOIDABLE, true);
+    assert!(
+        !explained.contains("re-run with `--explain`"),
+        "the pointer must vanish once the fixes are shown; output:\n{explained}"
+    );
+}
+
 /// The concept is a handle plus a door, and the door must open onto something real.
 ///
 /// A door onto nothing is worse than no door — so the catalogue entry the fix names has to

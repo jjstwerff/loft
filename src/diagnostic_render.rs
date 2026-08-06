@@ -372,6 +372,7 @@ pub fn render_pretty_all(
 
     let mut out = String::new();
     let mut error_count = 0u32;
+    let mut fixable = 0u32;
     let mut first = true;
     for (i, entry) in entries.iter().enumerate() {
         if entry.level == Level::Debug {
@@ -388,6 +389,29 @@ pub fn render_pretty_all(
         if entry.level >= Level::Error {
             error_count += 1;
         }
+        if !entry.fixes.is_empty() {
+            fixable += 1;
+        }
+    }
+
+    // @PLN131 — ONCE per run, never per diagnostic.
+    //
+    // The messages hand "what to write instead" to the fix lines, which are opt-in — so
+    // without this a reader who does not already know about `--explain` is simply told less
+    // than before. A per-diagnostic pointer would pay for that with a doubled line count on
+    // a file with fifty copy notices, which is the noise the opt-in exists to avoid. One
+    // line naming the count is the whole cost.
+    if fixable > 0 && !crate::keys::explain_enabled() {
+        let bold_open = if color.resolved() { ANSI_BOLD } else { "" };
+        let reset = if color.resolved() { ANSI_RESET } else { "" };
+        let plural = if fixable == 1 { "" } else { "s" };
+        out.push('\n');
+        let _ = writeln!(
+            out,
+            "{bold_open}note{reset}: {fixable} diagnostic{plural} above suggest{} what to write \
+             instead — re-run with `--explain`",
+            if fixable == 1 { "s" } else { "" }
+        );
     }
 
     if error_count > 0 {

@@ -32,6 +32,15 @@ under Q6: too few fixes spell an `edit`. Step 5 raised that count from zero to o
 `as T?` on the two cast codes is the second and third — which is what finally makes 3 and 4
 testable on something.
 
+**The three-homes rule was only half-applied until the prose moved too.** Attaching fixes
+left every message still carrying its own cure, so `--explain` printed the advice twice. The
+messages now say only what is wrong. That has a cost the rule does not mention: fix lines are
+opt-in, so a plain run says strictly less than it used to — closed by ONE line per run
+naming the count and pointing at `--explain`, which disappears once `--explain` is on. Per
+run, because a pointer under each diagnostic would double the output on a file with fifty
+copy notices. And the trim is only safe where a fix exists to catch what the prose dropped:
+the copy notice's no-named-source branch has no fix, so it keeps its resolution inline.
+
 Step 5's finding: **the tier is a property of the diagnostic's evidence, not of the fix's
 shape.** `lost-write` reads like it has a mechanical fix (`d = &s.items` is a one-token
 edit), but the analysis proves only that the write is lost, never which of the two
