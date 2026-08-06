@@ -460,7 +460,7 @@ driven through the loft fixture).
 | PostgreSQL 16 | **`extra_float_digits = 1` (the modern default) or `3`** | **0 / 2000** |
 | MariaDB 10.11 | **plain `v`, or `CAST(v AS CHAR)`** | **0 / 2000** |
 | MariaDB 10.11 | `FORMAT(v, 17)` | 1144 / 2000 |
-| duckdb | plain `v` / `CAST(v AS VARCHAR)`, **through loft's literal** | **19 / 500 — cause UNDIAGNOSED, see below** |
+| duckdb | plain `v` / `CAST(v AS VARCHAR)`, **through loft's literal** | **19 / 500 — diagnosed, see below** |
 
 **Each engine renders exactly once told to.** PostgreSQL and MariaDB are exact on
 BOTH sides — their parsers are correctly rounded, so a decimal literal makes the
@@ -469,30 +469,79 @@ round trip. Two rules fall out, and neither is a default you can lean on:
 a session can change it), and `FORMAT()` is a locale formatter, not a renderer.
 
 **duckdb's own round trip is exact** — `v = CAST(CAST(v AS VARCHAR) AS DOUBLE)`
-answered `yes` for every failing case, so the loss is in the hand-off between loft
-and duckdb, not inside the engine.
+answered `yes` for every failing case, so the loss is in the hand-off, in
+duckdb's parse of the literal loft hands it.
 
-**The CAUSE is not yet diagnosed, and an earlier version of this section named
-the wrong one.** It claimed the long literals were to blame — loft's `"{v}"` does
-render a float as a full decimal expansion with no exponent, so `5e-324` becomes a
-326-character literal — but that is **not** the mechanism: feeding duckdb literals
-of 252, 294 and 303 characters directly round-trips them EXACTLY. The failing
-inputs render to 281–294 characters and duckdb answers with a plausible nearby
-number, which rules out a simple rejection but not much else. The remaining
-suspects are the fixture's single-connection static shim slots and the statement
-path, neither of which has been isolated.
+**Diagnosed (2026-08-06) by testing duckdb alone in C**, reading the value back
+with `duckdb_value_double` so duckdb's own text rendering is out of the loop and
+exactly one stage is under test. Of the 19 failures:
 
-**So this cell is MEASURED but UNEXPLAINED**, and it must not be leaned on until
-it has a proper matrix: vary literal length, magnitude and the statement path
-independently, against the hand-computed expectation. It is recorded here rather
-than smoothed over because a wrong explanation of a real 19/500 failure is worse
-than an honest gap.
+| class | count | what happens |
+|---|---|---|
+| **the 10²⁵⁶ bug** | **15** | the parsed value is *exactly* `correct / 10^256`, silently |
+| 1–2 ULP | 4 | ordinary parser rounding, at ordinary magnitudes |
 
-**What the cell does establish**, whatever the mechanism turns out to be: a driver
-must not assume a float survives being written as a decimal literal, so it should
-BIND the value. Reading is exact everywhere once the rendering is specified;
-writing is where sqlite and duckdb lose bits, and where `sqlite3_bind_double`
-(@PLN128 E3) earns its keep.
+**The 10²⁵⁶ bug has a sharp, reproducible boundary, and it is the LITERAL FORM
+that triggers it — not the value.** With the same doubles written in exponent
+notation, duckdb is correct everywhere:
+
+| the value, as `5.754124332515439e<E>` | full decimal expansion | exponent form |
+|---|---|---|
+| E = 272 (expansion 273 chars) | ok | ok |
+| **E = 274 … 293 (expansion 275–294 chars)** | **WRONG — off by 10²⁵⁶** | ok |
+| E = 294 and above | ok | ok |
+
+A *window*, not a threshold: it recovers above E = 293. In the window the answer
+is a plausible number roughly 10²⁵⁶ too small — the failure class C80 exists to
+prevent, arriving as data.
+
+**The mechanism is a TYPE decision, and `typeof` says it outright:**
+
+| the literal | duckdb types it | result |
+|---|---|---|
+| 294-digit integer | **`HUGEINT`** | **silently truncated** — 5.75e293 does not fit in 128 bits |
+| the same digits QUOTED, cast to `DOUBLE` | string → double | correct |
+| `5.754124332515439e293` | `DOUBLE` | correct |
+| 316-digit integer | `DOUBLE` | correct |
+
+So duckdb reads a long bare integer literal as a 128-bit integer (max ≈ 1.7e38),
+overflows it **without an error**, and only gives up on `HUGEINT` for a much
+longer digit run — which is exactly why the failure has an upper edge as well as
+a lower one. Nothing about the value is out of range for `DOUBLE`; it is the
+literal's TYPE that is wrong.
+
+Two spellings avoid it entirely, and either is a fine fix for the driver:
+**exponent notation** (typed `DOUBLE`) or **quoting the digits** and casting.
+
+**loft is what walks into it.** `"{v}"` renders a float as a full decimal
+expansion with **no exponent**, so `5e-324` is 326 characters and any float above
+~1e274 is a 275+ character digit run. Every SQL literal loft builds from a float
+is therefore in expansion form by construction.
+
+**An earlier version of this section got this wrong twice, and both errors are
+worth keeping.** First it named long literals as the cause without probing —
+a hypothesis published as a finding. Then it "disproved" that with literals of
+252, 294 and 303 characters that round-tripped fine — but 252 is *below* the
+window and the other two were TINY magnitudes, where the long digit run is after
+the decimal point and truncating it costs precision rather than magnitude. A
+disproof drawn from unrepresentative cells is not a disproof. The mechanism was
+right; the reasoning on both passes was not.
+
+**What this settles for the design:** a driver must render a float in **exponent
+notation**, quote it, or bind it — never emit `"{v}"` as a bare literal. Reading
+is exact everywhere once the rendering is specified.
+
+**Two things to take upstream / next door**, neither fixed here:
+- **duckdb 1.5.5** (the current release) types a 275–294 digit bare integer
+  literal as `HUGEINT` and overflows it silently, giving a value 10²⁵⁶ too small.
+  Minimal repro: `SELECT typeof(<294 digits>)` → `HUGEINT`;
+  `SELECT CAST(<294 digits> AS DOUBLE)` → wrong; `SELECT CAST('<same digits>' AS
+  DOUBLE)` → right. The silent-`HUGEINT`-overflow FAMILY is known upstream
+  (duckdb#24081, duckdb#14580, both closed) but for aggregates, not literals;
+  no issue was found for this case.
+- **loft's float→text has no exponent form at all.** `1e300` is a 301-character
+  string in every context, not just SQL, and `5e-324` is 326. That is what walks
+  loft into the above, and it is worth deciding on its own merits.
 
 ### P4 — can a fault inside the nested fetch be contained? **YES, but it leaks.**
 

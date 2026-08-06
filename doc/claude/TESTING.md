@@ -540,15 +540,16 @@ LOFT_SQLDB_MODE=duckdb    selects the backend in uniform.loft
 | a `cc` failure mentioning `shim.c` | not a duckdb problem at all — the shim is deliberately free of duckdb symbols so it compiles without the library.  Look at the C toolchain. |
 | duckdb answers but DIFFERS from the other three | a real finding: the `SqlDb` contract is what makes the four interchangeable.  Compare the whole line, not one field. |
 
-**One measured caveat, so it is not rediscovered** (@PLN133 P3): a float written
-through this fixture round-trips exactly on PostgreSQL and MariaDB, and fails
-19 times in 500 on duckdb — while duckdb's OWN round trip
-(`v = CAST(CAST(v AS VARCHAR) AS DOUBLE)`) is exact.  **The cause is not
-diagnosed.**  It is not simply the length of the literal loft's `"{v}"` produces,
-though those are long: literals of 252, 294 and 303 characters round-trip fine
-when fed directly.  Do not assume a float survives being written as a decimal
-literal, and do not repeat the long-literal explanation — it was checked and it
-is wrong.
+**One diagnosed caveat, so it is not rediscovered** (@PLN133 P3): a float written
+through this fixture round-trips exactly on PostgreSQL and MariaDB and fails 19
+times in 500 on duckdb.  Fifteen of those are a **duckdb parser bug** —
+a decimal literal whose digit run is **275–294 characters** is read as a value
+exactly **10^256 too small**, silently, while the same value in *exponent
+notation* is correct.  The other four are ordinary 1–2 ULP parser rounding.
+
+loft walks into it because **`"{v}"` renders a float as a full decimal expansion
+with no exponent**, so any float above ~1e274 becomes a 275+ character literal.
+**Write floats to SQL in exponent notation, or bind them — never as `"{v}"`.**
 
 **A copy in a scratchpad or a build directory is not durable.**  When it
 evaporates the duckdb cell silently drops back to `SKIP` and the local
