@@ -9,6 +9,7 @@ mod descriptor;
 mod format;
 mod io;
 pub mod journal;
+pub mod lazy;
 mod search;
 pub mod snapshot;
 mod structures;

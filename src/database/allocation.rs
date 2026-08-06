@@ -3994,37 +3994,36 @@ impl Stores {
                 pos: 0,
             };
         }
-        // One key, whichever spelling it arrived in. A composite key is not
-        // fetchable yet — @PLN125's associated types are what would carry it —
-        // so it is left to answer absent rather than fetching the wrong row.
-        let fetched = match key {
-            [crate::keys::Content::Long(k)] => self.load_key(data, &source, *k),
-            [crate::keys::Content::Str(s)] => self.load_key_text(data, &source, s.str()),
-            _ => false,
-        };
+        // @PLN129 arc B step 1 — through the SOURCE seam. Which source this is
+        // is the binding's business; what a fetch can ANSWER is the same three
+        // outcomes whatever it is.
+        let src = crate::database::lazy::LazySource::of(&source);
         let slot = (data.store_nr, data.rec, data.pos);
-        if fetched {
+        match self.fetch_from_source(data, &src, key) {
             // NOT cleared. A success says nothing about what an earlier failure
             // already lost, and reporting "healthy" after a partial traversal is
             // exactly the silent-wrong-answer this channel exists to prevent.
-            return self.find(data, db, key);
-        }
-        // @PLN129 arc C — a failed fetch is TWO different facts, and answering
-        // `null` for both is the failure this channel exists to prevent: "no such
-        // person" is stable and true, "the source is unreachable" is neither. The
-        // check runs only HERE, on the miss-and-fail path, so a healthy program
-        // never pays for it.
-        if let Err(reason) = crate::paged_reader::PageSource::open(&source) {
-            // Sticky: count every failure, keep the FIRST reason as the cause.
-            let entry = self.lazy_errors.entry(slot).or_insert((0, reason));
-            entry.0 += 1;
-        }
-        // Reached it and the key was not there — a genuine absence. It leaves the
-        // record untouched: reachability NOW does not undo an earlier loss.
-        DbRef {
-            store_nr: data.store_nr,
-            rec: 0,
-            pos: 0,
+            crate::database::lazy::Fetched::Inserted => self.find(data, db, key),
+            // Reached it and the key was not there — a genuine absence. It leaves
+            // the record untouched: reachability NOW does not undo an earlier loss.
+            crate::database::lazy::Fetched::Absent => DbRef {
+                store_nr: data.store_nr,
+                rec: 0,
+                pos: 0,
+            },
+            // @PLN129 arc C — a failed fetch is TWO different facts, and answering
+            // `null` for both is the failure this channel exists to prevent: "no
+            // such person" is stable and true, "the source is unreachable" is
+            // neither. Sticky: count every failure, keep the FIRST reason.
+            crate::database::lazy::Fetched::Unreachable(reason) => {
+                let entry = self.lazy_errors.entry(slot).or_insert((0, reason));
+                entry.0 += 1;
+                DbRef {
+                    store_nr: data.store_nr,
+                    rec: 0,
+                    pos: 0,
+                }
+            }
         }
     }
 
