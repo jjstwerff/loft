@@ -301,5 +301,7 @@ fix-on-save applies.
 ## See also
 
 - [COPY_DIAGNOSTICS.md](COPY_DIAGNOSTICS.md) — the copy-vs-borrow model behind `avoidable-copy`.
-- [plans/131-suggestions/](plans/131-suggestions/README.md) — the suggestions design.
+- [plans/131-suggestions/](plans/131-suggestions/README.md) — @PLN131's closure record:
+  what was decided, and what the build learned that the design had not.
+- `@F110` — the user-facing capability in the feature catalogue.
 - `@F106` — copy and move semantics, the feature the copy fixes open onto.

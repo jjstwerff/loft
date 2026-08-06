@@ -5,345 +5,108 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 131 — Suggestions: tell the author what to write instead
 
-Tracker: [@PLN131](https://github.com/loft-lang/plans/issues/131) · starts from
-[@PLN130](https://github.com/loft-lang/plans/issues/130)'s copy notice.
+**Status — SHIPPED 2026-08-06.** Tracker: [@PLN131](https://github.com/loft-lang/plans/issues/131) ·
+started from [@PLN130](https://github.com/loft-lang/plans/issues/130)'s copy notice.
 
-**Status:** active — the prerequisite arc and ship steps **1–5** are BUILT. What remains is
-coverage (more fixes spelling a placeable edit), not machinery.
+**The reference lives in [DIAGNOSTICS.md](../../DIAGNOSTICS.md)** — the code index, the fix
+tiers, `--explain`, `loft fix`, the editor surfaces, and the rules a new code has to satisfy.
+The user-facing capability is catalogued as `@F110`. This file is the closure record: what
+was decided, and what the build learned that the design had not.
 
-Built: diagnostic codes (index at [DIAGNOSTICS.md](../../DIAGNOSTICS.md)), the surviving
-use's location through `VerdictRow` (Q6.1), the structured `Fix` shape (`kind` / `title` /
-`condition` / `edit` / `concept` / `concept_ref` — which answers Q2 as a side effect),
-`--explain` rendering tiered fix lines, and fixes on **all 10 codes**. Guards in
-`tests/suggestions.rs` (the copy notice) and `tests/e1_code_set.rs` (every code).
+## What shipped
 
-```
-advice[avoidable-copy]: copy of vector<integer> — `src` is still used after this point …
-  fix  build the value in place   [move · @F106]
-  fix  drop the later use of `src`   needs: `src` is used again at line 8 — you do not need that   [move · @F106]
+All five ship steps, plus coverage the plan did not ask for.
 
-error[format-unescaped-brace]: a literal `}` in a format string — `}` closes an interpolation hole, and none is open
-  fix  double the brace   write `}}`   [interpolation · @F35]
-```
-
-**Steps 3–4 — `loft fix`.** A fix is checked by APPLYING it to an in-memory copy and
-re-running the analysis; `--apply` writes the ones that are mechanical and verified.
-
-```
-$ loft fix --apply prog.loft
-prog.loft
-  prog.loft:2  double the brace        [applied]
-  prog.loft:7  make the cast checked   [REJECTED (the rewrite introduces an error)]
-  wrote 1 fix(es) to prog.loft
-```
-
-Three things the build settled that the design had not:
-
-1. **An edit needs a SPAN, and that was the real prerequisite** — not the count of fixes
-   spelling one. `Fix.edit` was a bare string with no idea where it went, and the
-   diagnostic's own position cannot stand in: by detection time the lexer has drifted past
-   the statement terminator, so a cast reported at column 33 ends at 31. `Edit { line, col,
-   len, text }` now carries it, captured where the parser knows it — for a cast, right after
-   the type parses, which is the only moment the lookahead has not moved on.
-2. **Verification pays for itself immediately.** `text-parse-may-fail` offers the checked
-   cast, and on `x: integer = "5" as integer` that yields `integer?` into a non-null slot —
-   plausible, and REJECTED by the measurement. A pattern-matched suggestion would have
-   shipped it. This is the plan's thesis holding on the first real case rather than in
-   principle.
-3. **The behaviour half of step 3 is refused, not deferred.** The design asked to compare
-   behaviour on both backends; that means running the author's code as a side effect of
-   asking what to write — code that may write files, take a network turn, or not terminate.
-   Verification stops where acting on the author's behalf begins: the diagnostic must
-   disappear and no new error may appear.
-
-Open now is COVERAGE, not machinery: only three fixes spell a placeable edit
-(`format-unescaped-brace`, and `as τ?` on the two cast codes). The copy notice still cannot,
-for the reason under Q6 — the IR desugars construction and append to the same node.
-
-**The three-homes rule was only half-applied until the prose moved too.** Attaching fixes
-left every message still carrying its own cure, so `--explain` printed the advice twice. The
-messages now say only what is wrong. That has a cost the rule does not mention: fix lines are
-opt-in, so a plain run says strictly less than it used to — closed by ONE line per run
-naming the count and pointing at `--explain`, which disappears once `--explain` is on. Per
-run, because a pointer under each diagnostic would double the output on a file with fifty
-copy notices. And the trim is only safe where a fix exists to catch what the prose dropped:
-the copy notice's no-named-source branch has no fix, so it keeps its resolution inline.
-
-Step 5's finding: **the tier is a property of the diagnostic's evidence, not of the fix's
-shape.** `lost-write` reads like it has a mechanical fix (`d = &s.items` is a one-token
-edit), but the analysis proves only that the write is lost, never which of the two
-resolutions the author meant — so both are `Conditional`. A tier assigned from how the
-rewrite LOOKS rather than from what the analysis KNOWS is how the unattended lane
-(step 4) would apply a guess.
-
-Step 5 hit Q6.2's prerequisite a second time and cleared it the same way. The
-`superseded-*` pair has `#superseded` itself as the concept, and the catalogue had no entry
-for it — a fix that links nowhere is not finished, so both were held back rather than
-shipped with a dead door. `@F109` now covers the steer, exactly as `@F106` did for `move`,
-and both codes carry their fixes. `FIX_BLOCKED` in `tests/e1_code_set.rs` is empty but
-stays: the alternative to a listed exception is a silent one.
-
-That is now twice that the blocker was a missing catalogue entry rather than anything about
-the compiler — worth expecting for the next diagnostic rather than rediscovering. **Check
-the concept has a door before building the fix**, since filing the entry is the long pole
-(an issue, `make features-fetch`, `make features-gen`, and a runnable example) while
-`fix_last` itself is minutes.
-
-A diagnostic tells you something is wrong. It rarely tells you what to *write instead*, and
-that second half is where most of the learning is. The model here is Eclipse's quick-fix: its
-lasting value was never the automation — you often did not apply the proposed fix — it was
-that each proposal **taught you a language capability you did not know existed**.
-
-So this is a *fix-delivery* feature: the resolution is the product, and the concept it
-names is a door to the documentation rather than a lecture inside the message.
-
-## Goal
-
-For a diagnostic loft raises, offer the concrete resolution(s) in the author's own code — the
-variable names, the line, the rewrite — each carrying the NAME of the capability it uses so a
-reader who wants more has somewhere to go. Opt-in to apply; never applied silently. The
-diagnostic keeps saying what is wrong; the suggestion says what to write instead; the docs
-explain why.
-
-## The two hard rules
-
-1. **Opt-in.** A suggestion is shown; the author chooses. Nothing rewrites source on its own.
-2. **Sound.** A suggestion that changes what the program DOES is worse than no suggestion —
-   it turns a diagnostic into a bug, and the author trusted us. This is the same rule
-   @PLN130 arrived at from the other side: a warning does not buy off breakage, and neither
-   does a fix.
-
-Rule 2 is the whole engineering problem. Rule 1 is a flag.
-
-## Soundness has two tiers, and they must be visibly different
-
-@PLN130's copy notice already shows why one tier is not enough. Its advice names two ways out,
-measured to take the diagnostic to zero:
-
-```loft
-src = [1, 2, 3];  h = Holder { v: src };  use(src);   // copies
-src = [1, 2, 3];  h = Holder { v: src };              // move — no copy
-h = Holder { v: [1, 2, 3] };                          // built in place — no copy
-```
-
-- **Mechanical** — "build the value in place" is a rewrite whose meaning is determined by
-  the code alone. Safe to apply, including unattended.
-- **Conditional** — "stop using `src` afterwards" depends on whether the author still NEEDS
-  that use. loft cannot know; only the author can.
-
-The tiers control **who may affirm the condition**, not whether a suggestion is clickable:
-
-| | interactive (one click) | unattended (`--apply`, batch, CI) |
-|---|---|---|
-| mechanical | yes | yes |
-| conditional | **yes — the click IS the affirmation**, provided the condition is stated in the line the author reads | **never** |
-
-So a conditional suggestion is still a one-click fix for a veteran: *"if `src` is not needed
-after line 12, deleting that use makes this a move"* is something they can judge instantly
-about their own code, and clicking asserts it. What is forbidden is applying it with nobody
-reading the condition.
-
-The failure mode to design against is therefore not "offering conditional suggestions" but
-**stating a condition badly** — a click that affirms something the author did not actually
-read is how a suggestions feature becomes a bug generator with good intentions.
-
-## The FIX is what we deliver — the rest is a door, not a lecture
-
-The suggestion's product is **the fix**. What is *wrong* already belongs to the
-error/warning and is stated there; a suggestion that re-explains it is duplication the reader
-pays for every time. And the deeper material — what a move is, why a borrow works — belongs
-in the documentation, not inlined into a compiler message.
-
-So the reported Eclipse effect (a proposal sending you off to forums and docs) is served by
-an **opening**, not by embedding the content:
-
-```
-copy of vector<integer> — `src` is still used after this point
-  fix: build the value in place —  h = Holder { v: [1, 2, 3] }         [move · @F41]
-  fix: if `src` is unused after line 12, delete that use               [move · @F41]
-```
-
-Three homes, no repetition:
-
-| what | where |
+| | |
 |---|---|
-| what is wrong | the diagnostic (already) |
-| what to write instead | the suggestion — the deliverable |
-| why, and what the concept means | the linked doc — followed only if wanted |
+| diagnostic codes | 49 sites — **100% of warnings and advice** (26/26, 11/11), plus 12 errors |
+| fixes | every coded diagnostic offers one; tiered `Mechanical` / `Conditional`, each with a concept and a catalogue door |
+| `--explain` | the fix lines, opt-in, with a once-per-run pointer so a quiet run still says where they are |
+| `loft fix` | checks a fix by APPLYING it to an in-memory copy and re-running the analysis |
+| `loft fix --apply` | writes the mechanical, verified ones; never a conditional one |
+| editor | quick-fixes, `relatedInformation` for every fix, `codeDescription`, and `source.fixAll` delegated to the same applier |
 
-Design rules that follow:
+Guards: `tests/suggestions.rs` (23) and `tests/e1_code_set.rs` (5, beside the pinned code
+set). `tools/diag_inventory.py` reports coverage — the numbers above are a snapshot, the
+tool is the source.
 
-1. **The fix line must stand alone.** A veteran reads it, agrees, clicks. No paragraph
-   between the problem and the resolution.
-2. **Name the concept as a handle, not an explanation.** `move` is the searchable noun; it
-   opens the door. A sentence defining a move inside the message is the lecture we are
-   avoiding — it belongs behind the link.
-3. **The link must resolve to something real.** loft has a canonical home: the feature
-   catalogue (`loft-lang/features` → `doc/features/`). A door onto nothing is worse than no
-   door (see Q5 — derive the id, never hand-write a URL).
-4. **Prefer the suggestion that teaches** when two are equally sound. Between "build the value
-   in place" and "drop the later use", the first introduces an idiom reusable everywhere;
-   the second is a local deletion. Rank on what it opens up, not on brevity.
+## Open questions — all resolved
 
-Test that is otherwise hard to state: **a suggestion that names no concept and links nowhere
-is not finished**, however correct its diff — and a suggestion that explains the concept
-inline is not finished either, because it has taken the documentation's job.
+- **Q1 — where does a suggestion live?** Beside the diagnostic that raised it: `fix_last`
+  attaches to the entry just emitted, so a fix cannot drift from its diagnostic.
+- **Q2 — what is the IDE surface?** One `Fix` shape renders to both. The CLI prints
+  `title` + `condition`; the LSP puts `title` on the lightbulb and `condition` in the
+  confirm step. Neither formats its own.
+- **Q3 — how is a suggestion tested?** Both halves. The door check reads every `@F` out of
+  every pinned code's `--explain` output and checks the catalogue, so a renumbered feature
+  breaks the build. The applied-result half is `applying_a_fix_produces_a_program_that_runs`
+  — the fixed program must compile AND print what the author wanted.
+- **Q4 — how much verification is affordable?** Measured: ~48 ms per fix, about one full
+  parse. Affordable in `loft fix` (a deliberate invocation), not in `--explain` (every
+  compile), and not on `didChange`. If it ever runs in an editor it belongs on the
+  code-action *resolve* step.
+- **Q5 — anchor on the diagnostic CODE, not a catalogue id.** A code names the diagnostic;
+  an `@F` id names the concept the fix uses. Both are carried, for different jobs.
+- **Q6 — the two prerequisites**, both cleared: the condition names the surviving use by
+  line, and `@F106` gave `move` its door.
 
-## What loft can do that an IDE quick-fix historically could not: verify its own advice
+## What the build learned that the design had not
 
-The compiler holds the analysis that raised the diagnostic. So a candidate rewrite can be
-**executed before it is offered**:
+1. **An edit needs a SPAN, and that — not the count of fixes — was the real prerequisite.**
+   `Fix.edit` was a bare string with no idea where it went, and the diagnostic's own position
+   cannot stand in: by detection time the lexer has often drifted past the statement
+   terminator. Spans are captured where the parser knows them, and measured rather than
+   reasoned — hand-counting got it wrong twice.
+2. **A fix's tier is a property of the EVIDENCE, not of how short the rewrite looks.**
+   `lost-write`'s fix is one token and still conditional, because the analysis proves the
+   write is lost and never which resolution was meant. Both checked-cast fixes were
+   `Mechanical` in name only until this was applied to them.
+3. **Ranking is on soundness first; teaching is the tiebreak between fixes that both hold.**
+   Two codes cost a tier to get this right.
+4. **A fix may only spell an edit it can PLACE.** "Drop the `#superseded` attribute" is a
+   rewrite the compiler knows exactly and still gets `edit: None`, because the diagnostic
+   sits at the definition and not at the attribute's span.
+5. **An unmasked error is not one the fix caused.** Pass 1 erroring means pass 2 never runs,
+   so fixing the blocker lets the next parse reach diagnostics the first could not report.
+   A positional rule was proposed and **measured wrong** — a brace hid a cast three lines
+   below it *and* another two lines above. The mechanism is the phase, not the line.
+6. **Giving a diagnostic a code turned it into a build break, in seven places.** Each
+   classified by rendered prefix (`"Advice:"`), and a coded diagnostic renders
+   `Advice[code]:` — matching none of them, and every one of those sites treats "not a
+   warning" as "an error". The classifier now lives beside the renderer that produces the
+   string.
+7. **Verification pays for itself on real cases, not in principle.** It refused the checked
+   cast where the target is annotated non-null, and refused `helpr` → `helper` where the
+   spelling is right and the call does not fit.
 
-1. apply the candidate to an in-memory copy of the source,
-2. re-run the analysis — does the diagnostic actually disappear?
-3. run the program's tests / compare behaviour on BOTH backends — is it unchanged?
+## Decided, not deferred
 
-Only then is it shown. A suggestion that has been tried is a different class of artefact from
-one that was pattern-matched, and it makes rule 2 checkable rather than aspirational. This is
-@PLN130's method turned into a user-facing feature: do not ship a fix you have not measured.
+- **The program is never run.** The design asked for a behaviour comparison across both
+  backends; that means executing the author's code as a side effect of asking what to write
+  — code that may write files, take a network turn, or not terminate. Verification is
+  static, and stops where acting on the author's behalf begins.
+- **The 500-odd remaining errors stay uncoded.** A code is frozen the moment it ships;
+  minting one for a message that will never carry a fix buys a permanent name for nothing.
+  Code an error when it gets a fix — which is how the did-you-mean family earned theirs.
 
-Cost is the open question — step 3 is expensive, and it may only be affordable for mechanical
-rewrites, or behind an explicit `--verify`.
+## Residue — small, and named
 
-## Scope — start with the copy notice
-
-Deliberately one diagnostic, because it is the one where the resolutions are already
-**measured** rather than imagined (@PLN130 F5): two rewrites, one mechanical, one conditional.
-That makes it a real test of the machinery — including the tier split — without first needing
-a catalogue of rewrites for every diagnostic.
-
-Ship order:
-
-1. `--explain` (or `loft explain prog.loft`) prints the FIX line(s) under each copy notice —
-   the rewrite, plus a concept handle and its catalogue link. No inline prose.
-2. Mark each candidate mechanical or conditional, and state a conditional one's condition in
-   the resolution line itself — that line is what a clicking author affirms.
-3. Self-verification (apply to an in-memory copy, re-run the analysis, compare behaviour).
-4. Apply: interactive one-click for both tiers; unattended `--apply` for mechanical only.
-5. Only then consider a second diagnostic.
-
-## Prerequisite arc — diagnostic codes (adopt what already exists)
-
-A suggestion needs a **stable identity** to attach to: the message prose changes, the
-suggestion must not. loft already decided this and built it — `Diagnostics::add_at_coded`,
-whose own doc says *"the code is the frozen identity; prose is free"* (@PLN102 arc-E E1) —
-and then never adopted it:
-
-| | count |
-|---|---|
-| coded call sites | **1** |
-| uncoded `add_at` | 15 |
-| uncoded `add` | 3 |
-
-There is also no index of codes anywhere in the docs, so nothing can be looked up.
-
-**This is the right anchor, and it beats the catalogue id in Q5.** A code names the
-*diagnostic*; a `@F` id names a *feature*. The suggestion, the doc section, the test and the
-grep all want the former. One identity, four consumers:
-
-- the message carries it, so a user can search it;
-- the suggestion attaches to it rather than to a message string that drifts;
-- `doc/claude/DIAGNOSTICS.md` is named by it — the door @PLN131 needs;
-- `grep -rn "<code>"` finds emitter, tests and docs together.
-
-loft chose **kebab slugs, not numbers** (`avoidable-copy`, not `E0142`), which is the stronger
-choice here: a slug is self-describing *and* greppable, while a number means nothing until the
-lookup table exists.
-
-Two costs to respect:
-
-1. **A code is a public surface — frozen once emitted.** The naming pass matters more than
-   the edit; a renamed code breaks every link and search that ever pointed at it.
-2. **A code with nothing to grep to is the same dead door** the prototype already rejected.
-   The index must land WITH the codes, not after.
-
-Order: code @PLN130 F5's copy notice first (it is the diagnostic this plan builds on, and it
-currently ships with **no** code), then the remaining sites, then the index.
-
-## Coverage — what is still uncovered
-
-Measured by scanning every emission form in `src/` (`diagnostic!`, `diagnostic_at!`,
-`specific!`, `add_at{,_coded}`, `add`, `self.err{,_coded}`), excluding `#[cfg(test)]`
-modules.
-
-| level | coded | total | |
-|---|---|---|---|
-| advice | 11 | 11 | **100%** |
-| warning | 26 | 26 | **100%** |
-| error | 7 | 515 | 1% |
-| fatal | 0 | 15 | 0% |
-
-**Every warning and every advice now carries a code and offers a fix.** That was the set
-worth finishing, and not because it was small: an ERROR stops the build, so its reader is
-already acting on it, while a warning fires on a program that WORKS and can be ignored
-forever. That reader is the one a suggestion changes the behaviour of.
-
-Two of the 37 have no single-file trigger and are listed in `NO_MINIMAL_TRIGGER` with the
-reason — `package-contract-drifted` needs an installed manifest, and `missing-return-path`
-turns out to be **unreachable**: it is gated on the deprecated `not null` return spelling AND
-pre-empted by a hard error ("expected integer, got void on return from block") that fires
-first. Kept and documented rather than deleted, since the warning is the friendlier of the
-two if that error is ever relaxed.
-
-**The 530 errors are explicitly NOT next.** A code is a frozen public surface, so
-batch-coding them mints 530 names that can never change — most for one-line parse complaints
-whose "fix" is already the message. Code an error when it gets a fix, not before. The
-per-file counts are a map of where they live: `control.rs` 93, `definitions.rs` 87,
-`collections.rs` 67, `mod.rs` 53, `lexer.rs` 44, `objects.rs` 34, `expressions.rs` 32,
-`fields.rs` 31, `builtins.rs` 29, `operators.rs` 25, `vectors.rs` 23.
-
-**Regenerate this with** `python3 tools/diag_inventory.py` — the numbers above are a
-snapshot, and a snapshot in a doc is a claim that rots.
-
-## Open questions
-
-- **Q1 — where does a suggestion live?** Next to the diagnostic definition, or in a separate
-  table? A suggestion that drifts from its diagnostic is misinformation, so one home.
-- **Q2 — what is the IDE surface?** The eventual target is an LSP code action. Does the
-  compiler emit structured suggestions (JSON) that both the CLI and the LSP render, rather
-  than each formatting its own?
-- **Q3 — how is a suggestion tested?** The doc-link half is RESOLVED and generalised:
-  `every_offered_door_resolves_to_a_catalogue_entry` reads every `@F` door out of every
-  pinned code's `--explain` output and checks it against the catalogue snapshot, so a
-  renumbered or deleted feature breaks the build whichever fix pointed at it — and
-  `every_pinned_code_offers_a_fix` makes a code with no fix red rather than merely
-  unfinished. Both live beside `CODES` in `tests/e1_code_set.rs`, for the reason the
-  doc-index check does: the pinned set is the one home for "which codes exist", and a second
-  scan can disagree with the first.
-
-  Still open is the half that needs step 3: a fixture with the diagnostic, the applied
-  result, and an assertion that the diagnostic count drops and behaviour is identical.
-- **Q6 — RESOLVED, both prerequisites** ([`fix-line-prototype.md`](fix-line-prototype.md)).
-  The condition now names the surviving use by LINE: the walker already tracked `cur_pos` for
-  the copy site, so recording it at the USE too (`last_use_loc`, kept in step with
-  `last_use_pos` so the two never describe different uses) carries it to `VerdictRow`. And
-  the `move` concept has its door — `@F106` covers copy and move semantics.
-
-  **What the build added to the prototype's finding.** The prototype said the append shape
-  has no mechanical fix; the stronger fact is that loft cannot presently tell the two shapes
-  apart at all. The IR desugars `S { f: src }` and `x.field += src` to the same
-  `OpAppendVector(OpGetField(…), src)` node, so `construct_copy` holds both. That is why no
-  fix currently spells an `edit`: a synthesised "build it in place" rewrite would be offered
-  for the append shape too, where it does not exist. **Distinguishing them at parse time is
-  the prerequisite for step 3**, and it is a bigger piece of work than Q6.1 was — the fix
-  line is still useful without it, because the title and the concept carry the teaching.
-
-  **What step 5 changed.** That finding is about the copy notice, not about fixes in
-  general: three of the eight now spell an `edit`. `format-unescaped-brace` spells `}}`,
-  which the code alone settles completely, and the two cast codes spell `as T?`. So steps 3
-  and 4 no longer wait on the IR shape split to have anything to run against — they can be
-  built and proved on the brace fix first, and the copy notice joins when the split lands.
-- **Q5 — RESOLVED: anchor on the diagnostic CODE, not a catalogue id.** See § Prerequisite
-  arc. A code names the diagnostic (what the suggestion belongs to); an `@F` id names a
-  feature (what the concept links to). Both exist — `@F106` now covers copy/move semantics —
-  but the suggestion attaches to the code, and the code's doc entry links onward to the
-  feature. Hand-written URLs inside diagnostics are still refused: they rot exactly like the
-  stale doc claim @PLN130 F6 had to correct.
-- **Q4 — how much verification is affordable** at `--explain` time versus `--apply` time?
+- `DiagEntry::suggestion` is fully shadowed by `fixes` at every current site; retiring the
+  field is a small, separate change.
+- `suggest_field_name` misses `nme` → `name`, so `unknown-field` fires less often than its
+  edit-distance budget suggests — a weakness in the suggestion channel, not in this
+  machinery.
+- The copy notice still cannot spell an `edit`: the IR desugars `S { f: src }` and
+  `x.field += src` to the same node, so a synthesised "build it in place" would be offered
+  for the append shape, where it does not exist. Distinguishing them at parse time is
+  @PLN130's territory.
+- Two codes have no single-file trigger, listed in `NO_MINIMAL_TRIGGER` with reasons.
+  `missing-return-path` is **unreachable** — gated on the deprecated `not null` return
+  spelling and pre-empted by a hard error.
 
 ## See also
 
-- @PLN130 — the copy notice this starts from, its measured resolutions, and the
-  breakage/misinformation bar this inherits.
-- `doc/claude/CODEGEN_METHOD.md` § the companion principle — build the instrument, and let it
-  name the gate on a fix rather than only the fix.
+- [DIAGNOSTICS.md](../../DIAGNOSTICS.md) — the reference.
+- [`fix-line-prototype.md`](fix-line-prototype.md) — the prototype that found Q6's two
+  prerequisites.
+- @PLN130 — the copy notice this started from.

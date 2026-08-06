@@ -89,6 +89,7 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F107](F107.md) | Type reflection — the declared shape of a type, as data |
 | [@F108](F108.md) | Lazy store binding — a collection fetches on a miss |
 | [@F109](F109.md) | `#superseded` — steer callers to a newer form without breaking the old one |
+| [@F110](F110.md) | Diagnostic suggestions — what to write instead, checked by running it |
 
 ## Infrastructure (`@I`)
 
