@@ -21,16 +21,26 @@ use crate::database::{Iterated, LayoutDesc, LayoutNode};
 /// same collection is a range. The kind decides what is POSSIBLE — a `hash` has
 /// no order, so it can never serve a range — and this decides which of the
 /// possible shapes is wanted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryShape {
     /// Every key field pinned: at most one row (`WHERE id = ?`).
     Equality,
     /// The leading key fields pinned and the last one bounded, in key order
-    /// (`WHERE person_id = ? AND from BETWEEN ? AND ?  ORDER BY from ASC`).
+    /// (`WHERE person_id = ? AND started BETWEEN ? AND ?  ORDER BY started ASC`).
     ///
     /// This is also the answer to the N+1 pattern: one query returning many rows
     /// instead of a lookup per row (README failure path 8).
     Range,
+    /// B2 — a predicate the collection's keys cannot express (`name LIKE 'Ada%'`,
+    /// an aggregate, a column that is not a key), supplied verbatim by the
+    /// caller.
+    ///
+    /// A shape rather than a second builder: the table and the columns are still
+    /// derived, and only the `WHERE` comes from outside. That is what makes a row
+    /// arriving this way indistinguishable from one arriving by key — which is
+    /// the requirement the whole model rests on (QUERIES.md § one record, however
+    /// it arrived).
+    Filter(String),
 }
 
 /// How one placeholder is bound — which key field, and which end of it.
@@ -294,7 +304,7 @@ fn key_fields(it: &Iterated) -> Option<(Vec<(usize, bool)>, bool)> {
 pub fn derive_select(
     desc: &LayoutDesc,
     collection: u16,
-    shape: QueryShape,
+    shape: &QueryShape,
     map: &Mapping,
 ) -> Option<Sql> {
     let LayoutNode::Iterated(it) = desc.nodes.get(&collection)? else {
@@ -311,7 +321,7 @@ pub fn derive_select(
     if keys.is_empty() || keys.iter().any(|(k, _)| *k >= fields.len()) {
         return None;
     }
-    if shape == QueryShape::Range && !ordered {
+    if *shape == QueryShape::Range && !ordered {
         return None; // a hash has no order to range over
     }
 
@@ -345,9 +355,19 @@ pub fn derive_select(
     // which is what makes `index<Position[person_id, started]>` a composite range
     // rather than N lookups.
     let last = keys.len() - 1;
+    if let QueryShape::Filter(condition) = shape {
+        // The caller's predicate, verbatim and unbound. It cannot be
+        // parameterised — loft does not parse it and so cannot know where its
+        // values are — which is why this shape is EXPLICIT in the loft source
+        // and a keyed lookup is not.
+        wheres.push(condition.clone());
+    }
     for (n, (field, _)) in keys.iter().enumerate() {
+        if let QueryShape::Filter(_) = shape {
+            break; // the predicate replaces the key, it does not extend it
+        }
         let col = map.quote(&map.column(type_name, &fields[*field].name))?;
-        if shape == QueryShape::Range && n == last {
+        if *shape == QueryShape::Range && n == last {
             wheres.push(format!(
                 "{col} BETWEEN {} AND {}",
                 map.placeholder(params.len()),
@@ -376,7 +396,7 @@ pub fn derive_select(
         .collect::<Vec<_>>()
         .join(", ");
     let mut text = format!("SELECT {cols} FROM {table} WHERE {}", wheres.join(" AND "));
-    if shape == QueryShape::Range {
+    if *shape == QueryShape::Range {
         // Only the ranged key is ordered. The keys before it are pinned to one
         // value each, so ordering by them says nothing — and the direction comes
         // from the collection's own declaration, never from a convention.

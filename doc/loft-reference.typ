@@ -6820,6 +6820,16 @@ Per COLLECTION, not per store: `persons` and `companies` are different sources, 
 Read-only, and the connection enforces it. A binding whose type cannot become a query — a collection that is not a `hash`, a field that is not a column — is REFUSED rather than served wrongly, and says so through `store\_lazy\_error`. sqlite is opened on the first fault, so a program that binds no database loads nothing.
 
 ```rust
+pub fn store_lazy_query(local: reference, condition: text) -> integer
+```
+
+\@PLN129 arc B2 — run an explicit condition against this collection's bound DATABASE source and pull every matching row into the collection. Answers how many records the collection gained.
+The escape hatch for what the collection's KEY cannot express — a predicate on another column, a pattern, a range nobody declared an index for. A keyed lookup derives its own query and needs no call; this one cannot be derived, so it is written down and visible rather than happening behind a lookup.
+found = store\_lazy\_query(persons, "name LIKE 'Ada%'"); p = persons\[42\]        // hits what the query already brought in
+The rows land IN the collection, not in a separate result: a person reached by this query and the same person reached by a later lookup are ONE record, and a row already resident is left alone rather than fetched twice. So `len` and iteration keep answering "what have I got" — after this, more.
+`condition` is SQL, sent as written (the connection is read-only). Answers 0 both when nothing matched and when the query could not run; `store\_lazy\_error` tells those apart.
+
+```rust
 pub fn store_lazy_error(local: reference) -> text
 ```
 

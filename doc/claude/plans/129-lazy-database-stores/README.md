@@ -322,7 +322,7 @@ an eager read with extra steps.
 |---|---|
 | **A** — the miss path: a bound collection fetches on a miss (`store_bind_lazy`) | **shipped** — file source, both backends |
 | **B** — schema→query from `LayoutDesc`: equality from `hash`, ranges from `sorted`, composite+ordered from `index`; nothing enumerated ahead of time | **shipped for EQUALITY on a `hash`** — the derivation covers ranges and composites too and is tested, but only the equality shape is wired to a fetch; a `sorted`/`index` binding is refused rather than served wrongly (step 8) |
-| **B2** — the explicit escape hatch: run a query, materialise rows INTO the collection (what the keys cannot express) | Open |
+| **B2** — the explicit escape hatch: run a query, materialise rows INTO the collection (what the keys cannot express) | **shipped** — `store_lazy_query(coll, condition)`, both backends. The rows POPULATE the collection and a row already resident is skipped, so a `LIKE` and a keyed lookup reach one record |
 | **B3** — the declared mapping + the `T: DbKeyed` bound + the bind-time schema/index check ([BINDING.md](BINDING.md)) | **partly** — the mapping VALUE exists and feeds the one builder (`Mapping`: table/column overrides, quoting, placeholder style); how it is WRITTEN in loft source, the `DbKeyed` bound and the bind-time check are open |
 | **B4** — collection-valued fields as owner-parameterised queries (`company.people`) | Open |
 | **C** — the C80-compatible failure channel (`store_lazy_error` / `_faults` / `_clear`), and `len`/iteration honesty | **shipped** — unreachable told from absent, faults STICKY across a later success, both backends; `len` settled as the resident count |

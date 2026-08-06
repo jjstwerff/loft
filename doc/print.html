@@ -3515,6 +3515,14 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>Read-only, and the connection enforces it. A binding whose type cannot become a query — a collection that is not a `hash`, a field that is not a column — is REFUSED rather than served wrongly, and says so through `store_lazy_error`. sqlite is opened on the first fault, so a program that binds no database loads nothing.</p>
 </div>
 <div class="item">
+<pre><code>pub fn store_lazy_query(local: reference, condition: text) -&gt; integer</code></pre>
+<p>@PLN129 arc B2 — run an explicit condition against this collection's bound DATABASE source and pull every matching row into the collection. Answers how many records the collection gained.</p>
+<p>The escape hatch for what the collection's KEY cannot express — a predicate on another column, a pattern, a range nobody declared an index for. A keyed lookup derives its own query and needs no call; this one cannot be derived, so it is written down and visible rather than happening behind a lookup.</p>
+<p>found = store_lazy_query(persons, &quot;name LIKE 'Ada%'&quot;); p = persons[42]        // hits what the query already brought in</p>
+<p>The rows land IN the collection, not in a separate result: a person reached by this query and the same person reached by a later lookup are ONE record, and a row already resident is left alone rather than fetched twice. So `len` and iteration keep answering &quot;what have I got&quot; — after this, more.</p>
+<p>`condition` is SQL, sent as written (the connection is read-only). Answers 0 both when nothing matched and when the query could not run; `store_lazy_error` tells those apart.</p>
+</div>
+<div class="item">
 <pre><code>pub fn store_lazy_error(local: reference) -&gt; text</code></pre>
 <p>@PLN129 arc C — why the last lazy fetch could not REACH this collection's source, or &quot;&quot; when it is healthy.</p>
 <p>A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:</p>

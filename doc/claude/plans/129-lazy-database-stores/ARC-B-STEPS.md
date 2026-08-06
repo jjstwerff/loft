@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 arc B — the implementation sequence
 
-**Progress: steps 0–6 and 11 are shipped; 7–10 are open.** A `sqlite:<path>` binding faults on a
+**Progress: steps 0–7, 9 and 11 are shipped; 8 and 10 are open.** A `sqlite:<path>` binding faults on a
 miss, derives its own SELECT, materialises the row into the collection and passes arc F's graph
 gate on both backends. What each step ANSWERED, where it differed from what it expected, and the
 three findings that changed the design are at the bottom (§ What the steps answered).
@@ -256,7 +256,16 @@ Written after building them, because the answers are what the next reader needs.
 | **3** — the mapping | `Mapping` holds table/column overrides plus the two dialect facts core must spell (quoting, placeholders). An empty mapping IS the derivation, so there is one builder rather than two paths. |
 | **4** — the source | `SqlConn` connects read-only, runs the string, returns rows with `NULL` / `''` / value kept distinct. |
 | **5+6** — row→record, wired | `record_new` + `hash::add` — the same pair `coll += [x]` uses, so a SQL arrival and an ordinary insert end in the same place. |
+| **7** — the schema check | On the FIRST FETCH, not at bind: a bind takes a reference and a reference carries no type. Still before any answer a program could believe. Two probe queries once per binding — the count test asserts 5 rather than 9, which is what proves it does not repeat. |
+| **9** (B2) — the explicit query | `store_lazy_query(coll, condition)`. Only the WHERE comes from the caller; the table and columns are still derived, which is what makes a row arriving this way the same as one arriving by key. A row already resident is SKIPPED, so `LIKE` and a keyed lookup reach one record. |
 | **11** — the gate | Passes over SQL on both backends with the counts arc F proved over a file. |
+
+**A new stdlib builtin needs three edits, and two of them are silent.** `store_lazy_query`'s
+`#rust` body serves `--native` only; the interpreter dispatches through `src/native.rs`'s
+`FUNCTIONS` table, and `src/fill.rs` is GENERATED (`cargo test regen_fill_rs -- --ignored`). With
+the registry entry missing, the interpreter returned a plausible number — 8322 — from an
+uninitialised slot, and nothing reported anything: the count was wrong, the collection did not
+grow, and `--native` was correct all along.
 
 ### Three findings that changed the design
 

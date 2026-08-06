@@ -172,6 +172,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_reclaim", n_store_reclaim),
     #[cfg(paged_store)]
     ("n_store_bind_lazy", n_store_bind_lazy),
+    #[cfg(feature = "native-extensions")]
+    ("n_store_lazy_query", n_store_lazy_query),
     ("n_store_lazy_error_dest", n_store_lazy_error_dest),
     ("n_store_lazy_faults", n_store_lazy_faults),
     ("n_store_lazy_clear", n_store_lazy_clear),
@@ -1313,6 +1315,21 @@ fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
         stores.bind_lazy(&v_ref, v_source.str());
     }
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_lazy_query` — @PLN129 arc B2.  Run an explicit
+/// condition against the bound DATABASE source and pull every matching row into
+/// the collection; answers how many records it gained.  Args pop in reverse:
+/// condition, local.
+///
+/// Gated on `native-extensions` to match its registry entry: the query is driven
+/// through `c_call::resolve`, which is that feature's whole surface.
+#[cfg(feature = "native-extensions")]
+fn n_store_lazy_query(stores: &mut Stores, stack: &mut DbRef) {
+    let v_condition = *stores.get::<Str>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    let added = stores.lazy_query(&coll, v_condition.str());
+    stores.put(stack, added);
 }
 
 /// Interpreter handler for `store_lazy_error` — @PLN129 arc C.  Why the last

@@ -135,7 +135,7 @@ impl Stores {
             ));
         }
         let desc = self.layout_descriptor(&[db]);
-        let Some(sql) = derive_select(&desc, db, QueryShape::Equality, &Mapping::default()) else {
+        let Some(sql) = derive_select(&desc, db, &QueryShape::Equality, &Mapping::default()) else {
             return Fetched::Unreachable(format!(
                 "no query can be derived for `{}` — its element has a field that is \
                  not a column",
@@ -178,6 +178,142 @@ impl Stores {
         }
         self.materialise(data, db, &sql, &row);
         Fetched::Inserted
+    }
+
+    /// @PLN129 arc B2 — run an explicit predicate against this collection's
+    /// bound source and materialise every row it matches INTO the collection.
+    /// Returns how many records the collection gained.
+    ///
+    /// The escape hatch for what the keys cannot express — `name LIKE 'Ada%'`, a
+    /// predicate on a non-key column. Those cannot be derived from a layout, and
+    /// a scan-then-filter would silently read the table, so this is EXPLICIT and
+    /// visible in the source (QUERIES.md § what it cannot express).
+    ///
+    /// It is not a side channel returning a detached result set: rows land in the
+    /// collection, and a row whose key is already resident is SKIPPED rather than
+    /// materialised again. That is the rule the whole model rests on — the
+    /// collection is asked first, always — and it is what makes a person reached
+    /// by `LIKE` and a person reached by navigation the same record.
+    #[cfg(feature = "native-extensions")]
+    pub fn lazy_query(&mut self, coll: &DbRef, condition: &str) -> i64 {
+        use crate::database::sql_query::{Mapping, QueryShape, derive_select};
+        use crate::database::sql_source::SqlConn;
+
+        let slot = (coll.store_nr, coll.rec, coll.pos);
+        let Some(source) = self.lazy_source(coll) else {
+            return self.lazy_refuse(slot, "this collection is not bound to a source");
+        };
+        let LazySource::Sql(driver, target) = LazySource::of(&source) else {
+            return self.lazy_refuse(slot, &format!("`{source}` is not a database source"));
+        };
+        // The collection's TYPE, from the store it was allocated into — a
+        // `reference` argument carries no type, and every derived name comes
+        // from this one.
+        let db = self.allocations[coll.store_nr as usize].known_type;
+        if db == u16::MAX || !matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
+            return self.lazy_refuse(slot, "an explicit query serves a `hash` collection");
+        }
+        let desc = self.layout_descriptor(&[db]);
+        let shape = QueryShape::Filter(condition.to_string());
+        let Some(sql) = derive_select(&desc, db, &shape, &Mapping::default()) else {
+            return self.lazy_refuse(
+                slot,
+                &format!(
+                    "no query can be derived for `{}`",
+                    self.types[db as usize].name
+                ),
+            );
+        };
+        let conn = match SqlConn::open(driver, &target) {
+            Ok(c) => c,
+            Err(why) => return self.lazy_refuse(slot, &why),
+        };
+        // An explicit predicate is NOT index-checked: the caller asked for
+        // exactly this, a `LIKE` has no index to use, and refusing it would
+        // remove the escape hatch this exists to be. The columns still have to
+        // be there, and a query that does not run reports through arc C.
+        let rows = match conn.query(&sql.text, &[]) {
+            Ok(r) => r,
+            Err(why) => return self.lazy_refuse(slot, &why),
+        };
+        let mut added = 0i64;
+        for row in rows {
+            if row.len() != sql.columns.len() {
+                return self.lazy_refuse(slot, "the source answered a different column count");
+            }
+            let Some(key) = self.row_key(db, &desc, &sql, &row) else {
+                return self.lazy_refuse(slot, "a row arrived without the collection's key");
+            };
+            // Ask the collection FIRST. Without this a person already fetched by
+            // key would be materialised a second time, and `is_same` would answer
+            // false for one obvious person (BINDING.md § the real cost).
+            if self.find(coll, db, &key).rec != 0 {
+                continue;
+            }
+            self.materialise(coll, db, &sql, &row);
+            added += 1;
+        }
+        added
+    }
+
+    /// Record why an explicit query could not run, and answer "nothing arrived".
+    ///
+    /// Through arc C's channel rather than a return code: a count cannot carry a
+    /// reason, and `0` is also what a predicate matching nothing answers.
+    #[cfg(feature = "native-extensions")]
+    fn lazy_refuse(&mut self, slot: (u16, u32, u32), why: &str) -> i64 {
+        let entry = self.lazy_errors.entry(slot).or_insert((0, why.to_string()));
+        entry.0 += 1;
+        0
+    }
+
+    /// The collection key carried by one fetched row.
+    ///
+    /// Read through the FIELD's content type rather than the cell's, because
+    /// `find` compares against `field_content`, which reads the stored field the
+    /// same way — a key built from what SQLite happened to return would not
+    /// compare equal to the identical record already resident.
+    #[cfg(feature = "native-extensions")]
+    fn row_key(
+        &self,
+        db: u16,
+        desc: &crate::database::LayoutDesc,
+        sql: &crate::database::sql_query::Sql,
+        row: &crate::database::sql_source::Row,
+    ) -> Option<Vec<Content>> {
+        use crate::database::LayoutNode;
+        use crate::database::sql_source::Cell;
+        let Parts::Hash(elem, key_fields) = &self.types[db as usize].parts else {
+            return None;
+        };
+        let LayoutNode::Record(fields) = desc.nodes.get(elem)? else {
+            return None;
+        };
+        let mut key = Vec::with_capacity(key_fields.len());
+        for k in key_fields {
+            let at = sql.columns.iter().position(|c| c.field == *k as usize)?;
+            let cell = row.get(at)?.as_ref();
+            key.push(match fields.get(*k as usize)?.content {
+                5 => Content::Str(crate::keys::Str::new(match cell {
+                    Some(Cell::Text(s)) => s.as_str(),
+                    _ => "",
+                })),
+                3 | 2 => Content::Float(match cell {
+                    Some(Cell::Real(v)) => *v,
+                    #[allow(clippy::cast_precision_loss)]
+                    Some(Cell::Int(v)) => *v as f64,
+                    _ => 0.0,
+                }),
+                _ => Content::Long(match cell {
+                    Some(Cell::Int(v)) => *v,
+                    #[allow(clippy::cast_possible_truncation)]
+                    Some(Cell::Real(v)) => *v as i64,
+                    Some(Cell::Text(s)) => s.parse().unwrap_or(0),
+                    None => 0,
+                }),
+            });
+        }
+        Some(key)
     }
 
     /// @PLN129 arc B step 7 — why this schema cannot serve this collection, or

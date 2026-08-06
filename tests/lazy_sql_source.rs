@@ -553,3 +553,73 @@ fn a_schema_that_cannot_serve_the_lookup_is_refused_and_says_why() {
         "the refusal must quote the plan that proves it: {out}"
     );
 }
+
+// ── Step 9 (B2): the explicit query, and one record however it arrived ────────
+
+/// @PLN129 arc B2 — an explicit predicate populates the COLLECTION, so a person
+/// found by `LIKE` and the same person found by key are one record.
+#[test]
+fn an_explicit_query_populates_the_collection_both_backends() {
+    declare_sqlite();
+    if loft::c_call::resolve("sqlite3_open_v2").is_none() {
+        eprintln!("SKIP: libsqlite3.so.0 not installed");
+        return;
+    }
+    let path = scratch("b2").with_file_name("liked.db");
+    seed(
+        &path,
+        "CREATE TABLE sqliked(id INTEGER PRIMARY KEY, name TEXT); \
+         INSERT INTO sqliked VALUES (1,'ada'),(2,'adam'),(42,'grace'),(7,'alan')",
+    );
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/scripts/129-lazy-sql-query.loft");
+
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_SQL_TARGET", format!("sqlite:{}", path.display()))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("failed to invoke loft");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            eprintln!(
+                "{backend} stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        assert!(out.status.success(), "{backend}: {stdout}");
+
+        assert!(
+            stdout.contains("key=grace resident=1"),
+            "{backend}: {stdout}"
+        );
+        // TWO added, not three: grace was already resident and must be left
+        // alone. A count of 3 would mean a second record for one person.
+        assert!(
+            stdout.contains("added=2 resident=3"),
+            "{backend}: a row already resident is skipped, not fetched twice: {stdout}"
+        );
+        assert!(
+            stdout.contains("identity=true"),
+            "{backend}: the query POPULATES the collection — a detached result set \
+             would pass every value assertion and fail this one: {stdout}"
+        );
+        assert!(
+            stdout.contains("brought_in=ada,adam"),
+            "{backend}: and the rows it brought in are readable by key: {stdout}"
+        );
+        // A predicate matching nothing is an ordinary answer.
+        assert!(
+            stdout.contains("none=0 still=3 err2=[]"),
+            "{backend}: no match is not a failure: {stdout}"
+        );
+        // A predicate that cannot RUN is not the same answer.
+        assert!(
+            stdout.contains("bad=0 err3_empty=false"),
+            "{backend}: a broken query must be reported, not read as empty: {stdout}"
+        );
+        assert!(stdout.contains("sound=true"), "{backend}: {stdout}");
+    }
+}
