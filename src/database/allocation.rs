@@ -4213,10 +4213,11 @@ impl Stores {
         // keys touch O(N) pages, not O(file). Off unless asked.
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
             eprintln!(
-                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} distinct={} file={} reads={:?}",
+                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} depth={} distinct={} file={} reads={:?}",
                 keys_vals.len(),
                 reader.provider().bytes_fetched(),
                 reader.provider().requests(),
+                reader.provider().round_trips(),
                 reader.provider().distinct_bytes(),
                 reader.size(),
                 reader.read_histogram()
@@ -4512,8 +4513,15 @@ impl Stores {
         if esize == 0 {
             return new_inner;
         }
-        // loft#782 — warm every element's sub-records in ONE batch before relocating, so
-        // the walk stops paying a round trip per element.
+        // loft#782 — warm every element's sub-record in ONE batch before relocating, so the
+        // walk stops paying a round trip per element. The addresses come from the local
+        // copy (loft#783), so collecting them costs the reader nothing.
+        //
+        // Headers only, deliberately. Warming the BODIES too needs each sub-record's size
+        // word, and reading 1 000 of those put back the per-element four-byte read that
+        // loft#783 had just removed (109 → 1 222 on the guard) while measuring no further
+        // depth win — the bodies were already on the warmed pages. A batch that costs a
+        // read per element to save a page nobody needed is the trade in reverse.
         let mut heads = Vec::new();
         for i in 0..length {
             self.collect_sub_records(new_inner, 8 + i * esize, elem_tp, store_nr, &mut heads);

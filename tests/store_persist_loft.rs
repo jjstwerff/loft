@@ -3120,19 +3120,54 @@ fn store_load_keys_round_trip_depth_is_measurable() {
         Some(std::sync::Arc::clone(&hits)),
     );
 
+    // Run the binary directly rather than through `run_mode_backend`: the loader stats —
+    // and `depth=`, the number this test exists for — go to stderr, which that helper
+    // discards.
     let started = std::time::Instant::now();
-    let (out, code) = run_mode_backend("--interpret", &load_script(), Path::new(&url), "loadkey");
+    let raw = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(load_script())
+        .env("LOFT_PERSIST_TEST_PATH", &url)
+        .env("LOFT_PERSIST_TEST_MODE", "loadkey")
+        .env("LOFT_LOADER_STATS", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
     let elapsed = started.elapsed();
+    let out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&raw.stdout),
+        String::from_utf8_lossy(&raw.stderr)
+    );
+    let code = raw.status.code().unwrap_or(-1);
     assert_eq!(code, 0, "http loadkey exit: {out:?}");
     assert!(
         out.contains("loadkey verify=true"),
         "the working set fetched over http must be sound: {out:?}"
     );
 
+    let depth: u64 = out
+        .lines()
+        .find_map(|l| l.split("depth=").nth(1))
+        .and_then(|t| t.split_whitespace().next())
+        .and_then(|t| t.parse().ok())
+        .expect("loader stats must report round-trip depth");
     let requests = served.load(std::sync::atomic::Ordering::Relaxed);
     // Report the measurement: this test's job is to make depth VISIBLE, so the numbers
     // belong in the output whether it passes or fails.
-    eprintln!("loft#782 depth harness: requests={requests} latency={delay_ms}ms wall={elapsed:?}");
+    eprintln!(
+        "loft#782 depth harness: depth={depth} requests={requests} latency={delay_ms}ms \
+         wall={elapsed:?}"
+    );
+    // DEPTH is the metric, not the range count. A batch of 27 issued together and 27 issued
+    // one after another look identical to `requests`, and are the difference between 15 ms
+    // and 400 ms — which is why the loader reports both and this asserts on the former.
+    assert!(
+        depth as usize <= requests,
+        "round-trip depth {depth} exceeds the {requests} ranges served — impossible unless \
+         the counter is wrong"
+    );
     // The harness must actually be measuring something: no requests means the store came
     // from somewhere else and every number below is meaningless.
     assert!(

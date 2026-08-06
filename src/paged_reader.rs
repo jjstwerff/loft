@@ -63,6 +63,10 @@ pub struct LocalFileProvider {
     size: u64,
     /// Every `(off, len)` this provider was asked to fetch, in order.
     pub fetches: Vec<(u64, usize)>,
+    /// loft#782 — SEQUENTIAL provider invocations: the round-trip DEPTH. One `fetch` is
+    /// one; one `fetch_many` is one however many ranges it carries. `fetches.len()` counts
+    /// ranges and so cannot tell a batch from a queue — which is the entire question here.
+    pub depth: usize,
 }
 
 impl LocalFileProvider {
@@ -78,6 +82,7 @@ impl LocalFileProvider {
             file,
             size,
             fetches: Vec::new(),
+            depth: 0,
         })
     }
 
@@ -96,6 +101,7 @@ impl PageProvider for LocalFileProvider {
     fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
         use std::io::{Read, Seek, SeekFrom};
         self.fetches.push((off, len));
+        self.depth += 1;
         let mut buf = vec![0u8; len];
         if off < self.size {
             // Read what actually exists; anything past EOF stays zero.
@@ -123,6 +129,8 @@ pub struct HttpRangeProvider {
     size: u64,
     /// Every `(off, len)` fetched — for the "bytes fetched ≪ file" assertion.
     pub fetches: Vec<(u64, usize)>,
+    /// loft#782 — SEQUENTIAL round trips. See [`LocalFileProvider::depth`].
+    pub depth: usize,
 }
 
 impl HttpRangeProvider {
@@ -137,6 +145,7 @@ impl HttpRangeProvider {
             url: url.to_string(),
             size,
             fetches: Vec::new(),
+            depth: 0,
         })
     }
 
@@ -154,6 +163,7 @@ impl PageProvider for HttpRangeProvider {
 
     fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
         self.fetches.push((off, len));
+        self.depth += 1;
         let mut buf = vec![0u8; len];
         if off >= self.size {
             return buf; // wholly past EOF — zero
@@ -187,6 +197,7 @@ impl PageProvider for HttpRangeProvider {
         for &r in ranges {
             self.fetches.push(r);
         }
+        self.depth += 1; // ONE round trip, however many ranges ride in it
         let (url, size) = (self.url.clone(), self.size);
         let handles: Vec<_> = ranges
             .iter()
@@ -262,6 +273,19 @@ impl PageSource {
         }
     }
 
+    /// loft#782 — sequential round trips, which is the cost over a link.
+    ///
+    /// Distinct from [`requests`](PageSource::requests): that counts RANGES, so a batch of
+    /// 27 issued together and 27 issued one after another look identical to it. They are
+    /// the difference between 15 ms and 400 ms.
+    #[must_use]
+    pub fn round_trips(&self) -> usize {
+        match self {
+            PageSource::Local(p) => p.depth,
+            PageSource::Http(p) => p.depth,
+        }
+    }
+
     #[must_use]
     pub fn distinct_bytes(&self) -> usize {
         let log = match self {
@@ -287,6 +311,20 @@ impl PageProvider for PageSource {
         match self {
             PageSource::Local(p) => p.fetch(off, len),
             PageSource::Http(p) => p.fetch(off, len),
+        }
+    }
+
+    /// Forward the BATCH to the concrete provider.
+    ///
+    /// Without this the trait default applies here — a loop over `PageSource::fetch`, which
+    /// dispatches one range at a time and throws away the whole point. An enum that
+    /// implements a trait by delegation has to delegate every method that has a default,
+    /// because the default is silently correct and silently slow: the batch still returns
+    /// the right bytes, so nothing fails, and the win simply does not happen (loft#782).
+    fn fetch_many(&mut self, ranges: &[(u64, usize)]) -> Vec<Vec<u8>> {
+        match self {
+            PageSource::Local(p) => p.fetch_many(ranges),
+            PageSource::Http(p) => p.fetch_many(ranges),
         }
     }
 }
