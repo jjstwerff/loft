@@ -3716,9 +3716,23 @@ impl Parser {
                     self.lexer,
                     name_pos,
                     Level::Error,
+                    code = "unknown-function",
                     "Unknown function {name} — did you mean '{s}'?"
                 );
                 self.lexer.suggest_last(&s);
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: format!("rename to `{s}`"),
+                    condition: None,
+                    edit: Some(crate::diagnostics::Edit {
+                        line: name_pos.line,
+                        col: name_pos.pos,
+                        len: u32::try_from(name.len()).unwrap_or(0),
+                        text: s.clone(),
+                    }),
+                    concept: "functions",
+                    concept_ref: "@F16",
+                });
             } else {
                 diagnostic_at!(
                     self.lexer,
@@ -3923,9 +3937,23 @@ impl Parser {
                             self.lexer,
                             name_pos,
                             Level::Error,
+                            code = "unknown-function",
                             "Unknown function {name} — did you mean '{s}'?"
                         );
                         self.lexer.suggest_last(&s);
+                        self.lexer.fix_last(crate::diagnostics::Fix {
+                            kind: crate::diagnostics::FixKind::Mechanical,
+                            title: format!("rename to `{s}`"),
+                            condition: None,
+                            edit: Some(crate::diagnostics::Edit {
+                                line: name_pos.line,
+                                col: name_pos.pos,
+                                len: u32::try_from(name.len()).unwrap_or(0),
+                                text: s.clone(),
+                            }),
+                            concept: "functions",
+                            concept_ref: "@F16",
+                        });
                     } else {
                         diagnostic_at!(
                             self.lexer,

@@ -586,3 +586,79 @@ fn a_genuinely_broken_rewrite_is_still_refused() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// ── did-you-mean: the typo family becomes an applicable fix ──────────────────
+
+/// @PLN131 — a "did you mean" is applied, and the program then RUNS.
+///
+/// These four sites already computed a replacement and knew where the name sat, but only an
+/// LSP quickfix could reach it: no `--explain` line, no `loft fix`, and — the part that
+/// matters — never verified. Asserting the program runs afterwards is the point; a rename
+/// that merely changes the text is not a fix.
+#[test]
+fn a_did_you_mean_is_applied_and_the_program_runs() {
+    for (what, src, expect) in [
+        (
+            "variable",
+            "fn main() { value = 1; println(\"{valu}\"); }\n",
+            "1",
+        ),
+        (
+            "function",
+            "fn helper(v: integer) -> integer { v }\nfn main() { println(\"{helpr(7)}\"); }\n",
+            "7",
+        ),
+        (
+            "field",
+            "fn main() { s = \"hi\"; println(\"{s.starts_wit(\\\"h\\\")}\"); }\n",
+            "true",
+        ),
+    ] {
+        let path = probe(src);
+        let out = fix_cmd(&path, true);
+        assert!(
+            out.contains("[applied]"),
+            "[{what}] the rename must be written; output:\n{out}"
+        );
+        let run = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .args(["--interpret"])
+            .arg(&path)
+            .env("LOFT_TIMEOUT", "120")
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the fixed program");
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        assert!(
+            run.status.success() && stdout.contains(expect),
+            "[{what}] the renamed program must compile and print {expect}: {stdout}{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// The spelling is a GUESS; the re-parse is what makes it a measurement.
+///
+/// `helpr` → `helper` is the right spelling and the wrong call — the suggestion is chosen by
+/// edit distance, which knows nothing about arity. Verification catches it, which is the
+/// whole reason these can ship as `Mechanical` and be written unattended: a pattern match
+/// alone would have edited the file and left it broken.
+#[test]
+fn a_did_you_mean_that_does_not_fit_is_refused() {
+    let path = probe(
+        "fn helper(a: integer, b: integer) -> integer { a + b }\n\
+         fn main() { println(\"{helpr(1)}\"); }\n",
+    );
+    let before = std::fs::read_to_string(&path).expect("probe");
+    let out = fix_cmd(&path, true);
+    assert!(
+        out.contains("REJECTED"),
+        "a rename whose call no longer fits must be refused; output:\n{out}"
+    );
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&path).expect("probe"),
+        "and must not reach the file; output:\n{out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

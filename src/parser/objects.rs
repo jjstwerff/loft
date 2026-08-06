@@ -1602,11 +1602,27 @@ impl Parser {
                         self.lexer,
                         pos,
                         Level::Error,
+                        code = "unknown-variable",
                         "Unknown variable '{}' — did you mean '{}'?",
                         name,
                         s
                     );
                     self.lexer.suggest_last(s);
+                    // `pos` is the name's START (unlike the field site, which reports at
+                    // the cursor), so the span is the name exactly.
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: format!("rename to `{s}`"),
+                        condition: None,
+                        edit: Some(crate::diagnostics::Edit {
+                            line: pos.line,
+                            col: pos.pos,
+                            len: u32::try_from(name.len()).unwrap_or(0),
+                            text: s.to_string(),
+                        }),
+                        concept: "declarations",
+                        concept_ref: "@F16",
+                    });
                 } else {
                     diagnostic_at!(self.lexer, pos, Level::Error, "Unknown variable '{}'", name);
                 }

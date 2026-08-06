@@ -992,6 +992,10 @@ fn code_action_offers_the_did_you_mean_fix() {
         Some(Parsed::Array(a)) => a,
         other => panic!("codeAction result is an array, got {other:?}"),
     };
+    // ONE quick-fix, not two. Every did-you-mean site now emits a structured `Fix` as well
+    // as the legacy `data.suggestion`, and offering both listed the same rename twice under
+    // different titles — so the code-action path prefers `fixes` and skips the legacy one
+    // where a fix exists (@PLN131).
     assert_eq!(actions.len(), 1, "one quick-fix: {actions:?}");
     let a = &actions[0];
     assert_eq!(field_str(a, "kind").as_deref(), Some("quickfix"));

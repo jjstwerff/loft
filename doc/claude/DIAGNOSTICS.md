@@ -39,6 +39,9 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. | C C · `@F37` `@F2` |
 | `c-binding-not-interpretable` | error | A function bound to a C symbol with `#c` was called on the interpreter, which cannot make that call. | Run it on `--native`, or give the binding an interpretable path. | M M · `@F92` `@F53` |
 | `superseded-call` | advice | A call to a `#superseded` symbol, from source you own. The old form keeps working — this is a signpost, never a removal. | Call the successor instead. | M · `@F109` |
+| `unknown-function` | error | A call to a name that does not resolve, where a similarly-spelled function exists. | Rename to the suggested function. | M · `@F16` |
+| `unknown-field` | error | A field or method that does not exist on the type, where a similarly-spelled one does. | Rename to the suggested field. | M · `@F12` |
+| `unknown-variable` | error | A name that is not in scope, where a similarly-spelled binding exists. | Rename to the suggested binding. | M · `@F16` |
 | `redundant-coalesce` | warning | A `??` whose left side is a non-null field — the default can never be used. | Delete the `?? <default>`. | M · `@F2` |
 | `redundant-default-fallback` | warning | A `?` on a non-null field — the type default can never be used. | Delete the `?`. | M · `@F96` |
 | `redundant-null-check` | warning | A comparison against `null` on a non-null field: the answer is fixed. | Delete the check, or compare the value you meant. | M C · `@F1` |
@@ -267,6 +270,20 @@ The gate still bites where a rewrite genuinely breaks something, because that fa
 in the same phase the original reached: `x: integer = "5" as integer?` is still refused.
 `a_genuinely_broken_rewrite_is_still_refused` is what keeps "ignore unmasked errors" from
 becoming "ignore all errors".
+
+**Errors get codes when they get FIXES.** The did-you-mean family is the model: each site
+already computed a replacement and knew where the name sat, so the fix was a rename with a
+real span — and coding them was justified by that, not by a coverage number. 500-odd parse
+and type errors remain uncoded on purpose; a code is frozen the moment it ships, and minting
+one for a message that will never carry a fix buys a permanent name for nothing.
+
+**The spelling is a guess; the re-parse is what makes it a measurement.** A suggestion is
+chosen by edit distance, which knows nothing about arity or type — `helpr` → `helper` can be
+the right spelling and the wrong call. Verification catches exactly that, and it is the
+reason these can be `Mechanical` and written unattended: a pattern match alone would have
+edited the file and left it broken. It is also why the family reached the LSP years before
+it could be applied — a quickfix a human clicks is a different risk from one a
+fix-on-save applies.
 
 ## Adding a code
 

@@ -13,12 +13,12 @@ warning[dead-assignment]: Dead assignment — 'c' is overwritten before being re
 17 |   c = 2;
    |         ^
 
-error: Unknown function printt — did you mean 'print'?
+error[unknown-function]: Unknown function printt — did you mean 'print'?
   --> <cases>/42_diag_line_after_dead_assignment.loft:19:3
    |
 19 |   printt("x");
    |   ^
 
-note: 2 diagnostics above suggest what to write instead — re-run with `--explain`
+note: 3 diagnostics above suggest what to write instead — re-run with `--explain`
 
 error: aborting due to 1 previous error

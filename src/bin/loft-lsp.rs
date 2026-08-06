@@ -660,9 +660,20 @@ fn code_actions(
     if let Some(Parsed::Array(diags)) =
         obj_get(params, "context").and_then(|c| obj_get(c, "diagnostics"))
     {
+        // The legacy `data.suggestion` quickfix, ONLY where the diagnostic carries no
+        // structured fix. Every `suggest_last` site now also emits a `Fix` (@PLN131's
+        // did-you-mean arc), and offering both put the same rename in the list twice under
+        // two different titles. `fixes` wins because it is the one that carries a tier, a
+        // concept and a door — `suggestion` is a replacement token and nothing else.
         actions.extend(
             diags
                 .iter()
+                .filter(|d| {
+                    !matches!(
+                        obj_get(d, "data").and_then(|x| obj_get(x, "fixes")),
+                        Some(Parsed::Array(f)) if !f.is_empty()
+                    )
+                })
                 .filter_map(|d| quickfix_from_diagnostic(d, &uri)),
         );
         // @PLN131 step 4 — one quick-fix per spelled fix, both tiers.

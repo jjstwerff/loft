@@ -1,10 +1,12 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: Unknown field Player.naem — did you mean 'name'?
+error[unknown-field]: Unknown field Player.naem — did you mean 'name'?
   --> <cases>/07_type_field_unknown.loft:4:18
   |
 4 |   print("{p.naem}");
   |                  ^
+
+note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
 
 error: aborting due to 1 previous error

@@ -212,6 +212,23 @@ const CODES: &[(&str, &str)] = &[
         "file-write-width",
         "fn main() { f = file(\"loft_trig.bin\"); f#format = LittleEndian; f += 1; }",
     ),
+    // @PLN131 — the did-you-mean family. Each already computed its replacement and knew
+    // where the name sat; they were reachable only as an LSP quickfix until the fix shape
+    // gave them `--explain`, `loft fix`, and — the part that matters — VERIFICATION, which
+    // is what turns a Levenshtein guess into a measurement.
+    (
+        "unknown-function",
+        "fn helper(v: integer) -> integer { v }\n\
+         fn main() { print(\"{helpr(1)}\"); }",
+    ),
+    (
+        "unknown-field",
+        "fn main() { s = \"hi\"; print(\"{s.starts_wit(\\\"h\\\")}\"); }",
+    ),
+    (
+        "unknown-variable",
+        "fn main() { value = 1; print(\"{valu}\"); }",
+    ),
     // Listed in `NO_MINIMAL_TRIGGER` — pinned so the set stays complete; the program is
     // the closest shape and is not run.
     (

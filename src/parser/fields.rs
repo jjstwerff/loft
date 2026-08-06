@@ -413,10 +413,31 @@ impl Parser {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
+                            code = "unknown-field",
                             "Unknown field {}.{field} — did you mean '{s}'?",
                             self.data.def(dnr).name()
                         );
                         self.lexer.suggest_last(&s);
+                        // This site reports at the lexer CURSOR, which sits one past the
+                        // consumed name — so the name starts `len + 1` back. Measured on
+                        // two shapes rather than reasoned: `p.nme}` and `s.starts_wit(`
+                        // both land on the same offset, and verification would refuse the
+                        // rewrite outright if it did not.
+                        let (line, col) = self.lexer.at();
+                        let width = u32::try_from(field.len()).unwrap_or(0);
+                        self.lexer.fix_last(crate::diagnostics::Fix {
+                            kind: crate::diagnostics::FixKind::Mechanical,
+                            title: format!("rename to `{s}`"),
+                            condition: None,
+                            edit: Some(crate::diagnostics::Edit {
+                                line,
+                                col: col.saturating_sub(width + 1).max(1),
+                                len: width,
+                                text: s.clone(),
+                            }),
+                            concept: "struct fields",
+                            concept_ref: "@F12",
+                        });
                     } else {
                         diagnostic!(
                             self.lexer,
