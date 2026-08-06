@@ -28,72 +28,106 @@ use std::thread;
 /// the remote store the `store_load_key` HTTP path (Phase 5) fetches from.
 /// Returns the URL; the server thread is detached (ends with the test binary).
 fn serve_ranges(store: Vec<u8>, sidecar: Option<Vec<u8>>) -> String {
+    serve_ranges_tuned(store, sidecar, 0, None).0
+}
+
+/// loft#782 — the same server, with the two knobs a ROUND-TRIP claim needs.
+///
+/// `delay_ms` is injected per request, and every connection is handled on its own thread,
+/// so a client that issues its ranges concurrently finishes in ~one delay while a serial
+/// one pays `requests × delay`. Both matter: with the single-threaded server the socket
+/// would serialise a concurrent client anyway, and the harness would report "no win" for a
+/// fix that worked.
+///
+/// `counter` counts requests served, which is the DETERMINISTIC half — wall-clock is
+/// suggestive and flaky, but round-trip depth is exact and is what the defect is about.
+fn serve_ranges_tuned(
+    store: Vec<u8>,
+    sidecar: Option<Vec<u8>>,
+    delay_ms: u64,
+    counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
+    let hits =
+        counter.unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+    let out = std::sync::Arc::clone(&hits);
+    let store = std::sync::Arc::new(store);
+    let sidecar = std::sync::Arc::new(sidecar);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { break };
-            let mut buf = [0u8; 2048];
-            let n = s.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]);
-            // Path-aware (real servers 404 a missing sidecar): serve the layout
-            // sidecar whole at `/store.dschema` (or 404 when absent), so the
-            // @PLN97 3b.5 gate fetches a REAL sidecar, not the store bytes.
-            let req_path = req
-                .lines()
-                .next()
-                .and_then(|l| l.split_whitespace().nth(1))
-                .unwrap_or("/");
-            if req_path.ends_with(".dschema") {
-                match &sidecar {
-                    Some(sc) => {
-                        let hdr = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            sc.len()
-                        );
-                        let _ = s.write_all(hdr.as_bytes());
-                        let _ = s.write_all(sc);
-                    }
-                    None => {
-                        let _ = s.write_all(
+            let store = std::sync::Arc::clone(&store);
+            let sidecar = std::sync::Arc::clone(&sidecar);
+            let hits = std::sync::Arc::clone(&hits);
+            thread::spawn(move || {
+                let (store, sidecar) = (&*store, &*sidecar);
+                hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if delay_ms > 0 {
+                    thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                // Path-aware (real servers 404 a missing sidecar): serve the layout
+                // sidecar whole at `/store.dschema` (or 404 when absent), so the
+                // @PLN97 3b.5 gate fetches a REAL sidecar, not the store bytes.
+                let req_path = req
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                if req_path.ends_with(".dschema") {
+                    match &sidecar {
+                        Some(sc) => {
+                            let hdr = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                sc.len()
+                            );
+                            let _ = s.write_all(hdr.as_bytes());
+                            let _ = s.write_all(sc);
+                        }
+                        None => {
+                            let _ = s.write_all(
                             b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                         );
+                        }
                     }
+                    return; // the sidecar path is answered; this connection is done
                 }
-                continue;
-            }
-            let total = store.len();
-            let range = req.lines().find_map(|l| {
-                l.trim()
-                    .strip_prefix("Range: bytes=")
-                    .or_else(|| l.trim().strip_prefix("range: bytes="))
-            });
-            if let Some(r) = range {
-                let (a, b) = r.split_once('-').unwrap_or(("0", ""));
-                let a: usize = a.trim().parse().unwrap_or(0);
-                let b: usize = b
-                    .trim()
-                    .parse()
-                    .unwrap_or(total.saturating_sub(1))
-                    .min(total.saturating_sub(1));
-                let body = if a <= b { &store[a..=b] } else { &store[0..0] };
-                let hdr = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{total}\r\n\
+                let total = store.len();
+                let range = req.lines().find_map(|l| {
+                    l.trim()
+                        .strip_prefix("Range: bytes=")
+                        .or_else(|| l.trim().strip_prefix("range: bytes="))
+                });
+                if let Some(r) = range {
+                    let (a, b) = r.split_once('-').unwrap_or(("0", ""));
+                    let a: usize = a.trim().parse().unwrap_or(0);
+                    let b: usize = b
+                        .trim()
+                        .parse()
+                        .unwrap_or(total.saturating_sub(1))
+                        .min(total.saturating_sub(1));
+                    let body = if a <= b { &store[a..=b] } else { &store[0..0] };
+                    let hdr = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{total}\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = s.write_all(hdr.as_bytes());
-                let _ = s.write_all(body);
-            } else {
-                let hdr = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
-                );
-                let _ = s.write_all(hdr.as_bytes());
-                let _ = s.write_all(&store);
-            }
+                        body.len()
+                    );
+                    let _ = s.write_all(hdr.as_bytes());
+                    let _ = s.write_all(body);
+                } else {
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = s.write_all(hdr.as_bytes());
+                    let _ = s.write_all(store);
+                }
+            });
         }
     });
-    format!("http://127.0.0.1:{port}/store")
+    (format!("http://127.0.0.1:{port}/store"), out)
 }
 
 fn loft_bin() -> PathBuf {
@@ -3043,5 +3077,77 @@ fn a_pointer_bearing_element_relocates_in_bulk() {
         fast_reads < 500,
         "a pointer-bearing element must not cost a four-byte read each: {fast_reads} reads \
          for 1000 elements (wordwise control: {slow_reads})"
+    );
+}
+
+/// loft#782 — the ROUND-TRIP DEPTH harness: `store_load_keys` issues its ranges serially.
+///
+/// `Stores::load_keys` is `for &kv in keys_vals { load_one(…) }`, and under it
+/// `PageProvider::fetch` is synchronous and single-range. So a keyed load costs one
+/// sequential round trip per page it discovers it needs, and over a real link the round
+/// trip is the entire cost — the consumer that filed this measured a 1-byte range and a
+/// 64 kB range at the SAME ~45 ms, with 764 serial reads making a cold viewport's 16–26 s
+/// wait. It is depth, not bytes.
+///
+/// **This test is the gate, not the fix.** It exists so a batching change can be proved
+/// rather than asserted, and it is written to measure the two things such a change moves:
+///
+/// - `requests` — how many round trips the load takes. Deterministic, and the real metric.
+/// - wall time under injected per-request latency — the consequence, and the reason to care.
+///
+/// The server handles each connection on its own thread deliberately: with the
+/// single-threaded one a concurrent client would be serialised by the socket, and this
+/// harness would report "no improvement" for a fix that worked. That failure mode is worth
+/// more care than the assertion itself.
+///
+/// What it pins today is the SHAPE: with N keys the load takes multiple round trips, and
+/// wall time tracks `requests × latency`. When phase batching lands, the depth becomes
+/// roughly constant in N and this test tightens to say so.
+#[test]
+fn store_load_keys_round_trip_depth_is_measurable() {
+    let dir = scratch("load_keys_depth_782");
+    let path = dir.join("world.store");
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+
+    let sidecar = fs::read(format!("{}.dschema", path.display())).ok();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let delay_ms = 20;
+    let (url, served) = serve_ranges_tuned(
+        fs::read(&path).unwrap(),
+        sidecar,
+        delay_ms,
+        Some(std::sync::Arc::clone(&hits)),
+    );
+
+    let started = std::time::Instant::now();
+    let (out, code) = run_mode_backend("--interpret", &load_script(), Path::new(&url), "loadkey");
+    let elapsed = started.elapsed();
+    assert_eq!(code, 0, "http loadkey exit: {out:?}");
+    assert!(
+        out.contains("loadkey verify=true"),
+        "the working set fetched over http must be sound: {out:?}"
+    );
+
+    let requests = served.load(std::sync::atomic::Ordering::Relaxed);
+    // Report the measurement: this test's job is to make depth VISIBLE, so the numbers
+    // belong in the output whether it passes or fails.
+    eprintln!("loft#782 depth harness: requests={requests} latency={delay_ms}ms wall={elapsed:?}");
+    // The harness must actually be measuring something: no requests means the store came
+    // from somewhere else and every number below is meaningless.
+    assert!(
+        requests > 0,
+        "the load issued no HTTP requests — this harness is measuring nothing"
+    );
+    // Latency is REACHING the client: with requests served serially, the floor is
+    // `requests × delay`. Generous (half) because a warm page costs nothing and the
+    // request count includes the sidecar; the point is that depth is visible in the clock,
+    // not a precise timing claim.
+    let floor = std::time::Duration::from_millis(delay_ms * (requests as u64) / 2);
+    assert!(
+        elapsed >= floor,
+        "wall time {elapsed:?} is below {floor:?} for {requests} requests at {delay_ms}ms — \
+         the injected latency is not reaching the loader, so this harness cannot show a \
+         batching win either"
     );
 }
