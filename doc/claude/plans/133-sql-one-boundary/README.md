@@ -544,15 +544,37 @@ because a quoted value takes the string→double path instead of the literal
 tokenizer. Confirmed end to end through the real fixture, not just in C:
 `d.db_exec("INSERT INTO p3f VALUES (CAST('{v}' AS DOUBLE))")` gives **0 / 500**.
 
-**Quoting is the interim fix; binding is the design.** The same experiment on
-sqlite still loses 1 in 2000 (`CAST(text AS REAL)` runs the same imprecise
-converter its literal path does), so quoting solves duckdb completely and leaves
-sqlite's extreme-exponent ULP untouched. That one needs `sqlite3_bind_double`,
-i.e. @PLN128 E3 — which is where this lands as a *write-path* requirement rather
-than a duckdb question.
+### …and the drivers already do the right thing — measured before changing them
+
+**The duckdb driver needs NO fix.** It does not inline floats: `bind()` routes
+`SQL_FLOAT` to `ddb_bind_varchar(stmt, at, b.as_text())`, which is the
+string→double path, and that is **0 / 500**. The 19 failures were reached by a
+PROBE that interpolated a bare literal into `db_exec` — not by the driver. All
+four backends bind a float as text for the same reason (no `#c` path carries a
+`double` by value), so all four are on the safe side of the literal bug.
+
+**The exposure is a caller writing `db_exec("… {v} …")` directly**, which
+bypasses `SqlText` entirely — the same hole @PLN124's interpolation hook exists
+to close for injection, showing up as a numeric fault instead of a syntactic one.
+
+**sqlite's bind path is the one real gap, and it is NOT the duckdb bug.** On the
+known-bad value, `sqlite3_bind_text` with loft's 202-character literal is WRONG
+while `strtod` + `sqlite3_bind_double` is right — so sqlite's own text→REAL
+converter is what loses it, in the driver's actual path.
+
+**And it cannot be fixed in the shim.** `tests/fixtures/sqldb/sqlite/loft.toml`
+declares sqlite `optional-libs`, and the shim's header states it is *"deliberately
+free of any sqlite3 symbol… so it links against nothing"* — which is exactly what
+lets it compile on a machine with no libsqlite3 (@PLN24 arc G). A shim calling
+`sqlite3_bind_double` would put that hard dependency back. So the options are: `#c`
+float support (**@PLN128 E3**, which resolves lazily and needs no link), a `dlsym`
+inside the shim, or accepting the residual. **E3 it is** — the earlier note here
+that "a shim could do this today" was written before checking that the shim must
+stay symbol-free, and it was wrong.
 
 **So the rule is one rule, and it was always the right one:** a driver BINDS a
-float. Until it can, it quotes. It never emits `"{v}"` as a bare literal.
+float — which all four already do. A CALLER must never interpolate one into a raw
+statement. And sqlite's last ULP waits on E3.
 
 **What this settles for the design:** a driver must render a float in **exponent
 notation**, quote it, or bind it — never emit `"{v}"` as a bare literal. Reading
