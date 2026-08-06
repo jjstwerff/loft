@@ -390,6 +390,9 @@ an eager read with extra steps.
   explicit escape hatch, and one-record-however-it-arrived.
 - **[BINDING.md](BINDING.md)** — binding to a schema loft does not own: the declared mapping, the
   `T: DbKeyed` compile-time check, the bind-time schema check, and what loft gives up.
+- **[ARC-B-STEPS.md](ARC-B-STEPS.md)** — the implementation sequence for B/B2/B3/B4: eleven
+  steps that each land green, ordered by RISK rather than dependency, with what each one is
+  allowed to leave undone and what would make the sequence wrong.
 
 ## See also
 
