@@ -334,6 +334,14 @@ is standing on.
 
 ## Open work
 
+Most of the table below is superseded in shape by
+[@PLN133](https://github.com/loft-lang/plans/issues/133), which unifies this read
+path with the `#c` database clients: one connection string selecting one driver,
+and one table definition — derived from the type, or read back from the database —
+that a writer creates when absent and follows when present. Under it the mapping's
+loft-source spelling, the narrow-int refusal and the sqlite-only limit are all one
+question rather than four. The rows below are the state as BUILT.
+
 | item | why it waits |
 |---|---|
 | **A composite range** | `store_lazy_range(c, lo, hi)` cannot say which value pins a composite key's leading column. `store_lazy_query` covers it verbatim until there is a call shape that carries the pinned prefix. |
