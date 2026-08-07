@@ -1001,6 +1001,7 @@ impl Parser {
         name: &str,
         t: &mut Type,
         is_first: bool,
+        loop_var: u16,
     ) {
         let count_var = format!("{name}#count");
         let count = if self.vars.name_exists(&count_var) {
@@ -1008,7 +1009,10 @@ impl Parser {
         } else {
             self.create_var(&count_var, &I32)
         };
-        self.vars.loop_count(count);
+        // loft#794 — register the counter on the loop `name` iterates, which is
+        // not necessarily the loop being parsed: `for p { for q { p#count } }`
+        // reads the OUTER attribute from inside the INNER body.
+        self.vars.loop_count_of(loop_var, count);
         self.vars.defined(count);
         if is_first {
             *code = self.cl("OpEqInt", &[Value::Var(count), Value::Int(0)]);
@@ -1107,9 +1111,9 @@ use #count instead"
             *code = Value::Continue(self.vars.loop_nr(name));
             *t = Type::Void;
         } else if self.lexer.has_keyword("count") {
-            self.iter_op_count_or_first(code, name, t, false);
+            self.iter_op_count_or_first(code, name, t, false, index_var);
         } else if self.lexer.has_keyword("first") {
-            self.iter_op_count_or_first(code, name, t, true);
+            self.iter_op_count_or_first(code, name, t, true, index_var);
         } else if self.lexer.has_keyword("remove") {
             // CO1.5c: #remove on generator iterators is already rejected by the
             // loop_value == Null check below — coroutine for-loops never call set_loop.

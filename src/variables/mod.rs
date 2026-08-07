@@ -769,8 +769,34 @@ impl Function {
         self.current_loop = self.loops[self.current_loop as usize].inside;
     }
 
-    pub fn loop_count(&mut self, count_var: u16) {
-        self.loops[self.current_loop as usize].counter = count_var;
+    /// Register `count_var` as the `#count` of the loop whose iteration variable
+    /// is `loop_var` — searched OUTWARD from the current loop, not assumed to be
+    /// it.
+    ///
+    /// loft#794 — `#count` vars are minted on first READ, and a read of an OUTER
+    /// loop's `#count` happens while the parser sits in an INNER loop. Stamping
+    /// the current loop then re-pointed the inner loop's counter at the outer
+    /// loop's variable: with only the outer one read the inner loop silently
+    /// incremented the WRONG counter, and with both read in the same body the
+    /// inner loop's own count var was left with no init and no stack slot, which
+    /// aborted the compiler ("Incorrect var q#count[65535]") on both backends.
+    ///
+    /// A `loop_var` that names no enclosing loop keeps the current-loop
+    /// behaviour — a `#count` on something that is not an enclosing iteration
+    /// variable is already diagnosed elsewhere, and this is not the place to
+    /// change what it compiles to.
+    pub fn loop_count_of(&mut self, loop_var: u16, count_var: u16) {
+        let mut c = self.current_loop;
+        while c != u16::MAX {
+            if self.loops[c as usize].variable == loop_var {
+                self.loops[c as usize].counter = count_var;
+                return;
+            }
+            c = self.loops[c as usize].inside;
+        }
+        if self.current_loop != u16::MAX {
+            self.loops[self.current_loop as usize].counter = count_var;
+        }
     }
 
     pub fn loop_counter(&mut self) -> u16 {
