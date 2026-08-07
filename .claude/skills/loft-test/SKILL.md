@@ -341,21 +341,36 @@ closed/historical archive; the legacy `P###` ids survive only as references).
 
 ## Targeted regression — which suites to run
 
-Don't default to `cargo test --release --no-fail-fast` (≈7 minutes).
-Most changes only touch a few subsystems.  Map your edit to the
-relevant suites:
+**Just run `./scripts/find_problems.sh`.** Its default is the CURATED set —
+everything except a short named list of slow-and-few binaries — which is 3733 of
+3833 tests in ~70s instead of ~370s. You no longer have to guess which suites
+your change could break, and guessing is what the old table here asked for: it
+named 18 binaries of 177, and two (`format`, `graphics_gold`) had not existed for
+some time.
 
-| You touched | Run these (in order; ~3-5 minutes total) |
+Guessing does not work, and there is a worked example. An over-broad change to
+the parser's `null()` was caught by `binary_io_matrix` — a binary no
+parser-touches-these-suites map would ever have picked. Curating by INCLUSION has
+to predict which suite will catch a bug, which nobody can do in advance; curating
+by EXCLUSION leaves a miss set that is small, named and reviewable.
+
+| You want | Run |
 |---|---|
-| `src/parser/*` | `parse_errors`, `issues`, `expressions`, `format` |
-| `src/scopes.rs` / slot allocator | `slots`, `slot_v2_baseline`, `frame_vars`, `issues`, `leak` |
-| `src/state/*` (interpreter) | `wrap`, `issues`, `expressions`, `threading` |
-| `src/generation/*` (native codegen) | `native`, `native_loader`, `native_ext`, `codegen_emitter`, `issues` |
-| `src/parallel.rs` / `src/codegen_runtime.rs` (parallel) | `threading`, `threading_chars`, `parallel_rebase` |
-| `src/wasm.rs` / WASM bridges | `html_wasm`, `wasm_entry` |
-| `default/*.loft` (stdlib) | `wrap`, `issues`, `expressions`, plus the topic-specific suite |
-| `lib/graphics/` | `graphics_gold`, plus `wrap` (graphics tests live in `tests/docs/`) |
-| `tests/common/cross_mode.rs` or `tests/tuple_matrix.rs` | `tuple_matrix` (with `--ignored` + skip pattern) |
+| the normal check before a commit | `./scripts/find_problems.sh` (~70s) |
+| a tight loop on one area | `./scripts/find_problems.sh --subject <name>` (seconds) |
+| everything, incl. the slow-and-few | `./scripts/find_problems.sh --full` (~370s) |
+| to see subjects + what is excluded | `./scripts/find_problems.sh --list-subjects` |
+
+Subjects are `parser scopes codegen runtime store wasm packages lsp sql docs
+host`, defined as binary-name PATTERNS in `scripts/test_subjects.sh` so a new
+binary joins the subject its name already matches. They are a convenience for
+tight loops, not the safety mechanism — the default is subtractive, so a gap in
+a subject costs seconds, never coverage.
+
+What the default skips is eight binaries that are slow AND have very few tests
+(they hold 57% of the suite's work for 4.5% of its binaries). CI's
+`Test (ubuntu-latest)` job runs the suite unsharded as a required check, so none
+of them can be skipped on the way to main.
 
 **Always run after the targeted set:**
 - `cargo fmt --all -- --check`

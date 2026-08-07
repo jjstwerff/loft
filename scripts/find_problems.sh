@@ -4,9 +4,14 @@
 #
 # One-pass-find-all-problems workflow (see doc/claude/TESTING.md).
 #
-# Default mode: runs `cargo test --release --no-fail-fast` in the
-# background, tees the raw log to /tmp/loft_test.<id>.log (or $1), and
-# lets you get on with other work.  The summary writes to
+# Default mode: runs the CURATED set — everything except a short, named list of
+# slow-and-few binaries (scripts/test_subjects.sh).  3733 of 3833 tests in ~70s
+# instead of ~370s, so a run before every commit is affordable; the full suite is
+# what you reach for, not what you have to remember to avoid.  Nothing the
+# curated set skips can reach main: CI's `Test (ubuntu-latest)` runs the suite
+# unsharded and is a required check.
+#
+# Tees the raw log to /tmp/loft_test.<id>.log (or $1); the summary writes to
 # /tmp/loft_problems.txt (or $2) when the run finishes.  Avoids the
 # fix-one-rerun-see-next loop that pays the compile + test-startup
 # cost on every iteration.
@@ -24,12 +29,17 @@
 # wrap-suite crashes point at the specific .loft file that blew up.
 #
 # Usage:
-#   ./scripts/find_problems.sh                         # run+wait (foreground)
+#   ./scripts/find_problems.sh                         # CURATED run+wait (~70s)
+#   ./scripts/find_problems.sh --full                  # every test (~370s)
+#   ./scripts/find_problems.sh --subject store         # one subject (seconds)
+#   ./scripts/find_problems.sh --list-subjects         # subjects + what is excluded
 #   ./scripts/find_problems.sh --bg                    # run in background
 #   ./scripts/find_problems.sh /tmp/log /tmp/problems  # custom paths
 #   ./scripts/find_problems.sh --peek                  # in-flight peek
 #   ./scripts/find_problems.sh --wait                  # wait for a --bg run
 #   ./scripts/find_problems.sh --stop                  # stop THIS checkout's --bg run
+#
+# The selection flags combine with --bg: `--full --bg`, `--subject parser --bg`.
 #
 # All state is keyed by the checkout (dir name + path hash), so `--stop` only ever
 # touches this working tree's run — never a sibling checkout's.  Never use a broad
@@ -153,8 +163,15 @@ TIMINGS_FILE=/tmp/loft_timings.$REPO_TAG.txt
 # settings.
 test_runner_cmd() {
   if cargo nextest --version >/dev/null 2>&1; then
-    echo "cargo nextest run --release --no-fail-fast --status-level fail"
+    local base="cargo nextest run --release --no-fail-fast --status-level fail"
+    if [[ -n "${TEST_SELECT:-}" ]]; then
+      echo "$base -E '$TEST_SELECT'"
+    else
+      echo "$base"
+    fi
   else
+    # No filterset support in plain `cargo test` — it runs everything, which is
+    # the safe direction to fall back in.
     echo "cargo test --release --no-fail-fast"
   fi
 }
@@ -357,6 +374,52 @@ do_summarise() {
 }
 
 # `--peek`: look at the in-flight log without starting a run.
+# ── What this run selects ───────────────────────────────────────────────────
+# The DEFAULT is the curated set, and the full suite is what you reach for.  That
+# way round because the expensive thing should cost a keystroke to ask for, not
+# a keystroke to avoid: at 367s a full run is something you skip, and a check you
+# skip is not a check.  The curated set is 3733 of 3833 tests in 67s, and it is
+# built by EXCLUSION — see scripts/test_subjects.sh for what it drops and why.
+source "$(dirname "${BASH_SOURCE[0]}")/test_subjects.sh"
+
+SELECT_LABEL="curated"
+TEST_SELECT="$(curated_filter)"
+_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --full)
+      SELECT_LABEL="full"; TEST_SELECT=""; shift ;;
+    --subject)
+      shift
+      [[ $# -gt 0 ]] || { echo "--subject needs a name; try --list-subjects" >&2; exit 2; }
+      if ! TEST_SELECT="$(subject_filter "$1")"; then
+        echo "unknown subject '$1'.  Known: $(subject_names | tr '\n' ' ')" >&2
+        exit 2
+      fi
+      SELECT_LABEL="subject:$1"; shift ;;
+    --list-subjects)
+      echo "subjects (use: --subject <name>):"
+      for s in $(subject_names); do
+        f="$(subject_filter "$s" 2>/dev/null)" || continue
+        printf '  %-10s %2d binaries\n' "$s" "$(grep -o 'binary(' <<<"$f" | wc -l)"
+      done
+      echo
+      echo "default (no flag) runs everything EXCEPT these, which are slow-and-few"
+      echo "and covered by CI's unsharded Test job:"
+      printf '  %s\n' "${HEAVY_BINARIES[@]}"
+      un="$(unmatched_binaries | tr '\n' ' ')"
+      [[ -n "${un// /}" ]] && { echo; echo "matched by no subject (still in the default run): $un"; }
+      exit 0 ;;
+    *) _args+=("$1"); shift ;;
+  esac
+done
+set -- "${_args[@]+"${_args[@]}"}"
+
+# Announced only by the modes that actually RUN something.  `--peek`/`--wait`/
+# `--stop` inspect an existing run, and telling them which selection they would
+# have used is noise about a decision they are not making.
+announce_selection() { echo "selection: $SELECT_LABEL"; }
+
 if [[ "${1:-}" == "--peek" ]]; then
   LOG="${2:-$LOG_DEFAULT}"
   if [[ ! -f "$LOG" ]]; then
@@ -466,6 +529,7 @@ if [[ "${1:-}" == "--bg" ]]; then
   # for the rationale.  Runs in the foreground so the caller sees build
   # errors immediately, not 90 s later inside the test log.
   rebuild_native_cdylibs
+  announce_selection
   # Tee via a subshell so the script returns after backgrounding.
   # `|| true` after the runner so summarise still fires when tests
   # fail (cargo's non-zero exit would otherwise short-circuit `set -e`
@@ -498,6 +562,7 @@ OUT="${2:-$OUT_DEFAULT}"
 find tests/ -name '*.loftc' -delete 2>/dev/null || true
 find /tmp -maxdepth 1 -name '*.loftc' -delete 2>/dev/null || true
 rebuild_native_cdylibs
+announce_selection
 RUNNER="$(sweep_test_tmp; test_runner_cmd)"
 echo "test runner: $RUNNER"
 fg_start_ns=$(date +%s%N)
