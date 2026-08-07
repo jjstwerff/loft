@@ -1019,21 +1019,28 @@ impl State {
             return;
         }
         let data: &crate::data::Data = unsafe { &*self.data_ptr };
-        let d_nr = data.def_nr("n_lazy_fetch");
-        if d_nr == u32::MAX {
-            // Failure path 1, and it is the whole reason `Loft` is its own
-            // source kind: a backend that is not here must read as UNREACHABLE
-            // and name itself. Before this, `postgres://…` classified as a
-            // `.store` image and reported something about a paged reader.
-            self.database.lazy_fail(
-                coll,
-                &format!(
-                    "`{source}` needs a loft driver — define `fn lazy_fetch(coll, source, \
-                     key_int, key_text) -> integer` and bind the collection again"
-                ),
-            );
-            return;
-        }
+        let d_nr = match data.lazy_fetch_driver() {
+            Ok(Some(d)) => d,
+            Ok(None) => {
+                // Failure path 1, and it is the whole reason `Loft` is its own
+                // source kind: a backend that is not here must read as
+                // UNREACHABLE and name itself. Before this, `postgres://…`
+                // classified as a `.store` image and reported something about a
+                // paged reader.
+                self.database.lazy_fail(
+                    coll,
+                    &format!(
+                        "`{source}` needs a loft driver — define `fn lazy_fetch(coll, source, \
+                         key_int, key_text) -> integer` and bind the collection again"
+                    ),
+                );
+                return;
+            }
+            Err(why) => {
+                self.database.lazy_fail(coll, &why);
+                return;
+            }
+        };
         // One key, whichever spelling it arrived in — the same limit the paged
         // loader has, and for the same reason: a composite key needs @PLN125's
         // associated types to carry it, and fetching the WRONG row is worse than

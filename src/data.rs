@@ -5349,6 +5349,79 @@ impl Data {
         }
     }
 
+    /// @PLN133 S8 — the program's lazy DRIVER, checked.
+    ///
+    /// A collection bound to a scheme core has no Rust driver for is fetched by
+    /// calling a loft function named `lazy_fetch`. Both backends have to agree
+    /// about whether one is there and whether it is usable, so the question has
+    /// ONE home: the interpreter pushes arguments in this order and the native
+    /// generator installs a function pointer of exactly this shape, and a
+    /// mismatch caught in only one of them is how the two would start disagreeing
+    /// about what a lookup answers.
+    ///
+    /// Required shape — the collection, its source, and the key in whichever of
+    /// two spellings it arrived in:
+    ///
+    /// ```loft
+    /// fn lazy_fetch(coll: <a keyed collection>, source: text,
+    ///               key_int: integer, key_text: text) -> integer
+    /// ```
+    ///
+    /// # Errors
+    /// When a `lazy_fetch` exists with a different shape. Refusing beats calling
+    /// it: the arguments are pushed positionally, so a driver with a different
+    /// signature reads someone else's bytes as its own — a wrong VALUE rather
+    /// than a failure, which is the class this whole channel exists to keep out.
+    pub fn lazy_fetch_driver(&self) -> std::result::Result<Option<u32>, String> {
+        let d_nr = self.def_nr("n_lazy_fetch");
+        if d_nr == u32::MAX {
+            return Ok(None);
+        }
+        let def = self.def(d_nr);
+        let visible: Vec<&Attribute> = def.attributes().iter().filter(|a| !a.hidden).collect();
+        let wanted = "fn lazy_fetch(coll: <a keyed collection>, source: text, \
+                      key_int: integer, key_text: text) -> integer";
+        if visible.len() != 4 {
+            return Err(format!(
+                "`lazy_fetch` takes {} parameter(s); a lazy driver is `{wanted}`",
+                visible.len()
+            ));
+        }
+        let is_text = |t: &Type| matches!(t.base(), Type::Text(_));
+        let is_int = |t: &Type| matches!(t.base(), Type::Integer(_));
+        let is_collection = |t: &Type| {
+            matches!(
+                t.base(),
+                Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Radix(_, _, _)
+            )
+        };
+        if !is_collection(&visible[0].typedef) {
+            return Err(format!(
+                "`lazy_fetch`'s first parameter must be the keyed COLLECTION it fills; \
+                 a lazy driver is `{wanted}`"
+            ));
+        }
+        if !is_text(&visible[1].typedef)
+            || !is_int(&visible[2].typedef)
+            || !is_text(&visible[3].typedef)
+        {
+            return Err(format!(
+                "`lazy_fetch`'s parameters after the collection must be \
+                 `source: text, key_int: integer, key_text: text`; a lazy driver is `{wanted}`"
+            ));
+        }
+        if !is_int(def.returned()) {
+            return Err(format!(
+                "`lazy_fetch` must answer an integer — 1 inserted, 0 absent; \
+                 a lazy driver is `{wanted}`"
+            ));
+        }
+        Ok(Some(d_nr))
+    }
+
     /// @PLN102 arc C — is `source` the compilation's OWNED entry project (vs a
     /// resolved dependency or the stdlib)?  loft numbers sources `STD_SOURCE` (0)
     /// = stdlib, `MAIN_SOURCE` (1) = the entry being compiled, `2..` = imported

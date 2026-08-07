@@ -228,13 +228,15 @@ through `store_lazy_error` and the lookup answers null. So a buggy driver leaves
 the lookup answering null with a reason, the outer frame intact, and the program
 running.
 
-Two limits, both current:
+**Both backends, by different routes.** The interpreter runs the driver through
+the ordinary call machinery; `--native` cannot — `OpGetRecord` lives in libloft
+and cannot see a generated function — so generated `init()` installs a pointer to
+it. The answers are byte-identical, which is what the gate compares.
 
-- **`--native` cannot call the driver yet** and reports that instead of
-  answering — the one thing it must never do is answer "no such row".
-- **A contained fault leaks what the aborted driver had allocated**, one store
-  per failed fetch. A frame's locals are freed by the scope-exit bytecode the
-  fault skipped, so a releasing unwind is still owed (@PLN133 S8).
+One limit, current: **a contained fault leaks what the aborted driver had
+allocated**, one store per failed fetch, identically on both backends. A frame's
+locals are freed by the scope-exit code the fault skipped, so a releasing unwind
+is still owed (@PLN133 S8).
 
 **A binding with no `lazy_fetch` is REFUSED and says so** — *"`postgres://…`
 needs a loft driver"* — rather than being read as a `.store` image, which is what

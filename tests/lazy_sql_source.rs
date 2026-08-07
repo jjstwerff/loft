@@ -879,17 +879,15 @@ fn a_collection_field_is_an_owner_parameterised_query_both_backends() {
 ///
 /// @PLN129 costed this as a bytecode-level control change and it is not: the
 /// retry already existed (the collection stays the only authority on what is
-/// resident), and what was missing is only that the fetch was Rust. The call
-/// uses the ordinary machinery — `fn_call` pushes the frame, the loop runs until
-/// it pops — so the driver returns through the path every other call uses.
+/// resident), and what was missing is only that the fetch was Rust.
 ///
-/// **The two backends give different answers here, and that is asserted rather
-/// than hidden.** `--native` cannot reach the driver yet: `OpGetRecord` is
-/// compiled into libloft and cannot see the generated `n_lazy_fetch`, which
-/// needs generated `init()` to install a pointer to it. Until then it must
-/// report UNREACHABLE and name why — the one thing it must never do is answer
-/// "no such row", which is how a missing backend starts reading as an empty
-/// table.
+/// **Both backends, one answer, and they reach it differently.** The interpreter
+/// runs the driver through the ordinary call machinery — `fn_call` pushes the
+/// frame, the dispatch loop runs until it pops. `--native` cannot do that:
+/// `OpGetRecord` is compiled into libloft and cannot see a function the
+/// generator wrote, so generated `init()` installs a POINTER to it. Two
+/// mechanisms, and the output is compared whole rather than line by line,
+/// because that is the only assertion that catches a divergence nobody predicted.
 #[test]
 fn a_lazy_fetch_can_be_a_loft_function() {
     let _serial = SQLITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -900,6 +898,9 @@ fn a_lazy_fetch_can_be_a_loft_function() {
             .arg(backend)
             .arg("--no-warnings")
             .arg(&script)
+            // The leak below is asserted on BOTH backends, and native only
+            // counts stores when asked.
+            .env("LOFT_NATIVE_LEAK_CHECK", "1")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .output()
             .expect("failed to invoke loft");
@@ -909,14 +910,17 @@ fn a_lazy_fetch_can_be_a_loft_function() {
             out.status,
             String::from_utf8_lossy(&out.stderr)
         );
-
         // stderr too: the store-leak warning is written there, and it is one of
-        // the things this test pins.
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )
+        // the things this test pins.  rustc's own warnings are dropped so the
+        // two backends' outputs are comparable.
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        for line in String::from_utf8_lossy(&out.stderr).lines() {
+            if line.starts_with("Warning:") {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        text
     };
 
     let s = run("--interpret");
@@ -928,8 +932,7 @@ fn a_lazy_fetch_can_be_a_loft_function() {
         s.contains("again=row-7 same=true"),
         "a repeat lookup is a resident HIT, and the same record: {s}"
     );
-    // Exactly one driver line per MISS. Three misses reach the driver; the
-    // repeat of key 7 must not.
+    // Exactly one driver line per MISS. The repeat of key 7 must not reach it.
     assert_eq!(
         s.matches("driver source=postgres://localhost/loft key=7")
             .count(),
@@ -965,18 +968,16 @@ fn a_lazy_fetch_can_be_a_loft_function() {
          merely running: {s}"
     );
 
-    // The known debt, PINNED rather than grandfathered. Containment truncates
-    // the abandoned frames, and a frame's locals are freed by the scope-exit
-    // bytecode the fault skipped — so whatever the aborted driver had allocated
-    // is left behind, one store per contained fault. The driver in the fixture
-    // allocates before it faults precisely so this is measurable: a driver that
-    // allocates nothing leaks nothing, which is what localises the fix to the
-    // abandoned frames rather than to the fetch.
+    // The known debt, PINNED rather than grandfathered, and it is the SAME on
+    // both backends. Containment abandons the faulting driver's frames, and a
+    // frame's locals are freed by the scope-exit code the fault skipped — so
+    // whatever it had allocated is left behind, one store per contained fault.
+    // The fixture's driver allocates before it faults precisely so this is
+    // measurable: a driver that allocates nothing leaks nothing, which localises
+    // the fix to the abandoned frames rather than to the fetch.
     //
-    // A traversal over an unreachable source therefore leaks once per failed
-    // fetch — the long-running case arc C's sticky counter exists for. When the
-    // releasing unwind lands this assertion INVERTS, and that is the point of
-    // writing it down as a measurement.
+    // When the releasing unwind lands this assertion INVERTS, and that is the
+    // point of writing it down as a measurement.
     assert!(
         s.contains("LzdBag×1"),
         "@PLN133 S8: a contained fault still leaks the aborted frame's \
@@ -984,13 +985,12 @@ fn a_lazy_fetch_can_be_a_loft_function() {
          releasing unwind landed: invert the assertion: {s}"
     );
 
+    // One driver, two mechanisms, one answer — asserted whole. A backend that
+    // installed the pointer but never called it, or that contained a fault
+    // differently, would differ HERE and nowhere else.
     let n = run("--native");
-    assert!(
-        n.contains("`--native` cannot call yet"),
-        "--native must name the gap rather than answer 'no such row': {n}"
-    );
-    assert!(
-        !n.contains("hit=row-7"),
-        "--native must not silently appear to work: {n}"
+    assert_eq!(
+        s, n,
+        "both backends must give the same answers about a loft-driven lazy fetch"
     );
 }

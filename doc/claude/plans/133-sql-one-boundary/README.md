@@ -6,9 +6,9 @@
 **Building. All four probes ran 2026-08-06 and decided the architecture; S1–S6
 and S8 landed 2026-08-07.** S1–S5 are pure values and pure functions, S6 only
 READS a catalogue, and S8 is the first change to core: a lazy fetch can now BE a
-loft function, on the interpreter. `--native` reports the gap rather than
-answering, and a contained fault still leaks — both are named below and pinned by
-the test rather than left to be discovered.
+loft function, on BOTH backends, with byte-identical output. One debt remains and
+is pinned by the test rather than left to be discovered — a contained fault still
+leaks what the aborted driver had allocated, identically on both backends.
 
 P1 **passes**, so **option B is viable**. P2 **passes for reads and fails for
 writes on sqlite**, which is a bounded, documented limit rather than a blocker.
@@ -22,7 +22,7 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S5 the connection string | **done** |
 | S6 `introspect` (sqlite) + the round trip, run twice | **done** |
 | S7 the backend registry | not started — see § the design question below |
-| S8 core's lazy fault calls loft | **done on `--interpret`**; `--native` reports the gap |
+| S8 core's lazy fault calls loft | **done, both backends** |
 | S9–S14 | not started |
 
 Every measurement below is from the current tree and is cited so it can be
@@ -795,14 +795,35 @@ lazy_fetch(…)`"*.
 `tests/scripts/`: that directory is swept on both backends under a leak gate, and
 this program is asymmetric on both counts by design.
 
-#### What is NOT done, both named in the test
+#### `--native` reaches the driver by a different route, and answers the same
 
-- **`--native` cannot call the driver.** `OpGetRecord` is compiled into libloft
-  and cannot see the generated `n_lazy_fetch`; closing it needs generated
-  `init()` to install a pointer to that function, which is generator work. Until
-  then native REPORTS the gap and names it. That is the one thing it must do —
-  a missing backend answering "no such row" is how it starts reading as an empty
-  table.
+`OpGetRecord` is compiled into libloft and cannot see a function the generator
+wrote, so generated `init()` installs a POINTER to it
+(`codegen_runtime::register_lazy_fetch`). Three things that were not obvious:
+
+- **The driver is a reachability ROOT.** Nothing in loft calls `lazy_fetch`; the
+  RUNTIME does, on a miss. A walk rooted at `main` never reaches it, so
+  `--native` emitted no body for the function it was about to install a pointer
+  to — and the failure mode is the quiet one, a program that compiles and simply
+  has no driver.
+- **The signature has ONE home.** `Data::lazy_fetch_driver` checks it, and both
+  backends ask there: the interpreter pushes arguments positionally and the
+  generator installs a pointer of a fixed type, so a driver whose shape they
+  disagreed about could not exist. A wrong signature is refused rather than
+  called — arguments are positional, so calling it reads someone else's bytes as
+  its own, which is a wrong VALUE rather than a failure.
+- **Containment needed a second mechanism.** The interpreter contains a fault by
+  stopping its dispatch loop; native has no loop, and its depth guard called
+  `process::exit`. Inside a driver it now UNWINDS and `OpGetRecord` catches it,
+  with the panic hook silent for exactly that case — a lookup that correctly
+  answered null must not also look like a program falling over.
+
+**The gate is `assert_eq!` on the whole output of both backends**, not a line at
+a time: two mechanisms reaching one answer is the claim, and a divergence nobody
+predicted shows up only in the comparison.
+
+#### What is NOT done, and it is the same on both backends
+
 - **A contained fault still leaks, and the leak is now localised.** P4 measured
   one store; this measures *which* one: a driver that faults having allocated
   nothing leaks nothing, and one that allocates first leaks exactly what the
@@ -816,6 +837,10 @@ this program is asymmetric on both counts by design.
   which is strictly worse than the leak, and separating the two needs a boundary
   matrix rather than a plausible read. The test PINS the leak so the day it stops
   is visible.
+
+  **Measured on both backends, and they agree** — native's unwind runs Rust's
+  drop glue and still leaks the same one store, which says the missing free is
+  loft's own scope-exit code on both sides rather than anything backend-specific.
 
 ### S7 has a design question the plan did not name: `SqlDb` is STATIC dispatch
 
@@ -926,7 +951,7 @@ must agree on is the last thing that should have a gate that evaporates.
 |---|---|---|
 | **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
 | **S7** | The backend registry, used by the LIBRARY's own connect. No core change. **See the note below first — the obvious shape does not exist in loft.** | the library's four backends already pass their tests; the registry must not move them |
-| **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE on the INTERPRETER 2026-08-07**; `--native` reports the gap rather than answering. See the note below. | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
+| **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE 2026-08-07, both backends.** | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
 | **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
 | **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |
 
