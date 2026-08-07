@@ -44,7 +44,10 @@ here — use the module that declares it`.
 
 Not closed, and out of scope: a type named in a function BODY rather than a field
 DECLARATION is not deferred, so a module naming a type it cannot see still fails with
-`unknown type 'X'`. That is resolution, not layout.
+`unknown type 'X'`. That is resolution, not layout — filed as loft#801, together with the
+cascade that makes it expensive (`parse_file` returns on error before draining
+`todo_files`, so the suspended parent is never re-parsed and the type it declares is then
+reported undefined).
 
 Guard: `forward_module_type_gets_a_slot` (`tests/issues.rs`) over the `fwd797` fixture,
 asserting sizes as well as values — a read follows whatever offsets the layout ended up

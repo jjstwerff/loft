@@ -646,7 +646,11 @@ back cannot by itself prove the field has storage.
 Out of scope, and still true: a type named in a function BODY (a local, a vector literal
 element) rather than in a field DECLARATION is not deferred, so a module naming a type it
 cannot see fails there with `unknown type 'X'`.  That is a resolution question, not a
-layout one; the fix is the ordinary one, `use` the module that declares the type.
+layout one; the fix is the ordinary one, `use` the module that declares the type.  Tracked
+as [loft#801](https://github.com/loft-lang/loft/issues/801), which also carries the worse
+half: `parse_file` returns on error BEFORE draining `todo_files`, so the suspended parent
+is never re-parsed and its declaration never happens — the cascade then reports a type as
+undefined that is written two lines away.
 
 ### Inside the lambda: `__closure` is a struct parameter
 
