@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
 //
 // @PLN129 arc B — the SOURCE seam: what a lazy collection consults on a miss.
 //
@@ -8,8 +9,13 @@
 // differ in every detail except the question they answer — so the question is
 // what lives here, and the details live in one implementation each.
 
-use crate::database::{Parts, Stores};
+use crate::database::Stores;
 use crate::keys::{Content, DbRef};
+
+// Only `row_key` reads the layout's parts, and that is the SQL half — so on a build
+// without it (wasm) the import is dead and warns.
+#[cfg(feature = "native-extensions")]
+use crate::database::Parts;
 
 /// What a lazy collection is bound to, derived from the binding's source string.
 ///
@@ -99,6 +105,14 @@ pub enum Fetched {
 
 impl Stores {
     /// Ask one source for one key. The dispatch that makes the seam a seam.
+    ///
+    /// `db` is read by the SQL arm alone, so a build without it (wasm) sees an unused
+    /// parameter. Kept in the signature rather than renamed: it is part of the seam's
+    /// shape, and which sources a build happens to carry should not change it.
+    #[cfg_attr(
+        not(feature = "native-extensions"),
+        allow(unused_variables, clippy::needless_pass_by_value)
+    )]
     pub(crate) fn fetch_from_source(
         &mut self,
         data: &DbRef,
@@ -460,7 +474,13 @@ impl Stores {
     ///
     /// Through arc C's channel rather than a return code: a count cannot carry a
     /// reason, and `0` is also what a predicate matching nothing answers.
-    #[cfg(feature = "native-extensions")]
+    ///
+    /// NOT gated on `native-extensions`, though every other SQL-side helper here is:
+    /// it only records into `lazy_errors`, which is an ungated field, and `lazy_fail`
+    /// — public since @PLN133 S8 moved the refusal decision into `State` — calls it
+    /// from code that compiles on every target. Gated, the wasm builds failed to
+    /// compile it (`no method named lazy_refuse`), which is what took the browser,
+    /// Web-Worker `par` and node-bridge jobs down together.
     fn lazy_refuse(&mut self, slot: (u16, u32, u32), why: &str) -> i64 {
         let entry = self.lazy_errors.entry(slot).or_insert((0, why.to_string()));
         entry.0 += 1;

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I69 — Word-addressed store (the heap ceiling and its attribution)
 
 //! A memory ceiling for the store heap, and the report that says what filled it.
 //!
