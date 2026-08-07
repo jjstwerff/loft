@@ -10752,6 +10752,38 @@ impl Parser {
         }
     }
 
+    /// loft#793 — the null a `return` DELIVERS for `tp`: `null()`, plus the
+    /// store-pointer sentinel for every remaining DbRef-backed heap type (the
+    /// collections, and a struct-enum — whose payload is a record, not the
+    /// `255` discriminator a plain enum uses).
+    ///
+    /// Separate from `null()` because that one also supplies a variable's
+    /// DEFAULT-INIT, and the two want different answers here: a collection
+    /// LOCAL must start as an ALLOCATED empty store, because a later write
+    /// (`w: vector<single> = f#read(16) as vector<single>`) fills that store in
+    /// place and the sentinel's `store_nr` indexes nothing.  A RETURN has no
+    /// slot to fill — the value travels back as a DbRef — so there the
+    /// sentinel is the only thing that can mean null.
+    ///
+    /// Untreated, `return null` from a `-> vector<T>?` / `-> StructEnum?` fn
+    /// pushed nothing (or a 4-byte discriminator) where the caller read a
+    /// 12-byte DbRef, so the interpreter's `OpReturn` handed back whatever the
+    /// eval stack held: the caller saw a stale ref as NON-null and freed it a
+    /// second time ("refused free of out-of-range store", sometimes a SIGSEGV).
+    /// Native was already right, so the two backends disagreed on a bare
+    /// `return null`.
+    pub fn null_return(&mut self, tp: &Type) -> Value {
+        match tp.base() {
+            Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Enum(_, true, _) => self.cl("OpNullRefSentinel", &[]),
+            _ => self.null(tp),
+        }
+    }
+
     // For now, assume that returned texts are always related to internal variables
 }
 

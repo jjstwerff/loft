@@ -4751,6 +4751,61 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return
+            && !expr_is_terminal
+            && ret_var == u16::MAX
+            && is_heap_return_type(tp)
+            && !has_return_buffer(self.d_nr, data)
+            && tail_is_value_call(expr, data)
+        {
+            // loft#793 — the CALL sibling of loft#754, in the one regime that
+            // fix's "a CALL tail already delivers through its hidden buffer"
+            // does not cover: a NULLABLE heap return (`-> S?`,
+            // `-> vector<S>?`, `-> StructEnum?`).  Only a DENSE heap return is
+            // given a hidden `__retbuf` argument — both reservation sites
+            // (`parser/mod.rs`, `parser/definitions.rs`) gate on
+            // `Reference | Vector | Enum(_, true, _)`, which `Optional` is not
+            // — so for a nullable one the callee's value comes back ONLY as
+            // the call's own return value.
+            //
+            // Dropped, the fall-through emitted the call as a DISCARDED
+            // statement plus a fabricated `Return(Null)`.  The interpreter
+            // read the value off eval-stack top and answered correctly, so
+            // the whole class was invisible there; native — and any
+            // `StaticCall` into a library's compiled half, which is why it
+            // surfaced across a library boundary first — returned the null
+            // sentinel.  `fn f() -> S? { return mk(); }` answered null,
+            // silently, with the record left leaked.
+            //
+            // Hoist the call into `__ret_N` and return that, and make each
+            // pending record/vector free CONDITIONAL on not being the hoisted
+            // store: a callee with a return buffer may deliver a fresh store
+            // OR chain the work ref this frame passed in, and only the
+            // runtime knows which.
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let free_nr = data.def_nr("OpFreeRef");
+            let free_if = data.def_nr("OpFreeRefIfDistinct");
+            for op in &mut ls {
+                if let Value::Call(d, args) = op
+                    && *d == free_nr
+                    && let Some(Value::Var(w)) = args.first().map(Value::unspan)
+                    && matches!(
+                        function.tp(*w),
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    *op = Value::Call(free_if, vec![Value::Var(*w), Value::Var(tmp)]);
+                }
+            }
+            let mut result = Vec::with_capacity(ls.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            result.append(&mut ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
         } else if is_return && matches!(tp.base(), Type::Text(_)) && !expr_is_terminal {
             // B5-L3 extension for text returns: save the expression's text
             // to a `__ret_N` temp, run free ops, then return the temp.  The
@@ -6455,6 +6510,45 @@ fn is_heap_return_type(tp: &Type) -> bool {
     match tp.base() {
         Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => true,
         Type::RefVar(inner) => is_heap_return_type(inner),
+        _ => false,
+    }
+}
+
+/// loft#793 — does this function receive a hidden return BUFFER argument?
+///
+/// Only a DENSE heap return is given one: both reservation sites
+/// (`parser/mod.rs`, `parser/definitions.rs`) gate on
+/// `Reference | Vector | Enum(_, true, _)`.  A NULLABLE heap return (`-> S?`)
+/// is not one of those, so it has no buffer and its value can travel back only
+/// as the call's own return value — which is what makes a dropped call tail a
+/// silently-null answer there rather than a delivered one.
+fn has_return_buffer(d_nr: u32, data: &Data) -> bool {
+    data.def(d_nr).attributes().iter().any(|a| {
+        a.hidden
+            && matches!(
+                a.typedef,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            )
+    })
+}
+
+/// loft#793 — the tail of `expr` is a CALL that carries the block's VALUE, the
+/// shape the legacy `Return(Null)` fall-through drops.
+///
+/// The typed-NULL producers are excluded — `OpNullRefSentinel` and the
+/// `OpConv<T>FromNull` family.  For those `Return(Null)` is exactly right, and
+/// hoisting one is actively wrong: a `-> StructEnum?` fall-through null is
+/// `OpConvEnumFromNull`, whose native form is the `255u8` discriminator
+/// sentinel, so binding it to a `DbRef`-typed temp emitted `255u8 as DbRef`
+/// (E0605).
+fn tail_is_value_call(expr: &Value, data: &Data) -> bool {
+    match expr.tail().unspan() {
+        Value::Call(d, _) => {
+            let name = data.def(*d).name();
+            name != "OpNullRefSentinel"
+                && !(name.starts_with("OpConv") && name.ends_with("FromNull"))
+        }
+        Value::CallRef(_, _) => true,
         _ => false,
     }
 }
