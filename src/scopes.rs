@@ -5926,6 +5926,36 @@ impl Scopes {
                     return Some(Type::Function(params.clone(), ret.clone(), Deps::none()));
                 }
             }
+            // loft#792 — the same lift for a body-less NATIVE global that MINTS a
+            // record.  `type_of(x)` / `type_named(n)` lower to `n_reflect_type` /
+            // `n_type_named`, which allocate a `TypeInfo` store; passed straight as a
+            // call argument the value was bound to nothing, so nothing freed it.
+            // Binding it to a local first leaked nothing, which is what made this read
+            // as a reflection quirk rather than the missing lift it is.  Native frees
+            // the record through its own drop path, so the leak was interpreter-only —
+            // and it CASCADES: with a callee that returns a struct holding a freshly
+            // built vector, that vector leaked once per call after the first, so a loop
+            // calling `f(type_of(x))` grew the heap without bound.
+            //
+            // The bound is what keeps this sound.  A native has no body to read, so
+            // lift only where the answer cannot be anything but a fresh record: the
+            // return names a concrete STRUCT, carries no dep, and no parameter has a
+            // type that could have supplied one.  That excludes every view-returning
+            // native in the stdlib — `hash_sorted(h: reference, …) -> reference` and
+            // `parallel_buf_get_ref(i) -> reference` both hand back a borrow, and both
+            // return the untyped `reference` rather than a named struct.  The
+            // `JsonValue` constructors are struct-ENUMs and keep their own arm above.
+            if lift_owned_return
+                && def.code == Value::Null
+                && let Type::Reference(d_nr, dep) = def.returned.base()
+                && dep.is_empty()
+                && data.def_type(*d_nr) == DefType::Struct
+                && !def.attributes().iter().any(|a| {
+                    matches!(a.typedef.base(), Type::Reference(p, _) if p == d_nr)
+                })
+            {
+                return Some(Type::Reference(*d_nr, Deps::none()));
+            }
         }
         // @P393 (t9) — a loft-source fn OR `t_` method returning an OWNED vector
         // BY VALUE (empty dep) is de-NRVO'd when its body builds the result with

@@ -1,0 +1,34 @@
+// loft#792 — a record allocated by a NATIVE (`type_of` / `type_named`) and passed
+// straight as a call argument was bound to nothing, so nothing freed it.  The inline-
+// argument lift required the callee to have a BODY, so a body-less native fell through.
+//
+// Interpreter-only (native drops the record on its own), and it CASCADES: the leaked
+// argument kept the callee's frame alive, so a callee returning a struct that holds a
+// freshly built vector leaked that vector once per call after the first — N calls, N-1
+// leaked vectors.  One call cannot show it; the three below can.
+struct Person { const id: integer, const nm: text }
+struct Col { const nm: text, k: integer }
+struct Tab { const nm: text, const columns: vector<Col> }
+
+fn width(t: TypeInfo) -> integer { len(t.fields) }
+fn width_opt(t: TypeInfo?) -> integer { len((t ?? type_of(0)).fields) }
+
+// The vector is built here and never comes from `t` — only the parameter is reflected.
+fn mk(t: TypeInfo) -> Tab {
+  cs: vector<Col> = [];
+  for i in 0..2 { cs += [Col { nm: "x{i}", k: i }] }
+  Tab { nm: t.name, columns: cs }
+}
+
+pub fn test() {
+  p = Person { id: 1, nm: "a" };
+  assert(width(type_of(p)) == 2, "inline type_of={width(type_of(p))}");
+  assert(width_opt(type_named("Person")) == 2, "inline type_named");
+  a = mk(type_of(p));
+  b = mk(type_of(p));
+  c = mk(type_of(p));
+  assert(len(a.columns) + len(b.columns) + len(c.columns) == 6, "cascade columns");
+  n = 0;
+  for _ in 0..20 { n += width(type_of(p)) }
+  assert(n == 40, "loop n={n}");
+}
