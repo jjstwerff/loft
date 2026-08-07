@@ -1288,8 +1288,32 @@ impl Stores {
         let till = [tx, ty, tz];
         let till_ref = (has_till != 0).then_some(&till[..n]);
         let cap = (limit >= 0).then_some(limit as usize);
-        let recs =
-            crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], till_ref, cap);
+        // loft#800 — a CLOSED box promises containment, and the code interval is only a
+        // superset of it.  Filter here rather than inside `range`, because the other two
+        // surfaces this method serves (`xs[(x,y)..]`, `xs[(x,y)..:n]`) want exactly the
+        // Z-order walk and would be wrong to filter: this layer is the one that knows
+        // which form it is, and `has_till` is that fact.
+        //
+        // The cap moves AFTER the filter for the same reason — capping the raw interval
+        // first would drop in-box records in favour of out-of-box ones.
+        let raw_cap = if has_till != 0 { None } else { cap };
+        let recs = crate::radix_db::range(
+            coll,
+            &self.allocations,
+            &keys,
+            &from[..n],
+            till_ref,
+            raw_cap,
+        );
+        let recs = if has_till != 0 {
+            let store = crate::keys::store(coll, &self.allocations);
+            recs.into_iter()
+                .filter(|&r| crate::radix_db::in_box(store, r, &keys, &from[..n], &till[..n]))
+                .take(cap.unwrap_or(usize::MAX))
+                .collect()
+        } else {
+            recs
+        };
         self.build_rec_scratch(coll, &recs)
     }
 
