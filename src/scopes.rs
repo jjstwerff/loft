@@ -5950,9 +5950,10 @@ impl Scopes {
                 && let Type::Reference(d_nr, dep) = def.returned.base()
                 && dep.is_empty()
                 && data.def_type(*d_nr) == DefType::Struct
-                && !def.attributes().iter().any(|a| {
-                    matches!(a.typedef.base(), Type::Reference(p, _) if p == d_nr)
-                })
+                && !def
+                    .attributes()
+                    .iter()
+                    .any(|a| matches!(a.typedef.base(), Type::Reference(p, _) if p == d_nr))
             {
                 return Some(Type::Reference(*d_nr, Deps::none()));
             }
