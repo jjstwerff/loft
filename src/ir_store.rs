@@ -167,6 +167,9 @@ fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
             sort_key_list(stores, slot, ds::TYINDEX_KEYS, keys);
             dep_list(stores, slot, ds::TYINDEX_DEP, dep);
         }
+        Type::Trie(_, _, _) => {
+            unimplemented!("trie IR store encoding — step 6 of doc/claude/plans/text-keyed-trie.md")
+        }
         Type::Radix(n, names, dep) => {
             slot.set_discriminant(stores, ds::TY_RADIX);
             slot.set_field_int(stores, ds::TYRADIX_N, i64::from(*n));

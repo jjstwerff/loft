@@ -845,6 +845,13 @@ fn native_type_kind(t: &Type) -> TypeKind {
         Type::Iterator(_, _) => K::Iterator,
         Type::Sorted(_, _, _) => K::Sorted,
         Type::Index(_, _, _) => K::Index,
+        // The IR codec's own schema is GENERATED from tools/ir_schema/ir.loft; a `Trie`
+        // tag there needs a regeneration pass and a new discriminant, which is the
+        // remaining half of step 6 in doc/claude/plans/text-keyed-trie.md. Loud rather
+        // than silent: a codec that quietly skipped a kind would lose it on a round trip.
+        Type::Trie(_, _, _) => {
+            unimplemented!("trie IR node kind — step 6 of doc/claude/plans/text-keyed-trie.md")
+        }
         Type::Radix(_, _, _) => K::Radix,
         Type::Hash(_, _, _) => K::Hash,
         Type::Function(_, _, _) => K::Function,

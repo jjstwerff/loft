@@ -197,6 +197,9 @@ fn write_type(out: &mut String, ty: &Type) {
             write_u16_list(out, dep);
             out.push('}');
         }
+        Type::Trie(_, _, _) => unimplemented!(
+            "trie IR schema encoding — step 6 of doc/claude/plans/text-keyed-trie.md"
+        ),
         Type::Radix(n, names, dep) => {
             let _ = write!(out, "{{\"k\":\"Radix\",\"n\":{n},\"names\":");
             write_str_list(out, names);

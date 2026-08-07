@@ -1511,6 +1511,14 @@ pub enum Type {
     Index(u32, Vec<(String, bool)>, Deps), // @F9 — index<T[keys]> B-tree (asc/desc, multi-key)
     /// An index towards other records. The second is [field name]
     Radix(u32, Vec<String>, Deps),
+    /// A trie: a radix tree over ONE `text` key, answering exact lookup, key order
+    /// and PREFIX.  The runtime twin of `Parts::Trie`.
+    ///
+    /// Separate from `Radix` because `spatial` is geometric — Morton interleave,
+    /// bounding boxes, near/within/nearest — and none of that means anything for a
+    /// word.  One key name, not a `Vec`, so a two-key trie is unrepresentable rather
+    /// than rejected.  See doc/claude/plans/text-keyed-trie.md.
+    Trie(u32, String, Deps),
     /// A hash table towards other records. The second is the hash function per [field name].
     Hash(u32, Vec<String>, Deps), // @F7 — hash<T[keys]> keyed collection
     /// A function reference allowing for closures. Argument types, result, and deps.
@@ -1548,6 +1556,7 @@ impl Type {
             | Type::Sorted(_, _, d)
             | Type::Index(_, _, d)
             | Type::Radix(_, _, d)
+            | Type::Trie(_, _, d)
             | Type::Hash(_, _, d) => d.renumber_frame(from, to),
             Type::Vector(inner, d) => {
                 inner.renumber_frame_deps(from, to);
@@ -1646,6 +1655,7 @@ impl Type {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Hash(_, _, _) => {}
         }
     }
@@ -1992,6 +2002,7 @@ impl Type {
             Type::Radix(tp, key, _) => {
                 format!("spatial<{},{key:?}>", data.def(*tp).name)
             }
+            Type::Trie(tp, key, _) => format!("trie<{}[{key}]>", data.def(*tp).name),
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
             // Plan-07 phase 6.1 — explicit user-facing rendering for the
             // remaining variants.  Pre-fix these fell through to the
@@ -6316,6 +6327,7 @@ impl Data {
             Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),
             Type::Rewritten(inner) => self.type_name_str(inner),
             Type::Radix(d_nr, _, _) => format!("spatial<{}>", self.def(*d_nr).name),
+            Type::Trie(d_nr, key, _) => format!("trie<{}[{key}]>", self.def(*d_nr).name),
             Type::Tuple(elems) => {
                 let es: Vec<String> = elems.iter().map(|e| self.type_name_str(e)).collect();
                 format!("({})", es.join(", "))

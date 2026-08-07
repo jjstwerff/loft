@@ -205,6 +205,39 @@ then leaks into every prefix answer and two tests catch it.
 
 `trie<T[w]>`. `spatial` is untouched.
 
+**Started, and the measurement says split it.** `Type::Trie` (the runtime twin) is in,
+its nine compiler-named sites are handled, and three IR-codec sites carry loud stubs.
+But the assumption this step inherited from step 2 — *let the compiler produce the work
+list* — **does not hold for `Type`**:
+
+| | `Parts::Trie` (step 2) | `Type::Trie` (step 6) |
+|---|---|---|
+| compiler-named | 16 | **9** |
+| silent (`_` wildcard or `matches!`) | ~12 | **141** |
+
+`Parts` is matched exhaustively almost everywhere, so adding a variant is loud. `Type`
+is matched non-exhaustively almost everywhere — 92 wildcard `match`es and 49 `matches!`
+macros name two or more collection kinds without naming `Trie`. The compiler enumerates
+6% of the work here, against roughly half in step 2.
+
+So step 6 must not be done the way step 2 was. Proposed split:
+
+- **6a — the audit.** Triage the 141 by what the wildcard MEANS. Most will be correct
+  fall-throughs (a trie is not a `Vector`, not narrow, not inline), and the ones that are
+  not will cluster: places asking *"is this a keyed collection?"* and *"what is its
+  element type?"*. Cluster first, then read; 141 individually is not a review anyone can
+  do honestly in one pass.
+- **6b — the parser surface.** `typedef.rs`'s keyword list and `definitions.rs`'s
+  `"trie"` arm, with `Stores::trie` (already in) behind it.
+- **6c — the IR codec.** `tools/ir_schema/ir.loft` gains a `Trie` tag, `ir_schema_gen.rs`
+  is regenerated, a `PT_TRIE`/`TY_TRIE` discriminant lands with its assertion, and the
+  three stubs are retired. A generated schema, so this is a regeneration pass, not edits.
+- **6d — the `.loft` gate**, incl. the leak case step 4 could not write.
+
+The `Type`-level silence is also the argument for keeping the keyword last: with no way
+to declare a trie, all 141 are unreachable, so the audit can be done deliberately rather
+than under a live-defect clock.
+
 *Gate:* every operation the keyword exposes answers on both backends — declare, insert,
 exact lookup, prefix range, iterate, free — against hand-computed values, with a
 `sorted` control alongside so a regression cannot hide in "both are empty".
