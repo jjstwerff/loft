@@ -8,3 +8,9 @@ use fwd801_inner;
 
 pub struct F801Roofs { r_n: integer }
 pub type F801Feet = integer;
+
+// loft#803 — the ENUM half.  An enum reached through an adopted stub was never
+// registered (registration is scoped to the defs a file just added, and an
+// adopted stub's def number is below that range), so every variant of it
+// rendered `unknown` — a wrong value, not an error.
+pub enum F801Colour { F801Red, F801Green }

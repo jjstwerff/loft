@@ -88,6 +88,55 @@ reach the source never answers `null`: `store_lazy_error` says why, and
 `store_lazy_faults` keeps counting until you acknowledge it — so a traversal that
 lost data cannot report itself healthy.
 
+That last promise had a hole, and a refused binding fell through it. A `.store`
+image is read a page at a time, which only a `hash` supports — so binding a
+`trie`, `sorted`, `index` or `spatial` to one could never work. It used to answer
+`true` anyway, then `null` at every lookup, with `store_lazy_error` empty (whose
+documented meaning is *"reachable, genuinely no such key"*) and zero faults. A
+search box bound to a source it could not page showed "no results" forever, in
+perfect health.
+
+```loft
+if !store_bind_lazy(words, "vocab.store") {
+  store_load(words, "vocab.store");     // whole-image, and it carries every kind
+}
+```
+
+`store_bind_lazy` now answers `false` for a kind it can never serve — at the call
+that is wrong, not at some later lookup, because the kind is known without reading
+anything. The refusals it can only learn while fetching (a foreign layout, an entry
+holding a `vector<text>`) were equally silent and now reach `store_lazy_error` too.
+An unreachable source still reports its own connection error, and a binding that
+works still says nothing at all.
+
+### An enum works above the line that declares it
+
+Order stopped mattering for enums, the way it already did not matter for functions
+and structs:
+
+```loft
+fn probe() -> text { c = Colour.Green; return "{c}"; }
+enum Colour { Red, Green }
+```
+
+That used to be `Unknown variable`, and across two files in a package it was
+`Unknown type null — did you mean 'JNull'?` — naming a type and a suggestion the
+author never wrote, because an unresolved name was being handed on as a resolved
+type of `null` instead of as "not known yet".
+
+Underneath it was something worse, and quieter. An enum a module names before the
+importer declares it is reached through a shared definition, and that definition was
+never getting a runtime type — so every variant of it rendered as `unknown`. The
+same gap gave the enum zero width at layout time, which meant a struct field
+declared *after* an enum-typed field lost its position entirely:
+
+```loft
+struct Sess { s_a: integer, s_c: Colour, s_b: integer }   // s_b had no position
+```
+
+Both are fixed, and the enum keeps its identity: it compares, matches and renders as
+the variant you wrote, on both backends.
+
 ### Two libraries can no longer both answer a bare name
 
 If `use hex_world;` and `use hex_voxel;` each export a `Chunk`, writing bare

@@ -249,8 +249,41 @@ not, so `r: Roofs = Roofs { … }` compiled and the identical `r = Roofs { … }
 (loft#801).  Two sites in `parse_var` now leave the same stub — the `Name { … }`
 construction branch and the bare-name branch — recorded in `speculative_type_refs` so an
 unadopted one stays quiet and lets the construction site report with the author's own
-spelling.  A bare name qualifying a VALUE (`Colour.Green`) is deliberately excluded: see
-loft#803 for why resolving it is not enough to make the value right.
+spelling.  A bare name qualifying a VALUE (`Colour.Green`) is included too, since
+loft#803 established the discriminants that made its value right.
+
+**A stub is a DEFERRAL, not a resolved type.**  Handing one to a consumer as
+`Type::Null` is how `Colour.Green` reported `Unknown type null — did you mean 'JNull'?`
+— two names the author never wrote, in PASS 1, aborting before the pass that could have
+resolved it.  The field access already has a quiet `Type::Unknown(_)` path for exactly
+this, and it keeps the error rather than losing it: a stub nobody adopts is still
+`Unknown` in pass 2, where the same site reports "Field of unknown variable".
+
+#### Registration is keyed on the DEF, never on a def-number range
+
+Adoption is what breaks range-scoped work, and it does so silently.
+`actual_types_deferred` registers types over `start_def..` — "everything this file just
+added".  An adopted stub is not in that range: the module left the stub, so its def
+number is BELOW the resuming importer's `start_def`, while the def itself is the
+importer's enum.  It therefore never registered, `known_type` stayed `u16::MAX`, and
+`Stores::enum_val` answers **`unknown`** for exactly that — a wrong value, not an error
+(loft#803).  The layout fault beside it is the same cause: an unregistered enum has zero
+width, so the field AFTER an enum-typed field lost its position (the loft#797 shape).
+
+So `fill_all` scans **from 0** for any enum still lacking a db type, because the
+condition is a fact about the def, not about where its number falls.  That in turn
+requires registration to be idempotent, and its two halves are not idempotent in the
+same way — which is what defeated the three earlier attempts on loft#803:
+
+| half | idempotence | why |
+|---|---|---|
+| `Stores::enumerate` (mint the type) | **once** | it PUSHES; a second call mints a second `Colour` and renumbers every type id after it, so the generated `init()` referenced a `t189` it had not declared |
+| `Stores::value` (the db variant list) | **add-if-absent** | it appends blindly; a second pass gives the enum `Red, Green, Red, Green` and shifts what each discriminant names |
+| `set_attr_value` (the def's own discriminants) | **every pass** | `parse_enum` rebuilds the def's attributes each pass, so a stamp that ran only at mint leaves pass 2 — the pass that generates code — with variants carrying no discriminant |
+
+`register_enum_db` returns early to a stamp-only path when `known_type` is already set,
+which also skips the `__nullable<` name disambiguation — that keys on "the bare name is
+already a db type", which is true of the def's own second visit and would rename it.
 
 ### The H5 two-pass contract — the lazy-append law
 

@@ -48,3 +48,28 @@ pub fn f801_typedef() -> integer {
   x = F801Feeted { f: 55 };
   return x.f;
 }
+
+// loft#803 — the enum named in an EXPRESSION, above its own declaration and in
+// a file the entry is suspended above.  The VALUE is what matters: the earlier
+// attempts all made this compile and answer `unknown`.
+pub fn f801_enum_value() -> text {
+  c = F801Colour.F801Green;
+  return "{c}";
+}
+
+// The FIRST variant too — a fix that stamped only one discriminant passes a
+// single-variant check.
+pub fn f801_enum_first() -> text {
+  c = F801Colour.F801Red;
+  return "{c}";
+}
+
+// An enum-typed FIELD declared before its enum, with a field AFTER it: that
+// trailing field lost its position entirely when the enum was unregistered at
+// layout time (the loft#797 shape, one field along).
+pub struct F801Sess { s_a: integer, s_c: F801Colour, s_b: integer }
+
+pub fn f801_enum_field() -> text {
+  x = F801Sess { s_a: 1, s_c: F801Colour.F801Green, s_b: 2 };
+  return "{x.s_a}/{x.s_c}/{x.s_b}";
+}

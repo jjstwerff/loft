@@ -478,6 +478,20 @@ impl Parser {
             self.refuse_ambiguous_import(name, dnr);
             if self.data.def_type(dnr) == DefType::Enum {
                 t = self.data.def(dnr).returned().clone();
+            } else if matches!(self.data.def_type(dnr), DefType::Unknown) {
+                // A forward-reference STUB is not "no such name" — it is a type
+                // whose declaration has not been reached yet, and in a package it
+                // may be in the very file that is suspended at the `use` which
+                // pulled this one in. `Null` sent it to the field access as a
+                // resolved type of `null`, which reported `Unknown type null —
+                // did you mean 'JNull'?`: two names the author never wrote, in
+                // PASS 1, aborting before the pass that can resolve it (loft#803).
+                //
+                // `Unknown(0)` is the deferral the field access already handles
+                // quietly, and it keeps the error rather than dropping it: a stub
+                // that never gets adopted is still `Unknown` in pass 2, where the
+                // same site reports "Field of unknown variable".
+                t = Type::Unknown(0);
             } else {
                 t = Type::Null;
             }
@@ -640,13 +654,15 @@ impl Parser {
                     // as `Unknown(0)` with no slot is what the sibling `Name { … }` branch
                     // below already does, for the same reason.
                     //
-                    // NOT when a `.` follows.  `Colour.Green` is a type used to qualify a
-                    // VALUE, and resolving the qualifier this way is not enough to get the
-                    // value right: with the stub in place the cross-module form compiled
-                    // and evaluated to `unknown` for every variant — a wrong answer where
-                    // there had been an error, which is the worse failure.  A
-                    // forward-referenced enum VALUE needs the variant lowering fixed too;
-                    // until then this branch leaves it exactly as it was (loft#803).
+                    // A `.` may follow.  `Colour.Green` is a type qualifying a VALUE, and
+                    // this branch used to refuse it because the stub alone made the
+                    // program compile and evaluate to `unknown` for every variant — a
+                    // wrong answer where there had been an error.  That `unknown` was not
+                    // this site's doing: an ADOPTED enum def was never registered, so it
+                    // had no db type and `enum_val` answers `unknown` for exactly that
+                    // (loft#803, fixed in `typedef.rs`).  With the discriminants
+                    // established the stub yields the variant the author wrote, so the
+                    // qualifier resolves here like any other forward reference.
                     //
                     // The name test is NOT `is_camel`, which answers "not lower_case and
                     // no underscore" and so accepts `FOO`, `N` and `X` — the UPPER_CASE
@@ -657,8 +673,7 @@ impl Parser {
                     let looks_like_a_type = name.starts_with(char::is_uppercase)
                         && name.contains(char::is_lowercase)
                         && !name.contains('_');
-                    let qualifies_a_value = self.lexer.peek_token(".");
-                    if looks_like_a_type && !qualifies_a_value {
+                    if looks_like_a_type {
                         if self.data.def_nr(name) == u32::MAX {
                             self.speculative_type_refs.insert(self.data.add_def(
                                 name,

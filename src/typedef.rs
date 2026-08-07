@@ -672,12 +672,23 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
     // `register_enum_db` HERE — in `fill_all`, before the layout loop — instead of
     // mid-body-parse is what keeps the discriminant db-type laid out correctly;
     // registering it during parsing corrupts every read of the shared enum.
+    // loft#803 — and any HAND-WRITTEN enum the range-scoped registration missed.
+    //
+    // `actual_types_deferred` registers enums over `start_def..`, which reads as
+    // "everything this file just added". An ADOPTED stub breaks that: a module
+    // that names `Colour` before the importer declares it leaves a stub, the
+    // importer's own `enum Colour` upgrades that stub IN PLACE, and the stub's
+    // def number is BELOW the resuming importer's `start_def`. So the one def
+    // that IS the enum sits outside every range that would have registered it,
+    // `known_type` stays `u16::MAX`, and `enum_val` answers `unknown` for every
+    // variant — a wrong value, not an error.
+    //
+    // Scanning from 0 is the fix rather than widening the range, because the
+    // condition is a fact about the DEF (it has no db type yet), not about where
+    // its number happens to fall. Registration is idempotent, so a def the
+    // in-order pass already handled is re-stamped and not re-minted.
     for d in 0..data.definitions() {
-        if matches!(data.def_type(d), DefType::Enum)
-            && data.def(d).synthetic.is_some()
-            && data.def(d).known_type == u16::MAX
-            && data.def(d).name.starts_with("__nullable<")
-        {
+        if matches!(data.def_type(d), DefType::Enum) && data.def(d).known_type == u16::MAX {
             register_enum_db(data, database, d);
         }
     }
@@ -689,6 +700,21 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
 /// @PLN25 nullable-struct-field synthesis (synthetic `__nullable<T>` enums),
 /// so both register identically.
 fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
+    // ALREADY MINTED — re-stamp only. `parse_enum` rebuilds this def's attributes
+    // on every pass, so pass 2's variants carry no discriminant unless the stamp
+    // runs again; but `enumerate` PUSHES a type, so running the whole of this
+    // twice mints a second `Colour` and renumbers every type id after it — which
+    // is what made the generated `init()` reference a `t189` it had not declared
+    // (loft#803, attempt 3). The two halves have different idempotence, so they
+    // are separated here rather than guarded together at the call site.
+    //
+    // The name computation below is skipped as well, deliberately: its
+    // `__nullable<` disambiguation keys on "the bare name is already a db type",
+    // which is true of THIS def's own second visit and would rename it.
+    if data.def(d).known_type != u16::MAX {
+        stamp_enum_variants(data, database, d, data.def(d).known_type);
+        return;
+    }
     let mut name = data.def(d).name.clone();
     // @PLN22 (p379 `two_libs_same_struct_name`): two libraries may each define a struct
     // of the same name `S`.  `nullable_enum_for` already gives each `S` its own synth
@@ -713,12 +739,48 @@ fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
             name = format!("__nullable<{}>", data.qualified_type_name(sd));
         }
     }
-    let e_nr = database.enumerate(&name);
+    // An ADOPTED stub can be reached twice under two different def numbers — the
+    // stub's and the declaration's — so a name already in the table is this
+    // enum's own registration, not a clash. `enumerate` would push a second type
+    // under the same name and leave the first unreachable.
+    let e_nr = match database.names.get(&name) {
+        Some(&nr)
+            if matches!(
+                database.types[nr as usize].parts,
+                crate::database::Parts::Enum(_)
+            ) =>
+        {
+            nr
+        }
+        _ => database.enumerate(&name),
+    };
+    stamp_enum_variants(data, database, d, e_nr);
+    data.definitions[d as usize].known_type = e_nr;
+}
+
+/// Give each of this enum's variants its discriminant, in both places that hold
+/// one: the database's variant list and the def's own attribute values.
+///
+/// Runs on EVERY registration, including a repeat — `parse_enum` rebuilds the
+/// def's attributes each pass, so a stamp that ran only when the type was first
+/// minted leaves pass 2 (the pass that generates code) with variants that carry
+/// no discriminant, and every one of them renders as `unknown`.
+///
+/// The database half is add-if-absent because `Stores::value` appends blindly:
+/// a second pass over an already-populated enum would give it `Red, Green, Red,
+/// Green` and shift what each discriminant names.
+fn stamp_enum_variants(data: &mut Data, database: &mut Stores, d: u32, e_nr: u16) {
     for a in 0..data.attributes(d) {
-        database.value(e_nr, &data.attr_name(d, a), u16::MAX);
+        let v_name = data.attr_name(d, a);
+        let known = match &database.types[e_nr as usize].parts {
+            crate::database::Parts::Enum(values) => values.iter().any(|(_, n)| *n == v_name),
+            _ => false,
+        };
+        if !known {
+            database.value(e_nr, &v_name, u16::MAX);
+        }
         data.set_attr_value(d, a, Value::Enum(a as u8 + 1, e_nr));
     }
-    data.definitions[d as usize].known_type = e_nr;
 }
 
 /// @PLN25 — register + lay out a synth `__nullable<S>` enum ON DEMAND, for a FORWARD-referenced `S`

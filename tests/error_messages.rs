@@ -118,6 +118,19 @@ fn normalise(raw: &str, case_name: &str, entry: &Path) -> String {
     }
     // Native scratch dir (only present if a case slips into native mode).
     s = s.replace("/tmp/loft_native", "<tmp>/loft_native");
+    // The stale-rlib advisory is about THIS CHECKOUT's build order, not about the
+    // program: `target/release/libloft.rlib` is older than `deps/libloft.rlib`
+    // after any `cargo test` build, so a case that builds a library emits it here
+    // and not on a machine that last ran `cargo build --lib`. Capturing it would
+    // pin one build order into the baseline and make the case fail on the other.
+    s = s
+        .lines()
+        .filter(|l| !l.starts_with("loft: warning — ") || !l.contains("is STALE"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if raw.ends_with('\n') && !s.ends_with('\n') {
+        s.push('\n');
+    }
     // PID in Rust panic header: `thread 'main' (12345)` → `thread 'main' (<pid>)`.
     s = scrub_thread_pid(&s);
     // Crate-internal source line numbers in Rust panic origins.

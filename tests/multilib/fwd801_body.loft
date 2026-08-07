@@ -17,4 +17,11 @@ fn main() {
     assert(f801_for() == 44, "iterating a vector of the forward-declared type");
     assert(f801_sizeof() == 8, "the type named as a value argument");
     assert(f801_typedef() == 55, "a typedef the entry declares");
+
+    // loft#803 — the enum half.  These assert the VALUE, not that it compiled:
+    // three earlier attempts all reached a program that ran and answered
+    // `unknown` for every variant, which is worse than the error it replaced.
+    assert(f801_enum_value() == "F801Green", "a forward enum's variant, named in an expression");
+    assert(f801_enum_first() == "F801Red", "the FIRST variant — one discriminant is not enough");
+    assert(f801_enum_field() == "1/F801Green/2", "the field AFTER an enum field keeps its position");
 }
