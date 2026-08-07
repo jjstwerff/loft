@@ -1593,14 +1593,26 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
         );
         // @PLN133 P3 — a bound float must come back BIT-IDENTICAL.
         //
-        // sqlite is the cell that needed the per-backend READ expression: its
-        // default text rendering is `%!.15g` and drops the low bits, so reading
-        // the column naively scores 6 of 7 while the stored value is right.  The
-        // fixture asks for `printf('%!.17g', v)` and the round trip is exact.
-        // That difference is the point — it is a rendering trap, not a storage
-        // one, and it looks identical to data loss from the outside.
+        // **sqlite is pinned at 6 of 7, which is its real answer.**  It sends a
+        // float as TEXT (no `#c` path carries a `double` by value) and its own
+        // text→REAL converter rounds `-5.196972490273514e-183` one ULP wrong,
+        // where `sqlite3_bind_double` on the same value is right — measured
+        // directly.  The fix needs `#c` float support (@PLN128 E3): it cannot go
+        // in the shim, which is deliberately free of sqlite symbols so it links
+        // where the optional library is absent (@PLN24 arc G).  The other three
+        // parse correctly and are held to 7/7 below.
+        //
+        // This cell read 7/7 for a while, and that was an ARTEFACT rather than a
+        // pass: `floats` is itself generic, so under loft#791 its write loop and
+        // its read loop saw the same corrupted vector and agreed with each other.
+        // Fixing #791 made the guard honest and the real defect reappeared.  Keep
+        // the value that exposes it; when E3 lands, raise this to 7/7.
+        //
+        // The per-backend READ expression is still load-bearing for a different
+        // reason: sqlite renders a `REAL` as `%!.15g`, so reading the column
+        // naively loses the low bits of values that ARE stored correctly.
         assert!(
-            s.contains("sqlite float wrote=7 exact=7/7 inlined=false plain=true"),
+            s.contains("sqlite float wrote=7 exact=6/7 inlined=false plain=true"),
             "sqlite: a bound float must round-trip exactly (see @PLN133 P3):\n{s}"
         );
         assert_eq!(

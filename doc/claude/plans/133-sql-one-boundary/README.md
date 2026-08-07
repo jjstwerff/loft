@@ -557,21 +557,23 @@ four backends bind a float as text for the same reason (no `#c` path carries a
 bypasses `SqlText` entirely — the same hole @PLN124's interpolation hook exists
 to close for injection, showing up as a numeric fault instead of a syntactic one.
 
-**sqlite's problem turned out to be the READ, not the bind — and that reverses
-what an earlier version of this section claimed.** Reading the column naively
-(`SELECT v`) scores 6 of 7, because sqlite renders a `REAL` as `%!.15g` and drops
-the low bits. Reading it as `printf('%!.17g', v)` scores **7 of 7**: the value was
-stored correctly all along. It is a RENDERING trap, and from the outside it looks
-exactly like data loss.
+**sqlite loses one value in seven, and it IS the bind.** Its text→REAL converter
+rounds `-5.196972490273514e-183` one ULP wrong where `sqlite3_bind_double` on the
+same value is right, measured directly in C. The other three backends parse
+correctly and score 7/7.
 
-*One measurement remains unreconciled and is recorded rather than smoothed over*:
-a C-level comparison binding loft's 202-character literal with
-`sqlite3_bind_text` and reading `sqlite3_column_double` differs by one ULP from a
-`strtod`-derived target, while `strtod` + `sqlite3_bind_double` matches it. The
-end-to-end loft round trip is nevertheless exact, which is consistent with loft's
-own literal parse landing on a different ULP than `strtod` — self-consistent, and
-not a storage fault. **Unverified**; it needs its own probe before anything is
-built on either reading.
+*This claim was stated, retracted, and is now restored — and the retraction is the
+instructive part.* The guard briefly reported sqlite at **7/7**, which looked like
+proof that the bind was fine and the READ was the whole story. It was not a
+measurement: `floats` is itself a generic function, so under
+[loft#791](https://github.com/loft-lang/loft/issues/791) its write loop and its
+read loop saw the SAME corrupted vector and agreed with each other. **A guard can
+pass by comparing garbage to identical garbage**, and this one did. Fixing #791
+made it honest and the real defect reappeared, matching the C measurement exactly.
+
+The per-backend READ expression is still needed, for a separate reason: sqlite
+renders a `REAL` as `%!.15g`, so reading naively loses the low bits of values that
+were stored correctly. Both effects are real; only one of them is the bind.
 
 **A shim could not fix it in any case.** `tests/fixtures/sqldb/sqlite/loft.toml`
 declares sqlite `optional-libs`, and the shim's header states it is *"deliberately
@@ -581,7 +583,8 @@ compile on a machine with no libsqlite3 (@PLN24 arc G). A shim calling
 
 **So the rule is one rule, and it was always the right one:** a driver BINDS a
 float — which all four already do — and a CALLER must never interpolate one into
-a raw statement.
+a raw statement. sqlite's last ULP waits on @PLN128 E3, which is where a
+write-path requirement belonged all along.
 
 **And READING needs a per-backend full-precision expression**, which the `SqlDb`
 contract does not currently have. That is a real requirement this probe found:

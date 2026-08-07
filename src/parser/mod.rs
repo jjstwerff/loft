@@ -5129,11 +5129,27 @@ impl Parser {
                 // FIRST item's value for every iteration (P252).  The
                 // Nullable peer's arg shape is identical to OpGetVector
                 // (r, size, idx) so the elm_size fixup logic is unchanged.
+                // **Only a TYPE-VARIABLE element is rewritten**, and the baked
+                // stride of 0 is how one is recognised — that is what the
+                // paragraph above means by "the template bakes elm_size=0 for
+                // type-variable elements".  A read with a NON-ZERO stride is a
+                // vector of some concrete type that merely happens to live in a
+                // generic body, and its stride is already right.
+                //
+                // Without this guard every `OpGetVector` in the body was
+                // retargeted to T's stride, so a plain `vector<float>` local was
+                // written with stride 8 and read with the stride of whatever T
+                // happened to be.  Silent: an 8-byte T (a one-field struct — the
+                // shape most tests use) gives the correct answer by coincidence,
+                // and anything wider reads garbage from element 1 onward, while
+                // `len()` and the same vector passed to a NON-generic helper stay
+                // correct (loft#791).
                 if new_d != u32::MAX
                     && (new_d as usize) < data.definitions.len()
                     && (data.def(new_d).name() == "OpGetVector"
                         || data.def(new_d).name() == "OpGetVectorNullable")
                     && new_args.len() == 3
+                    && matches!(&new_args[1], Value::Int(0))
                 {
                     let cur_size = if let Value::Int(n) = &new_args[1] {
                         *n
