@@ -578,3 +578,254 @@ mod tests {
         assert_eq!(got, ["kerk", "kerkstraat", "kerkweg"], "the run closes up");
     }
 }
+
+/// @PLN134 — how many 64 KB PAGES one prefix query touches.
+///
+/// The measurement the plan opens on, and the reason it opens on one at all: a
+/// PATRICIA descent is cheap in NODES — one root→leaf path, branching on bits of a
+/// probe the caller already holds — and that says nothing about what it costs over a
+/// link. A reader fetches `paged_reader::PAGE_SIZE` (64 KB) at a time, and node ids
+/// are handed out in INSERTION order, so a path through a large tree can land on a
+/// fresh page at every hop.
+///
+/// Nodes are one contiguous array (`radix_tree::node_off` is `HDR + 16*(id-1)`), so
+/// the span a descent can reach is bounded by `16 × node_count` — which is the fact
+/// that makes the answer worth measuring rather than assuming in either direction.
+///
+/// Reports pages per query over a real vocabulary and a real prefix distribution.
+/// `#[ignore]` because it reads the host's dictionaries and prints rather than
+/// asserts — it answers a design question, it does not defend an invariant.
+///
+/// ```text
+/// cargo test --release --lib trie_db::pages -- --ignored --nocapture
+/// ```
+#[cfg(test)]
+mod pages {
+    use super::*;
+    use crate::radix_tree as rt;
+
+    const PAGE: u32 = 64 * 1024;
+
+    fn w_key() -> Key {
+        Key {
+            type_nr: TEXT_TYPE_NR,
+            position: 0,
+        }
+    }
+
+    fn add_word(store: &mut Store, w: &str) -> u32 {
+        let ptr = store.set_str(w);
+        let rec = store.claim(4);
+        store.set_u32_raw(rec, PAYLOAD, ptr);
+        rec
+    }
+
+    /// Real words, not generated ones: prefix SHARING is the whole subject, and a
+    /// synthetic vocabulary has whatever sharing its generator happened to produce.
+    /// Several languages, because routing's index is place names — proper nouns
+    /// across languages, which is closer to this than one language's lexicon.
+    fn vocabulary() -> Vec<String> {
+        let mut words = std::collections::BTreeSet::new();
+        for f in [
+            "/usr/share/dict/american-english",
+            "/usr/share/dict/british-english",
+            "/usr/share/dict/french",
+            "/usr/share/dict/spanish",
+            "/usr/share/dict/italian",
+            "/usr/share/dict/ngerman",
+            "/usr/share/dict/portuguese",
+        ] {
+            let Ok(text) = std::fs::read_to_string(f) else {
+                continue;
+            };
+            for w in text.lines() {
+                let w = w.trim().to_lowercase();
+                // ASCII only: the oracle is bytewise and a multi-byte word is not
+                // wrong here, just harder to reason about when reading the output.
+                if (2..=24).contains(&w.len()) && w.chars().all(|c| c.is_ascii_lowercase()) {
+                    words.insert(w);
+                }
+            }
+        }
+        words.into_iter().collect()
+    }
+
+    fn pct(sorted: &[usize], p: f64) -> usize {
+        if sorted.is_empty() {
+            return 0;
+        }
+        #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+        let i = ((sorted.len() - 1) as f64 * p) as usize;
+        sorted[i]
+    }
+
+    #[test]
+    #[ignore = "measurement — run with --release --lib --ignored --nocapture"]
+    fn prefix_query_page_span() {
+        let words = vocabulary();
+        if words.len() < 20_000 {
+            println!("SKIP — only {} words available on this host", words.len());
+            return;
+        }
+        let key = w_key();
+        let mut store = Store::new_in_use(1 << 20);
+        let mut tree = rt::rtree_init(&mut store, 8);
+        // INSERTION ORDER IS THE VARIABLE UNDER TEST. Sorted input would hand the
+        // node array the one layout that cannot scatter, and answer a question
+        // nobody asked — a real vocabulary arrives in whatever order its source
+        // had. Shuffled deterministically so the number is reproducible.
+        let mut order: Vec<usize> = (0..words.len()).collect();
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        for i in (1..order.len()).rev() {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            order.swap(i, (seed >> 33) as usize % (i + 1));
+        }
+        for &i in &order {
+            let rec = add_word(&mut store, &words[i]);
+            tree = rt::rtree_insert(&mut store, tree, rec, &TextOracle { key: &key });
+        }
+        let nodes = store.get_u32_raw(tree, 12);
+        let node_bytes = 24 + 16 * nodes;
+        println!(
+            "\nvocabulary {} words | {} nodes | node array {:.2} MB = {} pages of 64 KB",
+            words.len(),
+            nodes,
+            f64::from(node_bytes) / (1024.0 * 1024.0),
+            node_bytes.div_ceil(PAGE)
+        );
+
+        // THE COUNTERFACTUAL. Every number below is reported twice: once for the
+        // layout as built (ids in insertion order) and once for the same tree with
+        // ids renumbered breadth-first. Nothing is rebuilt — the touched offsets are
+        // mapped through the new ranking — so this is what a layout pass would buy,
+        // measured before anyone writes one.
+        let bfs = rt::bfs_order(&store, tree);
+        let mut rank = vec![u32::MAX; (nodes + 2) as usize];
+        for (i, &n) in bfs.iter().enumerate() {
+            rank[n as usize] = u32::try_from(i).unwrap_or(u32::MAX);
+        }
+        let renumber = |off: u32| -> u32 {
+            // offset -> node id -> BFS rank -> the offset it WOULD have had
+            let id = (off - 24) / 16 + 1;
+            let within = (off - 24) % 16;
+            match rank.get(id as usize) {
+                Some(&r) if r != u32::MAX => 24 + 16 * r + within,
+                _ => off,
+            }
+        };
+
+        // The prefix distribution a search box actually issues: what a person has
+        // typed after 2-8 keystrokes, sampled from the vocabulary itself so every
+        // probe HITS. A miss walks less, so hits are the honest side.
+        for plen in [2usize, 3, 4, 6, 8] {
+            let mut spans = Vec::new();
+            let mut results = Vec::new();
+            // The SAME touch set, bucketed three ways. A descent reads a handful of
+            // 16-byte nodes; how much that costs is decided by the fetch granularity,
+            // not by the walk, and one page size cannot show that.
+            let mut p4 = Vec::new();
+            let mut p512 = Vec::new();
+            let mut bytes = Vec::new();
+            let mut b4 = Vec::new();
+            let mut b64 = Vec::new();
+            let mut step = words.len() / 400;
+            if step == 0 {
+                step = 1;
+            }
+            for w in words.iter().step_by(step) {
+                if w.len() < plen {
+                    continue;
+                }
+                let pre = &w.as_bytes()[..plen];
+                rt::touch_begin();
+                let hits = prefix_offsets(&store, tree, &key, pre, 20);
+                let touched = rt::touch_end();
+                let pages: std::collections::BTreeSet<u32> =
+                    touched.iter().map(|o| o / PAGE).collect();
+                spans.push(pages.len());
+                p4.push(
+                    touched
+                        .iter()
+                        .map(|o| o / 4096)
+                        .collect::<std::collections::BTreeSet<u32>>()
+                        .len(),
+                );
+                p512.push(
+                    touched
+                        .iter()
+                        .map(|o| o / 512)
+                        .collect::<std::collections::BTreeSet<u32>>()
+                        .len(),
+                );
+                // Each recorded offset is one 4-byte field read; a node is two words.
+                bytes.push(touched.len() * 4);
+                let moved: std::collections::BTreeSet<u32> =
+                    touched.iter().map(|o| renumber(*o)).collect();
+                b4.push(
+                    moved
+                        .iter()
+                        .map(|o| o / 4096)
+                        .collect::<std::collections::BTreeSet<u32>>()
+                        .len(),
+                );
+                b64.push(
+                    moved
+                        .iter()
+                        .map(|o| o / PAGE)
+                        .collect::<std::collections::BTreeSet<u32>>()
+                        .len(),
+                );
+                results.push(hits);
+            }
+            spans.sort_unstable();
+            let total: usize = spans.iter().sum();
+            #[allow(clippy::cast_precision_loss)]
+            let mean = total as f64 / spans.len() as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let mean_bytes = bytes.iter().sum::<usize>() as f64 / bytes.len() as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let mean_4k = p4.iter().sum::<usize>() as f64 / p4.len() as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let mean_512 = p512.iter().sum::<usize>() as f64 / p512.len() as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let bfs_fine = b4.iter().sum::<usize>() as f64 / b4.len() as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let bfs_wide = b64.iter().sum::<usize>() as f64 / b64.len() as f64;
+            println!(
+                "  {plen}ch n={:<4} | AS BUILT 64K {mean:5.1} (p95 {:3}) 4K {mean_4k:5.1} \
+                 512B {mean_512:5.1} | BFS 64K {bfs_wide:5.1} 4K {bfs_fine:5.1} | bytes read {mean_bytes:4.0}",
+                spans.len(),
+                pct(&spans, 0.95),
+            );
+        }
+        println!(
+            "\n  whole image for comparison: the node array alone is {} pages; \
+             a query is worth paging only if it stays far below that.",
+            node_bytes.div_ceil(PAGE)
+        );
+    }
+
+    /// The seek + bounded walk `prefix` performs, without the `DbRef`/`Stores`
+    /// plumbing — this measures the TREE, and a collection wrapper would only add
+    /// its own constant.
+    fn prefix_offsets(store: &Store, tree: u32, key: &Key, pre: &[u8], cap: usize) -> usize {
+        let probe = |word: u32| bytes_word(pre, word);
+        let mut it = rt::rtree_seek(
+            store,
+            tree,
+            &probe,
+            pre.len() as u32 * 8,
+            &TextOracle { key },
+        );
+        let mut n = 0;
+        let mut rec = it.rec();
+        while rec != 0 && n < cap {
+            if !text_bytes(store, rec, key).as_bytes().starts_with(pre) {
+                break;
+            }
+            n += 1;
+            rec = it.next(store, tree).unwrap_or(0);
+        }
+        n
+    }
+}

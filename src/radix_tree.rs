@@ -341,7 +341,77 @@ fn node_off(node: u32) -> u32 {
     HDR + NODE_SIZE * (node - 1)
 }
 
+// @PLN134 — the byte offsets a traversal READ, so a measurement can count the
+// PAGES behind them.
+//
+// A descent is cheap in NODES (one root→leaf path) and that says nothing about
+// what it costs over a link, because a reader fetches 64 KB pages and node ids
+// are handed out in insertion order. Nodes are a contiguous array here
+// (`node_off`), so the two questions have different answers and only the page
+// one decides whether a trie can be paged.
+//
+// `#[cfg(test)]`, so production keeps the bare `get_u32_raw`. Off unless a
+// measurement calls `touch_begin`; recording is what makes it cost anything.
+#[cfg(test)]
+thread_local! {
+    static TOUCHED: std::cell::RefCell<Option<std::collections::BTreeSet<u32>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Start recording touched offsets, discarding anything from a previous window.
+#[cfg(test)]
+pub(crate) fn touch_begin() {
+    TOUCHED.with(|t| *t.borrow_mut() = Some(std::collections::BTreeSet::new()));
+}
+
+/// The distinct offsets read since [`touch_begin`], and stop recording.
+#[cfg(test)]
+pub(crate) fn touch_end() -> std::collections::BTreeSet<u32> {
+    TOUCHED.with(|t| t.borrow_mut().take().unwrap_or_default())
+}
+
+/// @PLN134 — node ids in BREADTH-FIRST order, so a measurement can ask what a
+/// different LAYOUT would cost without building one.
+///
+/// Ids are handed out in INSERTION order today, which is why a root→leaf path is
+/// scattered across the whole node array. BFS is the cheapest reordering that puts
+/// a path's early hops together, and every query shares those hops — so this
+/// answers "is the scatter the layout's fault?" before anyone changes the layout.
+#[cfg(test)]
+pub(crate) fn bfs_order(store: &Store, tree: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    if let Child::Node(root) = Child::decode(store.get_i32_raw(tree, TOP)) {
+        queue.push_back(root);
+    }
+    while let Some(n) = queue.pop_front() {
+        out.push(n);
+        for dir in [false, true] {
+            if let Child::Node(c) = child(store, tree, n, dir) {
+                queue.push_back(c);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+fn touch(off: u32) {
+    TOUCHED.with(|t| {
+        if let Ok(mut b) = t.try_borrow_mut()
+            && let Some(s) = b.as_mut()
+        {
+            s.insert(off);
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn touch(_off: u32) {}
+
 fn node_bit(store: &Store, tree: u32, node: u32) -> u32 {
+    touch(node_off(node));
     store.get_u32_raw(tree, node_off(node))
 }
 
@@ -363,6 +433,7 @@ fn child_off(node: u32, dir: bool) -> u32 {
 }
 
 fn child(store: &Store, tree: u32, node: u32, dir: bool) -> Child {
+    touch(child_off(node, dir));
     Child::decode(store.get_i32_raw(tree, child_off(node, dir)))
 }
 
