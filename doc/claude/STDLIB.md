@@ -1057,11 +1057,11 @@ or a schema check needs.  Declared in `default/07_reflect.loft`.
 | `type_named(name: text) -> TypeInfo?` | The declared shape of the type called `name`, or **null** when this program has no such type. Use when the name is a runtime value — a config file, a database catalogue, a command line — so there is nothing to call `type_of` on. |
 
 `TypeInfo` carries `name`, `kind`, `size` (bytes per record), `fields`,
-`variants` and `element`; each `FieldInfo` carries `name`, `type_name`,
-`position`, `kind` and `nullable`.  Match on `kind` first: only a record and a
-struct-enum variant have `fields`, only an enum has `variants`, and only a
-vector or a keyed collection names an `element`.  Empty is the honest answer for
-a kind that has no such thing.
+`variants`, `element`, `collection` and `keys`; each `FieldInfo` carries `name`,
+`type_name`, `position`, `kind` and `nullable`.  Match on `kind` first: only a
+record and a struct-enum variant have `fields`, only an enum has `variants`, and
+only a vector or a keyed collection names an `element`.  Empty is the honest
+answer for a kind that has no such thing.
 
 ```loft
 t = type_of(row);
@@ -1073,6 +1073,38 @@ for f in t.fields { println("  {f.name}: {f.type_name} @{f.position}") }
 `BooleanKind` · `TextKind` · `CharacterKind` · `RecordKind` · `EnumKind` ·
 `VariantKind` · `VectorKind` · `KeyedKind` · `RefKind` · `OtherKind`.  A kind
 this loft version has no name for is reported as `OtherKind`, never guessed at.
+
+### A keyed collection: which one, and on which fields
+
+`KeyedKind` says a type is walked by cursor and stops there, which is not enough
+to derive a query FROM.  `collection` says which of the five it is —
+`KeyedHash` · `KeyedIndex` · `KeyedSorted` · `KeyedOrdered` · `KeyedRadix`, and
+`NotKeyed` for every other type — and `keys` lists its key fields **in key
+order**, each a `KeyInfo` of `name`, `position` and `ascending`.
+
+```loft
+t = type_of(people);                       // hash<Person[id]>
+if t.collection == KeyedHash {
+  for k in t.keys { println("key {k.name} @{k.position}") }
+}
+```
+
+- **`position` is the ELEMENT record's byte offset** — the same number that
+  element type's `FieldInfo.position` carries, so a key joins to a field by
+  value.  A name is a display fact; the position is what the collection keys on.
+- **`ascending` is `true` for a kind with no order of its own** (`KeyedHash`,
+  `KeyedRadix`), because there is no descending answer to give.  Match
+  `collection` first where "ascending" and "unordered" differ: only the three
+  ordered kinds can serve a range.
+- **`KeyedSorted` vs `KeyedOrdered`** is the same declaration over a different
+  structure: `sorted<T[…]>` is a tree, and becomes a sorted by-value vector
+  (`KeyedOrdered`) when `T` is co-located by a `hash` / `index` / `spatial`
+  field elsewhere.  Both are ordered.
+- **`keys` is delivered whole or empty.**  A query built from half a composite
+  key reads the wrong rows, so a key the descriptor cannot resolve to an element
+  field drops the whole list — which is also what a `__nullable<S>` element
+  reports, because its keys live in the `Some` payload rather than in the
+  element node.
 
 Two limits worth knowing before you reach for it:
 

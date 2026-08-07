@@ -40,7 +40,8 @@ pub enum TypeKind {
   /// A vector — `element` names what it holds.
   VectorKind,
   /// A keyed collection (hash / index / sorted / ordered / radix) — walked by
-  /// cursor rather than by layout, so it reports its element and nothing more.
+  /// cursor rather than by layout, so it has no fields of its own. Which of the
+  /// five it is, and on which fields, are in `collection` and `keys`.
   KeyedKind,
   /// A stored reference to another record.
   RefKind,
@@ -65,6 +66,40 @@ pub struct FieldInfo {
   nullable: boolean,
 }
 
+/// WHICH keyed collection a type is — the shape of its lookup.
+///
+/// `KeyedKind` says a type is walked by cursor; this says what by. The
+/// distinction decides what a query over it can be: a `hash` answers equality
+/// only, `sorted` / `ordered` / `index` also answer a range in their declared
+/// direction, and a `radix` is a Morton-order structure that no SQL shape means
+/// the same thing as.
+pub enum CollectionKind {
+  /// Not a keyed collection. Every other kind of type answers this, so a
+  /// caller can read `collection` without matching `kind` first.
+  NotKeyed,
+  KeyedHash,
+  KeyedIndex,
+  KeyedSorted,
+  KeyedOrdered,
+  KeyedRadix,
+}
+
+/// One key field of a keyed collection.
+pub struct KeyInfo {
+  name: text,
+  /// Byte offset of this field within the ELEMENT record — the same number the
+  /// element type's `FieldInfo.position` carries, so a caller joins the two by
+  /// VALUE rather than by matching names. A name is a display fact; the
+  /// position is what the collection actually keys on.
+  position: integer,
+  /// Does the collection order this key ascending?
+  ///
+  /// `true` for a kind that has no order of its own (`hash`, `radix`), because
+  /// there is no descending answer to give. Match `collection` first where the
+  /// difference between "ascending" and "unordered" matters.
+  ascending: boolean,
+}
+
 /// One variant of an enum.
 pub struct VariantInfo {
   name: text,
@@ -87,6 +122,17 @@ pub struct TypeInfo {
   const variants: vector<VariantInfo>,
   /// For a vector or a keyed collection, the element type's name.
   element: text,
+  /// For a keyed collection, which of the five it is; `NotKeyed` otherwise.
+  collection: CollectionKind,
+  /// The key fields of a keyed collection, in KEY ORDER — the order a composite
+  /// lookup binds them in, which is why it is a vector and not a set.
+  ///
+  /// Empty for every type that is not keyed, and empty for the one keyed shape
+  /// whose keys are not its element's own fields: a `__nullable<S>` element
+  /// keys through its `Some` payload. Empty rather than partial is deliberate —
+  /// a query built from half a composite key is a WRONG query, not a narrower
+  /// one, so a key list is delivered whole or not at all.
+  const keys: vector<KeyInfo>,
 }
 
 /// The declared shape of `value`'s type.

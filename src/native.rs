@@ -2618,6 +2618,45 @@ fn reflect_kind(node: Option<&crate::database::LayoutNode>) -> i32 {
     }
 }
 
+/// The `CollectionKind` discriminant for a descriptor node — 1-indexed, matching
+/// the variant order in `default/07_reflect.loft`.
+///
+/// Spelled out per kind rather than closed with a catch-all inside the match on
+/// [`Iterated`], so a kind added to the descriptor fails to compile here instead
+/// of silently reporting one of the others
+/// ([DATABASE.md § Adding or changing a collection kind](../doc/claude/DATABASE.md)).
+fn reflect_collection(node: Option<&crate::database::LayoutNode>) -> i32 {
+    use crate::database::{Iterated, LayoutNode};
+    match node {
+        Some(LayoutNode::Iterated(it)) => match it {
+            Iterated::Hash { .. } => 2,
+            Iterated::Index { .. } => 3,
+            Iterated::Sorted { .. } => 4,
+            Iterated::Ordered { .. } => 5,
+            Iterated::Radix { .. } => 6,
+        },
+        _ => 1,
+    }
+}
+
+/// The key fields of a keyed collection as `(field index, ascending)`, in key
+/// order.
+///
+/// A kind with no order of its own answers `true` for every key: there is no
+/// descending sense in which a hash bucket is arranged, and inventing a
+/// direction would be a fact the descriptor does not hold.
+fn reflect_keys(it: &crate::database::Iterated) -> Vec<(u16, bool)> {
+    use crate::database::Iterated;
+    match it {
+        Iterated::Hash { keys, .. } | Iterated::Radix { keys, .. } => {
+            keys.iter().map(|k| (*k, true)).collect()
+        }
+        Iterated::Sorted { keys, .. }
+        | Iterated::Ordered { keys, .. }
+        | Iterated::Index { keys, .. } => keys.clone(),
+    }
+}
+
 /// Fill a `TypeInfo` record for `kt` and return it.
 #[allow(clippy::too_many_lines)] // one schema-driven writer; splitting it hides the field map
 /// # Panics
@@ -2637,6 +2676,7 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     let ti_tp = stores.name("TypeInfo");
     let fi_tp = stores.name("FieldInfo");
     let vi_tp = stores.name("VariantInfo");
+    let ki_tp = stores.name("KeyInfo");
     let lookup = |stores: &Stores, tp: u16, ty: &str, field: &str| {
         let p = stores.position(tp, field);
         assert_ne!(
@@ -2660,6 +2700,11 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     let fi_null = lookup(stores, fi_tp, "FieldInfo", "nullable");
     let vi_name = lookup(stores, vi_tp, "VariantInfo", "name");
     let vi_tag = lookup(stores, vi_tp, "VariantInfo", "tag");
+    let ti_collection = lookup(stores, ti_tp, "TypeInfo", "collection");
+    let ti_keys = lookup(stores, ti_tp, "TypeInfo", "keys");
+    let ki_name = lookup(stores, ki_tp, "KeyInfo", "name");
+    let ki_pos = lookup(stores, ki_tp, "KeyInfo", "position");
+    let ki_asc = lookup(stores, ki_tp, "KeyInfo", "ascending");
 
     let ti_bytes = u32::from(stores.size(ti_tp));
     let out = stores.database(ti_bytes.div_ceil(8) + 1);
@@ -2687,6 +2732,15 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     stores
         .store_mut(&out)
         .set_u32_raw(out.rec, out.pos + ti_variants, 0);
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, out.pos + ti_keys, 0);
+    stores.store_mut(&out).set_byte(
+        out.rec,
+        out.pos + ti_collection,
+        0,
+        reflect_collection(node.as_ref()),
+    );
 
     // The element type, for the two kinds that hold one.
     let elem = match &node {
@@ -2764,6 +2818,54 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
             stores
                 .store_mut(&out)
                 .set_int(vec_rec, at + vi_tag, i as i64 + 1);
+        }
+    }
+
+    // Keys — a keyed collection only. The descriptor holds them as INDICES into
+    // the element record's field list, so they are resolved here rather than
+    // published raw: an index is meaningless to a caller that also has to skip
+    // the synthetic fields (`#left_1` and friends), and the byte position is the
+    // one number that identifies a field in both lists.
+    if let Some(LayoutNode::Iterated(it)) = &node {
+        let keys = reflect_keys(it);
+        let elem_fields = match elem.and_then(|e| desc.nodes.get(&e)) {
+            Some(LayoutNode::Record(f) | LayoutNode::EnumValue(_, f)) => f.clone(),
+            // A `__nullable<S>` element keys through its `Some` payload, which is
+            // not this node. No field list here means no keys, which is what the
+            // doc comment promises.
+            _ => Vec::new(),
+        };
+        // Whole or nothing: half a composite key derives a query that reads the
+        // wrong rows, so an unresolvable key drops the list rather than the key.
+        let resolved: Option<Vec<(String, u16, bool)>> = keys
+            .iter()
+            .map(|(k, asc)| {
+                elem_fields
+                    .get(*k as usize)
+                    .map(|f| (f.name.clone(), f.position, *asc))
+            })
+            .collect();
+        if let Some(resolved) = resolved.filter(|r| !r.is_empty()) {
+            let ki_bytes = u32::from(stores.size(ki_tp));
+            let words = ((resolved.len() as u32) * ki_bytes + 15) / 8 + 1;
+            let vec_rec = stores.store_mut(&out).claim(words.max(1));
+            stores
+                .store_mut(&out)
+                .set_u32_raw(vec_rec, 4, resolved.len() as u32);
+            stores
+                .store_mut(&out)
+                .set_u32_raw(out.rec, out.pos + ti_keys, vec_rec);
+            for (i, (name, position, asc)) in resolved.iter().enumerate() {
+                let at = 8 + (i as u32) * ki_bytes;
+                let n = stores.store_mut(&out).set_str(name);
+                stores.store_mut(&out).set_u32_raw(vec_rec, at + ki_name, n);
+                stores
+                    .store_mut(&out)
+                    .set_int(vec_rec, at + ki_pos, i64::from(*position));
+                stores
+                    .store_mut(&out)
+                    .set_byte(vec_rec, at + ki_asc, 0, i32::from(*asc));
+            }
         }
     }
     out

@@ -655,6 +655,38 @@ not just a stack truncation — otherwise a traversal over an unreachable source
 leaks once per failed fetch, which is exactly the long-running case arc C's
 sticky fault counter exists for. Recorded as the first thing S8 must solve.
 
+## What the build settled
+
+### S1 — the two kinds a `sorted` declaration can be
+
+`sorted<T[…]>` does not name one structure. It registers as `Parts::Sorted` — a
+red-black tree — unless `T` is **co-located**, which a `hash` / `index` /
+`spatial` field elsewhere in the program makes it; then the same declaration
+becomes `Parts::Ordered`, a sorted by-value vector searched by bisection. So
+reflection reports `KeyedSorted` and `KeyedOrdered` as two kinds rather than one
+"ordered somehow": they are different structures, and a consumer that only knew
+they were both ordered could not tell which refusals apply to which.
+
+**It is not a property of the declaration**, which is what makes it worth
+pinning: the gate needs a second element type to hold the `ordered` cell,
+because linking `KeyedItem` to demonstrate it would have changed what the
+`sorted<KeyedItem[…]>` cell beside it reports.
+
+### S1 — a key is delivered whole or not at all
+
+The descriptor holds keys as INDICES into the element record's field list, and
+those indices are resolved to `(name, byte position)` before they are published.
+Two reasons, and the second is the one that decides the shape:
+
+- An index is meaningless to a caller who also has to skip the synthetic fields
+  (`#left_1`, `#right_1`, `#color_1`) that `LayoutField::is_data` filters, so a
+  raw index would make every consumer re-derive `is_data` to use it.
+- **A key that cannot be resolved drops the whole list.** A `__nullable<S>`
+  element keys through its `Some` payload, which is not the element node, so its
+  keys resolve to nothing. Publishing the resolvable half would derive
+  `WHERE k1 = ?` from a two-key collection — a query that reads the WRONG rows
+  rather than fewer of them. Empty is a refusal a caller can see; partial is not.
+
 ## Implementation steps — small, safe, each one green
 
 Ordered by **risk, not dependency**: the two unknowns are probed before anything
@@ -681,7 +713,7 @@ swap causes.
 
 | # | do | green because |
 |---|---|---|
-| **S1** | Reflection gains the collection KIND, its key fields and the direction bit, each carrying `position`. Additive only. | existing reflection output is byte-identical; the new fields have no reader yet |
+| **S1** | ~~Reflection gains the collection KIND, its key fields and the direction bit, each carrying `position`.~~ **DONE 2026-08-07** — `TypeInfo.collection` (`CollectionKind`) and `TypeInfo.keys` (`vector<KeyInfo>`); gated in `tests/scripts/pln127-reflect.loft` on both backends. | additive; the new fields have no reader yet |
 | **S2** | `TableDef` the value, and `derive(T)` from reflection. Must exclude synthetic fields the way `LayoutField::is_data` does. | a pure function with unit tests |
 | **S3** | `render(TableDef, dialect) -> DDL`, including the index the collection kind implies. | unit-tested against hand-written expected DDL per dialect — hand-written, so agreement between two generators cannot pass for correctness |
 | **S4** | `reconcile(want, have) -> Binding \| Refusal`, carrying per-column conversions. | pure; tested on hand-built pairs: exact match, missing column, incompatible type, extra column, missing index, a number in a `VARCHAR` |
