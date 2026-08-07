@@ -643,14 +643,19 @@ Guard: `forward_module_type_gets_a_slot` (`tests/issues.rs`), driving
 as values — a read follows whatever offsets the layout ended up with, so reading a field
 back cannot by itself prove the field has storage.
 
-Out of scope, and still true: a type named in a function BODY (a local, a vector literal
-element) rather than in a field DECLARATION is not deferred, so a module naming a type it
-cannot see fails there with `unknown type 'X'`.  That is a resolution question, not a
-layout one; the fix is the ordinary one, `use` the module that declares the type.  Tracked
-as [loft#801](https://github.com/loft-lang/loft/issues/801), which also carries the worse
-half: `parse_file` returns on error BEFORE draining `todo_files`, so the suspended parent
-is never re-parsed and its declaration never happens — the cascade then reports a type as
-undefined that is written two lines away.
+The resolution half — a type named in a function BODY rather than in a field DECLARATION —
+was loft#801 and is closed too: the body sites now leave the same forward-reference stub,
+and `parse_file` drains its suspended parents on a plain Error instead of abandoning them.
+See [COMPILER.md § How a forward reference actually resolves](COMPILER.md).
+
+One member of the family is still open, and it is an ENUM:
+[loft#803](https://github.com/loft-lang/loft/issues/803).  A struct field whose enum is
+declared later is laid out against an unregistered enum, so the field takes zero width and
+the field AFTER it loses its position — this same corruption, one field along.  Do not
+patch it from here: the issue records three fixes that each looked right and each broke
+something measurable (a silently wrong variant, a layout that never lifts, renumbered
+native type ids).  The order in which an enum gets its runtime type and its variant
+discriminants is the actual question.
 
 ### Inside the lambda: `__closure` is a struct parameter
 

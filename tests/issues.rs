@@ -15355,6 +15355,54 @@ fn forward_module_type_gets_a_slot() {
     );
 }
 
+// ── loft#801 — a module may name the entry's type in an EXPRESSION, not just ─
+// ── in a declaration ─────────────────────────────────────────────────────────
+//
+// `fwd801`'s entry `use`s `fwd801_inner` and only then declares the types that
+// module names, so every mention there is a forward reference to a file suspended
+// further up the `use` chain.  Whether it resolved used to depend on the SPELLING:
+// a written type went through `parse_type`, which leaves a `DefType::Unknown` stub
+// for the entry's declaration to adopt in place, and an expression left nothing to
+// adopt.  So `r: F801Roofs = F801Roofs { … }` compiled and the identical
+// `r = F801Roofs { … }` did not.
+//
+// The fixture covers each spelling that reaches the name differently — construction
+// alone, a vector literal, iterating that vector, the type as a value argument, and
+// a typedef (`parse_typedef` reported the waiting stub as a name clash where
+// `parse_struct` and `parse_enum` both adopt it).
+#[test]
+fn module_names_the_entry_type_in_an_expression() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
+    p.parse("tests/multilib/fwd801_body.loft", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "a type named only in an expression failed to resolve: {errors:?}"
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let config = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(config, None))));
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "an assertion in fwd801_body.loft failed"
+    );
+}
+
 // ── @PLAN53 clusters 3-5 — Miri-found UB regression guards ──────────────────
 //
 // These three tests guard the soundness fixes landed in commit batch on

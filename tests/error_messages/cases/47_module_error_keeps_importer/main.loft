@@ -1,0 +1,17 @@
+// loft#801 — one error inside a module must not invent a SECOND one saying a type
+// is undefined when the importer declares it.
+//
+// `parse_file` used to return on the first Error BEFORE draining `todo_files`, the
+// list of files SUSPENDED at a `use`.  Here that list holds `fwd`, which is waiting
+// for `inner` and which declares `Colour`.  Abandoning it meant `Colour` never
+// registered, so the run added `Undefined type Colour` — pointing away from the one
+// mistake the author made, at a line where the declaration is plainly visible.
+//
+// What this baseline pins is the ABSENCE of that second error.  The remaining one is
+// the real (and separately tracked) limitation: a forward-referenced enum VALUE in
+// an expression does not resolve, and says so poorly.
+use fwd;
+fn main() {
+  s = mk();
+  println("{s.s_a}");
+}

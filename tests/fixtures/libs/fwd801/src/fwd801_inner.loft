@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#801 — each function below names a type the entry declares AFTER the `use`
+// that pulled this file in.  They differ in the SPELLING that names it, which is
+// what decided whether it resolved: a written type left a forward-reference stub
+// for the entry's declaration to adopt, and an expression left nothing.
+//
+// `holder` is the control that always worked — it names the type in a field
+// DECLARATION.  If it ever fails, the fixture is broken rather than the fix.
+pub struct F801Holder { h: F801Roofs }
+
+pub fn f801_holder() -> integer {
+  x = F801Holder { h: F801Roofs { r_n: 11 } };
+  return x.h.r_n;
+}
+
+// A local built by CONSTRUCTION alone — no type written down anywhere.
+pub fn f801_local() -> integer {
+  r = F801Roofs { r_n: 22 };
+  return r.r_n;
+}
+
+// The same construction inside a vector literal.
+pub fn f801_vector() -> integer {
+  v = [F801Roofs { r_n: 30 }, F801Roofs { r_n: 3 }];
+  return len(v) + v[0].r_n + v[1].r_n;
+}
+
+// Iterating that vector — the element type has to be known to walk it.
+pub fn f801_for() -> integer {
+  v = [F801Roofs { r_n: 40 }, F801Roofs { r_n: 4 }];
+  t = 0;
+  for x in v { t += x.r_n; }
+  return t;
+}
+
+// The type named as a VALUE argument rather than as a construction.
+pub fn f801_sizeof() -> integer {
+  return sizeof(F801Roofs);
+}
+
+// A typedef the entry declares.  `parse_typedef` used to report the waiting stub
+// as a name clash, where `parse_struct` and `parse_enum` both adopt it.
+pub struct F801Feeted { f: F801Feet }
+
+pub fn f801_typedef() -> integer {
+  x = F801Feeted { f: 55 };
+  return x.f;
+}

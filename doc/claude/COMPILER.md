@@ -223,6 +223,35 @@ subsequent call — a layout, once registered, is never revisited, so getting it
 first time is the only chance.  See [LIFETIME.md § A field whose type another MODULE
 declares](LIFETIME.md) for what the missing deferral cost.
 
+### How a forward reference actually resolves — the stub, and who adopts it
+
+Worth knowing before touching name resolution, because the mechanism is not a lookup.
+
+A type name the parser cannot resolve yet becomes a real definition: an
+`add_def(name, …, DefType::Unknown)` **stub**.  Three things then act on it.
+
+1. **The declaration adopts it.**  `parse_struct`, `parse_enum` and `parse_typedef` each
+   look the name up before registering, and when they find a stub they upgrade it IN
+   PLACE — same def number, now a real type.  Every `Type::Unknown(stub)` already stored
+   on someone's attribute therefore resolves for free.
+2. **`use` carries it across files.**  `use inner;` imports the module's names into the
+   importer, stubs included.  That is the whole reason a module can name a type the
+   IMPORTER declares: the module leaves a stub, the import makes it visible under the
+   importer's source, and the importer's own declaration adopts it.  Both files end up
+   sharing one def.  (There is no cross-source *lookup* — `Data::def_nr` is keyed on
+   `(name, source)` with only a source-0 fallback.)
+3. **`resolve_deferred_unknowns` settles the rest** once every file has been parsed:
+   rewrite the references if the stub resolved, report `Undefined type` if it did not.
+
+The consequence to remember: **only a spelling that LEAVES a stub can be forward-
+referenced.**  Written types go through `parse_type`, which leaves one.  Expressions did
+not, so `r: Roofs = Roofs { … }` compiled and the identical `r = Roofs { … }` did not
+(loft#801).  Two sites in `parse_var` now leave the same stub — the `Name { … }`
+construction branch and the bare-name branch — recorded in `speculative_type_refs` so an
+unadopted one stays quiet and lets the construction site report with the author's own
+spelling.  A bare name qualifying a VALUE (`Colour.Green`) is deliberately excluded: see
+loft#803 for why resolving it is not enough to make the value right.
+
 ### The H5 two-pass contract — the lazy-append law
 
 `assert_pass2_def_attr_stable` (`src/parser/mod.rs`, debug-assertions only —

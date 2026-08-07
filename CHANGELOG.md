@@ -117,6 +117,19 @@ following it changed nothing. Now that case says what is actually wrong: the
 resolved package does not have the function and the published one does, so these
 are two different packages sharing a name.
 
+### Using a type no longer depends on having written its name down
+
+Inside a package, a module could name a type its entry declares later only where the
+name appeared in a *declaration*. The same type in an expression was rejected — so
+`r: Roofs = Roofs { ... }` compiled and `r = Roofs { ... }` did not, and adding the
+annotation was the fix for an error that never mentioned it. Constructions, vector
+literals, `for` loops over them, `sizeof(T)` and `type` aliases all work now.
+
+And one mistake gives one error again. An error inside a module used to abandon the
+file that was waiting on it, so the types *that* file declared quietly vanished and
+the run added a second error saying one of them was undefined — pointing at a line
+where the declaration was plainly visible.
+
 ### A field can name a type from a module that loads later
 
 Inside a package, a struct field whose type is declared in a module the package

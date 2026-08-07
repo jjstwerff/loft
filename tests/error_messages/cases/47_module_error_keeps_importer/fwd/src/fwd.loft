@@ -1,0 +1,2 @@
+use inner;
+pub enum Colour { Red, Green }

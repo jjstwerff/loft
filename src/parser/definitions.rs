@@ -586,6 +586,15 @@ impl Parser {
         // would otherwise panic with `Dual definition of <name>`.  Emit a
         // clear diagnostic citing the prior definition's location.
         let mut conflict = false;
+        // A forward-reference placeholder left by a file that named this type before it
+        // was declared.  `parse_struct` and `parse_enum` both ADOPT such a stub in place —
+        // that adoption is what makes a cross-module forward reference resolve at all, so
+        // a typedef that reported it as a name clash was the one declaration kind a module
+        // could not forward-reference (loft#801).  A stub is `DefType::Unknown` with an
+        // `Unknown` returned type; a reserved builtin type-keyword (`type iterator;`) is
+        // `DefType::Type` with an Unknown returned type and must NOT be adopted, or a
+        // user typedef would silently shadow the builtin.
+        let mut adopted = u32::MAX;
         if self.first_pass {
             let mut existing = self.data.def_nr(&type_name);
             // @PLN22 Phase 2 — shadow a prelude/import name (but not a built-in
@@ -593,7 +602,17 @@ impl Parser {
             if self.prelude_shadowed(&type_name) {
                 existing = u32::MAX;
             }
-            if existing != u32::MAX {
+            if existing != u32::MAX
+                && self.data.def_type(existing) == DefType::Unknown
+                && matches!(
+                    self.data.definitions[existing as usize].returned,
+                    Type::Unknown(_)
+                )
+            {
+                self.data.definitions[existing as usize].position = self.lexer.pos().clone();
+                self.data.definitions[existing as usize].def_type = DefType::Type;
+                adopted = existing;
+            } else if existing != u32::MAX {
                 let prev_pos = self.data.def(existing).position().clone();
                 let prev_kind = format!("{:?}", self.data.def(existing).def_type()).to_lowercase();
                 diagnostic!(
@@ -605,7 +624,9 @@ impl Parser {
                 conflict = true;
             }
         }
-        let d_nr = if self.first_pass && !conflict {
+        let d_nr = if adopted != u32::MAX {
+            adopted
+        } else if self.first_pass && !conflict {
             self.data
                 .add_def(&type_name, self.lexer.pos(), DefType::Type)
         } else {

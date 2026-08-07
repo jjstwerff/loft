@@ -444,6 +444,20 @@ pub struct Parser {
     /// `resolve_deferred_unknowns` after all files in the recursion have
     /// had their pass-1 / pass-2 definitions registered.
     deferred_unknown: Vec<(u16, u32, Position)>,
+    /// Stubs pass 1 registered for a type named only by a `Name { … }` CONSTRUCTION,
+    /// so a declaration parsed later can adopt them the way it adopts the stub a written
+    /// type annotation leaves (loft#801).
+    ///
+    /// They are speculative because the shape alone cannot tell a forward reference from
+    /// a typo, so an unadopted one must not become a diagnostic of its own:
+    /// `resolve_deferred_unknowns` stays quiet about these and leaves the report to the
+    /// construction site's own pass-2 `unknown type '…'`, which names the spelling the
+    /// author used and carries the "did you mean" suggestion.  Reporting both is the
+    /// two-errors-for-one-typo cascade #376 removed.
+    ///
+    /// NOT cleared between passes: the stub itself survives (pass 2 finds it by name
+    /// rather than registering a second one), so the exemption has to survive with it.
+    speculative_type_refs: std::collections::HashSet<u32>,
     /// @PLN115 — record each resolved identifier occurrence during parse.  DEFAULT
     /// OFF (only the LSP parse sets it, S3); zero-cost when off.  See
     /// `doc/claude/plans/115-resolution-index/`.
@@ -783,6 +797,7 @@ impl Parser {
             todo_files: Vec::new(),
             track_sources: false,
             parsed_sources: Vec::new(),
+            speculative_type_refs: std::collections::HashSet::new(),
             data,
             database: Stores::new(),
             lexer: Lexer::default(),
@@ -2009,6 +2024,15 @@ impl Parser {
                 && !matches!(self.data.def(resolved_nr).def_type(), DefType::Unknown)
             {
                 self.data.rewrite_unknown_refs(stub_nr, resolved_nr);
+                continue;
+            }
+            // A stub pass 1 registered on SPECULATION, from a `Name { … }` construction
+            // alone, is not evidence that the author wrote a type name: the same shape is
+            // what a typo makes.  It has served its purpose either way — a real
+            // declaration would have adopted it in case (a) — so an unadopted one is left
+            // to the construction site, which reports in pass 2 with the author's own
+            // spelling and a suggestion.  Reporting here as well is one typo, two errors.
+            if self.speculative_type_refs.contains(&stub_nr) {
                 continue;
             }
             // Case (c): emit the deferred error.  `string` used to be special-cased
@@ -8667,7 +8691,15 @@ impl Parser {
         }
         self.enum_fn();
         let lvl = self.lexer.diagnostics().level();
-        if lvl == Level::Error || lvl == Level::Fatal {
+        // FATAL stops; a plain Error does not.  `todo_files` holds the files SUSPENDED at
+        // a `use` — the importer, waiting for the module it pulled in — and they have not
+        // been parsed at all yet, so abandoning them does not avoid a cascade, it invents
+        // one: the definitions those files carry never register, and every later question
+        // about them is answered "undefined".  That is how one error in a module produced
+        // a second saying `Colour` was undefined while it was declared two lines away in
+        // the importer (loft#801).  Draining them can only ADD real information; any
+        // diagnostic that then appears is one the author's own code earned.
+        if lvl == Level::Fatal {
             return;
         }
         // Parse all files left in the todo_files list, as they are halted to parse a use file.
