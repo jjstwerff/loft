@@ -6056,6 +6056,60 @@ impl Parser {
         code
     }
 
+    /// The stored offset of `field` within `d_nr`'s layout.
+    ///
+    /// loft#796 — [`Stores::position`](crate::database::Stores::position) answers
+    /// `u16::MAX` for a field the layout does not have, and that answer used to flow
+    /// straight out as the field OFFSET: the interpreter then read and WROTE at
+    /// `record + 65535`. A struct whose declaration carries a field its layout does
+    /// not is not something any code can access correctly, so every lookup goes
+    /// through here and says so instead of emitting an access outside the record.
+    ///
+    /// The gap opens when the field's TYPE is not declared yet at the moment the
+    /// struct is laid out — a type from a module the package loads later. A second
+    /// pass resolves the ATTRIBUTE, so the declaration looks complete while the layout
+    /// keeps the hole (loft#797 tracks closing that; this is the guard, not the cure).
+    ///
+    /// It was silent: in the reported case a ten-field struct was laid out with nine,
+    /// and every write to the missing one corrupted whatever followed the record.
+    /// Usually a SIGSEGV inside a later claim walk, sometimes an unbounded allocation,
+    /// and non-deterministic either way, because WHICH it is depends on what the
+    /// neighbouring bytes happened to hold — which is why the same program read as
+    /// "random", "non-monotonic in scene size", and "fine as a program, crashes under
+    /// the test runner".
+    ///
+    /// Pass 2 only: pass 1 has no layouts yet, so the sentinel there is ordinary and
+    /// says nothing.
+    pub(crate) fn field_position(&mut self, d_nr: u32, field: &str) -> u16 {
+        let p = self
+            .database
+            .position(self.data.def(d_nr).known_type(), field);
+        if p == u16::MAX && !self.first_pass {
+            let owner = self.data.def(d_nr).name().to_string();
+            let unresolved = {
+                let a_nr = self.data.attr(d_nr, field);
+                a_nr != usize::MAX && self.data.attr_type(d_nr, a_nr).is_unknown()
+            };
+            if unresolved {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "the type of field '{field}' of '{owner}' never resolved, so the field \
+                     has no storage — declare that type, or `use` the module that declares it"
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "field '{field}' of '{owner}' has no storage in that type's layout — \
+                     the declaration and the layout disagree, so the field cannot be read \
+                     or written"
+                );
+            }
+        }
+        p
+    }
+
     fn get_field(&mut self, d_nr: u32, f_nr: usize, code: Value) -> Value {
         // #91: track $.<field> accesses during init(expr) parsing.
         if self.init_field_tracking && code == Value::Var(0) && f_nr != usize::MAX {
@@ -6076,8 +6130,7 @@ impl Parser {
             0
         } else {
             let nm = self.data.attr_name(d_nr, f_nr);
-            self.database
-                .position(self.data.def(d_nr).known_type(), &nm)
+            self.field_position(d_nr, &nm)
         };
         // Post-2c: pass the field's alias def_nr so `get_val` can honor
         // size(N) for integer subtypes (e.g. i32 → OpGetInt4).

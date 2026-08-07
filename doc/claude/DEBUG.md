@@ -21,6 +21,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)
 - [Debugging a Runtime Crash or Wrong Result](#debugging-a-runtime-crash-or-wrong-result)
 - [Before you believe a fault is RANDOM](#before-you-believe-a-fault-is-random)
+- [When the symptom is in the NEIGHBOURS, not the crashing code](#when-the-symptom-is-in-the-neighbours-not-the-crashing-code)
 - [When it fails in CI but passes locally](#when-it-fails-in-ci-but-passes-locally)
 - [The debug-assertions calibration run (`target-da`)](#the-debug-assertions-calibration-run-target-da)
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
@@ -768,6 +769,47 @@ deterministic: warm load, every time.
 random fault, prove each run really starts from the state you believe. A harness
 that clears the wrong cache reports a ratio with total confidence, and the ratio
 is fiction.
+
+## When the symptom is in the NEIGHBOURS, not the crashing code
+
+A write that lands outside its record damages whatever sits next to it, so the fault
+surfaces in unrelated code and its shape depends on what the neighbouring bytes held.
+That produces the most misleading bug report there is: "non-deterministic",
+"non-monotonic in the input size", "crashes under the test runner but is fine as a
+program". Every one of those is a downstream artefact, and chasing them costs days.
+
+loft#796 was exactly this. `Stores::position` answers `u16::MAX` for a field the layout
+has no slot for, and that answer was used as the field OFFSET — so a ten-field struct
+laid out with nine wrote at `record + 65535`. One program gave a SIGSEGV inside an
+unrelated claim walk, a 59.6 GiB allocation, or a clean pass, run to run.
+
+**The escalation that worked, in order:**
+
+```bash
+# 1. A real backtrace beats any amount of tracing.  Name the faulting FUNCTION first.
+gdb -q -batch -ex run -ex "bt 25" --args loft --interpret --tests probe.loft
+
+# 2. Turn the store bounds sentinels ON.  They are OFF in ordinary builds
+#    (`profile.dev.package.loft` sets debug-assertions = false for speed), so a
+#    release binary built WITH them is the instrument — and it usually turns a
+#    random crash into a deterministic, named assertion.
+CARGO_TARGET_DIR=/tmp/loft_dbg RUSTFLAGS="-C debug-assertions=on" cargo build --release
+cp /tmp/loft_dbg/release/loft target/release/loft_dbg   # so `default/` still resolves
+
+# 3. With it deterministic, the interpreter trace names the op outright.
+LOFT_LOG=crash_tail:35 target/release/loft_dbg --interpret --tests probe.loft
+#   -> GetField(v1=ref(15,1,8), fld=65535) -> ref(15,1,65543)=<oob>
+```
+
+Step 2 is the one worth remembering: the sentinels exist and are disabled by default, so
+"the release binary does not check that" is a fact about the PROFILE, not the code.
+
+**Also cap the process.** A corrupted length ends in a bad dereference on one run and an
+unbounded allocation on the next; `LOFT_TIMEOUT` bounds time, not memory. Wrap a
+repeat-run harness in `( ulimit -v 6000000; exec loft … )` — the kernel's OOM killer is
+free to kill a bystander instead of the runaway (it took out two unrelated sessions
+during this hunt). Test runs additionally carry loft's own store ceiling, which names
+the type that filled the heap (TESTING.md § Store-memory ceiling).
 
 ## When it fails in CI but passes locally
 

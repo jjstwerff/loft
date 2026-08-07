@@ -126,6 +126,66 @@ pub(super) struct OwnedWalk {
 }
 
 impl Stores {
+    /// Is `cur` a record this store could actually contain?
+    ///
+    /// Every container arm below reaches its children through a raw record number
+    /// read out of the record's OWN bytes. `cur != 0` says the field is not empty; it
+    /// does not say the field is an edge. A record whose slot was recycled, or one
+    /// over-freed while something still pointed at it, holds whatever the previous
+    /// tenant left there — and the walk would then follow that: a wild read
+    /// (loft#796's SIGSEGV), or, when a stale LENGTH comes with it, a `Vec` sized
+    /// from garbage, which is how one run reached 59.6 GiB and had the kernel kill a
+    /// bystander.
+    ///
+    /// So the walk asks whether the edge is inside the store before following it —
+    /// the same question the `Parts::Base` text arm already asks of its string
+    /// pointer, now asked of every container kind, which is where the fault landed.
+    /// A record number indexes WORDS, so the store's word capacity is the bound.
+    fn owned_edge_in_store(&self, rec: &DbRef, cur: u32) -> bool {
+        cur < self.store(rec).capacity_words()
+    }
+
+    /// Report an edge the walk refused to follow, once per site.
+    ///
+    /// Loud rather than silent: refusing the edge turns a crash into a leak, which is
+    /// survivable, but the record is still corrupt and a run that says nothing about
+    /// it would be a run that hides its own bug.
+    fn refuse_owned_edge(&self, rec: &DbRef, tp: u16, cur: u32, kind: &str) {
+        thread_local! {
+            static SEEN: std::cell::RefCell<std::collections::HashSet<(u16, u32, u32)>> =
+                std::cell::RefCell::new(std::collections::HashSet::new());
+        }
+        if SEEN.with(|s| s.borrow_mut().insert((rec.store_nr, rec.rec, rec.pos))) {
+            let tn = self.types.get(tp as usize).map_or("?", |t| t.name.as_str());
+            eprintln!(
+                "loft: BUG (#796): refused to walk a {kind} edge of `{tn}` (kt={tp}) at \
+                 store #{}, rec={}, pos={} — it points at record {cur}, outside the store \
+                 (capacity {} words). The record holds a stale interior claim: its slot was \
+                 recycled, or it was freed while something still pointed at it. The edge is \
+                 skipped (its records leak) so the run can continue and name the site.",
+                rec.store_nr,
+                rec.rec,
+                rec.pos,
+                self.store(rec).capacity_words(),
+            );
+        }
+    }
+
+    /// How many elements of `elem_bytes` can start at `first_byte` in `rec`'s store.
+    ///
+    /// The companion bound to [`Self::owned_edge_in_store`]: a container pointer can be
+    /// inside the store while the LENGTH written beside it is not, and it is the length
+    /// that sizes the walk. Reading `n` elements the store cannot hold is the same
+    /// fault one step later.
+    fn max_elements(&self, rec: &DbRef, first_byte: u32, elem_bytes: u32) -> u32 {
+        let capacity_bytes = u64::from(self.store(rec).capacity_words()) * 8;
+        let room = capacity_bytes.saturating_sub(u64::from(first_byte));
+        if elem_bytes == 0 {
+            return 0;
+        }
+        u32::try_from(room / u64::from(elem_bytes)).unwrap_or(u32::MAX)
+    }
+
     /// The Cluster-C keystone: enumerate the owned nested-heap children of the
     /// record `rec` of type `tp`, plus the container record backing them.  This
     /// is the SINGLE per-`Parts` heap-cascade walk (element type, stride,
@@ -148,12 +208,23 @@ impl Stores {
         let mut container_rec = None;
         match &self.types[tp as usize].parts {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                let capacity_bytes = u64::from(self.store(rec).capacity_words()) * 8;
                 for f in fields {
+                    let pos = rec.pos + u32::from(f.position);
+                    // A field offset comes from the TYPE, so a field landing outside the
+                    // store means the record is being walked as the wrong type — the
+                    // parent's own position is stale, or `tp` does not describe these
+                    // bytes.  Either way the offsets below it are fiction, so stop here
+                    // rather than hand a fabricated `DbRef` to the recursion.
+                    if u64::from(pos) >= capacity_bytes {
+                        self.refuse_owned_edge(rec, tp, pos, "struct field");
+                        break;
+                    }
                     children.push(OwnedChild {
                         child: DbRef {
                             store_nr: rec.store_nr,
                             rec: rec.rec,
-                            pos: rec.pos + u32::from(f.position),
+                            pos,
                         },
                         child_tp: f.content,
                         owning_elem: None,
@@ -163,9 +234,23 @@ impl Stores {
             Parts::Vector(v) | Parts::Sorted(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "vector");
+                } else if cur != 0 {
                     let length = vector::length_vector(rec, &self.allocations);
                     let size = u32::from(self.size(v));
+                    // The length lives beside the pointer and rots with it; a garbage
+                    // count here is what sizes the walk, so bound it by what the store
+                    // can physically hold.
+                    let room = self.max_elements(rec, 8, size);
+                    if length > room {
+                        self.refuse_owned_edge(rec, tp, cur, "vector (length)");
+                        return OwnedWalk {
+                            children,
+                            container_rec: Some(cur),
+                            zero_field: true,
+                        };
+                    }
                     for i in 0..length {
                         children.push(OwnedChild {
                             child: DbRef {
@@ -183,8 +268,20 @@ impl Stores {
             Parts::Array(v) | Parts::Ordered(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "array");
+                } else if cur != 0 {
                     let length = vector::length_vector(rec, &self.allocations);
+                    // Element slots are 4-byte record numbers here, read from the
+                    // container — bound the count by what the store can hold.
+                    if length > self.max_elements(rec, 8, 4) {
+                        self.refuse_owned_edge(rec, tp, cur, "array (length)");
+                        return OwnedWalk {
+                            children,
+                            container_rec: Some(cur),
+                            zero_field: true,
+                        };
+                    }
                     for i in 0..length {
                         let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
                         children.push(OwnedChild {
@@ -203,7 +300,9 @@ impl Stores {
             Parts::Hash(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "hash");
+                } else if cur != 0 {
                     // Enumerate the live element records through `hash::records`,
                     // the single owner of the bucket-record layout (the seed word
                     // and bucket offset live only in `src/hash.rs`).  Mirrors the
@@ -227,7 +326,9 @@ impl Stores {
                 let c = *c;
                 let left = self.fields(tp);
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "index");
+                } else if cur != 0 {
                     for node in self.collect_index_nodes(rec, left) {
                         children.push(OwnedChild {
                             child: DbRef {
@@ -245,7 +346,9 @@ impl Stores {
             Parts::ChildRec(ct) => {
                 let ct = *ct;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "child record");
+                } else if cur != 0 {
                     children.push(OwnedChild {
                         child: DbRef {
                             store_nr: rec.store_nr,
@@ -2515,6 +2618,17 @@ impl Stores {
     When a field points to a spatial structure (teardown unimplemented).
     */
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
+        // loft#796 — the record itself must be inside its store before anything reads
+        // its fields.  The per-edge guards in `for_each_owned_child` catch a rotten
+        // POINTER; this catches a rotten RECORD, which is the same fault one level up
+        // and the one that names the caller rather than a field of a field.
+        if rec.store_nr != u16::MAX
+            && (rec.store_nr as usize) < self.allocations.len()
+            && u64::from(rec.pos) >= u64::from(self.store(rec).capacity_words()) * 8
+        {
+            self.refuse_owned_edge(rec, tp, rec.pos, "record (position)");
+            return;
+        }
         // A null/absent container (the `store_nr == u16::MAX` sentinel) owns nothing to tear
         // down — no-op, mirroring `free_named`'s own guard. The `for_each_owned_child` keystone
         // guards absent CHILDREN (`cur != 0`), but not a null CONTAINER; without this a nullable

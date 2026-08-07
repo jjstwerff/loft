@@ -2621,9 +2621,7 @@ impl Parser {
             self.expression(&mut discard);
         } else {
             let td = self.data.attr_type(td_nr, nr);
-            let pos = self
-                .database
-                .position(self.data.def(td_nr).known_type(), &field);
+            let pos = self.field_position(td_nr, &field);
             found_fields.insert(field.clone());
             let mut value = if let Type::Vector(_, _)
             | Type::Sorted(_, _, _)
