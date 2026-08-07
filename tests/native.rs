@@ -1810,6 +1810,114 @@ fn one_table_definition_derives_reconciles_and_renders() -> std::io::Result<()> 
     Ok(())
 }
 
+/// @PLN133 S6 — the definition loft WROTE, read back out of sqlite's catalogue.
+///
+/// The pure gate above proves the derivation against hand-built definitions.
+/// This proves the hand-built ones were the right shape: `derive` from a loft
+/// type and `introspect` from the database produce one value, and `reconcile`
+/// matches them. That round trip is what requirement 2 rests on — a writer and a
+/// reader deriving their SQL separately agree only until they do not, and
+/// nothing else checks it.
+///
+/// **Run twice, and the second run is the one that matters.** Into an EMPTY
+/// database, where loft creates the schema; and against a table made by hand
+/// with a scrambled column order, a float kept in a `VARCHAR`, a boolean kept in
+/// `TEXT` and one extra column, where loft follows it. The first run passes even
+/// if `reconcile` always agrees.
+#[test]
+fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the sqlite backend ships a shim loft must compile
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("schema_live.loft");
+
+    // Every token is a separate claim, and three of them move in different
+    // directions if the round trip is a fiction:
+    //
+    //   created cols=4 ix=1 …   loft's own DDL came back as four columns AND the
+    //           index its collection kind implies. @PLN129 refuses a bind whose
+    //           lookup no index serves, so a writer that omitted it would build
+    //           a database its own reader cannot open.
+    //   declared flag=INTEGER   sqlite has no boolean type, so loft wrote one as
+    //           INTEGER — and the BINDING is what turns it back into a boolean.
+    //           That is why `flag conversion=ConvBoolean` is beside it: the pair
+    //           is the claim, and either alone would look right while wrong.
+    //   followed cols=5 bound=true   a table loft did not write, with the columns
+    //           in a different ORDER and an extra one, is readable. Column order
+    //           in a foreign table means nothing and must never be read as
+    //           meaning.
+    //   varchar score conversion=ConvFloat   a float kept in a VARCHAR is the
+    //           same conversion as one kept in a REAL, because every driver hands
+    //           the value over as text.
+    //   noindex bound=false     …and the refusal NAMES the column, because a
+    //           refusal a DBA cannot act on is only a slower failure.
+    //   extra bound=true write=false   ONE table, two verdicts. An unknown NOT
+    //           NULL column with no default is perfectly readable and impossible
+    //           to INSERT into.
+    let expect = [
+        "created cols=4 ix=1 bound=true write=true why=",
+        "declared flag=INTEGER score=REAL",
+        "flag conversion=ConvBoolean",
+        "followed cols=5 bound=true write=true why=",
+        "varchar score conversion=ConvFloat",
+        "noindex bound=false why=table noix_person has no index on id",
+        "extra bound=true write=false why=column tenant is NOT NULL with no default",
+        "schema_live ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            // The availability question is the PROGRAM's, answered by
+            // `c_library_available` — true only when every declared symbol
+            // resolves. A skip is printed, never inferred from silence.
+            assert!(
+                stdout.contains("not installed"),
+                "an absent library must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        // Both backends, one derivation. A backend that derived its own would
+        // differ HERE and nowhere else, which is what makes the whole output
+        // worth comparing rather than each line.
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one table definition"),
+        }
+    }
+    Ok(())
+}
+
 /// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
 /// compiled itself, with SQL NULL kept distinct from the empty string.
 ///

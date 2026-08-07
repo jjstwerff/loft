@@ -3,10 +3,10 @@
 
 ## Status
 
-**Building. All four probes ran 2026-08-06 and decided the architecture; the
-INERT half of the ladder — S1–S5 — landed 2026-08-07** and is gated on both loft
-backends. Nothing is wired yet: core's lazy path is untouched, and every step so
-far is a pure value or a pure function with no caller.
+**Building. All four probes ran 2026-08-06 and decided the architecture; S1–S6
+landed 2026-08-07** and are gated on both loft backends. Core is untouched: S1–S5
+are pure values and pure functions with no caller, and S6 only READS a
+catalogue.
 
 P1 **passes**, so **option B is viable**. P2 **passes for reads and fails for
 writes on sqlite**, which is a bounded, documented limit rather than a blocker.
@@ -18,7 +18,8 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S3 `render` per dialect | **done** — hand-written DDL, four dialects |
 | S4 `reconcile` | **done** — read and write verdicts, six hand-built pairs |
 | S5 the connection string | **done** |
-| S6–S14 | not started |
+| S6 `introspect` (sqlite) + the round trip, run twice | **done** |
+| S7–S14 | not started |
 
 Every measurement below is from the current tree and is cited so it can be
 re-checked rather than believed.
@@ -30,7 +31,7 @@ re-checked rather than believed.
 - **Effort:** H
 - **Design:** the invariant is named and its load-bearing claims have probes; the
   reconcile rules for a foreign schema are stated but untested against a real one.
-- **Last touched:** 2026-08-06
+- **Last touched:** 2026-08-07
 
 ## Goal
 
@@ -725,7 +726,35 @@ verdict.** A table with an extra `NOT NULL` column and no default is perfectly
 readable — `SELECT` names only the columns loft wants — and no `INSERT` loft can
 build will satisfy it. One `reconcile`, two answers, carried in the binding.
 
-### Three language defects the build surfaced, all pre-existing on `main`
+### S6 — the plan's own gate, at the library level, already runs
+
+S6 was scoped as "read-only, changes no existing behaviour", and building it made
+the whole of § The gate reachable a step early: `schema_live.loft` writes a
+schema into an EMPTY sqlite database, reads it back out of the catalogue,
+reconciles the two, and then does it again against a table made by hand with a
+scrambled column order, a float kept in a `VARCHAR`, a boolean kept in `TEXT`
+and one extra column. Both loft backends, byte-identical output.
+
+**What is NOT yet covered is the half that needs core**: the values, the identity
+across two paths, and the query counts. This gate proves the two DERIVATIONS
+agree; S8–S14 prove a row arrives.
+
+Two cells are worth keeping in view because they are where an easy version would
+have looked right:
+
+- **`declared flag=INTEGER` beside `flag conversion=ConvBoolean`.** sqlite has no
+  boolean type, so loft writes one as `INTEGER` and it comes back as an integer;
+  the BINDING is what makes it a boolean again. Either half alone reads as
+  correct while being wrong.
+- **`extra bound=true write=false`.** One table, two verdicts, from one
+  `reconcile`.
+
+**`introspect` is sqlite only, and that is a scope statement.** The other three
+have `information_schema`, which is one query for all of them — but a
+cross-backend claim made without running it against a live server of each is
+exactly the gap P3 found in the float rendering.
+
+### Four language defects the build surfaced, all pre-existing on `main`
 
 None of them is in this plan's code, all three reproduce on the released binary,
 and each has a workaround the schema package now uses:
@@ -746,6 +775,13 @@ and each has a workaround the schema package now uses:
   loops' `#count` inside a nested loop body aborts the compiler. Loud, so no
   wrong answer, but it has no workaround and the natural spelling of a
   match-by-position probe runs straight into it.
+- **[loft#795](https://github.com/loft-lang/loft/issues/795)** — `_` is exempt
+  from the one-type-per-name rule every other local obeys, and `--native` then
+  emits Rust that will not compile. Three assignments are needed: `FileResult`,
+  `boolean`, `FileResult` again. The same code with a NAMED local is refused
+  cleanly today, with a message that says what to do — so the fix is to stop
+  exempting `_`, which closes the backend divergence and the missing diagnostic
+  at once.
 
 **The one worth generalising is #793**, and not for its cause: a single run of
 the broken shape passed. A wrong answer that is only *usually* wrong reads as a
@@ -797,7 +833,7 @@ must agree on is the last thing that should have a gate that evaporates.
 
 | # | do | safe because |
 |---|---|---|
-| **S6** | `introspect(conn, table) -> TableDef?` in the loft library, sqlite only. | read-only; changes no existing behaviour |
+| **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
 | **S7** | The backend registry, used by the LIBRARY's own connect. No core change. | the library's four backends already pass their tests; the registry must not move them |
 | **S8** | Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched. | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
 | **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |

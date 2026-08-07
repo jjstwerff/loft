@@ -1,0 +1,157 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S6 — the definition loft WROTE, read back out of the database.
+//
+// `schema_pure.loft` proves the derivation against hand-built definitions. This
+// proves the hand-built ones were the right shape: the same `TableDef` value is
+// produced by `derive` from a loft type and by `introspect` from sqlite's own
+// catalogue, and `reconcile` matches them.
+//
+// **That round trip is what requirement 2 rests on.** If the writer creates
+// `person(id, nm)` and the reader derives a `SELECT` over different columns, a
+// round trip works only while the two derivations agree, and nothing checks that
+// they do — except this.
+//
+// **Run twice, and the second run is the one that matters** (README § the gate):
+// once into an EMPTY database, where loft creates the schema, and once against a
+// table made by hand with different types, a different column order and an extra
+// column, where loft follows it. The first passes even if `reconcile` always
+// agrees.
+//
+// sqlite, because it needs no server: a machine with no database still proves
+// the catalogue read, so this cannot skip into a green that asserted nothing.
+
+use schema;
+use sql;
+use sqlite;
+
+struct Person {
+  id: integer,
+  nm: text,
+  score: float,
+  flag: boolean,
+}
+
+fn main() {
+  if !sqlite_available() {
+    println("SKIP schema_live — libsqlite3 is not installed here");
+    return;
+  }
+  d = sqlite();
+  // A file rather than `:memory:`, because the catalogue read must go through
+  // the same path a real binding takes.
+  path = "{directory()}/.loft/pln133_schema.db";
+  // Distinct discard names. `_` is exempt from the one-type-per-name rule every
+  // other local obeys, and a function that discards a `FileResult`, then a
+  // boolean, then a `FileResult` again makes `--native` emit Rust that will not
+  // compile (loft#795).
+  fresh = delete(path);
+  if !d.db_open(path) {
+    println("FAIL open: {d.db_last_error()}");
+    return;
+  }
+
+  people: hash<Person[id]> = [];
+  ti = type_of(people);
+  want = derive(ti);
+  dial = dialect_sqlite();
+
+  // --- run 1: into an EMPTY database ----------------------------------------
+  //
+  // Absent → create. The absence is decided HERE, by asking the catalogue, and
+  // not by an `IF NOT EXISTS` in the DDL: the rule *loft never overwrites a
+  // structure it did not find missing* belongs in loft's own code where it can
+  // be read, not in an engine's tolerance for a repeated `CREATE`.
+  before = introspect(d, dial, "person");
+  if !before.table_absent() {
+    println("FAIL empty: {before.refusal}");
+    return;
+  }
+  for stmt in want.render(dial) {
+    if !d.db_exec(stmt) {
+      println("FAIL ddl [{stmt}]: {d.db_last_error()}");
+      return;
+    }
+  }
+
+  have = introspect(d, dial, "person");
+  if !have.table_ok() {
+    println("FAIL introspect: {have.refusal}");
+    return;
+  }
+  b1 = reconcile(want, have);
+  // Every column loft named came back, with the index it created — which is the
+  // claim, because @PLN129 refuses a bind whose lookup no index serves.
+  println("created cols={len(have.columns)} ix={len(have.indexes)} bound={b1.binding_ok()} write={b1.binding_writable()} why={b1.refusal}");
+
+  // The column types survived the round trip through sqlite's declarations.
+  // Non-vacuous on `flag`: loft writes a boolean as `INTEGER` there, so it comes
+  // back an integer and the BINDING is what turns it into a boolean again.
+  fk = "";
+  for c in have.columns { if c.nm == "flag" { fk = c.db_type } }
+  sk = "";
+  for c2 in have.columns { if c2.nm == "score" { sk = c2.db_type } }
+  println("declared flag={fk} score={sk}");
+  conv = "";
+  for cb in b1.columns { if cb.column == "flag" { conv = "{cb.conversion}" } }
+  println("flag conversion={conv}");
+
+  // --- run 2: a table someone ELSE made --------------------------------------
+  //
+  // Different column ORDER, a number kept in a `VARCHAR`, a `TEXT` where loft
+  // would have written `INTEGER`, and one extra column loft knows nothing about.
+  // Present → follow.
+  _ = d.db_exec("DROP TABLE IF EXISTS foreign_person");
+  ok = d.db_exec(`CREATE TABLE foreign_person (
+      created TEXT,
+      flag TEXT NOT NULL DEFAULT '0',
+      score VARCHAR(40) NOT NULL,
+      nm VARCHAR(80) NOT NULL,
+      id BIGINT NOT NULL)`);
+  if !ok { println("FAIL foreign ddl: {d.db_last_error()}"); return }
+  if !d.db_exec(`CREATE INDEX foreign_person_pk ON foreign_person (id)`) {
+    println("FAIL foreign index: {d.db_last_error()}");
+    return;
+  }
+  fhave = introspect(d, dial, "foreign_person");
+  // The want side is the SAME derivation, retargeted at the other table name —
+  // there is no second description of the type anywhere.
+  fwant: TableDef = TableDef { nm: "foreign_person", columns: want.columns,
+                               indexes: [IndexDef { nm: "x", columns: [IndexColumn { nm: "id" }] }] };
+  b2 = reconcile(fwant, fhave);
+  println("followed cols={len(fhave.columns)} bound={b2.binding_ok()} write={b2.binding_writable()} why={b2.refusal}");
+  // A float kept in a `VARCHAR` and a float kept in a `REAL` are the SAME
+  // conversion, because every driver hands the value over as text.
+  fconv = "";
+  for cb2 in b2.columns { if cb2.column == "score" { fconv = "{cb2.conversion}" } }
+  println("varchar score conversion={fconv}");
+
+  // --- the refusals, against real tables -------------------------------------
+  //
+  // A table with no index REFUSES: a keyed lookup with nothing to serve it is a
+  // table scan wearing a lazy fetch's clothes.
+  _ = d.db_exec("DROP TABLE IF EXISTS noix_person");
+  _ = d.db_exec("CREATE TABLE noix_person (id BIGINT NOT NULL, nm TEXT NOT NULL, score REAL NOT NULL, flag INTEGER NOT NULL)");
+  nhave = introspect(d, dial, "noix_person");
+  nwant: TableDef = TableDef { nm: "noix_person", columns: want.columns,
+                               indexes: [IndexDef { nm: "x", columns: [IndexColumn { nm: "id" }] }] };
+  b3 = reconcile(nwant, nhave);
+  println("noindex bound={b3.binding_ok()} why={b3.refusal}");
+
+  // A column loft never declared, `NOT NULL` and with no default: readable,
+  // and no `INSERT` loft can build will satisfy it.
+  _ = d.db_exec("DROP TABLE IF EXISTS tenant_person");
+  _ = d.db_exec("CREATE TABLE tenant_person (id BIGINT NOT NULL, nm TEXT NOT NULL, score REAL NOT NULL, flag INTEGER NOT NULL, tenant BIGINT NOT NULL)");
+  _ = d.db_exec("CREATE INDEX tenant_person_pk ON tenant_person (id)");
+  thave = introspect(d, dial, "tenant_person");
+  twant: TableDef = TableDef { nm: "tenant_person", columns: want.columns,
+                               indexes: [IndexDef { nm: "x", columns: [IndexColumn { nm: "id" }] }] };
+  b4 = reconcile(twant, thave);
+  println("extra bound={b4.binding_ok()} write={b4.binding_writable()} why={b4.write_refusal}");
+
+  d.db_shut();
+  gone = delete(path);
+  if !fresh.ok() && !gone.ok() { println("note: the temp database was not removable") }
+  println("schema_live ok");
+}

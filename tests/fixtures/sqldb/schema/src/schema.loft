@@ -721,3 +721,112 @@ pub fn conn_dialect(self: Conn) -> Dialect? {
   d = dialect_named(self.backend);   // bound first — loft#793
   return d;
 }
+
+// --- S6: introspect — the definition the DATABASE holds -----------------------
+//
+// The other producer of a `TableDef`. `derive` reads a loft type; this reads a
+// catalogue — and because both answer the same value, everything downstream is
+// written once.
+//
+// **sqlite only, and that is a scope statement rather than a shape one.** Its
+// catalogue is `PRAGMA`; the other three have `information_schema`, which is one
+// query for all of them — but a cross-backend claim made without running it
+// against a live server of each is exactly the gap P3 found in the float
+// rendering. Its per-backend query hangs off the `Dialect`, where the rest of
+// the dialect facts already are.
+//
+// Read-only: it runs `SELECT`s and changes nothing, which is what makes this the
+// first step allowed to touch a connection at all.
+
+/// The column type a sqlite declaration implies.
+///
+/// This follows sqlite's OWN affinity rules, quirks included: it tests for `INT`
+/// first, so a column declared `POINT` reads as an integer. That looks like a
+/// bug and is not — sqlite gives that column integer affinity too, and a
+/// derivation that disagreed with the engine about what a column holds would be
+/// wrong in the one direction that matters.
+fn sqlite_kind(declared: text) -> ColumnType {
+  t = declared.to_uppercase();
+  if t.find("INT") != null { return ColumnType.ColInteger }
+  if t.find("CHAR") != null || t.find("CLOB") != null || t.find("TEXT") != null { return ColumnType.ColText }
+  if t.find("REAL") != null || t.find("FLOA") != null || t.find("DOUB") != null { return ColumnType.ColFloat }
+  if t.find("BOOL") != null { return ColumnType.ColBoolean }
+  // Includes `BLOB` and everything with NUMERIC affinity. Not guessed at: a
+  // scalar field wanting one of these is refused by `reconcile`, which is the
+  // honest answer to a type whose text form loft has never parsed back.
+  return ColumnType.ColOther;
+}
+
+/// Read back the table called `table`, as a `TableDef`.
+///
+/// A refusal carries its reason, exactly as `derive`'s does — and the reason a
+/// caller most needs is the ordinary one: **there is no such table**. That is
+/// what tells `render` it may create it, and it is the whole of the
+/// absent-versus-present decision.
+pub fn introspect <D: SqlDb> (d: D, dial: Dialect, table: text) -> TableDef {
+  if dial.nm != "sqlite" {
+    return no_table("loft cannot read {dial.nm}'s catalogue yet — only sqlite's");
+  }
+  cols: vector<ColumnDef> = [];
+  // Bound, not interpolated. `pragma_table_info` is a table-valued function
+  // precisely so its argument can be a VALUE, and a table name reaching a
+  // statement as text is the one thing this package exists to prevent.
+  q: SqlText = "SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info({table})";
+  if !d.db_rows(q) {
+    return no_table("cannot read the catalogue: {d.db_last_error()}");
+  }
+  while d.db_next() {
+    cn = d.db_col(0) ?? "";
+    ct = d.db_col(1) ?? "";
+    nn = d.db_col(2) ?? "0";
+    dflt = d.db_col(3);
+    cols += [ColumnDef {
+      nm: cn,
+      kind: sqlite_kind(ct),
+      db_type: ct,
+      nullable: nn != "1",
+      // Absent `dflt_value` is SQL NULL, which is not the empty string — the
+      // distinction the whole binding layer exists to keep, showing up as the
+      // difference between a table loft may write to and one it may not.
+      has_default: dflt != null,
+    }];
+  }
+  if len(cols) == 0 {
+    // sqlite answers an EMPTY result for a table that is not there rather than
+    // an error, so absence arrives as no rows. Saying so plainly is what lets
+    // the caller create it.
+    return no_table("there is no table {table}");
+  }
+
+  // The index names first, in full. There is one cursor per connection — it is
+  // state ON the connection, not a second type — so a second query cannot run
+  // while this one is being walked.
+  ix_names: vector<text> = [];
+  qi: SqlText = "SELECT name FROM pragma_index_list({table})";
+  if d.db_rows(qi) {
+    while d.db_next() { ix_names += [d.db_col(0) ?? ""] }
+  }
+  ixs: vector<IndexDef> = [];
+  for ixn in ix_names {
+    ixc: vector<IndexColumn> = [];
+    qx: SqlText = "SELECT name, \"desc\" FROM pragma_index_xinfo({ixn}) WHERE key = 1 ORDER BY seqno";
+    if d.db_rows(qx) {
+      while d.db_next() {
+        xn = d.db_col(0) ?? "";
+        xd = d.db_col(1) ?? "0";
+        if xn != "" { ixc += [IndexColumn { nm: xn, ascending: xd != "1" }] }
+      }
+    }
+    if len(ixc) > 0 { ixs += [IndexDef { nm: ixn, columns: ixc }] }
+  }
+  return TableDef { nm: table, columns: cols, indexes: ixs };
+}
+
+/// Is there a table called `table` here?
+///
+/// The absent-or-present question on its own, because it is the one that decides
+/// whether loft may write a schema — **absent → create; present → follow** — and
+/// a caller should not have to read a refusal string to learn it.
+pub fn table_absent(self: TableDef) -> boolean {
+  return self.refusal.starts_with("there is no table ");
+}
