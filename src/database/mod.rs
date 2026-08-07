@@ -331,6 +331,14 @@ pub struct Stores {
     /// FIRST reason is kept because it names the original cause; later ones are
     /// usually the same failure repeating.
     pub lazy_errors: HashMap<(u16, u32, u32), (u64, String)>,
+    /// @PLN133 S8 — the stores created while a lazy DRIVER is running, or
+    /// `None` when none is.
+    ///
+    /// A raise short-circuits the dispatch loop, so the scope-exit frees the
+    /// compiler emitted never run. For a program about to exit that is
+    /// harmless; for a CONTAINED fault the program continues, and this is what
+    /// the containment frees instead of the teardown it could not run.
+    pub(crate) lazy_driver_allocs: Option<Vec<u16>>,
     #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
     #[cfg(feature = "wasm")]
@@ -624,6 +632,7 @@ impl Clone for Stores {
             stack_store_at_zero: self.stack_store_at_zero,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            lazy_driver_allocs: None,
             files: Vec::new(),
             max: self.max,
             peak: 0,
@@ -1363,6 +1372,7 @@ impl Stores {
             stack_store_at_zero: false,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            lazy_driver_allocs: None,
             files: Vec::new(),
             max: 0,
             peak: 0,

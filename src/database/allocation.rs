@@ -469,6 +469,13 @@ impl Stores {
         } else {
             store.claim(size)
         };
+        // @PLN133 S8 — while a lazy DRIVER is running, remember every store it
+        // creates. A fault inside it abandons its frames, and a frame's locals
+        // are freed by the scope-exit code the fault skipped, so this list is
+        // what the containment frees instead.
+        if let Some(watch) = &mut self.lazy_driver_allocs {
+            watch.push(slot);
+        }
         let result = DbRef {
             store_nr: slot,
             rec,
@@ -1517,6 +1524,7 @@ impl Stores {
             // the parent later reconciles. Fault before the `par`, not inside it.
             lazy_sources: std::collections::HashMap::new(),
             lazy_errors: std::collections::HashMap::new(),
+            lazy_driver_allocs: None,
             files: Vec::new(),
             max: (self.allocations.len() + scratch_stores) as u16,
             peak: (self.allocations.len() + scratch_stores) as u16,

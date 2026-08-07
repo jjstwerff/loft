@@ -233,10 +233,12 @@ the ordinary call machinery; `--native` cannot — `OpGetRecord` lives in liblof
 and cannot see a generated function — so generated `init()` installs a pointer to
 it. The answers are byte-identical, which is what the gate compares.
 
-One limit, current: **a contained fault leaks what the aborted driver had
-allocated**, one store per failed fetch, identically on both backends. A frame's
-locals are freed by the scope-exit code the fault skipped, so a releasing unwind
-is still owed (@PLN133 S8).
+**A contained fault releases what the driver held.** A raise short-circuits the
+dispatch loop, so the scope-exit frees never run — harmless for a program about
+to exit, and not harmless here, because the program continues. So the stores a
+driver creates are remembered for the length of the call and freed if it faults.
+An insert copies into the collection's store, so a driver's own new stores are
+only ever its locals: what it inserted before faulting survives intact.
 
 **A binding with no `lazy_fetch` is REFUSED and says so** — *"`postgres://…`
 needs a loft driver"* — rather than being read as a `.store` image, which is what

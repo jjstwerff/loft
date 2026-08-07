@@ -1062,7 +1062,14 @@ impl State {
             crate::state::LoftArg::Int(key_int),
             crate::state::LoftArg::Text(&key_text),
         ];
-        match self.run_until_return(d_nr, &args) {
+        // The teardown the fault cannot run. Every store the driver creates is
+        // remembered for the length of the call; on a fault they are what its
+        // abandoned frames held, and freeing them is what stops a traversal over
+        // an unreachable source leaking once per failed fetch.
+        let outer_watch = self.database.lazy_watch_begin();
+        let answer = self.run_until_return(d_nr, &args);
+        self.database.lazy_watch_end(outer_watch, answer.is_err());
+        match answer {
             // Inserted, or a genuine absence. Neither clears an earlier failure:
             // a success says nothing about what a partial traversal already
             // lost, and reporting "healthy" afterwards is exactly the silent

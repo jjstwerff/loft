@@ -149,6 +149,63 @@ impl Stores {
         self.lazy_refuse((coll.store_nr, coll.rec, coll.pos), why);
     }
 
+    /// @PLN133 S8 — start remembering the stores a lazy DRIVER creates.
+    ///
+    /// A raise in loft short-circuits the dispatch loop, so the scope-exit frees
+    /// the compiler emitted never run. For a program that is about to exit that
+    /// is harmless and the suite grandfathers it; for a CONTAINED fault it is
+    /// not, because the program continues and a traversal over an unreachable
+    /// source would leak once per failed fetch.
+    ///
+    /// Nested fetches nest: an inner window's stores are merged into the outer
+    /// one when the inner call returns normally, so an outer fault still
+    /// accounts for everything created underneath it.
+    ///
+    /// Answers the previous window, which the caller hands back to
+    /// [`Stores::lazy_watch_end`].
+    pub fn lazy_watch_begin(&mut self) -> Option<Vec<u16>> {
+        self.lazy_driver_allocs.replace(Vec::new())
+    }
+
+    /// Close the window opened by [`Stores::lazy_watch_begin`].
+    ///
+    /// `faulted` decides what the window MEANS. On a normal return the stores
+    /// are the program's — the driver's own scope-exit code freed what it
+    /// owned, and what it inserted belongs to the collection — so they are
+    /// merged into any enclosing window and nothing is freed. On a fault they
+    /// are what the abandoned frames held, and freeing them is the teardown the
+    /// fault skipped.
+    ///
+    /// Answers how many stores it freed, which is `0` on the normal path.
+    pub fn lazy_watch_end(&mut self, outer: Option<Vec<u16>>, faulted: bool) -> usize {
+        let mine = self.lazy_driver_allocs.take().unwrap_or_default();
+        self.lazy_driver_allocs = outer;
+        if !faulted {
+            if let Some(up) = &mut self.lazy_driver_allocs {
+                up.extend_from_slice(&mine);
+            }
+            return 0;
+        }
+        let mut freed = 0;
+        for slot in mine {
+            // A store the driver already freed, or one that was reused and is
+            // live again, is not this window's to free: `free_named` no-ops on
+            // an already-free slot, and the `free` check keeps the count honest.
+            if (slot as usize) < self.allocations.len() && !self.allocations[slot as usize].free {
+                self.free_named(
+                    &DbRef {
+                        store_nr: slot,
+                        rec: 0,
+                        pos: 0,
+                    },
+                    "lazy-driver-unwind",
+                );
+                freed += 1;
+            }
+        }
+        freed
+    }
+
     /// The `.store` image source — arc A's fetch, unchanged.
     ///
     /// The order is load-bearing and predates the seam: TRY the fetch, and only

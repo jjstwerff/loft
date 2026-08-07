@@ -968,21 +968,14 @@ fn a_lazy_fetch_can_be_a_loft_function() {
          merely running: {s}"
     );
 
-    // The known debt, PINNED rather than grandfathered, and it is the SAME on
-    // both backends. Containment abandons the faulting driver's frames, and a
-    // frame's locals are freed by the scope-exit code the fault skipped — so
-    // whatever it had allocated is left behind, one store per contained fault.
-    // The fixture's driver allocates before it faults precisely so this is
-    // measurable: a driver that allocates nothing leaks nothing, which localises
-    // the fix to the abandoned frames rather than to the fetch.
-    //
-    // When the releasing unwind lands this assertion INVERTS, and that is the
-    // point of writing it down as a measurement.
+    // The releasing unwind: a contained fault leaves NOTHING behind. It used to
+    // leak the aborted driver's allocation, one store per failed fetch — the
+    // long-running case arc C's sticky counter exists for. The matrix that
+    // decides the free is safe is a separate test below; this asserts the
+    // headline on the same program that once demonstrated the leak.
     assert!(
-        s.contains("LzdBag×1"),
-        "@PLN133 S8: a contained fault still leaks the aborted frame's \
-         allocation — one store, measured. If this no longer holds, the \
-         releasing unwind landed: invert the assertion: {s}"
+        !s.contains("not freed"),
+        "@PLN133 S8: a contained fault must leave nothing behind: {s}"
     );
 
     // One driver, two mechanisms, one answer — asserted whole. A backend that
@@ -992,5 +985,102 @@ fn a_lazy_fetch_can_be_a_loft_function() {
     assert_eq!(
         s, n,
         "both backends must give the same answers about a loft-driven lazy fetch"
+    );
+}
+
+/// @PLN133 S8 — the releasing unwind, and the matrix that decides it is safe.
+///
+/// A raise in loft short-circuits the dispatch loop, so the scope-exit frees the
+/// compiler emitted never run. For a program about to EXIT that is harmless, and
+/// the suite grandfathers it. For a CONTAINED fault it is not: the program
+/// continues, so a traversal over an unreachable source leaked once per failed
+/// fetch — unbounded.
+///
+/// The fix frees the stores the driver CREATED during the call it faulted out
+/// of, and the whole question is whether anything outside its abandoned frames
+/// can still reach one. Every cell in the fixture tries to leave something
+/// reachable behind before it faults — an inserted row, a text built during the
+/// call, a filled vector, a value from a second frame, two rows either side of
+/// an allocation — and then reads it back, late, after fifty more faults.
+///
+/// **Reading a value back is not proof on its own**: a freed store can read as
+/// plausible garbage. So the run also asserts the collection's heap verifies and
+/// that nothing is left unfreed.
+///
+/// Two break-checks were run against this matrix. Removing the free brings the
+/// leak straight back (128 stores across 57 faults). Freeing the candidates on
+/// the SUCCESS path too changes nothing — which is the stronger half of the
+/// safety argument: even where every store the driver produced is definitely
+/// still needed, none of them is a candidate, because an insert COPIES into the
+/// collection's store and the driver's new stores are only ever its own locals.
+#[test]
+fn a_contained_driver_fault_releases_what_it_held() {
+    let _serial = SQLITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/133-lazy-unwind.loft");
+    let run = |backend: &str| -> String {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg(&script)
+            .env("LOFT_NATIVE_LEAK_CHECK", "1")
+            .env("LOFT_STORES", "warn")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("failed to invoke loft");
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        for line in String::from_utf8_lossy(&out.stderr).lines() {
+            if line.starts_with("Warning:") {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        text
+    };
+
+    let expect = [
+        "1 null=true",
+        // Each of these faulted having left a row in the collection, and the row
+        // survived with its content intact — the text built during the call, the
+        // vector filled during it, the value that came from a second frame.
+        "2 during=true after=kept-2",
+        "3 during=true after=built-3-from-duckdb:unwind",
+        "4 during=true after=vec-4/alpha/beta/gamma",
+        "5 during=true after=made-5",
+        "6 during=true after=six-a sibling=six-b",
+        "8 null=true",
+        "9 ok-9",
+        // …and still intact fifty faults later, which is where a wrong free
+        // surfaces if it did not surface at the cell.
+        "late 2=kept-2 3=built-3-from-duckdb:unwind 4=vec-4/alpha/beta/gamma 5=made-5",
+        "late 6=six-a 7=six-b 9=ok-9",
+        "resident=7 faults=57",
+        // A value can read right out of a freed store; a heap check cannot.
+        "sound=true",
+    ];
+
+    let s = run("--interpret");
+    for line in expect {
+        assert!(s.contains(line), "--interpret: expected `{line}` in:\n{s}");
+    }
+    // The headline: 57 contained faults, nothing left behind.
+    assert!(
+        !s.contains("not freed"),
+        "57 contained faults must leave NOTHING behind:\n{s}"
+    );
+
+    // One answer, two mechanisms — the interpreter stops its dispatch loop, and
+    // native unwinds through Rust. Compared whole, because the way they differ
+    // is exactly where an unpredicted divergence would hide.
+    let n = run("--native");
+    assert_eq!(
+        s, n,
+        "both backends must release identically after a contained fault"
     );
 }

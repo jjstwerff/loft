@@ -613,7 +613,13 @@ pub fn OpGetRecord(
             // depth guard raises instead of exiting and this catches it — the
             // one place in generated-code execution where a fault is not the
             // program's to die of.
+            //
+            // The window is the same teardown the interpreter runs: Rust's
+            // unwind runs its own drop glue, but a loft store is freed by an
+            // explicit call the unwind skips exactly as the interpreter's fault
+            // skips its scope-exit op — measured identical on both backends.
             IN_LAZY_DRIVER.with(|f| f.set(true));
+            let outer_watch = stores.lazy_watch_begin();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 driver(cell, data, &source, key_int, &key_text)
             }));
@@ -621,6 +627,7 @@ pub fn OpGetRecord(
             // `stores` was borrowed from `cell` and the driver borrowed it too,
             // so it is re-taken here rather than reused.
             let stores: &mut Stores = unsafe { &mut *cell.get() };
+            stores.lazy_watch_end(outer_watch, outcome.is_err());
             match outcome {
                 Ok(1 | 0) => {}
                 // A driver that answered something else did not follow the

@@ -6,9 +6,8 @@
 **Building. All four probes ran 2026-08-06 and decided the architecture; S1–S6
 and S8 landed 2026-08-07.** S1–S5 are pure values and pure functions, S6 only
 READS a catalogue, and S8 is the first change to core: a lazy fetch can now BE a
-loft function, on BOTH backends, with byte-identical output. One debt remains and
-is pinned by the test rather than left to be discovered — a contained fault still
-leaks what the aborted driver had allocated, identically on both backends.
+loft function, on BOTH backends, with byte-identical output — including P4's
+releasing unwind, so a contained fault leaves nothing behind.
 
 P1 **passes**, so **option B is viable**. P2 **passes for reads and fails for
 writes on sqlite**, which is a bounded, documented limit rather than a blocker.
@@ -822,25 +821,46 @@ wrote, so generated `init()` installs a POINTER to it
 a time: two mechanisms reaching one answer is the claim, and a divergence nobody
 predicted shows up only in the comparison.
 
-#### What is NOT done, and it is the same on both backends
+#### The releasing unwind — done, and what made it safe
 
-- **A contained fault still leaks, and the leak is now localised.** P4 measured
-  one store; this measures *which* one: a driver that faults having allocated
-  nothing leaks nothing, and one that allocates first leaks exactly what the
-  abandoned frame held, once per failed fetch. So the fix is scoped to the
-  abandoned frames rather than to the fetch — a frame's locals are freed by the
-  scope-exit bytecode the fault skipped, and truncating runs none of it.
-  `State::iter_frame_variables_at` (the UAF scanner's enumerator) is the
-  mechanism a releasing unwind would use, plus the variable table's ownership
-  flags to tell an owned local from a borrowed one. **Not attempted here on
-  purpose**: freeing a store the collection now points into is a use-after-free,
-  which is strictly worse than the leak, and separating the two needs a boundary
-  matrix rather than a plausible read. The test PINS the leak so the day it stops
-  is visible.
+P4 measured one leaked store per contained fault and left the fix open. What
+closed it was measuring *which* store: a driver that faults having allocated
+nothing leaks nothing, and one that allocates first leaks exactly what its
+abandoned frames held — on BOTH backends, identically. Native's unwind runs
+Rust's drop glue and still leaked, which says the missing free is loft's own
+scope-exit code on both sides rather than anything backend-specific.
 
-  **Measured on both backends, and they agree** — native's unwind runs Rust's
-  drop glue and still leaks the same one store, which says the missing free is
-  loft's own scope-exit code on both sides rather than anything backend-specific.
+**The cause is not S8's.** A raise in loft short-circuits the dispatch loop, so
+the scope-exit frees the compiler emitted never run. The suite already knows
+this — `SCRIPTS_LEAK_ALLOW`'s history records scripts that abort mid-`main` being
+exempted for exactly this reason. It is harmless for a program about to exit. S8
+is the first case where a raise happens and the program CONTINUES, so it is the
+first place the leak accumulates.
+
+**The fix**: while a driver runs, remember every store it creates; on a fault,
+free those. Not the abandoned frames' variables — `State::iter_frame_variables_at`
+could enumerate them, but only on the interpreter, and the two backends had just
+been made to agree.
+
+**What makes it sound is a measurement, not an argument.** The risk was freeing a
+store the collection had come to point into — a use-after-free, strictly worse
+than the leak. `tests/fixtures/133-lazy-unwind.loft` is nine cells that each try
+to leave something REACHABLE behind before faulting: an inserted row, a text
+built during the call, a filled vector, a value returned from a second frame, two
+rows either side of an allocation, a fault with no allocation, and a successful
+fetch. Each is read back late, after fifty more faults, and the run asserts the
+collection's heap verifies and nothing is unfreed.
+
+Two break-checks:
+
+- Remove the free → the leak returns, 128 stores across 57 faults. The matrix
+  catches its absence.
+- Free the candidates on the SUCCESS path too → **nothing changes**, and that is
+  the stronger half of the safety argument. Even where every store the driver
+  produced is definitely still needed, none of them is a candidate: an insert
+  COPIES into the collection's store, so a driver's new stores are only ever its
+  own locals. The `!faulted` guard stays because it is right in principle, not
+  because the matrix needs it.
 
 ### S7 has a design question the plan did not name: `SqlDb` is STATIC dispatch
 
