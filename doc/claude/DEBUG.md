@@ -21,6 +21,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)
 - [Debugging a Runtime Crash or Wrong Result](#debugging-a-runtime-crash-or-wrong-result)
 - [Before you believe a fault is RANDOM](#before-you-believe-a-fault-is-random)
+- [When the symptom is in the NEIGHBOURS, not the crashing code](#when-the-symptom-is-in-the-neighbours-not-the-crashing-code)
 - [When it fails in CI but passes locally](#when-it-fails-in-ci-but-passes-locally)
 - [The debug-assertions calibration run (`target-da`)](#the-debug-assertions-calibration-run-target-da)
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
@@ -769,6 +770,47 @@ random fault, prove each run really starts from the state you believe. A harness
 that clears the wrong cache reports a ratio with total confidence, and the ratio
 is fiction.
 
+## When the symptom is in the NEIGHBOURS, not the crashing code
+
+A write that lands outside its record damages whatever sits next to it, so the fault
+surfaces in unrelated code and its shape depends on what the neighbouring bytes held.
+That produces the most misleading bug report there is: "non-deterministic",
+"non-monotonic in the input size", "crashes under the test runner but is fine as a
+program". Every one of those is a downstream artefact, and chasing them costs days.
+
+loft#796 was exactly this. `Stores::position` answers `u16::MAX` for a field the layout
+has no slot for, and that answer was used as the field OFFSET — so a ten-field struct
+laid out with nine wrote at `record + 65535`. One program gave a SIGSEGV inside an
+unrelated claim walk, a 59.6 GiB allocation, or a clean pass, run to run.
+
+**The escalation that worked, in order:**
+
+```bash
+# 1. A real backtrace beats any amount of tracing.  Name the faulting FUNCTION first.
+gdb -q -batch -ex run -ex "bt 25" --args loft --interpret --tests probe.loft
+
+# 2. Turn the store bounds sentinels ON.  They are OFF in ordinary builds
+#    (`profile.dev.package.loft` sets debug-assertions = false for speed), so a
+#    release binary built WITH them is the instrument — and it usually turns a
+#    random crash into a deterministic, named assertion.
+CARGO_TARGET_DIR=/tmp/loft_dbg RUSTFLAGS="-C debug-assertions=on" cargo build --release
+cp /tmp/loft_dbg/release/loft target/release/loft_dbg   # so `default/` still resolves
+
+# 3. With it deterministic, the interpreter trace names the op outright.
+LOFT_LOG=crash_tail:35 target/release/loft_dbg --interpret --tests probe.loft
+#   -> GetField(v1=ref(15,1,8), fld=65535) -> ref(15,1,65543)=<oob>
+```
+
+Step 2 is the one worth remembering: the sentinels exist and are disabled by default, so
+"the release binary does not check that" is a fact about the PROFILE, not the code.
+
+**Also cap the process.** A corrupted length ends in a bad dereference on one run and an
+unbounded allocation on the next; `LOFT_TIMEOUT` bounds time, not memory. Wrap a
+repeat-run harness in `( ulimit -v 6000000; exec loft … )` — the kernel's OOM killer is
+free to kill a bystander instead of the runaway (it took out two unrelated sessions
+during this hunt). Test runs additionally carry loft's own store ceiling, which names
+the type that filled the heap (TESTING.md § Store-memory ceiling).
+
 ## When it fails in CI but passes locally
 
 Same commit, same command, opposite result — so the difference is *state*, and the
@@ -1289,3 +1331,46 @@ steady-state runtime.
 - [SLOTS.md](SLOTS.md) — Slot assignment design (for the slots-dump enhancement)
 - [LIFETIME.md](LIFETIME.md) — Dep tracking and scope-based freeing (for the dep-graph enhancement)
 - [SLOTS.md](SLOTS.md) — Variable scoping and slot assignment details
+
+## Count it before you time it
+
+**A symptom that appears only on one target usually has a target-INDEPENDENT count behind
+it.** What code does — ranges fetched, bytes, pages resident, allocator calls — is a
+property of the algorithm and is the same everywhere. Only the *price* of each operation is
+target-specific. So when a defect is reported somewhere you cannot easily run, ask first
+*what does this change the count of?* and assert that count here.
+
+loft#787 was a browser-only 1.14x on a paged load. Three native probes saw nothing, so a
+CDP harness was built — three served roots, rotating arms, a cold browser per sample, four
+kernels. Every rung of that ladder landed inside a +/-100 ms noise floor. A counting
+`GlobalAlloc` over a one-page read range settled the same question in 20 ms:
+
+| | 200 reads | 300 000 reads |
+|---|---|---|
+| before | 4 | 300 011 |
+| after | 0 | 0 |
+
+One allocation per read (`resolve` returned an owning `Vec`, so a 4-byte index word cost a
+malloc and a free). Invisible natively only because glibc's tcache is ~15 ns — the *count*
+was always readable. `tests/paged_read_alloc.rs` is the pattern:
+
+- **A counting `#[global_allocator]`** in the test binary, armed around a tight window.
+- **Assert a SCALING property, never a bare zero.** Same work at 200 and 300 000 iterations,
+  counts must be EQUAL. A pinned zero breaks the day a read range widens by a page and says
+  nothing about the defect; the defect was that the count tracked reads.
+- **Run the control.** Restore the pre-fix file, watch it fail, restore. A harness not shown
+  to fail has asserted nothing (`CLAUDE.md` matrix rule 3).
+- **Say what stays non-zero and why.** A span read still owns one buffer per *record* — the
+  right unit — and a test states that, so a later "drive it to zero" knows what it is
+  breaking.
+
+Reach for the target's own harness only for the part that is genuinely a price.
+
+**How it ended, because the sequence is the lesson.** The reported ratio went
+`1.5x` (un-interleaved, withdrawn by the reporter) → `1.14x` (interleaved, real) →
+`1.03x` and, on the headline workload, **694 ms against a 763 ms pre-arc baseline** — faster
+than before the work started, with 42 fewer reads. Two per-read costs did it: an allocation
+per read, and hashing the page key twice per read. Both were found by counting, both were
+invisible to three native wall-clock probes, and the browser A/B built to see them could not
+resolve either — every rung of that ladder landed inside its own noise floor. **The counts
+were exact on the first try.**

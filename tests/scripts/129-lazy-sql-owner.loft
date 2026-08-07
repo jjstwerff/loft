@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc B4's SHAPE — a collection-valued field as an owner-parameterised
+// query.
+//
+// `company.people` is not a stored vector: it is `WHERE company_id = <this
+// company's key>`. That needs no new language surface — the explicit query says
+// it — and what it DOES need is for a collection declared as a struct FIELD to
+// resolve to its own type rather than to the wrapper's, which is the same
+// resolution the paged loader made for #632.
+//
+// Driven from tests/lazy_sql_source.rs, which seeds the database.
+
+struct SqHand { id: integer, name: text, company_id: integer }
+struct Firm { id: integer, name: text, people: hash<SqHand[id]> }
+struct TwoKeyed { a: hash<SqHand[id]>, b: hash<SqHand[id]> }
+
+fn main() {
+  target = env_variable("LOFT_SQL_TARGET") ?? "";
+  if target == "" { return }
+
+  acme = Firm { id: 7, name: "Acme", people: [] };
+  println("bound={store_bind_lazy(acme.people, target)}");
+  n = store_lazy_query(acme.people, "company_id = {acme.id}");
+  println("added={n} resident={acme.people.len()} err=[{store_lazy_error(acme.people)}]");
+  who = "";
+  for w in acme.people { who += "{w.name} " }
+  println("who={who}");
+
+  // A second firm's field is a DIFFERENT binding on the same table — per
+  // collection, not per store, which is what makes this shape work at all.
+  globex = Firm { id: 9, name: "Globex", people: [] };
+  store_bind_lazy(globex.people, target);
+  m = store_lazy_query(globex.people, "company_id = {globex.id}");
+  println("other={m} resident={globex.people.len()} acme_unchanged={acme.people.len()}");
+
+  // And a keyed lookup on the field collection faults like any other.
+  h = acme.people[3];
+  println("keyed={h.name} resident_after={acme.people.len()}");
+
+  // A wrapper with TWO keyed fields cannot say which collection a bare
+  // reference names, and refuses rather than guessing.
+  t = TwoKeyed { a: [], b: [] };
+  store_bind_lazy(t.a, target);
+  println("ambiguous={store_lazy_query(t.a, "1=1")} why_empty={store_lazy_error(t.a) == ""}");
+
+  // Both the field and its owner: a partially-loaded heap has to be sound at
+  // the collection that was actually filled. Verifying the FIELD used to report
+  // a corruption that was not there (loft#790, fixed) — a control with ordinary
+  // inserts is what proved that was `store_verify`'s bug and not this arc's.
+  println("sound={store_verify(acme.people)},{store_verify(acme)}");
+}

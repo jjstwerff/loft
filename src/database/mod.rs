@@ -9,8 +9,11 @@ mod descriptor;
 mod format;
 mod io;
 pub mod journal;
+pub mod lazy;
 mod search;
 pub mod snapshot;
+pub mod sql_query;
+pub mod sql_source;
 mod structures;
 mod types;
 
@@ -255,6 +258,28 @@ pub struct LazyBinding {
     /// same second. Nanoseconds catch an in-place rewrite; the inode catches a
     /// rename-replace, which does not touch the new file's mtime at all.
     pub pin: Option<(u64, u64, u64)>,
+    /// @PLN129 arc B step 7 — whether this source's schema can serve this
+    /// collection, decided once.
+    pub check: SchemaCheck,
+}
+
+/// @PLN129 arc B step 7 — the verdict on a database schema loft does not own.
+///
+/// Decided on the FIRST fetch rather than at bind, because that is the first
+/// moment the collection's TYPE is known — a bind takes a reference, and a
+/// reference does not carry one. Still before any answer a program could
+/// believe, which is the property the check exists for.
+///
+/// Re-decided by a rebind: a rebind is a caller saying "this is a different
+/// world now", and the schema is part of that world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SchemaCheck {
+    Unchecked,
+    Ok,
+    /// The bind cannot be served, and this says why. Sticky for the life of the
+    /// binding: nothing about the schema changes between two lookups, so
+    /// re-asking would cost a round trip per fault to get the same answer.
+    Refused(String),
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -306,6 +331,14 @@ pub struct Stores {
     /// FIRST reason is kept because it names the original cause; later ones are
     /// usually the same failure repeating.
     pub lazy_errors: HashMap<(u16, u32, u32), (u64, String)>,
+    /// @PLN133 S8 — the stores created while a lazy DRIVER is running, or
+    /// `None` when none is.
+    ///
+    /// A raise short-circuits the dispatch loop, so the scope-exit frees the
+    /// compiler emitted never run. For a program about to exit that is
+    /// harmless; for a CONTAINED fault the program continues, and this is what
+    /// the containment frees instead of the teardown it could not run.
+    pub(crate) lazy_driver_allocs: Option<Vec<u16>>,
     #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
     #[cfg(feature = "wasm")]
@@ -599,6 +632,7 @@ impl Clone for Stores {
             stack_store_at_zero: self.stack_store_at_zero,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            lazy_driver_allocs: None,
             files: Vec::new(),
             max: self.max,
             peak: 0,
@@ -1338,6 +1372,7 @@ impl Stores {
             stack_store_at_zero: false,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            lazy_driver_allocs: None,
             files: Vec::new(),
             max: 0,
             peak: 0,

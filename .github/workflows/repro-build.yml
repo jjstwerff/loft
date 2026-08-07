@@ -32,6 +32,22 @@ on:
   # a full cold build of loft.
   schedule:
     - cron: '0 6 * * 1'
+  # …and on any PR that touches the reproducibility contract itself.  The published-release
+  # jobs below cannot run here (there is no release for a PR), but `roundtrip` can, and this
+  # is the only moment a break is attributable: the weekly job reports it days later, on a
+  # commit that merely inherited it.  Both causes found so far — a timestamped build stamp
+  # and an unlocked dependency set — are edits to exactly these files.
+  pull_request:
+    paths:
+      - 'build.rs'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - '.gitignore'
+      - 'scripts/repro-flags.sh'
+      - 'scripts/repro-verify.sh'
+      - 'scripts/repro-roundtrip.sh'
+      - 'scripts/make-release.sh'
+      - '.github/workflows/repro-build.yml'
 
 permissions:
   contents: read
@@ -40,9 +56,36 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Does THIS commit rebuild to the same bytes from an exported tree?  No release, no
+  # network — so it can run on a PR, which is where a break is cheapest to attribute.
+  #
+  # It answers a strictly weaker question than `reproduce` below (same toolchain, same
+  # machine, one commit) and catches a strictly earlier failure: both real causes so far
+  # were visible here, days before any release existed to verify.
+  roundtrip:
+    name: Round trip (this commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # `git archive HEAD` needs the commit, and the probe reads `git rev-parse` —
+          # a shallow checkout of a merge ref would export something no release matches.
+          fetch-depth: 0
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: repro-roundtrip-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Round-trip this commit
+        run: bash scripts/repro-roundtrip.sh
+
   reproduce:
     name: Rebuild ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # No published release to verify on a PR; `roundtrip` covers that case instead.
+    if: github.event_name != 'pull_request'
     timeout-minutes: 45
     strategy:
       fail-fast: false

@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc B step 8 — a key RANGE is one query, not N lookups.
+//
+// This is what decides whether lazy reading is usable rather than merely
+// correct: 500 records fetched one lookup at a time is 500 round trips (README
+// failure path 8). The assertion is the query COUNT, checked by the driver —
+// the values below would be identical either way.
+//
+// It also exercises the ORDERED kinds, which materialise through the same
+// `record_finish` a `hash` does: the iteration order proves the records were
+// placed by key rather than appended in arrival order.
+//
+// Driven from tests/lazy_sql_source.rs, which seeds the database.
+
+struct SqEvent { at: integer, what: text }
+
+fn main() {
+  target = env_variable("LOFT_SQL_TARGET") ?? "";
+  if target == "" { return }
+
+  events: sorted<SqEvent[at]> = [];
+  store_bind_lazy(events, target);
+
+  // A keyed lookup on an ORDERED collection.
+  e = events[12];
+  println("keyed={e.what} resident={events.len()}");
+
+  n = store_lazy_range(events, 5, 9);
+  println("added={n} resident={events.len()} err=[{store_lazy_error(events)}]");
+
+  order = "";
+  for x in events { order += "{x.at} " }
+  println("order={order}");
+
+  // An overlapping range adds only what is new — the collection is asked first
+  // on this path too.
+  again = store_lazy_range(events, 7, 11);
+  println("again={again} resident={events.len()}");
+
+  // A hash has no order to range over, and says so rather than scanning.
+  h: hash<SqEvent[at]> = [];
+  store_bind_lazy(h, target);
+  println("hash_range={store_lazy_range(h, 1, 3)} why_empty={store_lazy_error(h) == ""}");
+
+  println("sound={store_verify(events)}");
+}

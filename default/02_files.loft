@@ -527,13 +527,70 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 // and two collections of one type can bind differently. Binding replaces, and may
 // be done before the collection holds anything.
 //
-// `source` is what `store_load_key` accepts — a local `.store` image or an
-// `http(s)://` URL served with Range. Returns false for a null collection.
+// `source` is either an IMAGE — what `store_load_key` accepts: a local `.store`
+// file or an `http(s)://` URL served with Range — or a DATABASE, named by a
+// driver prefix. Returns false for a null collection.
 //   persons: hash<Person[id]> = []
 //   store_bind_lazy(persons, "people.store")
 //   p = persons[42]        // fetches exactly entry 42, then holds it
+//
+// @PLN129 arc B — `sqlite:<path>` binds to a table instead, and the query is
+// DERIVED from the collection's own type: the table is the element type's name
+// lowercased, the columns are its fields, and the `WHERE` is the collection's
+// key. Nothing is written down twice.
+//   persons: hash<Person[id]> = []              // struct Person { id: integer, name: text }
+//   store_bind_lazy(persons, "sqlite:people.db")
+//   p = persons[42]        // SELECT "id","name" FROM "person" WHERE "id" = 42
+//
+// Read-only, and the connection enforces it. A binding whose type cannot become
+// a query — a collection that is not a `hash`, a field that is not a column —
+// is REFUSED rather than served wrongly, and says so through
+// `store_lazy_error`. sqlite is opened on the first fault, so a program that
+// binds no database loads nothing.
 pub fn store_bind_lazy(local: reference, source: text) -> boolean;
 #rust"{{ let r = @local; let ok = r.rec != 0; if ok {{ stores.bind_lazy(&r, @source); }} ok }}"
+
+// @PLN129 arc B2 — run an explicit condition against this collection's bound
+// DATABASE source and pull every matching row into the collection. Answers how
+// many records the collection gained.
+//
+// The escape hatch for what the collection's KEY cannot express — a predicate on
+// another column, a pattern, a range nobody declared an index for. A keyed
+// lookup derives its own query and needs no call; this one cannot be derived, so
+// it is written down and visible rather than happening behind a lookup.
+//
+//   found = store_lazy_query(persons, "name LIKE 'Ada%'");
+//   p = persons[42]        // hits what the query already brought in
+//
+// The rows land IN the collection, not in a separate result: a person reached by
+// this query and the same person reached by a later lookup are ONE record, and a
+// row already resident is left alone rather than fetched twice. So `len` and
+// iteration keep answering "what have I got" — after this, more.
+//
+// `condition` is SQL, sent as written (the connection is read-only). Answers 0
+// both when nothing matched and when the query could not run; `store_lazy_error`
+// tells those apart.
+pub fn store_lazy_query(local: reference, condition: text) -> integer;
+#rust"stores.lazy_query(&(@local), @condition)"
+
+// @PLN129 arc B step 8 — pull a whole KEY RANGE from this collection's bound
+// DATABASE source in ONE query. Answers how many records the collection gained.
+//
+// This is what keeps lazy reading usable rather than merely correct. Fetching
+// 500 records one lookup at a time is 500 round trips; the same 500 as a range
+// is one. So when you know the span you want, ask for the span:
+//
+//   store_lazy_range(events, 100, 199);   // one query, up to 100 records
+//   for e in events { ... }               // all resident, no further fetching
+//
+// The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order
+// to range over — and keyed on ONE column, since two numbers cannot say which
+// value pins a composite key's leading column; use `store_lazy_query` for that.
+// Both bounds are inclusive, in the collection's own key order. A record already
+// resident is left alone. Answers 0 when nothing matched AND when the query
+// could not run; `store_lazy_error` tells those apart.
+pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer;
+#rust"stores.lazy_range(&(@local), @lo, @hi)"
 
 // @PLN129 arc C — why the last lazy fetch could not REACH this collection's
 // source, or "" when it is healthy.
@@ -570,6 +627,29 @@ pub fn store_lazy_faults(local: reference) -> integer;
 // saying "I have seen this", which is a different event entirely.
 pub fn store_lazy_clear(local: reference) -> boolean;
 #rust"stores.lazy_clear(&(@local))"
+
+// @PLN133 S8 — a loft DRIVER reporting that it could not reach its source.
+//
+// The writing end of the channel `store_lazy_error` reads. A driver written in
+// loft (`fn lazy_fetch(...)`) has the same three answers a Rust source has, and
+// two of them are an integer: `1` inserted, `0` absent. The third is not — "the
+// source is down" carries a REASON, and answering `0` for it is exactly the
+// silent wrong answer arc C exists to prevent, because a caller cannot tell it
+// from "no such person".
+//
+//   fn lazy_fetch(coll: hash<Person[id]>, source: text,
+//                 key_int: integer, key_text: text) -> integer {
+//     if !db.db_open(source) {
+//       store_lazy_fail(coll, "cannot open {source}: {db.db_last_error()}");
+//       return 0;
+//     }
+//     ...
+//   }
+//
+// Sticky and counted exactly like a Rust source's failure: the FIRST reason is
+// kept, every failure is counted, and only `store_lazy_clear` clears them.
+pub fn store_lazy_fail(local: reference, why: text) fs#read;
+#rust"stores.lazy_fail(&(@local), @why)"
 
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
 #rust"stores.load_key(&(@local), @path, @key)"

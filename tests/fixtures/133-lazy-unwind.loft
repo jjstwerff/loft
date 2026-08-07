@@ -1,0 +1,146 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S8 — the releasing unwind, and the matrix that decides it is safe.
+//
+// A raise in loft short-circuits the dispatch loop, so the scope-exit frees the
+// compiler emitted never run. For a program about to EXIT that is harmless and
+// the suite grandfathers it. For a CONTAINED fault it is not: the program
+// continues, so a traversal over an unreachable source would leak once per
+// failed fetch — unbounded, and exactly the long-running case arc C's sticky
+// counter exists for.
+//
+// The fix frees the stores the driver CREATED during the call it faulted out
+// of. That is only sound if nothing outside the driver's abandoned frames can
+// still reach one of them, and this file is the attempt to break that: every
+// cell below tries to leave something REACHABLE behind before it faults, and
+// then reads it back.
+//
+// Reading a value back is not enough on its own — a freed store can read as
+// plausible garbage — so each cell also asserts the collection's HEAP is sound
+// (`store_verify`) and the run ends with a leak count of zero.
+//
+// Driven by `tests/lazy_sql_source.rs`, both backends, output compared whole.
+
+struct LuPerson { id: integer, nm: text, tags: vector<text> = [] }
+struct LuBag { rows: vector<LuPerson> = [] }
+struct LuWorld { people: hash<LuPerson[id]> = [] }
+
+fn lu_boom(n: integer) -> integer { return lu_boom(n + 1) + 1; }
+
+// A helper that allocates and hands a value back, so a FAULT abandons two
+// frames rather than one.
+fn lu_make(n: integer) -> LuPerson {
+  return LuPerson { id: n, nm: "made-{n}" };
+}
+
+fn lazy_fetch(coll: hash<LuPerson[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  // 1 — allocate a local, then fault. The baseline: nothing may survive it.
+  if key_int == 1 {
+    b = LuBag { };
+    b.rows += [LuPerson { id: 1, nm: "scratch" }];
+    return lu_boom(0) + len(b.rows);
+  }
+  // 2 — INSERT, then allocate, then fault. The inserted row must survive; the
+  //     local must not.
+  if key_int == 2 {
+    coll += [LuPerson { id: 2, nm: "kept-2" }];
+    b2 = LuBag { };
+    b2.rows += [LuPerson { id: 22, nm: "scratch-2" }];
+    return lu_boom(0) + len(b2.rows);
+  }
+  // 3 — insert a row whose TEXT was built during the call, then fault. A text
+  //     freed with the driver's locals reads back empty or as garbage.
+  if key_int == 3 {
+    built = "built-" + "{key_int}" + "-from-{source}";
+    coll += [LuPerson { id: 3, nm: built }];
+    return lu_boom(0);
+  }
+  // 4 — insert a row with a VECTOR field filled during the call, then fault.
+  if key_int == 4 {
+    p4 = LuPerson { id: 4, nm: "vec-4" };
+    p4.tags += ["alpha", "beta", "gamma"];
+    coll += [p4];
+    return lu_boom(0);
+  }
+  // 5 — the value comes from ANOTHER frame, so the fault abandons two.
+  if key_int == 5 {
+    made = lu_make(5);
+    coll += [made];
+    return lu_boom(0);
+  }
+  // 6 — insert TWICE, fault between allocations. Both rows must survive.
+  if key_int == 6 {
+    coll += [LuPerson { id: 6, nm: "six-a" }];
+    b6 = LuBag { };
+    b6.rows += [LuPerson { id: 66, nm: "scratch-6" }];
+    coll += [LuPerson { id: 7, nm: "six-b" }];
+    return lu_boom(0) + len(b6.rows);
+  }
+  // 8 — fault with NO allocation at all. The control: the window must be a
+  //     no-op, not a free of something it did not create.
+  if key_int == 8 { return lu_boom(0) }
+  // Every other key succeeds, which is the other control: a normal return must
+  // free nothing.
+  coll += [LuPerson { id: key_int, nm: "ok-{key_int}" }];
+  return 1;
+}
+
+fn lu_show(w: LuWorld, k: integer) -> text {
+  r = w.people[k];
+  if r == null { return "null" }
+  out = r.nm ?? "-";
+  for t in r.tags { out += "/{t}" }
+  return out;
+}
+
+fn main() {
+  w = LuWorld { };
+  _ = store_bind_lazy(w.people, "duckdb:unwind");
+
+  // 1 — the baseline. Nothing survives, and nothing is left behind.
+  a1 = w.people[1];
+  println("1 null={a1 == null}");
+
+  // 2..6 — each faults having left something REACHABLE in the collection.
+  a2 = w.people[2];
+  println("2 during={a2 != null} after={lu_show(w, 2)}");
+  a3 = w.people[3];
+  println("3 during={a3 != null} after={lu_show(w, 3)}");
+  a4 = w.people[4];
+  println("4 during={a4 != null} after={lu_show(w, 4)}");
+  a5 = w.people[5];
+  println("5 during={a5 != null} after={lu_show(w, 5)}");
+  a6 = w.people[6];
+  println("6 during={a6 != null} after={lu_show(w, 6)} sibling={lu_show(w, 7)}");
+
+  // 8 — a fault with nothing allocated.
+  a8 = w.people[8];
+  println("8 null={a8 == null}");
+
+  // 9 — the success control: a normal fetch must be unaffected by the window.
+  a9 = w.people[9];
+  println("9 {lu_show(w, 9)}");
+
+  // 7 — the point of the whole exercise: MANY contained faults must not grow
+  // the heap. Repeating cell 1 fifty times leaks fifty stores without the
+  // unwind and none with it.
+  for _i in 0..50 {
+    r = w.people[1];
+    if r != null { println("unexpected hit") }
+  }
+
+  // Read again AFTER fifty more faults — a store freed wrongly earlier shows up
+  // here rather than at the cell it was created in. Everything that was supposed to survive, INCLUDING the rows a successful
+  // fetch produced. Reading them here is what would catch a window that freed
+  // its candidates on the normal path too — measured to change nothing, which
+  // is the stronger half of the safety argument: even where every store the
+  // driver produced is definitely still needed, none of them is a candidate.
+  // An insert COPIES into the collection's store, so the driver's own new
+  // stores are only ever its locals.
+  println("late 2={lu_show(w, 2)} 3={lu_show(w, 3)} 4={lu_show(w, 4)} 5={lu_show(w, 5)}");
+  println("late 6={lu_show(w, 6)} 7={lu_show(w, 7)} 9={lu_show(w, 9)}");
+  println("resident={len(w.people)} faults={store_lazy_faults(w.people)}");
+  // A value can read right out of a freed store; a heap check cannot.
+  println("sound={store_verify(w.people)}");
+}

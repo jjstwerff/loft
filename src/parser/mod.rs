@@ -30,10 +30,27 @@ use typedef::complete_definition;
 /// and it has to settle stdlib shadowing first (a bare `find(…)` already binds to
 /// the stdlib `find`, silently). What this removes is the dead end: the name was
 /// right, it just was not imported, and the message now says where it lives.
+/// loft#789 — the advice has to be about the packages the BUILD resolved, not
+/// the ones the registry index knows.
+///
+/// `resolved` names the packages this compilation already has, so a suggestion
+/// to import one of them can be recognised as the misdirection it is: the file
+/// says `use hex_world;` on its second line, the resolved `hex_world` came from
+/// `--lib` and has no such function, and the registry's `hex_world` is a
+/// different package that does. Telling the author to add an import they have
+/// already written sends them to check the one thing that is right.
 #[cfg(feature = "registry")]
-fn registry_fn_hint(name: &str) -> Option<String> {
+fn registry_fn_hint(name: &str, resolved: &[String]) -> Option<String> {
     let pkgs = crate::registry_index::packages_exporting_fn(name);
     let first = pkgs.first()?;
+    // The useful diagnosis when the name collides: two packages share it, and
+    // the one in this build is not the one the index describes.
+    if let Some(here) = pkgs.iter().find(|p| resolved.iter().any(|r| &r == p)) {
+        return Some(format!(
+            "Unknown function {name} — the `{here}` this build resolved does not have it, \
+             and the registry's `{here}` does. These are different packages of the same name"
+        ));
+    }
     let provider = if pkgs.len() == 1 {
         format!("the `{first}` package provides it")
     } else {
@@ -47,7 +64,7 @@ fn registry_fn_hint(name: &str) -> Option<String> {
 
 /// Registry-less build: no index to consult, so no hint (@PLN13 phase 6).
 #[cfg(not(feature = "registry"))]
-fn registry_fn_hint(_name: &str) -> Option<String> {
+fn registry_fn_hint(_name: &str, _resolved: &[String]) -> Option<String> {
     None
 }
 
@@ -369,6 +386,15 @@ pub struct Parser {
     // count snapshot compared end-of-pass-1 vs end-of-pass-2 in debug/armed
     // builds, so any future cross-pass divergence fails loud (H5).
     first_pass: bool,
+    /// loft#788 — bare names already refused as ambiguous, so the message is
+    /// printed ONCE.
+    ///
+    /// Per name rather than per site, and in whichever pass reaches it first.
+    /// Pass 2 is not reliably reached: a first-wins binding to the wrong
+    /// package's struct raises "Unknown field" in pass 1, which is the very
+    /// symptom the ambiguity explains — waiting for pass 2 would report it in
+    /// exactly the case that needs it least.
+    ambiguity_reported: std::collections::HashSet<String>,
     /// @PLN104 P3 — def_nrs the post-pass-2 oracle (`report_tret_promotions`) marks
     /// for `__tret` retbuf promotion (a frame-local text return with no buffer). Read
     /// by `do_tret_bind`'s gate on the THIRD pass so the promotion is forward-ref-safe:
@@ -791,6 +817,7 @@ impl Parser {
             default: false,
             context: u32::MAX,
             first_pass: true,
+            ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
             reverse_iterator: false,
             iterable_context: false,
@@ -3562,7 +3589,21 @@ impl Parser {
             } else {
                 &types[0]
             };
-            self.data.find_fn(source, name, dispatch_tp)
+            let d = self.data.find_fn(source, name, dispatch_tp);
+            // loft#788 — a bare CALL is ambiguous the same way a bare type is,
+            // and worse: both import orders compile and RUN, answering
+            // differently. The key is the mangled one, since that is what a
+            // function is bound under.
+            //
+            // `source == MAX` is what makes it BARE. A qualified `ra::dup_name()`
+            // has already said which package it means, and two packages
+            // deliberately exporting one name and calling it qualified is a
+            // shape that works today (#305, `n2_cdylib`) — refusing it would
+            // break a program for a collision it has already resolved.
+            if source == u16::MAX {
+                self.refuse_ambiguous_import(&format!("n_{name}"), d);
+            }
+            d
         };
         // Trace point: post-find_fn dispatch state.  Captures the most
         // common debugging vantage — what name resolved to which
@@ -3930,7 +3971,7 @@ impl Parser {
                     // `random` — so this is offered first.  Bare calls still do
                     // not resolve; this only replaces a dead end with the two
                     // ways to say what was meant.
-                    if let Some(hint) = registry_fn_hint(name) {
+                    if let Some(hint) = registry_fn_hint(name, &self.data.resolved_libraries()) {
                         diagnostic_at!(self.lexer, name_pos, Level::Error, "{hint}");
                     } else if let Some(s) = self.suggest_function_name(name) {
                         diagnostic_at!(
@@ -5088,11 +5129,27 @@ impl Parser {
                 // FIRST item's value for every iteration (P252).  The
                 // Nullable peer's arg shape is identical to OpGetVector
                 // (r, size, idx) so the elm_size fixup logic is unchanged.
+                // **Only a TYPE-VARIABLE element is rewritten**, and the baked
+                // stride of 0 is how one is recognised — that is what the
+                // paragraph above means by "the template bakes elm_size=0 for
+                // type-variable elements".  A read with a NON-ZERO stride is a
+                // vector of some concrete type that merely happens to live in a
+                // generic body, and its stride is already right.
+                //
+                // Without this guard every `OpGetVector` in the body was
+                // retargeted to T's stride, so a plain `vector<float>` local was
+                // written with stride 8 and read with the stride of whatever T
+                // happened to be.  Silent: an 8-byte T (a one-field struct — the
+                // shape most tests use) gives the correct answer by coincidence,
+                // and anything wider reads garbage from element 1 onward, while
+                // `len()` and the same vector passed to a NON-generic helper stay
+                // correct (loft#791).
                 if new_d != u32::MAX
                     && (new_d as usize) < data.definitions.len()
                     && (data.def(new_d).name() == "OpGetVector"
                         || data.def(new_d).name() == "OpGetVectorNullable")
                     && new_args.len() == 3
+                    && matches!(&new_args[1], Value::Int(0))
                 {
                     let cur_size = if let Value::Int(n) = &new_args[1] {
                         *n
@@ -5999,6 +6056,60 @@ impl Parser {
         code
     }
 
+    /// The stored offset of `field` within `d_nr`'s layout.
+    ///
+    /// loft#796 — [`Stores::position`](crate::database::Stores::position) answers
+    /// `u16::MAX` for a field the layout does not have, and that answer used to flow
+    /// straight out as the field OFFSET: the interpreter then read and WROTE at
+    /// `record + 65535`. A struct whose declaration carries a field its layout does
+    /// not is not something any code can access correctly, so every lookup goes
+    /// through here and says so instead of emitting an access outside the record.
+    ///
+    /// The gap opens when the field's TYPE is not declared yet at the moment the
+    /// struct is laid out — a type from a module the package loads later. A second
+    /// pass resolves the ATTRIBUTE, so the declaration looks complete while the layout
+    /// keeps the hole (loft#797 tracks closing that; this is the guard, not the cure).
+    ///
+    /// It was silent: in the reported case a ten-field struct was laid out with nine,
+    /// and every write to the missing one corrupted whatever followed the record.
+    /// Usually a SIGSEGV inside a later claim walk, sometimes an unbounded allocation,
+    /// and non-deterministic either way, because WHICH it is depends on what the
+    /// neighbouring bytes happened to hold — which is why the same program read as
+    /// "random", "non-monotonic in scene size", and "fine as a program, crashes under
+    /// the test runner".
+    ///
+    /// Pass 2 only: pass 1 has no layouts yet, so the sentinel there is ordinary and
+    /// says nothing.
+    pub(crate) fn field_position(&mut self, d_nr: u32, field: &str) -> u16 {
+        let p = self
+            .database
+            .position(self.data.def(d_nr).known_type(), field);
+        if p == u16::MAX && !self.first_pass {
+            let owner = self.data.def(d_nr).name().to_string();
+            let unresolved = {
+                let a_nr = self.data.attr(d_nr, field);
+                a_nr != usize::MAX && self.data.attr_type(d_nr, a_nr).is_unknown()
+            };
+            if unresolved {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "the type of field '{field}' of '{owner}' never resolved, so the field \
+                     has no storage — declare that type, or `use` the module that declares it"
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "field '{field}' of '{owner}' has no storage in that type's layout — \
+                     the declaration and the layout disagree, so the field cannot be read \
+                     or written"
+                );
+            }
+        }
+        p
+    }
+
     fn get_field(&mut self, d_nr: u32, f_nr: usize, code: Value) -> Value {
         // #91: track $.<field> accesses during init(expr) parsing.
         if self.init_field_tracking && code == Value::Var(0) && f_nr != usize::MAX {
@@ -6019,8 +6130,7 @@ impl Parser {
             0
         } else {
             let nm = self.data.attr_name(d_nr, f_nr);
-            self.database
-                .position(self.data.def(d_nr).known_type(), &nm)
+            self.field_position(d_nr, &nm)
         };
         // Post-2c: pass the field's alias def_nr so `get_val` can honor
         // size(N) for integer subtypes (e.g. i32 → OpGetInt4).
@@ -10174,6 +10284,50 @@ impl Parser {
         crate::diagnostics::suggest_similar_capped(name, &candidates).map(String::from)
     }
 
+    /// loft#788 — refuse a bare name that two imports both bind, naming both
+    /// packages and what to write instead.
+    ///
+    /// The binding still happens (first import wins), so this is the ONLY thing
+    /// standing between a consumer and a source line whose meaning depends on
+    /// the order of the `use` block above it. Both orders compile for a function
+    /// or a constant, and they answer differently — the struct case merely
+    /// happens to error on a field the author never named.
+    ///
+    /// Reported at the USE and not at the `use`: two packages may share a name
+    /// the program never writes bare, and that program is well-defined and
+    /// compiles today (COMPATIBILITY.md — no functioning program breaks).
+    ///
+    /// Once per NAME, in whichever pass reaches it first. Not pass-2-only: a
+    /// first-wins binding to the wrong package's struct raises "Unknown field"
+    /// during pass 1 and the parse stops there, so a pass-2 check stays silent
+    /// in the case it explains.
+    pub(crate) fn refuse_ambiguous_import(&mut self, name: &str, winner: u32) {
+        if winner == u32::MAX || self.ambiguity_reported.contains(name) {
+            return;
+        }
+        let others = self.data.ambiguous_with(name);
+        if others.is_empty() {
+            return;
+        }
+        self.ambiguity_reported.insert(name.to_string());
+        // `n_` is the storage spelling of a function, never the source spelling —
+        // a message telling someone to write `pkg::n_shared` names something
+        // they cannot type.
+        let mut spellings: Vec<String> = std::iter::once(winner)
+            .chain(others.iter().copied())
+            .map(|d| self.data.qualified_type_name(d).replace("::n_", "::"))
+            .collect();
+        spellings.sort();
+        spellings.dedup();
+        let bare = name.strip_prefix("n_").unwrap_or(name);
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "`{bare}` is declared by more than one package here — write {} to say which",
+            spellings.join(" or ")
+        );
+    }
+
     /// Plan-07 phase 5 suggestions.  Find a similar field name on
     /// the given struct definition.  Skips synthetic compiler-
     /// generated attributes (those starting with `_` or `#`).
@@ -10648,6 +10802,38 @@ impl Parser {
             Type::RefVar(tp) if matches!(**tp, Type::Text(_)) => self.cl("OpConvTextFromNull", &[]),
             Type::Reference(_, _) => self.cl("OpNullRefSentinel", &[]),
             _ => Value::Null,
+        }
+    }
+
+    /// loft#793 — the null a `return` DELIVERS for `tp`: `null()`, plus the
+    /// store-pointer sentinel for every remaining DbRef-backed heap type (the
+    /// collections, and a struct-enum — whose payload is a record, not the
+    /// `255` discriminator a plain enum uses).
+    ///
+    /// Separate from `null()` because that one also supplies a variable's
+    /// DEFAULT-INIT, and the two want different answers here: a collection
+    /// LOCAL must start as an ALLOCATED empty store, because a later write
+    /// (`w: vector<single> = f#read(16) as vector<single>`) fills that store in
+    /// place and the sentinel's `store_nr` indexes nothing.  A RETURN has no
+    /// slot to fill — the value travels back as a DbRef — so there the
+    /// sentinel is the only thing that can mean null.
+    ///
+    /// Untreated, `return null` from a `-> vector<T>?` / `-> StructEnum?` fn
+    /// pushed nothing (or a 4-byte discriminator) where the caller read a
+    /// 12-byte DbRef, so the interpreter's `OpReturn` handed back whatever the
+    /// eval stack held: the caller saw a stale ref as NON-null and freed it a
+    /// second time ("refused free of out-of-range store", sometimes a SIGSEGV).
+    /// Native was already right, so the two backends disagreed on a bare
+    /// `return null`.
+    pub fn null_return(&mut self, tp: &Type) -> Value {
+        match tp.base() {
+            Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Enum(_, true, _) => self.cl("OpNullRefSentinel", &[]),
+            _ => self.null(tp),
         }
     }
 

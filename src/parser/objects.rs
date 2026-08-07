@@ -296,6 +296,29 @@ impl Parser {
             // closure record is a struct — add __closure as dep so the
             // store allocation stays alive while derived text/references are in use.
             t = t.depending(self.closure_param);
+        } else if name == "_" && self.at_binding_name() {
+            // loft#795 — `_` is the DISCARD, not a variable: nothing ever reads it, so
+            // each `_ = …` gets its own slot rather than re-binding one shared `_`.
+            //
+            // Sharing one slot made `_` the single name exempt from the
+            // one-type-per-name rule (`change_var_type` retyped it silently), and the
+            // backends then disagreed about what that meant.  The interpreter re-typed
+            // the slot per assignment and ran; native takes the Rust local's type from
+            // the FIRST assignment, so `_ = delete(…); _ = flag(); _ = delete(…)` emitted
+            // a `bool` lowering into a `u8` slot and the program did not compile (E0308).
+            // Three assignments were needed — two types alternating is what breaks it —
+            // which is why a discard-heavy function could work for a long time and then
+            // stop when one more `_` was added.
+            //
+            // A slot each fixes both halves without costing anyone the spelling: `_`
+            // keeps working for any mix of types (making it obey the rule instead would
+            // reject programs that run today, for the one name whose entire purpose is
+            // to be written more than once).  It is the same treatment `for _` loops
+            // already needed for their hidden counter, and for the same reason.
+            let v_nr = self.create_unique("discard", &Type::Unknown(0));
+            self.var_usages(v_nr, true);
+            *code = Value::Var(v_nr);
+            t = Type::Unknown(0);
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
             // on pass 2, if a variable has Unknown type, it may be a pass-1
@@ -450,6 +473,8 @@ impl Parser {
             // declaration mis-parses ("Expect token ;").  Enums / types stored
             // under their plain name still resolve here.
             let dnr = self.data.def_nr(name);
+            // loft#788 — this bare name may be one that two imports both bind.
+            self.refuse_ambiguous_import(name, dnr);
             if self.data.def_type(dnr) == DefType::Enum {
                 t = self.data.def(dnr).returned().clone();
             } else {
@@ -576,7 +601,20 @@ impl Parser {
                     }
                     t = self.emit_variant_value(e_nr, name, code);
                 } else if !self.first_pass {
-                    diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                    if name == "_" {
+                        // loft#795 — `_` DISCARDS its value (each `_ = …` gets its own
+                        // slot), so there is nothing here to read back.  Say that rather
+                        // than "Unknown variable '_'", which reads as a typo in the one
+                        // case where the name is deliberate.
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "`_` discards the value assigned to it — there is nothing to \
+                             read back; give the value a name if you need it"
+                        );
+                    } else {
+                        diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                    }
                     t = Type::Unknown(0);
                 } else {
                     *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
@@ -1299,6 +1337,13 @@ impl Parser {
         if d_nr == u32::MAX && source != u16::MAX {
             d_nr = self.data.variant_in_source(source, name);
         }
+        // loft#788 — THE bare-name chokepoint: `source == MAX` is exactly "the
+        // author wrote the name with nothing in front of it", which is the only
+        // spelling an ambiguity can bite. A qualified `pkg::Name` took the other
+        // branch above and says which package it means.
+        if source == u16::MAX && qualifier_enum == u32::MAX {
+            self.refuse_ambiguous_import(name, d_nr);
+        }
         // #493 — a QUALIFIED `Enum::UnknownVariant` (a typo like `Color::Bleu`)
         // that resolves to no variant: recover as a null enum value.  Without
         // this `code` keeps the caller's default (the assignment target itself),
@@ -1578,6 +1623,20 @@ impl Parser {
             }
             if !self.first_pass && (self.vars.tp(*nr).is_unknown() || !self.vars.is_defined(*nr)) {
                 let name = self.vars.name(*nr).to_string();
+                if name == "_" {
+                    // loft#795 — `_` DISCARDS its value (each `_ = …` gets its own slot),
+                    // so there is nothing here to read back.  Say that rather than
+                    // "Unknown variable '_'", which reads as a typo in the one case where
+                    // the name is deliberate — and never offer a rename suggestion for it.
+                    diagnostic_at!(
+                        self.lexer,
+                        pos,
+                        Level::Error,
+                        "`_` discards the value assigned to it — there is nothing to read \
+                         back; give the value a name if you need it"
+                    );
+                    return;
+                }
                 let candidates: Vec<&str> = (0..self.vars.count())
                     .filter(|&v| {
                         v != *nr && self.vars.is_defined(v) && !self.vars.tp(v).is_unknown()
@@ -2562,9 +2621,7 @@ impl Parser {
             self.expression(&mut discard);
         } else {
             let td = self.data.attr_type(td_nr, nr);
-            let pos = self
-                .database
-                .position(self.data.def(td_nr).known_type(), &field);
+            let pos = self.field_position(td_nr, &field);
             found_fields.insert(field.clone());
             let mut value = if let Type::Vector(_, _)
             | Type::Sorted(_, _, _)

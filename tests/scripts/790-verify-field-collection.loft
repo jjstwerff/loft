@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// loft#790 — `store_verify` on a collection declared as a struct FIELD.
+//
+// A store knows ONE type: the record allocated into it. For a field collection
+// that record is the WRAPPER, so the walk read the hash root as a `Firm` and
+// reported a corruption that was not there — a diagnostic in the direction that
+// costs debugging time rather than data.
+//
+// Nothing here is lazy or paged: ordinary inserts, which is what makes it a
+// property of `store_verify` rather than of any loader.
+
+struct Hand { hid: integer, name: text }
+struct Firm { fid: integer, name: text, people: hash<Hand[hid]> }
+struct Two { a: hash<Hand[hid]>, b: hash<Hand[hid]> }
+
+fn main() {
+  f = Firm { fid: 7, name: "Acme", people: [] };
+  f.people += [Hand { hid: 1, name: "ada" }];
+  f.people += [Hand { hid: 2, name: "grace" }];
+  // The FIELD and its OWNER are both sound, and both must say so.
+  println("field={store_verify(f.people)} owner={store_verify(f)}");
+
+  // The control that keeps the fix honest: a top-level collection was always
+  // right and must stay right.
+  top: hash<Hand[hid]> = [];
+  top += [Hand { hid: 1, name: "ada" }];
+  println("top={store_verify(top)}");
+
+  // Two keyed fields in one wrapper: the type is found by the field's OFFSET,
+  // so neither is guessed and both verify.
+  t = Two { a: [], b: [] };
+  t.a += [Hand { hid: 3, name: "alan" }];
+  t.b += [Hand { hid: 4, name: "edsger" }];
+  println("two={store_verify(t.a)},{store_verify(t.b)},{store_verify(t)}");
+}

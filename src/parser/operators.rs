@@ -1630,7 +1630,7 @@ impl Parser {
                 self.validate_convert("return", &t, &r_type, &ret_pos);
             }
         } else if r_type != Type::Void && !self.first_pass {
-            ret_val = self.null(&r_type);
+            ret_val = self.null_return(&r_type);
         }
         let ret_stmt = Value::Return(Box::new(ret_val));
 

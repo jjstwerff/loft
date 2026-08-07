@@ -6812,9 +6812,31 @@ pub fn store_bind_lazy(local: reference, source: text) -> boolean
 ```
 
 Working-set load: fetch ONE integer-keyed entry from a persisted HASH image into the empty local hash `local`, reading only the pages the lookup touches — not the whole file. The bounded-fetch counterpart of `store\_load`, for when `local` should hold only the entries actually asked for (a phone pulling the few map tiles a route needs from a large block). `path` is a local file or an `http(s)://` URL served with `Range`, on every target including the browser (`--html`), where the fetch goes through the same bridge `store\_load\_url\_trusted` uses. Returns false when the key is absent, the file is unreadable, or the collection is not an integer-keyed hash.
-The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector\<text\>` or a `vector\<vector\>` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)   // tiles now holds entry 42 only \@PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.
+The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector\<text\>` or a `vector\<vector\>` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)   // tiles now holds entry 42 only \@F108 — Lazy store binding (catalogue anchor, \@PLN92)
+\@PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.
 Per COLLECTION, not per store: `persons` and `companies` are different sources, and two collections of one type can bind differently. Binding replaces, and may be done before the collection holds anything.
-`source` is what `store\_load\_key` accepts — a local `.store` image or an `http(s)://` URL served with Range. Returns false for a null collection. persons: hash\<Person\[id\]\> = \[\] store\_bind\_lazy(persons, "people.store") p = persons\[42\]        // fetches exactly entry 42, then holds it
+`source` is either an IMAGE — what `store\_load\_key` accepts: a local `.store` file or an `http(s)://` URL served with Range — or a DATABASE, named by a driver prefix. Returns false for a null collection. persons: hash\<Person\[id\]\> = \[\] store\_bind\_lazy(persons, "people.store") p = persons\[42\]        // fetches exactly entry 42, then holds it
+\@PLN129 arc B — `sqlite:\<path\>` binds to a table instead, and the query is DERIVED from the collection's own type: the table is the element type's name lowercased, the columns are its fields, and the `WHERE` is the collection's key. Nothing is written down twice. persons: hash\<Person\[id\]\> = \[\]              // struct Person { id: integer, name: text } store\_bind\_lazy(persons, "sqlite:people.db") p = persons\[42\]        // SELECT "id","name" FROM "person" WHERE "id" = 42
+Read-only, and the connection enforces it. A binding whose type cannot become a query — a collection that is not a `hash`, a field that is not a column — is REFUSED rather than served wrongly, and says so through `store\_lazy\_error`. sqlite is opened on the first fault, so a program that binds no database loads nothing.
+
+```rust
+pub fn store_lazy_query(local: reference, condition: text) -> integer
+```
+
+\@PLN129 arc B2 — run an explicit condition against this collection's bound DATABASE source and pull every matching row into the collection. Answers how many records the collection gained.
+The escape hatch for what the collection's KEY cannot express — a predicate on another column, a pattern, a range nobody declared an index for. A keyed lookup derives its own query and needs no call; this one cannot be derived, so it is written down and visible rather than happening behind a lookup.
+found = store\_lazy\_query(persons, "name LIKE 'Ada%'"); p = persons\[42\]        // hits what the query already brought in
+The rows land IN the collection, not in a separate result: a person reached by this query and the same person reached by a later lookup are ONE record, and a row already resident is left alone rather than fetched twice. So `len` and iteration keep answering "what have I got" — after this, more.
+`condition` is SQL, sent as written (the connection is read-only). Answers 0 both when nothing matched and when the query could not run; `store\_lazy\_error` tells those apart.
+
+```rust
+pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer
+```
+
+\@PLN129 arc B step 8 — pull a whole KEY RANGE from this collection's bound DATABASE source in ONE query. Answers how many records the collection gained.
+This is what keeps lazy reading usable rather than merely correct. Fetching 500 records one lookup at a time is 500 round trips; the same 500 as a range is one. So when you know the span you want, ask for the span:
+store\_lazy\_range(events, 100, 199);   // one query, up to 100 records for e in events { ... }               // all resident, no further fetching
+The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order to range over — and keyed on ONE column, since two numbers cannot say which value pins a composite key's leading column; use `store\_lazy\_query` for that. Both bounds are inclusive, in the collection's own key order. A record already resident is left alone. Answers 0 when nothing matched AND when the query could not run; `store\_lazy\_error` tells those apart.
 
 ```rust
 pub fn store_lazy_error(local: reference) -> text

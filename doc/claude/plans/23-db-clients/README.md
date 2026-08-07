@@ -142,7 +142,7 @@ attack cell loudly.
   (Part 2).
 - **[INTERPOLATION_HOOK.md](INTERPOLATION_HOOK.md)** — the language change that makes a
   safe builder possible at all. Built as **@PLN124**; what shipped is in
-  [plans/124-interpolation-hook.md](../124-interpolation-hook.md).
+  [plans/124-interpolation-hook](../124-interpolation-hook/README.md).
 - **[PLATFORMS.md](PLATFORMS.md)** — building the client on Linux, macOS, Windows and
   wasm. The state is measured per platform, and two of the four cells passed
   **without testing anything**; the P1–P6 ladder fixes that before it chases greens.

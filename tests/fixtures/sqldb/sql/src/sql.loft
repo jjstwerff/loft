@@ -171,6 +171,50 @@ pub fn hole_sql_ident(self: SqlText, v: SqlIdent?) {
 // counted — they are already in the text.
 pub fn params(self: SqlText) -> integer { return len(self.binds); }
 
+// --- The `db_exec` contract, made checkable ---------------------------------
+//
+// `db_exec` and `db_select` take plain `text` and are documented for
+// "author-written SQL with no values in it — DDL, and the statements a backend
+// cannot prepare". Nothing enforced that, and a caller who interpolates a value
+// straight into the string gets neither the injection protection nor the
+// binding: `db_exec("INSERT … VALUES ({v})")` compiles, runs, and is wrong in
+// ways that depend on the value.
+//
+// A FLOAT is the sharp case, and it is why this exists. loft renders a float as
+// a full decimal expansion with no exponent, so `1e300` is a 301-character digit
+// run; duckdb reads a bare run of 275–294 digits as a HUGEINT and silently
+// truncates it to a value 10^256 too small (@PLN133 P3). The statement is
+// syntactically fine and the answer is a plausible number, which is the failure
+// class C80 exists to keep out of the value channel.
+//
+// So: a digit run longer than any integer type here can hold did not come from
+// an author typing a constant — it came from a value that should have been
+// bound. `MAX_INLINE_DIGITS` is 38 because that is the widest exact integer the
+// backends carry (`HUGEINT` / `DECIMAL(38)`); anything longer is either a float
+// or a number no column can store, and both are mistakes at this boundary.
+const MAX_INLINE_DIGITS = 38;
+
+// The reason this SQL must not be executed as written, or `null` when it is
+// fine. Cheap enough to call on every statement: one pass, no allocation.
+pub fn inline_value_fault(sql: text) -> text? {
+  run = 0;
+  worst = 0;
+  for c in sql {
+    if c >= '0' && c <= '9' {
+      run += 1;
+      if run > worst { worst = run }
+    } else {
+      run = 0;
+    }
+  }
+  if worst > MAX_INLINE_DIGITS {
+    return "a {worst}-digit number is written INTO this statement; that is a value, "
+         + "and a value must be bound — build the statement as SqlText so it reaches "
+         + "hole_* instead of the text";
+  }
+  return null;
+}
+
 // Where the `at`th value goes, in `style`.
 pub fn placeholder(style: integer, at: integer) -> text {
   if style == SQL_DOLLAR { return "${at}" }

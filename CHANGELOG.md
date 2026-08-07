@@ -26,6 +26,74 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A collection can fetch what it is asked for
+
+Bind a collection to a source and stop writing a loading step. A lookup that misses
+fetches exactly that one record and keeps it, so the next lookup for the same key is
+an ordinary read:
+
+```loft
+persons: hash<Person[id]> = [];
+store_bind_lazy(persons, "sqlite:people.db");
+
+p = persons[42];        // one SELECT, one row
+q = persons[42];        // never leaves the process
+```
+
+There is no cache to manage, because the collection *is* the cache. The source can
+be a `.store` image, an `http(s)://` URL served with Range, or a real SQLite
+database — and for the database nothing has to be written down: the table, the
+columns and the `WHERE` are all derived from the collection's own type. loft binds
+to tables that already exist, reads only, and refuses a binding it cannot turn into
+a query rather than serving it wrongly.
+
+Traversal is the point. Reaching the same person by a key lookup, by
+`store_lazy_query(persons, "name LIKE 'Ada%'")`, and by walking from their employer
+gives you the **same record** — identity falls out of the collection, so there is no
+identity map to keep in step.
+
+Two things stay honest on purpose. `len` is the count of what you have fetched, not
+of what the table holds, and iteration walks the same. And a fetch that could not
+reach the source never answers `null`: `store_lazy_error` says why, and
+`store_lazy_faults` keeps counting until you acknowledge it — so a traversal that
+lost data cannot report itself healthy.
+
+### Two libraries can no longer both answer a bare name
+
+If `use hex_world;` and `use hex_voxel;` each export a `Chunk`, writing bare
+`Chunk` used to bind to whichever was imported **first** — so swapping the two
+`use` lines, and changing nothing else, changed what the source meant. A struct
+gave itself away eventually (`Unknown field Chunk.ck_cells`, naming the struct you
+did not mean); a shared function or constant did not, because both orders compiled
+and ran and simply answered differently.
+
+Now it is an error that names both:
+
+```
+error: `Chunk` is declared by more than one package here —
+       write hex_voxel::Chunk or hex_world::Chunk to say which
+```
+
+It is reported where you write the bare name, not at the `use` line, so two
+libraries sharing a name your program never writes bare keeps working. Qualifying
+always works, and your own definition still shadows both.
+
+### Advice that no longer sends you to an import you already wrote
+
+Calling a function loft cannot find used to suggest the package that publishes it
+— even when your build had already resolved a *different* package of the same
+name, from `--lib`. The advice was to add an import that was on line two, and
+following it changed nothing. Now that case says what is actually wrong: the
+resolved package does not have the function and the published one does, so these
+are two different packages sharing a name.
+
+### `store_verify` on a collection inside a struct
+
+`store_verify(firm.people)` reported a corruption that was not there — it read the
+collection's root as if it were the wrapping struct. Verifying the struct itself
+was always right, which is what made the false alarm convincing. Both now report
+what is true.
+
 ### Reflection knows which fields can be null
 
 `type_of` and `type_named` now report `nullable` on every field, so a generated

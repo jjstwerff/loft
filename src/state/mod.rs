@@ -467,6 +467,21 @@ pub fn emit_op(op_code: u16, state: &mut State) {
 /// integer path (`run_parallel_queue`) already applies.  Without it, a primitive
 /// or text element was always pushed as a 12-byte `DbRef`, feeding the worker
 /// garbage (or, for text input, a wild pointer → SIGSEGV).
+/// @PLN133 S8 — one argument to a re-entrant loft call
+/// ([`State::run_until_return`]).
+///
+/// Spelled out per kind because the stack layout is: an integer is 8 bytes, a
+/// `DbRef` is 12, and a text is a pointer-sized `Str` that BORROWS its bytes.
+/// The borrow is why this carries a `&str` rather than a `String` — the caller
+/// keeps the backing bytes alive for the length of the call, which is the same
+/// contract `execute_at_raw_text_input` has for a par worker's text argument.
+#[derive(Clone, Copy)]
+pub enum LoftArg<'a> {
+    Int(i64),
+    Ref(DbRef),
+    Text(&'a str),
+}
+
 #[derive(Clone, Copy)]
 pub enum WorkerArg {
     /// Struct / reference element — a 12-byte `DbRef` into the element record.
@@ -764,7 +779,7 @@ impl State {
                         } else {
                             let sz = u32::from(self.database.size(tp_id));
                             let r = self.database.database(sz);
-                            self.database.allocations[r.store_nr as usize].known_type = tp_id;
+                            self.database.allocations[r.store_nr as usize].set_known_type(tp_id);
                             self.database
                                 .store_mut(&r)
                                 .set_u32_raw(r.rec, 4, u32::from(tp_id));
@@ -4579,6 +4594,10 @@ impl State {
         // RUNTIME panic must not be attributed to whatever line was compiled last.
         // The runtime has its own, better attribution (pc -> source span).
         crate::crash_report::clear_compile_pos();
+        // Give the memory-ceiling report its vocabulary before anything can trip it,
+        // so a refused growth names `Layer` rather than `kt=112`.  Costs nothing when
+        // no ceiling is set, which is every ordinary run.
+        let () = self.database.publish_type_names();
         let _ = name;
         let d_nr = data.def_nr(&format!("n_{name}"));
         // A missing entry function (e.g. running a file with no `fn main()`, or a
@@ -5446,6 +5465,119 @@ impl State {
             const_refs: Vec::new(),
             keep_entry_return: false,
         }
+    }
+
+    /// @PLN133 S8 — run a loft function to completion from INSIDE an opcode
+    /// handler, and answer the integer it returned.
+    ///
+    /// This is what lets a lazy fetch be loft code rather than Rust. `Stores`
+    /// cannot run a loft function; `State` can, which is why @PLN133 S8 lifts
+    /// the miss-then-fetch decision out of `Stores` into its two callers — the
+    /// `&mut Stores` borrow has to end before this runs.
+    ///
+    /// **It is the ORDINARY call machinery, not a second one.** `fn_call`
+    /// pushes the frame and stores the return address exactly as a `Call` op
+    /// does, and the loop below runs until that frame pops — so the callee
+    /// returns through the same path every other call uses, and the outer
+    /// frame's locals are untouched because nothing resets the stack. The
+    /// `execute_at*` family cannot serve here: each of those RESETS `stack_pos`
+    /// for a fresh par worker, which is correct there and would discard the
+    /// caller's frame here.
+    ///
+    /// **A fault inside the callee is CONTAINED, not propagated.** For an
+    /// ordinary call, propagating is right. For a fetch it is not: @PLN129's
+    /// contract is C80 — a failed fetch reports through `store_lazy_error` and
+    /// the lookup answers null — so a buggy source function must not turn a
+    /// lookup into a program halt. The reason comes back as `Err`, the outer
+    /// program keeps its own fault slot, and execution continues.
+    ///
+    /// # Errors
+    /// When the definition has no bytecode, when the call could not be entered
+    /// (a stack that is already at its depth limit), or when the callee raised —
+    /// the string is what arc C reports.
+    pub fn run_until_return(&mut self, d_nr: u32, args: &[LoftArg]) -> Result<i64, String> {
+        let Some(&to) = self.fn_positions.get(d_nr as usize) else {
+            return Err(format!("definition {d_nr} has no bytecode to run"));
+        };
+        let depth = self.call_stack.len();
+        let saved_code_pos = self.code_pos;
+        let saved_stack_pos = self.stack_pos;
+        let saved_call_depth = self.call_depth;
+        // The OUTER program's fault slot is set aside for the duration. Without
+        // this the containment below would swallow a fault the caller was
+        // already carrying, which is the opposite of what it is for.
+        let outer_error = self.database.runtime_error.take();
+        let outer_fatal = self.database.had_fatal;
+
+        let args_base = self.stack_pos;
+        for a in args {
+            match a {
+                LoftArg::Int(v) => self.put_stack(*v),
+                LoftArg::Ref(r) => self.put_stack(*r),
+                // A `Str` BORROWS its bytes, so the caller keeps the backing
+                // string alive across the call — the same contract
+                // `execute_at_raw_text_input` has for a par worker's text
+                // argument, and the reason `LoftArg` carries a `&str`.
+                LoftArg::Text(s) => self.put_stack(Str::new(s)),
+            }
+        }
+        let args_size = (self.stack_pos - args_base) as u16;
+        self.fn_call(d_nr, args_size, i64::from(to));
+        if self.call_stack.len() == depth {
+            // `fn_call` refused: the depth limit was already reached, and it
+            // raised rather than pushing. Restore and report — a fetch that
+            // cannot be entered is unreachable, not absent.
+            self.database.runtime_error = outer_error;
+            self.database.had_fatal = outer_fatal;
+            self.stack_pos = saved_stack_pos;
+            self.code_pos = saved_code_pos;
+            self.call_depth = saved_call_depth;
+            return Err("the call stack is too deep to run a fetch here".to_string());
+        }
+
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.call_stack.len() > depth && self.code_pos < bytecode_len {
+            let op = self.code::<u8>();
+            if op == 255 {
+                let ext = self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            if self.database.runtime_error.is_some() || self.code_pos == u32::MAX {
+                break;
+            }
+        }
+
+        let inner_error = self.database.runtime_error.take();
+        self.database.runtime_error = outer_error;
+        self.database.had_fatal = outer_fatal;
+        if let Some(err) = inner_error {
+            // Contained. The frames the callee left behind are dropped and the
+            // caller's position restored, so the outer program continues with
+            // every local intact.
+            //
+            // **What it does NOT do is release what those frames held.** A
+            // frame's locals are freed by the scope-exit bytecode the fault
+            // skipped, so there is no runtime teardown to run here, and
+            // truncating abandons whatever the aborted callee had allocated
+            // (@PLN133 P4 measured exactly one store per contained fault). A
+            // traversal over an unreachable source therefore leaks once per
+            // failed fetch — which is the long-running case arc C's sticky
+            // counter exists for, so it is a real debt rather than a cosmetic
+            // one, and it is recorded as such rather than papered over.
+            self.call_stack.truncate(depth);
+            self.call_depth = saved_call_depth;
+            self.stack_pos = saved_stack_pos;
+            self.code_pos = saved_code_pos;
+            return Err(format!("{}: {}", err.kind.label(), err.message));
+        }
+
+        let result = *self.get_stack::<i64>();
+        self.stack_pos = saved_stack_pos;
+        self.code_pos = saved_code_pos;
+        self.call_depth = saved_call_depth;
+        Ok(result)
     }
 
     /// Execute the bytecode function at `fn_pos` passing one `DbRef` argument,

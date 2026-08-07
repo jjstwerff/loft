@@ -78,6 +78,15 @@ lookup that MISSES fetches its own entry ([STDLIB.md § Lazy store
 binding](STDLIB.md), `@F108`). Same reader, same pages — driven by the lookups
 instead of by a call.
 
+That binding also takes a source these functions do not: **`sqlite:<path>`**, where
+the entries are rows in a relational table rather than pages of a loft image, and
+the `SELECT` is derived from the collection's own type
+([LAZY_STORES.md](LAZY_STORES.md)). Worth keeping the two apart while reading this
+document: everything below is about an image, whose bytes are loft's own, so `len`,
+ordering and identity are correct by construction. A foreign table owes loft none of
+that, which is why the database source is read-only and refuses anything it cannot
+derive rather than approximating it.
+
 ```loft
 // The whole dataset is 800 MB on a CDN. This reads a few pages of it.
 parts: hash<Part[id]> = [];
@@ -122,17 +131,64 @@ Reads are served through a page cache, not issued one-per-lookup:
 | page size | **64 KiB** | `LOFT_PAGE_BYTES` |
 | cache size | **the load's working set** | `LOFT_PAGE_CACHE_BYTES` |
 
-**The cache holds what the load reads, and is not bounded by default.** A page dropped
-before the walk reaches it costs a second fetch of the same bytes, so residency is what
-stops a load paying twice — and a keyed load's working set is the data you asked for, a
-local copy of which is being materialised anyway. Peak memory is therefore about the size
-of the result, not a constant.
+**The cache holds what the load reads, and is not bounded by default — on every target.**
+An eviction costs a RE-FETCH, and that is true whatever the transport, so never evicting is what
+removes a 3.6× read amplification (loft#785).
+
+A wasm-only cap was tried and measured worse (loft#787). The reasoning was that a browser
+eviction costs only a copy out of a buffer the host already holds, while linear memory is the
+scarce resource — every step true, and the conclusion still wrong, because it priced the eviction
+and not the re-fetch after it: 4 MiB against a 5.6 MB working set took range reads from 71 to 115
+and bytes from 5.7 to 8.5 MB, to save 1 MB of a 17 MB heap.
+
+**What DOES split per transport is prefetching, not retention.** `warm` exists to turn N round
+trips into one, so a transport whose `fetch_many` is sequential (wasm, no threads) declines it
+rather than paying the computation for a saving it cannot collect.
+
+A page dropped before the walk reaches it costs a second fetch of the same bytes, so residency is
+what stops a load paying twice — and a keyed load's working set is the data you asked for, a local
+copy of which is being materialised anyway. Peak memory is about the size of the result, not a
+constant.
 
 `LOFT_PAGE_CACHE_BYTES` turns it into a **hard cap** for a memory-bounded host. Expect
 re-fetching once the cap is below the working set: the bytes have to come back somehow, and
 that is the price of the bound. It was the default until loft#785, where 4 MiB against a
 20 MB working set fetched **3.6× the bytes** — the prefetch evicting the very pages it was
 about to read.
+
+### What a single read costs
+
+Two guarantees, because a paged traversal performs them by the hundred thousand — one
+viewport in a real consumer issues ~800 000 four-byte index reads (loft#783):
+
+| a resident read of 1–8 bytes | |
+|---|---|
+| allocations | **0** |
+| page-map lookups | **1** |
+
+Neither was true before loft#787. `resolve` returned an owning `Vec`, so a four-byte index
+word cost a malloc and a free; and the read hashed its page key **twice**, once to ask
+whether the page was resident and once to index it. Both are per-READ costs, both are
+invisible in a profile that attributes by function, and both hid completely on native builds
+because glibc's per-thread cache serves a 4-byte request in ~15 ns. In a browser — dlmalloc
+on the linear heap, no thread-local fast path — the same code was 1.14× slower on a keyed
+paged load while issuing FEWER requests and fewer bytes, which is the signature of a cost
+that scales with reads rather than with round trips.
+
+Measured end-to-end by the consumer that reported it, one viewport, medians, arms
+interleaved:
+
+```
+pre-arc baseline    169 ms / 763 ms (CPU 1x / 4x)   411 reads   26.9 MB
+as filed            254 ms / 1018 ms                369 reads   26.7 MB
+fixed               173 ms /  694 ms                369 reads   26.7 MB
+```
+
+Faster than before the work started, with 42 fewer reads. `tests/paged_read_alloc.rs` pins
+both counts, asserting them as SCALING properties (the same range read 200 and 300 000 times
+must cost the same) so a legitimate per-page or per-record allocation can never be mistaken
+for a per-read one. The span read that relocates a record body still owns one buffer — per
+RECORD, which is the right unit.
 
 Every fetch is one page-aligned range. **A page is the unit of waste and the unit
 of amortisation**: a 12-byte record costs a 64 KiB fetch, and so do the next

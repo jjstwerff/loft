@@ -198,3 +198,103 @@ fn pln13_c101_reserved_names_and_std_qualifier() {
         p.diagnostics.lines()
     );
 }
+
+// ── loft#788: a bare name two packages both declare ───────────────────────────
+
+/// Parse one `tests/lib` main file with the fixture libraries available.
+fn parse_lib_main(file: &str) -> Parser {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}{file}"), false);
+    scopes::check(&mut p.data);
+    p
+}
+
+fn errors_of(p: &Parser) -> String {
+    p.diagnostics.lines().join("\n")
+}
+
+/// loft#788 — a bare `Chunk` / `shared()` / `SHARED_C` that TWO packages declare
+/// must be refused, naming both packages.
+///
+/// The pair of orders is the test, not either file alone: the defect was that
+/// the same source line compiled to a different program depending on which
+/// `use` came first, so a fix that refuses only one order has not fixed it. Both
+/// files below are identical apart from the two swapped `use` lines.
+#[test]
+fn a_bare_name_two_packages_declare_is_refused_in_either_order() {
+    for file in ["dupname_ab_main.loft", "dupname_ba_main.loft"] {
+        let p = parse_lib_main(file);
+        let msgs = errors_of(&p);
+        assert!(
+            p.diagnostics.level() >= Level::Error,
+            "{file}: a bare ambiguous name must not silently pick a winner: {msgs}"
+        );
+        assert!(
+            msgs.contains("`Chunk` is declared by more than one package"),
+            "{file}: the message must name what is ambiguous: {msgs}"
+        );
+        // Both packages named, so the reader can pick — a message naming only
+        // the winner would describe the bug rather than the choice.
+        assert!(
+            msgs.contains("dupname_a::Chunk") && msgs.contains("dupname_b::Chunk"),
+            "{file}: both spellings must be offered: {msgs}"
+        );
+    }
+}
+
+/// loft#788 — a function and a constant collide the same way, and worse: both
+/// import orders COMPILE and run, answering differently.
+///
+/// The struct case at least errors on a field; these two were silent.
+#[test]
+fn an_ambiguous_call_and_constant_are_refused_too() {
+    let p = parse_lib_main("dupname_ab_main.loft");
+    let msgs = errors_of(&p);
+    assert!(
+        msgs.contains("`shared` is declared by more than one package"),
+        "a bare CALL is ambiguous the same way: {msgs}"
+    );
+    assert!(
+        msgs.contains("`SHARED_C` is declared by more than one package"),
+        "so is a bare constant: {msgs}"
+    );
+    // The storage spelling of a function is `n_shared`; a message telling
+    // someone to write `dupname_a::n_shared` names something they cannot type.
+    assert!(
+        !msgs.contains("::n_"),
+        "the mangled name must not reach the message: {msgs}"
+    );
+}
+
+/// loft#788 control — QUALIFIED says which, so it must keep compiling.
+///
+/// Without this the fix would "pass" by refusing the collision everywhere,
+/// including the shape #305 built to make work.
+#[test]
+fn a_qualified_name_is_never_ambiguous() {
+    let p = parse_lib_main("dupname_qualified_main.loft");
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "qualified names say which package they mean: {}",
+        errors_of(&p)
+    );
+}
+
+/// loft#788 control — two packages may share a name a program never writes
+/// bare, and that program compiles today.
+///
+/// This is why the refusal is at the USE and not at the `use`: reporting when
+/// the import is applied would break a working program for a collision it never
+/// has (COMPATIBILITY.md — no functioning program breaks).
+#[test]
+fn an_unused_collision_still_compiles() {
+    let p = parse_lib_main("dupname_unused_main.loft");
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "an unused collision is not a question: {}",
+        errors_of(&p)
+    );
+}

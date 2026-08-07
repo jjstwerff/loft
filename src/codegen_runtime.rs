@@ -302,7 +302,7 @@ pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i3
     // P259 commit 3 — record the type allocated into this store so
     // free_named can recognise closure-record stores at free time
     // (cascade-free walks `__closure_*` records' DbRef fields).
-    stores.allocations[r.store_nr as usize].known_type = db_tp;
+    stores.allocations[r.store_nr as usize].set_known_type(db_tp);
     stores.store_mut(&r).set_u32_raw(r.rec, 4, u32::from(db_tp));
     stores.set_default_value(db_tp, &r);
     db.store_nr = r.store_nr;
@@ -474,6 +474,73 @@ pub fn OpFormatDatabase(
     output.push_str(&s);
 }
 
+/// @PLN133 S8 — the generated `n_lazy_fetch`, as a pointer this runtime can call.
+///
+/// The shape is exactly what the generator emits for the one signature
+/// [`crate::data::Data::lazy_fetch_driver`] admits, and that is the point of the
+/// check living there: the interpreter pushes arguments in this order and the
+/// generator installs a pointer of this type, so a signature the two disagreed
+/// about could not exist.
+pub type LazyFetchFn = fn(&std::cell::UnsafeCell<Stores>, DbRef, &str, i64, &str) -> i64;
+
+/// The installed driver, or null.
+///
+/// A plain atomic word rather than a `Mutex`: it is written once by generated
+/// `init()` before anything runs and only read afterwards, and a `par` worker
+/// reading it needs the same pointer, not its own copy.
+static LAZY_FETCH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+thread_local! {
+    /// @PLN133 S8 — is this thread inside a lazy DRIVER right now?
+    ///
+    /// It changes what a fault MEANS. An ordinary loft call that overflows the
+    /// stack is a program bug and halting is right; the same overflow inside a
+    /// FETCH is not, because @PLN129's contract is C80 — a failed fetch reports
+    /// through `store_lazy_error` and the lookup answers null. So a buggy driver
+    /// must not turn a lookup into a program halt, which is what moving the
+    /// source from Rust to loft would otherwise have cost.
+    ///
+    /// Thread-local rather than global: a `par` worker running its own fetch is
+    /// its own answer.
+    static IN_LAZY_DRIVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Is a fault on this thread a driver's, and therefore containable?
+///
+/// Read by `cr_stack_overflow`, which exits the process for an ordinary overflow
+/// and unwinds for this one, and by the panic hook, which stays silent for a
+/// fault that is about to be reported through arc C's channel instead.
+#[must_use]
+pub fn in_lazy_driver() -> bool {
+    IN_LAZY_DRIVER.with(std::cell::Cell::get)
+}
+
+/// Install the program's lazy driver. Emitted by generated `init()`, once.
+///
+/// This is the whole of what `--native` was missing: `OpGetRecord` is compiled
+/// into libloft and cannot see a function the generator wrote, so the generator
+/// hands it over instead.
+pub fn register_lazy_fetch(f: LazyFetchFn) {
+    LAZY_FETCH.store(f as usize, std::sync::atomic::Ordering::Relaxed);
+    // A contained driver fault unwinds, and an unwind prints unless a hook says
+    // otherwise. Installed HERE — once, at init, before any thread exists —
+    // rather than around each call, because swapping the process-wide hook per
+    // fetch would race with any other thread that panics.
+    crate::crash_report::install_panic_hook();
+}
+
+/// The installed driver, if the program defined one.
+fn lazy_fetch_fn() -> Option<LazyFetchFn> {
+    let p = LAZY_FETCH.load(std::sync::atomic::Ordering::Relaxed);
+    if p == 0 {
+        None
+    } else {
+        // Safe by construction: the only writer is `register_lazy_fetch`, whose
+        // parameter is already typed `LazyFetchFn`.
+        Some(unsafe { std::mem::transmute::<usize, LazyFetchFn>(p) })
+    }
+}
+
 /// Look up a record in a collection by key values.
 /// Bytecode equivalent: `OpGetRecord` in `src/state/io.rs:353`.
 pub fn OpGetRecord(
@@ -491,8 +558,99 @@ pub fn OpGetRecord(
         }
     } else {
         // @PLN129 arc A — same miss path as the interpreter, so both backends
-        // agree about what is resident.
-        stores.find_or_fetch(&data, db_tp as u16, key)
+        // agree about what is resident. @PLN133 S8 splits the miss from the
+        // fetch at both callers rather than inside `Stores`; here it costs
+        // nothing (generated code is Rust calling Rust), and it keeps the two
+        // backends reading the same two calls in the same order.
+        let found = stores.find(&data, db_tp as u16, key);
+        if found.rec != 0 {
+            return found;
+        }
+        // @PLN133 S8 — a source served by a LOFT driver. Same shape as the
+        // interpreter's: run the driver, then re-run the lookup, because the
+        // collection stays the only authority on what is resident.
+        //
+        // The driver arrives as a POINTER generated `init()` installed, because
+        // this helper is compiled into libloft and cannot see a function the
+        // generator wrote. Two mechanisms, one answer.
+        if let Some(source) = stores.lazy_loft_source(&data) {
+            let Some(driver) = lazy_fetch_fn() else {
+                // Failure path 1: a backend that is not here reads as
+                // UNREACHABLE and names itself, never as "no such row".
+                stores.lazy_fail(
+                    &data,
+                    &format!(
+                        "`{source}` needs a loft driver — define `fn lazy_fetch(coll, source, \
+                         key_int, key_text) -> integer` and bind the collection again"
+                    ),
+                );
+                return DbRef {
+                    store_nr: data.store_nr,
+                    rec: 0,
+                    pos: 0,
+                };
+            };
+            // One key, whichever spelling it arrived in — the same limit the
+            // interpreter has, and for the same reason: fetching the WRONG row
+            // is worse than answering absent.
+            let (key_int, key_text) = match key {
+                [crate::keys::Content::Long(k)] => (*k, String::new()),
+                [crate::keys::Content::Str(s)] => (0, s.str().to_string()),
+                _ => {
+                    stores.lazy_fail(
+                        &data,
+                        "a composite key cannot be fetched — a driver is given one key",
+                    );
+                    return DbRef {
+                        store_nr: data.store_nr,
+                        rec: 0,
+                        pos: 0,
+                    };
+                }
+            };
+            // The driver's fault is CONTAINED, exactly as the interpreter
+            // contains it. There is no dispatch loop to unwind here, so the
+            // depth guard raises instead of exiting and this catches it — the
+            // one place in generated-code execution where a fault is not the
+            // program's to die of.
+            //
+            // The window is the same teardown the interpreter runs: Rust's
+            // unwind runs its own drop glue, but a loft store is freed by an
+            // explicit call the unwind skips exactly as the interpreter's fault
+            // skips its scope-exit op — measured identical on both backends.
+            IN_LAZY_DRIVER.with(|f| f.set(true));
+            let outer_watch = stores.lazy_watch_begin();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                driver(cell, data, &source, key_int, &key_text)
+            }));
+            IN_LAZY_DRIVER.with(|f| f.set(false));
+            // `stores` was borrowed from `cell` and the driver borrowed it too,
+            // so it is re-taken here rather than reused.
+            let stores: &mut Stores = unsafe { &mut *cell.get() };
+            stores.lazy_watch_end(outer_watch, outcome.is_err());
+            match outcome {
+                Ok(1 | 0) => {}
+                // A driver that answered something else did not follow the
+                // contract, and guessing which of the two it meant is how an
+                // unreachable source starts reading as an empty table.
+                Ok(answer) => stores.lazy_fail(
+                    &data,
+                    &format!(
+                        "`lazy_fetch` answered {answer}; it must answer 1 (inserted) or 0 (absent)"
+                    ),
+                ),
+                Err(payload) => {
+                    let why = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "the driver faulted".to_string());
+                    stores.lazy_fail(&data, &why);
+                }
+            }
+            return stores.find(&data, db_tp as u16, key);
+        }
+        stores.fetch_missing(&data, db_tp as u16, key)
     }
 }
 
@@ -4332,6 +4490,13 @@ pub const NATIVE_MAIN_STACK: usize = 512 * 1024 * 1024;
 #[cold]
 #[inline(never)]
 fn cr_stack_overflow(name: &str, file: &str, line: u32, depth: usize) -> ! {
+    // @PLN133 S8 — inside a lazy DRIVER this is not the program's to die of.
+    // Unwind instead, so `OpGetRecord` can report it through arc C and the
+    // lookup answers null — which is what the interpreter does, and the two
+    // backends must not disagree about whether a buggy driver halts a program.
+    if in_lazy_driver() {
+        std::panic::panic_any(format!("stack_overflow: call stack overflow in {name}"));
+    }
     eprintln!(
         "error: call stack overflow — exceeded {} nested calls",
         crate::state::State::MAX_CALL_DEPTH

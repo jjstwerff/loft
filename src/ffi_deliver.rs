@@ -156,7 +156,7 @@ impl Stores {
             }
             Some(LayoutNode::Record(fields)) | Some(LayoutNode::EnumValue(_, fields)) => {
                 for f in fields.clone() {
-                    if f.name == "enum" || f.position == u16::MAX || f.name.starts_with('#') {
+                    if !f.is_data() {
                         continue;
                     }
                     let field_at = DbRef {

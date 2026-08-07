@@ -415,6 +415,169 @@ output, not a self-satisfying assert.
 
 ---
 
+## Database backends: sqlite gates CI, all four are the local bar
+
+loft binds four SQL backends through `#c` — **sqlite, PostgreSQL, MariaDB and
+duckdb** — behind one `SqlDb` interface, and the property worth testing is that a
+generic routine gives the *same* answer on all four.  Only one of them can be a
+gate.
+
+**The rule:**
+
+- **Every routine is CI-checked against sqlite.**  It needs no server and no
+  install, so a skip there is never environmental — it means the library went
+  missing or the availability question broke.  `tests/native.rs` asserts sqlite
+  ran on Linux for exactly that reason.
+- **All four are runnable LOCALLY, and that is the real bar.**  PostgreSQL and
+  MariaDB need a live server, duckdb a 70 MB library no distribution ships;
+  none of that belongs in CI.  Before landing anything that touches the SQL
+  layer, run all four locally.
+
+**CI cannot cover the other three, and the docs must not imply it does.**  A
+green CI run means "sqlite agreed", never "the four agree".  The cross-backend
+claim is a local measurement, and when it matters it should be re-run and the
+result written into the plan or the commit message rather than assumed to have
+held since last time.
+
+### Running the other three
+
+Both servers run as ordinary system services on a development box; the fixtures
+find them through environment variables with working defaults:
+
+| backend | how it is reached | default |
+|---|---|---|
+| sqlite | `libsqlite3.so.0`, no server | `:memory:` |
+| PostgreSQL | `LOFT_PG_CONN` — set up with `scripts/setup-test-databases.sh --pg` | `dbname=loft_test_pg` |
+| MariaDB | `LOFT_MY_CONN` — set up with `scripts/setup-test-databases.sh --maria` | `host=127.0.0.1 user=loft pass=loft db=loft_test_uni` |
+| duckdb | `libduckdb.so` on `LD_LIBRARY_PATH` — install with `scripts/fetch-duckdb.sh` | declared `[c] optional-libs`, so absence is not an error |
+
+### PostgreSQL and MariaDB: the setup, and where to look when it breaks
+
+**`scripts/setup-test-databases.sh` creates both.**  It is idempotent, never
+drops anything, and **checks before it escalates** — on a box that is already set
+up it needs no `sudo` at all and acts as a verifier.  Run `--pg` or `--maria` for
+one half.
+
+| | PostgreSQL | MariaDB |
+|---|---|---|
+| measured against | 16.14 | 10.11.14 |
+| service | ordinary system service, port 5432 | ordinary system service, port 3306 |
+| database | `loft_test_pg` | `loft_test_uni` |
+| identity | **the OS user**, via unix-socket peer auth | `loft@localhost` / `loft@127.0.0.1`, password `loft` |
+| override | `LOFT_PG_CONN` | `LOFT_MY_CONN` |
+
+**The two servers authenticate differently, and that is not an accident of this
+box.**  The fixture's PostgreSQL default is `dbname=loft_test_pg` — no user, no
+host — so it is a peer connection as whoever runs the tests, and the role to
+create is *that person*, not a shared `loft` role.  MariaDB is reached over TCP
+with an explicit user and password, which is why one has a credential in the
+fixture and the other does not.
+
+**The MariaDB user is SCOPED on purpose**: `GRANT ALL ON \`loft\_test%\`.*` and
+nothing else, so anything outside `loft_test*` answers `ERROR 1044`.  A suite that
+can drop a developer's other schemas is one bad `DROP` away from a very bad day.
+The setup script **verifies** this by trying to create a database outside the
+pattern and expecting refusal — the GRANT text saying the right thing is not the
+same as the server enforcing it.
+
+The password is `loft`, in the clear, in `uniform.loft`.  That is deliberate and
+safe **only** because of the scoping above: it is a local test credential for a
+user that can reach nothing but `loft_test*`.  Do not reuse the pattern for a
+user with wider rights.
+
+**Symptom → where to look:**
+
+| what you see | where the fault is |
+|---|---|
+| `SKIP postgres …` / `SKIP maria …` | the server is down, or the database/role is missing.  Run the setup script — it will tell you which. |
+| `@PLN23 backends exercised:` missing one | same thing from the driver.  **Read this line**; green with three backends absent looks exactly like green with four passing. |
+| `ERROR 1044` from MariaDB | the scope working as designed.  The test wanted a schema outside `loft_test*` — fix the test, do not widen the grant. |
+| `peer authentication failed` on PostgreSQL | the OS user has no role.  `sudo -u postgres createuser --createdb $(id -un)`. |
+| PostgreSQL passes but floats differ | check `extra_float_digits` — it must be ≥ 1, and it defaulted to 0 before PG12 (@PLN133 P3). |
+| both servers fine, results differ between them | a real finding: the `SqlDb` contract is what makes the four interchangeable.  Compare the whole line. |
+
+**CI has neither server** and is not expected to.  Nothing here is reproduced by
+a green CI run.
+
+### duckdb: where it comes from, and where to look when it breaks
+
+**`scripts/fetch-duckdb.sh` installs it into `~/.local/lib`.**  It downloads a
+PINNED upstream release, verifies a recorded `sha256` of the extracted
+`libduckdb.so`, and refuses to install anything else.  Nothing else fetches it —
+not CI, not `loft install`, not the test suite.
+
+It is **not** vendored, for two reasons worth keeping straight: duckdb is MIT
+licensed so redistribution would be legal, but the library is ~70 MB and git
+history is permanent, and upstream already publishes exactly this artifact.  It
+does not live in `~/.loft/lib` either — that holds loft *packages*, not native
+shared libraries.
+
+**The dependency chain, in the order a failure travels it:**
+
+```
+scripts/fetch-duckdb.sh   pins VERSION + EXPECT_SHA, writes ~/.local/lib/libduckdb.so
+        ↓
+LD_LIBRARY_PATH           the only thing that makes it findable — no rpath, no ldconfig
+        ↓
+[c] optional-libs         tests/fixtures/sqldb/duckdb/loft.toml declares "libduckdb.so"
+        ↓
+c_call::resolve           dlopens it on the first miss (@PLN24 arc G)
+        ↓
+src/shim.c                loft compiles this with `cc` at parse time — it names NO
+                          duckdb symbol, so it builds even where the library is absent
+        ↓
+LOFT_SQLDB_MODE=duckdb    selects the backend in uniform.loft
+```
+
+**Symptom → where to look:**
+
+| what you see | where the fault is |
+|---|---|
+| `SKIP duckdb …`, everything else green | the library was not found — `LD_LIBRARY_PATH` unset, or `~/.local/lib/libduckdb.so` gone.  Re-run `scripts/fetch-duckdb.sh`. |
+| `@PLN23 backends exercised: [...]` without `duckdb` | the same thing, seen from the driver.  **Read this line** — a green run with duckdb absent looks identical to one with duckdb passing. |
+| `sha256 mismatch … NOT installing` | upstream re-cut the release, or the pin is stale.  Decide which, then edit `EXPECT_SHA` **on purpose** — never to make the message go away. |
+| `the archive did not contain libduckdb.so` | upstream changed the zip layout.  The script prints the listing; fix the extraction, do not work around it by hand. |
+| a `cc` failure mentioning `shim.c` | not a duckdb problem at all — the shim is deliberately free of duckdb symbols so it compiles without the library.  Look at the C toolchain. |
+| duckdb answers but DIFFERS from the other three | a real finding: the `SqlDb` contract is what makes the four interchangeable.  Compare the whole line, not one field. |
+
+**One diagnosed caveat, so it is not rediscovered** (@PLN133 P3): a float written
+through this fixture round-trips exactly on PostgreSQL and MariaDB and fails 19
+times in 500 on duckdb.  Fifteen of those are a **duckdb parser bug** —
+a decimal literal whose digit run is **275–294 characters** is read as a value
+exactly **10^256 too small**, silently, while the same value in *exponent
+notation* is correct.  The other four are ordinary 1–2 ULP parser rounding.
+
+loft walks into it because **`"{v}"` renders a float as a full decimal expansion
+with no exponent**, so any float above ~1e274 becomes a 275+ character literal.
+**Write floats to SQL quoted (`CAST('{v}' AS DOUBLE)`), in exponent notation, or
+bound — never as a bare `"{v}"`.**  Quoting is measured at 0/500 on duckdb and
+needs no change to loft's rendering; it does NOT help sqlite, whose own
+text→REAL converter loses the same 1 in 2000 either way.
+
+**A copy in a scratchpad or a build directory is not durable.**  When it
+evaporates the duckdb cell silently drops back to `SKIP` and the local
+four-backend bar quietly becomes a three-backend one — the same class of
+invisible coverage loss as a self-skipping test.
+
+`LOFT_SQLDB_MODE` picks the backend for `tests/fixtures/sqldb/uniform.loft`.  A
+backend that cannot be reached prints `SKIP` on stdout and the driver in
+`tests/native.rs` **recognises a skip as a skip** — it is never counted as a
+pass, and the set that actually ran is printed (`@PLN23 backends exercised: […]`).
+Read that line: it is the only thing distinguishing "four agreed" from "sqlite
+agreed and three were absent".
+
+**The test databases are scoped on purpose.**  The MariaDB `loft` user reaches
+only `loft_test*`; anything else answers `ERROR 1044`.  A test suite that can
+drop a developer's other schemas is a bug waiting for a bad `DROP`.
+
+**A measured caveat worth carrying into any float work here** (@PLN133 P3): the
+four engines do not render a `double` to text the same way, and the obvious
+spelling loses precision on two of them — `CAST(v AS TEXT)` on sqlite is inexact
+for 94% of random doubles.  Do not assume a value survives a text round trip;
+measure it per backend, with a sweep rather than a handful of hand-picked values.
+
+---
+
 ## Generated Test Files (`tests/generated/`)
 
 Generated files are written only in **debug builds** (`#[cfg(debug_assertions)]`). They are produced inside `Test::generate_code`, called from `Drop::drop`.
@@ -654,6 +817,61 @@ let config = LogConfig {
   if a panic occurs the tail buffer is flushed to the log file before re-raising.
 
 ---
+
+## Store-memory ceiling (`LOFT_MEMORY_LIMIT`)
+
+The sibling of the execution timeout, for the failure it cannot catch. A corrupted
+length does not always end in a bad dereference — often it ends in an **allocation**,
+and a time bound is no help there: chasing loft#796 a single run reached 59.6 GiB in
+seconds. The kernel's OOM killer is worse than useless as a diagnostic, because it
+reports only that a process died and is free to kill a bystander instead of the
+culprit (it took out two unrelated agent sessions).
+
+So the ceiling lives inside loft, where the thing being allocated still has a name.
+When a store growth would cross it the run stops **at that growth** — the store is
+left exactly as it was — and prints what filled the heap:
+
+```
+loft: store memory limit reached — 1.7 GiB in use, limit 2.0 GiB
+
+  the growth that crossed it
+    a store of type `main_vector<Cell>` (kt=78) growing 1.7 GiB → 4.0 GiB
+    the store was allocated at pc=8001
+
+  where the memory is
+    main_vector<Cell>        kt=78        1.7 GiB  in 1 store
+    ?                        kt=65535     9.6 KiB  in 2 stores
+
+  One type holding nearly all of it in ONE store is a runaway length;
+  the same total spread over very many stores is a leak.
+```
+
+That last line is the whole point of the breakdown: **one store vs very many** is what
+separates a runaway length from a leak, and it is the first thing you would otherwise
+have to go and measure.
+
+| Mechanism | Default | How |
+|---|---|---|
+| Ordinary run | **off** | loft is unbounded by default; a real program may want the machine |
+| Under `--tests` / `loft test` | **on, 2 GiB** | a test wanting tens of GiB is a bug either way |
+| Env var | — | `LOFT_MEMORY_LIMIT=<size>` — `2G`, `512M`, `64M`, or `0` to remove it |
+
+A limit that cannot be parsed is reported and the default is **kept** — a typo must
+never silently remove the ceiling.
+
+Implementation is `src/store_budget.rs` (accounting, ceiling, report) with the
+accounting asserted at every site in `src/store.rs` that allocates, reallocates or
+frees a store buffer: `new`, `open`, `resize_store`, `shrink_to`, `clone_locked`,
+`snapshot_copy` and `Drop`. Type names reach the report through
+`Stores::publish_type_names`, called once per run and inert when no ceiling is set.
+Guarded by `tests/store_memory_limit.rs`.
+
+**No `file:line` in the report, deliberately.** The interpreter's span table records
+CALL SITES only, so resolving an arbitrary allocation pc through it returns the
+nearest span *below* — routinely in an unrelated function. A diagnostic that sends
+the reader to the wrong file costs more than one that stays quiet, so the report
+prints the pc and stops there; `LOFT_STORES=summary` resolves the same pc against the
+denser per-run table.
 
 ## Execution timeout (`LOFT_TIMEOUT` / `--timeout`)
 

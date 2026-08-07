@@ -3,65 +3,23 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 124 — a library-implementable interpolation
+# @PLN124 — a library-implementable interpolation
 
 ## Status
 
-**@PLN124 H1–H7 built.** A format string whose TARGET TYPE implements the
-interpolation contract hands over its literal and hole parts instead of appending
-them into a text buffer. `text` is unchanged, proven as a byte-identical IR diff.
-Its first consumer is @PLN23 S4, which is built on it; H6/H7 add the identifier
-and procedures on top.
+**SHIPPED 2026-08-03 — H1–H7, both backends.** A format string whose TARGET TYPE
+implements the interpolation contract hands over its literal and hole parts
+instead of appending them into a text buffer. `text` is unchanged, proven as a
+byte-identical IR diff. Its first consumer is @PLN23 S4, built on it.
 
-The design — why neither the type system nor `const` can carry the distinction,
-and why the parser already knows it — is
-[@PLN23's INTERPOLATION_HOOK.md](23-db-clients/INTERPOLATION_HOOK.md). This
-file records what was BUILT and what it cost.
+**The contract is [INTERFACES.md § Interpolation targets](../../INTERFACES.md)** —
+the methods, the named-type hole and how its name is derived, the two refusals,
+and why the parser has to carry this. The user-facing entry is
+[`@F94`](https://github.com/loft-lang/features/issues/94). The design reasoning —
+why neither the type system nor `const` can carry the distinction — is
+[@PLN23's INTERPOLATION_HOOK.md](../23-db-clients/INTERPOLATION_HOOK.md).
 
-## The contract
-
-A struct satisfies it structurally, the way every loft interface works:
-
-```loft
-fn lit(self: T, s: text)              // a literal chunk the AUTHOR wrote
-fn hole_text(self: T, v: text?)       // an interpolated VALUE
-fn hole_int(self: T, v: integer)
-fn hole_float(self: T, v: float)
-fn hole_single(self: T, v: single)
-fn hole_boolean(self: T, v: boolean)
-fn hole_character(self: T, v: character)
-```
-
-`lit` is the whole test for whether the hook applies: a type that can accept the
-author's literal bytes is a type that can be built. The `hole_*` methods it goes
-on to define say which value kinds it takes, and **a kind it does not define is a
-compile error naming the method to add** — never a quiet fall back to text, which
-would put a value back on the path this exists to close.
-
-**H6 — a hole may also be a value of a NAMED type**, struct or enum, and its kind
-is the type's own name in the case a loft method is spelled in:
-
-```loft
-fn hole_sql_ident(self: SqlText, v: SqlIdent?)   // SqlIdent  -> hole_sql_ident
-fn hole_level(self: T, v: Level)                 // Level     -> hole_level
-```
-
-Derived rather than chosen, so a target and the parser cannot disagree about what
-a type's hole is called and the diagnostic can name the exact method to add; an
-acronym run breaks at the last capital (`SQLIdent` → `hole_sql_ident`).
-
-That is what lets a target hold something apart from both a literal and a bound
-value. A SQL table name is genuinely syntax, so `SqlText` puts it in INLINE — and
-the safety then rests on the TYPE rather than on the parser, because nothing
-builds a `SqlIdent` but its validating constructor. One method, one constructor,
-one place to audit.
-
-```loft
-q: SqlText = "SELECT id FROM t WHERE name = {name}";
-```
-
-lowers to `q.lit("SELECT id FROM t WHERE name = "); q.hole_text(name);` with the
-accumulator itself as the value of the expression.
+This file is the closure record: what the build COST, and what it corrected.
 
 ## Where the target comes from
 
@@ -126,7 +84,7 @@ NULL a distinct bound value rather than the text `"null"`.
 
 ## Proof
 
-- **H1, inertness.** `124-interpolation-hook/bytecode-comparisons/format-corpus.loft` is one function per
+- **H1, inertness.** `bytecode-comparisons/format-corpus.loft` is one function per
   format-string path the dispatch can reach — literals, bare holes, alternation,
   the numeric spec grammar, a `text?` hole, a fault-prone hole (`OpTagFault`), an
   inner fault that must NOT tag, struct/JSON/pretty specs, a custom `to_text` spec,
@@ -147,7 +105,7 @@ NULL a distinct bound value rather than the text `"null"`.
   `db_call` with `return true` gives `guard=true rows=0`, and a `procedural` that
   never refuses gives `ctl=true`.
 - **The target shape was captured BEFORE the parser was touched.**
-  `124-interpolation-hook/bytecode-comparisons/target-shape.loft` is the hand-written program whose IR
+  `bytecode-comparisons/target-shape.loft` is the hand-written program whose IR
   the branch had to reproduce, proven on both backends first. It also settled a
   design question by measurement: a default-constructed `T { }` is equivalent to a
   named constructor, so the contract needs only methods and `Interpolated` stays a
@@ -187,20 +145,26 @@ one, and the contract is **one statement per procedure, refused at deploy
 everywhere**. One rule, one function (`procedural`), four backends that cannot
 drift apart on what it means.
 
-## What is NOT built
+## What is NOT built, and why none of it is a tail
 
-- **A boxed value type** collapsing the per-kind `hole_*` methods into one
-  (@PLN125 arc A, associated types). The per-kind form was chosen first precisely
-  because it can be collapsed later without changing what the author writes.
+Each is a decision rather than an unfinished step, which is why this plan closes
+with them standing:
+
+- **A boxed value type** collapsing the per-kind `hole_*` methods into one is
+  **@PLN125 arc A** (associated types) — a different plan's work. The per-kind
+  form was chosen first precisely because it can be collapsed later without
+  changing what the author writes.
 - **Specs on holes** are refused rather than delivered; if a target ever wants
   them, they have to reach the hole as data, not as a rendering.
 - **A procedural body** on the two backends that could carry one — refused
-  instead, for the reason above.
+  instead, because there is no such body a uniform API could carry across even
+  those two (measured above).
 
 ## Bugs this surfaced, filed rather than fixed here
 
-Both are store-lifetime / marshalling faults with clean workarounds, and both are
-their own investigation rather than a patch alongside a language feature:
+Both were store-lifetime / marshalling faults with clean workarounds, and both
+were their own investigation rather than a patch alongside a language feature.
+**Both are now closed:**
 
 - **loft#771** — a value consumed where it is PRODUCED keeps no owner, in two
   carriers: a text field returned from a nullable struct, and a `T?`-returning
@@ -208,4 +172,4 @@ their own investigation rather than a patch alongside a language feature:
 - **loft#773** — a library function returning `text` answers `""` when used in
   place (a call argument, a format hole) through the prebuilt-cdylib bridge on
   `--interpret`; `--native` and `LOFT_NO_NATIVE_LIBS=1` are correct. Silent, and
-  the default mode for every published library has it.
+  the default mode for every published library had it.

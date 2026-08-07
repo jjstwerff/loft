@@ -552,6 +552,17 @@ falls back to the imported-library and standard-library *prelude*:
   `radix`, `spatial`, `iterator`, `reference`, and the sized integers
   `i8`/`i16`/`i32`/`u8`/`u16`/`u32`. `struct integer { … }` errors with *"conflicts
   with a type"* (for `struct`, `enum`, and `type` alike).
+- **Two imported libraries may not both answer a bare name** (loft#788). When
+  `use a;` and `use b;` each export `Chunk`, writing bare `Chunk` is an error naming
+  both — *"`Chunk` is declared by more than one package here — write `a::Chunk` or
+  `b::Chunk` to say which"* — because the alternative is a source line whose meaning
+  depends on the order of the `use` block above it. It applies to every bare
+  mention: a type, a function call, a constant.
+
+  Reported where the bare name is USED, never at the `use` line: two libraries may
+  share a name your program never writes bare, and that program keeps compiling.
+  Qualifying (`a::Chunk`, `a::helper()`) always works, and a definition of your own
+  still shadows both.
 
 ### Enum-scoped variants (`@PLN22`)
 

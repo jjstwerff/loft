@@ -263,11 +263,16 @@ pub struct Store {
     /// P259 — type-id of the loft type whose root record lives at
     /// `(rec=1, pos=8)` of this store.  `u16::MAX` when unknown
     /// (raw stores not allocated through `database_named`).
-    /// Set by `Stores::set_known_type` after `database_named`
-    /// returns the freshly-claimed store_nr.  Read by
-    /// `Stores::free_named` to gate the cascade-free walk on
+    /// Read by `Stores::free_named` to gate the cascade-free walk on
     /// closure records (type name starts with `__closure_`) —
     /// see commit 4 of the P259 fix.
+    ///
+    /// WRITE it through [`Store::set_known_type`], which moves the store's bytes to
+    /// the new type in the memory-ceiling accounting.  Assigning the field directly
+    /// still compiles and stays sound — the ceiling itself counts bytes, not types —
+    /// but it leaves those bytes filed under the previous type in the
+    /// [`breakdown`](crate::store_budget::breakdown) a refused growth prints, which
+    /// is the one place they have to be right.
     pub known_type: u16,
     /// @PLAN38 phase 01 — when `Some(path)`, this store was opened
     /// via `Store::open_durable` and on clean drop must (1) flush
@@ -338,6 +343,7 @@ impl Drop for Store {
         }
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
         unsafe { A.dealloc(self.ptr, l) };
+        crate::store_budget::release(self.known_type, self.size as usize * 8);
     }
 }
 
@@ -395,6 +401,9 @@ impl Store {
         let size = size.max(2);
         let l = Layout::from_size_align(size as usize * 8, 8).expect("Problem");
         let ptr = unsafe { A.alloc_zeroed(l) };
+        // A fresh store has no type yet — `set_known_type` moves these bytes across
+        // when `database_named` names it.
+        crate::store_budget::add(u16::MAX, size as usize * 8);
         let mut store = Store {
             ptr,
             size,
@@ -558,6 +567,7 @@ impl Store {
         );
         let l = Layout::from_size_align(words as usize * 8, 8).expect("Problem");
         let ptr = unsafe { A.alloc_zeroed(l) };
+        crate::store_budget::add(u16::MAX, words as usize * 8);
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
         }
@@ -651,6 +661,7 @@ impl Store {
         if ptr.is_null() {
             return None;
         }
+        crate::store_budget::add(u16::MAX, words as usize * 8);
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
         }
@@ -1268,6 +1279,9 @@ impl Store {
         }
         let old_bytes = self.size as usize * 8;
         let bytes = size as usize * 8;
+        // Refused BEFORE the realloc, so a store that cannot grow is left exactly as
+        // it was and the report describes the growth that was stopped.
+        crate::store_budget::grow(self.known_type, old_bytes, bytes, self.created_at);
         let l = Layout::from_size_align(old_bytes, 8).expect("Problem");
         self.ptr = unsafe { A.realloc(self.ptr, l, bytes) };
         if bytes > old_bytes {
@@ -1349,6 +1363,7 @@ impl Store {
         }
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
         self.ptr = unsafe { A.realloc(self.ptr, l, bytes) };
+        crate::store_budget::shrink(self.known_type, self.size as usize * 8, bytes);
         self.size = words;
         self.retile_tail(mark);
         true
@@ -1494,11 +1509,32 @@ impl Store {
         self.claims.is_empty()
     }
 
+    /// Relabel this store's type, moving its bytes with it in the memory-ceiling
+    /// accounting.
+    ///
+    /// A store is often created before its type is known — `database_named` claims
+    /// the store, then names it — so the bytes are first filed under whatever type
+    /// it started with.  Left there, the breakdown a refused growth prints would
+    /// blame the wrong type, which is exactly the fact that report exists to get
+    /// right.
+    pub fn set_known_type(&mut self, kt: u16) {
+        if self.known_type == kt {
+            return;
+        }
+        if !self.borrowed && !self.is_file_backed() {
+            let bytes = self.size as usize * 8;
+            crate::store_budget::release(self.known_type, bytes);
+            crate::store_budget::add(kt, bytes);
+        }
+        self.known_type = kt;
+    }
+
     /// Create a locked deep-copy of this store for use in a worker thread.
     /// The clone always has `locked = true`; the mmap file is not shared (data is copied).
     pub fn clone_locked(&self) -> Store {
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
         let ptr = unsafe { A.alloc(l) };
+        crate::store_budget::add(self.known_type, self.size as usize * 8);
         unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
         Store {
             ptr,
@@ -1537,6 +1573,7 @@ impl Store {
     pub(crate) fn snapshot_copy(&self) -> Store {
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("snapshot layout");
         let ptr = unsafe { A.alloc(l) };
+        crate::store_budget::add(self.known_type, self.size as usize * 8);
         unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
         Store {
             ptr,

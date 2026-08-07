@@ -1,9 +1,14 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 — Binding to a schema loft does not own
 
+> **This is the design record, kept for its reasoning.** What is TRUE of the built system —
+> the mapping, the schema and index check, what is refused — is in
+> [LAZY_STORES.md](../../LAZY_STORES.md). Read this one for why it took that shape, and for the
+> `T: DbKeyed` bound, which is still open work.
+
 Who owns the tables, what has to be declared, what is checked **when**, and what loft gives up
-for it. Companion to [README.md](README.md) (the model) and [QUERIES.md](QUERIES.md) (what a
-binding can ask).
+for it. Companion to [README.md](README.md) (the closure record) and [QUERIES.md](QUERIES.md)
+(what a binding can ask).
 
 ## The decision
 

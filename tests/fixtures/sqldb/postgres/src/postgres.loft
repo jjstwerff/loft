@@ -73,6 +73,11 @@ pub fn db_open(self: Postgres, target: text) -> boolean {
 }
 
 pub fn db_exec(self: Postgres, sql: text) -> boolean {
+  // The `db_exec`/`db_select` contract is "author-written SQL with no values in
+  // it".  A value written INTO the text is neither bound nor protected, and a
+  // long digit run is the shape that says one was (`sql::inline_value_fault`).
+  why = inline_value_fault(sql);
+  if why != null { self.err = why ?? ""; return false }
   r = pq_exec(self.conn, sql);
   if r == 0 { return false }
   s = pq_res_status(r);
@@ -81,6 +86,11 @@ pub fn db_exec(self: Postgres, sql: text) -> boolean {
 }
 
 pub fn db_select(self: Postgres, sql: text) -> boolean {
+  // The `db_exec`/`db_select` contract is "author-written SQL with no values in
+  // it".  A value written INTO the text is neither bound nor protected, and a
+  // long digit run is the shape that says one was (`sql::inline_value_fault`).
+  why = inline_value_fault(sql);
+  if why != null { self.err = why ?? ""; return false }
   if self.res != 0 { pq_clear(self.res); self.res = 0; }
   self.res = pq_exec(self.conn, sql);
   if self.res == 0 || pq_res_status(self.res) != 2 { return false }

@@ -1,14 +1,37 @@
 // Expose a BUILD_ID to the compiler so the bytecode cache can detect
 // same-version rebuilds (e.g. a parser fix without a version bump).
-// Uses the git HEAD commit hash when available, otherwise a timestamp.
+//
+// Three sources, in order, and the FIRST one is what makes a release
+// reproducible: an explicit `LOFT_BUILD_ID`, then the git HEAD commit, then a
+// timestamp.
+//
+// The timestamp is why a release used to fail `repro-verify.sh` on every target.
+// A release is cut from a git checkout, so it baked a commit hash; the verifier
+// rebuilds from the release's SOURCE ARCHIVE, which has no `.git`, so it fell
+// through to seconds-since-epoch — a different string, of a different LENGTH,
+// changing on every run. The binary could not match, and the mismatch looked
+// like a source problem rather than a stamp the build invented.
+//
+// The fallback stays a timestamp rather than a fixed word: BUILD_ID exists so
+// the bytecode cache can tell two same-version builds apart, and a constant
+// would make two different non-git builds share a cache entry. The override is
+// the seam a reproducible build needs; the timestamp is still right for a
+// casual one.
 
 fn main() {
-    let id = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
+    let id = std::env::var("LOFT_BUILD_ID")
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            std::process::Command::new("git")
+                .args(["rev-parse", "--short", "HEAD"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
         .unwrap_or_else(|| {
             // Fallback: seconds since epoch — changes on every build.
             std::time::SystemTime::now()
@@ -17,6 +40,8 @@ fn main() {
                 .unwrap_or_default()
         });
     println!("cargo:rustc-env=LOFT_BUILD_ID={id}");
+    // Without this, a second verification run reuses the first one's baked id.
+    println!("cargo:rerun-if-env-changed=LOFT_BUILD_ID");
 
     // Record the effective RUSTFLAGS this loft build used so the package
     // native-crate build (`extensions::auto_build_native`) can compile shared

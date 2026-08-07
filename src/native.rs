@@ -172,9 +172,14 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_reclaim", n_store_reclaim),
     #[cfg(paged_store)]
     ("n_store_bind_lazy", n_store_bind_lazy),
+    #[cfg(feature = "native-extensions")]
+    ("n_store_lazy_query", n_store_lazy_query),
+    #[cfg(feature = "native-extensions")]
+    ("n_store_lazy_range", n_store_lazy_range),
     ("n_store_lazy_error_dest", n_store_lazy_error_dest),
     ("n_store_lazy_faults", n_store_lazy_faults),
     ("n_store_lazy_clear", n_store_lazy_clear),
+    ("n_store_lazy_fail", n_store_lazy_fail),
     // Each `#[cfg]` here gates exactly ONE array element, so every paged-store entry needs
     // its own. This one was missing it while its handler is `#[cfg(paged_store)]`, so the
     // wasm32-wasip2 rlib could not build at all — and `find_problems.sh` rebuilds it with
@@ -1315,6 +1320,33 @@ fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, ok);
 }
 
+/// Interpreter handler for `store_lazy_query` — @PLN129 arc B2.  Run an explicit
+/// condition against the bound DATABASE source and pull every matching row into
+/// the collection; answers how many records it gained.  Args pop in reverse:
+/// condition, local.
+///
+/// Gated on `native-extensions` to match its registry entry: the query is driven
+/// through `c_call::resolve`, which is that feature's whole surface.
+#[cfg(feature = "native-extensions")]
+fn n_store_lazy_query(stores: &mut Stores, stack: &mut DbRef) {
+    let v_condition = *stores.get::<Str>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    let added = stores.lazy_query(&coll, v_condition.str());
+    stores.put(stack, added);
+}
+
+/// Interpreter handler for `store_lazy_range` — @PLN129 arc B step 8.  Pull a
+/// whole key range from the bound DATABASE source in ONE query; answers how many
+/// records the collection gained.  Args pop in reverse: hi, lo, local.
+#[cfg(feature = "native-extensions")]
+fn n_store_lazy_range(stores: &mut Stores, stack: &mut DbRef) {
+    let v_hi = *stores.get::<i64>(stack);
+    let v_lo = *stores.get::<i64>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    let added = stores.lazy_range(&coll, v_lo, v_hi);
+    stores.put(stack, added);
+}
+
 /// Interpreter handler for `store_lazy_error` — @PLN129 arc C.  Why the last
 /// fetch could not reach the collection's source, or "" when healthy.
 fn n_store_lazy_error_dest(stores: &mut Stores, stack: &mut DbRef) {
@@ -1341,6 +1373,19 @@ fn n_store_lazy_clear(stores: &mut Stores, stack: &mut DbRef) {
     let coll = *stores.get::<DbRef>(stack);
     let had = stores.lazy_clear(&coll);
     stores.put(stack, had);
+}
+
+/// Interpreter handler for `store_lazy_fail` — @PLN133 S8.  A loft DRIVER
+/// reporting that it could not reach its source, into the same sticky channel a
+/// Rust source's failure lands in.  Args pop in reverse: why, local.
+///
+/// It exists because a driver's third answer does not fit its return value: `1`
+/// and `0` are inserted and absent, and "the source is down" carries a reason
+/// that a caller must be able to tell apart from "no such key".
+fn n_store_lazy_fail(stores: &mut Stores, stack: &mut DbRef) {
+    let v_why = *stores.get::<Str>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    stores.lazy_fail(&coll, v_why.str());
 }
 
 /// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from
@@ -2587,6 +2632,45 @@ fn reflect_kind(node: Option<&crate::database::LayoutNode>) -> i32 {
     }
 }
 
+/// The `CollectionKind` discriminant for a descriptor node — 1-indexed, matching
+/// the variant order in `default/07_reflect.loft`.
+///
+/// Spelled out per kind rather than closed with a catch-all inside the match on
+/// [`Iterated`], so a kind added to the descriptor fails to compile here instead
+/// of silently reporting one of the others
+/// ([DATABASE.md § Adding or changing a collection kind](../doc/claude/DATABASE.md)).
+fn reflect_collection(node: Option<&crate::database::LayoutNode>) -> i32 {
+    use crate::database::{Iterated, LayoutNode};
+    match node {
+        Some(LayoutNode::Iterated(it)) => match it {
+            Iterated::Hash { .. } => 2,
+            Iterated::Index { .. } => 3,
+            Iterated::Sorted { .. } => 4,
+            Iterated::Ordered { .. } => 5,
+            Iterated::Radix { .. } => 6,
+        },
+        _ => 1,
+    }
+}
+
+/// The key fields of a keyed collection as `(field index, ascending)`, in key
+/// order.
+///
+/// A kind with no order of its own answers `true` for every key: there is no
+/// descending sense in which a hash bucket is arranged, and inventing a
+/// direction would be a fact the descriptor does not hold.
+fn reflect_keys(it: &crate::database::Iterated) -> Vec<(u16, bool)> {
+    use crate::database::Iterated;
+    match it {
+        Iterated::Hash { keys, .. } | Iterated::Radix { keys, .. } => {
+            keys.iter().map(|k| (*k, true)).collect()
+        }
+        Iterated::Sorted { keys, .. }
+        | Iterated::Ordered { keys, .. }
+        | Iterated::Index { keys, .. } => keys.clone(),
+    }
+}
+
 /// Fill a `TypeInfo` record for `kt` and return it.
 #[allow(clippy::too_many_lines)] // one schema-driven writer; splitting it hides the field map
 /// # Panics
@@ -2606,6 +2690,7 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     let ti_tp = stores.name("TypeInfo");
     let fi_tp = stores.name("FieldInfo");
     let vi_tp = stores.name("VariantInfo");
+    let ki_tp = stores.name("KeyInfo");
     let lookup = |stores: &Stores, tp: u16, ty: &str, field: &str| {
         let p = stores.position(tp, field);
         assert_ne!(
@@ -2629,6 +2714,11 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     let fi_null = lookup(stores, fi_tp, "FieldInfo", "nullable");
     let vi_name = lookup(stores, vi_tp, "VariantInfo", "name");
     let vi_tag = lookup(stores, vi_tp, "VariantInfo", "tag");
+    let ti_collection = lookup(stores, ti_tp, "TypeInfo", "collection");
+    let ti_keys = lookup(stores, ti_tp, "TypeInfo", "keys");
+    let ki_name = lookup(stores, ki_tp, "KeyInfo", "name");
+    let ki_pos = lookup(stores, ki_tp, "KeyInfo", "position");
+    let ki_asc = lookup(stores, ki_tp, "KeyInfo", "ascending");
 
     let ti_bytes = u32::from(stores.size(ti_tp));
     let out = stores.database(ti_bytes.div_ceil(8) + 1);
@@ -2656,6 +2746,15 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     stores
         .store_mut(&out)
         .set_u32_raw(out.rec, out.pos + ti_variants, 0);
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, out.pos + ti_keys, 0);
+    stores.store_mut(&out).set_byte(
+        out.rec,
+        out.pos + ti_collection,
+        0,
+        reflect_collection(node.as_ref()),
+    );
 
     // The element type, for the two kinds that hold one.
     let elem = match &node {
@@ -2733,6 +2832,54 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
             stores
                 .store_mut(&out)
                 .set_int(vec_rec, at + vi_tag, i as i64 + 1);
+        }
+    }
+
+    // Keys — a keyed collection only. The descriptor holds them as INDICES into
+    // the element record's field list, so they are resolved here rather than
+    // published raw: an index is meaningless to a caller that also has to skip
+    // the synthetic fields (`#left_1` and friends), and the byte position is the
+    // one number that identifies a field in both lists.
+    if let Some(LayoutNode::Iterated(it)) = &node {
+        let keys = reflect_keys(it);
+        let elem_fields = match elem.and_then(|e| desc.nodes.get(&e)) {
+            Some(LayoutNode::Record(f) | LayoutNode::EnumValue(_, f)) => f.clone(),
+            // A `__nullable<S>` element keys through its `Some` payload, which is
+            // not this node. No field list here means no keys, which is what the
+            // doc comment promises.
+            _ => Vec::new(),
+        };
+        // Whole or nothing: half a composite key derives a query that reads the
+        // wrong rows, so an unresolvable key drops the list rather than the key.
+        let resolved: Option<Vec<(String, u16, bool)>> = keys
+            .iter()
+            .map(|(k, asc)| {
+                elem_fields
+                    .get(*k as usize)
+                    .map(|f| (f.name.clone(), f.position, *asc))
+            })
+            .collect();
+        if let Some(resolved) = resolved.filter(|r| !r.is_empty()) {
+            let ki_bytes = u32::from(stores.size(ki_tp));
+            let words = ((resolved.len() as u32) * ki_bytes + 15) / 8 + 1;
+            let vec_rec = stores.store_mut(&out).claim(words.max(1));
+            stores
+                .store_mut(&out)
+                .set_u32_raw(vec_rec, 4, resolved.len() as u32);
+            stores
+                .store_mut(&out)
+                .set_u32_raw(out.rec, out.pos + ti_keys, vec_rec);
+            for (i, (name, position, asc)) in resolved.iter().enumerate() {
+                let at = 8 + (i as u32) * ki_bytes;
+                let n = stores.store_mut(&out).set_str(name);
+                stores.store_mut(&out).set_u32_raw(vec_rec, at + ki_name, n);
+                stores
+                    .store_mut(&out)
+                    .set_int(vec_rec, at + ki_pos, i64::from(*position));
+                stores
+                    .store_mut(&out)
+                    .set_byte(vec_rec, at + ki_asc, 0, i32::from(*asc));
+            }
         }
     }
     out

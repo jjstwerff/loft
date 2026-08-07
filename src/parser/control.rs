@@ -11153,7 +11153,7 @@ impl Parser {
             // a no-op (`n_store_violation` returns `false`).
             self.n_store_violation(&t, &r_type, "the return value", None);
             if t == Type::Null {
-                v = self.null(&r_type);
+                v = self.null_return(&r_type);
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
                 self.validate_convert("return", &t, &r_type, &expr_start.position);
             }

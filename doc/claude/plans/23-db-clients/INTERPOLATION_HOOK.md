@@ -185,7 +185,7 @@ writing a collection non-atomically is not a smaller step, it is a wrong one.
 
 ## Status
 
-**H1–H7 are BUILT** — see [plans/124-interpolation-hook.md](../124-interpolation-hook.md)
+**H1–H7 are BUILT** — see [plans/124-interpolation-hook](../124-interpolation-hook/README.md)
 for what shipped, what the build corrected, and the proof. The design above stands
 as written; three details changed on contact:
 

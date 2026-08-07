@@ -202,6 +202,7 @@ mod radix_db;
 mod radix_tree;
 mod spatial;
 pub mod store;
+pub mod store_budget;
 pub mod tree;
 mod typedef;
 

@@ -761,7 +761,7 @@ Off when the `mmap` Cargo feature is disabled at build time:
 returns `false` so consumers branch into a JSON fallback (or
 rebuild-from-source).
 
-### Lazy store binding (`@PLN129`, `@F108`)
+### Lazy store binding (`@F108`)
 
 Bind a collection to a source and let the LOOKUPS do the loading: a lookup that
 misses fetches exactly that one entry and inserts it, so the next lookup for the
@@ -770,12 +770,18 @@ working set — there is no second structure to keep in step with it.  Contrast
 `store_load_key` ([REMOTE_STORES.md](REMOTE_STORES.md)), where the program names
 the entries to fetch.
 
+The model behind these calls — what a query is derived from, why `len` answers the
+resident count, and what a binding refuses — is [LAZY_STORES.md](LAZY_STORES.md).
+
 | Function | Description |
 |----------|-------------|
-| `store_bind_lazy(c: reference, source: text) -> boolean` | Bind collection `c` to `source` — a local `.store` image or an `http(s)://` URL served with Range, i.e. whatever `store_load_key` accepts.  Per COLLECTION, not per store: two collections of one type may bind differently.  Binding replaces any previous binding, and may be done before `c` holds anything.  Returns `false` for a null collection. |
+| `store_bind_lazy(c: reference, source: text) -> boolean` | Bind collection `c` to `source` — an IMAGE (a local `.store` file or an `http(s)://` URL served with Range, i.e. whatever `store_load_key` accepts) or a DATABASE (`sqlite:<path>`), where the `SELECT` is derived from `c`'s own type: table = the element type's name lowercased, columns = its fields, `WHERE` = its key.  Read-only; the database source serves a keyed lookup on any ordered or hashed kind, and a binding it cannot turn into a query is refused through `store_lazy_error` rather than served wrongly.  Per COLLECTION, not per store: two collections of one type may bind differently.  Binding replaces any previous binding, and may be done before `c` holds anything.  Returns `false` for a null collection. |
+| `store_lazy_range(c: reference, lo: integer, hi: integer) -> integer` | Pull a whole KEY RANGE from `c`'s bound DATABASE source in ONE query (bounds inclusive, in the collection's own key order); answers how many records `c` gained.  The cure for N+1: 500 records fetched one lookup at a time is 500 round trips, and the same 500 as a range is one.  `c` must be ORDERED (`sorted`/`index`) and keyed on one column — a `hash` has no order to range over and a composite key needs `store_lazy_query`.  A record already resident is left alone. |
+| `store_lazy_query(c: reference, condition: text) -> integer` | Run an explicit SQL `condition` against `c`'s bound DATABASE source and pull every matching row INTO `c`; answers how many records `c` gained.  The escape hatch for what the key cannot express (`name LIKE 'Ada%'`, a predicate on another column) — derived queries need no call, this one cannot be derived, so it is written down and visible.  Rows land in the collection rather than in a detached result, and a row already resident is left alone: a person found this way and the same person found by key are ONE record.  Answers `0` both for "nothing matched" and for "the query could not run"; `store_lazy_error` tells those apart. |
 | `store_lazy_error(c: reference) -> text` | Why the last fetch could not REACH the source, or `""` when healthy.  A genuine absence CLEARS it — reaching the source and not finding the key proves the source was reachable — so a stale error never outlives the truth. |
 | `store_lazy_faults(c: reference) -> integer` | How many fetches could not reach the source.  `0` is healthy; after a traversal it answers "how incomplete am I". |
 | `store_lazy_clear(c: reference) -> boolean` | Acknowledge those faults, answering whether there was anything to acknowledge. |
+| `store_lazy_fail(c: reference, why: text)` | **The writing end of that channel**, for a lazy driver written in loft (`fn lazy_fetch(…)`, below).  A driver's three answers do not fit its return value: `1` inserted and `0` absent are integers, and "the source is down" carries a REASON — answering `0` for it is the silent wrong answer this channel exists to prevent.  Sticky and counted exactly like a Rust source's failure. |
 
 **Ask after a null, because a null cannot say why.**  C80 means a value read never
 raises, so a miss answers `null` whether the key is genuinely absent or the source
@@ -1052,11 +1058,11 @@ or a schema check needs.  Declared in `default/07_reflect.loft`.
 | `type_named(name: text) -> TypeInfo?` | The declared shape of the type called `name`, or **null** when this program has no such type. Use when the name is a runtime value — a config file, a database catalogue, a command line — so there is nothing to call `type_of` on. |
 
 `TypeInfo` carries `name`, `kind`, `size` (bytes per record), `fields`,
-`variants` and `element`; each `FieldInfo` carries `name`, `type_name`,
-`position`, `kind` and `nullable`.  Match on `kind` first: only a record and a
-struct-enum variant have `fields`, only an enum has `variants`, and only a
-vector or a keyed collection names an `element`.  Empty is the honest answer for
-a kind that has no such thing.
+`variants`, `element`, `collection` and `keys`; each `FieldInfo` carries `name`,
+`type_name`, `position`, `kind` and `nullable`.  Match on `kind` first: only a
+record and a struct-enum variant have `fields`, only an enum has `variants`, and
+only a vector or a keyed collection names an `element`.  Empty is the honest
+answer for a kind that has no such thing.
 
 ```loft
 t = type_of(row);
@@ -1068,6 +1074,38 @@ for f in t.fields { println("  {f.name}: {f.type_name} @{f.position}") }
 `BooleanKind` · `TextKind` · `CharacterKind` · `RecordKind` · `EnumKind` ·
 `VariantKind` · `VectorKind` · `KeyedKind` · `RefKind` · `OtherKind`.  A kind
 this loft version has no name for is reported as `OtherKind`, never guessed at.
+
+### A keyed collection: which one, and on which fields
+
+`KeyedKind` says a type is walked by cursor and stops there, which is not enough
+to derive a query FROM.  `collection` says which of the five it is —
+`KeyedHash` · `KeyedIndex` · `KeyedSorted` · `KeyedOrdered` · `KeyedRadix`, and
+`NotKeyed` for every other type — and `keys` lists its key fields **in key
+order**, each a `KeyInfo` of `name`, `position` and `ascending`.
+
+```loft
+t = type_of(people);                       // hash<Person[id]>
+if t.collection == KeyedHash {
+  for k in t.keys { println("key {k.name} @{k.position}") }
+}
+```
+
+- **`position` is the ELEMENT record's byte offset** — the same number that
+  element type's `FieldInfo.position` carries, so a key joins to a field by
+  value.  A name is a display fact; the position is what the collection keys on.
+- **`ascending` is `true` for a kind with no order of its own** (`KeyedHash`,
+  `KeyedRadix`), because there is no descending answer to give.  Match
+  `collection` first where "ascending" and "unordered" differ: only the three
+  ordered kinds can serve a range.
+- **`KeyedSorted` vs `KeyedOrdered`** is the same declaration over a different
+  structure: `sorted<T[…]>` is a tree, and becomes a sorted by-value vector
+  (`KeyedOrdered`) when `T` is co-located by a `hash` / `index` / `spatial`
+  field elsewhere.  Both are ordered.
+- **`keys` is delivered whole or empty.**  A query built from half a composite
+  key reads the wrong rows, so a key the descriptor cannot resolve to an element
+  field drops the whole list — which is also what a `__nullable<S>` element
+  reports, because its keys live in the `Some` payload rather than in the
+  element node.
 
 Two limits worth knowing before you reach for it:
 

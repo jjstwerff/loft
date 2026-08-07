@@ -1909,7 +1909,8 @@ extern crate loft;"
         // paths agree on what's actually live in the program.
         let main_nr = self.data.def_nr("n_main");
         if main_nr < self.data.definitions() {
-            self.reachable = reachable_functions(self.data, &[main_nr]);
+            let roots = self.roots_with_lazy_driver(&[main_nr]);
+            self.reachable = reachable_functions(self.data, &roots);
         } else {
             // No `n_main` (test-script style with `fn p203_*` as the
             // top-level fn).  Walk reachability from EVERY user-source
@@ -1956,7 +1957,8 @@ extern crate loft;"
                 entries.push(d);
             }
             if !entries.is_empty() {
-                self.reachable = reachable_functions(self.data, &entries);
+                let roots = self.roots_with_lazy_driver(&entries);
+                self.reachable = reachable_functions(self.data, &roots);
             }
         }
         Self::emit_file_header(
@@ -1978,6 +1980,7 @@ extern crate loft;"
         // before `n_main` runs.  Without this, `OpConstRef(<d_nr>)`
         // indexes into an empty Vec and panics.  @P275 fix.
         self.emit_const_vectors(w, till)?;
+        self.emit_lazy_fetch_registration(w, till)?;
         writeln!(w, "}}\n")?;
         self.output_functions(w, from, till, None)?;
         self.emit_main_bootstrap(w, till)
@@ -2092,7 +2095,8 @@ extern crate loft;"
         entry_defs: &[u32],
     ) -> std::io::Result<()> {
         self.dup_fn_names = duplicate_fn_names(self.data);
-        let reachable = reachable_functions(self.data, entry_defs);
+        let roots = self.roots_with_lazy_driver(entry_defs);
+        let reachable = reachable_functions(self.data, &roots);
         self.reachable.clone_from(&reachable);
         Self::emit_file_header(
             w,
@@ -2113,6 +2117,7 @@ extern crate loft;"
         // vectors and populate `db.const_refs` — mirrors the
         // interpreter path in `compile::build_const_vectors`.
         self.emit_const_vectors(w, till)?;
+        self.emit_lazy_fetch_registration(w, till)?;
         writeln!(w, "}}\n")?;
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))
@@ -2695,6 +2700,46 @@ extern crate loft;"
     /// codegen translates `s.const_ref_at(` → `stores.const_ref_at_runtime(`
     /// (`src/generation/calls.rs`), so the emitted user functions
     /// find these DbRefs at call time.
+    /// @PLN133 S8 — the lazy driver is a reachability ROOT.
+    ///
+    /// Nothing in loft calls `lazy_fetch`; the RUNTIME calls it, on a miss. So a
+    /// walk rooted at `main` never reaches it, and `--native` would emit no body
+    /// for the function it then installs a pointer to. The failure mode is the
+    /// quiet one — a program that compiles and simply has no driver — which is
+    /// why the root is added here rather than left to whoever writes the entry
+    /// list.
+    fn roots_with_lazy_driver(&self, entries: &[u32]) -> Vec<u32> {
+        let mut roots = entries.to_vec();
+        if let Ok(Some(d_nr)) = self.data.lazy_fetch_driver()
+            && !roots.contains(&d_nr)
+        {
+            roots.push(d_nr);
+        }
+        roots
+    }
+
+    /// @PLN133 S8 — hand the program's lazy driver to the runtime.
+    ///
+    /// `OpGetRecord` lives in libloft and cannot see a function the generator
+    /// wrote, so `init()` installs a pointer to it. Emitted only when the
+    /// program HAS a driver of the one admitted signature — which is checked in
+    /// `Data::lazy_fetch_driver`, the same place the interpreter asks, so the
+    /// two backends cannot disagree about whether a driver is usable.
+    ///
+    /// A driver with the wrong shape emits nothing, and the runtime then reports
+    /// "needs a loft driver" rather than calling a function whose parameters do
+    /// not line up — a wrong VALUE, which is the class this channel exists to
+    /// keep out.
+    fn emit_lazy_fetch_registration(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
+        if let Ok(Some(d_nr)) = self.data.lazy_fetch_driver()
+            && d_nr < till
+            && (self.reachable.is_empty() || self.reachable.contains(&d_nr))
+        {
+            writeln!(w, "    codegen_runtime::register_lazy_fetch(n_lazy_fetch);")?;
+        }
+        Ok(())
+    }
+
     fn emit_const_vectors(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
         // Short-circuit if nothing references const_refs (avoids
         // emitting an unused `db.const_refs.resize(...)` that'd

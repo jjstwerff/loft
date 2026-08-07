@@ -1,9 +1,13 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # @PLN129 — What a lazy binding can ASK
 
+> **This is the design record, kept for its reasoning.** What is TRUE of the built system —
+> the derivation, the quoting, the dialect facts, who executes — is in
+> [LAZY_STORES.md](../../LAZY_STORES.md). Read this one for why it took that shape.
+
 How a query is derived, what the collection kinds express, what they cannot, and the
 requirement that one record is one record however it arrived. Companion to
-[README.md](README.md) (the model) and [BINDING.md](BINDING.md) (the schema contract).
+[README.md](README.md) (the closure record) and [BINDING.md](BINDING.md) (the schema contract).
 
 ## What queries this model can express — the collection KIND is the query shape
 
@@ -121,17 +125,75 @@ So for `persons: hash<Person[id]>` where `Person { const id: integer, name: text
 SELECT id, name FROM person WHERE id = ?
 ```
 
-and for `positions: index<Position[person_id, from]>` walked as a range:
+and for `positions: index<Position[person_id, started]>` walked as a range:
 
 ```sql
-SELECT person_id, company_id, from, to FROM position
- WHERE person_id = ? AND from BETWEEN ? AND ?
- ORDER BY from ASC
+SELECT person_id, company_id, started, ended FROM position
+ WHERE person_id = ? AND started BETWEEN ? AND ?
+ ORDER BY started ASC
 ```
 
 — the `ASC` from the key's own direction bit, not from a convention.
 
+**This example said `from` and `to` until step 2 built it**, which is worth
+keeping because the correction is a rule rather than a typo: **every loft
+identifier is a legal SQL identifier, and some of them are RESERVED words.**
+`from` is a perfectly ordinary loft field name and the natural one for a history
+row, and the query above with it in the column list does not parse on any engine.
+Since nothing distinguishes a reserved word by shape, the derivation cannot dodge
+it — so **it quotes everything**, and the queries it really emits are
+
+```sql
+SELECT "id", "name" FROM "person" WHERE "id" = ?
+SELECT "person_id", "from", "to" FROM "spell" WHERE "person_id" = ?
+```
+
+That removes the whole class rather than one word of it: no reserved-word list to
+carry, and none to keep current as engines add words.
+
+**But quoting has a price on SQLite, and it was measured rather than reasoned
+about.** SQLite accepts a double-quoted name that resolves to no identifier as a
+STRING LITERAL. Against a table with a `name` column, `SELECT "naam" FROM
+"person"` does not fail — it returns the text `naam`, once per row. Since the
+derived query quotes *every* identifier, a renamed column would have materialised
+its own name into the record: failure path 9 in its cruellest form, a wrong answer
+that looks like data. The connection turns the misfeature off
+(`SQLITE_DBCONFIG_DQS_DML` / `_DDL`), which is one call on the handle core owns
+and makes an unresolvable name raise. An SQLite older than 3.29 does not know the
+option, and there the bind-time schema check (step 7) is the backstop — which is
+part of why that check is mandatory rather than a guard.
+
+The other cost is that the quote CHARACTER is a dialect fact — `"x"` is an identifier in standard SQL and a string
+literal in MySQL — so it is declared (`Quoting::Double` by default, `Backtick` for
+MySQL/MariaDB, `Bare` for a caller who wants the query to read as they wrote it
+and accepts a refusal for a name that cannot be written unquoted). Placeholders
+are the same kind of fact: `?` by default, `$1`-numbered for PostgreSQL.
+
+Quoting also settles the table name: the default is the type's name **lowercased**,
+which is the spelling that means the same thing everywhere — PostgreSQL folds an
+unquoted name down, so a table created the ordinary way is already lowercase and
+`"person"` finds it. A table that really is mixed-case is what the override is for.
+
+**Two facts the derivation had to learn from the descriptor rather than from this
+document**, both found by building it:
+
+- **An `index` element record carries its own tree links.** `Position` comes back
+  with `#left_1`, `#right_1` and `#color_1` after its declared fields — the
+  red-black bookkeeping, stored INSIDE the element. `#color_1` is an ordinary
+  boolean, so a column filter written on field TYPE selects it and the SELECT
+  names a column no table has. The non-data predicate (`enum`, no position,
+  `#`-prefixed) is `LayoutField::is_data`, one home shared with
+  `read_via_descriptor` and the browser delivery.
+- **A key is an INDEX into the full field list**, synthetic fields included, so
+  the key list and the column list are numbered in the same space and must not be
+  re-based on the filtered columns.
+
 **What the descriptor cannot give**, and what therefore has to be declared ([BINDING.md](BINDING.md)):
 the table when it is not the type's name (`persoon` for `Person`), a column when it is not the
-field's name, and a SQL identifier when a loft field name is not a legal one. The derivation is
-the DEFAULT; the mapping is the override, and both feed one query builder rather than two paths.
+field's name, and the dialect facts above. The derivation is the DEFAULT; the mapping is the
+override, and both feed one query builder rather than two paths — an empty mapping IS the
+derivation, which is what keeps them from drifting.
+
+A mapping is checked **where it is written**: naming a type or a field that does not exist is
+refused at construction, not at query time. A typo is otherwise invisible — the derivation would
+fall back to the default and query a column nobody meant.

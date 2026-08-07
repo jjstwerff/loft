@@ -296,6 +296,13 @@ pub fn install_panic_hook() {
     }
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // @PLN133 S8 — a fault inside a lazy DRIVER is contained and reported
+        // through `store_lazy_error`, so it is not a crash and must not be
+        // announced as one. Printing it would be worse than noise: a lookup that
+        // correctly answered null would look like a program that fell over.
+        if crate::codegen_runtime::in_lazy_driver() {
+            return;
+        }
         if let Some(pos) = compile_pos() {
             let detail = info
                 .payload()

@@ -150,6 +150,43 @@ pub fn loft_warnings(stderr: &str, script_name: &str) -> usize {
     count
 }
 
+/// Record environmental skips — tests that PASSED-by-skipping for a
+/// toolchain/OS reason rather than a code reason — to a side-channel ledger, so
+/// they survive nextest's suppression of successful output.
+///
+/// Reach for this from any test that self-skips on a missing toolchain.  A skip
+/// and a pass are indistinguishable in a summary, so without the ledger a green
+/// run hides reduced coverage: the regression of whatever the test guards looks
+/// exactly like a clean run.  The CI step `Surface environmental test skips`
+/// drains the ledger into annotations and a job summary, which is what turns
+/// "more tests skip than yesterday" into something visible.
+///
+/// No-op unless `LOFT_SKIP_LEDGER` (a directory) is set, so local runs are
+/// unaffected.  Each call gets its own file — pid-named for the cross-process
+/// case (nextest runs one process per test) and counter-suffixed for the
+/// same-process one (`cargo test` runs a binary's tests as threads), so a
+/// second caller can never truncate the first one's record.
+#[allow(dead_code)]
+pub fn record_env_skips(suite: &str, reason: &str, skips: &[(String, String)]) {
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let Ok(dir) = std::env::var("LOFT_SKIP_LEDGER") else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::path::Path::new(&dir).join(format!("{suite}-{}-{seq}.tsv", std::process::id()));
+    let body: String = skips
+        .iter()
+        .map(|(entry, detail)| {
+            let clean = |s: &str| s.replace(['\t', '\n'], " ");
+            format!("{suite}\t{reason}\t{}\t{}\n", clean(entry), clean(detail))
+        })
+        .collect();
+    let _ = std::fs::write(path, body);
+}
+
 #[allow(dead_code)]
 static DEFAULT_PARSED: OnceLock<(Data, Stores)> = OnceLock::new();
 

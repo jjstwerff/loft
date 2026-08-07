@@ -3543,6 +3543,21 @@ pub struct Data {
     /// is parsed as a fresh source that re-declares no `use`, and inheriting the
     /// program's imports is exactly what lets it name the frame's own vocabulary.
     applied: Vec<AppliedImport>,
+    /// loft#788 — bare names that MORE THAN ONE import binds, and to different
+    /// definitions: `(name, importing_source) → the losing def_nrs`.
+    ///
+    /// The binding itself is unchanged (first import wins), because the answer
+    /// to an ambiguity is not a different winner — it is a question. This
+    /// records that there WAS a question, so the site that resolves the bare
+    /// name can refuse instead of picking.
+    ///
+    /// Recorded at import and reported at USE, deliberately. A program where two
+    /// packages both export `Chunk` and nobody writes it bare is well-defined
+    /// and compiles today; refusing at the `use` line would break it for a
+    /// collision it never has (COMPATIBILITY.md — no functioning program
+    /// breaks). What is not well-defined is the bare name, and that is exactly
+    /// where this is consulted.
+    ambiguous: HashMap<(String, u16), Vec<u32>>,
     /// Current source file
     pub source: u16,
     /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
@@ -3839,6 +3854,7 @@ impl Data {
             def_names: HashMap::new(),
             use_names: HashMap::new(),
             applied: Vec::new(),
+            ambiguous: HashMap::new(),
             source: STD_SOURCE,
             value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
@@ -3952,6 +3968,10 @@ impl Data {
     /// creates.  Without the replay a rollback drops every `use`d name.
     pub(crate) fn rebuild_indices(&mut self) {
         self.def_names.clear();
+        // loft#788 — derived from the imports exactly as `def_names` is, so it
+        // is rebuilt by the same replay. Keeping stale entries would refuse a
+        // bare name whose second binding a rollback removed.
+        self.ambiguous.clear();
         self.operators.clear();
         self.possible.clear();
         let mut max_op: i32 = -1;
@@ -4062,6 +4082,20 @@ impl Data {
         } else {
             u16::MAX
         }
+    }
+
+    /// loft#789 — the library short-names this compilation actually resolved.
+    ///
+    /// What a diagnostic needs in order to talk about the build rather than
+    /// about the registry: a package name in here is one the program already
+    /// has, whatever a published index of the same name may contain.
+    #[must_use]
+    pub fn resolved_libraries(&self) -> Vec<String> {
+        self.use_names
+            .keys()
+            .filter(|n| !n.is_empty() && *n != "std")
+            .cloned()
+            .collect()
     }
 
     /// @P379 — a library-qualified database name for a struct/enum-value
@@ -5315,6 +5349,79 @@ impl Data {
         }
     }
 
+    /// @PLN133 S8 — the program's lazy DRIVER, checked.
+    ///
+    /// A collection bound to a scheme core has no Rust driver for is fetched by
+    /// calling a loft function named `lazy_fetch`. Both backends have to agree
+    /// about whether one is there and whether it is usable, so the question has
+    /// ONE home: the interpreter pushes arguments in this order and the native
+    /// generator installs a function pointer of exactly this shape, and a
+    /// mismatch caught in only one of them is how the two would start disagreeing
+    /// about what a lookup answers.
+    ///
+    /// Required shape — the collection, its source, and the key in whichever of
+    /// two spellings it arrived in:
+    ///
+    /// ```loft
+    /// fn lazy_fetch(coll: <a keyed collection>, source: text,
+    ///               key_int: integer, key_text: text) -> integer
+    /// ```
+    ///
+    /// # Errors
+    /// When a `lazy_fetch` exists with a different shape. Refusing beats calling
+    /// it: the arguments are pushed positionally, so a driver with a different
+    /// signature reads someone else's bytes as its own — a wrong VALUE rather
+    /// than a failure, which is the class this whole channel exists to keep out.
+    pub fn lazy_fetch_driver(&self) -> std::result::Result<Option<u32>, String> {
+        let d_nr = self.def_nr("n_lazy_fetch");
+        if d_nr == u32::MAX {
+            return Ok(None);
+        }
+        let def = self.def(d_nr);
+        let visible: Vec<&Attribute> = def.attributes().iter().filter(|a| !a.hidden).collect();
+        let wanted = "fn lazy_fetch(coll: <a keyed collection>, source: text, \
+                      key_int: integer, key_text: text) -> integer";
+        if visible.len() != 4 {
+            return Err(format!(
+                "`lazy_fetch` takes {} parameter(s); a lazy driver is `{wanted}`",
+                visible.len()
+            ));
+        }
+        let is_text = |t: &Type| matches!(t.base(), Type::Text(_));
+        let is_int = |t: &Type| matches!(t.base(), Type::Integer(_));
+        let is_collection = |t: &Type| {
+            matches!(
+                t.base(),
+                Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Radix(_, _, _)
+            )
+        };
+        if !is_collection(&visible[0].typedef) {
+            return Err(format!(
+                "`lazy_fetch`'s first parameter must be the keyed COLLECTION it fills; \
+                 a lazy driver is `{wanted}`"
+            ));
+        }
+        if !is_text(&visible[1].typedef)
+            || !is_int(&visible[2].typedef)
+            || !is_text(&visible[3].typedef)
+        {
+            return Err(format!(
+                "`lazy_fetch`'s parameters after the collection must be \
+                 `source: text, key_int: integer, key_text: text`; a lazy driver is `{wanted}`"
+            ));
+        }
+        if !is_int(def.returned()) {
+            return Err(format!(
+                "`lazy_fetch` must answer an integer — 1 inserted, 0 absent; \
+                 a lazy driver is `{wanted}`"
+            ));
+        }
+        Ok(Some(d_nr))
+    }
+
     /// @PLN102 arc C — is `source` the compilation's OWNED entry project (vs a
     /// resolved dependency or the stdlib)?  loft numbers sources `STD_SOURCE` (0)
     /// = stdlib, `MAIN_SOURCE` (1) = the entry being compiled, `2..` = imported
@@ -5588,8 +5695,44 @@ impl Data {
             .map(|((name, _), &def_nr)| (name.clone(), def_nr))
             .collect();
         for (name, def_nr) in names {
+            self.note_ambiguity(&name, into_source, def_nr);
             self.def_names.entry((name, into_source)).or_insert(def_nr);
         }
+    }
+
+    /// loft#788 — remember that a second import wanted to bind `name` too.
+    ///
+    /// Only a collision between two IMPORTS counts. A name already defined in
+    /// the importing source is the documented local-wins shadowing (@PLN22
+    /// Phase 2), and binding the same definition twice — one package
+    /// re-exporting another's, or the same `use` seen twice — is not a
+    /// question at all.
+    fn note_ambiguity(&mut self, name: &str, into_source: u16, def_nr: u32) {
+        let Some(&sitting) = self.def_names.get(&(name.to_string(), into_source)) else {
+            return; // nothing there yet: this import wins outright
+        };
+        if sitting == def_nr || self.definitions[sitting as usize].source == into_source {
+            return;
+        }
+        let losers = self
+            .ambiguous
+            .entry((name.to_string(), into_source))
+            .or_default();
+        if !losers.contains(&def_nr) {
+            losers.push(def_nr);
+        }
+    }
+
+    /// loft#788 — the definitions a bare `name` could ALSO have meant in
+    /// `source`, or empty when it is unambiguous.
+    ///
+    /// The winner is not in the list: it is what `def_nr` already answers, and
+    /// the caller needs both to name every package in the message.
+    #[must_use]
+    pub fn ambiguous_with(&self, name: &str) -> &[u32] {
+        self.ambiguous
+            .get(&(name.to_string(), self.source))
+            .map_or(&[][..], Vec::as_slice)
     }
 
     /// Import a single name from `lib_source` into `into_source`, BINDING it
@@ -5627,11 +5770,13 @@ impl Data {
             return false;
         }
         if let Some(def_nr) = found_plain {
+            self.note_ambiguity(bind, into_source, def_nr);
             self.def_names
                 .entry((bind.to_string(), into_source))
                 .or_insert(def_nr);
         }
         if let Some(def_nr) = found_fn {
+            self.note_ambiguity(&bind_fn_key, into_source, def_nr);
             self.def_names
                 .entry((bind_fn_key, into_source))
                 .or_insert(def_nr);

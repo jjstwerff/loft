@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc B step 11 — arc F's gate over a DATABASE rather than a file.
+//
+// The same graph, the same two properties, a different source. Arc F proved the
+// SHAPE against a `.store` image; until this passes, arc B is the hypothesis the
+// README says arc F exists to settle.
+//
+//   IDENTITY  two persons at the SAME company must reach ONE company record,
+//             because identity falls out of the collection rather than a map.
+//   COUNT     fetches == records TOUCHED, never records reachable — every value
+//             assertion here would pass under an eager load, and only the
+//             counts would not.
+//
+// Driven from tests/lazy_sql_source.rs, which seeds the database first. No
+// paths, nothing to do.
+
+struct SqCompany { id: integer, name: text }
+struct SqPersonG { id: integer, name: text, employer: integer }
+
+fn main() {
+  pp = env_variable("LOFT_SQL_PERSONS") ?? "";
+  cp = env_variable("LOFT_SQL_COMPANIES") ?? "";
+  if pp == "" || cp == "" { return }
+
+  persons:   hash<SqPersonG[id]> = [];
+  companies: hash<SqCompany[id]> = [];
+  store_bind_lazy(persons, pp);
+  store_bind_lazy(companies, cp);
+  println("start p={persons.len()} c={companies.len()}");
+
+  ada = persons[1];
+  c1 = companies[ada.employer];
+  println("hop1 {ada.name}@{c1.name} p={persons.len()} c={companies.len()}");
+
+  // The second person is at the SAME company: the company hop must HIT.
+  grace = persons[2];
+  c2 = companies[grace.employer];
+  println("hop2 {grace.name}@{c2.name} p={persons.len()} c={companies.len()}");
+  println("identity={c1 == c2}");
+
+  alan = persons[3];
+  c3 = companies[alan.employer];
+  println("hop3 {alan.name}@{c3.name} p={persons.len()} c={companies.len()}");
+
+  // Nothing that was never asked for may be resident.
+  println("touched={persons.len() + companies.len()}");
+  println("sound={store_verify(persons)},{store_verify(companies)}");
+  println("healthy={store_lazy_error(persons)}{store_lazy_error(companies)}");
+}

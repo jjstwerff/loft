@@ -1591,6 +1591,30 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             "sqlite: a procedure kept in the PROCESS must deploy, call and do the \
              work, and refuse a body needing a procedural language:\n{s}"
         );
+        // @PLN133 P3 — a bound float must come back BIT-IDENTICAL.
+        //
+        // **sqlite is pinned at 6 of 7, which is its real answer.**  It sends a
+        // float as TEXT (no `#c` path carries a `double` by value) and its own
+        // text→REAL converter rounds `-5.196972490273514e-183` one ULP wrong,
+        // where `sqlite3_bind_double` on the same value is right — measured
+        // directly.  The fix needs `#c` float support (@PLN128 E3): it cannot go
+        // in the shim, which is deliberately free of sqlite symbols so it links
+        // where the optional library is absent (@PLN24 arc G).  The other three
+        // parse correctly and are held to 7/7 below.
+        //
+        // This cell read 7/7 for a while, and that was an ARTEFACT rather than a
+        // pass: `floats` is itself generic, so under loft#791 its write loop and
+        // its read loop saw the same corrupted vector and agreed with each other.
+        // Fixing #791 made the guard honest and the real defect reappeared.  Keep
+        // the value that exposes it; when E3 lands, raise this to 7/7.
+        //
+        // The per-backend READ expression is still load-bearing for a different
+        // reason: sqlite renders a `REAL` as `%!.15g`, so reading the column
+        // naively loses the low bits of values that ARE stored correctly.
+        assert!(
+            s.contains("sqlite float wrote=7 exact=6/7 inlined=false plain=true"),
+            "sqlite: a bound float must round-trip exactly (see @PLN133 P3):\n{s}"
+        );
         assert_eq!(
             run("--native", "sqlite")?,
             s,
@@ -1632,6 +1656,25 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
             out.contains(&format!("{mode} proc {proc}")),
             "{mode}: a server-side procedure must give the same answer as the \
              process-side emulation:\n{out}"
+        );
+        // @PLN133 P3 — a bound float must come back BIT-IDENTICAL.
+        //
+        // Every backend sends a float as TEXT (no `#c` path carries a `double`
+        // by value), so each is relying on its server's text→double conversion
+        // being correctly rounded.  Three of the four are.  **sqlite is not**:
+        // it loses the last bit of `-5.196972490273514e-183`, measured directly
+        // against `sqlite3_bind_double`, which gets it right.  Fixing it needs
+        // `#c` float support (@PLN128 E3) — it cannot go in the shim, which is
+        // deliberately free of sqlite symbols so it links where the optional
+        // library is absent (@PLN24 arc G).
+        //
+        // Both of these servers parse correctly, so they are held to 7/7 —
+        // sqlite is the odd one out and is pinned separately, above.
+        assert!(
+            out.contains(&format!(
+                "{mode} float wrote=7 exact=7/7 inlined=false plain=true"
+            )),
+            "{mode}: a bound float must round-trip exactly (see @PLN133 P3):\n{out}"
         );
         assert_eq!(
             run("--native", mode)?,
@@ -1702,6 +1745,175 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
              the library went missing or the availability question broke, and a \
              pass with it skipped asserts nothing. Exercised: {ran:?}"
         );
+    }
+    Ok(())
+}
+
+/// @PLN133 S2–S5 — one table definition, derived and reconciled, with no
+/// database anywhere.
+///
+/// The whole point of `TableDef` being a VALUE is that it is built two ways —
+/// derived from a loft type, or read back from a database — and consumed four,
+/// with nothing downstream allowed to ask which. That makes the derivation
+/// testable with no connection at all: the hand-built `have` definitions in the
+/// script stand in for what `introspect` will read, and they are the same shape,
+/// which is the invariant rather than a shortcut.
+///
+/// **So this cell is UNCONDITIONAL**, and that is what it is for. Every other
+/// SQL test in this file skips where a library or a server is missing; this one
+/// runs on any machine, so the derivation the reader and the writer must agree
+/// on has a gate that cannot evaporate into a green.
+///
+/// The DDL it asserts is HAND-WRITTEN per dialect. Comparing one generator
+/// against another proves they agree, which is not the question.
+#[test]
+fn one_table_definition_derives_reconciles_and_renders() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        // The `schema` package holds no `#c` at all, but it sits beside the
+        // backends in one lib directory and `sql` is compiled with it.
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("schema_pure.loft");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && stdout.contains("schema ok"),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // A leak here is not cosmetic. This derivation runs on the LAZY FETCH
+        // path, once per miss, so a record left behind per call is a traversal
+        // that grows the heap for as long as it runs.
+        assert!(
+            !stdout.contains("not freed"),
+            "{backend}: the derivation must leave nothing behind:\n{stdout}"
+        );
+    }
+    Ok(())
+}
+
+/// @PLN133 S6 — the definition loft WROTE, read back out of sqlite's catalogue.
+///
+/// The pure gate above proves the derivation against hand-built definitions.
+/// This proves the hand-built ones were the right shape: `derive` from a loft
+/// type and `introspect` from the database produce one value, and `reconcile`
+/// matches them. That round trip is what requirement 2 rests on — a writer and a
+/// reader deriving their SQL separately agree only until they do not, and
+/// nothing else checks it.
+///
+/// **Run twice, and the second run is the one that matters.** Into an EMPTY
+/// database, where loft creates the schema; and against a table made by hand
+/// with a scrambled column order, a float kept in a `VARCHAR`, a boolean kept in
+/// `TEXT` and one extra column, where loft follows it. The first run passes even
+/// if `reconcile` always agrees.
+#[test]
+fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the sqlite backend ships a shim loft must compile
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("schema_live.loft");
+
+    // Every token is a separate claim, and three of them move in different
+    // directions if the round trip is a fiction:
+    //
+    //   created cols=4 ix=1 …   loft's own DDL came back as four columns AND the
+    //           index its collection kind implies. @PLN129 refuses a bind whose
+    //           lookup no index serves, so a writer that omitted it would build
+    //           a database its own reader cannot open.
+    //   declared flag=INTEGER   sqlite has no boolean type, so loft wrote one as
+    //           INTEGER — and the BINDING is what turns it back into a boolean.
+    //           That is why `flag conversion=ConvBoolean` is beside it: the pair
+    //           is the claim, and either alone would look right while wrong.
+    //   followed cols=5 bound=true   a table loft did not write, with the columns
+    //           in a different ORDER and an extra one, is readable. Column order
+    //           in a foreign table means nothing and must never be read as
+    //           meaning.
+    //   varchar score conversion=ConvFloat   a float kept in a VARCHAR is the
+    //           same conversion as one kept in a REAL, because every driver hands
+    //           the value over as text.
+    //   noindex bound=false     …and the refusal NAMES the column, because a
+    //           refusal a DBA cannot act on is only a slower failure.
+    //   extra bound=true write=false   ONE table, two verdicts. An unknown NOT
+    //           NULL column with no default is perfectly readable and impossible
+    //           to INSERT into.
+    let expect = [
+        "created cols=4 ix=1 bound=true write=true why=",
+        "declared flag=INTEGER score=REAL",
+        "flag conversion=ConvBoolean",
+        "followed cols=5 bound=true write=true why=",
+        "varchar score conversion=ConvFloat",
+        "noindex bound=false why=table noix_person has no index on id",
+        "extra bound=true write=false why=column tenant is NOT NULL with no default",
+        "schema_live ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            // The availability question is the PROGRAM's, answered by
+            // `c_library_available` — true only when every declared symbol
+            // resolves. A skip is printed, never inferred from silence.
+            assert!(
+                stdout.contains("not installed"),
+                "an absent library must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        // Both backends, one derivation. A backend that derived its own would
+        // differ HERE and nowhere else, which is what makes the whole output
+        // worth comparing rather than each line.
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one table definition"),
+        }
     }
     Ok(())
 }
@@ -2430,7 +2642,7 @@ fn native_library_suite() -> std::io::Result<()> {
         )));
     }
     if !env_skips.is_empty() {
-        record_env_skips("native_library_suite", "LNK1181", &env_skips);
+        common::record_env_skips("native_library_suite", "LNK1181", &env_skips);
         println!(
             "native_library_suite: {ran} passed, {} skipped (environmental — LNK1181)",
             env_skips.len()
@@ -2537,33 +2749,6 @@ fn imaging_fixture_png_roundtrip_both_backends() -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Record environmental skips (tests that PASSED-by-skipping for a
-/// toolchain/OS reason, not a code reason) to a side-channel ledger so they
-/// survive nextest's success-output suppression.  Without this a green run
-/// hides reduced coverage — a regression of the underlying fix (e.g. G2's
-/// Windows native link) would look identical to a clean pass.  A CI step
-/// (`Surface environmental test skips`) drains the ledger into annotations +
-/// a job summary.  No-op unless `LOFT_SKIP_LEDGER` (a directory) is set, so
-/// local runs are unaffected.  One file per test process (pid-named) avoids
-/// cross-process write races.
-fn record_env_skips(suite: &str, reason: &str, skips: &[(String, String)]) {
-    let Ok(dir) = std::env::var("LOFT_SKIP_LEDGER") else {
-        return;
-    };
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let path = std::path::Path::new(&dir).join(format!("{suite}-{}.tsv", std::process::id()));
-    let body: String = skips
-        .iter()
-        .map(|(entry, detail)| {
-            let clean = |s: &str| s.replace(['\t', '\n'], " ");
-            format!("{suite}\t{reason}\t{}\t{}\n", clean(entry), clean(detail))
-        })
-        .collect();
-    let _ = std::fs::write(path, body);
 }
 
 /// loft#742 — a NESTED vector field must reference the content type the

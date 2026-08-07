@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc B2 — the explicit escape hatch, and the requirement that ties the
+// whole model together.
+//
+// A `LIKE` query and a keyed lookup must reach the SAME person records. If an
+// explicit query returned a detached result set instead of populating the
+// collection, every value here would still be right and `identity` would be
+// false — which is why that line, not the names, is the assertion.
+//
+// Driven from tests/lazy_sql_source.rs, which seeds the database.
+
+struct SqLiked { id: integer, name: text }
+
+fn main() {
+  target = env_variable("LOFT_SQL_TARGET") ?? "";
+  if target == "" { return }
+
+  people: hash<SqLiked[id]> = [];
+  store_bind_lazy(people, target);
+
+  // One record arrives by KEY first, so the query below meets one it has seen.
+  g = people[42];
+  println("key={g.name} resident={people.len()}");
+
+  n = store_lazy_query(people, "name LIKE 'ada%' OR id = 42");
+  println("added={n} resident={people.len()}");
+  println("err=[{store_lazy_error(people)}]");
+
+  // The record the query saw again must be the SAME one, never a second copy.
+  g2 = people[42];
+  println("identity={g == g2} name={g2.name}");
+  println("brought_in={people[1].name},{people[2].name}");
+
+  // A predicate matching nothing is not a failure.
+  z = store_lazy_query(people, "name = 'nobody'");
+  println("none={z} still={people.len()} err2=[{store_lazy_error(people)}]");
+
+  // A query that cannot RUN is reported, and reported as unreachable rather
+  // than as an empty result — the arc C distinction, on this path too.
+  bad = store_lazy_query(people, "naam = 'ada'");
+  println("bad={bad} err3_empty={store_lazy_error(people) == ""}");
+
+  println("sound={store_verify(people)}");
+}

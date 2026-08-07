@@ -3286,3 +3286,56 @@ fn store_load_keys_round_trip_depth_is_measurable() {
          batching win either"
     );
 }
+
+/// loft#790 — `store_verify` on a collection declared as a struct FIELD reports
+/// what is true.
+///
+/// A store knows ONE type: the record allocated into it. For a field collection
+/// that record is the WRAPPER, so the walk read the hash root as a `Firm` and
+/// reported a corruption that was not there. The two calls are told apart by
+/// `pos` — a ref to the record starts at the payload, a ref to a field carries
+/// that field's byte offset — which is why the fix needs no guess about which
+/// collection a wrapper meant, and why the two-keyed-field case is here.
+///
+/// Nothing in the script is lazy or paged: ordinary inserts, so a regression
+/// cannot hide behind a loader.
+#[test]
+fn store_verify_reads_a_field_collection_as_itself_both_backends() {
+    let script = workspace_root().join("tests/scripts/790-verify-field-collection.loft");
+    for backend in ["--interpret", "--native"] {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            eprintln!(
+                "{backend} stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        assert!(out.status.success(), "{backend}: {stdout}");
+        assert!(
+            stdout.contains("field=true owner=true"),
+            "{backend}: a sound field collection and its owner must both verify: {stdout}"
+        );
+        assert!(
+            stdout.contains("top=true"),
+            "{backend}: the top-level case was always right and must stay right: {stdout}"
+        );
+        assert!(
+            stdout.contains("two=true,true,true"),
+            "{backend}: two keyed fields in one wrapper resolve by OFFSET, so \
+             neither is guessed: {stdout}"
+        );
+        // The symptom was a `[cr-check]` line naming an absurd bucket rec —
+        // `1701667649` is `eman`, the wrapper's `name` text read as a pointer.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("cr-check"),
+            "{backend}: no structural complaint may be printed: {stderr}"
+        );
+    }
+}

@@ -407,6 +407,76 @@ Rust, before any new behaviour is routed through it. That ordering is what keeps
 a language change from being a rewrite: the proof that nothing changed is a
 smaller and much earlier step than the feature.
 
+## Interpolation targets — receiving the parts of `"{…}"`
+
+A format string does not have to become one flat `text`. When the string's TARGET
+TYPE defines the methods below, the parser hands that type the literal chunks and
+the interpolated values **separately**, instead of appending them into a text
+buffer:
+
+```loft
+fn lit(self: T, s: text)              // a literal chunk the AUTHOR wrote
+fn hole_text(self: T, v: text?)       // an interpolated VALUE
+fn hole_int(self: T, v: integer)
+fn hole_float(self: T, v: float)
+fn hole_single(self: T, v: single)
+fn hole_boolean(self: T, v: boolean)
+fn hole_character(self: T, v: character)
+```
+
+So
+
+```loft
+q: SqlText = "SELECT id FROM t WHERE name = {name}";
+```
+
+lowers to `q.lit("SELECT id FROM t WHERE name = "); q.hole_text(name);`, with the
+accumulator itself as the value of the expression. `text` is unchanged — a target
+that does not define `lit` formats exactly as it always did.
+
+**`lit` is the whole test for whether the hook applies.** A type that can accept
+the author's literal bytes is a type that can be built. The `hole_*` methods it
+goes on to define say which value kinds it takes.
+
+**A hole may also be a value of a NAMED type**, struct or enum, and its kind is the
+type's own name in the case a loft method is spelled in — an acronym run breaks at
+the last capital:
+
+```loft
+fn hole_sql_ident(self: SqlText, v: SqlIdent?)   // SqlIdent / SQLIdent -> hole_sql_ident
+fn hole_level(self: Trace, v: Level)             // Level               -> hole_level
+```
+
+The name is DERIVED rather than chosen, so a target and the parser cannot disagree
+about what a type's hole is called, and the diagnostic can name the exact method to
+add. This is what lets a target hold something apart from both a literal and a
+bound value: a SQL table name really is syntax, so `SqlText` puts it inline — and
+the safety then rests on the TYPE, because nothing builds a `SqlIdent` but its
+validating constructor. One method, one constructor, one place to audit.
+
+**Two refusals, and they are the point:**
+
+- **A kind the target does not define is a compile error** naming the method to
+  add — never a quiet fall back to text, which would put a value back on the path
+  this exists to close.
+- **A spec on a hole is refused.** `{v:>8}` has already decided how the value
+  should look, and the target wants the VALUE. A target that needs formatting
+  receives the hole as data and renders it itself.
+
+Why the target type carries this and not the type system: only the parser knows
+where a literal ends and a hole begins, and that boundary is gone by the time any
+value exists. Neither a type nor a `const` can carry it, which is why this is a
+parser hook rather than a library convention. `Parser::interpolation_target` reads
+the target off the one expected-type channel that already carries `lambda_hint` /
+`enum_hint` / `vector_hint`, so it is a fifth shape on that channel rather than a
+sixth side-channel.
+
+The per-kind `hole_*` form is deliberately expandable: **associated types**
+(@PLN125 arc A) would collapse it into one generic method without changing what an
+author writes. Catalogued as
+[`@F94`](https://github.com/loft-lang/features/issues/94); the design reasoning is
+[plans/23-db-clients/INTERPOLATION_HOOK.md](plans/23-db-clients/INTERPOLATION_HOOK.md).
+
 ## Comparison to Go interfaces
 
 | Property | Go interfaces | loft interfaces (this design) |

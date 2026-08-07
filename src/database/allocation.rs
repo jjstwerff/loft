@@ -126,6 +126,66 @@ pub(super) struct OwnedWalk {
 }
 
 impl Stores {
+    /// Is `cur` a record this store could actually contain?
+    ///
+    /// Every container arm below reaches its children through a raw record number
+    /// read out of the record's OWN bytes. `cur != 0` says the field is not empty; it
+    /// does not say the field is an edge. A record whose slot was recycled, or one
+    /// over-freed while something still pointed at it, holds whatever the previous
+    /// tenant left there — and the walk would then follow that: a wild read
+    /// (loft#796's SIGSEGV), or, when a stale LENGTH comes with it, a `Vec` sized
+    /// from garbage, which is how one run reached 59.6 GiB and had the kernel kill a
+    /// bystander.
+    ///
+    /// So the walk asks whether the edge is inside the store before following it —
+    /// the same question the `Parts::Base` text arm already asks of its string
+    /// pointer, now asked of every container kind, which is where the fault landed.
+    /// A record number indexes WORDS, so the store's word capacity is the bound.
+    fn owned_edge_in_store(&self, rec: &DbRef, cur: u32) -> bool {
+        cur < self.store(rec).capacity_words()
+    }
+
+    /// Report an edge the walk refused to follow, once per site.
+    ///
+    /// Loud rather than silent: refusing the edge turns a crash into a leak, which is
+    /// survivable, but the record is still corrupt and a run that says nothing about
+    /// it would be a run that hides its own bug.
+    fn refuse_owned_edge(&self, rec: &DbRef, tp: u16, cur: u32, kind: &str) {
+        thread_local! {
+            static SEEN: std::cell::RefCell<std::collections::HashSet<(u16, u32, u32)>> =
+                std::cell::RefCell::new(std::collections::HashSet::new());
+        }
+        if SEEN.with(|s| s.borrow_mut().insert((rec.store_nr, rec.rec, rec.pos))) {
+            let tn = self.types.get(tp as usize).map_or("?", |t| t.name.as_str());
+            eprintln!(
+                "loft: BUG (#796): refused to walk a {kind} edge of `{tn}` (kt={tp}) at \
+                 store #{}, rec={}, pos={} — it points at record {cur}, outside the store \
+                 (capacity {} words). The record holds a stale interior claim: its slot was \
+                 recycled, or it was freed while something still pointed at it. The edge is \
+                 skipped (its records leak) so the run can continue and name the site.",
+                rec.store_nr,
+                rec.rec,
+                rec.pos,
+                self.store(rec).capacity_words(),
+            );
+        }
+    }
+
+    /// How many elements of `elem_bytes` can start at `first_byte` in `rec`'s store.
+    ///
+    /// The companion bound to [`Self::owned_edge_in_store`]: a container pointer can be
+    /// inside the store while the LENGTH written beside it is not, and it is the length
+    /// that sizes the walk. Reading `n` elements the store cannot hold is the same
+    /// fault one step later.
+    fn max_elements(&self, rec: &DbRef, first_byte: u32, elem_bytes: u32) -> u32 {
+        let capacity_bytes = u64::from(self.store(rec).capacity_words()) * 8;
+        let room = capacity_bytes.saturating_sub(u64::from(first_byte));
+        if elem_bytes == 0 {
+            return 0;
+        }
+        u32::try_from(room / u64::from(elem_bytes)).unwrap_or(u32::MAX)
+    }
+
     /// The Cluster-C keystone: enumerate the owned nested-heap children of the
     /// record `rec` of type `tp`, plus the container record backing them.  This
     /// is the SINGLE per-`Parts` heap-cascade walk (element type, stride,
@@ -148,12 +208,23 @@ impl Stores {
         let mut container_rec = None;
         match &self.types[tp as usize].parts {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                let capacity_bytes = u64::from(self.store(rec).capacity_words()) * 8;
                 for f in fields {
+                    let pos = rec.pos + u32::from(f.position);
+                    // A field offset comes from the TYPE, so a field landing outside the
+                    // store means the record is being walked as the wrong type — the
+                    // parent's own position is stale, or `tp` does not describe these
+                    // bytes.  Either way the offsets below it are fiction, so stop here
+                    // rather than hand a fabricated `DbRef` to the recursion.
+                    if u64::from(pos) >= capacity_bytes {
+                        self.refuse_owned_edge(rec, tp, pos, "struct field");
+                        break;
+                    }
                     children.push(OwnedChild {
                         child: DbRef {
                             store_nr: rec.store_nr,
                             rec: rec.rec,
-                            pos: rec.pos + u32::from(f.position),
+                            pos,
                         },
                         child_tp: f.content,
                         owning_elem: None,
@@ -163,9 +234,23 @@ impl Stores {
             Parts::Vector(v) | Parts::Sorted(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "vector");
+                } else if cur != 0 {
                     let length = vector::length_vector(rec, &self.allocations);
                     let size = u32::from(self.size(v));
+                    // The length lives beside the pointer and rots with it; a garbage
+                    // count here is what sizes the walk, so bound it by what the store
+                    // can physically hold.
+                    let room = self.max_elements(rec, 8, size);
+                    if length > room {
+                        self.refuse_owned_edge(rec, tp, cur, "vector (length)");
+                        return OwnedWalk {
+                            children,
+                            container_rec: Some(cur),
+                            zero_field: true,
+                        };
+                    }
                     for i in 0..length {
                         children.push(OwnedChild {
                             child: DbRef {
@@ -183,8 +268,20 @@ impl Stores {
             Parts::Array(v) | Parts::Ordered(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "array");
+                } else if cur != 0 {
                     let length = vector::length_vector(rec, &self.allocations);
+                    // Element slots are 4-byte record numbers here, read from the
+                    // container — bound the count by what the store can hold.
+                    if length > self.max_elements(rec, 8, 4) {
+                        self.refuse_owned_edge(rec, tp, cur, "array (length)");
+                        return OwnedWalk {
+                            children,
+                            container_rec: Some(cur),
+                            zero_field: true,
+                        };
+                    }
                     for i in 0..length {
                         let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
                         children.push(OwnedChild {
@@ -203,7 +300,9 @@ impl Stores {
             Parts::Hash(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "hash");
+                } else if cur != 0 {
                     // Enumerate the live element records through `hash::records`,
                     // the single owner of the bucket-record layout (the seed word
                     // and bucket offset live only in `src/hash.rs`).  Mirrors the
@@ -227,7 +326,9 @@ impl Stores {
                 let c = *c;
                 let left = self.fields(tp);
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "index");
+                } else if cur != 0 {
                     for node in self.collect_index_nodes(rec, left) {
                         children.push(OwnedChild {
                             child: DbRef {
@@ -245,7 +346,9 @@ impl Stores {
             Parts::ChildRec(ct) => {
                 let ct = *ct;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 {
+                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                    self.refuse_owned_edge(rec, tp, cur, "child record");
+                } else if cur != 0 {
                     children.push(OwnedChild {
                         child: DbRef {
                             store_nr: rec.store_nr,
@@ -469,6 +572,13 @@ impl Stores {
         } else {
             store.claim(size)
         };
+        // @PLN133 S8 — while a lazy DRIVER is running, remember every store it
+        // creates. A fault inside it abandons its frames, and a frame's locals
+        // are freed by the scope-exit code the fault skipped, so this list is
+        // what the containment frees instead.
+        if let Some(watch) = &mut self.lazy_driver_allocs {
+            watch.push(slot);
+        }
         let result = DbRef {
             store_nr: slot,
             rec,
@@ -883,7 +993,26 @@ impl Stores {
         }
     }
 
-    /// Collect a description for every leaked store at program exit.
+    /// Tell the memory ceiling what every store type is called, so a refused growth
+    /// can name the type that filled the heap instead of printing a bare id.
+    ///
+    /// A whole-schema sweep rather than a hook on each naming site: the schema is
+    /// small, the sweep runs once per program, and it cannot miss a type the way a
+    /// per-site hook can.  Inert when no ceiling is set — there is no report to build
+    /// then, so there is nothing to pay for.
+    pub fn publish_type_names(&self) {
+        if crate::store_budget::limit() == 0 {
+            return;
+        }
+        for (kt, t) in self.types.iter().enumerate() {
+            if let Ok(kt) = u16::try_from(kt) {
+                crate::store_budget::note_type_name(kt, &t.name);
+            }
+        }
+    }
+
+    /// Collect a description for every leaked store at program exit, grouped BY TYPE,
+    /// most-leaked first.
     ///
     /// Mirrors `State::collect_store_leaks` (which operates on the
     /// interpreter's `State`) but lives on `Stores` so the **native**
@@ -894,13 +1023,13 @@ impl Stores {
     /// (`stack_store_at_zero` — interp only; the native runtime's
     /// slot 0 is an ordinary heap store and MUST be checked, #490),
     /// locked constants / worker borrows, and `const_refs`.
+    ///
+    /// @P317 — the previous per-store `N(bc:created_at)` listing (truncated to 5 by
+    /// the leak-check preview) buried the signal in store numbers; naming the culprit
+    /// directly (e.g. `kt=68 ChunkKey×6026`) is what pinpointed the @P317 native
+    /// ref-local leak.  Used by `LOFT_NATIVE_LEAK_CHECK` (native) and
+    /// `LOFT_STORES=summary` (interp).
     #[must_use]
-    /// @P317 — leaked stores grouped BY TYPE, most-leaked first.  The previous
-    /// per-store `N(bc:created_at)` listing (truncated to 5 by the leak-check
-    /// preview) buried the signal in store numbers; aggregating by type names
-    /// the culprit directly (e.g. `kt=68 ChunkKey×6026`), which is what
-    /// pinpointed the @P317 native ref-local leak.  Used by
-    /// `LOFT_NATIVE_LEAK_CHECK` (native) and `LOFT_STORES=summary` (interp).
     pub fn collect_store_leaks(&self) -> Vec<String> {
         let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
             std::collections::BTreeMap::new();
@@ -1517,6 +1646,7 @@ impl Stores {
             // the parent later reconciles. Fault before the `par`, not inside it.
             lazy_sources: std::collections::HashMap::new(),
             lazy_errors: std::collections::HashMap::new(),
+            lazy_driver_allocs: None,
             files: Vec::new(),
             max: (self.allocations.len() + scratch_stores) as u16,
             peak: (self.allocations.len() + scratch_stores) as u16,
@@ -2488,6 +2618,17 @@ impl Stores {
     When a field points to a spatial structure (teardown unimplemented).
     */
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
+        // loft#796 — the record itself must be inside its store before anything reads
+        // its fields.  The per-edge guards in `for_each_owned_child` catch a rotten
+        // POINTER; this catches a rotten RECORD, which is the same fault one level up
+        // and the one that names the caller rather than a field of a field.
+        if rec.store_nr != u16::MAX
+            && (rec.store_nr as usize) < self.allocations.len()
+            && u64::from(rec.pos) >= u64::from(self.store(rec).capacity_words()) * 8
+        {
+            self.refuse_owned_edge(rec, tp, rec.pos, "record (position)");
+            return;
+        }
         // A null/absent container (the `store_nr == u16::MAX` sentinel) owns nothing to tear
         // down — no-op, mirroring `free_named`'s own guard. The `for_each_owned_child` keystone
         // guards absent CHILDREN (`cur != 0`), but not a null CONTAINER; without this a nullable
@@ -2772,7 +2913,7 @@ impl Stores {
 
         // Re-apply preserved metadata onto the new Store.  Slot bitmap sees
         // continuity; the on-disk bytes carry the user data.
-        new_store.known_type = preserved.0;
+        new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
         new_store.created_at = preserved.2;
         new_store.last_op_at = preserved.3;
@@ -2855,7 +2996,7 @@ impl Stores {
             Err(_) => return false,
         };
 
-        new_store.known_type = preserved.0;
+        new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
         new_store.created_at = preserved.2;
         new_store.last_op_at = preserved.3;
@@ -2980,7 +3121,7 @@ impl Stores {
         let Ok(mut store) = opened else {
             return false;
         };
-        store.known_type = preserved.0;
+        store.set_known_type(preserved.0);
         store.free = preserved.1;
         store.created_at = preserved.2;
         store.last_op_at = preserved.3;
@@ -3320,7 +3461,7 @@ impl Stores {
         }
         // The slot's bookkeeping is the slot's, not the buffer's.
         let s = &self.allocations[idx];
-        rebuilt.known_type = tp;
+        rebuilt.set_known_type(tp);
         rebuilt.free = s.free;
         rebuilt.created_at = s.created_at;
         rebuilt.last_op_at = s.last_op_at;
@@ -3350,7 +3491,7 @@ impl Stores {
             Some(s) => s,
             None => return false,
         };
-        new_store.known_type = preserved.0;
+        new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
         new_store.created_at = preserved.2;
         new_store.last_op_at = preserved.3;
@@ -3658,9 +3799,42 @@ impl Stores {
         if tp == u16::MAX {
             return false;
         }
+        let tp = self.type_at(r, tp);
         let mut problems = 0u32;
         self.validate_claims(r, tp, "store_verify", &mut problems);
         problems == 0
+    }
+
+    /// loft#790 — the type of what `r` actually POINTS AT, given the type its
+    /// store was allocated for.
+    ///
+    /// A store knows one type: the record allocated into it. That is the right
+    /// answer for `store_verify(f)` and the wrong one for `store_verify(f.people)`
+    /// — a collection declared as a struct FIELD lives in the WRAPPER's store, so
+    /// the walk read the hash root as a `Firm` and reported a corruption that was
+    /// not there (the bucket rec `1701667649` is `eman`, the wrapper's `name`
+    /// text read as a pointer).
+    ///
+    /// The two are told apart by `pos`, which was there all along: a ref to the
+    /// record itself starts at the payload (8), and a ref to a field carries that
+    /// field's byte offset. So the field is looked up by offset — no guessing
+    /// which of several collections was meant, and no reliance on the wrapper
+    /// having exactly one.
+    fn type_at(&self, r: &DbRef, tp: u16) -> u16 {
+        if r.pos <= 8 {
+            return tp; // the record itself
+        }
+        let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) = &self.types[tp as usize].parts
+        else {
+            return tp;
+        };
+        let Ok(offset) = u16::try_from(r.pos - 8) else {
+            return tp;
+        };
+        fields
+            .iter()
+            .find(|f| f.position == offset && !f.name.starts_with('#'))
+            .map_or(tp, |f| f.content)
     }
 
     /// Give back the free tail of the store holding `slot` — the runtime half
@@ -3785,8 +3959,13 @@ impl Stores {
     /// root claim in both the image and the target. So descend to the field at
     /// `local.pos` whose type is a keyed collection. `u16::MAX` when `tp` is a
     /// struct with no keyed-collection field there (a genuinely wrong shape).
-    #[cfg(paged_store)]
-    fn paged_collection_type(&self, tp: u16) -> u16 {
+    pub(crate) fn collection_type_of_store(&self, tp: u16) -> u16 {
+        // An untyped store has nothing to descend from, and `u16::MAX` is not an
+        // index. The paged callers happened to check first; @PLN129's do not,
+        // and a guard in the caller is a guard someone can forget.
+        if tp == u16::MAX || tp as usize >= self.types.len() {
+            return u16::MAX;
+        }
         // `Ordered` is the PROMOTED form of `Sorted` (`finish()` renames a
         // sorted collection whose element is shared by >1 container), so a
         // collection that is `Sorted` in a small program is `Ordered` in one where
@@ -3848,6 +4027,9 @@ impl Stores {
             crate::database::LazyBinding {
                 source: source.to_string(),
                 pin,
+                // @PLN129 arc B step 7 — a rebind re-decides the schema too: it
+                // says "a different world now", and the schema is part of it.
+                check: crate::database::SchemaCheck::Unchecked,
             },
         );
     }
@@ -3943,28 +4125,29 @@ impl Stores {
     /// consulted.
     ///
     /// `find` already answers a miss with `rec: 0`, so this changes nothing for
-    /// an unbound collection — it re-answers exactly what `find` said. For a
-    /// bound one it fetches that single entry, which INSERTS it into the
-    /// collection (`load_one` ends in `hash::add`), and re-runs the lookup so
-    /// the answer comes from the collection either way.
+    /// an unbound collection. For a bound one it fetches that single entry,
+    /// which INSERTS it into the collection (`load_one` ends in `hash::add`),
+    /// and re-runs the lookup so the answer comes from the collection either
+    /// way.
     ///
     /// Re-running rather than returning the fetched ref is deliberate: the
     /// collection stays the single source of truth for what is resident, which
     /// is what makes identity fall out of it (README § the resident set IS the
     /// cache). A path that answered from the fetch directly could hand back a
     /// record the collection does not hold.
-    pub fn find_or_fetch(&mut self, data: &DbRef, db: u16, key: &[crate::keys::Content]) -> DbRef {
-        let found = self.find(data, db, key);
-        if found.rec != 0 {
-            return found; // resident: no query, no source, ordinary loft speed
-        }
-        self.fetch_missing(data, db, key)
-    }
-
-    /// The fetch half of [`find_or_fetch`], split out so the resident path stays
-    /// a plain `find` with one comparison after it.
-    #[cfg(paged_store)]
-    fn fetch_missing(&mut self, data: &DbRef, db: u16, key: &[crate::keys::Content]) -> DbRef {
+    ///
+    /// **@PLN133 S8 — the miss and the fetch are separate calls, and their two
+    /// callers make the decision between them.** `Stores` cannot run a loft
+    /// function and `State` can, so a fetch that IS loft code needs the
+    /// `&mut Stores` borrow released between the two — which is only possible
+    /// where the borrow is taken. The retry is unchanged; only who sequences it
+    /// moved.
+    pub(crate) fn fetch_missing(
+        &mut self,
+        data: &DbRef,
+        db: u16,
+        key: &[crate::keys::Content],
+    ) -> DbRef {
         let Some(source) = self.lazy_source(data) else {
             return DbRef {
                 store_nr: data.store_nr,
@@ -3994,48 +4177,36 @@ impl Stores {
                 pos: 0,
             };
         }
-        // One key, whichever spelling it arrived in. A composite key is not
-        // fetchable yet — @PLN125's associated types are what would carry it —
-        // so it is left to answer absent rather than fetching the wrong row.
-        let fetched = match key {
-            [crate::keys::Content::Long(k)] => self.load_key(data, &source, *k),
-            [crate::keys::Content::Str(s)] => self.load_key_text(data, &source, s.str()),
-            _ => false,
-        };
+        // @PLN129 arc B step 1 — through the SOURCE seam. Which source this is
+        // is the binding's business; what a fetch can ANSWER is the same three
+        // outcomes whatever it is.
+        let src = crate::database::lazy::LazySource::of(&source);
         let slot = (data.store_nr, data.rec, data.pos);
-        if fetched {
+        match self.fetch_from_source(data, db, &src, key) {
             // NOT cleared. A success says nothing about what an earlier failure
             // already lost, and reporting "healthy" after a partial traversal is
             // exactly the silent-wrong-answer this channel exists to prevent.
-            return self.find(data, db, key);
-        }
-        // @PLN129 arc C — a failed fetch is TWO different facts, and answering
-        // `null` for both is the failure this channel exists to prevent: "no such
-        // person" is stable and true, "the source is unreachable" is neither. The
-        // check runs only HERE, on the miss-and-fail path, so a healthy program
-        // never pays for it.
-        if let Err(reason) = crate::paged_reader::PageSource::open(&source) {
-            // Sticky: count every failure, keep the FIRST reason as the cause.
-            let entry = self.lazy_errors.entry(slot).or_insert((0, reason));
-            entry.0 += 1;
-        }
-        // Reached it and the key was not there — a genuine absence. It leaves the
-        // record untouched: reachability NOW does not undo an earlier loss.
-        DbRef {
-            store_nr: data.store_nr,
-            rec: 0,
-            pos: 0,
-        }
-    }
-
-    /// Without the paged reader there is no source to consult, so a miss stays a
-    /// miss — the binding is inert rather than a build error.
-    #[cfg(not(paged_store))]
-    fn fetch_missing(&mut self, data: &DbRef, _db: u16, _key: &[crate::keys::Content]) -> DbRef {
-        DbRef {
-            store_nr: data.store_nr,
-            rec: 0,
-            pos: 0,
+            crate::database::lazy::Fetched::Inserted => self.find(data, db, key),
+            // Reached it and the key was not there — a genuine absence. It leaves
+            // the record untouched: reachability NOW does not undo an earlier loss.
+            crate::database::lazy::Fetched::Absent => DbRef {
+                store_nr: data.store_nr,
+                rec: 0,
+                pos: 0,
+            },
+            // @PLN129 arc C — a failed fetch is TWO different facts, and answering
+            // `null` for both is the failure this channel exists to prevent: "no
+            // such person" is stable and true, "the source is unreachable" is
+            // neither. Sticky: count every failure, keep the FIRST reason.
+            crate::database::lazy::Fetched::Unreachable(reason) => {
+                let entry = self.lazy_errors.entry(slot).or_insert((0, reason));
+                entry.0 += 1;
+                DbRef {
+                    store_nr: data.store_nr,
+                    rec: 0,
+                    pos: 0,
+                }
+            }
         }
     }
 
@@ -4062,7 +4233,7 @@ impl Stores {
             Self::refuse_paged(path, "the target collection's store has no recorded type");
             return false;
         }
-        let tp = self.paged_collection_type(root_tp); // field form → the field's hash (#632)
+        let tp = self.collection_type_of_store(root_tp); // field form → the field's hash (#632)
         let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
             let reason = self.wrong_collection_reason(root_tp, "a hash");
             Self::refuse_paged(path, &reason);
@@ -4108,7 +4279,7 @@ impl Stores {
             Self::refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
-        let tp = self.paged_collection_type(root_tp);
+        let tp = self.collection_type_of_store(root_tp);
         // SAFE REFUSAL (3b.1) — `load_one` can copy an entry whose fields are
         // inline-scalar (raw word-copy) or `text` (relocated string, 3b.2). A
         // vector / nested / reference field still needs the recursive relocating

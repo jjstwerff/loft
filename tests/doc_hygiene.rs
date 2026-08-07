@@ -1251,6 +1251,45 @@ fn installer_and_self_update_agree_on_the_published_triples() {
     }
 }
 
+/// @PLN78 step 7 — the release RECORDS the build stamp the verifier has to reproduce.
+///
+/// `build.rs` bakes `LOFT_BUILD_ID` from `git rev-parse`, falling back to a TIMESTAMP.  A
+/// release is cut from a git checkout, so it baked a commit; `repro-verify.sh` rebuilds from
+/// the release's source ARCHIVE, which has no `.git`, so it fell through to
+/// seconds-since-epoch — a different string, of a different length, changing on every run.
+/// Every published target failed to reproduce, and the mismatch read as a source problem
+/// rather than as a stamp the build had invented.
+///
+/// The contract now spans three files and drifts silently if any one moves: the writer
+/// records `commit`, the verifier reads it back, and `build.rs` honours the override.  This
+/// pins all three ends — a rename in one file is caught here rather than by a weekly job
+/// nobody blames on the rename.
+#[test]
+fn the_release_records_the_build_id_the_verifier_replays() {
+    let mk = std::fs::read_to_string("scripts/make-release.sh").expect("read make-release.sh");
+    let vf = std::fs::read_to_string("scripts/repro-verify.sh").expect("read repro-verify.sh");
+    let br = std::fs::read_to_string("build.rs").expect("read build.rs");
+
+    assert!(
+        mk.contains("echo \"commit = "),
+        "make-release.sh must record the build commit in BUILD-INFO — without it the \
+         verifier cannot reproduce LOFT_BUILD_ID and every target fails"
+    );
+    assert!(
+        vf.contains("^commit = "),
+        "repro-verify.sh must read `commit` back out of BUILD-INFO"
+    );
+    assert!(
+        vf.contains("LOFT_BUILD_ID=\"$BUILD_COMMIT\""),
+        "repro-verify.sh must hand the recorded commit to the rebuild as LOFT_BUILD_ID"
+    );
+    assert!(
+        br.contains("LOFT_BUILD_ID") && br.contains("rerun-if-env-changed=LOFT_BUILD_ID"),
+        "build.rs must honour an explicit LOFT_BUILD_ID — and re-run when it changes, or a \
+         second verification reuses the first one's baked id"
+    );
+}
+
 /// @PLN78 step 7 — every triple we PUBLISH must also be rebuilt from source.
 ///
 /// The two lists drift in one direction that is silent: adding a target to `release.yml`
