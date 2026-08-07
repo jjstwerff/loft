@@ -2853,13 +2853,24 @@ impl Parser {
         let mut ls = Vec::new();
         let is_field = self.is_field(val);
         let ed_nr = self.data.type_def_nr(in_t);
-        assert_ne!(
-            ed_nr,
-            u32::MAX,
-            "Unknown type {} at {}",
-            in_t.name(&self.data),
-            self.lexer.pos()
-        );
+        if ed_nr == u32::MAX {
+            // The element type never resolved, so there is no record shape to build.  An
+            // `assert_ne!` here made that an internal compiler error on ordinary source:
+            // `v = [Nope { n: 1 }]` — one undefined name in a vector literal — was enough
+            // to abort the compiler and send the reader looking for a compiler bug.
+            //
+            // The undefined name itself is always reported before this, so say nothing
+            // about WHICH type is missing: by the time the element reaches here it is the
+            // synthesised `never`, and naming that (or prescribing a `use` for it) points
+            // at something the author never wrote.  Fatal because every caller below needs
+            // a record shape, so the parse cannot usefully go on.
+            diagnostic!(
+                self.lexer,
+                Level::Fatal,
+                "cannot build this record — its type never resolved"
+            );
+            return ls;
+        }
         // P188: when the LHS local is a keyed collection
         // (sorted/hash/index/spatial<T[key]>), the container type id
         // must be the keyed-collection's own known_type so OpNewRecord

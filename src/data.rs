@@ -5938,6 +5938,13 @@ impl Data {
                 .map(|new_inner| Type::RefVar(Box::new(new_inner))),
             Type::Rewritten(inner) => Self::rewrite_type_opt(inner, stub, target)
                 .map(|new_inner| Type::Rewritten(Box::new(new_inner))),
+            // A `?` on the field is a wrapper like any other, and it is the wrapper a
+            // forward-referenced field is most likely to be wearing.  Leaving it out left
+            // `Optional(Unknown(stub))` in place after every other spelling resolved, so a
+            // `Roofs?` field failed with the internal type name (`optional(unknown(700))`)
+            // where a plain `Roofs` field succeeded (loft#797).
+            Type::Optional(inner) => Self::rewrite_type_opt(inner, stub, target)
+                .map(|new_inner| Type::Optional(Box::new(new_inner))),
             Type::Iterator(step, internal) => {
                 let new_step = Self::rewrite_type_opt(step, stub, target);
                 let new_internal = Self::rewrite_type_opt(internal, stub, target);

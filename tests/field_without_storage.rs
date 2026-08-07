@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! loft#796 — a struct field the layout has no slot for must be a compile error,
-//! never an access.
+//! loft#796 / loft#797 — a field the program can name is read and written where its
+//! record actually keeps it.
 //!
 //! `Stores::position` answers `u16::MAX` for a field the layout does not have, and that
 //! answer used to flow straight out as the field OFFSET: the interpreter read and WROTE
@@ -17,10 +17,17 @@
 //! Non-deterministic, non-monotonic in scene size, and reported as "same code is fine as
 //! a program" — all downstream of one silent out-of-range offset.
 //!
-//! The layout gap itself is a separate matter: `Roofs` below IS declared in the package,
-//! just in a file loaded after the struct that names it, and a later pass resolves the
-//! ATTRIBUTE while the layout keeps the hole. That is worth closing on its own. This test
-//! pins the part that must never regress — the hole is refused, loudly, at the site.
+//! loft#797 then closed the gap that produced the hole: `Roofs` below IS declared in the
+//! package, just in a file loaded after the struct that names it, and `fill_all` now defers
+//! a layout until every field's type is known instead of registering it short. So the
+//! program these tests build COMPILES AND RUNS, and `field_position`'s refusal is left as a
+//! backstop with no reachable trigger.
+//!
+//! That is why both tests below assert VALUES. A guard message can only be checked where
+//! something still produces a hole, and nothing does; what must never regress is the thing
+//! the message was protecting — that a field the program can name is read and written where
+//! its record actually keeps it. A future change that drops a field from a layout again
+//! fails here on the answer, whichever way it then surfaces.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -53,7 +60,7 @@ fn build_package(root: &Path) {
 }
 
 #[test]
-fn a_field_with_no_storage_is_refused_at_the_site() {
+fn the_reported_package_reads_its_fields_where_they_live() {
     let root = std::env::temp_dir().join("loft_796_field_storage");
     let _ = std::fs::remove_dir_all(&root);
     build_package(&root);
@@ -78,22 +85,19 @@ fn a_field_with_no_storage_is_refused_at_the_site() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // `s_a` and `s_b` are the NEIGHBOURS of the forward-declared field, and they are what
+    // the out-of-range write landed in.  Reading them back as 1 and 2 is the assertion
+    // that matters: it fails whether a regression drops the field again (the message
+    // returns), mispositions it (the neighbours come back wrong), or corrupts the record.
     assert!(
-        all.contains("has no storage"),
-        "a field the layout has no slot for must be refused, not written at \
-         `record + 65535`.\n{all}"
-    );
-    // Naming the FIELD and its owner is the whole value: the fault surfaces far from
-    // here (in a claim walk over a neighbouring record), so a message that did not name
-    // the field would leave the reader where this bug already left several people.
-    assert!(
-        all.contains("s_roofs") && all.contains("Sess"),
-        "the message must name the field and the struct.\n{all}"
+        all.contains("12"),
+        "the package must run and read its fields back.\n{all}"
     );
     assert!(
-        !out.status.success(),
-        "the run must FAIL — the alternative is memory corruption.\n{all}"
+        !all.contains("has no storage"),
+        "a field whose type another module declares must get a slot (loft#797).\n{all}"
     );
+    assert!(out.status.success(), "the run must succeed.\n{all}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

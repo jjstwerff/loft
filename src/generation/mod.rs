@@ -3043,7 +3043,15 @@ extern crate loft;"
                 // `fill_database` does the same via recursive content
                 // resolution when a collection field first names a
                 // forward-declared type.
-                let dep_tp = match &a.typedef {
+                //
+                // Peel the `?` first, exactly as `fill_database` does: an `Optional(τ)`
+                // field lays out as `τ`, so the hoist it needs is `τ`'s.  Matching the
+                // wrapper instead landed every arm below on `None`, and a nullable
+                // forward-referenced field emitted `db.field(t_host, "f", t_content)`
+                // ahead of `let t_content = …` — a Rust compile error in the generated
+                // `init()`, i.e. the library simply failed to build (loft#797).
+                let field_type = a.typedef.base();
+                let dep_tp = match field_type {
                     Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
                         (*c_nr != u32::MAX)
                             .then(|| self.data.def(*c_nr).known_type())
@@ -3062,7 +3070,7 @@ extern crate loft;"
                     // t_synthetic_tuple)`) sees the synthetic binding
                     // already declared.
                     Type::Tuple(_) => {
-                        let n = self.data.type_def_nr(&a.typedef);
+                        let n = self.data.type_def_nr(field_type);
                         (n != u32::MAX)
                             .then(|| self.data.def(n).known_type())
                             .filter(|t| *t != u16::MAX)

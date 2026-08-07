@@ -588,7 +588,7 @@ sentinel.  Two things then went wrong, and the first hid the second:
    closure read and wrote its capture at **offset 65535**, intermittently fatal.
 
 **The invariant: a struct is laid out only once its fields are sized.**  `fill_all` skips a
-def with a nameless-unknown attribute (`has_nameless_unknown_attr`); the loop is keyed on
+def whose fields are not all known yet (`layout_blocked`); the loop is keyed on
 `known_type == u16::MAX`, so this defers rather than drops.  `parse_lambda`'s
 `resolve_forward_captures` then re-types the attribute from `capture_context` at LAMBDA
 ENTRY — not at the synthesis epilogue, which runs after the body — and lays that one record
@@ -603,6 +603,50 @@ for a forward-referenced synth enum.
 at offset 65535 happen to be fatal.  Two byte-identical probe files disagreed during the
 investigation, and single runs "confirmed" three different stories before a repeat-run
 harness (N≥12) replaced them.  Any probe in this area needs one.
+
+### A field whose type another MODULE declares (#797)
+
+The same invariant, reached by a different route, and with a wider blast radius: the
+struct here is one a package author wrote down, not a synthesised closure record.
+
+A package entry that `use`s a module before declaring the types that module names
+suspends itself at the `use`.  The module is then parsed to completion — layout
+included — while every such type is still a `DefType::Unknown` stub.  `fill_database`
+skips a field whose `type_elm` is `u32::MAX`, so the field gets no slot, and the stub is
+upgraded IN PLACE moments later when the entry resumes and declares the type.  The
+DECLARATION therefore ends up correct and the LAYOUT keeps the hole — the two disagree
+for the rest of the run, and `position()` answered `u16::MAX` for a field the program
+could name.  Same offset-65535 write as #686, but into the neighbouring records: the
+symptom depended on what happened to sit next to the record, so one run gave a SIGSEGV
+inside an unrelated walk, another an allocation that reached 59.6 GiB, and a third a
+clean pass.
+
+Three sites had to agree for the deferral to hold:
+
+- **`layout_blocked`** — the guard, now covering `Unknown(stub)` as well as `Unknown(0)`,
+  and TRANSITIVE, because an inline field stores its content's bytes so a host whose
+  field type is waiting cannot be laid out either.
+- **The sweep at the top of `fill_all`** — re-runs `copy_unknown_fields` over everything
+  still unlaid, so each `fill_all` picks up whatever the files parsed since have
+  declared.  Without it the deferral never ends: `actual_types_deferred` only sweeps the
+  file it is finishing, and nothing was asking again.
+- **`copy_unknown_fields` peels `Optional`** — `S?` and `S` name the same forward
+  reference.  `Type::Optional` is the wrapper this area keeps forgetting: `rewrite_type_opt`
+  and the native `init()` generator's field-hoist match were missing it too, so a nullable
+  forward field failed where a plain one worked — the generator emitted
+  `db.field(t_host, "f", t_content)` ahead of `let t_content`, i.e. the library did not
+  compile.  Adding an arm per site is how that gets missed a fourth time; each of the
+  three peels the marker and asks about the base.
+
+Guard: `forward_module_type_gets_a_slot` (`tests/issues.rs`), driving
+`tests/multilib/fwd797_layout.loft` over the `fwd797` fixture.  It asserts SIZES as well
+as values — a read follows whatever offsets the layout ended up with, so reading a field
+back cannot by itself prove the field has storage.
+
+Out of scope, and still true: a type named in a function BODY (a local, a vector literal
+element) rather than in a field DECLARATION is not deferred, so a module naming a type it
+cannot see fails there with `unknown type 'X'`.  That is a resolution question, not a
+layout one; the fix is the ordinary one, `use` the module that declares the type.
 
 ### Inside the lambda: `__closure` is a struct parameter
 

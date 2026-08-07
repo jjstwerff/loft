@@ -6087,12 +6087,22 @@ impl Parser {
     /// the test runner".
     ///
     /// Pass 2 only: pass 1 has no layouts yet, so the sentinel there is ordinary and
-    /// says nothing.
+    /// says nothing.  Quiet once the parser has reported an error, for the reason
+    /// `parse_file` gives `validate_all_layouts`: a program that already failed can hold
+    /// unlaid types as a CONSEQUENCE, and the hole is then noise on top of the real
+    /// diagnostic.  `v = [Nope { n: 1 }]` reported the undefined type, then a missing
+    /// field on the synthetic `main_vector<never>` the compiler built for it — a type the
+    /// author never wrote.  Nothing is lost by staying quiet: the compile is already
+    /// aborting, and once the first error is fixed a genuine hole reports on the next run.
     pub(crate) fn field_position(&mut self, d_nr: u32, field: &str) -> u16 {
         let p = self
             .database
             .position(self.data.def(d_nr).known_type(), field);
-        if p == u16::MAX && !self.first_pass {
+        let already_failed = matches!(
+            self.lexer.diagnostics().level(),
+            Level::Error | Level::Fatal
+        );
+        if p == u16::MAX && !self.first_pass && !already_failed {
             let owner = self.data.def(d_nr).name().to_string();
             let unresolved = {
                 let a_nr = self.data.attr(d_nr, field);

@@ -106,11 +106,22 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
         // field with no type silently acquires a plausible wrong one instead of staying
         // visibly unresolved (#686).  The `Vector` arm below already guarded it; this is
         // the same guard on the bare case.
-        if let Type::Unknown(was) = data.attr_type(d, nr)
+        //
+        // A `?` on the field is transparent here: `S?` and `S` name the same
+        // forward reference, so peel the marker, resolve, and put it back.  Without
+        // that, a `Roofs?` field kept `Optional(Unknown(stub))` after every other
+        // spelling had resolved, and the first read of it reported the internal type
+        // name (`optional(unknown(700))`) at the CALLER (loft#797).
+        let (attr_type, optional) = match data.attr_type(d, nr) {
+            Type::Optional(inner) => (*inner, true),
+            other => (other, false),
+        };
+        if let Type::Unknown(was) = attr_type
             && was != 0
         {
-            data.set_attr_type(d, nr, data.def(was).returned.clone());
-        } else if let Type::Vector(content, dep) = &data.attr_type(d, nr)
+            let resolved = data.def(was).returned.clone();
+            set_attr_type_keeping_optional(data, d, nr, resolved, optional);
+        } else if let Type::Vector(content, dep) = &attr_type
             && let Type::Unknown(was) = **content
             && was != 0
         {
@@ -125,8 +136,35 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
             // construction stayed dense → element-stride mismatch → corrupted
             // enum-discriminant reads / over-free on both backends (@PLN25 #465).
             let resolved = data.def(was).returned.clone();
-            data.set_attr_type(d, nr, Type::Vector(Box::new(resolved), dep));
+            set_attr_type_keeping_optional(
+                data,
+                d,
+                nr,
+                Type::Vector(Box::new(resolved), dep),
+                optional,
+            );
         }
+    }
+}
+
+/// Write a freshly resolved type onto attribute `nr`, restoring the `?` the caller peeled.
+///
+/// `set_attr_type` guards against overwriting a type that is already settled, and it reads
+/// "settled" as `is_unknown() == false` — which an `Optional(…)` wrapper always is, whatever
+/// it wraps.  Re-wrapping before the call would therefore trip the guard on exactly the
+/// resolution it exists to allow, so the optional case writes the field directly, the same
+/// escape [`Data::rewrite_unknown_refs`] takes for `Vector<Unknown>` and friends.
+fn set_attr_type_keeping_optional(
+    data: &mut Data,
+    d: u32,
+    nr: usize,
+    resolved: Type,
+    optional: bool,
+) {
+    if optional {
+        data.definitions[d as usize].attributes[nr].typedef = Type::Optional(Box::new(resolved));
+    } else {
+        data.set_attr_type(d, nr, resolved);
     }
 }
 
@@ -234,33 +272,109 @@ pub fn sync_capture_ownership(data: &Data, database: &mut Stores) {
     }
 }
 
-/// #686 — does `d` still carry a NAMELESS unknown attribute, i.e. one no resolver can
-/// ever fix?
+/// Whether `d`'s layout has to wait, because a field's type is not known yet.
 ///
-/// `Unknown(stub)` names a forward-referenced type and `copy_unknown_fields` resolves it
-/// before the layout loop.  `Unknown(0)` names nothing: it is what a field typed from an
-/// EXPRESSION carries, and the only producer of those is the closure record (a capture's
-/// type is the type of `w.chunks[1]`, not of a written-down name).
+/// Laying a struct out anyway is what makes the failure a CORRUPTION rather than a
+/// refusal: the field loop in [`fill_database`] silently skips an attribute it cannot
+/// size, but the type is still registered and `finish` still sizes it — so the field
+/// keeps `position == u16::MAX` forever, and `finish_type` will not revisit an
+/// already-sized type.  The declaration and the layout then disagree for the rest of
+/// the run: #686's closure body read and wrote its capture at offset 65535, and #797's
+/// package field did the same to its record's neighbours.
 ///
-/// Laying such a struct out anyway is what made #686 corrupt instead of merely fail: the
-/// field loop SKIPS an attribute it cannot size, but the type is still registered and
-/// `finish` still sizes it — so the field keeps `position == u16::MAX` forever, and
-/// `finish_type` will not revisit an already-sized type.  The closure body then read and
-/// wrote its capture at offset 65535.  Deferring instead costs nothing: the layout loop
-/// is keyed on `known_type == u16::MAX`, so pass 2 picks the record up once
-/// `parse_lambda`'s `resolve_forward_captures` has repaired it.  A field that never
-/// resolves leaves the struct unregistered, which is harmless — the parser has already
-/// reported the error and the program cannot run.
-fn has_nameless_unknown_attr(data: &Data, d: u32) -> bool {
-    (0..data.attributes(d)).any(|a| {
-        let tp = data.attr_type(d, a);
-        let tp = tp.base();
-        matches!(tp, Type::Unknown(0))
-            || matches!(tp, Type::Vector(c, _) if matches!(**c, Type::Unknown(0)))
-    })
+/// Deferring costs nothing.  The registration loop in [`fill_all`] is keyed on
+/// `known_type == u16::MAX`, so the next `fill_all` — the next file's, or the one after
+/// `resolve_deferred_unknowns` — picks the struct up as soon as the type arrives.  A
+/// field that never resolves leaves the struct unregistered, which is harmless: the
+/// parser has already reported the undefined type, and `field_position` names the field
+/// if anything still reaches for it.
+///
+/// Two kinds of "not known yet" reach here, and both must block:
+///
+///  * `Unknown(0)` names nothing.  It is what a field typed from an EXPRESSION carries,
+///    and the only producer is the closure record — a capture's type is the type of
+///    `w.chunks[1]`, not of a written-down name.  `resolve_forward_captures` repairs it.
+///  * `Unknown(stub)` names a forward-referenced type whose declaration has not parsed
+///    yet.  Within one file `copy_unknown_fields` resolves it before the layout loop, but
+///    it only sweeps the file being finished — a struct in a module the package loaded
+///    EARLIER keeps its stub, because the type it names is declared by a module still
+///    suspended further up the `use` chain (loft#797).  The sweep at the top of
+///    `fill_all` re-resolves those; whatever is still `Unknown` here is genuinely unknown.
+///
+/// The answer is transitive.  An inline struct field stores its content's bytes, so a
+/// host whose field type is itself waiting cannot be laid out either — laying it out
+/// would register the field with content id `u16::MAX`.
+fn layout_blocked(data: &Data, d: u32, seen: &mut Vec<u32>) -> bool {
+    if d == u32::MAX {
+        return true;
+    }
+    if matches!(data.def_type(d), DefType::Unknown) {
+        return true;
+    }
+    if data.def(d).known_type != u16::MAX {
+        return false; // already laid out — its fields were known then
+    }
+    if !matches!(data.def_type(d), DefType::Struct | DefType::EnumValue) {
+        return false;
+    }
+    if seen.contains(&d) {
+        // A value cycle is rejected by `fill_all`'s own check; stopping here just
+        // keeps this walk finite.
+        return false;
+    }
+    seen.push(d);
+    let blocked = (0..data.attributes(d)).any(|a| {
+        !data.def(d).attributes[a].constant && type_blocked(data, &data.attr_type(d, a), seen)
+    });
+    seen.pop();
+    blocked
+}
+
+/// The [`layout_blocked`] question asked of a TYPE rather than a definition: does laying
+/// this out need a size nobody can supply yet?
+///
+/// The set of forms mirrors what [`fill_database`] actually asks of a field's content, so
+/// that the two agree on which fields have a dependency at all.  A keyed collection needs
+/// its content's type ID; a `Reference` with EMPTY deps stores the content's bytes inline
+/// and so needs its size — but one with deps is a fixed-width `DbRef`, sized whatever the
+/// content turns out to be, which is why that case does not wait (the same split the
+/// native generator's field-hoist makes).
+fn type_blocked(data: &Data, tp: &Type, seen: &mut Vec<u32>) -> bool {
+    match tp.base() {
+        Type::Unknown(_) => true,
+        Type::Vector(c, _) | Type::RefVar(c) => type_blocked(data, c, seen),
+        Type::Tuple(elms) => elms.iter().any(|e| type_blocked(data, e, seen)),
+        Type::Hash(c, _, _)
+        | Type::Index(c, _, _)
+        | Type::Sorted(c, _, _)
+        | Type::Radix(c, _, _)
+        | Type::Trie(c, _, _) => layout_blocked(data, *c, seen),
+        Type::Reference(c, deps) if deps.is_empty() => layout_blocked(data, *c, seen),
+        _ => false,
+    }
 }
 
 pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
+    // Re-resolve the forward references of everything still waiting for a layout.
+    //
+    // `actual_types_deferred` sweeps only the file it is finishing, so a struct that
+    // named a not-yet-declared type keeps `Unknown(stub)` on the attribute after its own
+    // file is done.  The stub def is upgraded IN PLACE the moment its real declaration
+    // parses (`parse_struct` reuses the stub's def_nr), which makes the attribute
+    // resolvable from here on — but nothing was asking again.  That is loft#797: the
+    // declaration ended up correct and the layout kept the hole.
+    //
+    // Ask again for every def whose layout is still pending, so each `fill_all` picks up
+    // whatever the files parsed since have declared.  Resolving against a def that is
+    // still a stub is a no-op (a stub's `returned` is its own `Unknown`), so this
+    // converges without needing to know which pass finally supplies the type.
+    for d_nr in 0..data.definitions() {
+        if data.def(d_nr).known_type == u16::MAX
+            && matches!(data.def_type(d_nr), DefType::Struct | DefType::EnumValue)
+        {
+            copy_unknown_fields(data, d_nr);
+        }
+    }
     // Detect type cycles before computing sizes.
     for d_nr in start_def..data.definitions() {
         if matches!(data.def_type(d_nr), DefType::Struct) {
@@ -390,7 +504,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
             && data.def(d_nr).known_type == u16::MAX
-            && !has_nameless_unknown_attr(data, d_nr)
+            && !layout_blocked(data, d_nr, &mut Vec::new())
         {
             fill_database(data, database, d_nr);
             // @PLN25 E2 — right after building a struct `S`, build its synthetic

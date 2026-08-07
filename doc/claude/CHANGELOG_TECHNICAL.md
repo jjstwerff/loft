@@ -9,6 +9,49 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A field whose type another module declares gets a slot (loft#797) (2026-08-07)
+
+A package entry that `use`s a module before declaring the types that module names
+suspends itself at the `use`. The module was then parsed to completion — layout
+included — while every such type was still a `DefType::Unknown` stub. `fill_database`
+skips a field whose `type_elm` is `u32::MAX`, so the field got no slot; the stub was
+upgraded in place moments later when the entry resumed, so the DECLARATION ended up
+correct and the LAYOUT kept the hole, and nothing revisits a registered type. Only
+the load ORDER decided it.
+
+`fill_all` now defers a layout until every field's type is known, and re-asks on each
+call. Three sites had to agree:
+
+- **`layout_blocked`** (was `has_nameless_unknown_attr`) — covers `Unknown(stub)` as
+  well as `Unknown(0)`, and is TRANSITIVE: an inline field stores its content's bytes,
+  so a host whose field type is waiting cannot be laid out either. The loop is keyed on
+  `known_type == u16::MAX`, so this defers rather than drops.
+- **A sweep at the top of `fill_all`** re-runs `copy_unknown_fields` over everything
+  still unlaid. Without it the deferral never ends — `actual_types_deferred` sweeps only
+  the file it is finishing, and nothing was asking again.
+- **`Type::Optional` is peeled, not matched.** `S?` and `S` name the same forward
+  reference, and three places that peel `Vector` had all forgotten the `?`:
+  `copy_unknown_fields`, `Data::rewrite_type_opt`, and the native `init()` generator's
+  field-hoist match. The last one emitted `db.field(t_host, "f", t_content)` ahead of
+  `let t_content` — the generated crate did not compile, so a nullable forward field
+  broke the library build where a plain one worked.
+
+Also from the same matrix, both now diagnostics rather than panics: a keyed collection
+whose content was a stub indexed `attributes[usize::MAX]` in `set_mutable`, and a vector
+literal of a stub element tripped `new_record`'s `assert_ne!` as an internal compiler
+error. The first is gone with the deferral; the second reports `type 'X' is not defined
+here — use the module that declares it`.
+
+Not closed, and out of scope: a type named in a function BODY rather than a field
+DECLARATION is not deferred, so a module naming a type it cannot see still fails with
+`unknown type 'X'`. That is resolution, not layout.
+
+Guard: `forward_module_type_gets_a_slot` (`tests/issues.rs`) over the `fwd797` fixture,
+asserting sizes as well as values — a read follows whatever offsets the layout ended up
+with, so reading a field back cannot by itself prove the field has storage.
+`tests/field_without_storage.rs` (loft#796's guard) changes with it: the hole it used as
+a trigger no longer exists, so both its tests now assert the ANSWER.
+
 ### Lazy stores — the fault is the collection's MISS path, and a SQL source drives it (2026-08-06)
 
 `store_bind_lazy(c, source)` binds a collection to a store image or to

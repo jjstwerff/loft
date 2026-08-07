@@ -117,6 +117,19 @@ following it changed nothing. Now that case says what is actually wrong: the
 resolved package does not have the function and the published one does, so these
 are two different packages sharing a name.
 
+### A field can name a type from a module that loads later
+
+Inside a package, a struct field whose type is declared in a module the package
+loads *after* the one that names it was left out of that struct's storage. The
+field could be written, and the write landed outside the record — in whatever
+record happened to sit next to it. That is why it read as random: the same program
+gave a crash on one run, a runaway allocation on the next, and a clean pass on the
+third, and the failure never pointed at the field.
+
+Only the load order decided it, so the same code was correct or corrupt depending
+on which module `use`d which. It is now correct either way — including when the
+field is a `vector<T>`, a `T?`, or a struct that itself holds one.
+
 ### `store_verify` on a collection inside a struct
 
 `store_verify(firm.people)` reported a corruption that was not there — it read the

@@ -214,6 +214,15 @@ Every source file is parsed **twice**:
 
 The two-pass approach allows forward references — a struct or function can be used before it is defined.
 
+Both of those run **per file**, at the end of each `parse_file`, and each sweeps only the
+definitions that file added.  A `use` suspends the current file to parse the dependency to
+completion, so a module can be laid out while a type it names is still an unresolved stub
+belonging to the file further up the chain.  `fill_all` therefore defers any def whose
+fields are not all known (`layout_blocked`) and re-asks with `copy_unknown_fields` on every
+subsequent call — a layout, once registered, is never revisited, so getting it right the
+first time is the only chance.  See [LIFETIME.md § A field whose type another MODULE
+declares](LIFETIME.md) for what the missing deferral cost.
+
 ### The H5 two-pass contract — the lazy-append law
 
 `assert_pass2_def_attr_stable` (`src/parser/mod.rs`, debug-assertions only —
