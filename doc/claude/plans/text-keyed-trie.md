@@ -222,11 +222,39 @@ macros name two or more collection kinds without naming `Trie`. The compiler enu
 
 So step 6 must not be done the way step 2 was. Proposed split:
 
-- **6a — the audit.** Triage the 141 by what the wildcard MEANS. Most will be correct
-  fall-throughs (a trie is not a `Vector`, not narrow, not inline), and the ones that are
-  not will cluster: places asking *"is this a keyed collection?"* and *"what is its
-  element type?"*. Cluster first, then read; 141 individually is not a review anyone can
-  do honestly in one pass.
+- **6a — the audit. DONE.** Clustering did the work; reading 141 sites individually was
+  never the job. Two questions cut it down:
+
+  **1. Does the site already name `Radix`?** If not, `spatial` is excluded there too, so
+  a trie falling through behaves exactly like its sibling — consistent, not an omission.
+  That is 24 sites, no action.
+
+  **2. Of the 117 that do name `Radix`: does `Radix` share an `|` ALTERNATION with its
+  keyed siblings, or does it have its own arm?** An alternation means the site already
+  treats every keyed collection alike, so one verdict covers all of them.
+
+  | | sites | verdict |
+  |---|---|---|
+  | no `Radix` | 24 | none — a trie matches spatial's treatment |
+  | `Radix` in an alternation | **104** | add `Trie` to the alternation; mechanical, and safe because the site already makes no distinction |
+  | `Radix` has its own arm | **13** | read individually — below |
+
+  The 13 turned out to be mostly ONE question, which is why they are not 13 decisions:
+
+  - **8 ask "what is this type's db-type id?"** and answer `database.spatial(c, key)` —
+    `typedef.rs` ×2, `state/codegen.rs` ×2, `parser/{vectors,expressions,objects}.rs`,
+    `parser/definitions.rs`. Each becomes `database.trie(c, key)`, and every one of them
+    is a site **6b has to touch anyway** to wire the keyword. They are not separate work.
+  - **2 are small own arms**: `data.rs`'s `spatial<…>` renderer and `scopes.rs`'s
+    dep-stripping for a keyed type. Both take a `Trie` twin.
+  - **1 is the IR decoder** (`ir_schema.rs`'s `"Radix" =>` tag) — **6c**.
+  - **1 is the range diagnostic** (`parser/fields.rs`: *"a `spatial` range is a
+    COORDINATE slice"*). A trie must NOT inherit that refusal — its range is a prefix,
+    which is the whole point — so this is where the step-5 operation attaches to the
+    surface, and it is also the #799 message's other half.
+
+  So the real remaining work is smaller than 141 suggested: one mechanical sweep, and a
+  handful of sites 6b already has to visit.
 - **6b — the parser surface.** `typedef.rs`'s keyword list and `definitions.rs`'s
   `"trie"` arm, with `Stores::trie` (already in) behind it.
 - **6c — the IR codec.** `tools/ir_schema/ir.loft` gains a `Trie` tag, `ir_schema_gen.rs`
