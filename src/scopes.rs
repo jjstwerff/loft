@@ -6005,6 +6005,9 @@ impl Scopes {
                     Type::Radix(d, keys, dep) if dep.is_empty() => {
                         return Some(Type::Radix(*d, keys.clone(), Deps::none()));
                     }
+                    Type::Trie(d, key, dep) if dep.is_empty() => {
+                        return Some(Type::Trie(*d, key.clone(), Deps::none()));
+                    }
                     _ => {}
                 }
             }

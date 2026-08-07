@@ -1754,6 +1754,7 @@ impl Type {
             Type::Enum(t, is_ref, _) => Type::Enum(*t, *is_ref, Deps::none()),
             Type::Index(t, keys, _) => Type::Index(*t, keys.clone(), Deps::none()),
             Type::Radix(t, keys, _) => Type::Radix(*t, keys.clone(), Deps::none()),
+            Type::Trie(t, key, _) => Type::Trie(*t, key.clone(), Deps::none()),
             Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), Deps::none()),
             Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), Deps::none()),
             Type::Vector(t, _) => Type::Vector(Box::new(t.without_deps()), Deps::none()),
@@ -1792,6 +1793,7 @@ impl Type {
             Type::Enum(t, is_ref, _) => Type::Enum(*t, *is_ref, v),
             Type::Index(t, keys, _) => Type::Index(*t, keys.clone(), v),
             Type::Radix(t, keys, _) => Type::Radix(*t, keys.clone(), v),
+            Type::Trie(t, key, _) => Type::Trie(*t, key.clone(), v),
             Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), v),
             Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), v),
             Type::Vector(t, _) => Type::Vector(Box::new(*t.clone()), v),
@@ -2082,6 +2084,11 @@ impl Type {
             ),
             Type::Index(tp, key, dep) => format!(
                 "index<{},{key:?}>{}",
+                data.def(*tp).name,
+                Self::dep_var(dep, vars)
+            ),
+            Type::Trie(tp, key, dep) => format!(
+                "trie<{}[{key}]>{}",
                 data.def(*tp).name,
                 Self::dep_var(dep, vars)
             ),
@@ -6243,6 +6250,7 @@ impl Data {
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
             Type::Radix(_, _, _) => self.source_nr(0, "spatial"),
+            Type::Trie(_, _, _) => self.source_nr(0, "trie"),
             // P189: look up the synthetic tuple struct registered by
             // `tuple_def` at parse time.  Returns u32::MAX if the
             // tuple shape was never registered (caller must register

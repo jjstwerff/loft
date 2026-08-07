@@ -642,6 +642,7 @@ impl Parser {
                         | Parts::Sorted(_, _)
                         | Parts::Ordered(_, _)
                         | Parts::Radix(_, _)
+                        | Parts::Trie(_, _)
                 )
             {
                 let db_tp = *db_tp_val;
@@ -704,6 +705,7 @@ impl Parser {
                     | Parts::Sorted(_, _)
                     | Parts::Index(_, _, _)
                     | Parts::Radix(_, _)
+                    | Parts::Trie(_, _)
             )
         {
             let db_tp = *db_tp;
@@ -1883,7 +1885,10 @@ use #count instead"
             | Type::Radix(content, _, dep)
             | Type::Trie(content, _, dep) = in_type.clone()
             {
-                let is_radix = matches!(in_type, Type::Radix(_, _, _));
+                // A trie is a radix TREE too, so its in-order walk is already key
+                // order: it takes the tree builder, not the hash one (whose bucket
+                // walk would read a trie's records as a hash table).
+                let is_radix = matches!(in_type, Type::Radix(_, _, _) | Type::Trie(_, _, _));
                 let scratch_tp = Type::Reference(content, dep.clone());
                 let scratch_var = self.create_unique("hash_scratch", &scratch_tp);
                 hash_scratch_var = scratch_var;
@@ -1912,7 +1917,7 @@ use #count instead"
                 // (which would walk the scratch as if it were a tree).
                 let already_scratch = matches!(
                     expr.unspan(),
-                    Value::Call(d, _) if self.data.def(*d).name() == "n_spatial_range"
+                    Value::Call(d, _) if matches!(self.data.def(*d).name(), "n_spatial_range" | "n_trie_prefix")
                 );
                 if already_scratch {
                     fill = v_set(scratch_var, expr.clone());

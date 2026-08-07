@@ -2684,6 +2684,40 @@ impl Parser {
                         self.parse_fields(true, &mut fields);
                         Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
+                    "trie" => {
+                        // `trie<T[w]>` — a radix tree over ONE text key, answering
+                        // exact lookup, key order and PREFIX.  Its own keyword rather
+                        // than a `spatial` spelling because `spatial` means Morton
+                        // interleaving of coordinate axes, and none of that applies to
+                        // a word.  See doc/claude/plans/text-keyed-trie.md.
+                        self.has_deprecated_not_null();
+                        if self.lexer.peek_token("[") {
+                            self.parse_fields(false, &mut fields);
+                            self.data.set_referenced(sub_nr, on_d, Value::Null);
+                            let f: Vec<String> = fields.into_iter().map(|(k, _)| k).collect();
+                            if f.len() == 1 {
+                                Type::Trie(sub_nr, f[0].clone(), crate::data::Deps::none())
+                            } else {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "trie<T[k]> keys on exactly ONE text field, got {} — a trie \
+                                     orders one key's bytes, so several keys have no order to \
+                                     share; use `sorted<T[a, b]>` for a multi-field order",
+                                    f.len()
+                                );
+                                Type::Unknown(0)
+                            }
+                        } else {
+                            self.lexer.closing_angle();
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "trie<T[k]> needs its text key field, e.g. trie<Word[w]>"
+                            );
+                            Type::Unknown(0)
+                        }
+                    }
                     "spatial" => {
                         // @PLN48 S2 — `spatial<T[x, y]>` lowers to the shared `Radix`
                         // runtime kind (RADIX_TREE.md §8.1): the coordinate key fields

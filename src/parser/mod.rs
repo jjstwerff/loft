@@ -3477,7 +3477,8 @@ impl Parser {
                     || (r == self.data.def_nr("index")
                         && matches!(test_type, Type::Index(_, _, _)))
                     || (r == self.data.def_nr("spatial")
-                        && matches!(test_type, Type::Radix(_, _, _)));
+                        && matches!(test_type, Type::Radix(_, _, _)))
+                    || (r == self.data.def_nr("trie") && matches!(test_type, Type::Trie(_, _, _)));
                 if bare {
                     return true;
                 }

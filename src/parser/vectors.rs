@@ -2481,6 +2481,7 @@ impl Parser {
             Type::Hash(_, key, _) => self.database.hash(content, key),
             Type::Index(_, key, _) => self.database.index(content, key),
             Type::Radix(_, key, _) => self.database.spatial(content, key),
+            Type::Trie(_, key, _) => self.database.trie(content, key),
             _ => return None,
         })
     }
@@ -3375,6 +3376,21 @@ impl Parser {
                     return u16::MAX;
                 }
                 self.database.spatial(c_tp, key)
+            }
+            Type::Trie(tp, key, _) => {
+                // The Radix shape, for a trie: resolve the registered id, and register
+                // on demand for a local-only var whose type is otherwise absent from
+                // the schema.  Same spelling `Stores::trie` uses.
+                let name = format!("trie<{}[{key}]>", self.data.def(*tp).name());
+                let r = self.database.name(&name);
+                if r != u16::MAX {
+                    return r;
+                }
+                let c_tp = self.data.def(*tp).known_type();
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.trie(c_tp, key)
             }
             Type::Sorted(tp, key, _) => {
                 let mut name = "sorted<".to_string() + self.data.def(*tp).name() + "[";

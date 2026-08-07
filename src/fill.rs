@@ -269,6 +269,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     clear_keyed,
     set_keyed,
     length_spatial,
+    length_trie,
     static_call,
     create_stack,
     init_create_stack,
@@ -2305,6 +2306,12 @@ fn set_keyed(s: &mut State) {
 fn length_spatial(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = i64::from(codegen_runtime::spatial_len(&v_r, &s.database.allocations));
+    s.put_stack(new_value);
+}
+
+fn length_trie(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = i64::from(codegen_runtime::trie_len(&v_r, &s.database.allocations));
     s.put_stack(new_value);
 }
 

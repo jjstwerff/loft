@@ -446,6 +446,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_hash_sorted", n_hash_sorted),
     ("n_radix_sorted", n_radix_sorted),
     ("n_spatial_range", n_spatial_range),
+    ("n_trie_prefix", n_trie_prefix),
     ("n_hash_unsorted", n_hash_unsorted),
     // Plan-12 phase 1a (2026-05-23) — crypto `n_*` symbols
     // (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`,
@@ -3105,6 +3106,16 @@ fn n_spatial_range(stores: &mut Stores, stack: &mut DbRef) {
     let tp = *stores.get::<i64>(stack) as u16;
     let coll = *stores.get::<DbRef>(stack);
     let result = stores.build_radix_range_vec(&coll, tp, fx, fy, fz, has_till, tx, ty, tz, limit);
+    stores.put(stack, result);
+}
+
+/// A trie prefix slice.  Args pop in reverse declaration order.
+fn n_trie_prefix(stores: &mut Stores, stack: &mut DbRef) {
+    let limit = *stores.get::<i64>(stack);
+    let pre = *stores.get::<Str>(stack);
+    let tp = *stores.get::<i64>(stack) as u16;
+    let coll = *stores.get::<DbRef>(stack);
+    let result = stores.build_trie_prefix_vec(&coll, tp, pre.str(), limit);
     stores.put(stack, result);
 }
 

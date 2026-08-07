@@ -1674,6 +1674,10 @@ impl State {
                 let c = stack.data.def(*td).known_type();
                 self.database.spatial(c, key)
             }
+            Type::Trie(td, key, _) => {
+                let c = stack.data.def(*td).known_type();
+                self.database.trie(c, key)
+            }
             _ => unreachable!("gen_keyed_null on non-keyed type"),
         };
         debug_assert_ne!(
@@ -3616,7 +3620,7 @@ impl State {
                 }
             }
             "OpGetRadix" => {
-                if let Type::Radix(v, _, link) = &tps[0] {
+                if let Type::Radix(v, _, link) | Type::Trie(v, _, link) = &tps[0] {
                     return Type::Reference(*v, link.clone());
                 }
             }

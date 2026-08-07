@@ -59,7 +59,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.set_returned(d_nr, Type::Character);
             data.definitions[d_nr as usize].known_type = 6;
         }
-        "radix" | "hash" | "reference" | "index" | "sorted" | "spatial" => {
+        "radix" | "hash" | "reference" | "index" | "sorted" | "spatial" | "trie" => {
             data.set_returned(d_nr, Type::Reference(d_nr, Deps::none()));
         }
         "keys_definition" => {
@@ -470,6 +470,12 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                     let c_tp = data.def(c).known_type;
                     if c_tp != u16::MAX {
                         database.spatial(c_tp, &key);
+                    }
+                }
+                Type::Trie(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.trie(c_tp, &key);
                     }
                 }
                 _ => {}
@@ -907,6 +913,15 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     }
                     set_mutable(data, c_nr, &key_fields);
                     database.spatial(c_tp, &key_fields)
+                }
+                Type::Trie(c_nr, key, _) => {
+                    let mut c_tp = data.def(c_nr).known_type;
+                    if c_tp == u16::MAX {
+                        fill_database(data, database, c_nr);
+                        c_tp = data.def(c_nr).known_type;
+                    }
+                    set_mutable(data, c_nr, std::slice::from_ref(&key));
+                    database.trie(c_tp, &key)
                 }
                 Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),
                 Type::Function(_, _, _) => {

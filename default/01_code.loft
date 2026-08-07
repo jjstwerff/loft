@@ -1161,6 +1161,18 @@ fn radix_sorted(r: reference, tp: integer) -> reference;
 // rewrites the slice expression, injecting the collection's type id.  Coordinates
 // carry up to MAX_AXES (3) axes; the range builder reads only the collection's own
 // axis count, so `fz`/`tz` are ignored (0) for a 2D `spatial<T[x,y]>`.
+// A trie prefix slice `t["kerk"..]` / `t["kerk"..:n]`.  Returns a fresh
+// vector<reference<T>> of the records whose key begins with `pre`, in key order
+// (limit<0 = no cap).  The parser rewrites the slice expression, injecting the
+// collection's type id.  No successor string: the prefix IS the query.
+fn trie_prefix(
+  r: reference,
+  tp: integer,
+  pre: text,
+  limit: integer
+) -> reference;
+#impure(parent_write)
+
 fn spatial_range(
   r: reference,
   tp: integer,
@@ -1317,6 +1329,7 @@ type iterator;
 // panicking in `complete_definition` (enum/type).
 type radix;
 type spatial;
+type trie;
 // @PLN48 — number of elements in a spatial<T[x,y]> (radix / Morton tree).  Reads
 // the tree's cached length word (O(1)), mirroring `len(both: hash)`.  Declared
 // after `type spatial` so the parameter type resolves.
@@ -1325,6 +1338,14 @@ fn OpLengthSpatial(r: spatial) -> integer;
 // Number of elements in a spatial (radix / Morton tree) collection.
 pub fn len(both: spatial) -> integer {
   OpLengthSpatial(both)
+}
+#pure
+// Number of elements in a trie.  Same cached length word as `len(spatial)` —
+// the tree is shared, only the key oracle above it differs.
+fn OpLengthTrie(r: trie) -> integer;
+#rust"i64::from(codegen_runtime::trie_len(&@r, &s.database.allocations))"
+pub fn len(both: trie) -> integer {
+  OpLengthTrie(both)
 }
 #pure
 // Call a predefined system function (but not an operator).

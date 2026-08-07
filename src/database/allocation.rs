@@ -1292,6 +1292,20 @@ impl Stores {
     /// bounding box `xs[(x1,y1)..(x2,y2)]`.  Coordinates arrive as a fixed `MAX_AXES`-wide
     /// triple; only the collection's own `keys.len()` axes are read (a 2D collection
     /// ignores `fz`/`tz`), so the same ABI serves 1D…3D slices.
+    /// A trie PREFIX slice as an iterable scratch vector, the trie's twin of
+    /// `build_radix_range_vec` and feeding the same on=4 scratch path.  Every record
+    /// whose key begins with `pre`, in key order, capped at `limit` (`< 0` = no cap).
+    /// Backs `t["kerk"..]` and `t["kerk"..:n]`.
+    ///
+    /// There is no `till` here and that is the point: a prefix is the whole query, so
+    /// the caller never constructs the successor string a `sorted` range would need.
+    pub fn build_trie_prefix_vec(&mut self, coll: &DbRef, tp: u16, pre: &str, limit: i64) -> DbRef {
+        let keys = self.types[tp as usize].keys.clone();
+        let cap = (limit >= 0).then_some(limit as usize);
+        let recs = crate::trie_db::prefix(coll, &self.allocations, &keys, pre.as_bytes(), cap);
+        self.build_rec_scratch(coll, &recs)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn build_radix_range_vec(
         &mut self,

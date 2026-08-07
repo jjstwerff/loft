@@ -776,6 +776,14 @@ impl Parser {
             // coordinate tuple.
             if matches!(t, Type::Radix(_, _, _)) && self.lexer.peek_token("(") {
                 elm_type = self.parse_spatial_slice(code, &t, &key_types);
+            } else if matches!(t, Type::Trie(_, _, _)) {
+                // A trie subscript is `t[k]` (exact) or `t[pre..]` (prefix) — which one
+                // is only known after the key expression is parsed, so both live in one
+                // parse.  A prefix slice returns the Trie type, so the enclosing `for`
+                // iterates the scratch the call builds.
+                if let Some(slice) = self.parse_trie_slice(code, &t, &key_types) {
+                    elm_type = slice;
+                }
             } else {
                 self.parse_key(code, &t, &key_types);
             }
@@ -1420,6 +1428,83 @@ impl Parser {
         }
     }
 
+    /// Parse a trie subscript: `t[k]` (exact lookup) or `t[pre..]` / `t[pre..:n]`
+    /// (the prefix slice).  Returns `Some(typedef)` for the slice — the caller uses it
+    /// as the iterated type — and `None` for the exact lookup, which `parse_key` has
+    /// already lowered to `OpGetRecord`.
+    ///
+    /// The prefix form does NOT go through `parse_key`'s range branch: that branch
+    /// walks a key INTERVAL between two bounds, and a trie has one bound because the
+    /// prefix is the entire query (`doc/claude/plans/text-keyed-trie.md` step 5).
+    /// `t[a..b]` is therefore refused rather than silently answering an interval.
+    fn parse_trie_slice(
+        &mut self,
+        code: &mut Value,
+        typedef: &Type,
+        key_types: &[Type],
+    ) -> Option<Type> {
+        let mut pre = Value::Null;
+        let pt = self.expression(&mut pre);
+        if !self.convert(&mut pre, &pt, &key_types[0]) && !self.first_pass {
+            diagnostic!(self.lexer, Level::Error, "Invalid index key");
+        }
+        if !self.lexer.has_token("..") {
+            // Exact lookup — same lowering every keyed collection uses.
+            let known = if self.first_pass {
+                Value::Null
+            } else {
+                self.type_info(typedef)
+            };
+            let ls = vec![code.clone(), known, Value::Int(1), pre];
+            *code = self.cl("OpGetRecord", &ls);
+            return None;
+        }
+        self.lexer.has_token("="); // `..=` reads the same: a prefix has no upper bound
+        let limit = if self.lexer.has_token(":") {
+            let mut n = Value::Null;
+            let nt = self.expression(&mut n);
+            if !self.convert(&mut n, &nt, &crate::data::I64) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "trie prefix limit must be an integer"
+                );
+            }
+            n
+        } else {
+            Value::Int(-1)
+        };
+        if !self.first_pass && !self.lexer.peek_token("]") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a trie slice is a PREFIX, not an interval — write `t[\"kerk\"..]` (every key \
+                 beginning with `kerk`) or `t[\"kerk\"..:n]` for the first n; an upper bound \
+                 asks for a key interval, which `sorted<…>` answers"
+            );
+        }
+        if !self.first_pass && !self.iterable_context {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a trie prefix slice is a `for`-loop iterator, not a value — iterate it \
+                 directly (`for x in t[pre..] {{ … }}`) or materialise a vector with a \
+                 comprehension (`[for x in t[pre..] {{ x }}]`)"
+            );
+        }
+        if !self.first_pass {
+            let tp = self.get_type(typedef);
+            let fn_nr = self.data.def_nr("n_trie_prefix");
+            if tp != u16::MAX && fn_nr != u32::MAX {
+                *code = Value::Call(
+                    fn_nr,
+                    vec![code.clone(), Value::Int(i32::from(tp)), pre, limit],
+                );
+            }
+        }
+        Some(typedef.clone())
+    }
+
     /// @PLN48 S3 — parse a `spatial` range slice `xs[(fx,fy)..(tx,ty)]`,
     /// `xs[(fx,fy)..:n]`, or the open `xs[(fx,fy)..]`, and lower it to an
     /// `n_spatial_range` scratch-builder call.  Returns the Radix `typedef` so the
@@ -1600,6 +1685,10 @@ impl Parser {
                          `s[(x1, y1)..(x2, y2)]` (the bounding box), or iterate the whole \
                          collection with `for x in s`"
                     ),
+                    // `Type::Trie` is deliberately absent, not overlooked: a trie's range
+                    // is a PREFIX, which is the reason the kind exists, and it never
+                    // reaches here — the two `parse_key` callers route a trie subscript
+                    // to `parse_trie_slice` before this branch is entered.
                     _ => {}
                 }
             }

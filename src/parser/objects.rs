@@ -3282,6 +3282,10 @@ impl Parser {
                 let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.spatial(c, key))
             }
+            Type::Trie(d, key, _) => {
+                let c = self.data.def(*d).known_type();
+                (c != u16::MAX).then(|| self.database.trie(c, key))
+            }
             _ => None,
         }
     }

@@ -1145,6 +1145,7 @@ enum BareIo {
     Sorted(u16, Vec<(u16, bool)>),
     Hash(u16, Vec<u16>),
     Radix(u16, Vec<u16>),
+    Trie(u16, u16),
     Index(u16, Vec<(u16, bool)>),
 }
 
@@ -2520,12 +2521,8 @@ extern crate loft;"
                 // referenced by no field: emit it here so it does not leave a gap in
                 // the runtime type-id sequence (else `content(tp)` reads u16::MAX and
                 // `record_new` panics), exactly as the local-only Hash arm above.
-                // Step 6 of doc/claude/plans/text-keyed-trie.md: the native backend's
-                // bare-IO registry needs a `BareIo::Trie`. Falling through would omit the
-                // trie's IO from `--native` SILENTLY — the one-backend divergence this
-                // audit is for. Unreachable until the keyword.
-                crate::database::Parts::Trie(_, _) => {
-                    unimplemented!("trie native bare-IO — step 6 of the text-keyed-trie plan")
+                crate::database::Parts::Trie(c, key) if !field_keyed.contains(&tid) => {
+                    bare_io.push((tid, BareIo::Trie(*c, *key)));
                 }
                 crate::database::Parts::Radix(c, keys) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Radix(*c, keys.clone())));
@@ -2536,6 +2533,7 @@ extern crate loft;"
                 crate::database::Parts::Sorted(_, _)
                 | crate::database::Parts::Hash(_, _)
                 | crate::database::Parts::Radix(_, _)
+                | crate::database::Parts::Trie(_, _)
                 | crate::database::Parts::Index(_, _, _) => {}
                 _ => {}
             }
@@ -2934,6 +2932,11 @@ extern crate loft;"
                     .join(", ");
                 // `db.spatial` is the surface constructor for the shared Radix kind.
                 writeln!(w, "    let t{tid} = db.spatial({c_ref}, &[{keys_str}]);")?;
+            }
+            BareIo::Trie(c, key) => {
+                let c_ref = type_id_ref(*c);
+                let key_str = self.bare_field_name(*c, *key);
+                writeln!(w, "    let t{tid} = db.trie({c_ref}, \"{key_str}\");")?;
             }
             BareIo::Index(c, keys) => {
                 let c_ref = type_id_ref(*c);
@@ -3687,6 +3690,22 @@ extern crate loft;"
                 field_name,
                 "spatial",
                 &format!("db.spatial({c_ref}, &[{keys_str}])"),
+            )?;
+            return Ok(());
+        }
+        // A `trie<T[k]>` field: one text key, `db.trie(content, key)`.  Like the
+        // keyed arms above it must be created INLINE here, or the field's type id
+        // is never registered and its record layout reads as a struct with no
+        // fields (`field_type` → index 0 of an empty list).
+        if let Type::Trie(c_nr, key, _) = typedef {
+            let c_tp = self.data.def(*c_nr).known_type();
+            let c_ref = type_id_ref(c_tp);
+            emit_db_field(
+                w,
+                s_var,
+                field_name,
+                "trie",
+                &format!("db.trie({c_ref}, \"{key}\")"),
             )?;
             return Ok(());
         }

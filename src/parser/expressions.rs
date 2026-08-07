@@ -2428,6 +2428,10 @@ use a separate collection or add after the loop"
                     let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.spatial(c, key))
                 }
+                Type::Trie(td, key, _) => {
+                    let c = self.data.def(*td).known_type();
+                    (c != u16::MAX).then(|| self.database.trie(c, key))
+                }
                 _ => None,
             }
         } else {
