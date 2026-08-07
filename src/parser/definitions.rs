@@ -8,6 +8,54 @@ use super::{
 };
 
 impl Parser {
+    /// loft#799 — a keyed collection whose key field is the wrong TYPE for its kind
+    /// is refused at DECLARATION, naming the kind that does key on it.
+    ///
+    /// `spatial` interleaves its axes into a Morton code, which is a numeric
+    /// operation; a `text` key produced a collection that compiled, counted right,
+    /// and then answered NULL for a key just inserted — indistinguishable from
+    /// "not found" at the call site, which is the shape that reaches production. A
+    /// `trie` walks one key's BYTES, so a numeric key is the mirror of the same
+    /// mistake.
+    ///
+    /// Pass 2 only: pass 1 has an incomplete definition table by construction, so a
+    /// key whose element type is declared further down the file would read as
+    /// unknown there (loft#683's rule).
+    fn check_key_is_text(&mut self, content: u32, field: &str, want_text: bool) {
+        if self.first_pass {
+            return;
+        }
+        let el = crate::typedef::key_bearing_def(&self.data, content);
+        let a_nr = self.data.attr(el, field);
+        if a_nr == usize::MAX {
+            return; // an unknown field name is reported by the layout pass
+        }
+        let tp = self.data.attr_type(el, a_nr);
+        let is_text = matches!(tp, Type::Text(_));
+        if is_text == want_text {
+            return;
+        }
+        if want_text {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a trie keys on the BYTES of a text field, and `{field}` is {} — use \
+                 `spatial<…>` for coordinates, or `sorted<…>` / `index<…>` to order on a \
+                 number",
+                tp.name(&self.data)
+            );
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a spatial index interleaves its axes into a Morton code, which needs \
+                 numbers, and `{field}` is text — use `trie<{}[{field}]>`, which keys on \
+                 text and answers a prefix",
+                self.data.def(content).name()
+            );
+        }
+    }
+
     /// Consume an optional `not null` annotation, warning that it is deprecated.
     /// Returns `true` when it was present.
     ///
@@ -2696,6 +2744,7 @@ impl Parser {
                             self.data.set_referenced(sub_nr, on_d, Value::Null);
                             let f: Vec<String> = fields.into_iter().map(|(k, _)| k).collect();
                             if f.len() == 1 {
+                                self.check_key_is_text(sub_nr, &f[0], true);
                                 Type::Trie(sub_nr, f[0].clone(), crate::data::Deps::none())
                             } else {
                                 diagnostic!(
@@ -2744,6 +2793,9 @@ impl Parser {
                                     crate::radix_db::MAX_AXES,
                                     f.len()
                                 );
+                            }
+                            for k in &f {
+                                self.check_key_is_text(sub_nr, k, false);
                             }
                             Type::Radix(sub_nr, f, crate::data::Deps::none())
                         } else {
