@@ -95,7 +95,8 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
-            | Parts::Radix(c, _) => {
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => {
                 let rec = self.claim(&d, 1 + ((u32::from(self.size(c)) + 7) >> 3));
                 self.store_mut(&rec).set_u32_raw(rec.rec, 4, data.rec);
                 rec
@@ -254,6 +255,10 @@ impl Stores {
                     &mut self.allocations,
                 );
             }
+            // Step 3 of doc/claude/plans/text-keyed-trie.md. Falling THROUGH here would
+            // be the silent per-kind omission this audit exists to find: an insert that does nothing.
+            // Unreachable until the keyword (step 6).
+            Parts::Trie(_, _) => unimplemented!("trie insert — step 3 of the text-keyed-trie plan"),
             Parts::Radix(_, _) => {
                 // @PLN48 S2 — no dedup: two records may share a cell (they differ in
                 // the id suffix and land adjacent), which is what a spatial index

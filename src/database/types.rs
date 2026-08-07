@@ -410,9 +410,10 @@ impl Stores {
                 for f in fields {
                     match self.types[f.content as usize].parts {
                         Parts::Vector(v) | Parts::Sorted(v, _) => vectors.insert(v),
-                        Parts::Hash(r, _) | Parts::Radix(r, _) | Parts::Index(r, _, _) => {
-                            linked.insert(r)
-                        }
+                        Parts::Hash(r, _)
+                        | Parts::Radix(r, _)
+                        | Parts::Trie(r, _)
+                        | Parts::Index(r, _, _) => linked.insert(r),
                         _ => false,
                     };
                 }
@@ -733,6 +734,17 @@ impl Stores {
             // numbers.  Radix's key positions are what the Morton oracle reads
             // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
             // order.
+            // A trie keys on ONE field; same registration, a one-element list.
+            Parts::Trie(c, k) => {
+                self.types[t_nr].keys.clear();
+                if let Some((content, position)) = self.key_field(c, k) {
+                    let tp = key_type_nr_for_content(content, &self.types);
+                    self.types[t_nr].keys.push(crate::keys::Key {
+                        type_nr: tp,
+                        position,
+                    });
+                }
+            }
             Parts::Hash(c, key_fields) | Parts::Radix(c, key_fields) => {
                 self.types[t_nr].keys.clear();
                 for key_field in key_fields {
@@ -976,7 +988,8 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Radix(_, _) => {
+                | Parts::Radix(_, _)
+                | Parts::Trie(_, _) => {
                     self.validate_layout_by_nr(tp as u16, &mut visited, &mut issues);
                 }
                 _ => {}
@@ -1057,7 +1070,8 @@ impl Stores {
             | Parts::Sorted(c, _)
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
-            | Parts::Radix(c, _) => {
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => {
                 self.validate_layout_by_nr(*c, visited, issues);
             }
             Parts::Index(c, _, left_field_nr) => {
@@ -2203,7 +2217,8 @@ impl Stores {
                 | Parts::Ordered(e, _)
                 | Parts::Hash(e, _)
                 | Parts::Index(e, _, _)
-                | Parts::Radix(e, _) => refs.push(*e),
+                | Parts::Radix(e, _)
+                | Parts::Trie(e, _) => refs.push(*e),
                 Parts::ChildRec(c) => refs.push(*c),
                 // A plain variant (no data) keeps `known_type == u16::MAX`;
                 // only data-carrying variants have an `EnumValue` type to reach.
@@ -2661,7 +2676,8 @@ impl Type {
             | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
             | Parts::ChildRec(c)
-            | Parts::Radix(c, _) => c == tp,
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => c == tp,
             _ => false,
         }
     }

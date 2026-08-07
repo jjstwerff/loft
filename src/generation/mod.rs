@@ -2519,6 +2519,13 @@ extern crate loft;"
                 // referenced by no field: emit it here so it does not leave a gap in
                 // the runtime type-id sequence (else `content(tp)` reads u16::MAX and
                 // `record_new` panics), exactly as the local-only Hash arm above.
+                // Step 6 of doc/claude/plans/text-keyed-trie.md: the native backend's
+                // bare-IO registry needs a `BareIo::Trie`. Falling through would omit the
+                // trie's IO from `--native` SILENTLY — the one-backend divergence this
+                // audit is for. Unreachable until the keyword.
+                crate::database::Parts::Trie(_, _) => {
+                    unimplemented!("trie native bare-IO — step 6 of the text-keyed-trie plan")
+                }
                 crate::database::Parts::Radix(c, keys) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Radix(*c, keys.clone())));
                 }

@@ -97,9 +97,23 @@ all-enclosing box as controls: they pass today, which is why this survived undet
 Add the `Parts` variant and its runtime `Type` twin. Then **let the compiler produce the
 work list** — build, and fix each non-exhaustive match it names.
 
-*Gate:* the build is the instrument. Separately, audit the ~24 wildcard arms by hand,
-since those are the only sites the compiler cannot name; record the verdict for each in
-the commit rather than leaving it implied.
+*Gate:* the build is the instrument. Separately, audit the wildcard arms by hand, since
+those are the only sites the compiler cannot name.
+
+**Done.** The compiler named 16 sites. The hand audit found 55 matches on `.parts` with a
+wildcard, but most name only scalars (`Byte`/`Short`/`Int`/`Struct`), where "not a narrow
+int" is a correct answer for a trie. **Twelve** enumerate the COLLECTION kinds, which is
+where a trie falls through into the wrong answer:
+
+| verdict | sites | what falling through would have done |
+|---|---|---|
+| mechanical arm added | 9 | the element type never marked LINKED or reachable; the key never registered, so `keys(db)` is empty and every key read is wrong; the container record never claimed; layout never validated; iteration never routed |
+| loud stub, step 3 | 2 | an insert that does nothing; a deep copy that drops the collection |
+| loud stub, step 6 | 1 | the trie's IO omitted from `--native` only — a one-backend divergence |
+
+The nine were real: a trie whose key is not registered answers every lookup wrong, and
+nothing would have said so. That is the omission class this audit exists to find, and it
+is why the wildcard count — not `N` — was the number that mattered.
 
 ### Step 3 — the oracle and the tree operations
 

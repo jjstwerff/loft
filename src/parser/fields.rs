@@ -1744,7 +1744,7 @@ impl Parser {
                 on = 3;
                 arg = 4;
             }
-            Parts::Hash(_, _) | Parts::Radix(_, _) => {
+            Parts::Hash(_, _) | Parts::Radix(_, _) | Parts::Trie(_, _) => {
                 // Route hash/radix iteration through the Ordered code as on=4.
                 // The parser has substituted the iterated expression with a
                 // `hash_scratch` ref to a fresh u32-stride rec-nr vector

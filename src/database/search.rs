@@ -603,6 +603,7 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Radix(c, _)
+            | Parts::Trie(c, _)
             | Parts::Index(c, _, _) => *c,
             // Not a collection: `remove` panics on these, and it stays the one
             // place that decides so.

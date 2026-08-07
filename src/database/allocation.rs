@@ -2423,6 +2423,12 @@ impl Stores {
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);
             }
+            // Step 3 of doc/claude/plans/text-keyed-trie.md. Falling THROUGH here would
+            // be the silent per-kind omission this audit exists to find: a deep copy that drops the collection.
+            // Unreachable until the keyword (step 6).
+            Parts::Trie(_, _) => {
+                unimplemented!("trie copy_claims — step 3 of the text-keyed-trie plan")
+            }
             Parts::Radix(_, _) => self.copy_claims_radix_body(rec, to, tp),
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
