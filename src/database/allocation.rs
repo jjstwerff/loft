@@ -3984,27 +3984,29 @@ impl Stores {
     /// consulted.
     ///
     /// `find` already answers a miss with `rec: 0`, so this changes nothing for
-    /// an unbound collection — it re-answers exactly what `find` said. For a
-    /// bound one it fetches that single entry, which INSERTS it into the
-    /// collection (`load_one` ends in `hash::add`), and re-runs the lookup so
-    /// the answer comes from the collection either way.
+    /// an unbound collection. For a bound one it fetches that single entry,
+    /// which INSERTS it into the collection (`load_one` ends in `hash::add`),
+    /// and re-runs the lookup so the answer comes from the collection either
+    /// way.
     ///
     /// Re-running rather than returning the fetched ref is deliberate: the
     /// collection stays the single source of truth for what is resident, which
     /// is what makes identity fall out of it (README § the resident set IS the
     /// cache). A path that answered from the fetch directly could hand back a
     /// record the collection does not hold.
-    pub fn find_or_fetch(&mut self, data: &DbRef, db: u16, key: &[crate::keys::Content]) -> DbRef {
-        let found = self.find(data, db, key);
-        if found.rec != 0 {
-            return found; // resident: no query, no source, ordinary loft speed
-        }
-        self.fetch_missing(data, db, key)
-    }
-
-    /// The fetch half of [`find_or_fetch`], split out so the resident path stays
-    /// a plain `find` with one comparison after it.
-    fn fetch_missing(&mut self, data: &DbRef, db: u16, key: &[crate::keys::Content]) -> DbRef {
+    ///
+    /// **@PLN133 S8 — the miss and the fetch are separate calls, and their two
+    /// callers make the decision between them.** `Stores` cannot run a loft
+    /// function and `State` can, so a fetch that IS loft code needs the
+    /// `&mut Stores` borrow released between the two — which is only possible
+    /// where the borrow is taken. The retry is unchanged; only who sequences it
+    /// moved.
+    pub(crate) fn fetch_missing(
+        &mut self,
+        data: &DbRef,
+        db: u16,
+        key: &[crate::keys::Content],
+    ) -> DbRef {
         let Some(source) = self.lazy_source(data) else {
             return DbRef {
                 store_nr: data.store_nr,

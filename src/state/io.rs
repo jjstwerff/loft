@@ -960,9 +960,118 @@ impl State {
         } else {
             // @PLN129 arc A — the miss path consults a bound source; identical to
             // `find` for an unbound collection, which is every collection today.
-            self.database.find_or_fetch(&data, db_tp, &key)
+            //
+            // @PLN133 S8 — split HERE rather than inside `Stores`, so the
+            // `&mut Stores` borrow ends between the miss and the fetch. That is
+            // the whole structural change: a fetch that is loft code has to run
+            // where a loft function CAN be run, and `Stores` is not that place.
+            let found = self.database.find(&data, db_tp, &key);
+            if found.rec != 0 {
+                found // resident: no query, no source, ordinary loft speed
+            } else if let Some(source) = self.database.lazy_loft_source(&data) {
+                // @PLN133 S8 — a backend core has no Rust driver for. The fetch
+                // is loft code, and the retry after it is arc A's rule
+                // unchanged: the collection stays the only authority on what is
+                // resident, so this never hands back what the fetch returned.
+                self.lazy_fetch_through_loft(&data, &key, &source);
+                self.database.find(&data, db_tp, &key)
+            } else {
+                self.database.fetch_missing(&data, db_tp, &key)
+            }
         };
         self.put_stack(res);
+    }
+
+    /// @PLN133 S8 — run the program's own lazy driver for one missing key.
+    ///
+    /// The driver is a loft function called `lazy_fetch`, and everything about
+    /// this is deliberately the ordinary call it looks like: it receives the
+    /// COLLECTION, so what it inserts lands in the very collection the lookup is
+    /// walking, and the caller then re-runs the lookup.
+    ///
+    /// ```loft
+    /// fn lazy_fetch(coll: hash<Person[id]>, source: text,
+    ///               key_int: integer, key_text: text) -> integer
+    /// ```
+    ///
+    /// Answer `1` when the record was inserted, `0` when the source was reached
+    /// and does not hold that key. **The two are not the same fact and must not
+    /// read the same** (@PLN129 arc C): "no such person" is stable and true,
+    /// "the source is down" is neither — so a driver that cannot reach its
+    /// source reports the reason through `store_lazy_fail` and the lookup
+    /// answers null.
+    ///
+    /// A FAULT inside the driver is contained rather than propagated
+    /// ([`State::run_until_return`]): a buggy driver must not turn a lookup into
+    /// a program halt, because that would make moving the source from Rust to
+    /// loft a regression against what @PLN129 already ships.
+    fn lazy_fetch_through_loft(
+        &mut self,
+        coll: &DbRef,
+        key: &[crate::keys::Content],
+        source: &str,
+    ) {
+        if self.data_ptr.is_null() {
+            self.database.lazy_fail(
+                coll,
+                "a lazy fetch needs a running program to call its driver",
+            );
+            return;
+        }
+        let data: &crate::data::Data = unsafe { &*self.data_ptr };
+        let d_nr = data.def_nr("n_lazy_fetch");
+        if d_nr == u32::MAX {
+            // Failure path 1, and it is the whole reason `Loft` is its own
+            // source kind: a backend that is not here must read as UNREACHABLE
+            // and name itself. Before this, `postgres://…` classified as a
+            // `.store` image and reported something about a paged reader.
+            self.database.lazy_fail(
+                coll,
+                &format!(
+                    "`{source}` needs a loft driver — define `fn lazy_fetch(coll, source, \
+                     key_int, key_text) -> integer` and bind the collection again"
+                ),
+            );
+            return;
+        }
+        // One key, whichever spelling it arrived in — the same limit the paged
+        // loader has, and for the same reason: a composite key needs @PLN125's
+        // associated types to carry it, and fetching the WRONG row is worse than
+        // answering absent.
+        let (key_int, key_text) = match key {
+            [crate::keys::Content::Long(k)] => (*k, String::new()),
+            [crate::keys::Content::Str(s)] => (0, s.str().to_string()),
+            _ => {
+                self.database.lazy_fail(
+                    coll,
+                    "a composite key cannot be fetched — a driver is given one key",
+                );
+                return;
+            }
+        };
+        let args = [
+            crate::state::LoftArg::Ref(*coll),
+            crate::state::LoftArg::Text(source),
+            crate::state::LoftArg::Int(key_int),
+            crate::state::LoftArg::Text(&key_text),
+        ];
+        match self.run_until_return(d_nr, &args) {
+            // Inserted, or a genuine absence. Neither clears an earlier failure:
+            // a success says nothing about what a partial traversal already
+            // lost, and reporting "healthy" afterwards is exactly the silent
+            // wrong answer arc C exists to prevent.
+            Ok(1 | 0) => {}
+            // A driver that answered something else did not follow the contract,
+            // and guessing which of the two it meant is how an unreachable
+            // source starts reading as an empty table.
+            Ok(other) => self.database.lazy_fail(
+                coll,
+                &format!(
+                    "`lazy_fetch` answered {other}; it must answer 1 (inserted) or 0 (absent)"
+                ),
+            ),
+            Err(why) => self.database.lazy_fail(coll, &why),
+        }
     }
 
     /**

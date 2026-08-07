@@ -192,11 +192,53 @@ failure lives on a store-level channel a program can ask:
   this answers "how incomplete am I".
 - `store_lazy_clear(c)` — acknowledge those faults.
 
+- `store_lazy_fail(c, why)` — the WRITING end, for a driver written in loft.
+
 **Faults are STICKY.** An earlier version cleared on a later success, which
 recreated the same bug in a subtler place: a traversal whose first lookup could
 not reach the source and whose second could is MISSING data, and it reported
 healthy. Reachability says nothing about what an earlier failure already lost, so
 only `store_lazy_clear` clears — and a genuine absence does not clear it either.
+
+## A source core has no driver for: `fn lazy_fetch` (@PLN133 S8)
+
+Core drives one database in Rust (`sqlite:`). The loft library drives four behind
+one `SqlDb` interface. Restating the other three in Rust is N drivers now and +1
+forever, with the loft versions left to drift — so a collection bound to a scheme
+core does NOT drive (`postgres:` · `postgresql:` · `pg:` · `mysql:` · `mariadb:` ·
+`maria:` · `duckdb:`) calls **loft** on a miss:
+
+```loft
+fn lazy_fetch(coll: hash<Person[id]>, source: text,
+              key_int: integer, key_text: text) -> integer {
+  // …open `source`, query it, and insert into `coll`…
+  return 1;                      // 1 inserted · 0 absent
+}
+```
+
+It receives the COLLECTION, so what it inserts lands where the lookup is looking,
+and the lookup is then re-run — the collection stays the only authority on what is
+resident, exactly as for a Rust source. The third answer, *the source is down*,
+goes through `store_lazy_fail(coll, why)`: it carries a reason, and answering `0`
+for it would make an unreachable source read as an empty table.
+
+**A fault inside the driver is CONTAINED.** For an ordinary call, propagating a
+fault is right; for a fetch it is not, because C80 says a failed fetch reports
+through `store_lazy_error` and the lookup answers null. So a buggy driver leaves
+the lookup answering null with a reason, the outer frame intact, and the program
+running.
+
+Two limits, both current:
+
+- **`--native` cannot call the driver yet** and reports that instead of
+  answering — the one thing it must never do is answer "no such row".
+- **A contained fault leaks what the aborted driver had allocated**, one store
+  per failed fetch. A frame's locals are freed by the scope-exit bytecode the
+  fault skipped, so a releasing unwind is still owed (@PLN133 S8).
+
+**A binding with no `lazy_fetch` is REFUSED and says so** — *"`postgres://…`
+needs a loft driver"* — rather than being read as a `.store` image, which is what
+it used to be.
 
 ## `len` and iteration answer "what have I got"
 

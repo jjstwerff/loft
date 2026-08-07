@@ -491,8 +491,39 @@ pub fn OpGetRecord(
         }
     } else {
         // @PLN129 arc A — same miss path as the interpreter, so both backends
-        // agree about what is resident.
-        stores.find_or_fetch(&data, db_tp as u16, key)
+        // agree about what is resident. @PLN133 S8 splits the miss from the
+        // fetch at both callers rather than inside `Stores`; here it costs
+        // nothing (generated code is Rust calling Rust), and it keeps the two
+        // backends reading the same two calls in the same order.
+        let found = stores.find(&data, db_tp as u16, key);
+        if found.rec != 0 {
+            return found;
+        }
+        // @PLN133 S8 — a loft DRIVER is not reachable from here yet, and the
+        // divergence is reported rather than hidden.
+        //
+        // This helper is compiled into libloft, so it cannot see the generated
+        // `n_lazy_fetch` the way the interpreter sees its bytecode. Closing it
+        // needs generated `init()` to install a pointer to that function, which
+        // is generator work S9 carries. Until then a `postgres:` binding
+        // answers UNREACHABLE here and names why — the one thing it must never
+        // do is answer "no such row", which is how a missing backend starts
+        // reading as an empty table (README failure path 1).
+        if let Some(source) = stores.lazy_loft_source(&data) {
+            stores.lazy_fail(
+                &data,
+                &format!(
+                    "`{source}` is served by a loft driver, which `--native` cannot call \
+                     yet — run this on the interpreter, or use a backend core drives"
+                ),
+            );
+            return DbRef {
+                store_nr: data.store_nr,
+                rec: 0,
+                pos: 0,
+            };
+        }
+        stores.fetch_missing(&data, db_tp as u16, key)
     }
 }
 

@@ -179,6 +179,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_lazy_error_dest", n_store_lazy_error_dest),
     ("n_store_lazy_faults", n_store_lazy_faults),
     ("n_store_lazy_clear", n_store_lazy_clear),
+    ("n_store_lazy_fail", n_store_lazy_fail),
     // Each `#[cfg]` here gates exactly ONE array element, so every paged-store entry needs
     // its own. This one was missing it while its handler is `#[cfg(paged_store)]`, so the
     // wasm32-wasip2 rlib could not build at all — and `find_problems.sh` rebuilds it with
@@ -1372,6 +1373,19 @@ fn n_store_lazy_clear(stores: &mut Stores, stack: &mut DbRef) {
     let coll = *stores.get::<DbRef>(stack);
     let had = stores.lazy_clear(&coll);
     stores.put(stack, had);
+}
+
+/// Interpreter handler for `store_lazy_fail` — @PLN133 S8.  A loft DRIVER
+/// reporting that it could not reach its source, into the same sticky channel a
+/// Rust source's failure lands in.  Args pop in reverse: why, local.
+///
+/// It exists because a driver's third answer does not fit its return value: `1`
+/// and `0` are inserted and absent, and "the source is down" carries a reason
+/// that a caller must be able to tell apart from "no such key".
+fn n_store_lazy_fail(stores: &mut Stores, stack: &mut DbRef) {
+    let v_why = *stores.get::<Str>(stack);
+    let coll = *stores.get::<DbRef>(stack);
+    stores.lazy_fail(&coll, v_why.str());
 }
 
 /// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from

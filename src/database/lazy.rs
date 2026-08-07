@@ -25,7 +25,36 @@ pub enum LazySource {
     /// foreign schema, so a fetch is a derived query and a row to materialise.
     #[cfg(feature = "native-extensions")]
     Sql(crate::database::sql_source::Driver, String),
+    /// @PLN133 S8 — a database core has **no Rust driver for**, and loft does.
+    ///
+    /// Core binds one backend (sqlite); the loft library binds four behind one
+    /// interface. Rather than restate the other three in Rust — N drivers now
+    /// and +1 forever, with the loft versions left to drift — a source named by
+    /// one of their schemes is fetched by calling loft
+    /// ([`crate::state::State::run_until_return`]).
+    ///
+    /// **Its own variant rather than a fall-through**, because the fall-through
+    /// is what failure path 1 is about: before this, `postgres://…` classified
+    /// as a `.store` image and a miss reported something about a paged reader.
+    /// An unreachable backend must read as unreachable.
+    Loft(String),
 }
+
+/// The database schemes core routes to a loft driver.
+///
+/// The list is the loft library's four backends minus sqlite, which core has in
+/// Rust and which stays there — it is the CONTROL for the swap (@PLN133 S8/S9).
+/// Aliases are admitted because they are what a DSN already spells.
+const LOFT_SCHEMES: [&str; 8] = [
+    "postgres",
+    "postgresql",
+    "pg",
+    "mysql",
+    "mariadb",
+    "maria",
+    "duckdb",
+    "duck",
+];
 
 impl LazySource {
     /// Classify a binding's source string.
@@ -34,6 +63,15 @@ impl LazySource {
         #[cfg(feature = "native-extensions")]
         if let Some((driver, target)) = crate::database::sql_source::driver_of(source) {
             return LazySource::Sql(driver, target.to_string());
+        }
+        // The scheme is what precedes the first `:`, and only a scheme this
+        // build recognises as a DATABASE routes to loft. A Windows path
+        // (`C:\data\people.store`) has a colon and is not a scheme, which is why
+        // the list is closed rather than "anything before a colon".
+        if let Some((scheme, _)) = source.split_once(':')
+            && LOFT_SCHEMES.contains(&scheme.to_lowercase().as_str())
+        {
+            return LazySource::Loft(source.to_string());
         }
         LazySource::File(source.to_string())
     }
@@ -77,7 +115,38 @@ impl Stores {
             )),
             #[cfg(feature = "native-extensions")]
             LazySource::Sql(driver, target) => self.fetch_from_sql(*driver, target, data, db, key),
+            // Never reached through here: `State` peels a loft source off
+            // BEFORE calling the fetch, because running a loft function needs a
+            // `State` and this has only a `Stores`. Answering rather than
+            // panicking keeps the seam total — a caller that has not been
+            // taught the split gets a refusal, not a crash.
+            LazySource::Loft(source) => Fetched::Unreachable(format!(
+                "`{source}` is served by a loft driver, and this lookup did not route to one"
+            )),
         }
+    }
+
+    /// @PLN133 S8 — the binding's source, when it is one a LOFT driver serves.
+    ///
+    /// Asked before the fetch rather than inside it, because the answer decides
+    /// WHO fetches: `Stores` cannot run a loft function and `State` can, so the
+    /// two callers of the miss path make this call while they still hold both.
+    #[must_use]
+    pub fn lazy_loft_source(&self, coll: &DbRef) -> Option<String> {
+        let source = self.lazy_source(coll)?;
+        match LazySource::of(&source) {
+            LazySource::Loft(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Record a refusal against a collection, through arc C's channel.
+    ///
+    /// Public because @PLN133 S8's fetch runs in `State`, which is where the
+    /// refusal is now decided; the channel and its sticky first-reason rule are
+    /// unchanged.
+    pub fn lazy_fail(&mut self, coll: &DbRef, why: &str) {
+        self.lazy_refuse((coll.store_nr, coll.rec, coll.pos), why);
     }
 
     /// The `.store` image source — arc A's fetch, unchanged.

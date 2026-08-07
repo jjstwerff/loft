@@ -628,6 +628,29 @@ pub fn store_lazy_faults(local: reference) -> integer;
 pub fn store_lazy_clear(local: reference) -> boolean;
 #rust"stores.lazy_clear(&(@local))"
 
+// @PLN133 S8 — a loft DRIVER reporting that it could not reach its source.
+//
+// The writing end of the channel `store_lazy_error` reads. A driver written in
+// loft (`fn lazy_fetch(...)`) has the same three answers a Rust source has, and
+// two of them are an integer: `1` inserted, `0` absent. The third is not — "the
+// source is down" carries a REASON, and answering `0` for it is exactly the
+// silent wrong answer arc C exists to prevent, because a caller cannot tell it
+// from "no such person".
+//
+//   fn lazy_fetch(coll: hash<Person[id]>, source: text,
+//                 key_int: integer, key_text: text) -> integer {
+//     if !db.db_open(source) {
+//       store_lazy_fail(coll, "cannot open {source}: {db.db_last_error()}");
+//       return 0;
+//     }
+//     ...
+//   }
+//
+// Sticky and counted exactly like a Rust source's failure: the FIRST reason is
+// kept, every failure is counted, and only `store_lazy_clear` clears them.
+pub fn store_lazy_fail(local: reference, why: text) fs#read;
+#rust"stores.lazy_fail(&(@local), @why)"
+
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
 #rust"stores.load_key(&(@local), @path, @key)"
 #impure(io)

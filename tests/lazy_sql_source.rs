@@ -868,3 +868,129 @@ fn a_collection_field_is_an_owner_parameterised_query_both_backends() {
         );
     }
 }
+
+/// @PLN133 S8 — the lazy fetch is LOFT CODE, called re-entrantly from inside the
+/// lookup that missed.
+///
+/// Core drives one database in Rust (sqlite) and the loft library drives four
+/// behind one interface. Restating the other three in Rust is N drivers now and
+/// +1 forever, with the loft versions left to drift — so a collection bound to a
+/// scheme core has no driver for CALLS loft instead.
+///
+/// @PLN129 costed this as a bytecode-level control change and it is not: the
+/// retry already existed (the collection stays the only authority on what is
+/// resident), and what was missing is only that the fetch was Rust. The call
+/// uses the ordinary machinery — `fn_call` pushes the frame, the loop runs until
+/// it pops — so the driver returns through the path every other call uses.
+///
+/// **The two backends give different answers here, and that is asserted rather
+/// than hidden.** `--native` cannot reach the driver yet: `OpGetRecord` is
+/// compiled into libloft and cannot see the generated `n_lazy_fetch`, which
+/// needs generated `init()` to install a pointer to it. Until then it must
+/// report UNREACHABLE and name why — the one thing it must never do is answer
+/// "no such row", which is how a missing backend starts reading as an empty
+/// table.
+#[test]
+fn a_lazy_fetch_can_be_a_loft_function() {
+    let _serial = SQLITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/133-lazy-loft-driver.loft");
+    let run = |backend: &str| -> String {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg(&script)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("failed to invoke loft");
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        // stderr too: the store-leak warning is written there, and it is one of
+        // the things this test pins.
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    let s = run("--interpret");
+    // The fetch, and the retry after it. `same=true` is the claim that matters:
+    // the second lookup answers the same RECORD, which it can only do because
+    // the driver inserted into the collection and the collection was re-asked.
+    assert!(s.contains("hit=row-7"), "the driver's row must arrive: {s}");
+    assert!(
+        s.contains("again=row-7 same=true"),
+        "a repeat lookup is a resident HIT, and the same record: {s}"
+    );
+    // Exactly one driver line per MISS. Three misses reach the driver; the
+    // repeat of key 7 must not.
+    assert_eq!(
+        s.matches("driver source=postgres://localhost/loft key=7")
+            .count(),
+        1,
+        "a resident key must not re-enter the driver: {s}"
+    );
+    // Absence and unreachability are the same null and must never be the same
+    // fact — the pair is what makes this cell non-vacuous.
+    assert!(
+        s.contains("absent=true err=[]"),
+        "a genuine absence leaves the channel EMPTY: {s}"
+    );
+    assert!(
+        s.contains(
+            "unreachable=true err=[the postgres://localhost/loft server is not answering] faults=1"
+        ),
+        "an unreachable source reports the driver's own reason: {s}"
+    );
+    // A driver that FAULTS is contained. For an ordinary call propagating is
+    // right; for a fetch it would turn a lookup into a program halt, which is a
+    // regression against what @PLN129 already ships.
+    assert!(
+        s.contains("contained=true"),
+        "a faulting driver must answer null, not halt: {s}"
+    );
+    assert!(
+        s.contains("outer n=111 v=7,9"),
+        "the outer frame must survive the contained fault intact: {s}"
+    );
+    assert!(
+        s.contains("after=row-8 faults=2"),
+        "a LATER fetch must still work — the machinery has to be usable, not \
+         merely running: {s}"
+    );
+
+    // The known debt, PINNED rather than grandfathered. Containment truncates
+    // the abandoned frames, and a frame's locals are freed by the scope-exit
+    // bytecode the fault skipped — so whatever the aborted driver had allocated
+    // is left behind, one store per contained fault. The driver in the fixture
+    // allocates before it faults precisely so this is measurable: a driver that
+    // allocates nothing leaks nothing, which is what localises the fix to the
+    // abandoned frames rather than to the fetch.
+    //
+    // A traversal over an unreachable source therefore leaks once per failed
+    // fetch — the long-running case arc C's sticky counter exists for. When the
+    // releasing unwind lands this assertion INVERTS, and that is the point of
+    // writing it down as a measurement.
+    assert!(
+        s.contains("LzdBag×1"),
+        "@PLN133 S8: a contained fault still leaks the aborted frame's \
+         allocation — one store, measured. If this no longer holds, the \
+         releasing unwind landed: invert the assertion: {s}"
+    );
+
+    let n = run("--native");
+    assert!(
+        n.contains("`--native` cannot call yet"),
+        "--native must name the gap rather than answer 'no such row': {n}"
+    );
+    assert!(
+        !n.contains("hit=row-7"),
+        "--native must not silently appear to work: {n}"
+    );
+}

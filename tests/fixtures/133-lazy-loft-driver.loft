@@ -1,0 +1,98 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S8 — the lazy fetch is LOFT CODE.
+//
+// Core binds one database (sqlite, in Rust); the loft library binds four behind
+// one interface. Rather than restate the other three in Rust — N drivers now and
+// +1 forever, with the loft versions left to drift — a collection bound to a
+// scheme core has no driver for is fetched by CALLING loft, re-entrantly, from
+// inside the lookup that missed.
+//
+// @PLN129 costed this as a bytecode-level control change. It is not: the retry
+// after the fetch already existed (`find_or_fetch` always re-ran the lookup, so
+// the collection stays the only authority on what is resident), and what was
+// missing is only that the fetch was Rust. The call uses the ORDINARY call
+// machinery — `fn_call` pushes the frame, the loop runs until it pops — so the
+// driver returns through the same path every other call uses.
+//
+// Driven by `tests/lazy_sql_source.rs`, and deliberately NOT in `tests/scripts/`:
+// that directory is swept by `loft_suite`, which runs every file on both
+// backends under a leak gate — and this program is asymmetric on both counts by
+// design. `--native` cannot call the driver yet and must SAY so rather than
+// answer "no such row"; and a contained fault leaks exactly one store, which is
+// a measurement this test pins rather than a regression to grandfather.
+//
+// No database is opened here. The driver stands in for one, which is what makes
+// the CONTRACT testable rather than the plumbing: what a driver answers, and
+// what happens when it cannot answer at all.
+
+struct LzdPerson { id: integer, nm: text }
+struct LzdBag { rows: vector<LzdPerson> = [] }
+struct LzdWorld { people: hash<LzdPerson[id]> = [] }
+
+fn lzd_boom(n: integer) -> integer { return lzd_boom(n + 1) + 1; }
+
+// The driver core calls on a miss. It receives the COLLECTION, so what it
+// inserts lands in the very collection the outer lookup is walking — and the
+// caller then re-runs the lookup rather than trusting what came back.
+//
+// `1` inserted, `0` absent. The third answer does not fit an integer: "the
+// source is down" carries a REASON and must never read as "no such person"
+// (@PLN129 arc C), so it goes through `store_lazy_fail`.
+fn lazy_fetch(coll: hash<LzdPerson[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  println("  driver source={source} key={key_int}");
+  if key_int == 99 {
+    store_lazy_fail(coll, "the {source} server is not answering");
+    return 0;
+  }
+  // A driver that FAULTS must not halt the program — and this one allocates
+  // first, which is what makes the leak below measurable rather than theoretical.
+  if key_int == 1 {
+    b = LzdBag { };
+    b.rows += [LzdPerson { id: 1, nm: "scratch-{source}" }];
+    return lzd_boom(0) + len(b.rows);
+  }
+  if key_int > 100 { return 0 }
+  coll += [LzdPerson { id: key_int, nm: "row-{key_int}" }];
+  return 1;
+}
+
+fn main() {
+  w = LzdWorld { };
+  println("bound={store_bind_lazy(w.people, "postgres://localhost/loft")}");
+
+  // The fetch, and the retry that follows it.
+  a = w.people[7];
+  println("hit={a.nm ?? "-"}");
+  // The SAME key again is a resident hit: no driver line between these two, and
+  // the two lookups answer the same RECORD. Identity falling out of the
+  // collection is the whole model.
+  b = w.people[7];
+  println("again={b.nm ?? "-"} same={a == b}");
+
+  // Reached the source, and it does not hold this key. A genuine absence leaves
+  // the error channel EMPTY — that is the distinction the channel exists for.
+  c = w.people[200];
+  println("absent={c == null} err=[{store_lazy_error(w.people)}]");
+
+  // Unreachable is not absence. Same null, different fact, and the reason is
+  // the driver's own words.
+  d = w.people[99];
+  println("unreachable={d == null} err=[{store_lazy_error(w.people)}] faults={store_lazy_faults(w.people)}");
+
+  // A driver that faults is CONTAINED: the lookup answers null, the reason
+  // reaches arc C, and the outer frame is untouched. For an ordinary call
+  // propagating the fault is right; for a fetch it would turn a lookup into a
+  // program halt, which is a regression against what @PLN129 already ships.
+  outer_n = 111;
+  outer_v = [7, 8, 9];
+  e = w.people[1];
+  println("contained={e == null} err=[{store_lazy_error(w.people)}]");
+  println("outer n={outer_n} v={outer_v[0] ?? 0},{outer_v[2] ?? 0}");
+
+  // …and a LATER fetch still works. A contained fault must leave the machinery
+  // usable, not merely leave the program running.
+  f = w.people[8];
+  println("after={f.nm ?? "-"} faults={store_lazy_faults(w.people)}");
+}

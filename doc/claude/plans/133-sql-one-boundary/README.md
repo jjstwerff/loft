@@ -4,9 +4,11 @@
 ## Status
 
 **Building. All four probes ran 2026-08-06 and decided the architecture; S1–S6
-landed 2026-08-07** and are gated on both loft backends. Core is untouched: S1–S5
-are pure values and pure functions with no caller, and S6 only READS a
-catalogue.
+and S8 landed 2026-08-07.** S1–S5 are pure values and pure functions, S6 only
+READS a catalogue, and S8 is the first change to core: a lazy fetch can now BE a
+loft function, on the interpreter. `--native` reports the gap rather than
+answering, and a contained fault still leaks — both are named below and pinned by
+the test rather than left to be discovered.
 
 P1 **passes**, so **option B is viable**. P2 **passes for reads and fails for
 writes on sqlite**, which is a bounded, documented limit rather than a blocker.
@@ -19,7 +21,9 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S4 `reconcile` | **done** — read and write verdicts, six hand-built pairs |
 | S5 the connection string | **done** |
 | S6 `introspect` (sqlite) + the round trip, run twice | **done** |
-| S7–S14 | not started |
+| S7 the backend registry | not started — see § the design question below |
+| S8 core's lazy fault calls loft | **done on `--interpret`**; `--native` reports the gap |
+| S9–S14 | not started |
 
 Every measurement below is from the current tree and is cited so it can be
 re-checked rather than believed.
@@ -754,6 +758,65 @@ have `information_schema`, which is one query for all of them — but a
 cross-backend claim made without running it against a live server of each is
 exactly the gap P3 found in the float rendering.
 
+### S8 — the mechanism works, and it is smaller than @PLN129 costed it
+
+A collection bound to a scheme core has no Rust driver for now calls a LOFT
+function on a miss, re-entrantly, from inside the lookup:
+
+```loft
+fn lazy_fetch(coll: hash<Person[id]>, source: text,
+              key_int: integer, key_text: text) -> integer
+```
+
+`1` inserted, `0` absent, and the third answer — *the source is down* — goes
+through `store_lazy_fail`, because it carries a REASON and answering `0` for it
+is exactly what arc C exists to prevent.
+
+**Nothing about the call is new machinery.** `fn_call` pushes the frame and
+stores the return address exactly as a `Call` op does, and
+`State::run_until_return` runs the dispatch loop until that frame pops — so the
+driver returns through the path every other call uses. The `execute_at*` family
+could not serve: each RESETS `stack_pos` for a fresh par worker, which is right
+there and would discard the caller's frame here.
+
+**The structural change is where the miss/fetch decision lives.** It moved out of
+`Stores` into its two callers, because `Stores` cannot run a loft function and
+`State` can — the `&mut Stores` borrow has to end between the miss and the fetch,
+which is only possible where it is taken. The retry itself is unchanged.
+
+**Failure path 1 is closed as a side effect, and it was worse than the plan
+said.** `postgres://…` used to classify as a `.store` image, so a miss reported
+something about a paged reader. `LazySource::Loft` is now its own kind, and a
+binding with no driver answers *"`postgres://…` needs a loft driver — define `fn
+lazy_fetch(…)`"*.
+
+**Gated** by `tests/fixtures/133-lazy-loft-driver.loft` through
+`tests/lazy_sql_source.rs::a_lazy_fetch_can_be_a_loft_function`. Not in
+`tests/scripts/`: that directory is swept on both backends under a leak gate, and
+this program is asymmetric on both counts by design.
+
+#### What is NOT done, both named in the test
+
+- **`--native` cannot call the driver.** `OpGetRecord` is compiled into libloft
+  and cannot see the generated `n_lazy_fetch`; closing it needs generated
+  `init()` to install a pointer to that function, which is generator work. Until
+  then native REPORTS the gap and names it. That is the one thing it must do —
+  a missing backend answering "no such row" is how it starts reading as an empty
+  table.
+- **A contained fault still leaks, and the leak is now localised.** P4 measured
+  one store; this measures *which* one: a driver that faults having allocated
+  nothing leaks nothing, and one that allocates first leaks exactly what the
+  abandoned frame held, once per failed fetch. So the fix is scoped to the
+  abandoned frames rather than to the fetch — a frame's locals are freed by the
+  scope-exit bytecode the fault skipped, and truncating runs none of it.
+  `State::iter_frame_variables_at` (the UAF scanner's enumerator) is the
+  mechanism a releasing unwind would use, plus the variable table's ownership
+  flags to tell an owned local from a borrowed one. **Not attempted here on
+  purpose**: freeing a store the collection now points into is a use-after-free,
+  which is strictly worse than the leak, and separating the two needs a boundary
+  matrix rather than a plausible read. The test PINS the leak so the day it stops
+  is visible.
+
 ### S7 has a design question the plan did not name: `SqlDb` is STATIC dispatch
 
 Requirement 1 is *one string switches every SQL consumer in the process*, and S5
@@ -863,7 +926,7 @@ must agree on is the last thing that should have a gate that evaporates.
 |---|---|---|
 | **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
 | **S7** | The backend registry, used by the LIBRARY's own connect. No core change. **See the note below first — the obvious shape does not exist in loft.** | the library's four backends already pass their tests; the registry must not move them |
-| **S8** | Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched. | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
+| **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE on the INTERPRETER 2026-08-07**; `--native` reports the gap rather than answering. See the note below. | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
 | **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
 | **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |
 
