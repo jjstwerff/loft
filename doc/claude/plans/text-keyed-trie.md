@@ -187,6 +187,20 @@ forfeit the reason to build it.
 *Gate:* `c["kerk"..]` yields exactly the keys bearing that prefix, in order, `kerk`
 included; an absent prefix yields nothing rather than its neighbour.
 
+**Done at the runtime level** — `trie_db::prefix`. The surface spelling is step 6; this
+is the operation behind it, and the design question is answered rather than assumed: the
+prefix IS the query. Seek to it, then walk while the key still begins with it. Both
+halves rest on facts the tree already guarantees — `rtree_seek` lands on the first record
+BEARING the prefix (a probe carries id `0`), and in-order traversal is increasing key
+order, so every extension is contiguous from there. That makes the first key not
+beginning with the prefix an exact stop rather than a heuristic one, and it is why no
+successor string is needed.
+
+The gate is hand-computed from the bytes, and `"kerx"` is the cell that matters: it sorts
+between `kerkweg` and `lonneker`, so a seek lands on `lonneker` and a missing stop-check
+answers **that**. Proven non-vacuous by breaking the stop-check on purpose — `lonneker`
+then leaks into every prefix answer and two tests catch it.
+
 ### Step 6 — the keyword
 
 `trie<T[w]>`. `spatial` is untouched.

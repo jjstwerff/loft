@@ -184,6 +184,60 @@ pub fn records(coll: &DbRef, stores: &[Store]) -> Vec<u32> {
     out
 }
 
+/// Every record whose key begins with `pre`, in key order, capped at `limit`.
+///
+/// The capability that earns the kind its place, and the one `sorted` cannot offer.
+/// A `sorted` range needs a SUCCESSOR string — `c["kerk".."kerl"]` — which the caller
+/// has to construct, gets wrong at a byte boundary, and which answers a key INTERVAL
+/// rather than a prefix. Here the prefix is the query: seek to it, then walk while the
+/// key still begins with it.
+///
+/// Both halves lean on facts the tree already guarantees. `rtree_seek` positions at
+/// the lowest key `>= pre`, and because a probe carries id `0` that is the first
+/// record BEARING the prefix (`radix_tree`, and `r8` pins it). In-order traversal is
+/// increasing key order, so every extension of the prefix is contiguous from there —
+/// which makes the first key that does not begin with `pre` a correct stop, not a
+/// heuristic one.
+///
+/// An empty `pre` is every record, which is what "begins with nothing" means and what
+/// `starts_with` already answers.
+#[must_use]
+pub fn prefix(
+    coll: &DbRef,
+    stores: &[Store],
+    keys: &[Key],
+    pre: &[u8],
+    limit: Option<usize>,
+) -> Vec<u32> {
+    let store = crate::keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    let mut out = Vec::new();
+    let Some(key) = keys.first() else {
+        return out;
+    };
+    if tree == 0 {
+        return out;
+    }
+    let probe = |word: u32| bytes_word(pre, word);
+    let mut it = rt::rtree_seek(
+        store,
+        tree,
+        &probe,
+        pre.len() as u32 * 8,
+        &TextOracle { key },
+    );
+    let cap = limit.unwrap_or(usize::MAX);
+    let mut rec = it.rec();
+    while rec != 0 && out.len() < cap {
+        if !text_bytes(store, rec, key).as_bytes().starts_with(pre) {
+            break;
+        }
+        out.push(rec);
+        rec = it.next(store, tree).unwrap_or(0);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,5 +491,90 @@ mod tests {
                 "{w:?} survives the removal of its prefix-sibling"
             );
         }
+    }
+
+    /// The step-5 gate. Every expectation is hand-computed from the bytes.
+    ///
+    /// `WORDS` sorts `kerf kerk kerklaan kerkstraat kerkweg lonneker`, so:
+    ///   "kerk"  -> kerk and its three extensions, NOT kerf ('f' < 'k')
+    ///   "ker"   -> those four AND kerf, since `kerf` begins with `ker` too
+    ///   "kerkl" -> kerklaan alone
+    ///   "kerx"  -> nothing; it sorts between kerkweg and lonneker, so a seek lands on
+    ///              lonneker and a missing stop-check would answer that instead
+    ///   ""      -> everything
+    #[test]
+    fn a_prefix_yields_its_extensions_and_stops() {
+        let mut store = Store::new_in_use(1 << 14);
+        let keys = vec![w_key()];
+        let (coll, recs) = collection(&mut store);
+        let stores = std::slice::from_ref(&store);
+        let names = |v: Vec<u32>| -> Vec<&str> {
+            v.into_iter()
+                .map(|r| recs.iter().find(|(_, x)| *x == r).expect("known rec").0)
+                .collect()
+        };
+
+        assert_eq!(
+            names(prefix(&coll, stores, &keys, b"kerk", None)),
+            ["kerk", "kerklaan", "kerkstraat", "kerkweg"],
+            "the prefix itself is included, and kerf is not"
+        );
+        assert_eq!(
+            names(prefix(&coll, stores, &keys, b"ker", None)),
+            ["kerf", "kerk", "kerklaan", "kerkstraat", "kerkweg"],
+            "kerf begins with `ker`, so a shorter prefix widens the answer"
+        );
+        assert_eq!(
+            names(prefix(&coll, stores, &keys, b"kerkl", None)),
+            ["kerklaan"],
+            "a prefix that is not itself a key still finds its extension"
+        );
+        assert_eq!(
+            names(prefix(&coll, stores, &keys, b"lonneker", None)),
+            ["lonneker"],
+            "an exact key is a prefix of itself"
+        );
+        assert!(
+            prefix(&coll, stores, &keys, b"kerx", None).is_empty(),
+            "an absent prefix answers NOTHING, not the neighbour a seek lands on"
+        );
+        assert!(
+            prefix(&coll, stores, &keys, b"zzz", None).is_empty(),
+            "a prefix past the last key answers nothing"
+        );
+        assert_eq!(
+            names(prefix(&coll, stores, &keys, b"", None)).len(),
+            WORDS.len(),
+            "the empty prefix is every record"
+        );
+        assert_eq!(
+            names(prefix(&coll, stores, &keys, b"kerk", Some(2))),
+            ["kerk", "kerklaan"],
+            "the cap takes the first N in key order"
+        );
+    }
+
+    /// A prefix query must not be disturbed by a removal inside its run.
+    #[test]
+    fn a_prefix_reflects_a_removal_in_its_run() {
+        let mut store = Store::new_in_use(1 << 14);
+        let keys = vec![w_key()];
+        let (coll, recs) = collection(&mut store);
+        let (_, kerklaan) = *recs.iter().find(|(w, _)| *w == "kerklaan").unwrap();
+        remove(
+            &coll,
+            &DbRef {
+                store_nr: 0,
+                rec: kerklaan,
+                pos: PAYLOAD,
+            },
+            std::slice::from_mut(&mut store),
+            &keys,
+        );
+        let got: Vec<&str> = prefix(&coll, std::slice::from_ref(&store), &keys, b"kerk", None)
+            .into_iter()
+            .map(|r| recs.iter().find(|(_, x)| *x == r).expect("known rec").0)
+            .collect();
+        assert_eq!(got, ["kerk", "kerkstraat", "kerkweg"], "the run closes up");
     }
 }
