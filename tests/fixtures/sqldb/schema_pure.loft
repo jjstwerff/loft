@@ -1,0 +1,327 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S2–S5 — the table definition, on its own.
+//
+// Everything here is a value in and a value out, so this runs on a machine with
+// no database, no server and no C library. That is deliberate: the derivation
+// is what the reader and the writer must AGREE on, and a gate that needed a
+// database would only run where one is installed.
+//
+// Driven by `tests/native.rs`, on both loft backends.
+
+use schema;
+use sql;
+
+// The motivating shape: a keyed collection of a record with one of each column
+// type. `flag` is a boolean and `initial` a character, which the DDL must spell
+// differently even though loft stores the second as a codepoint.
+struct Person {
+  id: integer,
+  nm: text,
+  score: float,
+  flag: boolean,
+  initial: character,
+}
+
+// A composite, descending key — the two facts a `SELECT` cannot derive for
+// itself and an index must carry.
+struct Visit { person_id: integer, started: integer, note: text }
+
+// The trap failure path 6 names: an `index` element record carries red-black
+// links (`#left_1`, `#right_1`, `#color_1`) and `#color_1` is an ordinary
+// boolean. A derivation that filtered by field TYPE would put it in the DDL.
+struct Linked { lk: integer, payload: text }
+struct LinkedHolder { rows: index<Linked[lk]> = [] }
+
+// Not one column: a nested record is another table's row.
+struct Nested { id: integer, inner: Person }
+
+// A nullable field — the one thing in the DDL that is not a layout fact.
+struct Optional { oid: integer, note: text? }
+
+fn cols(t: TableDef) -> text {
+  out = "";
+  for c in t.columns { out += "{c.nm} " }
+  return out.trim();
+}
+
+fn main() {
+  // Every `type_of` is bound to a LOCAL before it is passed. A reflected record
+  // used directly as a call argument leaks on the interpreter — one record per
+  // call, and it takes the callee's freshly built vector with it from the second
+  // call on (loft#792). Binding first is the verified workaround, and it reads
+  // better anyway.
+
+  // --- a hash: one key, one index, five columns ------------------------------
+  people: hash<Person[id]> = [];
+  ti_people = type_of(people);
+  tp = derive(ti_people);
+  assert(tp.table_ok(), "person refused: {tp.refusal}");
+  assert(tp.nm == "person", "table name: {tp.nm}");
+  assert(cols(tp) == "id nm score flag initial", "columns: {cols(tp)}");
+
+  c0 = tp.column_named("id") ?? ColumnDef { nm: "", kind: ColOther };
+  c1 = tp.column_named("nm") ?? ColumnDef { nm: "", kind: ColOther };
+  c2 = tp.column_named("score") ?? ColumnDef { nm: "", kind: ColOther };
+  c3 = tp.column_named("flag") ?? ColumnDef { nm: "", kind: ColOther };
+  c4 = tp.column_named("initial") ?? ColumnDef { nm: "", kind: ColOther };
+  assert(c0.kind == ColInteger, "id: {c0.kind}");
+  assert(c1.kind == ColText, "nm: {c1.kind}");
+  assert(c2.kind == ColFloat, "score: {c2.kind}");
+  assert(c3.kind == ColBoolean, "flag: {c3.kind}");
+  // A character is stored as a codepoint and read back from a text column's
+  // first character, so TEXT is the spelling that round-trips.
+  assert(c4.kind == ColText, "initial: {c4.kind}");
+  // The column carries the loft field's own byte offset, which is what lets a
+  // key join to it without matching names.
+  assert(c0.position == 0, "id at {c0.position}");
+
+  assert(len(tp.indexes) == 1, "one index: {len(tp.indexes)}");
+  ix = tp.indexes[0] ?? IndexDef { nm: "" };
+  assert(ix.nm == "person_by_id", "index name: {ix.nm}");
+  assert(len(ix.columns) == 1, "index columns: {len(ix.columns)}");
+  ic = ix.columns[0] ?? IndexColumn { nm: "" };
+  assert(ic.nm == "id" && ic.ascending, "index column: {ic.nm}/{ic.ascending}");
+
+  // --- a composite, descending key ------------------------------------------
+  //
+  // Both facts come from the collection's declaration and nowhere else: the
+  // ORDER of the two key columns, and that the second is descending.
+  visits: index<Visit[person_id, -started]> = [];
+  ti_visits = type_of(visits);
+  tv = derive(ti_visits);
+  assert(tv.table_ok(), "visit refused: {tv.refusal}");
+  vix = tv.indexes[0] ?? IndexDef { nm: "" };
+  assert(vix.nm == "visit_by_person_id_started", "composite index: {vix.nm}");
+  assert(len(vix.columns) == 2, "composite width: {len(vix.columns)}");
+  v0 = vix.columns[0] ?? IndexColumn { nm: "" };
+  v1 = vix.columns[1] ?? IndexColumn { nm: "" };
+  assert(v0.nm == "person_id" && v0.ascending, "key 0: {v0.nm}/{v0.ascending}");
+  assert(v1.nm == "started" && !v1.ascending, "key 1: {v1.nm}/{v1.ascending}");
+
+  // --- the synthetic fields are NOT columns ---------------------------------
+  //
+  // Non-vacuous because `#color_1` is an ordinary boolean: it is exactly the
+  // field a type filter would have admitted.
+  holder = LinkedHolder { };
+  ti_rows = type_of(holder.rows);
+  tl = derive(ti_rows);
+  assert(tl.table_ok(), "linked refused: {tl.refusal}");
+  assert(cols(tl) == "lk payload", "linked columns: {cols(tl)}");
+
+  // --- refusals name what is wrong ------------------------------------------
+  nested = Nested { id: 1, inner: Person { } };
+  ti_nested = type_of(nested);
+  tn = derive(ti_nested);
+  assert(!tn.table_ok(), "a nested record is not one column");
+  assert(tn.refusal.find("inner") != null, "refusal names the field: {tn.refusal}");
+
+  spots: spatial<Person[id, score]> = [];
+  ti_spots = type_of(spots);
+  ts = derive(ti_spots);
+  assert(!ts.table_ok(), "a spatial collection has no SQL shape");
+  assert(ts.refusal.find("spatial") != null, "refusal names the kind: {ts.refusal}");
+
+  ti_scalar = type_of(1);
+  ti = derive(ti_scalar);
+  assert(!ti.table_ok(), "a scalar is not a table");
+
+  // A plain record derives its columns and NO index — nothing in a record says
+  // what it is looked up by, and inventing one would be the writer deciding a
+  // fact the reader also decides.
+  person = Person { };
+  ti_person = type_of(person);
+  tr = derive(ti_person);
+  assert(tr.table_ok(), "record refused: {tr.refusal}");
+  assert(len(tr.indexes) == 0, "a record implies no index");
+  assert(cols(tr) == "id nm score flag initial", "record columns: {cols(tr)}");
+
+  // --- S3: the same definition, in four engines' spellings -------------------
+  //
+  // Every expected string below is HAND-WRITTEN. Comparing one generator
+  // against another would prove they agree, which is not the question — the
+  // question is whether either is right, and only a string someone wrote by
+  // reading the engine's manual can answer that.
+  //
+  // Four differences ride in these four lines, and each of them is a measured
+  // fact rather than a preference: mariadb's backticks (ANSI quotes reach it as
+  // a syntax error), `DOUBLE PRECISION` vs `DOUBLE` vs `REAL`, duckdb's
+  // `VARCHAR`, and sqlite having no boolean type at all.
+  ddl_pg = tp.render(dialect_postgres());
+  assert(len(ddl_pg) == 2, "postgres statements: {len(ddl_pg)}");
+  assert((ddl_pg[0] ?? "") == `CREATE TABLE "person" ("id" BIGINT NOT NULL, "nm" TEXT NOT NULL, "score" DOUBLE PRECISION NOT NULL, "flag" BOOLEAN NOT NULL, "initial" TEXT NOT NULL)`,
+         "postgres DDL: {ddl_pg[0] ?? ""}");
+  assert((ddl_pg[1] ?? "") == `CREATE INDEX "person_by_id" ON "person" ("id" ASC)`,
+         "postgres index: {ddl_pg[1] ?? ""}");
+
+  ddl_sq = tp.render(dialect_sqlite());
+  assert((ddl_sq[0] ?? "") == `CREATE TABLE "person" ("id" INTEGER NOT NULL, "nm" TEXT NOT NULL, "score" REAL NOT NULL, "flag" INTEGER NOT NULL, "initial" TEXT NOT NULL)`,
+         "sqlite DDL: {ddl_sq[0] ?? ""}");
+
+  ddl_ma = tp.render(dialect_maria());
+  assert((ddl_ma[0] ?? "") == "CREATE TABLE `person` (`id` BIGINT NOT NULL, `nm` TEXT NOT NULL, `score` DOUBLE NOT NULL, `flag` BOOLEAN NOT NULL, `initial` TEXT NOT NULL)",
+         "maria DDL: {ddl_ma[0] ?? ""}");
+  assert((ddl_ma[1] ?? "") == "CREATE INDEX `person_by_id` ON `person` (`id` ASC)",
+         "maria index: {ddl_ma[1] ?? ""}");
+
+  ddl_du = tp.render(dialect_duckdb());
+  assert((ddl_du[0] ?? "") == `CREATE TABLE "person" ("id" BIGINT NOT NULL, "nm" VARCHAR NOT NULL, "score" DOUBLE NOT NULL, "flag" BOOLEAN NOT NULL, "initial" VARCHAR NOT NULL)`,
+         "duckdb DDL: {ddl_du[0] ?? ""}");
+
+  // A DESCENDING composite index, in declaration order — the two facts the
+  // collection's type carries and a table cannot recover for itself.
+  ddl_v = tv.render(dialect_postgres());
+  assert((ddl_v[1] ?? "") == `CREATE INDEX "visit_by_person_id_started" ON "visit" ("person_id" ASC, "started" DESC)`,
+         "composite index: {ddl_v[1] ?? ""}");
+
+  // A nullable field is the whole reason reflection reports nullability: this
+  // is not a more detailed DDL, it is a table that stops accepting rows the
+  // loft type would refuse.
+  optional: hash<Optional[oid]> = [];
+  ti_opt = type_of(optional);
+  to = derive(ti_opt);
+  ddl_o = to.render(dialect_postgres());
+  assert((ddl_o[0] ?? "") == `CREATE TABLE "optional" ("oid" BIGINT NOT NULL, "note" TEXT)`,
+         "nullable DDL: {ddl_o[0] ?? ""}");
+
+  // A refused definition renders NOTHING. A half-written `CREATE TABLE` is the
+  // one outcome worse than no statement at all.
+  assert(len(ts.render(dialect_sqlite())) == 0, "a refusal renders no DDL");
+
+  // The float READ expression, which a portable `SELECT v` gets wrong on two
+  // engines of four. sqlite needs the `!`; postgres needs the session setting
+  // instead, so its column is selected bare.
+  assert(dialect_sqlite().float_read(`"score"`) == `printf('%!.17g', "score")`,
+         "sqlite float read: {dialect_sqlite().float_read(`\"score\"`)}");
+  assert(dialect_postgres().float_read(`"score"`) == `"score"`, "postgres float read");
+  pg_setup = dialect_postgres().setup;
+  assert(len(pg_setup) == 1 && (pg_setup[0] ?? "").find("extra_float_digits") != null,
+         "postgres sets extra_float_digits on connect");
+
+  // --- S4: reconcile — the table loft FOUND, against the type it wants -------
+  //
+  // These `have` definitions are hand-built, standing in for what `introspect`
+  // will read back. That is the point of `TableDef` being one value: a table
+  // loft made and a table loft found are the same shape, so this can be tested
+  // without a database at all — and the test is not weaker for it, because the
+  // only thing `introspect` adds is where the value came from.
+
+  // 1. A table loft made itself. Reconciling must be trivial — no provenance
+  //    flag, no "is this ours" state, just the uniform rule agreeing with
+  //    itself.
+  b_self = reconcile(tp, tp);
+  assert(b_self.binding_ok(), "self-reconcile refused: {b_self.refusal}");
+  assert(b_self.binding_writable(), "self-reconcile not writable: {b_self.write_refusal}");
+  assert(len(b_self.columns) == 5, "self columns: {len(b_self.columns)}");
+  bc = b_self.columns[2] ?? ColumnBinding { column: "", position: -1, conversion: ConvText };
+  assert(bc.column == "score" && bc.conversion == ConvFloat, "score binding: {bc.conversion}");
+  // The binding carries the loft FIELD's offset, so materialising a row never
+  // matches on a column name. Asserted against the column it came from rather
+  // than against a number, because that identity is the claim.
+  assert(bc.position == c2.position, "score at {bc.position}, field at {c2.position}");
+
+  // 2. A FOREIGN table: different column order, a wider type, and one extra
+  //    column loft knows nothing about. This is the run that proves
+  //    requirement 3 — the first would pass even if reconcile always agreed.
+  foreign: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "created", kind: ColText, db_type: "timestamp", nullable: true },
+    ColumnDef { nm: "initial", kind: ColText, db_type: "char(1)" },
+    ColumnDef { nm: "flag", kind: ColInteger, db_type: "smallint" },
+    ColumnDef { nm: "score", kind: ColText, db_type: "numeric" },
+    ColumnDef { nm: "nm", kind: ColText, db_type: "varchar(80)" },
+    ColumnDef { nm: "id", kind: ColInteger, db_type: "bigint" },
+  ], indexes: [IndexDef { nm: "pk_person", columns: [IndexColumn { nm: "id" }] }] };
+  b_for = reconcile(tp, foreign);
+  assert(b_for.binding_ok(), "foreign refused: {b_for.refusal}");
+  assert(b_for.binding_writable(), "foreign not writable: {b_for.write_refusal}");
+  // Column ORDER in the table means nothing: the binding is in the loft type's
+  // order, because that is the order a record's fields are filled in.
+  assert(len(b_for.columns) == 5, "foreign columns: {len(b_for.columns)}");
+  f2 = b_for.columns[2] ?? ColumnBinding { column: "", position: -1, conversion: ConvText };
+  assert(f2.column == "score", "foreign column 2: {f2.column}");
+  // A float kept in a `numeric` and a float kept in a `double precision` are the
+  // same conversion, because every driver hands the value over as text.
+  assert(f2.conversion == ConvFloat, "numeric → float: {f2.conversion}");
+  f3 = b_for.columns[3] ?? ColumnBinding { column: "", position: -1, conversion: ConvText };
+  assert(f3.column == "flag" && f3.conversion == ConvBoolean, "smallint → boolean: {f3.conversion}");
+
+  // 3. A missing column refuses, and NAMES it.
+  short_tbl: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "id", kind: ColInteger }, ColumnDef { nm: "nm", kind: ColText },
+  ], indexes: [IndexDef { nm: "pk", columns: [IndexColumn { nm: "id" }] }] };
+  b_short = reconcile(tp, short_tbl);
+  assert(!b_short.binding_ok(), "a missing column must refuse");
+  // The REASON is asserted, not just that something refused. A reconcile that
+  // stopped looking for the column would still refuse this table — on the type
+  // of a column it never found — and the cell would pass while testing nothing.
+  assert(b_short.refusal.find("has no column") != null && b_short.refusal.find("score") != null,
+         "refusal must say the column is missing: {b_short.refusal}");
+
+  // 4. A type loft cannot read back refuses — the one genuine type refusal left
+  //    once everything crosses as text.
+  odd: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "id", kind: ColInteger }, ColumnDef { nm: "nm", kind: ColText },
+    ColumnDef { nm: "score", kind: ColOther, db_type: "geometry" },
+    ColumnDef { nm: "flag", kind: ColBoolean }, ColumnDef { nm: "initial", kind: ColText },
+  ], indexes: [IndexDef { nm: "pk", columns: [IndexColumn { nm: "id" }] }] };
+  b_odd = reconcile(tp, odd);
+  assert(!b_odd.binding_ok(), "an unreadable type must refuse");
+  assert(b_odd.refusal.find("geometry") != null, "refusal names the type: {b_odd.refusal}");
+
+  // 5. A missing INDEX refuses, and names the columns it wanted. It does not
+  //    ALTER: adding an index to someone else's populated table is mutating
+  //    their schema, and a lookup with no index is a silent table scan.
+  b_noix = reconcile(tp, TableDef { nm: "person", columns: foreign.columns });
+  assert(!b_noix.binding_ok(), "a missing index must refuse");
+  assert(b_noix.refusal.find("id") != null, "refusal names the index: {b_noix.refusal}");
+
+  // 6. READING and WRITING reach different verdicts about ONE table. An extra
+  //    `NOT NULL` column with no default is perfectly readable — `SELECT` names
+  //    only what loft wants — and no `INSERT` loft can build will satisfy it.
+  extra: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "id", kind: ColInteger }, ColumnDef { nm: "nm", kind: ColText },
+    ColumnDef { nm: "score", kind: ColFloat }, ColumnDef { nm: "flag", kind: ColBoolean },
+    ColumnDef { nm: "initial", kind: ColText },
+    ColumnDef { nm: "tenant", kind: ColInteger, has_default: false },
+  ], indexes: [IndexDef { nm: "pk", columns: [IndexColumn { nm: "id" }] }] };
+  b_extra = reconcile(tp, extra);
+  assert(b_extra.binding_ok(), "an extra column must not stop a READ: {b_extra.refusal}");
+  assert(!b_extra.binding_writable(), "an extra NOT NULL column must stop a WRITE");
+  assert(b_extra.write_refusal.find("tenant") != null, "write refusal names it: {b_extra.write_refusal}");
+
+  // --- S5: one string picks the driver ---------------------------------------
+  c_sq = parse_conn("sqlite:/tmp/app.db");
+  assert(c_sq.conn_ok() && c_sq.backend == "sqlite", "sqlite: {c_sq.refusal}");
+  assert(c_sq.target == "/tmp/app.db", "sqlite target: {c_sq.target}");
+
+  // libpq parses its own URI, so the driver that wants the scheme back gets the
+  // whole string. Carrying both is what stops one of them being re-derived.
+  c_pg = parse_conn("postgresql://ada@localhost/loft");
+  assert(c_pg.backend == "postgres", "postgresql alias: {c_pg.backend}");
+  assert(c_pg.full == "postgresql://ada@localhost/loft", "full: {c_pg.full}");
+  assert(parse_conn("pg:x").backend == "postgres", "pg alias");
+  assert(parse_conn("MySQL://h/db").backend == "maria", "mysql alias, case-folded");
+  assert(parse_conn("duckdb:w.duckdb").backend == "duckdb", "duckdb");
+
+  // A string that names nothing says so, quoting back what it saw. A backend
+  // loft cannot reach must read as UNREACHABLE, never as an empty answer that
+  // looks like an empty table.
+  c_no = parse_conn("oracle:whatever");
+  assert(!c_no.conn_ok(), "an unknown scheme must refuse");
+  assert(c_no.refusal.find("oracle") != null, "refusal names it: {c_no.refusal}");
+  assert(!parse_conn("app.db").conn_ok(), "a bare path is not a connection string");
+
+  // …and the string is what picks the dialect, which is requirement 1 in one
+  // line: the quoting changes because the connection string did.
+  dpg = c_pg.conn_dialect();
+  if dpg == null { assert(false, "postgres has a dialect") } else {
+    assert(dpg.quote == `"`, "postgres quoting");
+  }
+  dma = parse_conn("mariadb://h/db").conn_dialect();
+  if dma == null { assert(false, "maria has a dialect") } else {
+    assert(dma.quote == "`", "maria quoting");
+  }
+
+  println("schema ok");
+}

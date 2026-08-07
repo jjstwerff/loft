@@ -1,0 +1,8 @@
+[library]
+name = "schema"
+version = "0.0.1"
+
+# No `[c]` section, and that is the point: this package is the derivation, not a
+# driver. It holds no connection, opens no library and calls no foreign symbol,
+# so everything in it is a value in and a value out — testable on a machine with
+# no database at all.

@@ -1,0 +1,723 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 — ONE table definition, and the dialects that render it.
+//
+// The invariant this file exists to hold:
+//
+//   A loft type has exactly one table definition, and that definition is a
+//   VALUE — derived from the type, or read back from the database, in the SAME
+//   shape. Creating, following, querying and writing are all functions of that
+//   one value, so a table loft made and a table loft found are
+//   indistinguishable to everything downstream.
+//
+// So `TableDef` is built two ways and consumed four, and nothing downstream may
+// ask which way it was built. That is what removes the "is this table ours"
+// state a provenance flag would need — and a provenance flag would be a second
+// description of the same fact, which is the failure this whole design exists to
+// prevent.
+//
+// **Pure.** No connection, no store, no `#c`: a value in and a value out. That
+// is what makes it testable on a machine with no database, which is where the
+// unit gate for it runs.
+//
+// The source of a derived definition is @PLN127 reflection, which since @PLN133
+// S1 reports a keyed collection's KIND and its key fields — the two facts that
+// decide the index a writer must create and the query a reader derives. One
+// derivation choosing both is the only way those two agree.
+
+use sql;
+
+// --- the value ---------------------------------------------------------------
+
+/// What a column HOLDS, independent of how any engine spells it.
+///
+/// Four kinds, because four is what loft's own storage distinguishes at this
+/// boundary. A `character` is text: the reader takes a text column's first
+/// character, so writing one as a one-character string is the round trip that
+/// closes.
+pub enum ColumnType {
+  ColInteger,
+  ColFloat,
+  ColText,
+  ColBoolean,
+  /// A type this engine has that loft has no name for.
+  ///
+  /// Carried verbatim in `db_type` and never guessed at: whether an engine's
+  /// text rendering of its own type parses back is a fact about the ENGINE, and
+  /// a scalar field wanting one is refused rather than converted hopefully.
+  ColOther,
+}
+
+/// One column.
+pub struct ColumnDef {
+  const nm: text,
+  kind: ColumnType,
+  /// The ENGINE's own spelling, for a definition read back from a database;
+  /// `""` for one derived from a loft type, where the dialect chooses the
+  /// spelling at render time.
+  ///
+  /// This is the asymmetry the whole design turns on: where loft DEFINES the
+  /// table it picks the cleanest column type and pays nothing; where it FOLLOWS
+  /// one it accepts what is there and converts.
+  db_type: text = "",
+  /// May this column be SQL NULL?
+  nullable: boolean = false,
+  /// Byte offset of the loft field this column fills — the number
+  /// `FieldInfo.position` and `KeyInfo.position` both carry, so a key joins to
+  /// a column by value. `-1` for a column that is in the table and not in the
+  /// type.
+  position: integer = -1,
+  /// Would an `INSERT` that omits this column succeed?
+  ///
+  /// Only a column read back from a database can answer no, and it is the one
+  /// fact that makes a table readable but not writable. A derived definition
+  /// answers `true`: loft writes every column it named.
+  has_default: boolean = true,
+}
+
+/// One column of an index, in key order.
+pub struct IndexColumn { const nm: text, ascending: boolean = true }
+
+/// An index. Ordinary, never unique.
+///
+/// A `UNIQUE` index would be a claim about the DATA — that no two rows share a
+/// key — and this derivation has no evidence for it. Getting it wrong rejects
+/// rows the program meant to store, while an ordinary index serves the lookup
+/// either way, which is all @PLN129's bind requires.
+pub struct IndexDef { const nm: text, const columns: vector<IndexColumn> }
+
+/// One table.
+pub struct TableDef {
+  const nm: text,
+  const columns: vector<ColumnDef>,
+  /// The indexes this definition names.
+  ///
+  /// For a DERIVED definition, the one index the collection kind implies:
+  /// @PLN129 refuses a bind whose lookup no index serves, so a writer that
+  /// omits it produces a database its own reader cannot bind to. For one read
+  /// back from a database, whatever is actually there — none, one or several.
+  const indexes: vector<IndexDef>,
+  /// Why there is no definition here; `""` when there is one.
+  ///
+  /// Carried rather than returned apart, the way `SqlText` and `SqlProc` carry
+  /// theirs: ONE refusal idiom in this package, and a value a caller can pass
+  /// on without discharging it at every hop.
+  refusal: text = "",
+}
+
+/// Is there a definition here at all?
+pub fn table_ok(self: TableDef) -> boolean { return self.refusal == ""; }
+
+/// A refusal carrying its own reason, and no definition.
+fn no_table(why: text) -> TableDef {
+  return TableDef { nm: "", refusal: why };
+}
+
+// --- S2: derive — the definition a loft type implies --------------------------
+
+/// The fields a table has columns for.
+///
+/// This is `LayoutField::is_data` in core, restated against the reflected shape:
+/// not the struct-enum discriminant, not at position 65535, and not a
+/// `#`-prefixed synthetic. An `index` element record carries its own red-black
+/// links, and `#color_1` is an ordinary boolean — so filtering by field TYPE
+/// alone would put a column in the DDL that no reader ever selects, and break
+/// the round trip on the WRITER's side.
+fn is_data(f: FieldInfo) -> boolean {
+  return f.name != "enum" && f.position != 65535 && !f.name.starts_with("#");
+}
+
+/// What one loft field is stored as.
+fn column_type(k: TypeKind) -> ColumnType {
+  match k {
+    IntegerKind => ColInteger,
+    LongKind => ColInteger,
+    SingleKind => ColFloat,
+    FloatKind => ColFloat,
+    BooleanKind => ColBoolean,
+    TextKind => ColText,
+    // Stored as a codepoint, read back from a text column's first character.
+    CharacterKind => ColText,
+    // A nested record is another table's row, a vector is many rows, a stored
+    // reference is meaningless outside this process. None of them is a column,
+    // and `derive` refuses rather than inventing one.
+    _ => ColOther,
+  }
+}
+
+/// The default table name for a loft type: its own name, lowercased.
+///
+/// Lowercase because that is the spelling that means the same thing on every
+/// engine — PostgreSQL folds an unquoted name down, so a table created the
+/// ordinary way is already lowercase. A table that really is mixed-case is what
+/// a declared mapping is for.
+pub fn table_name_for(type_name: text) -> text { return type_name.to_lowercase(); }
+
+/// The table definition a loft type implies.
+///
+/// `t` is a keyed collection's `TypeInfo` — the shape a lazily-bound collection
+/// and an ORM write both hold — or a plain record's. A collection also derives
+/// the INDEX its kind implies; a record derives columns only, because nothing
+/// in a record says what it is looked up by.
+///
+/// A refusal is the point, and it is carried in the answer: a table definition
+/// that quietly omits a field produces a database whose own reader disagrees
+/// with its writer, which is the failure this plan exists to remove.
+pub fn derive(t: TypeInfo) -> TableDef {
+  if t.collection == NotKeyed {
+    if t.kind == RecordKind || t.kind == VariantKind {
+      return derive_columns(t, t.name);
+    }
+    return no_table("{t.name} is neither a record nor a keyed collection");
+  }
+  // A spatial index is a Morton-order structure over coordinates, and SQL has
+  // no shape that means the same thing. Refusing is the honest answer: the
+  // alternative is a bounding-box scan that looks like a lazy fetch and reads
+  // the whole table.
+  if t.collection == KeyedRadix {
+    return no_table("a spatial collection has no SQL shape — its order is not one SQL can express");
+  }
+  et = type_named(t.element);
+  if et == null {
+    return no_table("the element type {t.element} is not a type in this program");
+  }
+  elem = et ?? t;
+  if len(t.keys) == 0 {
+    return no_table("{t.name} has no resolvable key fields, so nothing says what a row is found by");
+  }
+  base = derive_columns(elem, elem.name);
+  // The reason rather than the value: `base` is used again below, so returning
+  // it here would copy a whole definition on the refusal path. A refusal has no
+  // columns to carry, so re-wrapping the reason loses nothing.
+  if base.refusal != "" { return no_table(base.refusal) }
+  ix = derive_index(t, base);
+  if ix.nm == "" {
+    return no_table("a key of {t.name} is not one of {elem.name}'s stored columns");
+  }
+  return TableDef { nm: base.nm, columns: base.columns, indexes: [ix] };
+}
+
+/// The columns of one record type, with no index.
+fn derive_columns(elem: TypeInfo, type_name: text) -> TableDef {
+  if elem.kind != RecordKind && elem.kind != VariantKind {
+    return no_table("{type_name} is not a record, so it has no columns");
+  }
+  cols: vector<ColumnDef> = [];
+  for f in elem.fields {
+    if !is_data(f) { continue }
+    ct = column_type(f.kind);
+    if ct == ColOther {
+      return no_table("{type_name}.{f.name} is a {f.type_name}, which is not one column");
+    }
+    cols += [ColumnDef {
+      nm: f.name,
+      kind: ct,
+      nullable: f.nullable,
+      position: f.position,
+    }];
+  }
+  if len(cols) == 0 {
+    return no_table("{type_name} has no stored columns");
+  }
+  return TableDef { nm: table_name_for(type_name), columns: cols };
+}
+
+/// The index a collection kind implies, or one with an empty name when a key
+/// does not land on a column.
+///
+/// The kind decides the index and the query TOGETHER, from one derivation. That
+/// is not tidiness: @PLN129 refuses a bind whose lookup no index serves, so a
+/// writer that emits a table without this index produces a database its own
+/// reader cannot bind to.
+fn derive_index(t: TypeInfo, base: TableDef) -> IndexDef {
+  ixc: vector<IndexColumn> = [];
+  nms = "";
+  for k in t.keys {
+    col = column_at(base, k.position);
+    if col == "" { return IndexDef { nm: "" } }
+    ixc += [IndexColumn { nm: col, ascending: k.ascending }];
+    nms += "_{col}";
+  }
+  return IndexDef { nm: "{base.nm}_by{nms}", columns: ixc };
+}
+
+/// The column filled by the loft field at `position`, or `""`.
+///
+/// By POSITION, never by name: position is how the collection itself says which
+/// of the element's fields the key is, and a name-match would be a second,
+/// guessable derivation of a fact the descriptor already holds.
+fn column_at(self: TableDef, position: integer) -> text {
+  for c in self.columns {
+    if c.position == position { return c.nm }
+  }
+  return "";
+}
+
+/// The column named `nm`, or `null`.
+pub fn column_named(self: TableDef, nm: text) -> ColumnDef? {
+  for c in self.columns {
+    if c.nm == nm { return c }
+  }
+  return null;
+}
+
+/// Is there a column called `nm`?
+///
+/// Beside `column_named` rather than derived from it: the answer to "is it
+/// there" is a boolean, and taking it from a nullable RECORD makes every
+/// membership test allocate one.
+pub fn has_column(self: TableDef, nm: text) -> boolean {
+  for c in self.columns {
+    if c.nm == nm { return true }
+  }
+  return false;
+}
+
+// --- S3: render — the same definition, in one engine's spelling ---------------
+
+/// The facts about an engine that a table definition cannot derive.
+///
+/// Every one of these had to be MEASURED rather than assumed, and two of them
+/// were wrong in the first version of this design (@PLN133 P3):
+///
+/// - **Quoting comes from the backend, not from core.** `"person"` is an
+///   identifier in standard SQL and a string literal in MySQL, and no property
+///   of the name says which engine is listening. A connection string that
+///   switched the driver but not the quoting sends mariadb ANSI double quotes,
+///   which it rejects — a wrong query rather than a wrong result, and only
+///   because mariadb happened to reject it.
+/// - **A float needs a per-engine READ expression.** A portable `SELECT v` is
+///   lossy on two engines of four: sqlite renders a `REAL` as `%!.15g`, and
+///   PostgreSQL's `extra_float_digits` defaulted to 0 before PG12 and can be
+///   changed by any session. Both are silent — the value comes back almost
+///   right, which is the failure class that arrives as data.
+pub struct Dialect {
+  const nm: text,
+  /// The identifier quote character — `"` everywhere but mariadb.
+  const quote: text,
+  const int_type: text,
+  const float_type: text,
+  const text_type: text,
+  const boolean_type: text,
+  /// A float column is selected as `{float_before}<column>{float_after}`.
+  ///
+  /// Two fields rather than a template, because a template needs a substitution
+  /// pass and this needs a concatenation.
+  const float_before: text = "",
+  const float_after: text = "",
+  /// Statements the driver must run when it connects.
+  ///
+  /// PostgreSQL's `extra_float_digits` is the whole reason this exists: it is a
+  /// session setting, so the value a float reads back at is decided by whoever
+  /// connected, not by the schema. A driver that does not set it inherits
+  /// whatever the server was configured with.
+  const setup: vector<text>,
+  /// How this engine spells a bound parameter — `SQL_QMARK` or `SQL_DOLLAR`
+  /// from the `sql` package.
+  style: integer = 0,
+}
+
+pub fn dialect_sqlite() -> Dialect {
+  // sqlite has no separate boolean type; `INTEGER` is what it stores either
+  // way, and it is what the reader converts from.
+  //
+  // `printf`, not `format`: `format()` is sqlite 3.38+ and `printf()` is
+  // 3.8.3+. The `!` is the whole measurement — `%.17g` without it still loses
+  // 46% of random doubles, and `CAST(v AS TEXT)` loses 94%.
+  return Dialect {
+    nm: "sqlite", quote: "\"",
+    int_type: "INTEGER", float_type: "REAL", text_type: "TEXT",
+    boolean_type: "INTEGER",
+    float_before: "printf('%!.17g', ", float_after: ")",
+    style: SQL_QMARK,
+  };
+}
+
+pub fn dialect_postgres() -> Dialect {
+  // Nothing wraps the column: PostgreSQL's wire protocol returns every value as
+  // text already, so "parse it" is the native path — once `extra_float_digits`
+  // is set. Measured: 0 of 2000 random doubles inexact at 1 or 3, 1887 at 0.
+  return Dialect {
+    nm: "postgres", quote: "\"",
+    int_type: "BIGINT", float_type: "DOUBLE PRECISION", text_type: "TEXT",
+    boolean_type: "BOOLEAN",
+    setup: ["SET extra_float_digits = 3"],
+    style: SQL_DOLLAR,
+  };
+}
+
+pub fn dialect_maria() -> Dialect {
+  // Backticks, and MEASURED to matter: ANSI double quotes reach mariadb as
+  // `error in your SQL syntax … near '"loft_p"'`.
+  //
+  // Plain `v` is exact — 0 of 2000. `FORMAT(v, 17)` is not (1144 of 2000): it
+  // is a locale formatter, not a renderer, and it is the function whose name
+  // makes it look like the right answer.
+  return Dialect {
+    nm: "maria", quote: "`",
+    int_type: "BIGINT", float_type: "DOUBLE", text_type: "TEXT",
+    boolean_type: "BOOLEAN",
+    style: SQL_QMARK,
+  };
+}
+
+pub fn dialect_duckdb() -> Dialect {
+  return Dialect {
+    nm: "duckdb", quote: "\"",
+    int_type: "BIGINT", float_type: "DOUBLE", text_type: "VARCHAR",
+    boolean_type: "BOOLEAN",
+    style: SQL_QMARK,
+  };
+}
+
+/// The dialect this backend speaks, or `null` for a name loft has no driver for.
+///
+/// Null rather than a default: a connection string naming an engine this build
+/// cannot reach must be answered "unreachable", never quietly served by
+/// somebody else's spelling.
+pub fn dialect_named(nm: text) -> Dialect? {
+  // Each answer is bound to a local before it is returned. A library function
+  // returning `T?` whose value came straight from a CALL answers null to its
+  // caller — silently, on both backends, 19 runs in 20 (loft#793). Binding
+  // first is the verified workaround.
+  if nm == "sqlite" { d = dialect_sqlite(); return d }
+  if nm == "postgres" { p = dialect_postgres(); return p }
+  if nm == "maria" { m = dialect_maria(); return m }
+  if nm == "duckdb" { k = dialect_duckdb(); return k }
+  return null;
+}
+
+/// How a float column must be SELECTed to come back with every bit.
+pub fn float_read(self: Dialect, col: text) -> text {
+  return "{self.float_before}{col}{self.float_after}";
+}
+
+/// One identifier, spelled for this engine.
+///
+/// **Total, and deliberately NOT the `sql` package's `ident` gate.** That gate
+/// exists for a name that becomes SYNTAX unquoted, where the only safe answer to
+/// an odd name is to refuse it. Here every name is quoted, and quoting is total
+/// where refusing is not: doubling the engine's own quote character is how both
+/// dialects escape it, so a name containing one still round-trips instead of
+/// closing the identifier early.
+///
+/// The difference matters for requirement 3. A foreign table may have a column
+/// called `first name`, which `ident` refuses and quoting handles — and refusing
+/// it would mean refusing to follow a table that is perfectly readable.
+pub fn quote_ident(self: Dialect, nm: text) -> text {
+  return "{self.quote}{nm.replace(self.quote, self.quote + self.quote)}{self.quote}";
+}
+
+/// The engine's spelling of one column type.
+fn type_spelling(self: Dialect, k: ColumnType) -> text {
+  match k {
+    ColInteger => self.int_type,
+    ColFloat => self.float_type,
+    ColText => self.text_type,
+    ColBoolean => self.boolean_type,
+    // Never rendered: `derive` refuses a field that is not one column, and a
+    // definition read back from a database is never rendered as DDL.
+    ColOther => "",
+  }
+}
+
+/// The statements that CREATE this table — the table, then its index.
+///
+/// **No `IF NOT EXISTS`, deliberately.** Whether the table is there is decided
+/// by `introspect`, and the rule that follows from it — *loft never overwrites a
+/// structure it did not find missing* — belongs in loft's own code where it can
+/// be read, not hidden in an engine's tolerance for a repeated `CREATE`. A
+/// `CREATE` that hits an existing table then FAILS, which is the right backstop.
+///
+/// **The index is not optional.** @PLN129 refuses a bind whose lookup no index
+/// serves, so a writer that emits the table without it produces a database its
+/// own reader cannot bind to. The collection kind chooses both, from this one
+/// derivation, which is the only way the two agree.
+///
+/// Empty for a refused definition — a half-written `CREATE TABLE` is the one
+/// outcome worse than no statement at all.
+pub fn render(self: TableDef, d: Dialect) -> vector<text> {
+  out: vector<text> = [];
+  if self.refusal != "" { return out }
+  tname = d.quote_ident(self.nm);
+  body = "";
+  for c in self.columns {
+    if c#count > 0 { body += ", " }
+    body += "{d.quote_ident(c.nm)} {d.type_spelling(c.kind)}";
+    // `NOT NULL` is why reflection reports nullability at all. It does not make
+    // the DDL more detailed — it stops the table accepting rows the loft type
+    // would refuse.
+    if !c.nullable { body += " NOT NULL" }
+  }
+  out += ["CREATE TABLE {tname} ({body})"];
+  for ix in self.indexes {
+    out += [render_index(ix, tname, d)];
+  }
+  return out;
+}
+
+/// `CREATE INDEX "person_by_id" ON "person" ("id" ASC)`.
+pub fn render_index(ix: IndexDef, quoted_table: text, d: Dialect) -> text {
+  cols_sql = "";
+  for c in ix.columns {
+    if c#count > 0 { cols_sql += ", " }
+    dir = if c.ascending { "ASC" } else { "DESC" };
+    cols_sql += "{d.quote_ident(c.nm)} {dir}";
+  }
+  return "CREATE INDEX {d.quote_ident(ix.nm)} ON {quoted_table} ({cols_sql})";
+}
+
+// --- S4: reconcile — the table loft found, against the type it wants ----------
+//
+// This is where requirement 3 is paid for. `derive` says what loft WANTS;
+// `introspect` says what the database HAS; `reconcile` says whether the second
+// can serve the first, and how.
+//
+// It does not answer yes or no. It answers a BINDING carrying one conversion
+// per column — and one measurement collapsed most of what that was expected to
+// cost. Every driver here hands a value over as TEXT, because no `#c` path
+// carries a `double` by value (@PLN133 P3), so "convert a number kept in a
+// VARCHAR" and "read a BIGINT" are the same operation. The conversion is
+// therefore chosen by what the loft FIELD wants, and the database column decides
+// only whether it is possible at all.
+//
+// So the asymmetry the design leans on — loft CHOOSES where it defines the
+// table, and CONVERTS where it follows one — costs nothing at read time. It
+// survives at the two ends: at `CREATE`, where loft picks the cleanest type, and
+// at the write, where a value is bound.
+
+/// How a column's text becomes the loft field's value.
+pub enum Conversion {
+  ConvText,
+  ConvInteger,
+  ConvFloat,
+  ConvBoolean,
+}
+
+/// One column of a binding: which column fills which loft field, and what
+/// happens to the value on the way.
+pub struct ColumnBinding {
+  const column: text,
+  /// The loft field's byte offset — the number `KeyInfo` and `FieldInfo` both
+  /// carry, so nothing downstream matches on a name.
+  position: integer,
+  conversion: Conversion,
+}
+
+/// A table matched to a type.
+///
+/// **Reading and writing reconcile to different verdicts against the same
+/// table**, so the binding carries which it permits: a table with an extra
+/// `NOT NULL` column and no default is perfectly readable and impossible to
+/// `INSERT` into.
+pub struct Binding {
+  const table: text,
+  const columns: vector<ColumnBinding>,
+  /// Why this table cannot serve this type at all; `""` when it can.
+  refusal: text = "",
+  /// Why a row cannot be WRITTEN through this binding; `""` when it can.
+  write_refusal: text = "",
+}
+
+pub fn binding_ok(self: Binding) -> boolean { return self.refusal == ""; }
+
+/// May a row be written through this binding?
+pub fn binding_writable(self: Binding) -> boolean {
+  return self.refusal == "" && self.write_refusal == "";
+}
+
+fn no_binding(why: text) -> Binding { return Binding { table: "", refusal: why }; }
+
+/// What a loft field of this kind is read back as.
+fn conversion_for(k: ColumnType) -> Conversion {
+  match k {
+    ColInteger => ConvInteger,
+    ColFloat => ConvFloat,
+    ColBoolean => ConvBoolean,
+    ColText => ConvText,
+    ColOther => ConvText,
+  }
+}
+
+/// Does `have` hold an index over exactly `want`'s columns, in the same order?
+///
+/// Order matters and DIRECTION does not: a composite index answers a prefix
+/// query only in its own column order, while a b-tree is scanned either way.
+fn index_served(have: TableDef, want: IndexDef) -> boolean {
+  for hix in have.indexes {
+    if len(hix.columns) == len(want.columns) {
+      same = true;
+      for wc in want.columns {
+        hc = hix.columns[wc#count] ?? IndexColumn { nm: "\u{1}" };
+        if hc.nm != wc.nm { same = false }
+      }
+      if same { return true }
+    }
+  }
+  return false;
+}
+
+/// Match the definition loft WANTS against the one the database HAS.
+///
+/// Every refusal names the column or the index it is about, because a refusal a
+/// DBA cannot act on is only a slower failure.
+///
+/// **Columns are matched by NAME, never by position.** Position is how loft
+/// finds which of its own fields is the key; a foreign table's column ORDER
+/// means nothing and must never be read as meaning — which the hand-built
+/// foreign table in the gate scrambles on purpose.
+///
+/// **A declared mapping is not built yet.** `Person.name` living in
+/// `persoon.naam` is a fact the database owes loft nothing about, so it has to
+/// be stated somewhere; until it is, a foreign table has to use loft's own field
+/// names. The rule that would carry it is already fixed — the override replaces
+/// the default in ONE builder, so there is never a default path and an override
+/// path to drift apart.
+pub fn reconcile(want: TableDef, have: TableDef) -> Binding {
+  if want.refusal != "" { return no_binding(want.refusal) }
+  if have.refusal != "" { return no_binding(have.refusal) }
+
+  binds: vector<ColumnBinding> = [];
+  wr = "";
+  for wc in want.columns {
+    // The table's column is read field by field in a nested walk rather than
+    // through `column_named`. A `ColumnDef?` discharged with `??` materialises a
+    // record that is never freed — one per column, on the path a lazy fetch
+    // takes (the loft#792 family) — and reconcile needs three facts, not a
+    // record.
+    found = false;
+    h_kind: ColumnType = ColOther;
+    h_nullable = false;
+    h_db = "";
+    for hc in have.columns {
+      if hc.nm == wc.nm {
+        found = true;
+        h_kind = hc.kind;
+        h_nullable = hc.nullable;
+        h_db = hc.db_type;
+      }
+    }
+    if !found {
+      return no_binding("table {have.nm} has no column {wc.nm}");
+    }
+    // The one genuine type refusal. Everything crosses as text, so a number in
+    // a VARCHAR converts like any other — but whether an engine's text form of
+    // its OWN exotic type parses back into a loft scalar is a fact about the
+    // engine, and guessing it would put a plausible wrong number in the record.
+    if h_kind == ColOther && wc.kind != ColText {
+      return no_binding("column {wc.nm} is {h_db}, which loft cannot read back as a number or a boolean");
+    }
+    // A nullable field over a `NOT NULL` column reads fine and cannot be
+    // WRITTEN: the null the field is allowed to hold is the one value the
+    // column refuses.
+    if wc.nullable && !h_nullable && wr == "" {
+      wr = "column {wc.nm} is NOT NULL, and the loft field may be null";
+    }
+    binds += [ColumnBinding {
+      column: wc.nm,
+      position: wc.position,
+      conversion: conversion_for(wc.kind),
+    }];
+  }
+
+  // Extra columns are FINE for reading — a `SELECT` names only the columns loft
+  // wants. They are not fine for writing: an unknown `NOT NULL` column with no
+  // default makes an `INSERT` impossible, and no value loft holds can fill it.
+  for hc2 in have.columns {
+    if !want.has_column(hc2.nm) && !hc2.nullable && !hc2.has_default && wr == "" {
+      wr = "column {hc2.nm} is NOT NULL with no default and is not one of this type's fields";
+    }
+  }
+
+  // A missing index REFUSES; it does not silently `ALTER`. Creating a table
+  // where there was none fills absence. Adding an index to someone else's
+  // populated table mutates their schema, can take a long time, and can change
+  // their write performance — so it stays opt-in, and the refusal names the
+  // index that was wanted so a DBA can add it.
+  for wix in want.indexes {
+    if !index_served(have, wix) {
+      return no_binding("table {have.nm} has no index on {index_columns(wix)} — a lookup on it would read the whole table");
+    }
+  }
+
+  return Binding { table: have.nm, columns: binds, write_refusal: wr };
+}
+
+/// `person_id, started` — an index's columns, for a message a DBA can act on.
+pub fn index_columns(self: IndexDef) -> text {
+  out = "";
+  for c in self.columns {
+    if c#count > 0 { out += ", " }
+    out += c.nm;
+  }
+  return out;
+}
+
+// --- S5: the connection string ------------------------------------------------
+//
+// One string selects the driver, and requirement 1 is that it selects it for
+// EVERY consumer in the process — a lazily-bound collection, a client routine
+// and an ORM write — with no other edit anywhere.
+//
+// Pure: this decides which backend a string NAMES. Whether that backend is in
+// this build is a separate question with its own answer (`c_library_available`),
+// and keeping the two apart is what lets an unreachable backend say
+// "unreachable" instead of "no such row".
+
+/// Which backend a connection string names, and what to hand it.
+pub struct Conn {
+  /// The driver's name — `sqlite`, `postgres`, `maria` or `duckdb`.
+  const backend: text,
+  /// Everything after `scheme:`. What a driver that takes a path or a DSN wants.
+  const target: text,
+  /// The string exactly as given. What a driver that parses its own URI wants —
+  /// libpq reads the whole `postgresql://…`, scheme included.
+  const full: text,
+  /// Why this string names no backend; `""` when it names one.
+  refusal: text = "",
+}
+
+pub fn conn_ok(self: Conn) -> boolean { return self.refusal == ""; }
+
+/// The driver a scheme names, or `""`.
+///
+/// Aliases are admitted because they are what people already write in a DSN,
+/// and a config file that works everywhere else should not fail here on a
+/// spelling.
+fn backend_of(scheme: text) -> text {
+  if scheme == "sqlite" || scheme == "sqlite3" || scheme == "file" { return "sqlite" }
+  if scheme == "postgres" || scheme == "postgresql" || scheme == "pg" { return "postgres" }
+  if scheme == "mysql" || scheme == "mariadb" || scheme == "maria" { return "maria" }
+  if scheme == "duckdb" { return "duckdb" }
+  return "";
+}
+
+/// Read a connection string.
+///
+/// A string that names nothing is REFUSED with the scheme it saw quoted back.
+/// That is the whole of failure path 1: a backend loft cannot reach must be
+/// "unreachable", never an empty answer that reads like an empty table.
+pub fn parse_conn(s: text) -> Conn {
+  at = s.find(":");
+  if at == null {
+    return Conn { backend: "", target: "", full: s,
+                  refusal: "{s} is not a connection string — it needs a scheme, as in sqlite:app.db" };
+  }
+  cut = at ?? 0;
+  scheme = s[0..cut].to_lowercase();
+  rest = s[(cut + 1)..size(s)];
+  b = backend_of(scheme);
+  if b == "" {
+    return Conn { backend: "", target: rest, full: s,
+                  refusal: "loft has no driver for {scheme} — it speaks sqlite, postgres, maria and duckdb" };
+  }
+  return Conn { backend: b, target: rest, full: s };
+}
+
+/// The dialect this connection speaks, or `null` when it names no backend.
+pub fn conn_dialect(self: Conn) -> Dialect? {
+  if self.refusal != "" { return null }
+  d = dialect_named(self.backend);   // bound first — loft#793
+  return d;
+}

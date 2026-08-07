@@ -1749,6 +1749,67 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     Ok(())
 }
 
+/// @PLN133 S2–S5 — one table definition, derived and reconciled, with no
+/// database anywhere.
+///
+/// The whole point of `TableDef` being a VALUE is that it is built two ways —
+/// derived from a loft type, or read back from a database — and consumed four,
+/// with nothing downstream allowed to ask which. That makes the derivation
+/// testable with no connection at all: the hand-built `have` definitions in the
+/// script stand in for what `introspect` will read, and they are the same shape,
+/// which is the invariant rather than a shortcut.
+///
+/// **So this cell is UNCONDITIONAL**, and that is what it is for. Every other
+/// SQL test in this file skips where a library or a server is missing; this one
+/// runs on any machine, so the derivation the reader and the writer must agree
+/// on has a gate that cannot evaporate into a green.
+///
+/// The DDL it asserts is HAND-WRITTEN per dialect. Comparing one generator
+/// against another proves they agree, which is not the question.
+#[test]
+fn one_table_definition_derives_reconciles_and_renders() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        // The `schema` package holds no `#c` at all, but it sits beside the
+        // backends in one lib directory and `sql` is compiled with it.
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("schema_pure.loft");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && stdout.contains("schema ok"),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // A leak here is not cosmetic. This derivation runs on the LAZY FETCH
+        // path, once per miss, so a record left behind per call is a traversal
+        // that grows the heap for as long as it runs.
+        assert!(
+            !stdout.contains("not freed"),
+            "{backend}: the derivation must leave nothing behind:\n{stdout}"
+        );
+    }
+    Ok(())
+}
+
 /// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
 /// compiled itself, with SQL NULL kept distinct from the empty string.
 ///

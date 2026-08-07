@@ -3,10 +3,22 @@
 
 ## Status
 
-**Design only — nothing built. BOTH GATING PROBES ARE RUN, and both answered
-2026-08-06** (§ Probe results). P1 **passes**, so **option B is viable** and the
-architecture is decided. P2 **passes for reads and fails for writes on sqlite**,
-which is a bounded, documented limit rather than a blocker.
+**Building. All four probes ran 2026-08-06 and decided the architecture; the
+INERT half of the ladder — S1–S5 — landed 2026-08-07** and is gated on both loft
+backends. Nothing is wired yet: core's lazy path is untouched, and every step so
+far is a pure value or a pure function with no caller.
+
+P1 **passes**, so **option B is viable**. P2 **passes for reads and fails for
+writes on sqlite**, which is a bounded, documented limit rather than a blocker.
+
+| | |
+|---|---|
+| S1 reflection: collection kind + keys | **done** — `tests/scripts/pln127-reflect.loft` |
+| S2 `TableDef` + `derive` | **done** — `tests/fixtures/sqldb/schema/` |
+| S3 `render` per dialect | **done** — hand-written DDL, four dialects |
+| S4 `reconcile` | **done** — read and write verdicts, six hand-built pairs |
+| S5 the connection string | **done** |
+| S6–S14 | not started |
 
 Every measurement below is from the current tree and is cited so it can be
 re-checked rather than believed.
@@ -687,6 +699,60 @@ Two reasons, and the second is the one that decides the shape:
   `WHERE k1 = ?` from a two-key collection — a query that reads the WRONG rows
   rather than fewer of them. Empty is a refusal a caller can see; partial is not.
 
+### S4 — "convert" and "identity" turn out to be the SAME operation
+
+The design leaned on an asymmetry: where loft defines the table the conversion is
+identity and nothing is paid; where it follows someone else's it accepts what is
+there and converts. Building it found that at READ time there is no difference at
+all — **every driver hands a value over as text**, because no `#c` path carries a
+`double` by value (P3), so "parse a number kept in a `VARCHAR`" and "read a
+`BIGINT`" are one code path. The conversion is chosen by what the loft FIELD
+wants; the database column decides only whether it is *possible*.
+
+That makes the asymmetry cheaper than costed, and it survives at the two ends
+where it is real: at `CREATE`, where loft picks the cleanest column type, and at
+the WRITE, where a value is bound.
+
+**What is left is one genuine type refusal**, and naming it is what stops
+`reconcile` degenerating into a function that always agrees: a column whose
+engine type loft has no name for (`geometry`, `bytea`) is refused for a numeric
+or boolean field. Whether an engine's text form of its own exotic type parses
+back is a fact about the engine, and guessing it puts a plausible wrong number in
+the record.
+
+**The write verdict is the other half, and it is not a subset of the read
+verdict.** A table with an extra `NOT NULL` column and no default is perfectly
+readable — `SELECT` names only the columns loft wants — and no `INSERT` loft can
+build will satisfy it. One `reconcile`, two answers, carried in the binding.
+
+### Three language defects the build surfaced, all pre-existing on `main`
+
+None of them is in this plan's code, all three reproduce on the released binary,
+and each has a workaround the schema package now uses:
+
+- **[loft#792](https://github.com/loft-lang/loft/issues/792)** — a reflected
+  record passed as a call ARGUMENT leaks on `--interpret`, and takes the callee's
+  freshly built vector with it from the second call on. `f(type_of(x))` leaks;
+  `t = type_of(x); f(t)` does not. It is the temporary, not the type: a
+  hand-written struct of the same shape leaks nothing.
+- **[loft#793](https://github.com/loft-lang/loft/issues/793)** — a LIBRARY
+  function returning `T?` answers **null** when the value came from a call.
+  Silent, both backends, and it is the reason `dialect_named` answered null for
+  every backend it had a dialect for. Measured with a repeat-run harness because
+  the first run happened to pass: **1 correct in 20** on `--interpret`, **0 in 6**
+  on `--native`, **10 in 10** with the same code in one file, and **20 in 20**
+  with the result bound to a local first.
+- **[loft#794](https://github.com/loft-lang/loft/issues/794)** — reading BOTH
+  loops' `#count` inside a nested loop body aborts the compiler. Loud, so no
+  wrong answer, but it has no workaround and the natural spelling of a
+  match-by-position probe runs straight into it.
+
+**The one worth generalising is #793**, and not for its cause: a single run of
+the broken shape passed. A wrong answer that is only *usually* wrong reads as a
+flake, and every "I could not reproduce it" in this session came from trusting
+one run. The harness — clear the cache, run twenty, count — is what turned it
+from an anecdote into a filed defect with a verified workaround.
+
 ## Implementation steps — small, safe, each one green
 
 Ordered by **risk, not dependency**: the two unknowns are probed before anything
@@ -714,10 +780,18 @@ swap causes.
 | # | do | green because |
 |---|---|---|
 | **S1** | ~~Reflection gains the collection KIND, its key fields and the direction bit, each carrying `position`.~~ **DONE 2026-08-07** — `TypeInfo.collection` (`CollectionKind`) and `TypeInfo.keys` (`vector<KeyInfo>`); gated in `tests/scripts/pln127-reflect.loft` on both backends. | additive; the new fields have no reader yet |
-| **S2** | `TableDef` the value, and `derive(T)` from reflection. Must exclude synthetic fields the way `LayoutField::is_data` does. | a pure function with unit tests |
-| **S3** | `render(TableDef, dialect) -> DDL`, including the index the collection kind implies. | unit-tested against hand-written expected DDL per dialect — hand-written, so agreement between two generators cannot pass for correctness |
-| **S4** | `reconcile(want, have) -> Binding \| Refusal`, carrying per-column conversions. | pure; tested on hand-built pairs: exact match, missing column, incompatible type, extra column, missing index, a number in a `VARCHAR` |
-| **S5** | The connection-string parser: `scheme:rest` → backend name. | pure; nothing routes through it |
+| **S2** | ~~`TableDef` the value, and `derive(T)` from reflection.~~ **DONE 2026-08-07** | a pure function with unit tests |
+| **S3** | ~~`render(TableDef, dialect) -> DDL`, including the index the collection kind implies.~~ **DONE 2026-08-07** | unit-tested against hand-written expected DDL per dialect — hand-written, so agreement between two generators cannot pass for correctness |
+| **S4** | ~~`reconcile(want, have) -> Binding \| Refusal`, carrying per-column conversions.~~ **DONE 2026-08-07** | pure; tested on hand-built pairs: exact match, missing column, incompatible type, extra column, missing index, a number in a `VARCHAR` |
+| **S5** | ~~The connection-string parser: `scheme:rest` → backend name.~~ **DONE 2026-08-07** | pure; nothing routes through it |
+
+S2–S5 live in `tests/fixtures/sqldb/schema/` — a package with no `[c]` section at
+all, beside the four backends and the `SqlDb` interface. Gated by
+`tests/fixtures/sqldb/schema_pure.loft` through
+`tests/native.rs::one_table_definition_derives_reconciles_and_renders`, on both
+loft backends, **unconditionally**: it holds no connection, so unlike every other
+SQL test in that file it cannot skip. The derivation the reader and the writer
+must agree on is the last thing that should have a gate that evaporates.
 
 ### Wiring — one consumer at a time, sqlite kept as the control
 
