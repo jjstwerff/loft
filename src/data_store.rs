@@ -178,6 +178,7 @@ pub(crate) const TY_FUNCTION: u8 = 22;
 pub(crate) const TY_REWRITTEN: u8 = 23;
 pub(crate) const TY_TUPLE: u8 = 24;
 pub(crate) const TY_OPTIONAL: u8 = 25; // @PLN25 `τ?` — box-of-one child like RefVar
+pub(crate) const TY_TRIE: u8 = 26; // `trie<T[k]>` — ONE text key, appended so 0..=25 keep their numbers
 
 /// Element strides for the non-`Node` vectors the TypeT half uses.
 pub(crate) const TYPET_STRIDE: u32 = 33; // `TypeT` enum record size
@@ -210,6 +211,9 @@ pub(crate) const TYSORTED_DEP: u32 = 16;
 pub(crate) const TYINDEX_N: u32 = 8;
 pub(crate) const TYINDEX_KEYS: u32 = 4;
 pub(crate) const TYINDEX_DEP: u32 = 16;
+pub(crate) const TYTRIE_KEY: u32 = 4; // the one key NAME (text), where Radix carries a name list
+pub(crate) const TYTRIE_N: u32 = 8;
+pub(crate) const TYTRIE_DEP: u32 = 16;
 pub(crate) const TYRADIX_N: u32 = 8;
 pub(crate) const TYRADIX_NAMES: u32 = 4;
 pub(crate) const TYRADIX_DEP: u32 = 16;
@@ -403,6 +407,7 @@ pub(crate) const PT_INDEX: u8 = 14;
 pub(crate) const PT_RADIX: u8 = 15;
 pub(crate) const PT_DB_REF: u8 = 16;
 pub(crate) const PT_CHILD_REC: u8 = 17;
+pub(crate) const PT_TRIE: u8 = 18;
 // `DbParts` field offsets (shared where variant shapes coincide).
 pub(crate) const PTSTRUCT_FIELDS: u32 = 4; // vector<DbField>
 pub(crate) const PTENUM_VALUES: u32 = 4; // vector<EnumPair>
@@ -414,6 +419,7 @@ pub(crate) const PTCONTENT: u32 = 8; // Vector/Array/Sorted/Ordered/Hash/Index/R
 pub(crate) const PTKEYS: u32 = 4; // Sorted/Ordered/Index (vector<KeyField>)
 pub(crate) const PTFIELDS: u32 = 4; // Hash/Radix (vector<integer>)
 pub(crate) const PTINDEX_LEFT: u32 = 16;
+pub(crate) const PTTRIE_KEY: u32 = 16; // Trie's key FIELD INDEX (content is at PTCONTENT)
 
 /// `DbType` (`database::Type`) record — `parents` is derived, not stored.
 pub(crate) const DBTYPE_STRIDE: u32 = 34;
@@ -503,6 +509,7 @@ pub enum TypeKind {
     Sorted,
     Index,
     Radix,
+    Trie,
     Hash,
     Function,
     Rewritten,
@@ -535,6 +542,7 @@ pub fn type_kind(disc: u8) -> TypeKind {
         TY_SORTED => TypeKind::Sorted,
         TY_INDEX => TypeKind::Index,
         TY_RADIX => TypeKind::Radix,
+        TY_TRIE => TypeKind::Trie,
         TY_HASH => TypeKind::Hash,
         TY_FUNCTION => TypeKind::Function,
         TY_REWRITTEN => TypeKind::Rewritten,
@@ -1248,6 +1256,7 @@ mod tests {
         assert_eq!(disc(ids.ty_sorted), TY_SORTED);
         assert_eq!(disc(ids.ty_index), TY_INDEX);
         assert_eq!(disc(ids.ty_radix), TY_RADIX);
+        assert_eq!(disc(ids.ty_trie), TY_TRIE);
         assert_eq!(disc(ids.ty_hash), TY_HASH);
         assert_eq!(disc(ids.ty_function), TY_FUNCTION);
         assert_eq!(disc(ids.ty_rewritten), TY_REWRITTEN);
@@ -1366,6 +1375,9 @@ mod tests {
         assert_eq!(pos(ids.ty_radix, "n"), TYRADIX_N);
         assert_eq!(pos(ids.ty_radix, "names"), TYRADIX_NAMES);
         assert_eq!(pos(ids.ty_radix, "dep"), TYRADIX_DEP);
+        assert_eq!(pos(ids.ty_trie, "n"), TYTRIE_N);
+        assert_eq!(pos(ids.ty_trie, "key"), TYTRIE_KEY);
+        assert_eq!(pos(ids.ty_trie, "dep"), TYTRIE_DEP);
         assert_eq!(pos(ids.ty_hash, "n"), TYHASH_N);
         assert_eq!(pos(ids.ty_hash, "names"), TYHASH_NAMES);
         assert_eq!(pos(ids.ty_hash, "dep"), TYHASH_DEP);
@@ -1539,6 +1551,9 @@ mod tests {
         assert_eq!(disc(ids.pt_hash), PT_HASH);
         assert_eq!(disc(ids.pt_index), PT_INDEX);
         assert_eq!(disc(ids.pt_radix), PT_RADIX);
+        assert_eq!(disc(ids.pt_trie), PT_TRIE);
+        assert_eq!(pos(ids.pt_trie, "content"), PTCONTENT);
+        assert_eq!(pos(ids.pt_trie, "key"), PTTRIE_KEY);
         assert_eq!(disc(ids.pt_db_ref), PT_DB_REF);
         assert_eq!(disc(ids.pt_child_rec), PT_CHILD_REC);
         assert_eq!(pos(ids.pt_struct, "fields"), PTSTRUCT_FIELDS);

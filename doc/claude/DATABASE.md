@@ -398,6 +398,7 @@ pub struct Type {
 | `Hash(u16, Vec<u16>)` | Open-addressing hash table; field indices as hash keys |
 | `Index(u16, Vec<(u16,bool)>, u16)` | Combo: sorted tree + hash table for a single collection |
 | `Radix(u16, Vec<u16>)` | Spatial index for `spatial<T[x,y]>` / `spatial<T[x,y,z]>` — Morton/Z-order radix tree, 1–3 coordinate axes (renamed from `Spatial`) |
+| `Trie(u16, u16)` | Text index for `trie<T[k]>` — the SAME radix tree over ONE text key; content type nr + the key field index |
 
 ### Field struct
 
@@ -917,6 +918,40 @@ See [INTERNALS.md](INTERNALS.md) for the full radix-tree API and record
 layout, and [plans/48-spacial-index/README.md](plans/48-spacial-index/README.md)
 for the design history.
 
+## Text Trie (`src/trie_db.rs`)
+
+`trie<T[k]>` keys on ONE **text** field. It shares `spatial`'s PATRICIA tree
+(`src/radix_tree.rs`) and nothing above it: `src/trie_db.rs` is the DB↔tree
+bridge with a byte-key oracle where `radix_db.rs` has a Morton one, and the two
+operation sets diverge from there — a bounding box means nothing for a word, and
+a prefix means nothing for a coordinate.
+
+**`spatial` is not called `radix` on purpose**, which is why this is a separate
+`Parts` kind rather than `Radix` with a second oracle. Sharing the storage
+structure is not sharing the kind; the rename to `Parts::Radix` was
+storage-honesty about the tree. Design and its falsified first draft:
+[plans/text-keyed-trie.md](plans/text-keyed-trie.md).
+
+Supported operations, both backends:
+- **Construct**: `t: trie<Word[w]> = [];`, including as a struct field.
+- **Append**: `t += [Word{w: "kerk"}];`.
+- **Iterate**: `for x in t { … }` — key order (byte order), no sort. The
+  terminator sorts before any byte, so `kerk` precedes `kerkstraat` precedes
+  `kerkweg`.
+- **Exact lookup**: `t["kerk"]` — the record, or `null`. Never a neighbour.
+- **Length**: `t.len()` — O(1), the tree's cached length word.
+- **Prefix slice**: `t["kerk"..]` / `t["kerk"..:n]` — every key BEGINNING with
+  the prefix, in key order, capped at `n`. This is the capability that earns the
+  kind its place: a `sorted` range needs a successor string the caller must
+  construct, and answers a key interval rather than a prefix. `t[a..b]` is
+  refused and names `sorted` as the kind that answers an interval.
+
+Exactly one key field, refused at the keyword: a trie orders one key's bytes, so
+several keys have no order to share.
+
+The gate is `tests/scripts/801-trie-text-keyed.loft` — hand-computed values on
+both backends with a `sorted` control alongside.
+
 ### Adding or changing a collection kind — the per-kind lists
 
 A `Parts` collection variant is not implemented in one place. It has to be
@@ -931,6 +966,9 @@ later as a crash or as silent corruption. loft#720 was three such omissions of
 | `Stores::find` / `remove` / `remove_owned` | Lookup or unlink silently does nothing, or reads the element at the wrong frame. |
 | `Stores::set_keyed` | `coll[k] = v` falls through to the update-only `OpCopyRecord`, which no-ops on an insert-miss — and copying into a null lookup **clobbers the collection root**. |
 | `towards_set_hash_remove` / the `OpSetKeyed` route (`parser/collections.rs`) | The removal or the insert never lowers to the runtime that handles it: the interpreter corrupts the store, `--native` fails to compile a void argument. |
+| The `is_radix` scratch selector (`parser/collections.rs`) | `for x in coll` takes the HASH builder — a bucket walk over a tree. `trie` hit this: the site names every keyed kind, so the sweep had counted it as mechanical and handled. |
+| `emit_field` (`generation/mod.rs`) | A keyed STRUCT FIELD's type id is never registered on `--native`, and its record reads as a struct with no fields (`field_type` indexes an empty list). Local-only vars still work, so it looks kind-specific rather than field-specific. |
+| `Iterated` (`database/descriptor.rs`) and its readers | The layout descriptor, `type_of(…).collection` and the lazy-store SQL deriver all match `Iterated` exhaustively, so these are compile errors — EXCEPT `ffi_deliver::collect_keyed`, which is `#[cfg(target_arch = "wasm32")]` and therefore dead on the host that compiles the audit, and `rewrite_iterated`, which closes with `_ => continue`. Check the wasm target explicitly. |
 
 Two habits that make the class visible instead of latent:
 
@@ -963,6 +1001,7 @@ loft runtime value
                             ├── Sorted/Index    → src/tree.rs  (+ src/vector.rs for Ordered)
                             ├── Hash            → src/hash.rs
                             ├── Radix           → src/radix_tree.rs + src/radix_db.rs
+                            ├── Trie            → src/radix_tree.rs + src/trie_db.rs
                             └── Key comparison  → src/keys.rs
 ```
 

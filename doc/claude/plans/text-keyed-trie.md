@@ -255,12 +255,35 @@ So step 6 must not be done the way step 2 was. Proposed split:
 
   So the real remaining work is smaller than 141 suggested: one mechanical sweep, and a
   handful of sites 6b already has to visit.
-- **6b — the parser surface.** `typedef.rs`'s keyword list and `definitions.rs`'s
-  `"trie"` arm, with `Stores::trie` (already in) behind it.
-- **6c — the IR codec.** `tools/ir_schema/ir.loft` gains a `Trie` tag, `ir_schema_gen.rs`
-  is regenerated, a `PT_TRIE`/`TY_TRIE` discriminant lands with its assertion, and the
-  three stubs are retired. A generated schema, so this is a regeneration pass, not edits.
-- **6d — the `.loft` gate**, incl. the leak case step 4 could not write.
+- **6b — the parser surface. DONE.** `typedef.rs`'s keyword list, `definitions.rs`'s
+  `"trie"` arm, `type trie;` in the stdlib, and `len(both: trie)`, with `Stores::trie`
+  behind them. The audit's 13 own-arm sites landed with it, and three things the audit
+  had NOT predicted came out of building it:
+
+  - **The prefix surface is 6b's, not step 5's.** The audit called `parse_key`'s range
+    diagnostic *"where the step-5 operation attaches to the surface"* and left it at
+    that. It is a whole path: `parse_trie_slice` (a trie subscript is exact-or-prefix,
+    and which one is only known after the key expression is parsed), `n_trie_prefix`,
+    `build_trie_prefix_vec`, and the arm in both backends. `t[a..b]` is refused with
+    the reason rather than silently answering a key interval, and the `spatial`
+    COORDINATE-slice refusal now records that a trie's absence from it is deliberate.
+  - **`fill.rs` is generated, and a new opcode shifts every one after it.** `len(trie)`
+    added `OpLengthTrie`; without `make fill` the interpreter's `OPERATORS` table was
+    one position off from `length_spatial` onward, and `for p in spatial<…>` — nothing
+    to do with a trie — SIGSEGV'd on an unrelated program. The oracle that caught it
+    was the INSTALLED binary answering correctly on the same file.
+  - **Two silent alternations the sweep had already "handled".** A trie took
+    `n_hash_sorted` for whole-collection iteration (the hash BUCKET walk over a radix
+    tree), and its `-=` never reached `OpHashRemove`. Both sites name every keyed kind
+    and both had been counted as mechanical.
+- **6c — the IR codec.** `ir_schema.rs`'s JSON side is DONE (self-describing, so both
+  encoder and decoder could land without regeneration). What remains is the STORE codec:
+  `tools/ir_schema/ir.loft` gains a `Trie` tag, `ir_schema_gen.rs` is regenerated, a
+  `PT_TRIE`/`TY_TRIE` discriminant lands with its assertion, and `ir_store.rs`'s two
+  stubs plus `ir_node.rs`'s one are retired.
+- **6d — the `.loft` gate. DONE** — `tests/scripts/801-trie-text-keyed.loft`, both
+  backends, with the leak case step 4 could not write (a trie as a struct field, torn
+  down with its container).
 
 The `Type`-level silence is also the argument for keeping the keyword last: with no way
 to declare a trie, all 141 are unreachable, so the audit can be done deliberately rather
@@ -269,6 +292,17 @@ than under a live-defect clock.
 *Gate:* every operation the keyword exposes answers on both backends — declare, insert,
 exact lookup, prefix range, iterate, free — against hand-computed values, with a
 `sorted` control alongside so a regression cannot hide in "both are empty".
+
+**Met.** Proven non-vacuous by breaking the prefix stop-check on purpose: `lonneker`
+leaks into the `kerk` answer and the gate fails on that assertion by name.
+
+*Beyond the parser, three consumers read a collection's KIND rather than its `Parts`* —
+`LayoutDesc`, `type_of(…).collection`, and the lazy-store query deriver. `Iterated::Trie`
+is exhaustive in all three, so each omission was a compile error — except in
+`ffi_deliver`, whose `collect_keyed` is `#[cfg(target_arch = "wasm32")]` and so is dead
+on the host that compiles the audit, and whose `rewrite_iterated` closes with `_ =>
+continue`. A wasm-only silent skip is the residual this design's own instrument could
+not see, and it is the same shape as *"a probe written in one platform's spelling"*.
 
 ### Step 7 — the diagnostics (loft#799)
 

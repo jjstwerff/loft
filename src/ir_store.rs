@@ -167,8 +167,11 @@ fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
             sort_key_list(stores, slot, ds::TYINDEX_KEYS, keys);
             dep_list(stores, slot, ds::TYINDEX_DEP, dep);
         }
-        Type::Trie(_, _, _) => {
-            unimplemented!("trie IR store encoding — step 6 of doc/claude/plans/text-keyed-trie.md")
+        Type::Trie(n, key, dep) => {
+            slot.set_discriminant(stores, ds::TY_TRIE);
+            slot.set_field_int(stores, ds::TYTRIE_N, i64::from(*n));
+            slot.set_field_str(stores, ds::TYTRIE_KEY, key);
+            dep_list(stores, slot, ds::TYTRIE_DEP, dep);
         }
         Type::Radix(n, names, dep) => {
             slot.set_discriminant(stores, ds::TY_RADIX);
@@ -556,8 +559,10 @@ fn write_db_parts(stores: &mut Stores, r: &Record, parts: &Parts) {
         // (`data_store.rs` pins each id and `ir_schema_roundtrip` guards the drift).
         // Deferred to step 3 for the same reason as the descriptor: it should land with
         // a test that can construct a trie.
-        Parts::Trie(_, _) => {
-            unimplemented!("trie IR encoding — step 3 of doc/claude/plans/text-keyed-trie.md")
+        Parts::Trie(c, key) => {
+            r.set_discriminant(stores, ds::PT_TRIE);
+            r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
+            r.set_field_int(stores, ds::PTTRIE_KEY, i64::from(*key));
         }
         Parts::Radix(c, fields) => {
             r.set_discriminant(stores, ds::PT_RADIX);
