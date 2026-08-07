@@ -1,0 +1,123 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN129 arc C / loft#802 — a lazy binding that CANNOT be served must say so
+// where the program can read it.
+//
+// The bug this guards: a `trie` bound to a `.store` image answered `true` from
+// `store_bind_lazy`, `null` from every lookup, `""` from `store_lazy_error`
+// (documented as "reachable, genuinely no such key") and `0` faults. The refusal
+// went to stderr, which no program can read — so a search box bound to a source
+// it cannot page shows "no results" forever, in perfect health.
+//
+// The CONTROLS are what make this a test rather than a description. `hash_ok`
+// must stay silent — a fix that reported every null as a refusal would pass the
+// refusal cells and destroy the channel. `unreachable` must keep its own,
+// MORE SPECIFIC reason (the connection error, not "cannot be opened"), which is
+// what the first attempt at this fix regressed.
+//
+// Driven by tests/store_persist_loft.rs with a scratch path, because a relative
+// path resolves against the PROGRAM's directory (@PLN9) and a suite script must
+// not write beside itself. No path, nothing to do.
+
+struct RfWord { const w: text, hits: integer }
+struct RfRow { const id: integer, v: integer }
+struct RfBig { const id: integer, tags: vector<text> }
+
+fn main() {
+  base = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  if base == "" { return }
+  mode = env_variable("LOFT_LAZY_MODE") ?? "";
+
+  trie_img = "{base}.trie";
+  hash_img = "{base}.hash";
+  big_img = "{base}.big";
+  sort_img = "{base}.sorted";
+
+  if mode == "write" {
+    t: trie<RfWord[w]> = [];
+    if !store_persist_bind(t, trie_img) { println("FAIL write-trie"); return }
+    t += [RfWord { w: "kerkstraat", hits: 3 }];
+    t += [RfWord { w: "lonneker", hits: 7 }];
+
+    h: hash<RfRow[id]> = [];
+    if !store_persist_bind(h, hash_img) { println("FAIL write-hash"); return }
+    h += [RfRow { id: 42, v: 4200 }];
+
+    // A `vector<text>` field is exactly what the working-set copy cannot
+    // relocate, so this image drives the refusal only a FETCH can decide.
+    b: hash<RfBig[id]> = [];
+    if !store_persist_bind(b, big_img) { println("FAIL write-big"); return }
+    big = RfBig { id: 7 };
+    big.tags += ["kerk"];
+    b += [big];
+
+    s: sorted<RfRow[id]> = [];
+    if !store_persist_bind(s, sort_img) { println("FAIL write-sorted"); return }
+    s += [RfRow { id: 1, v: 10 }];
+
+    println("seeded={t.len()},{h.len()},{b.len()},{s.len()}");
+    return
+  }
+
+  // A — the reported case. The kind can never be paged, and that is known at
+  // BIND: refusing at the call that is wrong beats refusing at an arbitrary
+  // later lookup.
+  tr: trie<RfWord[w]> = [];
+  println("trie_bound={store_bind_lazy(tr, trie_img)}");
+  println("trie_null={tr["kerkstraat"] == null} trie_speaks={store_lazy_error(tr) != ""}");
+  println("trie_faults={store_lazy_faults(tr)}");
+  // The message must name the KIND and the way out, not the #632 wrapper-struct
+  // trap — a `trie` local was told to "declare it as an annotated local", which
+  // it already was.
+  println("trie_names_kind={store_lazy_error(tr).contains("trie<RfWord[w]>")}");
+  println("trie_names_cure={store_lazy_error(tr).contains("store_load")}");
+
+  // F — the rule is the KIND SET, not `trie`. A `sorted` cannot page either.
+  so: sorted<RfRow[id]> = [];
+  println("sorted_bound={store_bind_lazy(so, sort_img)}");
+  println("sorted_speaks={store_lazy_error(so) != ""}");
+
+  // D — a refusal only a FETCH can decide: the local is a `hash`, so the bind is
+  // accepted, and the IMAGE is a foreign layout.
+  fl: hash<RfRow[id]> = [];
+  println("foreign_bound={store_bind_lazy(fl, trie_img)}");
+  println("foreign_null={fl[42] == null} foreign_speaks={store_lazy_error(fl) != ""}");
+  println("foreign_faults={store_lazy_faults(fl)}");
+
+  // E — the other fetch-time refusal: the entry has a field the working-set copy
+  // cannot relocate.
+  bg: hash<RfBig[id]> = [];
+  println("big_bound={store_bind_lazy(bg, big_img)}");
+  println("big_null={bg[7] == null} big_speaks={store_lazy_error(bg) != ""}");
+
+  // CONTROL 1 — a binding that WORKS stays silent. Without this cell, reporting
+  // every null as a refusal would pass every assertion above.
+  ok: hash<RfRow[id]> = [];
+  println("hash_bound={store_bind_lazy(ok, hash_img)}");
+  hit = ok[42];
+  println("hash_hit={hit.v} hash_quiet={store_lazy_error(ok) == ""}");
+  // A genuine absence is still an absence, and must not start speaking.
+  println("hash_absent={ok[999] == null} hash_still_quiet={store_lazy_error(ok) == ""}");
+  println("hash_faults={store_lazy_faults(ok)}");
+
+  // CONTROL 2 — an UNREACHABLE source keeps its own reason. The refusal channel
+  // must not preempt the more specific one: the paged loader says only "it
+  // cannot be opened as a paged source" where the open itself names the error.
+  ur: hash<RfRow[id]> = [];
+  println("ur_bound={store_bind_lazy(ur, "{base}.no-such-source")}");
+  println("ur_null={ur[42] == null} ur_speaks={store_lazy_error(ur) != ""}");
+  println("ur_specific={!store_lazy_error(ur).contains("as a paged source")}");
+
+  // CONTROL 3 — no leak. A refused DIRECT load must not poison an unrelated
+  // healthy binding made afterwards; the refusal is per-fetch, not global.
+  poison: hash<RfBig[id]> = [];
+  println("direct_refused={store_load_key(poison, big_img, 7)}");
+  clean: hash<RfRow[id]> = [];
+  store_bind_lazy(clean, hash_img);
+  c = clean[42];
+  println("clean_hit={c.v} clean_quiet={store_lazy_error(clean) == ""}");
+
+  // The sticky contract is unchanged: a refusal survives a later success and
+  // only an explicit acknowledgement clears it.
+  println("cleared={store_lazy_clear(tr)} after_clear={store_lazy_error(tr) == ""}");
+}

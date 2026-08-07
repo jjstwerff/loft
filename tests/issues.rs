@@ -15307,6 +15307,102 @@ fn manifest_dep_multifile_use_order() {
     );
 }
 
+// ── loft#797 — a field whose type a LATER module declares still gets storage ─
+//
+// `fwd797`'s entry `use`s `fwd797_inner` and only then declares the structs that
+// module's fields name, so `fwd797_inner` is laid out while every one of those
+// types is still a forward-reference stub.  `fill_database` silently skips a
+// field it cannot size and nothing revisits an already-registered type, so the
+// declaration and the layout disagreed from then on: `position()` answered
+// `u16::MAX` for the missing field and that flowed out as the field OFFSET, so
+// writes landed at `record + 65535` — in the neighbouring records' bytes.
+//
+// The fixture covers each spelling that reaches the layout differently (inline
+// struct, `vector<T>`, a nullable `T?`, and a host whose own field is one of the
+// structs that had to wait) and the in-loft `main` checks the SIZES as well as
+// the values: a read follows whatever offsets the layout ended up with, so
+// reading a field back cannot by itself prove the field has storage.
+#[test]
+fn forward_module_type_gets_a_slot() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
+    p.parse("tests/multilib/fwd797_layout.loft", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "a later-declared field type failed to compile: {errors:?}"
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let config = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(config, None))));
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "a field or a size assertion in fwd797_layout.loft failed"
+    );
+}
+
+// ── loft#801 — a module may name the entry's type in an EXPRESSION, not just ─
+// ── in a declaration ─────────────────────────────────────────────────────────
+//
+// `fwd801`'s entry `use`s `fwd801_inner` and only then declares the types that
+// module names, so every mention there is a forward reference to a file suspended
+// further up the `use` chain.  Whether it resolved used to depend on the SPELLING:
+// a written type went through `parse_type`, which leaves a `DefType::Unknown` stub
+// for the entry's declaration to adopt in place, and an expression left nothing to
+// adopt.  So `r: F801Roofs = F801Roofs { … }` compiled and the identical
+// `r = F801Roofs { … }` did not.
+//
+// The fixture covers each spelling that reaches the name differently — construction
+// alone, a vector literal, iterating that vector, the type as a value argument, and
+// a typedef (`parse_typedef` reported the waiting stub as a name clash where
+// `parse_struct` and `parse_enum` both adopt it).
+#[test]
+fn module_names_the_entry_type_in_an_expression() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
+    p.parse("tests/multilib/fwd801_body.loft", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "a type named only in an expression failed to resolve: {errors:?}"
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let config = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(config, None))));
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "an assertion in fwd801_body.loft failed"
+    );
+}
+
 // ── @PLAN53 clusters 3-5 — Miri-found UB regression guards ──────────────────
 //
 // These three tests guard the soundness fixes landed in commit batch on

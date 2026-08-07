@@ -872,7 +872,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Radix(_, _, _)
+        | Type::Radix(_, _, _) | Type::Trie(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _)
         // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
@@ -1060,7 +1060,7 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Radix(_, _, _)
+        | Type::Radix(_, _, _) | Type::Trie(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _)
         // N8b.1: exhausted / uninitialized generator variable.
@@ -1126,6 +1126,7 @@ fn is_collection_field(tp: &Type) -> bool {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
     )
 }
 
@@ -1144,6 +1145,7 @@ enum BareIo {
     Sorted(u16, Vec<(u16, bool)>),
     Hash(u16, Vec<u16>),
     Radix(u16, Vec<u16>),
+    Trie(u16, u16),
     Index(u16, Vec<(u16, bool)>),
 }
 
@@ -2519,6 +2521,9 @@ extern crate loft;"
                 // referenced by no field: emit it here so it does not leave a gap in
                 // the runtime type-id sequence (else `content(tp)` reads u16::MAX and
                 // `record_new` panics), exactly as the local-only Hash arm above.
+                crate::database::Parts::Trie(c, key) if !field_keyed.contains(&tid) => {
+                    bare_io.push((tid, BareIo::Trie(*c, *key)));
+                }
                 crate::database::Parts::Radix(c, keys) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Radix(*c, keys.clone())));
                 }
@@ -2528,6 +2533,7 @@ extern crate loft;"
                 crate::database::Parts::Sorted(_, _)
                 | crate::database::Parts::Hash(_, _)
                 | crate::database::Parts::Radix(_, _)
+                | crate::database::Parts::Trie(_, _)
                 | crate::database::Parts::Index(_, _, _) => {}
                 _ => {}
             }
@@ -2927,6 +2933,11 @@ extern crate loft;"
                 // `db.spatial` is the surface constructor for the shared Radix kind.
                 writeln!(w, "    let t{tid} = db.spatial({c_ref}, &[{keys_str}]);")?;
             }
+            BareIo::Trie(c, key) => {
+                let c_ref = type_id_ref(*c);
+                let key_str = self.bare_field_name(*c, *key);
+                writeln!(w, "    let t{tid} = db.trie({c_ref}, \"{key_str}\");")?;
+            }
             BareIo::Index(c, keys) => {
                 let c_ref = type_id_ref(*c);
                 let keys_str = keys
@@ -3032,7 +3043,15 @@ extern crate loft;"
                 // `fill_database` does the same via recursive content
                 // resolution when a collection field first names a
                 // forward-declared type.
-                let dep_tp = match &a.typedef {
+                //
+                // Peel the `?` first, exactly as `fill_database` does: an `Optional(τ)`
+                // field lays out as `τ`, so the hoist it needs is `τ`'s.  Matching the
+                // wrapper instead landed every arm below on `None`, and a nullable
+                // forward-referenced field emitted `db.field(t_host, "f", t_content)`
+                // ahead of `let t_content = …` — a Rust compile error in the generated
+                // `init()`, i.e. the library simply failed to build (loft#797).
+                let field_type = a.typedef.base();
+                let dep_tp = match field_type {
                     Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
                         (*c_nr != u32::MAX)
                             .then(|| self.data.def(*c_nr).known_type())
@@ -3051,7 +3070,7 @@ extern crate loft;"
                     // t_synthetic_tuple)`) sees the synthetic binding
                     // already declared.
                     Type::Tuple(_) => {
-                        let n = self.data.type_def_nr(&a.typedef);
+                        let n = self.data.type_def_nr(field_type);
                         (n != u32::MAX)
                             .then(|| self.data.def(n).known_type())
                             .filter(|t| *t != u16::MAX)
@@ -3679,6 +3698,22 @@ extern crate loft;"
                 field_name,
                 "spatial",
                 &format!("db.spatial({c_ref}, &[{keys_str}])"),
+            )?;
+            return Ok(());
+        }
+        // A `trie<T[k]>` field: one text key, `db.trie(content, key)`.  Like the
+        // keyed arms above it must be created INLINE here, or the field's type id
+        // is never registered and its record layout reads as a struct with no
+        // fields (`field_type` → index 0 of an empty list).
+        if let Type::Trie(c_nr, key, _) = typedef {
+            let c_tp = self.data.def(*c_nr).known_type();
+            let c_ref = type_id_ref(c_tp);
+            emit_db_field(
+                w,
+                s_var,
+                field_name,
+                "trie",
+                &format!("db.trie({c_ref}, \"{key}\")"),
             )?;
             return Ok(());
         }

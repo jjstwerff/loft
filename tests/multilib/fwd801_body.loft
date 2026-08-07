@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#801 — a package module may name a type the entry declares after the `use`
+// that pulled the module in, whether the name appears in a DECLARATION or only in
+// an EXPRESSION.
+//
+// It used to depend on the spelling: `r: F801Roofs = F801Roofs { … }` compiled and
+// the identical `r = F801Roofs { … }` did not, because only a written type left a
+// forward-reference stub for the entry's declaration to adopt.
+use fwd801;
+
+fn main() {
+    assert(f801_holder() == 11, "field declaration (the control that always worked)");
+    assert(f801_local() == 22, "a local built by construction alone");
+    assert(f801_vector() == 35, "construction inside a vector literal");
+    assert(f801_for() == 44, "iterating a vector of the forward-declared type");
+    assert(f801_sizeof() == 8, "the type named as a value argument");
+    assert(f801_typedef() == 55, "a typedef the entry declares");
+
+    // loft#803 — the enum half.  These assert the VALUE, not that it compiled:
+    // three earlier attempts all reached a program that ran and answered
+    // `unknown` for every variant, which is worse than the error it replaced.
+    assert(f801_enum_value() == "F801Green", "a forward enum's variant, named in an expression");
+    assert(f801_enum_first() == "F801Red", "the FIRST variant — one discriminant is not enough");
+    assert(f801_enum_field() == "1/F801Green/2", "the field AFTER an enum field keeps its position");
+}

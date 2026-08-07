@@ -237,6 +237,31 @@ fn code_gt(a: &[u64; MAX_AXES], b: &[u64; MAX_AXES], n: usize) -> bool {
 /// interval — for a bounding box that is a *superset* of the geometric box (Z-order
 /// threads through codes outside it), exactly as a keyed range slice is the raw key
 /// range; the caller filters or `break`s as needed.
+/// Is `rec` inside the closed box `[from, till]` on EVERY axis?
+///
+/// The geometric test [`range`] deliberately does not do: its result is the Morton
+/// code interval, which for any non-degenerate box is a strict superset — Z-order
+/// threads out of the box and back. A caller that promised a BOX (the
+/// `xs[(x1,y1)..(x2,y2)]` surface) filters with this; a caller that wants Z-order
+/// nearness (`xs[(x,y)..]`, `xs[(x,y)..:n]`) must not.
+///
+/// Lives here rather than in the caller because the axis decoding does: `axis_i64`
+/// is what knows how each integer width is stored, and a second reader of that
+/// layout is how the two drift apart.
+#[must_use]
+pub(crate) fn in_box(store: &Store, rec: u32, keys: &[Key], from: &[i64], till: &[i64]) -> bool {
+    keys.iter().enumerate().all(|(a, key)| {
+        let v = axis_i64(store, rec, key);
+        let (lo, hi) = if from[a] <= till[a] {
+            (from[a], till[a])
+        } else {
+            // A box given corner-swapped on an axis still names that interval.
+            (till[a], from[a])
+        };
+        v >= lo && v <= hi
+    })
+}
+
 #[must_use]
 pub fn range(
     coll: &DbRef,

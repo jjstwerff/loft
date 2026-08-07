@@ -26,6 +26,36 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Words, and the prefix you actually wanted
+
+`trie<T[k]>` keys a collection on one **text** field and answers what no other
+kind could:
+
+```loft
+words: trie<Word[w]> = [];
+words += [Word { w: "kerk" }, Word { w: "kerkweg" }, Word { w: "lonneker" }];
+
+for x in words["kerk"..] { … }      // kerk, kerkweg — in key order
+for x in words["kerk"..:20] { … }   // the first 20 of them
+```
+
+The prefix IS the query. Doing this on a `sorted` means inventing a successor
+string — `words["kerk".."kerl"]` — which you have to construct, which is easy to
+get wrong at a byte boundary, and which asks for a key *interval* rather than a
+prefix. So loft refuses `t[a..b]` on a trie and tells you `sorted` is the kind
+that answers an interval.
+
+It also shares everything you already know: `+=`, `for` iteration (key order, no
+sort), `.len()`, and `t["kerk"]` for the one record — `null` when absent, never a
+neighbour.
+
+And the mistake that prompted it now gets caught. `spatial<Word[w]>` on a text
+key used to compile, count correctly, and then answer `null` for a key you had
+just inserted — indistinguishable from "not found" wherever you called it. It is
+refused at the declaration now, and the message points at `trie`. The mirror too:
+a numeric key under `trie` points back at `spatial`, or at `sorted` / `index` for
+an order on a number.
+
 ### A collection can fetch what it is asked for
 
 Bind a collection to a source and stop writing a loading step. A lookup that misses
@@ -58,6 +88,55 @@ reach the source never answers `null`: `store_lazy_error` says why, and
 `store_lazy_faults` keeps counting until you acknowledge it — so a traversal that
 lost data cannot report itself healthy.
 
+That last promise had a hole, and a refused binding fell through it. A `.store`
+image is read a page at a time, which only a `hash` supports — so binding a
+`trie`, `sorted`, `index` or `spatial` to one could never work. It used to answer
+`true` anyway, then `null` at every lookup, with `store_lazy_error` empty (whose
+documented meaning is *"reachable, genuinely no such key"*) and zero faults. A
+search box bound to a source it could not page showed "no results" forever, in
+perfect health.
+
+```loft
+if !store_bind_lazy(words, "vocab.store") {
+  store_load(words, "vocab.store");     // whole-image, and it carries every kind
+}
+```
+
+`store_bind_lazy` now answers `false` for a kind it can never serve — at the call
+that is wrong, not at some later lookup, because the kind is known without reading
+anything. The refusals it can only learn while fetching (a foreign layout, an entry
+holding a `vector<text>`) were equally silent and now reach `store_lazy_error` too.
+An unreachable source still reports its own connection error, and a binding that
+works still says nothing at all.
+
+### An enum works above the line that declares it
+
+Order stopped mattering for enums, the way it already did not matter for functions
+and structs:
+
+```loft
+fn probe() -> text { c = Colour.Green; return "{c}"; }
+enum Colour { Red, Green }
+```
+
+That used to be `Unknown variable`, and across two files in a package it was
+`Unknown type null — did you mean 'JNull'?` — naming a type and a suggestion the
+author never wrote, because an unresolved name was being handed on as a resolved
+type of `null` instead of as "not known yet".
+
+Underneath it was something worse, and quieter. An enum a module names before the
+importer declares it is reached through a shared definition, and that definition was
+never getting a runtime type — so every variant of it rendered as `unknown`. The
+same gap gave the enum zero width at layout time, which meant a struct field
+declared *after* an enum-typed field lost its position entirely:
+
+```loft
+struct Sess { s_a: integer, s_c: Colour, s_b: integer }   // s_b had no position
+```
+
+Both are fixed, and the enum keeps its identity: it compares, matches and renders as
+the variant you wrote, on both backends.
+
 ### Two libraries can no longer both answer a bare name
 
 If `use hex_world;` and `use hex_voxel;` each export a `Chunk`, writing bare
@@ -86,6 +165,32 @@ name, from `--lib`. The advice was to add an import that was on line two, and
 following it changed nothing. Now that case says what is actually wrong: the
 resolved package does not have the function and the published one does, so these
 are two different packages sharing a name.
+
+### Using a type no longer depends on having written its name down
+
+Inside a package, a module could name a type its entry declares later only where the
+name appeared in a *declaration*. The same type in an expression was rejected — so
+`r: Roofs = Roofs { ... }` compiled and `r = Roofs { ... }` did not, and adding the
+annotation was the fix for an error that never mentioned it. Constructions, vector
+literals, `for` loops over them, `sizeof(T)` and `type` aliases all work now.
+
+And one mistake gives one error again. An error inside a module used to abandon the
+file that was waiting on it, so the types *that* file declared quietly vanished and
+the run added a second error saying one of them was undefined — pointing at a line
+where the declaration was plainly visible.
+
+### A field can name a type from a module that loads later
+
+Inside a package, a struct field whose type is declared in a module the package
+loads *after* the one that names it was left out of that struct's storage. The
+field could be written, and the write landed outside the record — in whatever
+record happened to sit next to it. That is why it read as random: the same program
+gave a crash on one run, a runaway allocation on the next, and a clean pass on the
+third, and the failure never pointed at the field.
+
+Only the load order decided it, so the same code was correct or corrupt depending
+on which module `use`d which. It is now correct either way — including when the
+field is a `vector<T>`, a `T?`, or a struct that itself holds one.
 
 ### `store_verify` on a collection inside a struct
 

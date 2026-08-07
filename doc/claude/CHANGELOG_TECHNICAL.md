@@ -9,6 +9,107 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A module may name the entry's type in an EXPRESSION (loft#801) (2026-08-07)
+
+Companion to loft#797, which fixed the LAYOUT half of the same load-order story. This is
+the resolution half.
+
+A forward reference resolves through a **stub**, not a lookup: an unresolvable type name
+becomes an `add_def(name, …, DefType::Unknown)`, `use` imports it into the importer along
+with the module's other names, and the importer's own `struct` / `enum` / `type`
+declaration upgrades it IN PLACE so both files share one def. `Data::def_nr` is keyed on
+`(name, source)` with only a source-0 fallback, so there is no cross-source lookup at all —
+adoption is the entire mechanism. Documented in COMPILER.md § How a forward reference
+actually resolves, because nothing said so.
+
+The consequence was that only a spelling which LEAVES a stub could be forward-referenced.
+Written types go through `parse_type`, which leaves one; expressions did not. So
+`r: Roofs = Roofs { … }` compiled and the identical `r = Roofs { … }` did not — the same
+name, the same file, decided by whether an annotation happened to be written.
+
+- **Two sites in `parse_var` now leave the same stub** — the `Name { … }` construction
+  branch and the bare-name branch. Both pass 1 only. They are tracked in
+  `speculative_type_refs` so `resolve_deferred_unknowns` stays quiet about an unadopted
+  one and the construction site still reports in pass 2 with the author's own spelling and
+  its suggestion — reporting both is the one-typo-two-errors cascade #376 removed.
+- The bare-name branch also stops creating a placeholder VARIABLE for such a name. A
+  function's variable table survives into pass 2, so the pass-1 placeholder was still
+  there when pass 2 looked the name up, and it shadowed the type the declaration had
+  meanwhile produced.
+- Its name test is deliberately NOT `is_camel`, which answers "not lower_case and no
+  underscore" and so accepts `FOO`, `N`, `X`. Treating those as types took the placeholder
+  variable away from every misspelled constant — the `upper-case-local` advice and
+  `Unknown variable 'N'` are written against it. A type name carries a lowercase letter.
+- **`parse_typedef` adopts a stub**, which `parse_struct` and `parse_enum` already did. It
+  was reporting the waiting stub as a name clash, so a typedef was the one declaration
+  kind a module could not forward-reference.
+- **`parse_file` drains `todo_files` on a plain Error**, stopping only on Fatal. That list
+  holds the files SUSPENDED at a `use` — the importer, waiting for the module it pulled in
+  — and they had not been parsed at all, so abandoning them did not avoid a cascade, it
+  invented one: the definitions they carry never registered, and one error in a module
+  produced a second saying a type was undefined while it was declared two lines away in
+  the importer.
+
+Fixed spellings (both backends): a local built by construction alone, a vector literal,
+iterating that vector, the type as a value argument (`sizeof(T)`), and a typedef.
+
+**Not fixed, and deliberately excluded: a bare name qualifying a VALUE (`Colour.Green`).**
+It fails in a single file too, so it is not a module problem, and it is loft#803. Leaving
+the stub there makes the program COMPILE and evaluate to `unknown` for every variant — a
+wrong answer where there had been an error. That issue records two further attempts (an
+enum-aware `layout_blocked`; registering enum stragglers from `fill_all`) and exactly what
+each broke. Read it before patching.
+
+Guards: `module_names_the_entry_type_in_an_expression` (`tests/issues.rs`) over the
+`fwd801` fixture, and golden case `47_module_error_keeps_importer`, whose baseline pins the
+ABSENCE of the invented second error.
+
+### A field whose type another module declares gets a slot (loft#797) (2026-08-07)
+
+A package entry that `use`s a module before declaring the types that module names
+suspends itself at the `use`. The module was then parsed to completion — layout
+included — while every such type was still a `DefType::Unknown` stub. `fill_database`
+skips a field whose `type_elm` is `u32::MAX`, so the field got no slot; the stub was
+upgraded in place moments later when the entry resumed, so the DECLARATION ended up
+correct and the LAYOUT kept the hole, and nothing revisits a registered type. Only
+the load ORDER decided it.
+
+`fill_all` now defers a layout until every field's type is known, and re-asks on each
+call. Three sites had to agree:
+
+- **`layout_blocked`** (was `has_nameless_unknown_attr`) — covers `Unknown(stub)` as
+  well as `Unknown(0)`, and is TRANSITIVE: an inline field stores its content's bytes,
+  so a host whose field type is waiting cannot be laid out either. The loop is keyed on
+  `known_type == u16::MAX`, so this defers rather than drops.
+- **A sweep at the top of `fill_all`** re-runs `copy_unknown_fields` over everything
+  still unlaid. Without it the deferral never ends — `actual_types_deferred` sweeps only
+  the file it is finishing, and nothing was asking again.
+- **`Type::Optional` is peeled, not matched.** `S?` and `S` name the same forward
+  reference, and three places that peel `Vector` had all forgotten the `?`:
+  `copy_unknown_fields`, `Data::rewrite_type_opt`, and the native `init()` generator's
+  field-hoist match. The last one emitted `db.field(t_host, "f", t_content)` ahead of
+  `let t_content` — the generated crate did not compile, so a nullable forward field
+  broke the library build where a plain one worked.
+
+Also from the same matrix, both now diagnostics rather than panics: a keyed collection
+whose content was a stub indexed `attributes[usize::MAX]` in `set_mutable`, and a vector
+literal of a stub element tripped `new_record`'s `assert_ne!` as an internal compiler
+error. The first is gone with the deferral; the second reports `type 'X' is not defined
+here — use the module that declares it`.
+
+Not closed, and out of scope: a type named in a function BODY rather than a field
+DECLARATION is not deferred, so a module naming a type it cannot see still fails with
+`unknown type 'X'`. That is resolution, not layout — filed as loft#801, together with the
+cascade that makes it expensive (`parse_file` returns on error before draining
+`todo_files`, so the suspended parent is never re-parsed and the type it declares is then
+reported undefined).
+
+Guard: `forward_module_type_gets_a_slot` (`tests/issues.rs`) over the `fwd797` fixture,
+asserting sizes as well as values — a read follows whatever offsets the layout ended up
+with, so reading a field back cannot by itself prove the field has storage.
+`tests/field_without_storage.rs` (loft#796's guard) changes with it: the hole it used as
+a trigger no longer exists, so both its tests now assert the ANSWER.
+
 ### Lazy stores — the fault is the collection's MISS path, and a SQL source drives it (2026-08-06)
 
 `store_bind_lazy(c, source)` binds a collection to a store image or to

@@ -1069,7 +1069,8 @@ impl Function {
             | Type::Sorted(_, _, to)
             | Type::Hash(_, _, to)
             | Type::Index(_, _, to)
-            | Type::Radix(_, _, to) = &mut after
+            | Type::Radix(_, _, to)
+            | Type::Trie(_, _, to) = &mut after
                 && let Some(pos) = to.iter().position(|x| x == &remove)
             {
                 to.remove(pos);
@@ -1089,7 +1090,7 @@ impl Function {
             | Type::Sorted(_, _, to)
             | Type::Hash(_, _, to)
             | Type::Index(_, _, to)
-            | Type::Radix(_, _, to) => {
+            | Type::Radix(_, _, to) | Type::Trie(_, _, to) => {
                 if let Some(pos) = to.iter().position(|x| x == &remove) {
                     to.remove(pos);
                 }
@@ -2579,6 +2580,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         | Type::Sorted(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Iterator(_, _) => size_of::<DbRef>() as u16,
         Type::Tuple(elems) => crate::data::element_stack_size(&Type::Tuple(elems.clone())) as u16,
         _ => 0,
@@ -2617,6 +2619,7 @@ pub fn align(tp: &Type) -> u8 {
         | Type::Sorted(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Iterator(_, _) => 4, // DbRef = u16 + u32 + u32 → align 4
         // @PLN114 — a stack tuple's alignment is the strongest alignment ITS OWN
         // elements need on the stack, so recurse through THIS function rather than

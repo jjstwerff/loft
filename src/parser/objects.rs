@@ -74,6 +74,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         )
     }
 
@@ -477,6 +478,20 @@ impl Parser {
             self.refuse_ambiguous_import(name, dnr);
             if self.data.def_type(dnr) == DefType::Enum {
                 t = self.data.def(dnr).returned().clone();
+            } else if matches!(self.data.def_type(dnr), DefType::Unknown) {
+                // A forward-reference STUB is not "no such name" — it is a type
+                // whose declaration has not been reached yet, and in a package it
+                // may be in the very file that is suspended at the `use` which
+                // pulled this one in. `Null` sent it to the field access as a
+                // resolved type of `null`, which reported `Unknown type null —
+                // did you mean 'JNull'?`: two names the author never wrote, in
+                // PASS 1, aborting before the pass that can resolve it (loft#803).
+                //
+                // `Unknown(0)` is the deferral the field access already handles
+                // quietly, and it keeps the error rather than dropping it: a stub
+                // that never gets adopted is still `Unknown` in pass 2, where the
+                // same site reports "Field of unknown variable".
+                t = Type::Unknown(0);
             } else {
                 t = Type::Null;
             }
@@ -617,8 +632,60 @@ impl Parser {
                     }
                     t = Type::Unknown(0);
                 } else {
-                    *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
-                    t = Type::Unknown(0);
+                    // Pass 1, and the name resolves to nothing yet.  A CamelCase one can
+                    // only be a TYPE here: loft gives variables and functions `lower_case`
+                    // and constants `UPPER_CASE`, and a name that is a known enum variant
+                    // was resolved by the branch above.  So leave the same
+                    // forward-reference stub a written type annotation leaves, and a
+                    // declaration parsed later — in this file or in the module that
+                    // `use`d it — adopts it in place.
+                    //
+                    // Without it `Colour.Green` and `sizeof(Roofs)` had nothing to resolve
+                    // through: the placeholder variable below is all pass 1 left behind,
+                    // and a variable is not a type, so pass 2 reported the name unknown
+                    // even where the declaration was two lines down (loft#801).
+                    //
+                    // No placeholder VARIABLE for such a name, which is the other half of
+                    // the same fault.  A function's variable table survives into pass 2
+                    // (`data.reset()` keeps definitions), so a pass-1 placeholder named
+                    // `Roofs` was still there when pass 2 looked the name up, and it
+                    // shadowed the type the declaration had meanwhile produced — the stub
+                    // resolved and the name still read as an unknown variable.  Deferring
+                    // as `Unknown(0)` with no slot is what the sibling `Name { … }` branch
+                    // below already does, for the same reason.
+                    //
+                    // A `.` may follow.  `Colour.Green` is a type qualifying a VALUE, and
+                    // this branch used to refuse it because the stub alone made the
+                    // program compile and evaluate to `unknown` for every variant — a
+                    // wrong answer where there had been an error.  That `unknown` was not
+                    // this site's doing: an ADOPTED enum def was never registered, so it
+                    // had no db type and `enum_val` answers `unknown` for exactly that
+                    // (loft#803, fixed in `typedef.rs`).  With the discriminants
+                    // established the stub yields the variant the author wrote, so the
+                    // qualifier resolves here like any other forward reference.
+                    //
+                    // The name test is NOT `is_camel`, which answers "not lower_case and
+                    // no underscore" and so accepts `FOO`, `N` and `X` — the UPPER_CASE
+                    // constant style.  Treating those as types took the placeholder
+                    // variable away from every misspelled constant, which is what the
+                    // `upper-case-local` advice and "Unknown variable 'N'" are written
+                    // against.  A type name carries a lowercase letter.
+                    let looks_like_a_type = name.starts_with(char::is_uppercase)
+                        && name.contains(char::is_lowercase)
+                        && !name.contains('_');
+                    if looks_like_a_type {
+                        if self.data.def_nr(name) == u32::MAX {
+                            self.speculative_type_refs.insert(self.data.add_def(
+                                name,
+                                name_pos,
+                                DefType::Unknown,
+                            ));
+                        }
+                        t = Type::Unknown(0);
+                    } else {
+                        *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
+                        t = Type::Unknown(0);
+                    }
                 }
             }
         }
@@ -1076,6 +1143,7 @@ impl Parser {
                 | Type::Index(..)
                 | Type::Hash(..)
                 | Type::Radix(..)
+                | Type::Trie(..)
                 | Type::Text(_)
                 | Type::Vector(..) => return Some(a.name.clone()),
                 Type::Reference(inner, _) => {
@@ -1533,6 +1601,31 @@ impl Parser {
             && self.lexer.peek_token("{")
             && self.peek_struct_literal_body()
         {
+            // Pass 1 leaves a forward-reference STUB for the name, the same one a written
+            // type would leave (`r: Roofs = …` goes through `parse_type`, which registers
+            // one).  That stub is the entire mechanism by which a cross-module forward
+            // reference ever resolves: `use inner;` imports the module's names into the
+            // importer, and the importer's own `struct Roofs` then ADOPTS the stub in
+            // place, so both files end up sharing one def.  Without a stub there is
+            // nothing to import and nothing to adopt, which is why `r: Roofs = Roofs {…}`
+            // compiled and the identical `r = Roofs {…}` did not (loft#801).
+            //
+            // Only in pass 1, and only for a `Name { … }` construction — the shape check
+            // above has already ruled out a variable and a control-flow block.
+            //
+            // Ask the def table, not `d_nr`: an existing stub was blanked to `u32::MAX`
+            // just above so this branch would handle it, so `d_nr` cannot tell "no such
+            // name" from "a stub is already waiting".  Registering a second def under a
+            // name the source already has aborts `add_def` — which is what a declaration
+            // plus a construction of the same type (`h: Roofs` and `Roofs { … }`, the
+            // ordinary shape) did.
+            if self.first_pass && self.data.def_nr(name) == u32::MAX {
+                self.speculative_type_refs.insert(self.data.add_def(
+                    name,
+                    name_pos,
+                    DefType::Unknown,
+                ));
+            }
             // Emit on pass 2, NOT pass 1: unlike the private-type branch above
             // (a private type is `u32::MAX` in BOTH passes, so pass-1 emission
             // fires once and is always correct), a FORWARD-REFERENCED or
@@ -2627,6 +2720,7 @@ impl Parser {
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Enum(_, true, _)
             | Type::Index(_, _, _) = td
             {
@@ -2693,6 +2787,7 @@ impl Parser {
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
                     | Type::Index(_, _, _)
             ) && {
                 let link = self.lexer.link();
@@ -3142,6 +3237,7 @@ impl Parser {
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             ) {
                 let prime = self.cl(
                     "OpSetInt4",
@@ -3277,6 +3373,10 @@ impl Parser {
                 let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.spatial(c, key))
             }
+            Type::Trie(d, key, _) => {
+                let c = self.data.def(*d).known_type();
+                (c != u16::MAX).then(|| self.database.trie(c, key))
+            }
             _ => None,
         }
     }
@@ -3333,6 +3433,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
                 | Type::Index(_, _, _)
         ) {
             // Issue #120: for vector fields assigned from a bare variable

@@ -1,0 +1,20 @@
+// loft#801 — one error inside a module must not invent a SECOND one saying a type
+// is undefined when the importer declares it.
+//
+// `parse_file` used to return on the first Error BEFORE draining `todo_files`, the
+// list of files SUSPENDED at a `use`.  Here that list holds `fwd`, which is waiting
+// for `inner` and which declares `Colour`.  Abandoning it meant `Colour` never
+// registered, so the run added `Undefined type Colour` — pointing away from the one
+// mistake the author made, at a line where the declaration is plainly visible.
+//
+// What this baseline pins is the ABSENCE of that second error — and it now pins it
+// the strongest way available: the whole chain COMPILES AND RUNS, so there is no
+// error to invent a second one from.  It captured one error until loft#803 landed
+// (a forward-referenced enum VALUE did not resolve, and said so as `Unknown type
+// null — did you mean 'JNull'?', naming two things nobody wrote).  If `todo_files`
+// is ever abandoned again, `Colour` stops registering and this exits non-zero.
+use fwd;
+fn main() {
+  s = mk();
+  println("{s.s_a}");
+}

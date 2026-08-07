@@ -287,6 +287,16 @@ fn key_fields(it: &Iterated) -> Option<(Vec<(usize, bool)>, bool)> {
         // reads the table (README matrix — "a kind with no mapping must refuse
         // rather than scan").
         Iterated::Radix { .. } => return None,
+        // A trie DOES have a SQL shape, and it is `sorted`'s: one key, ascending,
+        // answering equality and a range on it. Its PREFIX is a different shape
+        // (`LIKE 'x%'`) that `key_fields` cannot express, so it is simply not
+        // offered here rather than approximated by a range.
+        //
+        // The caveat it inherits is `sorted<T[text]>`'s, not a new one: a trie
+        // orders BYTES and SQL orders by collation, so a range's boundary rows can
+        // differ between the two. Same fact, same treatment — refusing a trie while
+        // answering for `sorted` would be inconsistent, not safer.
+        Iterated::Trie { key, .. } => (vec![(*key as usize, true)], true),
     })
 }
 

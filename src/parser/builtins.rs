@@ -278,6 +278,7 @@ impl Parser {
                         | Type::Sorted(..)
                         | Type::Index(..)
                         | Type::Radix(..)
+                        | Type::Trie(..)
                         | Type::Enum(_, true, _)
                         | Type::Text(_)
                 )
@@ -312,6 +313,7 @@ impl Parser {
                         | Type::Sorted(..)
                         | Type::Index(..)
                         | Type::Radix(..)
+                        | Type::Trie(..)
                 )
             };
             if is_plain_scalar(elem_tp)

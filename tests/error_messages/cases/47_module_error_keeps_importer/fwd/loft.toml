@@ -1,0 +1,5 @@
+[package]
+name = "fwd"
+version = "0.1.0"
+[library]
+entry = "src/fwd.loft"

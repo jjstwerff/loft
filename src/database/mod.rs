@@ -183,6 +183,15 @@ pub enum Parts {
     Hash(u16, Vec<u16>), // A hash table, listing the field numbers that define its key
     Index(u16, Vec<(u16, bool)>, u16), // An index to a table, listing the key fields and the left field-nr
     Radix(u16, Vec<u16>),              // A spatial index with the listed coordinate fields as a key
+    // A trie: a radix tree over ONE `text` key field, answering exact lookup, key
+    // order and prefix.  Shares `radix_tree` with `Radix` and nothing above it —
+    // `Radix` is geometric (Morton interleave, boxes, near/within/nearest) and none
+    // of that means anything for a word, which is why `spatial` is not called `radix`
+    // at the surface.  See doc/claude/plans/text-keyed-trie.md.
+    //
+    // ONE key, held as a `u16` rather than a `Vec<u16>`: a trie over two text fields
+    // is not a thing, and encoding that in the type means no site has to check it.
+    Trie(u16, u16),
     // Plan-06 phase 4d.C step 2: 12-byte stored DbRef pointer (store_nr
     // u16 padded to u32 + rec u32 + pos u32).  Distinct from `Vector`
     // / `Hash` / etc. which all store a 4-byte rec pointer; this
@@ -331,6 +340,18 @@ pub struct Stores {
     /// FIRST reason is kept because it names the original cause; later ones are
     /// usually the same failure repeating.
     pub lazy_errors: HashMap<(u16, u32, u32), (u64, String)>,
+    /// The reason the paged loader last REFUSED, or `None` when it merely
+    /// missed. Set by [`Stores::refuse_paged`], read and cleared by the lazy
+    /// fetch (loft#802).
+    ///
+    /// The loaders answer `false` / `0` for both outcomes, and those are
+    /// different facts: a key that is absent is a stable truth about the data, a
+    /// refused shape is a permanent truth about the BINDING. Without this the
+    /// lazy fetch had only the loader's `false` to go on and reported the
+    /// refusal as an absence — so `store_lazy_error` said `""`, whose documented
+    /// meaning is "reachable, genuinely no such key". A trie bound to a paged
+    /// source then looked healthy and answered null forever.
+    pub(crate) paged_refusal: Option<String>,
     /// @PLN133 S8 — the stores created while a lazy DRIVER is running, or
     /// `None` when none is.
     ///
@@ -632,6 +653,7 @@ impl Clone for Stores {
             stack_store_at_zero: self.stack_store_at_zero,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            paged_refusal: None,
             lazy_driver_allocs: None,
             files: Vec::new(),
             max: self.max,
@@ -1372,6 +1394,7 @@ impl Stores {
             stack_store_at_zero: false,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            paged_refusal: None,
             lazy_driver_allocs: None,
             files: Vec::new(),
             max: 0,

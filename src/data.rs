@@ -1077,7 +1077,8 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Radix(_, _, _) => Value::Int(0),
+        | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _) => Value::Int(0),
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
         // @PLN116 — `character`'s zero is the NUL codepoint `'\0'`, stored (like every
@@ -1511,6 +1512,14 @@ pub enum Type {
     Index(u32, Vec<(String, bool)>, Deps), // @F9 — index<T[keys]> B-tree (asc/desc, multi-key)
     /// An index towards other records. The second is [field name]
     Radix(u32, Vec<String>, Deps),
+    /// A trie: a radix tree over ONE `text` key, answering exact lookup, key order
+    /// and PREFIX.  The runtime twin of `Parts::Trie`.
+    ///
+    /// Separate from `Radix` because `spatial` is geometric — Morton interleave,
+    /// bounding boxes, near/within/nearest — and none of that means anything for a
+    /// word.  One key name, not a `Vec`, so a two-key trie is unrepresentable rather
+    /// than rejected.  See doc/claude/plans/text-keyed-trie.md.
+    Trie(u32, String, Deps),
     /// A hash table towards other records. The second is the hash function per [field name].
     Hash(u32, Vec<String>, Deps), // @F7 — hash<T[keys]> keyed collection
     /// A function reference allowing for closures. Argument types, result, and deps.
@@ -1548,6 +1557,7 @@ impl Type {
             | Type::Sorted(_, _, d)
             | Type::Index(_, _, d)
             | Type::Radix(_, _, d)
+            | Type::Trie(_, _, d)
             | Type::Hash(_, _, d) => d.renumber_frame(from, to),
             Type::Vector(inner, d) => {
                 inner.renumber_frame_deps(from, to);
@@ -1646,6 +1656,7 @@ impl Type {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Hash(_, _, _) => {}
         }
     }
@@ -1679,7 +1690,7 @@ impl Type {
                 | Type::Routine(d)
                 | Type::Sorted(d, _, _)
                 | Type::Index(d, _, _)
-                | Type::Radix(d, _, _)
+                | Type::Radix(d, _, _) | Type::Trie(d, _, _)
                 | Type::Hash(d, _, _) if *d == d_nr)
         })
     }
@@ -1699,7 +1710,8 @@ impl Type {
             | Type::Sorted(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Index(_, _, dep)
-            | Type::Radix(_, _, dep) => Some(dep),
+            | Type::Radix(_, _, dep)
+            | Type::Trie(_, _, dep) => Some(dep),
             _ => None,
         }
     }
@@ -1742,6 +1754,7 @@ impl Type {
             Type::Enum(t, is_ref, _) => Type::Enum(*t, *is_ref, Deps::none()),
             Type::Index(t, keys, _) => Type::Index(*t, keys.clone(), Deps::none()),
             Type::Radix(t, keys, _) => Type::Radix(*t, keys.clone(), Deps::none()),
+            Type::Trie(t, key, _) => Type::Trie(*t, key.clone(), Deps::none()),
             Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), Deps::none()),
             Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), Deps::none()),
             Type::Vector(t, _) => Type::Vector(Box::new(t.without_deps()), Deps::none()),
@@ -1780,6 +1793,7 @@ impl Type {
             Type::Enum(t, is_ref, _) => Type::Enum(*t, *is_ref, v),
             Type::Index(t, keys, _) => Type::Index(*t, keys.clone(), v),
             Type::Radix(t, keys, _) => Type::Radix(*t, keys.clone(), v),
+            Type::Trie(t, key, _) => Type::Trie(*t, key.clone(), v),
             Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), v),
             Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), v),
             Type::Vector(t, _) => Type::Vector(Box::new(*t.clone()), v),
@@ -1807,6 +1821,7 @@ impl Type {
             | Type::Reference(_, dep)
             | Type::Index(_, _, dep)
             | Type::Radix(_, _, dep)
+            | Type::Trie(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Sorted(_, _, dep)
             | Type::Enum(_, _, dep)
@@ -1826,6 +1841,7 @@ impl Type {
             | Type::Reference(_, dep)
             | Type::Index(_, _, dep)
             | Type::Radix(_, _, dep)
+            | Type::Trie(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Sorted(_, _, dep)
             | Type::Enum(_, _, dep)
@@ -1854,6 +1870,7 @@ impl Type {
         match self {
             Type::Index(tp, _, dep)
             | Type::Radix(tp, _, dep)
+            | Type::Trie(tp, _, dep)
             | Type::Hash(tp, _, dep)
             | Type::Sorted(tp, _, dep) => Type::Reference(*tp, dep.clone()),
             Type::Vector(tp, _) => *tp.clone(),
@@ -1918,6 +1935,7 @@ impl Type {
             }
             (Type::Hash(r, rf, _), Type::Hash(o, of, _))
             | (Type::Radix(r, rf, _), Type::Radix(o, of, _)) => return r == o && rf == of,
+            (Type::Trie(r, rf, _), Type::Trie(o, of, _)) => return r == o && rf == of,
             (Type::Sorted(r, rf, _), Type::Sorted(o, of, _))
             | (Type::Index(r, rf, _), Type::Index(o, of, _)) => return r == o && rf == of,
             (Type::Function(sp, sr, _), Type::Function(op, or, _)) => {
@@ -1992,6 +2010,7 @@ impl Type {
             Type::Radix(tp, key, _) => {
                 format!("spatial<{},{key:?}>", data.def(*tp).name)
             }
+            Type::Trie(tp, key, _) => format!("trie<{}[{key}]>", data.def(*tp).name),
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
             // Plan-07 phase 6.1 — explicit user-facing rendering for the
             // remaining variants.  Pre-fix these fell through to the
@@ -2065,6 +2084,11 @@ impl Type {
             ),
             Type::Index(tp, key, dep) => format!(
                 "index<{},{key:?}>{}",
+                data.def(*tp).name,
+                Self::dep_var(dep, vars)
+            ),
+            Type::Trie(tp, key, dep) => format!(
+                "trie<{}[{key}]>{}",
                 data.def(*tp).name,
                 Self::dep_var(dep, vars)
             ),
@@ -2173,6 +2197,7 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::RefVar(_)
     ) || matches!(t, Type::Tuple(elems) if elems.iter().any(has_lifetime_concern))
 }
@@ -2205,6 +2230,7 @@ pub fn element_stack_align(t: &Type) -> u8 {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Enum(_, true, _) => 4,
         Type::Tuple(elems) => element_offsets_alignment_max(elems),
         _ => 1,
@@ -2246,6 +2272,7 @@ pub fn element_stack_size(t: &Type) -> usize {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
         Type::Tuple(elems) => {
             // @PLN114 — the STACK view: one `aligned_stack_step` slot per element,
@@ -2621,6 +2648,7 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Enum(_, true, _) => {
                 result.push((offsets[i], i));
             }
@@ -4587,6 +4615,7 @@ impl Data {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Optional(_)
             | Type::Null
             | Type::Function(_, _, _)
@@ -5396,6 +5425,7 @@ impl Data {
                     | Type::Index(_, _, _)
                     | Type::Sorted(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
         };
         if !is_collection(&visible[0].typedef) {
@@ -5908,6 +5938,13 @@ impl Data {
                 .map(|new_inner| Type::RefVar(Box::new(new_inner))),
             Type::Rewritten(inner) => Self::rewrite_type_opt(inner, stub, target)
                 .map(|new_inner| Type::Rewritten(Box::new(new_inner))),
+            // A `?` on the field is a wrapper like any other, and it is the wrapper a
+            // forward-referenced field is most likely to be wearing.  Leaving it out left
+            // `Optional(Unknown(stub))` in place after every other spelling resolved, so a
+            // `Roofs?` field failed with the internal type name (`optional(unknown(700))`)
+            // where a plain `Roofs` field succeeded (loft#797).
+            Type::Optional(inner) => Self::rewrite_type_opt(inner, stub, target)
+                .map(|new_inner| Type::Optional(Box::new(new_inner))),
             Type::Iterator(step, internal) => {
                 let new_step = Self::rewrite_type_opt(step, stub, target);
                 let new_internal = Self::rewrite_type_opt(internal, stub, target);
@@ -6220,6 +6257,7 @@ impl Data {
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
             Type::Radix(_, _, _) => self.source_nr(0, "spatial"),
+            Type::Trie(_, _, _) => self.source_nr(0, "trie"),
             // P189: look up the synthetic tuple struct registered by
             // `tuple_def` at parse time.  Returns u32::MAX if the
             // tuple shape was never registered (caller must register
@@ -6268,7 +6306,8 @@ impl Data {
             Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Radix(_, _, _) => self.source_nr(0, "reference"),
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _) => self.source_nr(0, "reference"),
             // P189: tuple element types resolve to the synthetic
             // tuple struct registered by `tuple_def`.  Same lookup
             // as `type_def_nr`'s Tuple arm.
@@ -6316,6 +6355,7 @@ impl Data {
             Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),
             Type::Rewritten(inner) => self.type_name_str(inner),
             Type::Radix(d_nr, _, _) => format!("spatial<{}>", self.def(*d_nr).name),
+            Type::Trie(d_nr, key, _) => format!("trie<{}[{key}]>", self.def(*d_nr).name),
             Type::Tuple(elems) => {
                 let es: Vec<String> = elems.iter().map(|e| self.type_name_str(e)).collect();
                 format!("({})", es.join(", "))

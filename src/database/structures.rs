@@ -95,7 +95,8 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
-            | Parts::Radix(c, _) => {
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => {
                 let rec = self.claim(&d, 1 + ((u32::from(self.size(c)) + 7) >> 3));
                 self.store_mut(&rec).set_u32_raw(rec.rec, 4, data.rec);
                 rec
@@ -253,6 +254,12 @@ impl Stores {
                     &self.types[tp as usize].keys,
                     &mut self.allocations,
                 );
+            }
+            Parts::Trie(_, _) => {
+                // Same no-dedup contract as the spatial side: two records may share a
+                // key, differing in the id suffix, and land adjacent (`r8b`).
+                let keys = self.types[tp as usize].keys.clone();
+                crate::trie_db::add(data, rec, &mut self.allocations, &keys);
             }
             Parts::Radix(_, _) => {
                 // @PLN48 S2 — no dedup: two records may share a cell (they differ in
@@ -669,6 +676,7 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Radix(c, _)
+            | Parts::Trie(c, _)
             | Parts::Index(c, _, _) => {
                 let crate::json::Parsed::Array(items) = parsed else {
                     return Err(mismatch());
@@ -1121,6 +1129,7 @@ impl Stores {
             Parts::Sorted(_, _)
             | Parts::Ordered(_, _)
             | Parts::Radix(_, _)
+            | Parts::Trie(_, _)
             | Parts::Hash(_, _)
             | Parts::Index(_, _, _)
             | Parts::Array(_)

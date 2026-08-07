@@ -818,6 +818,66 @@ let config = LogConfig {
 
 ---
 
+## What a test run selects (`find_problems.sh`)
+
+`./scripts/find_problems.sh` defaults to the **curated** set: everything except a
+short, named list of slow-and-few binaries. **3733 of 3833 tests in ~70s** rather
+than ~370s.
+
+The default is the cheap one on purpose. At six minutes a full run is something
+you skip, and a check you skip is not a check — so the expensive option costs a
+flag to ask for rather than a flag to avoid.
+
+| | |
+|---|---|
+| `find_problems.sh` | curated — ~70s, 97.4% of the tests |
+| `find_problems.sh --full` | every test — ~370s |
+| `find_problems.sh --subject <name>` | one area — seconds |
+| `find_problems.sh --list-subjects` | the subjects, and what the default excludes |
+
+Selection flags combine with `--bg` / `--peek` / `--wait` / `--stop`.
+
+### Why it curates by EXCLUSION
+
+Because inclusion does not work, and there is a measurement rather than an
+opinion behind that. An additive map ("you touched the parser, run these four
+suites") keeps 4 binaries of 177 and drops 173 — and it demonstrably misses real
+regressions: an over-broad change to the parser's `null()` was caught by
+`binary_io_matrix`, which no parser map would have selected. Curating by
+inclusion has to predict which suite will catch a bug, which is exactly the thing
+nobody can do in advance.
+
+Excluding instead makes the miss set small, named and auditable — and the cost
+profile makes it nearly free, because the suite's cost is extremely concentrated:
+
+```
+top 5  binaries =  49% of test-seconds
+top 10 binaries =  64%
+top 20 binaries =  81%
+```
+
+**Eight binaries of 177 (4.5%) hold 57% of the work**, each slow AND few:
+`deliver_wasm` alone is 1011s for 17 tests. Dropping exactly those eight is the
+whole difference between 370s and 70s.
+
+Nothing that skips can reach `main`: CI's `Test (ubuntu-latest)` runs the suite
+**unsharded** and is a required check. The local default is the fast loop; CI is
+the complete gate.
+
+### Subjects
+
+`parser scopes codegen runtime store wasm packages lsp sql docs host`, defined in
+`scripts/test_subjects.sh` as binary-name **patterns** rather than lists — a list
+is incomplete the day it is written (the first draft left 91 of 177 binaries
+unreachable), while a pattern picks up new binaries whose names already match.
+Patterns are expanded against the real binary list before being handed to
+nextest, because nextest treats a pattern matching nothing as a filterset parse
+error, and because an expanded selection can be read back and checked.
+
+Subjects are a convenience for tight loops, **not** the safety mechanism. The
+default being subtractive is what makes it safe to leave them approximate: a gap
+in a subject costs seconds, never coverage.
+
 ## Store-memory ceiling (`LOFT_MEMORY_LIMIT`)
 
 The sibling of the execution timeout, for the failure it cannot catch. A corrupted

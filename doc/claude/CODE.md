@@ -23,6 +23,16 @@ Rules for all Rust and loft code in this project.
 - Internal-only functions use an `i_` prefix (e.g. `i_parse_errors`). Registered in `Parser::new()`, not in `default/*.loft`. Invisible to user code — no namespace collision.
 - Operators use `OpCamelCase` in loft source → bare `snake_case` in Rust (`fill.rs`), without any prefix. Exception: `OpReturn` → `op_return`, because `return` is a Rust keyword.
 
+**Adding an `fn Op*` to `default/*.loft` means `make fill` — and the symptom of
+forgetting is not a mismatch.** `fill.rs`'s `OPERATORS` is a POSITIONAL array, so a
+new opcode shifts every operator declared after it by one. The interpreter then
+dispatches each of those to its neighbour's implementation, and what you see is a
+SIGSEGV in a program that has nothing to do with your change — adding
+`OpLengthTrie` broke `for p in spatial<…>`. `tests/issues.rs::fill_rs_up_to_date`
+catches it, so run the suite before believing an ad-hoc run; if you are already
+staring at the crash, the fastest oracle is the INSTALLED `loft`, which answers
+correctly on the same file.
+
 ## Functions
 
 - One algorithm per function. Extract helpers to avoid duplication.

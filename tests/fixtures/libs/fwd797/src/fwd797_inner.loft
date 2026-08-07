@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#797 — every field here names a type the entry module declares AFTER the
+// `use` that pulls this file in, so all of them are unresolved stubs while this
+// file is being parsed.  Each spelling reaches the layout by a different route:
+// inline struct, `vector<T>`, a nullable `T?`, and a host whose own field is one
+// of the structs that had to wait.
+//
+// The field either side of each forward one is deliberate: when the layout froze
+// with a hole, the missing field's `position()` answered `u16::MAX` and writes
+// landed at `record + 65535` — in the NEIGHBOURS' bytes — so a guard that checks
+// only the forward field would miss the damage the bug actually did.
+pub struct F797Sess {
+  s_before: integer,
+  s_roofs: F797Roofs,
+  s_middle: integer,
+  s_many: vector<F797Walls>,
+  s_maybe: F797Roofs?,
+  s_after: integer,
+}
+
+// A host whose field is a struct that is itself waiting — the layout answer has
+// to be transitive, because an inline field stores its content's bytes.
+pub struct F797Outer { o_sess: F797Sess, o_tail: integer }
+
+pub fn f797_make() -> F797Outer {
+  return F797Outer {
+    o_sess: F797Sess {
+      s_before: 11,
+      s_roofs: F797Roofs { r_n: 22 },
+      s_middle: 33,
+      s_many: [F797Walls { w_m: 44 }, F797Walls { w_m: 55 }],
+      s_maybe: F797Roofs { r_n: 66 },
+      s_after: 77,
+    },
+    o_tail: 88,
+  };
+}

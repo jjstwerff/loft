@@ -197,6 +197,13 @@ fn write_type(out: &mut String, ty: &Type) {
             write_u16_list(out, dep);
             out.push('}');
         }
+        Type::Trie(n, key, dep) => {
+            let _ = write!(out, "{{\"k\":\"Trie\",\"n\":{n},\"key\":");
+            write_str(out, key);
+            out.push_str(",\"dep\":");
+            write_u16_list(out, dep);
+            out.push('}');
+        }
         Type::Radix(n, names, dep) => {
             let _ = write!(out, "{{\"k\":\"Radix\",\"n\":{n},\"names\":");
             write_str_list(out, names);
@@ -415,6 +422,11 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
         "Radix" => Type::Radix(
             as_u32(field(p, "n")?)?,
             str_list(field(p, "names")?)?,
+            deps(field(p, "dep")?)?,
+        ),
+        "Trie" => Type::Trie(
+            as_u32(field(p, "n")?)?,
+            as_str(field(p, "key")?)?,
             deps(field(p, "dep")?)?,
         ),
         "Hash" => Type::Hash(
@@ -1571,6 +1583,7 @@ mod tests {
             ),
             Type::Index(3, vec![("key".into(), true)], Deps::none()),
             Type::Radix(3, vec!["x".into(), "y".into()], Deps::unknown(vec![1])),
+            Type::Trie(3, "word".into(), Deps::unknown(vec![1])),
             Type::Hash(3, vec!["id".into()], Deps::none()),
             Type::Function(
                 vec![Type::Integer(IntegerSpec::wide()), Type::Text(Deps::none())],

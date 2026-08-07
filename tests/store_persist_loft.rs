@@ -2865,6 +2865,125 @@ fn lazy_bound_collection_fetches_only_the_touched_entry_both_backends() {
     }
 }
 
+/// loft#802 — a lazy binding that cannot be served must say so IN-BAND, and a
+/// binding that works must stay silent.
+///
+/// The reported failure was a `trie` bound to a `.store` image: `true` from the
+/// bind, `null` from every lookup, `""` from `store_lazy_error` — whose
+/// documented meaning is "reachable, genuinely no such key" — and `0` faults.
+/// The refusal existed only on stderr, so the program had nothing but the null.
+///
+/// FOUR refusal cells, because a refusal is decided in two different places and
+/// a fix for one leaves the other silent: the KIND is static and refuses at the
+/// bind (`trie`, `sorted`), while a foreign layout and a non-relocatable entry
+/// are only knowable when a fetch runs. THREE controls carry the test: a working
+/// hash must stay quiet (a fix that reported every null as a refusal would pass
+/// every refusal cell), an unreachable source must keep its own more specific
+/// reason, and a refused DIRECT load must not poison a later healthy binding.
+#[test]
+fn a_refused_lazy_binding_is_visible_to_the_program_both_backends() {
+    let dir = scratch("lazy_refusal_802");
+    let path = dir.join("rf");
+    let script = workspace_root().join("tests/scripts/802-lazy-refusal-visible.loft");
+
+    let (out_w, code_w) = run_lazy("--interpret", &script, &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("seeded=2,1,1,1"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_lazy(backend, &script, &path, "read");
+        assert_eq!(code, 0, "{backend} read exit: {out:?}");
+
+        // The reported case. The kind can never page, and that is known with no
+        // I/O — so it fails at the call that is wrong, not at a later lookup.
+        assert!(
+            out.contains("trie_bound=false"),
+            "{backend}: a kind a paged image can never serve must be refused AT \
+             THE BIND — `true` here is what made every later null look like an \
+             absent key: {out:?}"
+        );
+        assert!(
+            out.contains("trie_null=true trie_speaks=true"),
+            "{backend}: the lookup still answers null (C80), and the channel that \
+             exists to break that tie must carry the reason: {out:?}"
+        );
+        assert!(
+            out.contains("trie_faults=1"),
+            "{backend}: a binding that can serve NOTHING is maximally incomplete, \
+             and `0` reads as healthy: {out:?}"
+        );
+        // The message is the deliverable here: the old one blamed the #632
+        // wrapper-struct trap and told a plain `trie` local to declare itself as
+        // an annotated local, which it already was.
+        assert!(
+            out.contains("trie_names_kind=true") && out.contains("trie_names_cure=true"),
+            "{backend}: the refusal must name the KIND that was refused and the \
+             call that does work: {out:?}"
+        );
+        // The rule is the kind SET, not `trie` — a fix keyed on one kind would
+        // leave `sorted` and `index` exactly as silent.
+        assert!(
+            out.contains("sorted_bound=false") && out.contains("sorted_speaks=true"),
+            "{backend}: `sorted` cannot page either, and must refuse the same \
+             way: {out:?}"
+        );
+
+        // The refusals a bind CANNOT decide: the local is a `hash`, so the pair
+        // is plausible, and only the fetch learns otherwise.
+        assert!(
+            out.contains("foreign_bound=true"),
+            "{backend}: a hash local is a plausible binding — refusing it at the \
+             bind would break the working case: {out:?}"
+        );
+        assert!(
+            out.contains("foreign_null=true foreign_speaks=true")
+                && out.contains("foreign_faults=1"),
+            "{backend}: a foreign-layout image is refused by the layout gate, and \
+             that refusal must reach the program too: {out:?}"
+        );
+        assert!(
+            out.contains("big_bound=true") && out.contains("big_null=true big_speaks=true"),
+            "{backend}: an entry the working-set copy cannot relocate is refused \
+             at FETCH time, and was equally silent: {out:?}"
+        );
+
+        // CONTROL 1 — without this, "report every null as a refusal" passes
+        // every assertion above and destroys the channel.
+        assert!(
+            out.contains("hash_hit=4200 hash_quiet=true"),
+            "{backend}: a binding that WORKS must stay silent: {out:?}"
+        );
+        assert!(
+            out.contains("hash_absent=true hash_still_quiet=true") && out.contains("hash_faults=0"),
+            "{backend}: a genuine absence is still an absence — it must not start \
+             reporting a reason: {out:?}"
+        );
+
+        // CONTROL 2 — the refusal must not PREEMPT the more specific answer. The
+        // loader says only "it cannot be opened as a paged source"; the open
+        // itself names the connection error, and the first fix lost it.
+        assert!(
+            out.contains("ur_null=true ur_speaks=true") && out.contains("ur_specific=true"),
+            "{backend}: an unreachable source must keep its own reason, not the \
+             loader's generic one: {out:?}"
+        );
+
+        // CONTROL 3 — the recorded refusal is per-fetch. A refused DIRECT
+        // `store_load_key` must not leave a reason behind for an unrelated
+        // collection bound afterwards.
+        assert!(
+            out.contains("direct_refused=false") && out.contains("clean_hit=4200 clean_quiet=true"),
+            "{backend}: a refusal must not leak across collections: {out:?}"
+        );
+
+        // The sticky contract is untouched by all of this.
+        assert!(
+            out.contains("cleared=true after_clear=true"),
+            "{backend}: an explicit acknowledgement still clears: {out:?}"
+        );
+    }
+}
+
 /// `run_mode_backend`'s sibling for the @PLN129 script, which reads its mode
 /// from `LOFT_LAZY_MODE` so it cannot be confused with the persist scripts'.
 fn run_lazy(backend: &str, script: &Path, path: &Path, mode: &str) -> (String, i32) {

@@ -1691,7 +1691,8 @@ impl Parser {
             Type::Hash(c, _, _)
             | Type::Sorted(c, _, _)
             | Type::Index(c, _, _)
-            | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
+            | Type::Radix(c, _, _)
+            | Type::Trie(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
             Type::Vector(elm, _) => {
                 Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
             }
@@ -2468,7 +2469,8 @@ impl Parser {
             Type::Sorted(td, _, _)
             | Type::Hash(td, _, _)
             | Type::Index(td, _, _)
-            | Type::Radix(td, _, _) => self.data.def(*td).known_type(),
+            | Type::Radix(td, _, _)
+            | Type::Trie(td, _, _) => self.data.def(*td).known_type(),
             _ => return None,
         };
         if content == u16::MAX {
@@ -2479,6 +2481,7 @@ impl Parser {
             Type::Hash(_, key, _) => self.database.hash(content, key),
             Type::Index(_, key, _) => self.database.index(content, key),
             Type::Radix(_, key, _) => self.database.spatial(content, key),
+            Type::Trie(_, key, _) => self.database.trie(content, key),
             _ => return None,
         })
     }
@@ -2850,13 +2853,24 @@ impl Parser {
         let mut ls = Vec::new();
         let is_field = self.is_field(val);
         let ed_nr = self.data.type_def_nr(in_t);
-        assert_ne!(
-            ed_nr,
-            u32::MAX,
-            "Unknown type {} at {}",
-            in_t.name(&self.data),
-            self.lexer.pos()
-        );
+        if ed_nr == u32::MAX {
+            // The element type never resolved, so there is no record shape to build.  An
+            // `assert_ne!` here made that an internal compiler error on ordinary source:
+            // `v = [Nope { n: 1 }]` — one undefined name in a vector literal — was enough
+            // to abort the compiler and send the reader looking for a compiler bug.
+            //
+            // The undefined name itself is always reported before this, so say nothing
+            // about WHICH type is missing: by the time the element reaches here it is the
+            // synthesised `never`, and naming that (or prescribing a `use` for it) points
+            // at something the author never wrote.  Fatal because every caller below needs
+            // a record shape, so the parse cannot usefully go on.
+            diagnostic!(
+                self.lexer,
+                Level::Fatal,
+                "cannot build this record — its type never resolved"
+            );
+            return ls;
+        }
         // P188: when the LHS local is a keyed collection
         // (sorted/hash/index/spatial<T[key]>), the container type id
         // must be the keyed-collection's own known_type so OpNewRecord
@@ -3374,6 +3388,21 @@ impl Parser {
                 }
                 self.database.spatial(c_tp, key)
             }
+            Type::Trie(tp, key, _) => {
+                // The Radix shape, for a trie: resolve the registered id, and register
+                // on demand for a local-only var whose type is otherwise absent from
+                // the schema.  Same spelling `Stores::trie` uses.
+                let name = format!("trie<{}[{key}]>", self.data.def(*tp).name());
+                let r = self.database.name(&name);
+                if r != u16::MAX {
+                    return r;
+                }
+                let c_tp = self.data.def(*tp).known_type();
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.trie(c_tp, key)
+            }
             Type::Sorted(tp, key, _) => {
                 let mut name = "sorted<".to_string() + self.data.def(*tp).name() + "[";
                 field_id(key, &mut name);
@@ -3440,7 +3469,11 @@ impl Parser {
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp,
-        Type::Hash(_, _, _) | Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Radix(_, _, _)
+        Type::Hash(_, _, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
     )
 }
 

@@ -214,6 +214,86 @@ Every source file is parsed **twice**:
 
 The two-pass approach allows forward references — a struct or function can be used before it is defined.
 
+Both of those run **per file**, at the end of each `parse_file`, and each sweeps only the
+definitions that file added.  A `use` suspends the current file to parse the dependency to
+completion, so a module can be laid out while a type it names is still an unresolved stub
+belonging to the file further up the chain.  `fill_all` therefore defers any def whose
+fields are not all known (`layout_blocked`) and re-asks with `copy_unknown_fields` on every
+subsequent call — a layout, once registered, is never revisited, so getting it right the
+first time is the only chance.  See [LIFETIME.md § A field whose type another MODULE
+declares](LIFETIME.md) for what the missing deferral cost.
+
+### How a forward reference actually resolves — the stub, and who adopts it
+
+Worth knowing before touching name resolution, because the mechanism is not a lookup.
+
+A type name the parser cannot resolve yet becomes a real definition: an
+`add_def(name, …, DefType::Unknown)` **stub**.  Three things then act on it.
+
+1. **The declaration adopts it.**  `parse_struct`, `parse_enum` and `parse_typedef` each
+   look the name up before registering, and when they find a stub they upgrade it IN
+   PLACE — same def number, now a real type.  Every `Type::Unknown(stub)` already stored
+   on someone's attribute therefore resolves for free.
+2. **`use` carries it across files.**  `use inner;` imports the module's names into the
+   importer, stubs included.  That is the whole reason a module can name a type the
+   IMPORTER declares: the module leaves a stub, the import makes it visible under the
+   importer's source, and the importer's own declaration adopts it.  Both files end up
+   sharing one def.  (There is no cross-source *lookup* — `Data::def_nr` is keyed on
+   `(name, source)` with only a source-0 fallback.)
+3. **`resolve_deferred_unknowns` settles the rest** once every file has been parsed:
+   rewrite the references if the stub resolved, report `Undefined type` if it did not.
+
+The consequence to remember: **only a spelling that LEAVES a stub can be forward-
+referenced.**  Written types go through `parse_type`, which leaves one.  Expressions did
+not, so `r: Roofs = Roofs { … }` compiled and the identical `r = Roofs { … }` did not
+(loft#801).  Two sites in `parse_var` now leave the same stub — the `Name { … }`
+construction branch and the bare-name branch — recorded in `speculative_type_refs` so an
+unadopted one stays quiet and lets the construction site report with the author's own
+spelling.  A bare name qualifying a VALUE (`Colour.Green`) is included too, since
+loft#803 established the discriminants that made its value right.
+
+**A stub is a DEFERRAL, not a resolved type.**  Handing one to a consumer as
+`Type::Null` is how `Colour.Green` reported `Unknown type null — did you mean 'JNull'?`
+— two names the author never wrote, in PASS 1, aborting before the pass that could have
+resolved it.  The field access already has a quiet `Type::Unknown(_)` path for exactly
+this, and it keeps the error rather than losing it: a stub nobody adopts is still
+`Unknown` in pass 2, where the same site reports "Field of unknown variable".
+
+#### Registration is keyed on the DEF, never on a def-number range
+
+Adoption is what breaks range-scoped work, and it does so silently.
+`actual_types_deferred` registers types over `start_def..` — "everything this file just
+added".  An adopted stub is not in that range: the module left the stub, so its def
+number is BELOW the resuming importer's `start_def`, while the def itself is the
+importer's enum.  It therefore never registered, `known_type` stayed `u16::MAX`, and
+`Stores::enum_val` answers **`unknown`** for exactly that — a wrong value, not an error
+(loft#803).  The layout fault beside it is the same cause: an unregistered enum has zero
+width, so the field AFTER an enum-typed field lost its position (the loft#797 shape).
+
+So `fill_all` scans **from 0** for any enum still lacking a db type, because the
+condition is a fact about the def, not about where its number falls.  That in turn
+requires registration to be idempotent, and its two halves are not idempotent in the
+same way — which is what defeated the three earlier attempts on loft#803:
+
+| half | idempotence | why |
+|---|---|---|
+| `Stores::enumerate` (mint the type) | **once** | it PUSHES; a second call mints a second `Colour` and renumbers every type id after it, so the generated `init()` referenced a `t189` it had not declared |
+| `Stores::value` (the db variant list) | **add-if-absent** | it appends blindly; a second pass gives the enum `Red, Green, Red, Green` and shifts what each discriminant names |
+| `set_attr_value` (the def's own discriminants) | **every pass** | `parse_enum` rebuilds the def's attributes each pass, so a stamp that ran only at mint leaves pass 2 — the pass that generates code — with variants carrying no discriminant |
+
+`register_enum_db` returns early to a stamp-only path when `known_type` is already set,
+which also skips the `__nullable<` name disambiguation — that keys on "the bare name is
+already a db type", which is true of the def's own second visit and would rename it.
+
+⚠ **Key that early return on the DEF, never on the NAME.** A db name is not unique
+across defs: the stdlib declares `enum Format` (`02_files.loft`) and a program may
+declare its own. Making registration idempotent by looking the name up in
+`Stores::names` handed the user's `Format` the STDLIB type, so `Format.Number`
+(discriminant 2) read back `LittleEndian` — in a program containing no forward
+reference at all. `enumerate` shadowing the name is exactly what keeps two same-named
+enums apart, so the mint must stay unconditional. Guarded by the name-collision cell in
+`tests/scripts/803-forward-enum-value.loft`.
+
 ### The H5 two-pass contract — the lazy-append law
 
 `assert_pass2_def_attr_stable` (`src/parser/mod.rs`, debug-assertions only —

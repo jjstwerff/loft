@@ -167,6 +167,12 @@ fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
             sort_key_list(stores, slot, ds::TYINDEX_KEYS, keys);
             dep_list(stores, slot, ds::TYINDEX_DEP, dep);
         }
+        Type::Trie(n, key, dep) => {
+            slot.set_discriminant(stores, ds::TY_TRIE);
+            slot.set_field_int(stores, ds::TYTRIE_N, i64::from(*n));
+            slot.set_field_str(stores, ds::TYTRIE_KEY, key);
+            dep_list(stores, slot, ds::TYTRIE_DEP, dep);
+        }
         Type::Radix(n, names, dep) => {
             slot.set_discriminant(stores, ds::TY_RADIX);
             slot.set_field_int(stores, ds::TYRADIX_N, i64::from(*n));
@@ -548,6 +554,15 @@ fn write_db_parts(stores: &mut Stores, r: &Record, parts: &Parts) {
             r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
             write_key_fields(stores, r, ds::PTKEYS, keys);
             r.set_field_int(stores, ds::PTINDEX_LEFT, i64::from(*left));
+        }
+        // The IR codec needs its own `PT_TRIE` discriminant — a SCHEMA change
+        // (`data_store.rs` pins each id and `ir_schema_roundtrip` guards the drift).
+        // Deferred to step 3 for the same reason as the descriptor: it should land with
+        // a test that can construct a trie.
+        Parts::Trie(c, key) => {
+            r.set_discriminant(stores, ds::PT_TRIE);
+            r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
+            r.set_field_int(stores, ds::PTTRIE_KEY, i64::from(*key));
         }
         Parts::Radix(c, fields) => {
             r.set_discriminant(stores, ds::PT_RADIX);

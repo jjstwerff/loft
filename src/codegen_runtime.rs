@@ -108,6 +108,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
     RuntimeFn { name: "n_radix_sorted",               abi: Abi::Cell },
     RuntimeFn { name: "n_spatial_range",              abi: Abi::Cell },
+    RuntimeFn { name: "n_trie_prefix",                abi: Abi::Cell },
     // P268 — JSON ecosystem (P54 sprint).  Native runtime wrappers
     // around `crate::native::json_parse_into_stores` + the JsonValue
     // method natives so `--native` programs can read/parse JSON
@@ -949,6 +950,12 @@ pub fn OpLengthCharacter(_cell: &std::cell::UnsafeCell<Stores>, c: i32) -> i64 {
 #[must_use]
 pub fn spatial_len(coll: &DbRef, stores: &[crate::store::Store]) -> u32 {
     crate::radix_db::count(coll, stores)
+}
+
+/// Number of records in a trie.  The cached tree length, as for a spatial index.
+#[must_use]
+pub fn trie_len(coll: &DbRef, stores: &[crate::store::Store]) -> u32 {
+    crate::trie_db::count(coll, stores)
 }
 
 /// Pack a (current-position, finish) pair into a single i64 iterator state.
@@ -2334,6 +2341,18 @@ pub fn n_spatial_range(
 ) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.build_radix_range_vec(&r, tp as u16, fx, fy, fz, has_till, tx, ty, tz, limit)
+}
+
+/// A trie prefix slice.  Bytecode equivalent: `n_trie_prefix`.
+pub fn n_trie_prefix(
+    cell: &std::cell::UnsafeCell<Stores>,
+    r: DbRef,
+    tp: i64,
+    pre: &str,
+    limit: i64,
+) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores.build_trie_prefix_vec(&r, tp as u16, pre, limit)
 }
 
 /// Read the text element a par worker's `&str` parameter expects out of the

@@ -136,6 +136,10 @@ pub enum Iterated {
         elem: u16,
         keys: Vec<u16>,
     },
+    Trie {
+        elem: u16,
+        key: u16,
+    },
 }
 
 impl Iterated {
@@ -148,7 +152,8 @@ impl Iterated {
             | Iterated::Ordered { elem, .. }
             | Iterated::Hash { elem, .. }
             | Iterated::Index { elem, .. }
-            | Iterated::Radix { elem, .. } => *elem,
+            | Iterated::Radix { elem, .. }
+            | Iterated::Trie { elem, .. } => *elem,
         }
     }
 }
@@ -307,6 +312,13 @@ impl LayoutDesc {
                 Iterated::Radix { elem, keys } => {
                     format!(
                         "spatial<{}>(keys={keys:?},elem_size={})",
+                        self.name(*elem),
+                        self.size(*elem)
+                    )
+                }
+                Iterated::Trie { elem, key } => {
+                    format!(
+                        "trie<{}>(key={key},elem_size={})",
                         self.name(*elem),
                         self.size(*elem)
                     )
@@ -519,6 +531,7 @@ fn node_json(node: &LayoutNode, s: &mut String) {
                 Iterated::Hash { elem, .. } => ("hash", elem),
                 Iterated::Index { elem, .. } => ("index", elem),
                 Iterated::Radix { elem, .. } => ("radix", elem),
+                Iterated::Trie { elem, .. } => ("trie", elem),
             };
             let _ = write!(
                 s,
@@ -626,6 +639,14 @@ impl Stores {
                 elem: *e,
                 keys: keys.clone(),
                 left: *left,
+            }),
+            // The descriptor's `Iterated` needs its own trie variant, and that is a FORMAT
+            // change (it crosses to the JS `deliver` reader).  Deferred to step 3 with the
+            // rest of the trie's behaviour, so it lands with a test that can construct one —
+            // a codec arm you cannot exercise is worse than a loud stub.
+            Parts::Trie(e, key) => LayoutNode::Iterated(Iterated::Trie {
+                elem: *e,
+                key: *key,
             }),
             Parts::Radix(e, keys) => LayoutNode::Iterated(Iterated::Radix {
                 elem: *e,

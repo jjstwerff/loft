@@ -805,6 +805,39 @@ fn spatial_rejects_more_than_three_axes() {
         .error("spatial<T[…]> supports at most 3 coordinate axes, got 4 at spatial_rejects_more_than_three_axes:2:42");
 }
 
+/// loft#799: a `spatial` keyed on TEXT compiled, counted right, and then answered
+/// NULL for a key just inserted — indistinguishable from "not found" at the call
+/// site.  Refused at declaration now, naming the kind that does key on bytes.
+#[test]
+fn spatial_rejects_a_text_key() {
+    code!("struct Word { w: text, n: integer }\nfn test() { ws: spatial<Word[w]> = []; }")
+        .error("a spatial index interleaves its axes into a Morton code, which needs numbers, and `w` is text — use `trie<Word[w]>`, which keys on text and answers a prefix at spatial_rejects_a_text_key:2:35");
+}
+
+/// loft#799, the mirror: a `trie` walks one key's BYTES, so a numeric key is the
+/// same mistake the other way round.
+#[test]
+fn trie_rejects_a_numeric_key() {
+    code!("struct Pt { x: integer, y: integer }\nfn test() { ps: trie<Pt[x]> = []; }")
+        .error("a trie keys on the BYTES of a text field, and `x` is integer — use `spatial<…>` for coordinates, or `sorted<…>` / `index<…>` to order on a number at trie_rejects_a_numeric_key:2:30");
+}
+
+/// A trie orders ONE key's bytes, so several keys have no order to share.
+#[test]
+fn trie_rejects_two_keys() {
+    code!("struct Word { w: text, s: text }\nfn test() { ws: trie<Word[w, s]> = []; }")
+        .error("trie<T[k]> keys on exactly ONE text field, got 2 — a trie orders one key's bytes, so several keys have no order to share; use `sorted<T[a, b]>` for a multi-field order at trie_rejects_two_keys:2:35");
+}
+
+/// A bare `trie<T>` has no key to walk, so it is a helpful error rather than a
+/// silent empty key — the same shape `spatial<T>` gets.
+#[test]
+fn trie_needs_its_key_field() {
+    code!("struct Word { w: text }\nfn test() { ws: trie<Word> = []; }").error(
+        "trie<T[k]> needs its text key field, e.g. trie<Word[w]> at trie_needs_its_key_field:2:29",
+    );
+}
+
 /// F57: write_file on a struct with a collection-type field must produce a compile error.
 #[test]
 fn write_file_collection_field() {

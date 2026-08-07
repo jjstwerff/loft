@@ -59,7 +59,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.set_returned(d_nr, Type::Character);
             data.definitions[d_nr as usize].known_type = 6;
         }
-        "radix" | "hash" | "reference" | "index" | "sorted" | "spatial" => {
+        "radix" | "hash" | "reference" | "index" | "sorted" | "spatial" | "trie" => {
             data.set_returned(d_nr, Type::Reference(d_nr, Deps::none()));
         }
         "keys_definition" => {
@@ -106,11 +106,22 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
         // field with no type silently acquires a plausible wrong one instead of staying
         // visibly unresolved (#686).  The `Vector` arm below already guarded it; this is
         // the same guard on the bare case.
-        if let Type::Unknown(was) = data.attr_type(d, nr)
+        //
+        // A `?` on the field is transparent here: `S?` and `S` name the same
+        // forward reference, so peel the marker, resolve, and put it back.  Without
+        // that, a `Roofs?` field kept `Optional(Unknown(stub))` after every other
+        // spelling had resolved, and the first read of it reported the internal type
+        // name (`optional(unknown(700))`) at the CALLER (loft#797).
+        let (attr_type, optional) = match data.attr_type(d, nr) {
+            Type::Optional(inner) => (*inner, true),
+            other => (other, false),
+        };
+        if let Type::Unknown(was) = attr_type
             && was != 0
         {
-            data.set_attr_type(d, nr, data.def(was).returned.clone());
-        } else if let Type::Vector(content, dep) = &data.attr_type(d, nr)
+            let resolved = data.def(was).returned.clone();
+            set_attr_type_keeping_optional(data, d, nr, resolved, optional);
+        } else if let Type::Vector(content, dep) = &attr_type
             && let Type::Unknown(was) = **content
             && was != 0
         {
@@ -125,8 +136,35 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
             // construction stayed dense → element-stride mismatch → corrupted
             // enum-discriminant reads / over-free on both backends (@PLN25 #465).
             let resolved = data.def(was).returned.clone();
-            data.set_attr_type(d, nr, Type::Vector(Box::new(resolved), dep));
+            set_attr_type_keeping_optional(
+                data,
+                d,
+                nr,
+                Type::Vector(Box::new(resolved), dep),
+                optional,
+            );
         }
+    }
+}
+
+/// Write a freshly resolved type onto attribute `nr`, restoring the `?` the caller peeled.
+///
+/// `set_attr_type` guards against overwriting a type that is already settled, and it reads
+/// "settled" as `is_unknown() == false` — which an `Optional(…)` wrapper always is, whatever
+/// it wraps.  Re-wrapping before the call would therefore trip the guard on exactly the
+/// resolution it exists to allow, so the optional case writes the field directly, the same
+/// escape [`Data::rewrite_unknown_refs`] takes for `Vector<Unknown>` and friends.
+fn set_attr_type_keeping_optional(
+    data: &mut Data,
+    d: u32,
+    nr: usize,
+    resolved: Type,
+    optional: bool,
+) {
+    if optional {
+        data.definitions[d as usize].attributes[nr].typedef = Type::Optional(Box::new(resolved));
+    } else {
+        data.set_attr_type(d, nr, resolved);
     }
 }
 
@@ -234,33 +272,109 @@ pub fn sync_capture_ownership(data: &Data, database: &mut Stores) {
     }
 }
 
-/// #686 — does `d` still carry a NAMELESS unknown attribute, i.e. one no resolver can
-/// ever fix?
+/// Whether `d`'s layout has to wait, because a field's type is not known yet.
 ///
-/// `Unknown(stub)` names a forward-referenced type and `copy_unknown_fields` resolves it
-/// before the layout loop.  `Unknown(0)` names nothing: it is what a field typed from an
-/// EXPRESSION carries, and the only producer of those is the closure record (a capture's
-/// type is the type of `w.chunks[1]`, not of a written-down name).
+/// Laying a struct out anyway is what makes the failure a CORRUPTION rather than a
+/// refusal: the field loop in [`fill_database`] silently skips an attribute it cannot
+/// size, but the type is still registered and `finish` still sizes it — so the field
+/// keeps `position == u16::MAX` forever, and `finish_type` will not revisit an
+/// already-sized type.  The declaration and the layout then disagree for the rest of
+/// the run: #686's closure body read and wrote its capture at offset 65535, and #797's
+/// package field did the same to its record's neighbours.
 ///
-/// Laying such a struct out anyway is what made #686 corrupt instead of merely fail: the
-/// field loop SKIPS an attribute it cannot size, but the type is still registered and
-/// `finish` still sizes it — so the field keeps `position == u16::MAX` forever, and
-/// `finish_type` will not revisit an already-sized type.  The closure body then read and
-/// wrote its capture at offset 65535.  Deferring instead costs nothing: the layout loop
-/// is keyed on `known_type == u16::MAX`, so pass 2 picks the record up once
-/// `parse_lambda`'s `resolve_forward_captures` has repaired it.  A field that never
-/// resolves leaves the struct unregistered, which is harmless — the parser has already
-/// reported the error and the program cannot run.
-fn has_nameless_unknown_attr(data: &Data, d: u32) -> bool {
-    (0..data.attributes(d)).any(|a| {
-        let tp = data.attr_type(d, a);
-        let tp = tp.base();
-        matches!(tp, Type::Unknown(0))
-            || matches!(tp, Type::Vector(c, _) if matches!(**c, Type::Unknown(0)))
-    })
+/// Deferring costs nothing.  The registration loop in [`fill_all`] is keyed on
+/// `known_type == u16::MAX`, so the next `fill_all` — the next file's, or the one after
+/// `resolve_deferred_unknowns` — picks the struct up as soon as the type arrives.  A
+/// field that never resolves leaves the struct unregistered, which is harmless: the
+/// parser has already reported the undefined type, and `field_position` names the field
+/// if anything still reaches for it.
+///
+/// Two kinds of "not known yet" reach here, and both must block:
+///
+///  * `Unknown(0)` names nothing.  It is what a field typed from an EXPRESSION carries,
+///    and the only producer is the closure record — a capture's type is the type of
+///    `w.chunks[1]`, not of a written-down name.  `resolve_forward_captures` repairs it.
+///  * `Unknown(stub)` names a forward-referenced type whose declaration has not parsed
+///    yet.  Within one file `copy_unknown_fields` resolves it before the layout loop, but
+///    it only sweeps the file being finished — a struct in a module the package loaded
+///    EARLIER keeps its stub, because the type it names is declared by a module still
+///    suspended further up the `use` chain (loft#797).  The sweep at the top of
+///    `fill_all` re-resolves those; whatever is still `Unknown` here is genuinely unknown.
+///
+/// The answer is transitive.  An inline struct field stores its content's bytes, so a
+/// host whose field type is itself waiting cannot be laid out either — laying it out
+/// would register the field with content id `u16::MAX`.
+fn layout_blocked(data: &Data, d: u32, seen: &mut Vec<u32>) -> bool {
+    if d == u32::MAX {
+        return true;
+    }
+    if matches!(data.def_type(d), DefType::Unknown) {
+        return true;
+    }
+    if data.def(d).known_type != u16::MAX {
+        return false; // already laid out — its fields were known then
+    }
+    if !matches!(data.def_type(d), DefType::Struct | DefType::EnumValue) {
+        return false;
+    }
+    if seen.contains(&d) {
+        // A value cycle is rejected by `fill_all`'s own check; stopping here just
+        // keeps this walk finite.
+        return false;
+    }
+    seen.push(d);
+    let blocked = (0..data.attributes(d)).any(|a| {
+        !data.def(d).attributes[a].constant && type_blocked(data, &data.attr_type(d, a), seen)
+    });
+    seen.pop();
+    blocked
+}
+
+/// The [`layout_blocked`] question asked of a TYPE rather than a definition: does laying
+/// this out need a size nobody can supply yet?
+///
+/// The set of forms mirrors what [`fill_database`] actually asks of a field's content, so
+/// that the two agree on which fields have a dependency at all.  A keyed collection needs
+/// its content's type ID; a `Reference` with EMPTY deps stores the content's bytes inline
+/// and so needs its size — but one with deps is a fixed-width `DbRef`, sized whatever the
+/// content turns out to be, which is why that case does not wait (the same split the
+/// native generator's field-hoist makes).
+fn type_blocked(data: &Data, tp: &Type, seen: &mut Vec<u32>) -> bool {
+    match tp.base() {
+        Type::Unknown(_) => true,
+        Type::Vector(c, _) | Type::RefVar(c) => type_blocked(data, c, seen),
+        Type::Tuple(elms) => elms.iter().any(|e| type_blocked(data, e, seen)),
+        Type::Hash(c, _, _)
+        | Type::Index(c, _, _)
+        | Type::Sorted(c, _, _)
+        | Type::Radix(c, _, _)
+        | Type::Trie(c, _, _) => layout_blocked(data, *c, seen),
+        Type::Reference(c, deps) if deps.is_empty() => layout_blocked(data, *c, seen),
+        _ => false,
+    }
 }
 
 pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
+    // Re-resolve the forward references of everything still waiting for a layout.
+    //
+    // `actual_types_deferred` sweeps only the file it is finishing, so a struct that
+    // named a not-yet-declared type keeps `Unknown(stub)` on the attribute after its own
+    // file is done.  The stub def is upgraded IN PLACE the moment its real declaration
+    // parses (`parse_struct` reuses the stub's def_nr), which makes the attribute
+    // resolvable from here on — but nothing was asking again.  That is loft#797: the
+    // declaration ended up correct and the layout kept the hole.
+    //
+    // Ask again for every def whose layout is still pending, so each `fill_all` picks up
+    // whatever the files parsed since have declared.  Resolving against a def that is
+    // still a stub is a no-op (a stub's `returned` is its own `Unknown`), so this
+    // converges without needing to know which pass finally supplies the type.
+    for d_nr in 0..data.definitions() {
+        if data.def(d_nr).known_type == u16::MAX
+            && matches!(data.def_type(d_nr), DefType::Struct | DefType::EnumValue)
+        {
+            copy_unknown_fields(data, d_nr);
+        }
+    }
     // Detect type cycles before computing sizes.
     for d_nr in start_def..data.definitions() {
         if matches!(data.def_type(d_nr), DefType::Struct) {
@@ -390,7 +504,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
             && data.def(d_nr).known_type == u16::MAX
-            && !has_nameless_unknown_attr(data, d_nr)
+            && !layout_blocked(data, d_nr, &mut Vec::new())
         {
             fill_database(data, database, d_nr);
             // @PLN25 E2 — right after building a struct `S`, build its synthetic
@@ -470,6 +584,12 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                     let c_tp = data.def(c).known_type;
                     if c_tp != u16::MAX {
                         database.spatial(c_tp, &key);
+                    }
+                }
+                Type::Trie(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.trie(c_tp, &key);
                     }
                 }
                 _ => {}
@@ -552,12 +672,23 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
     // `register_enum_db` HERE — in `fill_all`, before the layout loop — instead of
     // mid-body-parse is what keeps the discriminant db-type laid out correctly;
     // registering it during parsing corrupts every read of the shared enum.
+    // loft#803 — and any HAND-WRITTEN enum the range-scoped registration missed.
+    //
+    // `actual_types_deferred` registers enums over `start_def..`, which reads as
+    // "everything this file just added". An ADOPTED stub breaks that: a module
+    // that names `Colour` before the importer declares it leaves a stub, the
+    // importer's own `enum Colour` upgrades that stub IN PLACE, and the stub's
+    // def number is BELOW the resuming importer's `start_def`. So the one def
+    // that IS the enum sits outside every range that would have registered it,
+    // `known_type` stays `u16::MAX`, and `enum_val` answers `unknown` for every
+    // variant — a wrong value, not an error.
+    //
+    // Scanning from 0 is the fix rather than widening the range, because the
+    // condition is a fact about the DEF (it has no db type yet), not about where
+    // its number happens to fall. Registration is idempotent, so a def the
+    // in-order pass already handled is re-stamped and not re-minted.
     for d in 0..data.definitions() {
-        if matches!(data.def_type(d), DefType::Enum)
-            && data.def(d).synthetic.is_some()
-            && data.def(d).known_type == u16::MAX
-            && data.def(d).name.starts_with("__nullable<")
-        {
+        if matches!(data.def_type(d), DefType::Enum) && data.def(d).known_type == u16::MAX {
             register_enum_db(data, database, d);
         }
     }
@@ -569,6 +700,21 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
 /// @PLN25 nullable-struct-field synthesis (synthetic `__nullable<T>` enums),
 /// so both register identically.
 fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
+    // ALREADY MINTED — re-stamp only. `parse_enum` rebuilds this def's attributes
+    // on every pass, so pass 2's variants carry no discriminant unless the stamp
+    // runs again; but `enumerate` PUSHES a type, so running the whole of this
+    // twice mints a second `Colour` and renumbers every type id after it — which
+    // is what made the generated `init()` reference a `t189` it had not declared
+    // (loft#803, attempt 3). The two halves have different idempotence, so they
+    // are separated here rather than guarded together at the call site.
+    //
+    // The name computation below is skipped as well, deliberately: its
+    // `__nullable<` disambiguation keys on "the bare name is already a db type",
+    // which is true of THIS def's own second visit and would rename it.
+    if data.def(d).known_type != u16::MAX {
+        stamp_enum_variants(data, database, d, data.def(d).known_type);
+        return;
+    }
     let mut name = data.def(d).name.clone();
     // @PLN22 (p379 `two_libs_same_struct_name`): two libraries may each define a struct
     // of the same name `S`.  `nullable_enum_for` already gives each `S` its own synth
@@ -593,12 +739,47 @@ fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
             name = format!("__nullable<{}>", data.qualified_type_name(sd));
         }
     }
+    // MINT, always — idempotence is keyed on the DEF above, never on the name.
+    //
+    // A db name is NOT unique across defs. The stdlib declares `enum Format`
+    // (`02_files.loft`) and a program may declare its own, which is the same
+    // collision the `__nullable<` disambiguation right above exists for. Reusing a
+    // same-named db type here made the user's `Format` adopt the STDLIB one, so
+    // its second variant read back `LittleEndian` — a silent wrong value, and
+    // precisely the failure this whole fix is about. `enumerate` shadows the name,
+    // and that shadowing is what keeps two same-named enums apart.
+    //
+    // Adoption needs nothing from here: it upgrades a stub IN PLACE, so there is
+    // one def and one `known_type`, and the early return above is the only guard a
+    // second visit needs.
     let e_nr = database.enumerate(&name);
+    stamp_enum_variants(data, database, d, e_nr);
+    data.definitions[d as usize].known_type = e_nr;
+}
+
+/// Give each of this enum's variants its discriminant, in both places that hold
+/// one: the database's variant list and the def's own attribute values.
+///
+/// Runs on EVERY registration, including a repeat — `parse_enum` rebuilds the
+/// def's attributes each pass, so a stamp that ran only when the type was first
+/// minted leaves pass 2 (the pass that generates code) with variants that carry
+/// no discriminant, and every one of them renders as `unknown`.
+///
+/// The database half is add-if-absent because `Stores::value` appends blindly:
+/// a second pass over an already-populated enum would give it `Red, Green, Red,
+/// Green` and shift what each discriminant names.
+fn stamp_enum_variants(data: &mut Data, database: &mut Stores, d: u32, e_nr: u16) {
     for a in 0..data.attributes(d) {
-        database.value(e_nr, &data.attr_name(d, a), u16::MAX);
+        let v_name = data.attr_name(d, a);
+        let known = match &database.types[e_nr as usize].parts {
+            crate::database::Parts::Enum(values) => values.iter().any(|(_, n)| *n == v_name),
+            _ => false,
+        };
+        if !known {
+            database.value(e_nr, &v_name, u16::MAX);
+        }
         data.set_attr_value(d, a, Value::Enum(a as u8 + 1, e_nr));
     }
-    data.definitions[d as usize].known_type = e_nr;
 }
 
 /// @PLN25 — register + lay out a synth `__nullable<S>` enum ON DEMAND, for a FORWARD-referenced `S`
@@ -907,6 +1088,15 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     }
                     set_mutable(data, c_nr, &key_fields);
                     database.spatial(c_tp, &key_fields)
+                }
+                Type::Trie(c_nr, key, _) => {
+                    let mut c_tp = data.def(c_nr).known_type;
+                    if c_tp == u16::MAX {
+                        fill_database(data, database, c_nr);
+                        c_tp = data.def(c_nr).known_type;
+                    }
+                    set_mutable(data, c_nr, std::slice::from_ref(&key));
+                    database.trie(c_tp, &key)
                 }
                 Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),
                 Type::Function(_, _, _) => {

@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#797 — a struct field whose type is declared in a module the package loads
+// LATER must still get storage.  The layout used to be computed while the type
+// was an unresolved stub: `fill_database` skips a field it cannot size, and
+// nothing revisits an already-registered type, so the declaration and the layout
+// disagreed for the rest of the run.
+//
+// Reading every field back is the point.  A guard that only checked the forward
+// field would pass on the broken build for the neighbours, which is where the
+// damage landed (`record + 65535`).
+use fwd797;
+
+fn main() {
+    o = f797_make();
+
+    assert(o.o_sess.s_before == 11, "field before the forward one");
+    assert(o.o_sess.s_roofs.r_n == 22, "inline struct field declared later");
+    assert(o.o_sess.s_middle == 33, "field between two forward ones");
+    assert(len(o.o_sess.s_many) == 2, "vector<T> of a later-declared T");
+    assert(o.o_sess.s_many[0].w_m == 44, "first element of that vector");
+    assert(o.o_sess.s_many[1].w_m == 55, "second element of that vector");
+    assert(o.o_sess.s_maybe.r_n == 66, "nullable field of a later-declared type");
+    assert(o.o_sess.s_after == 77, "field after every forward one");
+    assert(o.o_tail == 88, "field of the host that had to wait for F797Sess");
+
+    // Sizes, hand-computed.  F797Roofs and F797Walls are one 8-byte integer each;
+    // a `vector<T>` field stores a 4-byte record id, not the elements.  So
+    // F797Sess = 8 (s_before) + 8 (s_roofs) + 8 (s_middle) + 4 (s_many) + 8
+    // (s_maybe) + 8 (s_after) = 44, and F797Outer inlines that plus its own
+    // integer = 52.  A field dropped from the layout shrinks these; reading the
+    // values back cannot catch that on its own, because the read follows whatever
+    // offsets the layout ended up with.
+    assert(sizeof(F797Roofs) == 8, "F797Roofs is one integer");
+    assert(sizeof(F797Sess) == 44, "every F797Sess field has storage");
+    assert(sizeof(F797Outer) == 52, "F797Outer inlines a whole F797Sess plus a tail");
+}

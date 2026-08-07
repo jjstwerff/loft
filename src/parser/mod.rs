@@ -444,6 +444,20 @@ pub struct Parser {
     /// `resolve_deferred_unknowns` after all files in the recursion have
     /// had their pass-1 / pass-2 definitions registered.
     deferred_unknown: Vec<(u16, u32, Position)>,
+    /// Stubs pass 1 registered for a type named only by a `Name { … }` CONSTRUCTION,
+    /// so a declaration parsed later can adopt them the way it adopts the stub a written
+    /// type annotation leaves (loft#801).
+    ///
+    /// They are speculative because the shape alone cannot tell a forward reference from
+    /// a typo, so an unadopted one must not become a diagnostic of its own:
+    /// `resolve_deferred_unknowns` stays quiet about these and leaves the report to the
+    /// construction site's own pass-2 `unknown type '…'`, which names the spelling the
+    /// author used and carries the "did you mean" suggestion.  Reporting both is the
+    /// two-errors-for-one-typo cascade #376 removed.
+    ///
+    /// NOT cleared between passes: the stub itself survives (pass 2 finds it by name
+    /// rather than registering a second one), so the exemption has to survive with it.
+    speculative_type_refs: std::collections::HashSet<u32>,
     /// @PLN115 — record each resolved identifier occurrence during parse.  DEFAULT
     /// OFF (only the LSP parse sets it, S3); zero-cost when off.  See
     /// `doc/claude/plans/115-resolution-index/`.
@@ -783,6 +797,7 @@ impl Parser {
             todo_files: Vec::new(),
             track_sources: false,
             parsed_sources: Vec::new(),
+            speculative_type_refs: std::collections::HashSet::new(),
             data,
             database: Stores::new(),
             lexer: Lexer::default(),
@@ -2011,6 +2026,15 @@ impl Parser {
                 self.data.rewrite_unknown_refs(stub_nr, resolved_nr);
                 continue;
             }
+            // A stub pass 1 registered on SPECULATION, from a `Name { … }` construction
+            // alone, is not evidence that the author wrote a type name: the same shape is
+            // what a typo makes.  It has served its purpose either way — a real
+            // declaration would have adopted it in case (a) — so an unadopted one is left
+            // to the construction site, which reports in pass 2 with the author's own
+            // spelling and a suggestion.  Reporting here as well is one typo, two errors.
+            if self.speculative_type_refs.contains(&stub_nr) {
+                continue;
+            }
             // Case (c): emit the deferred error.  `string` used to be special-cased
             // here (and in `typedef.rs`); it is now one row of the cross-language
             // alias table `suggest_type_name` consults, so both deferred and direct
@@ -3207,6 +3231,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) {
             // A keyed-collection handle IS a `DbRef`, so it satisfies a bare
             // `reference` parameter unchanged — no conversion op.  Used by
@@ -3457,6 +3482,7 @@ impl Parser {
                         | Type::Sorted(_, _, _)
                         | Type::Index(_, _, _)
                         | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
                 )
             {
                 return true;
@@ -3475,7 +3501,8 @@ impl Parser {
                     || (r == self.data.def_nr("index")
                         && matches!(test_type, Type::Index(_, _, _)))
                     || (r == self.data.def_nr("spatial")
-                        && matches!(test_type, Type::Radix(_, _, _)));
+                        && matches!(test_type, Type::Radix(_, _, _)))
+                    || (r == self.data.def_nr("trie") && matches!(test_type, Type::Trie(_, _, _)));
                 if bare {
                     return true;
                 }
@@ -3896,7 +3923,10 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Index(_, _, _) | Type::Radix(_, _, _))
+            && matches!(
+                types[0],
+                Type::Index(_, _, _) | Type::Radix(_, _, _) | Type::Trie(_, _, _)
+            )
         {
             // @PLN110 1d: an `index` (red-black tree) / `spatial` (radix/Morton tree)
             // keeps its ordering as bookkeeping embedded IN each element record —
@@ -3905,7 +3935,9 @@ impl Parser {
             // struct-record path.  The arg is evaluated; only its element type feeds
             // the const record size.
             let elem_kt = match &types[0] {
-                Type::Index(tp, _, _) | Type::Radix(tp, _, _) => self.data.def(*tp).known_type(),
+                Type::Index(tp, _, _) | Type::Radix(tp, _, _) | Type::Trie(tp, _, _) => {
+                    self.data.def(*tp).known_type()
+                }
                 _ => u16::MAX,
             };
             let op_d_nr = self.data.def_nr("OpSizeStruct");
@@ -6079,12 +6111,22 @@ impl Parser {
     /// the test runner".
     ///
     /// Pass 2 only: pass 1 has no layouts yet, so the sentinel there is ordinary and
-    /// says nothing.
+    /// says nothing.  Quiet once the parser has reported an error, for the reason
+    /// `parse_file` gives `validate_all_layouts`: a program that already failed can hold
+    /// unlaid types as a CONSEQUENCE, and the hole is then noise on top of the real
+    /// diagnostic.  `v = [Nope { n: 1 }]` reported the undefined type, then a missing
+    /// field on the synthetic `main_vector<never>` the compiler built for it — a type the
+    /// author never wrote.  Nothing is lost by staying quiet: the compile is already
+    /// aborting, and once the first error is fixed a genuine hole reports on the next run.
     pub(crate) fn field_position(&mut self, d_nr: u32, field: &str) -> u16 {
         let p = self
             .database
             .position(self.data.def(d_nr).known_type(), field);
-        if p == u16::MAX && !self.first_pass {
+        let already_failed = matches!(
+            self.lexer.diagnostics().level(),
+            Level::Error | Level::Fatal
+        );
+        if p == u16::MAX && !self.first_pass && !already_failed {
             let owner = self.data.def(d_nr).name().to_string();
             let unresolved = {
                 let a_nr = self.data.attr(d_nr, field);
@@ -6263,7 +6305,8 @@ impl Parser {
                 Type::Hash(d, _, _)
                 | Type::Sorted(d, _, _)
                 | Type::Index(d, _, _)
-                | Type::Radix(d, _, _) => walk_def(data, db, *d, seen),
+                | Type::Radix(d, _, _)
+                | Type::Trie(d, _, _) => walk_def(data, db, *d, seen),
                 Type::Tuple(elems) => elems.iter().any(|e| walk(data, db, e, seen)),
                 _ => false,
             }
@@ -6375,6 +6418,7 @@ impl Parser {
             Type::Hash(_, _, _)
             | Type::Sorted(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _)
             | Type::Vector(_, _) => {
@@ -6548,6 +6592,7 @@ impl Parser {
                 Type::Sorted(c, keys, _) | Type::Index(c, keys, _) => {
                     (*c, keys.iter().map(|(k, _)| k.clone()).collect())
                 }
+                Type::Trie(c, key, _) => (*c, vec![key.clone()]),
                 Type::Hash(c, keys, _) | Type::Radix(c, keys, _) => (*c, keys.clone()),
                 _ => continue,
             };
@@ -6785,6 +6830,7 @@ impl Parser {
             Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Sorted(_, _, _) => self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value]),
             // Plan-06 phase 4d: nested tuple element — recurse into
             // `emit_tuple_set_ops` with the inner tuple's offsets so
@@ -6993,6 +7039,7 @@ impl Parser {
             Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Sorted(_, _, _)
                 if f_nr != usize::MAX
                     && !matches!(val_code.unspan(), Value::Int(_))
@@ -7023,6 +7070,7 @@ impl Parser {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Sorted(_, _, _) => {
                 // Collection header is a 4-byte u32 record pointer.  Post-2c
                 // `OpSetInt` writes 8 bytes (i64), which overflows into the
@@ -7970,6 +8018,7 @@ impl Parser {
             | Type::Hash(_, _, ad)
             | Type::Index(_, _, ad)
             | Type::Radix(_, _, ad)
+            | Type::Trie(_, _, ad)
             | Type::Reference(_, ad)
             | Type::Enum(_, true, ad) = &types[*ar as usize]
             {
@@ -8642,7 +8691,15 @@ impl Parser {
         }
         self.enum_fn();
         let lvl = self.lexer.diagnostics().level();
-        if lvl == Level::Error || lvl == Level::Fatal {
+        // FATAL stops; a plain Error does not.  `todo_files` holds the files SUSPENDED at
+        // a `use` — the importer, waiting for the module it pulled in — and they have not
+        // been parsed at all yet, so abandoning them does not avoid a cascade, it invents
+        // one: the definitions those files carry never register, and every later question
+        // about them is answered "undefined".  That is how one error in a module produced
+        // a second saying `Colour` was undefined while it was declared two lines away in
+        // the importer (loft#801).  Draining them can only ADD real information; any
+        // diagnostic that then appears is one the author's own code earned.
+        if lvl == Level::Fatal {
             return;
         }
         // Parse all files left in the todo_files list, as they are halted to parse a use file.
@@ -10831,6 +10888,7 @@ impl Parser {
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _) => self.cl("OpNullRefSentinel", &[]),
             _ => self.null(tp),

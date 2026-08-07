@@ -211,6 +211,7 @@ impl Stores {
                 }
             }
             Parts::Hash(_, _) => hash::find(data, &self.allocations, self.keys(db), key),
+            Parts::Trie(_, _) => crate::trie_db::find(data, &self.allocations, self.keys(db), key),
             Parts::Radix(_, _) => {
                 crate::radix_db::find(data, &self.allocations, self.keys(db), key)
             }
@@ -296,6 +297,10 @@ impl Stores {
             // next `get_stack::<DbRef>()` reads a leftover key value as the collection —
             // `sp[3, 3]` then looked up in store #3 (loft#720).  The bytecode was always
             // right (`GetRecord(… no_keys=2)`); only this list disagreed.
+            Parts::Trie(c, k) => self
+                .key_field(*c, *k)
+                .map(|(ct, _)| vec![ct])
+                .unwrap_or_default(),
             Parts::Hash(c, key) | Parts::Radix(c, key) => key
                 .iter()
                 .filter_map(|k| self.key_field(*c, *k).map(|(content, _)| content))
@@ -428,7 +433,8 @@ impl Stores {
             | Parts::DbRef
             | Parts::ChildRec(_)
             | Parts::Hash(_, _)
-            | Parts::Radix(_, _) => panic!(
+            | Parts::Radix(_, _)
+            | Parts::Trie(_, _) => panic!(
                 "Undefined iterate on non-collection type: {} (db={})",
                 self.types[db as usize].name, db
             ),
@@ -477,7 +483,8 @@ impl Stores {
             | Parts::Sorted(c, _)
             | Parts::Index(c, _, _)
             | Parts::Ordered(c, _)
-            | Parts::Radix(c, _) => c,
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => c,
             _ => return,
         };
         let keys = self.types[db as usize].keys.clone();
@@ -496,7 +503,7 @@ impl Stores {
             // `remove_owned` calls `own_block`), so it needs the same reclaim.
             if matches!(
                 self.types[db as usize].parts,
-                Parts::Hash(_, _) | Parts::Radix(_, _)
+                Parts::Hash(_, _) | Parts::Radix(_, _) | Parts::Trie(_, _)
             ) {
                 self.store_mut(coll).delete(existing.rec);
             }
@@ -591,6 +598,7 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Radix(c, _)
+            | Parts::Trie(c, _)
             | Parts::Index(c, _, _) => *c,
             // Not a collection: `remove` panics on these, and it stays the one
             // place that decides so.
@@ -612,7 +620,11 @@ impl Stores {
         // and it has no test to move it on.
         let own_block = matches!(
             parts,
-            Parts::Hash(..) | Parts::Index(..) | Parts::Radix(..) | Parts::Ordered(..)
+            Parts::Hash(..)
+                | Parts::Index(..)
+                | Parts::Radix(..)
+                | Parts::Trie(..)
+                | Parts::Ordered(..)
         );
         let rec_nr = rec.rec;
         if own_block {
@@ -706,6 +718,10 @@ impl Stores {
                 let left = self.fields(db);
                 let keys = self.keys(db).to_vec();
                 tree::remove(data, rec, left, &mut self.allocations, &keys);
+            }
+            Parts::Trie(_, _) => {
+                let keys = self.keys(db).to_vec();
+                crate::trie_db::remove(data, rec, &mut self.allocations, &keys);
             }
             Parts::Radix(_, _) => {
                 let keys = self.keys(db).to_vec();

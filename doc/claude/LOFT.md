@@ -203,6 +203,7 @@ internal utility should one become necessary.
 | `index<T[field1, -field2]>`        | B-tree index (ascending/descending)                   |
 | `sorted<T[field]>`                 | Sorted vector on the given fields                     |
 | `spatial<T[x,y]>` / `spatial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
+| `trie<T[field]>`                   | Text-keyed collection on ONE field — exact lookup, key order, and prefix |
 | `reference<T>`                     | Reference (pointer) to a stored `T` record            |
 | `iterator<T, I>`                   | Iterator yielding `T` using internal state `I`        |
 | `fn(T1, T2) -> R`                  | First-class function type                             |
@@ -1740,6 +1741,27 @@ caller `break`s), `xs[(x,y)..:n]` (capped at `n`), `xs[(x1,y1)..(x2,y2)]`
 (bounding box — the raw Morton-code interval, a superset of the geometric
 box).  See [STDLIB.md § Keyed collections](STDLIB.md#keyed-collections-hash--index--sorted)
 for the full syntax table.
+
+**`trie<T[field]>` keys on ONE text field** and shares the same radix tree as
+`spatial` — only the key oracle above it differs, so `spatial` is coordinates and
+`trie` is bytes.  It shares `+=` append, `for` iteration (in key order, no sort),
+`.len()`, and the exact subscript `t[key]` (`null` when absent — never a
+neighbour).
+
+What it offers that `sorted<T[text]>` cannot is the **prefix**:
+
+```
+for w in words["kerk"..]    { … }   // every key beginning with "kerk", in key order
+for w in words["kerk"..:20] { … }   // the first 20 of them
+```
+
+The prefix IS the query.  A `sorted` range needs a successor string
+(`words["kerk".."kerl"]`) that the caller has to construct, gets wrong at a byte
+boundary, and which answers a key INTERVAL rather than a prefix — so `t[a..b]` is
+refused, and it names `sorted` as the kind that answers an interval.  Key order is
+BYTE order and the terminator sorts before any byte, which is why `kerk` precedes
+`kerkstraat` precedes `kerkweg`.  Exactly one key field: a trie orders one key's
+bytes, so several keys have no order to share (use `sorted<T[a, b]>` for that).
 
 ---
 

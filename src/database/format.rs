@@ -963,6 +963,13 @@ impl ShowDb<'_> {
             }
         } else if (self.known_type as usize) < self.stores.types.len() {
             match &self.stores.types[self.known_type as usize].parts {
+                // The trie KIND exists at the schema level from step 2 of
+                // doc/claude/plans/text-keyed-trie.md; rendering is step 3.  No trie can
+                // be CONSTRUCTED until the keyword lands (step 6), so this is
+                // unreachable today — and loud rather than a silent wrong answer.
+                Parts::Trie(_, _) => {
+                    unimplemented!("trie rendering — step 3 of doc/claude/plans/text-keyed-trie.md")
+                }
                 Parts::Enum(vals) => {
                     // P54 Q3 second half — when serialising in JSON mode
                     // and the parent enum is JsonValue, render the
@@ -1894,7 +1901,7 @@ impl ShowDb<'_> {
             | Parts::Index(tp, _, _) => {
                 self.write_dump_list(s, *tp, indent);
             }
-            Parts::Hash(_, _) | Parts::Radix(_, _) => {
+            Parts::Hash(_, _) | Parts::Radix(_, _) | Parts::Trie(_, _) => {
                 // Hash and Radix don't support sequential next() — show count only.
                 let data = DbRef {
                     store_nr: self.store,

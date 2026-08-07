@@ -290,8 +290,22 @@ valid. That is a fact about loft, not about lazy stores.
 
 ## What is refused, and why
 
-Each of these answers `store_lazy_error` rather than a wrong record:
+Each of these answers `store_lazy_error` rather than a wrong record. **A refusal
+that only printed is the same silence in a different place**: the lookup answers
+`null` either way, and `""` from `store_lazy_error` is documented to mean
+"reachable, genuinely no such key" — so a refused binding reported itself
+healthy, forever (loft#802). Every refusal below is therefore readable in-band,
+and the two chokepoints that guarantee it are `Stores::refuse_paged` (the
+loader's, turned into a fault by `fetch_from_file`) and `Stores::bind_lazy` (the
+static ones, answered at the bind).
 
+- **A collection kind an IMAGE cannot page — at the BIND.** `store_bind_lazy`
+  answers `false` for a `sorted` / `index` / `trie` / `spatial` bound to a
+  `.store` file or URL: the paged reader serves a `hash`, that is a static
+  property of the pair, and refusing at the call that is wrong beats refusing at
+  an arbitrary later lookup. Those kinds load WHOLE (`store_load`,
+  `store_load_url_trusted`), which carries every kind. A DATABASE source is not
+  judged here — a `trie` gets `sorted`'s SQL shape and is served.
 - **Writes.** Read-only. A write to a lazily-backed record is refused loudly;
   silently diverging from the source of truth is the failure this design exists to
   avoid.

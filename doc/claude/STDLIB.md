@@ -359,6 +359,39 @@ filter or `break` inside the loop for an exact shape. A slice is a
 [DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers) for
 the implementation.
 
+A text key is refused here — `spatial<Word[w]>` names `trie<Word[w]>` instead
+(loft#799).  Before that, it compiled and then answered `null` for a key just
+inserted.
+
+### `trie<T[k]>` — text-keyed collection
+
+The same radix tree over ONE **text** key, keyed on its bytes rather than a
+Morton code:
+
+| Syntax | Description |
+|--------|-------------|
+| `t: trie<Word[w]> = [];` | Construct; also legal as a struct field. |
+| `t += [Word{w: "kerk"}];` | Append. |
+| `for x in t { … }` | Iterate in key order — byte order, no sort. |
+| `t.len()` | Element count — O(1), the tree's cached length word. |
+| `x = t["kerk"]` | Exact lookup; `null` when absent, never a neighbour. |
+| `t["kerk"..]` | Every key BEGINNING with `"kerk"`, in key order. |
+| `t["kerk"..:n]` | The first `n` of them. |
+
+**The prefix is what earns the kind its place.** A `sorted<T[text]>` range
+needs a successor string — `t["kerk".."kerl"]` — that the caller must
+construct, gets wrong at a byte boundary, and that answers a key INTERVAL
+rather than a prefix.  So `t[a..b]` is refused, and the message names `sorted`
+as the kind that answers an interval.
+
+The terminator sorts before any byte, which is why `kerk` precedes
+`kerkstraat` precedes `kerkweg`.  Exactly one key field (several keys have no
+byte order to share — use `sorted<T[a, b]>`), and it must be `text`
+(a numeric key names `spatial` / `sorted` / `index`).  A prefix slice is a
+`for`-loop iterator, not a value, as with every keyed range slice.  See
+[DATABASE.md § Text Trie](DATABASE.md#text-trie-srctrie_dbrs) for the
+implementation.
+
 ---
 
 ## Output and Diagnostics
@@ -775,7 +808,7 @@ resident count, and what a binding refuses — is [LAZY_STORES.md](LAZY_STORES.m
 
 | Function | Description |
 |----------|-------------|
-| `store_bind_lazy(c: reference, source: text) -> boolean` | Bind collection `c` to `source` — an IMAGE (a local `.store` file or an `http(s)://` URL served with Range, i.e. whatever `store_load_key` accepts) or a DATABASE (`sqlite:<path>`), where the `SELECT` is derived from `c`'s own type: table = the element type's name lowercased, columns = its fields, `WHERE` = its key.  Read-only; the database source serves a keyed lookup on any ordered or hashed kind, and a binding it cannot turn into a query is refused through `store_lazy_error` rather than served wrongly.  Per COLLECTION, not per store: two collections of one type may bind differently.  Binding replaces any previous binding, and may be done before `c` holds anything.  Returns `false` for a null collection. |
+| `store_bind_lazy(c: reference, source: text) -> boolean` | Bind collection `c` to `source` — an IMAGE (a local `.store` file or an `http(s)://` URL served with Range, i.e. whatever `store_load_key` accepts) or a DATABASE (`sqlite:<path>`), where the `SELECT` is derived from `c`'s own type: table = the element type's name lowercased, columns = its fields, `WHERE` = its key.  Read-only; the database source serves a keyed lookup on any ordered or hashed kind, and a binding it cannot turn into a query is refused through `store_lazy_error` rather than served wrongly.  Per COLLECTION, not per store: two collections of one type may bind differently.  Binding replaces any previous binding, and may be done before `c` holds anything.  **`false` is worth checking**: besides a null collection, an IMAGE is read a page at a time and only a `hash` supports that, so a `sorted`/`index`/`trie`/`spatial` bound to one is refused HERE rather than answering `null` at every later lookup (loft#802) — those kinds load whole, with `store_load` / `store_load_url_trusted`.  A DATABASE source judges its own schema on the first fault instead, since what it can serve is a fact about the other end. |
 | `store_lazy_range(c: reference, lo: integer, hi: integer) -> integer` | Pull a whole KEY RANGE from `c`'s bound DATABASE source in ONE query (bounds inclusive, in the collection's own key order); answers how many records `c` gained.  The cure for N+1: 500 records fetched one lookup at a time is 500 round trips, and the same 500 as a range is one.  `c` must be ORDERED (`sorted`/`index`) and keyed on one column — a `hash` has no order to range over and a composite key needs `store_lazy_query`.  A record already resident is left alone. |
 | `store_lazy_query(c: reference, condition: text) -> integer` | Run an explicit SQL `condition` against `c`'s bound DATABASE source and pull every matching row INTO `c`; answers how many records `c` gained.  The escape hatch for what the key cannot express (`name LIKE 'Ada%'`, a predicate on another column) — derived queries need no call, this one cannot be derived, so it is written down and visible.  Rows land in the collection rather than in a detached result, and a row already resident is left alone: a person found this way and the same person found by key are ONE record.  Answers `0` both for "nothing matched" and for "the query could not run"; `store_lazy_error` tells those apart. |
 | `store_lazy_error(c: reference) -> text` | Why the last fetch could not REACH the source, or `""` when healthy.  A genuine absence CLEARS it — reaching the source and not finding the key proves the source was reachable — so a stale error never outlives the truth. |

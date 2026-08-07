@@ -230,6 +230,11 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
             ),
             read_deps(stores, slot, ds::TYRADIX_DEP),
         ),
+        TypeKind::Trie => Type::Trie(
+            slot.field_int(stores, ds::TYTRIE_N) as u32,
+            slot.field_str(stores, ds::TYTRIE_KEY).to_string(),
+            read_deps(stores, slot, ds::TYTRIE_DEP),
+        ),
         TypeKind::Hash => Type::Hash(
             slot.field_int(stores, ds::TYHASH_N) as u32,
             read_name_list(
@@ -895,6 +900,7 @@ fn read_db_parts(stores: &Stores, r: Record) -> Parts {
             r.field_int(stores, ds::PTINDEX_LEFT) as u16,
         ),
         ds::PT_RADIX => Parts::Radix(content(), read_dep_list(stores, r, ds::PTFIELDS)),
+        ds::PT_TRIE => Parts::Trie(content(), r.field_int(stores, ds::PTTRIE_KEY) as u16),
         ds::PT_DB_REF => Parts::DbRef,
         ds::PT_CHILD_REC => Parts::ChildRec(content()),
         other => panic!("ir_read: unknown DbParts discriminant {other}"),

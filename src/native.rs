@@ -446,6 +446,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_hash_sorted", n_hash_sorted),
     ("n_radix_sorted", n_radix_sorted),
     ("n_spatial_range", n_spatial_range),
+    ("n_trie_prefix", n_trie_prefix),
     ("n_hash_unsorted", n_hash_unsorted),
     // Plan-12 phase 1a (2026-05-23) — crypto `n_*` symbols
     // (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`,
@@ -1313,10 +1314,11 @@ fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
 fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
     let v_source = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
-    let ok = v_ref.rec != 0;
-    if ok {
-        stores.bind_lazy(&v_ref, v_source.str());
-    }
+    // `bind_lazy` owns the verdict, including the refusal a kind mismatch
+    // decides (loft#802) — deriving any part of it here would be the second
+    // home for one fact, and the `#rust` body in `02_files.loft` would have to
+    // grow the same copy.
+    let ok = v_ref.rec != 0 && stores.bind_lazy(&v_ref, v_source.str());
     stores.put(stack, ok);
 }
 
@@ -2648,6 +2650,7 @@ fn reflect_collection(node: Option<&crate::database::LayoutNode>) -> i32 {
             Iterated::Sorted { .. } => 4,
             Iterated::Ordered { .. } => 5,
             Iterated::Radix { .. } => 6,
+            Iterated::Trie { .. } => 7,
         },
         _ => 1,
     }
@@ -2665,6 +2668,9 @@ fn reflect_keys(it: &crate::database::Iterated) -> Vec<(u16, bool)> {
         Iterated::Hash { keys, .. } | Iterated::Radix { keys, .. } => {
             keys.iter().map(|k| (*k, true)).collect()
         }
+        // A trie DOES order its one key — ascending byte order — which is what
+        // makes its prefix slice answerable.
+        Iterated::Trie { key, .. } => vec![(*key, true)],
         Iterated::Sorted { keys, .. }
         | Iterated::Ordered { keys, .. }
         | Iterated::Index { keys, .. } => keys.clone(),
@@ -3105,6 +3111,16 @@ fn n_spatial_range(stores: &mut Stores, stack: &mut DbRef) {
     let tp = *stores.get::<i64>(stack) as u16;
     let coll = *stores.get::<DbRef>(stack);
     let result = stores.build_radix_range_vec(&coll, tp, fx, fy, fz, has_till, tx, ty, tz, limit);
+    stores.put(stack, result);
+}
+
+/// A trie prefix slice.  Args pop in reverse declaration order.
+fn n_trie_prefix(stores: &mut Stores, stack: &mut DbRef) {
+    let limit = *stores.get::<i64>(stack);
+    let pre = *stores.get::<Str>(stack);
+    let tp = *stores.get::<i64>(stack) as u16;
+    let coll = *stores.get::<DbRef>(stack);
+    let result = stores.build_trie_prefix_vec(&coll, tp, pre.str(), limit);
     stores.put(stack, result);
 }
 

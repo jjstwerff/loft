@@ -225,6 +225,7 @@ impl Stores {
         | Parts::Ordered(c, _)
         | Parts::Hash(c, _)
         | Parts::Index(c, _, _)
+        | Parts::Trie(c, _)
         | Parts::Radix(c, _) = self.types[content as usize].parts
         {
             // A dead `main_vector<unknown>` wrapper — left over when a vector's
@@ -333,7 +334,8 @@ impl Stores {
             | Parts::Sorted(c, _)
             | Parts::Index(c, _, _)
             | Parts::Hash(c, _)
-            | Parts::Radix(c, _) => c,
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => c,
             _ => u16::MAX,
         }
     }
@@ -408,9 +410,10 @@ impl Stores {
                 for f in fields {
                     match self.types[f.content as usize].parts {
                         Parts::Vector(v) | Parts::Sorted(v, _) => vectors.insert(v),
-                        Parts::Hash(r, _) | Parts::Radix(r, _) | Parts::Index(r, _, _) => {
-                            linked.insert(r)
-                        }
+                        Parts::Hash(r, _)
+                        | Parts::Radix(r, _)
+                        | Parts::Trie(r, _)
+                        | Parts::Index(r, _, _) => linked.insert(r),
                         _ => false,
                     };
                 }
@@ -731,6 +734,17 @@ impl Stores {
             // numbers.  Radix's key positions are what the Morton oracle reads
             // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
             // order.
+            // A trie keys on ONE field; same registration, a one-element list.
+            Parts::Trie(c, k) => {
+                self.types[t_nr].keys.clear();
+                if let Some((content, position)) = self.key_field(c, k) {
+                    let tp = key_type_nr_for_content(content, &self.types);
+                    self.types[t_nr].keys.push(crate::keys::Key {
+                        type_nr: tp,
+                        position,
+                    });
+                }
+            }
             Parts::Hash(c, key_fields) | Parts::Radix(c, key_fields) => {
                 self.types[t_nr].keys.clear();
                 for key_field in key_fields {
@@ -828,6 +842,7 @@ impl Stores {
             Parts::Hash(_, _) => "hash",
             Parts::Index(_, _, _) => "index",
             Parts::Radix(_, _) => "spatial",
+            Parts::Trie(_, _) => "trie",
             _ => "<other>",
         };
         let _ = writeln!(
@@ -842,6 +857,7 @@ impl Stores {
         | Parts::Sorted(c, _)
         | Parts::Ordered(c, _)
         | Parts::Hash(c, _)
+        | Parts::Trie(c, _)
         | Parts::Radix(c, _) = t.parts
         {
             let _ = writeln!(
@@ -972,7 +988,8 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Radix(_, _) => {
+                | Parts::Radix(_, _)
+                | Parts::Trie(_, _) => {
                     self.validate_layout_by_nr(tp as u16, &mut visited, &mut issues);
                 }
                 _ => {}
@@ -1053,7 +1070,8 @@ impl Stores {
             | Parts::Sorted(c, _)
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
-            | Parts::Radix(c, _) => {
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => {
                 self.validate_layout_by_nr(*c, visited, issues);
             }
             Parts::Index(c, _, left_field_nr) => {
@@ -1368,6 +1386,26 @@ impl Stores {
             let num = self.types.len() as u16;
             self.types
                 .push(Type::data(&name, Parts::Radix(content, key_nrs)));
+            self.names.insert(name, num);
+            num
+        }
+    }
+
+    /// Register a `trie<T[k]>` type — the `spatial` sibling, over ONE text key.
+    ///
+    /// Takes a single key name rather than a slice: `Parts::Trie` holds one `u16`,
+    /// so a two-key trie is unrepresentable rather than rejected.
+    pub fn trie(&mut self, content: u16, key: &str) -> u16 {
+        let mut name = "trie<".to_string() + &self.types[content as usize].name + "[";
+        let key_nrs = self.field_name(content, std::slice::from_ref(&key.to_string()), &mut name);
+        let Some(&k) = key_nrs.first() else {
+            return u16::MAX;
+        };
+        if let Some(nr) = self.names.get(&name) {
+            *nr
+        } else {
+            let num = self.types.len() as u16;
+            self.types.push(Type::data(&name, Parts::Trie(content, k)));
             self.names.insert(name, num);
             num
         }
@@ -2199,7 +2237,8 @@ impl Stores {
                 | Parts::Ordered(e, _)
                 | Parts::Hash(e, _)
                 | Parts::Index(e, _, _)
-                | Parts::Radix(e, _) => refs.push(*e),
+                | Parts::Radix(e, _)
+                | Parts::Trie(e, _) => refs.push(*e),
                 Parts::ChildRec(c) => refs.push(*c),
                 // A plain variant (no data) keeps `known_type == u16::MAX`;
                 // only data-carrying variants have an `EnumValue` type to reach.
@@ -2220,6 +2259,7 @@ impl Stores {
     fn render_layout_parts(&self, kt: u16) -> String {
         let name = |k: u16| self.layout_type_name(k);
         match &self.types[kt as usize].parts {
+            Parts::Trie(e, k) => format!("trie<{}[{k}]>", name(*e)),
             Parts::Base => "base".to_string(),
             Parts::Struct(fields) => {
                 let inner: Vec<String> = fields
@@ -2656,7 +2696,8 @@ impl Type {
             | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
             | Parts::ChildRec(c)
-            | Parts::Radix(c, _) => c == tp,
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => c == tp,
             _ => false,
         }
     }

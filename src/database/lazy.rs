@@ -227,6 +227,9 @@ impl Stores {
     /// would put a stat on the path of every successful fault.
     #[cfg(paged_store)]
     fn fetch_from_file(&mut self, path: &str, data: &DbRef, key: &[Content]) -> Fetched {
+        // Clear first, so what is read back after the call is THIS fetch's
+        // refusal and not one an earlier `store_load_key` left behind.
+        self.paged_refusal = None;
         // One key, whichever spelling it arrived in. A composite key is not
         // fetchable yet — @PLN125's associated types are what would carry it —
         // so it is left to answer absent rather than fetching the wrong row.
@@ -238,10 +241,18 @@ impl Stores {
         if hit {
             return Fetched::Inserted;
         }
+        let refusal = self.paged_refusal.take();
         match crate::paged_reader::PageSource::open(path) {
+            // Unreachable is decided HERE and not by the recorded refusal, which
+            // for this case says only "it cannot be opened as a paged source"
+            // while the open itself names the connection error.
             Err(reason) => Fetched::Unreachable(reason),
-            // Reached it and the key was not there — a genuine absence.
-            Ok(_) => Fetched::Absent,
+            // The source opened, so a `false` from the loader is one of two
+            // things and they are not the same fact (loft#802): it REFUSED the
+            // shape — permanent, and no lookup will ever succeed — or it reached
+            // the data and the key was not there. Answering `Absent` for both is
+            // what let a refused binding report itself as healthy.
+            Ok(_) => refusal.map_or(Fetched::Absent, Fetched::Unreachable),
         }
     }
 
@@ -481,7 +492,7 @@ impl Stores {
     /// from code that compiles on every target. Gated, the wasm builds failed to
     /// compile it (`no method named lazy_refuse`), which is what took the browser,
     /// Web-Worker `par` and node-bridge jobs down together.
-    fn lazy_refuse(&mut self, slot: (u16, u32, u32), why: &str) -> i64 {
+    pub(crate) fn lazy_refuse(&mut self, slot: (u16, u32, u32), why: &str) -> i64 {
         let entry = self.lazy_errors.entry(slot).or_insert((0, why.to_string()));
         entry.0 += 1;
         0
@@ -508,6 +519,7 @@ impl Stores {
         // record the collection already holds.
         let (elem, key_fields): (u16, Vec<u16>) = match &self.types[db as usize].parts {
             Parts::Hash(c, keys) | Parts::Radix(c, keys) => (*c, keys.clone()),
+            Parts::Trie(c, k) => (*c, vec![*k]),
             Parts::Sorted(c, keys) | Parts::Ordered(c, keys) | Parts::Index(c, keys, _) => {
                 (*c, keys.iter().map(|(k, _)| *k).collect())
             }

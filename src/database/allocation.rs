@@ -400,6 +400,29 @@ impl Stores {
                     container_rec = Some(cur);
                 }
             }
+            Parts::Trie(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    // Identical SHAPE to the Radix arm — the tree's leaves are the
+                    // element records, walked key-free — but through `trie_db`, because
+                    // the two kinds share the tree and nothing above it.  Without this
+                    // arm a trie fell into the catch-all below and `remove_claims` freed
+                    // NOTHING: every element and the tree itself leaked, silently.
+                    for elm in crate::trie_db::records(rec, &self.allocations) {
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: elm,
+                                pos: 8,
+                            },
+                            child_tp: v,
+                            owning_elem: Some(elm),
+                        });
+                    }
+                    container_rec = Some(cur);
+                }
+            }
             // Base text leaf, scalars, DbRef: no cascade.
             _ => {}
         }
@@ -414,6 +437,7 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Radix(_, _)
+                | Parts::Trie(_, _)
                 | Parts::Index(_, _, _)
                 | Parts::ChildRec(_)
         );
@@ -1268,6 +1292,20 @@ impl Stores {
     /// bounding box `xs[(x1,y1)..(x2,y2)]`.  Coordinates arrive as a fixed `MAX_AXES`-wide
     /// triple; only the collection's own `keys.len()` axes are read (a 2D collection
     /// ignores `fz`/`tz`), so the same ABI serves 1D…3D slices.
+    /// A trie PREFIX slice as an iterable scratch vector, the trie's twin of
+    /// `build_radix_range_vec` and feeding the same on=4 scratch path.  Every record
+    /// whose key begins with `pre`, in key order, capped at `limit` (`< 0` = no cap).
+    /// Backs `t["kerk"..]` and `t["kerk"..:n]`.
+    ///
+    /// There is no `till` here and that is the point: a prefix is the whole query, so
+    /// the caller never constructs the successor string a `sorted` range would need.
+    pub fn build_trie_prefix_vec(&mut self, coll: &DbRef, tp: u16, pre: &str, limit: i64) -> DbRef {
+        let keys = self.types[tp as usize].keys.clone();
+        let cap = (limit >= 0).then_some(limit as usize);
+        let recs = crate::trie_db::prefix(coll, &self.allocations, &keys, pre.as_bytes(), cap);
+        self.build_rec_scratch(coll, &recs)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn build_radix_range_vec(
         &mut self,
@@ -1288,8 +1326,32 @@ impl Stores {
         let till = [tx, ty, tz];
         let till_ref = (has_till != 0).then_some(&till[..n]);
         let cap = (limit >= 0).then_some(limit as usize);
-        let recs =
-            crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], till_ref, cap);
+        // loft#800 — a CLOSED box promises containment, and the code interval is only a
+        // superset of it.  Filter here rather than inside `range`, because the other two
+        // surfaces this method serves (`xs[(x,y)..]`, `xs[(x,y)..:n]`) want exactly the
+        // Z-order walk and would be wrong to filter: this layer is the one that knows
+        // which form it is, and `has_till` is that fact.
+        //
+        // The cap moves AFTER the filter for the same reason — capping the raw interval
+        // first would drop in-box records in favour of out-of-box ones.
+        let raw_cap = if has_till != 0 { None } else { cap };
+        let recs = crate::radix_db::range(
+            coll,
+            &self.allocations,
+            &keys,
+            &from[..n],
+            till_ref,
+            raw_cap,
+        );
+        let recs = if has_till != 0 {
+            let store = crate::keys::store(coll, &self.allocations);
+            recs.into_iter()
+                .filter(|&r| crate::radix_db::in_box(store, r, &keys, &from[..n], &till[..n]))
+                .take(cap.unwrap_or(usize::MAX))
+                .collect()
+        } else {
+            recs
+        };
         self.build_rec_scratch(coll, &recs)
     }
 
@@ -1646,6 +1708,7 @@ impl Stores {
             // the parent later reconciles. Fault before the `par`, not inside it.
             lazy_sources: std::collections::HashMap::new(),
             lazy_errors: std::collections::HashMap::new(),
+            paged_refusal: None,
             lazy_driver_allocs: None,
             files: Vec::new(),
             max: (self.allocations.len() + scratch_stores) as u16,
@@ -2196,6 +2259,48 @@ impl Stores {
         }
     }
 
+    /// Deep-copy a `trie<T[k]>` field from `rec` into `to`.
+    ///
+    /// The Radix twin, and deliberately a twin rather than a shared body with a kind
+    /// switch: the two differ exactly where the kinds differ — whose `add` re-inserts
+    /// each element — and a shared body would put a trie concept in the spatial path,
+    /// which is the coupling this design removes.
+    pub(super) fn copy_claims_trie_body(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        // Start the destination as an empty tree; `trie_db::add` claims + grows it.
+        self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
+        let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+        if cur == 0 {
+            return;
+        }
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Trie(c, _) => *c,
+            other => panic!("copy_claims_trie_body called with non-trie type {tp} ({other:?})"),
+        };
+        let size = u32::from(self.size(content_tp));
+        let keys = self.types[tp as usize].keys.clone();
+        for child in self.for_each_owned_child(rec, tp).children {
+            let Some(elm) = child.owning_elem else {
+                continue;
+            };
+            // Element layout (record_new): header, back-pointer at 4, payload at 8.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
+            self.store_mut(to).set_u32_raw(new, 4, to.rec);
+            let src_db = DbRef {
+                store_nr: rec.store_nr,
+                rec: elm,
+                pos: 8,
+            };
+            let new_db = DbRef {
+                store_nr: to.store_nr,
+                rec: new,
+                pos: 8,
+            };
+            self.copy_block(&src_db, &new_db, size);
+            self.copy_claims(&src_db, &new_db, content_tp);
+            crate::trie_db::add(to, &new_db, &mut self.allocations, &keys);
+        }
+    }
+
     /// Collect all record numbers in an RB-tree index by in-order traversal.
     /// `rec` points to the i32 tree-root field; `left` is `self.fields(index_tp)`.
     pub(super) fn collect_index_nodes(&self, rec: &DbRef, left: u16) -> Vec<u32> {
@@ -2399,6 +2504,7 @@ impl Stores {
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);
             }
+            Parts::Trie(_, _) => self.copy_claims_trie_body(rec, to, tp),
             Parts::Radix(_, _) => self.copy_claims_radix_body(rec, to, tp),
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
@@ -3278,7 +3384,7 @@ impl Stores {
             // records WITHIN one.  Nothing would rewrite a foreign pointer at
             // the far end, so refuse rather than guess.
             Parts::DbRef => false,
-            Parts::Radix(..) => false,
+            Parts::Radix(..) | Parts::Trie(..) => false,
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
                 .clone()
                 .iter()
@@ -3652,7 +3758,7 @@ impl Stores {
     /// is a local file or an `http(s)://` URL — the sidecar is read from beside
     /// it (`<path>.dschema`), over the same transport.
     #[cfg(paged_store)]
-    fn layout_gate_ok(&self, path: &str, local: &DbRef) -> bool {
+    fn layout_gate_ok(&mut self, path: &str, local: &DbRef) -> bool {
         let known_type = self.allocations[local.store_nr as usize].known_type;
         if known_type == u16::MAX {
             return true; // untyped store — no identity to compare against
@@ -3663,11 +3769,15 @@ impl Stores {
             return true;
         }
         // A layout mismatch is a rare, important safety event — always surface it
-        // so a rejected load is not silently mistaken for "key absent".
-        eprintln!(
-            "store loader: refusing {path} — its recorded layout differs from this \
-             program's (verdict: {verdict:?}); not range-reading foreign bytes"
+        // so a rejected load is not silently mistaken for "key absent". Through
+        // `refuse_paged` rather than its own `eprintln`, so the program can read
+        // it back too: a refusal reachable by one route and not another is the
+        // same silence in a different place (loft#802).
+        let reason = format!(
+            "its recorded layout differs from this program's (verdict: \
+             {verdict:?}); not range-reading foreign bytes"
         );
+        self.refuse_paged(path, &reason);
         false
     }
 
@@ -3688,13 +3798,13 @@ impl Stores {
         }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
-            Self::refuse_paged(path, "it cannot be opened as a paged source");
+            self.refuse_paged(path, "it cannot be opened as a paged source");
             return 0;
         };
         let mut reader = PagedReader::new(source);
         let tp = self.allocations[local.store_nr as usize].known_type;
         if tp == u16::MAX {
-            Self::refuse_paged(path, "the target collection's store has no recorded type");
+            self.refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
         // Range needs an ordered collection — `Sorted`, or its promoted `Ordered`
@@ -3716,12 +3826,13 @@ impl Stores {
             self.types.get(tp as usize).map(|t| &t.parts)
         else {
             let reason = self.wrong_collection_reason(tp, "a sorted collection");
-            Self::refuse_paged(path, &reason);
+            self.refuse_paged(path, &reason);
             return 0;
         };
         let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
-            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
             return 0;
         }
         let keys = self.keys(tp).to_vec();
@@ -3907,32 +4018,66 @@ impl Stores {
     }
 
     /// Report that a paged working-set load REFUSED the request and loaded
-    /// nothing. Every refusal in `load_key(s)` / `load_key_text` / `load_range`
-    /// speaks through here, for the same reason
-    /// [`layout_gate_ok`](Stores::layout_gate_ok) warns: these loaders report
-    /// failure as `false` / `0`, which is exactly what an ABSENT KEY looks like,
-    /// so a silent refusal reads as "the data isn't there" and sends the caller
-    /// hunting for missing data instead of an unsupported shape (#632).
+    /// nothing. Every refusal in `layout_gate_ok` / `load_key(s)` /
+    /// `load_key_text` / `load_range` speaks through here, because these loaders
+    /// report failure as `false` / `0`, which is exactly what an ABSENT KEY
+    /// looks like — so a silent refusal reads as "the data isn't there" and
+    /// sends the caller hunting for missing data instead of an unsupported
+    /// shape (#632).
+    ///
+    /// Two channels, because stderr is not one a program can read. The message
+    /// is for the person, and [`paged_refusal`](Stores::paged_refusal) is for
+    /// the lazy fetch, which turns it into `store_lazy_error` (loft#802). A
+    /// refusal that only printed left the program itself with nothing but the
+    /// `null`.
     #[cfg(paged_store)]
-    fn refuse_paged(path: &str, reason: &str) {
+    fn refuse_paged(&mut self, path: &str, reason: &str) {
         eprintln!(
             "store loader: refusing {path} — {reason}; loaded NOTHING (a refusal, \
              not an absent key)"
         );
+        self.paged_refusal = Some(format!("refusing {path} — {reason}"));
     }
 
     /// The refusal reason when the bound store does not root the collection kind
-    /// the loader needs (`want` names it, e.g. "a hash"). Spells out the
-    /// commonest cause because the type name alone does not suggest the fix.
+    /// the loader needs (`want` names it, e.g. "a hash"). Spells out the cause
+    /// because the type name alone does not suggest the fix.
+    ///
+    /// TWO causes, and telling them apart is the whole value of the message.
+    /// When the root is a keyed collection of the WRONG KIND, the shape is
+    /// already what the author wrote and no declaration change can help — the
+    /// answer is `store_load`, and saying "declare it as an annotated local"
+    /// sends them to rewrite a line that is correct (a `trie` local was told
+    /// exactly that, loft#802). When the root is anything else, it is the #632
+    /// wrapper-struct trap and the declaration IS the fix.
     #[cfg(paged_store)]
     fn wrong_collection_reason(&self, tp: u16, want: &str) -> String {
-        format!(
-            "its bound store roots `{}`, not {want} — a collection declared as a \
-             struct FIELD records the WRAPPER STRUCT as the store's type (#632), so \
-             declare it as an annotated local (`h: hash<T[k]> = []`) for paged loads, \
-             or read it whole with `store_load`",
-            self.type_name(tp)
-        )
+        let name = self.type_name(tp);
+        let keyed = matches!(
+            self.types.get(tp as usize).map(|t| &t.parts),
+            Some(
+                Parts::Hash(..)
+                    | Parts::Sorted(..)
+                    | Parts::Ordered(..)
+                    | Parts::Index(..)
+                    | Parts::Trie(..)
+                    | Parts::Radix(..)
+            )
+        );
+        if keyed {
+            format!(
+                "its bound store roots `{name}`, not {want} — that kind cannot be \
+                 read a page at a time, so read it whole with `store_load` (or \
+                 `store_load_url_trusted` for a URL)"
+            )
+        } else {
+            format!(
+                "its bound store roots `{name}`, not {want} — a collection declared \
+                 as a struct FIELD records the WRAPPER STRUCT as the store's type \
+                 (#632), so declare it as an annotated local (`h: hash<T[k]> = []`) \
+                 for paged loads, or read it whole with `store_load`"
+            )
+        }
     }
 
     /// The refusal reason when an entry has a field the working-set copy cannot
@@ -4018,7 +4163,20 @@ impl Stores {
     /// Per collection (`persons` and `companies` are different tables), so the
     /// key is the collection's root ref. Rebinding replaces; binding is
     /// configuration and may be set before the collection holds anything.
-    pub fn bind_lazy(&mut self, coll: &DbRef, source: &str) {
+    ///
+    /// Answers whether the binding was ACCEPTED. A source that can never serve
+    /// this collection's kind is refused HERE rather than at some later lookup,
+    /// because that is a static property of the pair and is knowable with no I/O
+    /// — and the alternative is what loft#802 reports: `true`, then `null`
+    /// forever, with the refusal on stderr where no program can read it.
+    pub fn bind_lazy(&mut self, coll: &DbRef, source: &str) -> bool {
+        if let Some(why) = self.unservable_kind(coll, source) {
+            self.lazy_sources
+                .remove(&(coll.store_nr, coll.rec, coll.pos));
+            eprintln!("store_bind_lazy: refusing `{source}` — {why}");
+            self.lazy_refuse((coll.store_nr, coll.rec, coll.pos), &why);
+            return false;
+        }
         // @PLN129 arc D — pin the source's identity at bind. Rebinding RE-pins,
         // which is how a caller says "I accept the new world" after drift.
         let pin = Self::source_pin(source);
@@ -4032,6 +4190,51 @@ impl Stores {
                 check: crate::database::SchemaCheck::Unchecked,
             },
         );
+        true
+    }
+
+    /// Why this source can NEVER serve this collection, or `None` when the pair
+    /// is at least possible.
+    ///
+    /// Static, and that is the point: a `.store` IMAGE is read by the paged
+    /// loader, which serves one kind — a `hash`, integer- or text-keyed. Every
+    /// other keyed kind is refused at the first lookup and would be refused at
+    /// every lookup after it, so the answer is already known when the binding is
+    /// made and costs no I/O to give.
+    ///
+    /// A DATABASE source is NOT judged here. Its refusals depend on the schema
+    /// on the other end — a column that is missing, a type that will not map —
+    /// and `fetch_from_sql` interrogates that once, on the first fault. Refusing
+    /// a `trie` bound to sqlite would also be WRONG: `derive_select` gives a
+    /// trie `sorted`'s shape and serves it (`sql_query.rs`). The kinds a paged
+    /// image can serve and the kinds SQL can serve are different sets, and this
+    /// is only about the first.
+    fn unservable_kind(&self, coll: &DbRef, source: &str) -> Option<String> {
+        if !matches!(
+            crate::database::lazy::LazySource::of(source),
+            crate::database::lazy::LazySource::File(_)
+        ) {
+            return None;
+        }
+        let root_tp = self.allocations[coll.store_nr as usize].known_type;
+        // An untyped store has no kind to judge; the loader's own gate handles
+        // it, and refusing here on no evidence would break a working bind.
+        if root_tp == u16::MAX {
+            return None;
+        }
+        let tp = self.collection_type_of_store(root_tp);
+        if matches!(
+            self.types.get(tp as usize).map(|t| &t.parts),
+            Some(Parts::Hash(..))
+        ) {
+            return None;
+        }
+        Some(format!(
+            "a lazily-bound `.store` image is read a page at a time, which only a \
+             `hash` supports, and `{}` is not one — read it whole with `store_load` \
+             (or `store_load_url_trusted` for a URL), which carries every kind",
+            self.type_name(root_tp)
+        ))
     }
 
     /// The identity a local source is pinned to: `(len, mtime_secs)`.
@@ -4224,24 +4427,25 @@ impl Stores {
         }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
-            Self::refuse_paged(path, "it cannot be opened as a paged source");
+            self.refuse_paged(path, "it cannot be opened as a paged source");
             return false;
         };
         let mut reader = PagedReader::new(source);
         let root_tp = self.allocations[local.store_nr as usize].known_type;
         if root_tp == u16::MAX {
-            Self::refuse_paged(path, "the target collection's store has no recorded type");
+            self.refuse_paged(path, "the target collection's store has no recorded type");
             return false;
         }
         let tp = self.collection_type_of_store(root_tp); // field form → the field's hash (#632)
         let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
             let reason = self.wrong_collection_reason(root_tp, "a hash");
-            Self::refuse_paged(path, &reason);
+            self.refuse_paged(path, &reason);
             return false;
         };
         let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
-            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
             return false;
         }
         let keys = self.keys(tp).to_vec();
@@ -4265,7 +4469,7 @@ impl Stores {
         // `path` is a local file OR an `http(s)://` URL — the paged reader pulls
         // only the pages a lookup touches, from disk or over the network (#517).
         let Ok(source) = PageSource::open(path) else {
-            Self::refuse_paged(path, "it cannot be opened as a paged source");
+            self.refuse_paged(path, "it cannot be opened as a paged source");
             return 0;
         };
         let mut reader = PagedReader::new(source);
@@ -4276,7 +4480,7 @@ impl Stores {
         // collection either way.
         let root_tp = self.allocations[local.store_nr as usize].known_type;
         if root_tp == u16::MAX {
-            Self::refuse_paged(path, "the target collection's store has no recorded type");
+            self.refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
         let tp = self.collection_type_of_store(root_tp);
@@ -4289,12 +4493,13 @@ impl Stores {
         // Only Hash supported so far (Sorted lands at 3b.7).
         let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
             let reason = self.wrong_collection_reason(root_tp, "a hash");
-            Self::refuse_paged(path, &reason);
+            self.refuse_paged(path, &reason);
             return 0;
         };
         let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
-            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
             return 0;
         }
         let keys = self.keys(tp).to_vec();
@@ -5088,5 +5293,76 @@ mod p318_hash_deepcopy {
         // (both the hand-built source and the copied destination carry one).
         stores.remove_claims(&src, holder);
         stores.free(&dest);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Stores;
+
+    /// Teardown: `remove_claims` on a trie must free every element record AND the tree.
+    ///
+    /// The gate for step 4 of `doc/claude/plans/text-keyed-trie.md`, and it guards a
+    /// fault that was real: `for_each_owned_child` had no `Trie` arm, so a trie fell into
+    /// its catch-all, the keystone yielded no children and no container, and
+    /// `remove_claims` freed NOTHING — every element and the tree itself leaked, with
+    /// nothing said.  `claims_count` is the observable, because `claim` inserts and
+    /// `delete` removes: a teardown that works returns it to where it started.
+    #[test]
+    fn a_trie_frees_every_element_and_its_tree() {
+        let mut stores = Stores::new();
+        // struct Word { w: text }
+        let word_tp = stores.structure("Word", -1);
+        stores.field(word_tp, "w", 5); // text
+        stores.finish();
+        let trie_tp = stores.trie(word_tp, "w");
+        assert_ne!(trie_tp, u16::MAX, "the trie type registered");
+        stores.determine_keys();
+
+        // A record holding one trie field at payload offset 0.
+        let coll = stores.database(4);
+        let store_nr = coll.store_nr;
+        let baseline = stores.allocations[store_nr as usize].claims_count();
+
+        let keys = stores.types[trie_tp as usize].keys.clone();
+        assert_eq!(keys.len(), 1, "a trie registers exactly one key");
+        for w in ["kerkstraat", "kerk", "lonneker", "kerf"] {
+            let elm = {
+                let s = &mut stores.allocations[store_nr as usize];
+                let ptr = s.set_str(w);
+                let rec = s.claim(4);
+                s.set_u32_raw(rec, 8, ptr);
+                rec
+            };
+            let e = DbRef {
+                store_nr,
+                rec: elm,
+                pos: 8,
+            };
+            crate::trie_db::add(&coll, &e, &mut stores.allocations, &keys);
+        }
+        assert_eq!(
+            crate::trie_db::count(&coll, &stores.allocations),
+            4,
+            "four words are resident"
+        );
+        assert!(
+            stores.allocations[store_nr as usize].claims_count() > baseline,
+            "the inserts claimed records"
+        );
+
+        stores.remove_claims(&coll, trie_tp);
+
+        assert_eq!(
+            stores.allocations[store_nr as usize].get_u32_raw(coll.rec, coll.pos),
+            0,
+            "the field is cleared, so a re-bind starts empty"
+        );
+        assert_eq!(
+            stores.allocations[store_nr as usize].claims_count(),
+            baseline,
+            "every element record and the tree itself are freed"
+        );
     }
 }
