@@ -146,7 +146,11 @@ impl Stores {
             Some(LayoutNode::Iterated(it)) => {
                 let scratch = match it {
                     Iterated::Hash { .. } => self.build_hash_sorted_vec(&at, node_id),
-                    Iterated::Radix { .. } => self.build_radix_sorted_vec(&at, node_id),
+                    // A trie shares the radix TREE, so the same in-order walk
+                    // materialises it — only the key oracle above differs.
+                    Iterated::Radix { .. } | Iterated::Trie { .. } => {
+                        self.build_radix_sorted_vec(&at, node_id)
+                    }
                     Iterated::Index { .. } => self.build_index_sorted_vec(&at, node_id),
                     Iterated::Sorted { .. } | Iterated::Ordered { .. } => return,
                 };
@@ -222,6 +226,7 @@ impl Stores {
                 LayoutNode::Iterated(
                     Iterated::Hash { elem, .. }
                     | Iterated::Radix { elem, .. }
+                    | Iterated::Trie { elem, .. }
                     | Iterated::Index { elem, .. },
                 ) => LayoutNode::FlatArray { elem: *elem },
                 LayoutNode::Iterated(Iterated::Sorted { elem, .. }) => LayoutNode::Vector(*elem),

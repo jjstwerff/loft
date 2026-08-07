@@ -71,8 +71,9 @@ pub struct FieldInfo {
 /// `KeyedKind` says a type is walked by cursor; this says what by. The
 /// distinction decides what a query over it can be: a `hash` answers equality
 /// only, `sorted` / `ordered` / `index` also answer a range in their declared
-/// direction, and a `radix` is a Morton-order structure that no SQL shape means
-/// the same thing as.
+/// direction, a `radix` is a Morton-order structure that no SQL shape means the
+/// same thing as, and a `trie` answers equality, byte order, and a PREFIX —
+/// which is `LIKE 'x%'` and nothing narrower.
 pub enum CollectionKind {
   /// Not a keyed collection. Every other kind of type answers this, so a
   /// caller can read `collection` without matching `kind` first.
@@ -82,6 +83,7 @@ pub enum CollectionKind {
   KeyedSorted,
   KeyedOrdered,
   KeyedRadix,
+  KeyedTrie,
 }
 
 /// One key field of a keyed collection.
@@ -94,7 +96,9 @@ pub struct KeyInfo {
   position: integer,
   /// Does the collection order this key ascending?
   ///
-  /// `true` for a kind that has no order of its own (`hash`, `radix`), because
+  /// `true` for a kind that has no order of its own (`hash`, `radix`), and for a
+  /// `trie`, whose single key IS ordered ascending by byte. Only a kind that can
+  /// be declared descending ever answers `false`. Because
   /// there is no descending answer to give. Match `collection` first where the
   /// difference between "ascending" and "unordered" matters.
   ascending: boolean,

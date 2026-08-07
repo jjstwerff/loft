@@ -2649,6 +2649,7 @@ fn reflect_collection(node: Option<&crate::database::LayoutNode>) -> i32 {
             Iterated::Sorted { .. } => 4,
             Iterated::Ordered { .. } => 5,
             Iterated::Radix { .. } => 6,
+            Iterated::Trie { .. } => 7,
         },
         _ => 1,
     }
@@ -2666,6 +2667,9 @@ fn reflect_keys(it: &crate::database::Iterated) -> Vec<(u16, bool)> {
         Iterated::Hash { keys, .. } | Iterated::Radix { keys, .. } => {
             keys.iter().map(|k| (*k, true)).collect()
         }
+        // A trie DOES order its one key — ascending byte order — which is what
+        // makes its prefix slice answerable.
+        Iterated::Trie { key, .. } => vec![(*key, true)],
         Iterated::Sorted { keys, .. }
         | Iterated::Ordered { keys, .. }
         | Iterated::Index { keys, .. } => keys.clone(),
