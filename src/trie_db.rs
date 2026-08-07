@@ -19,8 +19,8 @@
 //! Nothing consumes it yet — the trie KIND is step 2 of the plan. It lands first, and
 //! proven, so the steps that build on it start from a known-good key reading.
 
-use crate::keys::Key;
-use crate::radix_tree::KeyOracle;
+use crate::keys::{Content, DbRef, Key};
+use crate::radix_tree::{self as rt, KeyOracle};
 use crate::store::Store;
 
 /// Payload offset of an element record's fields; mirrors `radix_db`.
@@ -73,6 +73,113 @@ fn bytes_word(b: &[u8], word: u32) -> u64 {
     for i in 0..8 {
         let idx = (word * 8 + i) as usize;
         out = (out << 8) | u64::from(b.get(idx).copied().unwrap_or(0));
+    }
+    out
+}
+
+/// The bytes a query key carries, when it is a text one.
+///
+/// A non-text probe cannot match a text key: answering an empty slice makes that a
+/// miss rather than a panic, which is the same choice `probe_code` makes on the
+/// coordinate side.
+fn probe_bytes(key: &[Content]) -> &[u8] {
+    match key.first() {
+        Some(Content::Str(v)) => v.str().as_bytes(),
+        _ => &[],
+    }
+}
+
+/// Insert element record `rec` into the `Trie` collection at field `coll`.
+///
+/// The tree lives in `coll`'s store, its record id in `coll`'s 4-byte field (the
+/// `hash`-bucket convention). A growing insert can relocate the tree, so the
+/// (possibly new) id is written back. Two records may share a key — they differ in
+/// the id suffix and land adjacent, which `r8b` pins.
+pub fn add(coll: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
+    let Some(key) = keys.first() else {
+        return;
+    };
+    let store = crate::keys::mut_store(coll, stores);
+    let mut tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        tree = rt::rtree_init(store, 0);
+        store.set_u32_raw(coll.rec, coll.pos, tree);
+    }
+    let tree = rt::rtree_insert(store, tree, rec.rec, &TextOracle { key });
+    store.set_u32_raw(coll.rec, coll.pos, tree);
+}
+
+/// The record whose key equals `key`, or a null `DbRef` (`rec == 0`) when absent.
+/// When several records share the key, the first in order.
+#[must_use]
+pub fn find(coll: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -> DbRef {
+    let store = crate::keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    let rec = match keys.first() {
+        Some(k) if tree != 0 => {
+            // The probe reads bytes exactly as `TextOracle` does — via the same
+            // `bytes_word`. The two reading a key differently is the classic radix
+            // fault and presents as "inserted, then not found".
+            let q = probe_bytes(key);
+            let probe = |word: u32| bytes_word(q, word);
+            rt::rtree_get(
+                store,
+                tree,
+                &probe,
+                q.len() as u32 * 8,
+                &TextOracle { key: k },
+            )
+        }
+        _ => 0,
+    };
+    DbRef {
+        store_nr: coll.store_nr,
+        rec,
+        pos: PAYLOAD,
+    }
+}
+
+/// Unlink element record `rec`; the caller frees `rec` itself. `false` when it was
+/// not present — the tree removes only the record whose key AND id match, so a
+/// same-key sibling is never removed by mistake.
+pub fn remove(coll: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) -> bool {
+    let Some(key) = keys.first() else {
+        return false;
+    };
+    let store = crate::keys::mut_store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        return false;
+    }
+    rt::rtree_remove(store, tree, rec.rec, &TextOracle { key })
+}
+
+/// Number of element records. Reads the tree's cached length word (O(1)).
+#[must_use]
+pub fn count(coll: &DbRef, stores: &[Store]) -> u32 {
+    let store = crate::keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        0
+    } else {
+        rt::rtree_len(store, tree)
+    }
+}
+
+/// Every element record, in key order. Key-free (a plain tree walk), so teardown
+/// and iteration reach it without building an oracle.
+#[must_use]
+pub fn records(coll: &DbRef, stores: &[Store]) -> Vec<u32> {
+    let store = crate::keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    let mut out = Vec::new();
+    if tree != 0 {
+        let mut it = rt::rtree_first(store, tree);
+        let mut r = it.rec();
+        while r != 0 {
+            out.push(r);
+            r = it.next(store, tree).unwrap_or(0);
+        }
     }
     out
 }
@@ -192,6 +299,143 @@ mod tests {
                 &TextOracle { key: &key },
             );
             assert_eq!(got, 0, "{absent:?} is absent and must not be found");
+        }
+    }
+
+    // ---- the OPERATIONS, through the collection surface ---------------------
+    //
+    // The tests above drive the tree directly. These drive `add` / `find` / `remove` /
+    // `records` / `count` — the functions `search.rs` and `structures.rs` now call —
+    // so a mistake in the collection plumbing (the tree id written back into the
+    // field, an empty key list, a probe built the wrong way) cannot hide behind a
+    // correct tree.
+
+    /// A collection field holding the tree id, plus an element record per word.
+    fn collection(store: &mut Store) -> (DbRef, Vec<(&'static str, u32)>) {
+        let coll_rec = store.claim(1);
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
+        let keys = vec![w_key()];
+        let mut recs = Vec::new();
+        for w in WORDS {
+            let ptr = store.set_str(w);
+            let rec = store.claim(4);
+            store.set_u32_raw(rec, PAYLOAD, ptr);
+            add(
+                &coll,
+                &DbRef {
+                    store_nr: 0,
+                    rec,
+                    pos: PAYLOAD,
+                },
+                std::slice::from_mut(store),
+                &keys,
+            );
+            recs.push((w, rec));
+        }
+        (coll, recs)
+    }
+
+    /// The round trip: every word inserted is found by its own key, and an absent key
+    /// answers `rec == 0` rather than a neighbour.
+    #[test]
+    fn the_collection_round_trips_every_key() {
+        let mut store = Store::new_in_use(1 << 14);
+        let keys = vec![w_key()];
+        let (coll, recs) = collection(&mut store);
+        let stores = std::slice::from_ref(&store);
+
+        assert_eq!(count(&coll, stores), WORDS.len() as u32, "count");
+
+        for (w, want) in &recs {
+            let got = find(
+                &coll,
+                stores,
+                &keys,
+                &[Content::Str(crate::keys::Str::new(w))],
+            );
+            assert_eq!(got.rec, *want, "find {w:?}");
+        }
+        // `kerks` extends `kerk` and is a prefix of `kerkstraat` — the shape a probe
+        // built differently from the oracle answers for.
+        for absent in ["kerks", "ker", "kerkstraatx", "aaa", "zzz"] {
+            let got = find(
+                &coll,
+                stores,
+                &keys,
+                &[Content::Str(crate::keys::Str::new(absent))],
+            );
+            assert_eq!(got.rec, 0, "{absent:?} must not be found");
+        }
+    }
+
+    /// `records` walks in key order, so iteration and teardown see a prefix before
+    /// what extends it.
+    #[test]
+    fn the_collection_walks_in_key_order() {
+        let mut store = Store::new_in_use(1 << 14);
+        let (coll, recs) = collection(&mut store);
+        let walk: Vec<&str> = records(&coll, std::slice::from_ref(&store))
+            .into_iter()
+            .map(|r| recs.iter().find(|(_, x)| *x == r).expect("known rec").0)
+            .collect();
+        assert_eq!(
+            walk,
+            [
+                "kerf",
+                "kerk",
+                "kerklaan",
+                "kerkstraat",
+                "kerkweg",
+                "lonneker"
+            ]
+        );
+    }
+
+    /// Removal unlinks exactly one record and leaves its neighbours findable — the
+    /// `kerk` family is the interesting case, since they share a prefix.
+    #[test]
+    fn removal_takes_one_key_and_leaves_the_rest() {
+        let mut store = Store::new_in_use(1 << 14);
+        let keys = vec![w_key()];
+        let (coll, recs) = collection(&mut store);
+        let (_, kerklaan) = *recs.iter().find(|(w, _)| *w == "kerklaan").unwrap();
+
+        let gone = remove(
+            &coll,
+            &DbRef {
+                store_nr: 0,
+                rec: kerklaan,
+                pos: PAYLOAD,
+            },
+            std::slice::from_mut(&mut store),
+            &keys,
+        );
+        assert!(gone, "kerklaan was present");
+        assert_eq!(count(&coll, std::slice::from_ref(&store)), 5, "one fewer");
+
+        let stores = std::slice::from_ref(&store);
+        let missing = find(
+            &coll,
+            stores,
+            &keys,
+            &[Content::Str(crate::keys::Str::new("kerklaan"))],
+        );
+        assert_eq!(missing.rec, 0, "kerklaan is gone");
+        for w in ["kerk", "kerkstraat", "kerkweg", "kerf", "lonneker"] {
+            let got = find(
+                &coll,
+                stores,
+                &keys,
+                &[Content::Str(crate::keys::Str::new(w))],
+            );
+            assert_ne!(
+                got.rec, 0,
+                "{w:?} survives the removal of its prefix-sibling"
+            );
         }
     }
 }

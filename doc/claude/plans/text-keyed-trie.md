@@ -124,6 +124,19 @@ the tree, with the trie's own key reading.
 exact lookup finds every inserted key and refuses `kerks`, `ker`, `kerkstraatx` — the
 shapes a wrong terminator or a probe/oracle mismatch answers for.
 
+**Done.** `add` / `find` / `remove` / `records` / `count` in `trie_db.rs`, wired into the
+three step-2 stubs (`search.rs` find + remove, `structures.rs` insert), which are gone.
+Tested at two levels deliberately: through the TREE (the oracle reads a record's key
+right) and through the COLLECTION surface the callers use, so a mistake in the plumbing —
+the tree id written back into the field, an empty key list, a probe built differently
+from the oracle — cannot hide behind a correct tree. Removal is asserted on `kerklaan`
+specifically, because unlinking one member of a prefix family is where a radix removal
+goes wrong.
+
+Still stubbed after this step: `copy_claims` (a deep copy that would drop the
+collection), the layout descriptor and the IR discriminant. Teardown is step 4; the two
+FORMAT surfaces wait for step 6, when a trie can be constructed and their arms tested.
+
 ### Step 4 — teardown
 
 Free the collection's records. The spatial side is unimplemented here too and guarded as

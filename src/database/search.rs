@@ -211,12 +211,7 @@ impl Stores {
                 }
             }
             Parts::Hash(_, _) => hash::find(data, &self.allocations, self.keys(db), key),
-            // The trie KIND exists at the schema level from step 2 of
-            // doc/claude/plans/text-keyed-trie.md; its lookup is step 3.
-            // No trie can be CONSTRUCTED until the keyword lands (step 6), so this is
-            // unreachable today — and loud rather than a silent wrong answer, which is
-            // the whole reason the keyword is sequenced last.
-            Parts::Trie(_, _) => unimplemented!("trie lookup — step 3 of the text-keyed-trie plan"),
+            Parts::Trie(_, _) => crate::trie_db::find(data, &self.allocations, self.keys(db), key),
             Parts::Radix(_, _) => {
                 crate::radix_db::find(data, &self.allocations, self.keys(db), key)
             }
@@ -724,13 +719,9 @@ impl Stores {
                 let keys = self.keys(db).to_vec();
                 tree::remove(data, rec, left, &mut self.allocations, &keys);
             }
-            // The trie KIND exists at the schema level from step 2 of
-            // doc/claude/plans/text-keyed-trie.md; its removal is step 3.
-            // No trie can be CONSTRUCTED until the keyword lands (step 6), so this is
-            // unreachable today — and loud rather than a silent wrong answer, which is
-            // the whole reason the keyword is sequenced last.
             Parts::Trie(_, _) => {
-                unimplemented!("trie removal — step 3 of the text-keyed-trie plan")
+                let keys = self.keys(db).to_vec();
+                crate::trie_db::remove(data, rec, &mut self.allocations, &keys);
             }
             Parts::Radix(_, _) => {
                 let keys = self.keys(db).to_vec();

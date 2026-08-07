@@ -255,10 +255,12 @@ impl Stores {
                     &mut self.allocations,
                 );
             }
-            // Step 3 of doc/claude/plans/text-keyed-trie.md. Falling THROUGH here would
-            // be the silent per-kind omission this audit exists to find: an insert that does nothing.
-            // Unreachable until the keyword (step 6).
-            Parts::Trie(_, _) => unimplemented!("trie insert — step 3 of the text-keyed-trie plan"),
+            Parts::Trie(_, _) => {
+                // Same no-dedup contract as the spatial side: two records may share a
+                // key, differing in the id suffix, and land adjacent (`r8b`).
+                let keys = self.types[tp as usize].keys.clone();
+                crate::trie_db::add(data, rec, &mut self.allocations, &keys);
+            }
             Parts::Radix(_, _) => {
                 // @PLN48 S2 — no dedup: two records may share a cell (they differ in
                 // the id suffix and land adjacent), which is what a spatial index
