@@ -340,6 +340,18 @@ pub struct Stores {
     /// FIRST reason is kept because it names the original cause; later ones are
     /// usually the same failure repeating.
     pub lazy_errors: HashMap<(u16, u32, u32), (u64, String)>,
+    /// The reason the paged loader last REFUSED, or `None` when it merely
+    /// missed. Set by [`Stores::refuse_paged`], read and cleared by the lazy
+    /// fetch (loft#802).
+    ///
+    /// The loaders answer `false` / `0` for both outcomes, and those are
+    /// different facts: a key that is absent is a stable truth about the data, a
+    /// refused shape is a permanent truth about the BINDING. Without this the
+    /// lazy fetch had only the loader's `false` to go on and reported the
+    /// refusal as an absence — so `store_lazy_error` said `""`, whose documented
+    /// meaning is "reachable, genuinely no such key". A trie bound to a paged
+    /// source then looked healthy and answered null forever.
+    pub(crate) paged_refusal: Option<String>,
     /// @PLN133 S8 — the stores created while a lazy DRIVER is running, or
     /// `None` when none is.
     ///
@@ -641,6 +653,7 @@ impl Clone for Stores {
             stack_store_at_zero: self.stack_store_at_zero,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            paged_refusal: None,
             lazy_driver_allocs: None,
             files: Vec::new(),
             max: self.max,
@@ -1381,6 +1394,7 @@ impl Stores {
             stack_store_at_zero: false,
             lazy_sources: HashMap::new(),
             lazy_errors: HashMap::new(),
+            paged_refusal: None,
             lazy_driver_allocs: None,
             files: Vec::new(),
             max: 0,

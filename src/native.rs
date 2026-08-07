@@ -1314,10 +1314,11 @@ fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
 fn n_store_bind_lazy(stores: &mut Stores, stack: &mut DbRef) {
     let v_source = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
-    let ok = v_ref.rec != 0;
-    if ok {
-        stores.bind_lazy(&v_ref, v_source.str());
-    }
+    // `bind_lazy` owns the verdict, including the refusal a kind mismatch
+    // decides (loft#802) — deriving any part of it here would be the second
+    // home for one fact, and the `#rust` body in `02_files.loft` would have to
+    // grow the same copy.
+    let ok = v_ref.rec != 0 && stores.bind_lazy(&v_ref, v_source.str());
     stores.put(stack, ok);
 }
 

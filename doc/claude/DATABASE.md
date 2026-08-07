@@ -949,8 +949,22 @@ Supported operations, both backends:
 Exactly one key field, refused at the keyword: a trie orders one key's bytes, so
 several keys have no order to share.
 
+**Persistence is WHOLE-IMAGE.** `store_persist_bind` / `store_load` /
+`store_load_url_trusted` carry a trie with its counts and key order intact. The
+PAGED readers do not: `store_load_key(_text)` and a lazily-bound `.store` image
+read a `hash`, and `store_lazy_range` reads a `sorted` / `index`. So a trie is
+downloaded whole or not at all — for the `routing` name index that is 220 032
+words, 23.4 MB raw and 5.9 MB gzipped, reloaded in 42 ms. That is a size cut, not
+a per-query read, and the two compose rather than compete: keep the vocabulary
+whole and page the postings behind it.
+
+`store_bind_lazy` REFUSES a trie (and a `sorted` / `index` / `spatial`) bound to
+an image, answering `false` — the kind cannot be paged, that is knowable with no
+I/O, and the alternative is `null` at every lookup forever (loft#802).
+
 The gate is `tests/scripts/801-trie-text-keyed.loft` — hand-computed values on
-both backends with a `sorted` control alongside.
+both backends with a `sorted` control alongside;
+`tests/scripts/802-lazy-refusal-visible.loft` is the refusal's.
 
 ### Adding or changing a collection kind — the per-kind lists
 
@@ -969,6 +983,7 @@ later as a crash or as silent corruption. loft#720 was three such omissions of
 | The `is_radix` scratch selector (`parser/collections.rs`) | `for x in coll` takes the HASH builder — a bucket walk over a tree. `trie` hit this: the site names every keyed kind, so the sweep had counted it as mechanical and handled. |
 | `emit_field` (`generation/mod.rs`) | A keyed STRUCT FIELD's type id is never registered on `--native`, and its record reads as a struct with no fields (`field_type` indexes an empty list). Local-only vars still work, so it looks kind-specific rather than field-specific. |
 | `Iterated` (`database/descriptor.rs`) and its readers | The layout descriptor, `type_of(…).collection` and the lazy-store SQL deriver all match `Iterated` exhaustively, so these are compile errors — EXCEPT `ffi_deliver::collect_keyed`, which is `#[cfg(target_arch = "wasm32")]` and therefore dead on the host that compiles the audit, and `rewrite_iterated`, which closes with `_ => continue`. Check the wasm target explicitly. |
+| `Stores::unservable_kind` (`database/allocation.rs`) and `collection_type_of_store`'s `is_keyed` | **A binding that reports itself healthy and answers nothing.** The paged loader serves only a `hash`, so every other kind must be refused at `store_bind_lazy`; a kind missing from the check binds, answers `null` at every lookup, and leaves `store_lazy_error` empty — whose documented meaning is "reachable, genuinely no such key" (loft#802). The refusal is a STATIC property of the pair, so it costs no I/O to give and there is no reason to defer it to a lookup. |
 
 Two habits that make the class visible instead of latent:
 

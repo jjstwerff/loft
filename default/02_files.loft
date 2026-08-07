@@ -542,13 +542,24 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 //   store_bind_lazy(persons, "sqlite:people.db")
 //   p = persons[42]        // SELECT "id","name" FROM "person" WHERE "id" = 42
 //
-// Read-only, and the connection enforces it. A binding whose type cannot become
-// a query — a collection that is not a `hash`, a field that is not a column —
-// is REFUSED rather than served wrongly, and says so through
-// `store_lazy_error`. sqlite is opened on the first fault, so a program that
-// binds no database loads nothing.
+// Read-only, and the connection enforces it. A binding that cannot be served —
+// a field that is not a column, a collection whose KIND the source cannot read —
+// is REFUSED rather than served wrongly, and says so through `store_lazy_error`.
+// sqlite is opened on the first fault, so a program that binds no database loads
+// nothing.
+//
+// FALSE means the binding was not made, and it is worth checking. A `.store`
+// IMAGE is read a page at a time, which only a `hash` supports: a `sorted`,
+// `index`, `trie` or `spatial` bound to one is refused HERE, at the call that is
+// wrong, rather than answering `null` at every later lookup (loft#802). Those
+// kinds load whole — `store_load` / `store_load_url_trusted` carry all of them.
+// A DATABASE source judges its own schema on the first fault instead, since what
+// it can serve is a fact about the other end.
+//   if !store_bind_lazy(words, "vocab.store") {
+//     store_load(words, "vocab.store");     // whole-image, every kind
+//   }
 pub fn store_bind_lazy(local: reference, source: text) -> boolean;
-#rust"{{ let r = @local; let ok = r.rec != 0; if ok {{ stores.bind_lazy(&r, @source); }} ok }}"
+#rust"{{ let r = @local; r.rec != 0 && stores.bind_lazy(&r, @source) }}"
 
 // @PLN129 arc B2 — run an explicit condition against this collection's bound
 // DATABASE source and pull every matching row into the collection. Answers how

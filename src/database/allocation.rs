@@ -1708,6 +1708,7 @@ impl Stores {
             // the parent later reconciles. Fault before the `par`, not inside it.
             lazy_sources: std::collections::HashMap::new(),
             lazy_errors: std::collections::HashMap::new(),
+            paged_refusal: None,
             lazy_driver_allocs: None,
             files: Vec::new(),
             max: (self.allocations.len() + scratch_stores) as u16,
@@ -3757,7 +3758,7 @@ impl Stores {
     /// is a local file or an `http(s)://` URL — the sidecar is read from beside
     /// it (`<path>.dschema`), over the same transport.
     #[cfg(paged_store)]
-    fn layout_gate_ok(&self, path: &str, local: &DbRef) -> bool {
+    fn layout_gate_ok(&mut self, path: &str, local: &DbRef) -> bool {
         let known_type = self.allocations[local.store_nr as usize].known_type;
         if known_type == u16::MAX {
             return true; // untyped store — no identity to compare against
@@ -3768,11 +3769,15 @@ impl Stores {
             return true;
         }
         // A layout mismatch is a rare, important safety event — always surface it
-        // so a rejected load is not silently mistaken for "key absent".
-        eprintln!(
-            "store loader: refusing {path} — its recorded layout differs from this \
-             program's (verdict: {verdict:?}); not range-reading foreign bytes"
+        // so a rejected load is not silently mistaken for "key absent". Through
+        // `refuse_paged` rather than its own `eprintln`, so the program can read
+        // it back too: a refusal reachable by one route and not another is the
+        // same silence in a different place (loft#802).
+        let reason = format!(
+            "its recorded layout differs from this program's (verdict: \
+             {verdict:?}); not range-reading foreign bytes"
         );
+        self.refuse_paged(path, &reason);
         false
     }
 
@@ -3793,13 +3798,13 @@ impl Stores {
         }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
-            Self::refuse_paged(path, "it cannot be opened as a paged source");
+            self.refuse_paged(path, "it cannot be opened as a paged source");
             return 0;
         };
         let mut reader = PagedReader::new(source);
         let tp = self.allocations[local.store_nr as usize].known_type;
         if tp == u16::MAX {
-            Self::refuse_paged(path, "the target collection's store has no recorded type");
+            self.refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
         // Range needs an ordered collection — `Sorted`, or its promoted `Ordered`
@@ -3821,12 +3826,13 @@ impl Stores {
             self.types.get(tp as usize).map(|t| &t.parts)
         else {
             let reason = self.wrong_collection_reason(tp, "a sorted collection");
-            Self::refuse_paged(path, &reason);
+            self.refuse_paged(path, &reason);
             return 0;
         };
         let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
-            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
             return 0;
         }
         let keys = self.keys(tp).to_vec();
@@ -4012,32 +4018,66 @@ impl Stores {
     }
 
     /// Report that a paged working-set load REFUSED the request and loaded
-    /// nothing. Every refusal in `load_key(s)` / `load_key_text` / `load_range`
-    /// speaks through here, for the same reason
-    /// [`layout_gate_ok`](Stores::layout_gate_ok) warns: these loaders report
-    /// failure as `false` / `0`, which is exactly what an ABSENT KEY looks like,
-    /// so a silent refusal reads as "the data isn't there" and sends the caller
-    /// hunting for missing data instead of an unsupported shape (#632).
+    /// nothing. Every refusal in `layout_gate_ok` / `load_key(s)` /
+    /// `load_key_text` / `load_range` speaks through here, because these loaders
+    /// report failure as `false` / `0`, which is exactly what an ABSENT KEY
+    /// looks like — so a silent refusal reads as "the data isn't there" and
+    /// sends the caller hunting for missing data instead of an unsupported
+    /// shape (#632).
+    ///
+    /// Two channels, because stderr is not one a program can read. The message
+    /// is for the person, and [`paged_refusal`](Stores::paged_refusal) is for
+    /// the lazy fetch, which turns it into `store_lazy_error` (loft#802). A
+    /// refusal that only printed left the program itself with nothing but the
+    /// `null`.
     #[cfg(paged_store)]
-    fn refuse_paged(path: &str, reason: &str) {
+    fn refuse_paged(&mut self, path: &str, reason: &str) {
         eprintln!(
             "store loader: refusing {path} — {reason}; loaded NOTHING (a refusal, \
              not an absent key)"
         );
+        self.paged_refusal = Some(format!("refusing {path} — {reason}"));
     }
 
     /// The refusal reason when the bound store does not root the collection kind
-    /// the loader needs (`want` names it, e.g. "a hash"). Spells out the
-    /// commonest cause because the type name alone does not suggest the fix.
+    /// the loader needs (`want` names it, e.g. "a hash"). Spells out the cause
+    /// because the type name alone does not suggest the fix.
+    ///
+    /// TWO causes, and telling them apart is the whole value of the message.
+    /// When the root is a keyed collection of the WRONG KIND, the shape is
+    /// already what the author wrote and no declaration change can help — the
+    /// answer is `store_load`, and saying "declare it as an annotated local"
+    /// sends them to rewrite a line that is correct (a `trie` local was told
+    /// exactly that, loft#802). When the root is anything else, it is the #632
+    /// wrapper-struct trap and the declaration IS the fix.
     #[cfg(paged_store)]
     fn wrong_collection_reason(&self, tp: u16, want: &str) -> String {
-        format!(
-            "its bound store roots `{}`, not {want} — a collection declared as a \
-             struct FIELD records the WRAPPER STRUCT as the store's type (#632), so \
-             declare it as an annotated local (`h: hash<T[k]> = []`) for paged loads, \
-             or read it whole with `store_load`",
-            self.type_name(tp)
-        )
+        let name = self.type_name(tp);
+        let keyed = matches!(
+            self.types.get(tp as usize).map(|t| &t.parts),
+            Some(
+                Parts::Hash(..)
+                    | Parts::Sorted(..)
+                    | Parts::Ordered(..)
+                    | Parts::Index(..)
+                    | Parts::Trie(..)
+                    | Parts::Radix(..)
+            )
+        );
+        if keyed {
+            format!(
+                "its bound store roots `{name}`, not {want} — that kind cannot be \
+                 read a page at a time, so read it whole with `store_load` (or \
+                 `store_load_url_trusted` for a URL)"
+            )
+        } else {
+            format!(
+                "its bound store roots `{name}`, not {want} — a collection declared \
+                 as a struct FIELD records the WRAPPER STRUCT as the store's type \
+                 (#632), so declare it as an annotated local (`h: hash<T[k]> = []`) \
+                 for paged loads, or read it whole with `store_load`"
+            )
+        }
     }
 
     /// The refusal reason when an entry has a field the working-set copy cannot
@@ -4123,7 +4163,20 @@ impl Stores {
     /// Per collection (`persons` and `companies` are different tables), so the
     /// key is the collection's root ref. Rebinding replaces; binding is
     /// configuration and may be set before the collection holds anything.
-    pub fn bind_lazy(&mut self, coll: &DbRef, source: &str) {
+    ///
+    /// Answers whether the binding was ACCEPTED. A source that can never serve
+    /// this collection's kind is refused HERE rather than at some later lookup,
+    /// because that is a static property of the pair and is knowable with no I/O
+    /// — and the alternative is what loft#802 reports: `true`, then `null`
+    /// forever, with the refusal on stderr where no program can read it.
+    pub fn bind_lazy(&mut self, coll: &DbRef, source: &str) -> bool {
+        if let Some(why) = self.unservable_kind(coll, source) {
+            self.lazy_sources
+                .remove(&(coll.store_nr, coll.rec, coll.pos));
+            eprintln!("store_bind_lazy: refusing `{source}` — {why}");
+            self.lazy_refuse((coll.store_nr, coll.rec, coll.pos), &why);
+            return false;
+        }
         // @PLN129 arc D — pin the source's identity at bind. Rebinding RE-pins,
         // which is how a caller says "I accept the new world" after drift.
         let pin = Self::source_pin(source);
@@ -4137,6 +4190,51 @@ impl Stores {
                 check: crate::database::SchemaCheck::Unchecked,
             },
         );
+        true
+    }
+
+    /// Why this source can NEVER serve this collection, or `None` when the pair
+    /// is at least possible.
+    ///
+    /// Static, and that is the point: a `.store` IMAGE is read by the paged
+    /// loader, which serves one kind — a `hash`, integer- or text-keyed. Every
+    /// other keyed kind is refused at the first lookup and would be refused at
+    /// every lookup after it, so the answer is already known when the binding is
+    /// made and costs no I/O to give.
+    ///
+    /// A DATABASE source is NOT judged here. Its refusals depend on the schema
+    /// on the other end — a column that is missing, a type that will not map —
+    /// and `fetch_from_sql` interrogates that once, on the first fault. Refusing
+    /// a `trie` bound to sqlite would also be WRONG: `derive_select` gives a
+    /// trie `sorted`'s shape and serves it (`sql_query.rs`). The kinds a paged
+    /// image can serve and the kinds SQL can serve are different sets, and this
+    /// is only about the first.
+    fn unservable_kind(&self, coll: &DbRef, source: &str) -> Option<String> {
+        if !matches!(
+            crate::database::lazy::LazySource::of(source),
+            crate::database::lazy::LazySource::File(_)
+        ) {
+            return None;
+        }
+        let root_tp = self.allocations[coll.store_nr as usize].known_type;
+        // An untyped store has no kind to judge; the loader's own gate handles
+        // it, and refusing here on no evidence would break a working bind.
+        if root_tp == u16::MAX {
+            return None;
+        }
+        let tp = self.collection_type_of_store(root_tp);
+        if matches!(
+            self.types.get(tp as usize).map(|t| &t.parts),
+            Some(Parts::Hash(..))
+        ) {
+            return None;
+        }
+        Some(format!(
+            "a lazily-bound `.store` image is read a page at a time, which only a \
+             `hash` supports, and `{}` is not one — read it whole with `store_load` \
+             (or `store_load_url_trusted` for a URL), which carries every kind",
+            self.type_name(root_tp)
+        ))
     }
 
     /// The identity a local source is pinned to: `(len, mtime_secs)`.
@@ -4329,24 +4427,25 @@ impl Stores {
         }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
-            Self::refuse_paged(path, "it cannot be opened as a paged source");
+            self.refuse_paged(path, "it cannot be opened as a paged source");
             return false;
         };
         let mut reader = PagedReader::new(source);
         let root_tp = self.allocations[local.store_nr as usize].known_type;
         if root_tp == u16::MAX {
-            Self::refuse_paged(path, "the target collection's store has no recorded type");
+            self.refuse_paged(path, "the target collection's store has no recorded type");
             return false;
         }
         let tp = self.collection_type_of_store(root_tp); // field form → the field's hash (#632)
         let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
             let reason = self.wrong_collection_reason(root_tp, "a hash");
-            Self::refuse_paged(path, &reason);
+            self.refuse_paged(path, &reason);
             return false;
         };
         let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
-            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
             return false;
         }
         let keys = self.keys(tp).to_vec();
@@ -4370,7 +4469,7 @@ impl Stores {
         // `path` is a local file OR an `http(s)://` URL — the paged reader pulls
         // only the pages a lookup touches, from disk or over the network (#517).
         let Ok(source) = PageSource::open(path) else {
-            Self::refuse_paged(path, "it cannot be opened as a paged source");
+            self.refuse_paged(path, "it cannot be opened as a paged source");
             return 0;
         };
         let mut reader = PagedReader::new(source);
@@ -4381,7 +4480,7 @@ impl Stores {
         // collection either way.
         let root_tp = self.allocations[local.store_nr as usize].known_type;
         if root_tp == u16::MAX {
-            Self::refuse_paged(path, "the target collection's store has no recorded type");
+            self.refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
         let tp = self.collection_type_of_store(root_tp);
@@ -4394,12 +4493,13 @@ impl Stores {
         // Only Hash supported so far (Sorted lands at 3b.7).
         let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
             let reason = self.wrong_collection_reason(root_tp, "a hash");
-            Self::refuse_paged(path, &reason);
+            self.refuse_paged(path, &reason);
             return 0;
         };
         let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
-            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
             return 0;
         }
         let keys = self.keys(tp).to_vec();
