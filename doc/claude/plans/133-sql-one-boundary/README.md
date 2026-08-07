@@ -754,7 +754,35 @@ have `information_schema`, which is one query for all of them — but a
 cross-backend claim made without running it against a live server of each is
 exactly the gap P3 found in the float rendering.
 
-### Four language defects the build surfaced, all pre-existing on `main`
+### S7 has a design question the plan did not name: `SqlDb` is STATIC dispatch
+
+Requirement 1 is *one string switches every SQL consumer in the process*, and S5
+delivers the half that is a parser. The other half — handing back a connection
+the caller then uses — has no obvious spelling, because **loft interfaces are
+static dispatch**: `SqlDb` is satisfied by four unrelated types, and no function
+can return "one of them". `sql.loft`'s own header states this as the reason the
+cursor is state ON the connection rather than a second type the connection
+returns; it applies to the registry too.
+
+Three shapes, and the choice is not free:
+
+1. **A struct-enum over the four backends** (`enum AnyDb { Sq { c: Sqlite }, … }`)
+   with one method per variant. This is loft's native polymorphism and it works
+   today — but it names all four backends in one type, so a program that wants
+   only sqlite links the other three, and adding a fifth edits the enum.
+2. **The caller matches on `Conn.backend` itself** and holds a concrete type.
+   Honest and zero-cost, and it makes requirement 1 a smaller claim than it
+   sounds: the string picks the driver, and the caller still has a `match`.
+3. **Core does the dispatch**, which is S8 and later — core holds no loft type,
+   so it calls a loft function by name and the registry can be inside that
+   function.
+
+**(1) is the one to build for S7** — it keeps the promise the requirement makes,
+and the linking cost is the price of a uniform API over four C libraries — but it
+should be written down as a decision rather than arrived at, because (2) is
+defensible and cheaper and the difference is visible to every consumer.
+
+### Five language defects the build surfaced, all pre-existing on `main`
 
 None of them is in this plan's code, all three reproduce on the released binary,
 and each has a workaround the schema package now uses:
@@ -834,7 +862,7 @@ must agree on is the last thing that should have a gate that evaporates.
 | # | do | safe because |
 |---|---|---|
 | **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
-| **S7** | The backend registry, used by the LIBRARY's own connect. No core change. | the library's four backends already pass their tests; the registry must not move them |
+| **S7** | The backend registry, used by the LIBRARY's own connect. No core change. **See the note below first — the obvious shape does not exist in loft.** | the library's four backends already pass their tests; the registry must not move them |
 | **S8** | Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched. | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
 | **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
 | **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |
