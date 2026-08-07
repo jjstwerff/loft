@@ -144,6 +144,36 @@ a loud failure because a silent no-op leaks; the trie must not inherit that hole
 
 *Gate:* a `clean/` leak case that builds and drops a trie reports no unfreed stores.
 
+**Done, with the gate adapted.** A `clean/` case needs a trie a `.loft` program can
+DECLARE, and that is step 6 — so the gate is asserted where a trie can be built today:
+through `Stores::remove_claims`, with `claims_count` as the observable (`claim` inserts,
+`delete` removes, so a teardown that works returns it to baseline). The `.loft` leak case
+still lands at step 6, when it becomes writable.
+
+The fault was real and exactly the predicted shape: `for_each_owned_child` had no `Trie`
+arm, so a trie fell into its catch-all, the keystone yielded no children and no
+container, and `remove_claims` freed **nothing** — every element and the tree, silently.
+`copy_claims` got its own body rather than sharing the Radix one, because the two differ
+precisely where the kinds differ (whose `add` re-inserts each element).
+
+### What the audit instrument missed, twice
+
+Step 2's wildcard scan used a 120-line window and only looked at `match`. Both bounds
+were wrong, and each hid a live site:
+
+| gap | hid | found by |
+|---|---|---|
+| 120-line window | `for_each_owned_child` (its match spans ~195 lines) — the teardown fault above | brace-matching instead of a window |
+| `match` only | `zero_field`, a `matches!` macro — without it the field is never cleared, so a re-bind re-reads a freed tree | scanning `matches!` bodies too |
+
+Re-running both corrected scans found 9 wildcard `match` sites and 6 `matches!` sites.
+Of those, the load-bearing ones are fixed; the rest are diagnostics, or places where
+`Radix` is absent too — so a trie falling through behaves exactly like a spatial does
+today, which is the consistent answer rather than an omission.
+
+The lesson is the skill's own: a scan that reports "N sites" with a bound nobody stated
+is a blind instrument, and its silence reads exactly like coverage.
+
 ### Step 5 — the prefix range
 
 The capability that earns the kind its place, and the one `sorted` cannot offer.

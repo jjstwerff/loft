@@ -1391,6 +1391,26 @@ impl Stores {
         }
     }
 
+    /// Register a `trie<T[k]>` type — the `spatial` sibling, over ONE text key.
+    ///
+    /// Takes a single key name rather than a slice: `Parts::Trie` holds one `u16`,
+    /// so a two-key trie is unrepresentable rather than rejected.
+    pub fn trie(&mut self, content: u16, key: &str) -> u16 {
+        let mut name = "trie<".to_string() + &self.types[content as usize].name + "[";
+        let key_nrs = self.field_name(content, std::slice::from_ref(&key.to_string()), &mut name);
+        let Some(&k) = key_nrs.first() else {
+            return u16::MAX;
+        };
+        if let Some(nr) = self.names.get(&name) {
+            *nr
+        } else {
+            let num = self.types.len() as u16;
+            self.types.push(Type::data(&name, Parts::Trie(content, k)));
+            self.names.insert(name, num);
+            num
+        }
+    }
+
     pub fn field_name(&self, content: u16, key: &[String], name: &mut String) -> Vec<u16> {
         let mut key_nrs = Vec::new();
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =

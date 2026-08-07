@@ -400,6 +400,29 @@ impl Stores {
                     container_rec = Some(cur);
                 }
             }
+            Parts::Trie(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    // Identical SHAPE to the Radix arm — the tree's leaves are the
+                    // element records, walked key-free — but through `trie_db`, because
+                    // the two kinds share the tree and nothing above it.  Without this
+                    // arm a trie fell into the catch-all below and `remove_claims` freed
+                    // NOTHING: every element and the tree itself leaked, silently.
+                    for elm in crate::trie_db::records(rec, &self.allocations) {
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: elm,
+                                pos: 8,
+                            },
+                            child_tp: v,
+                            owning_elem: Some(elm),
+                        });
+                    }
+                    container_rec = Some(cur);
+                }
+            }
             // Base text leaf, scalars, DbRef: no cascade.
             _ => {}
         }
@@ -414,6 +437,7 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Radix(_, _)
+                | Parts::Trie(_, _)
                 | Parts::Index(_, _, _)
                 | Parts::ChildRec(_)
         );
@@ -2220,6 +2244,48 @@ impl Stores {
         }
     }
 
+    /// Deep-copy a `trie<T[k]>` field from `rec` into `to`.
+    ///
+    /// The Radix twin, and deliberately a twin rather than a shared body with a kind
+    /// switch: the two differ exactly where the kinds differ — whose `add` re-inserts
+    /// each element — and a shared body would put a trie concept in the spatial path,
+    /// which is the coupling this design removes.
+    pub(super) fn copy_claims_trie_body(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        // Start the destination as an empty tree; `trie_db::add` claims + grows it.
+        self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
+        let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+        if cur == 0 {
+            return;
+        }
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Trie(c, _) => *c,
+            other => panic!("copy_claims_trie_body called with non-trie type {tp} ({other:?})"),
+        };
+        let size = u32::from(self.size(content_tp));
+        let keys = self.types[tp as usize].keys.clone();
+        for child in self.for_each_owned_child(rec, tp).children {
+            let Some(elm) = child.owning_elem else {
+                continue;
+            };
+            // Element layout (record_new): header, back-pointer at 4, payload at 8.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
+            self.store_mut(to).set_u32_raw(new, 4, to.rec);
+            let src_db = DbRef {
+                store_nr: rec.store_nr,
+                rec: elm,
+                pos: 8,
+            };
+            let new_db = DbRef {
+                store_nr: to.store_nr,
+                rec: new,
+                pos: 8,
+            };
+            self.copy_block(&src_db, &new_db, size);
+            self.copy_claims(&src_db, &new_db, content_tp);
+            crate::trie_db::add(to, &new_db, &mut self.allocations, &keys);
+        }
+    }
+
     /// Collect all record numbers in an RB-tree index by in-order traversal.
     /// `rec` points to the i32 tree-root field; `left` is `self.fields(index_tp)`.
     pub(super) fn collect_index_nodes(&self, rec: &DbRef, left: u16) -> Vec<u32> {
@@ -2423,12 +2489,7 @@ impl Stores {
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);
             }
-            // Step 3 of doc/claude/plans/text-keyed-trie.md. Falling THROUGH here would
-            // be the silent per-kind omission this audit exists to find: a deep copy that drops the collection.
-            // Unreachable until the keyword (step 6).
-            Parts::Trie(_, _) => {
-                unimplemented!("trie copy_claims — step 3 of the text-keyed-trie plan")
-            }
+            Parts::Trie(_, _) => self.copy_claims_trie_body(rec, to, tp),
             Parts::Radix(_, _) => self.copy_claims_radix_body(rec, to, tp),
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
@@ -5118,5 +5179,76 @@ mod p318_hash_deepcopy {
         // (both the hand-built source and the copied destination carry one).
         stores.remove_claims(&src, holder);
         stores.free(&dest);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Stores;
+
+    /// Teardown: `remove_claims` on a trie must free every element record AND the tree.
+    ///
+    /// The gate for step 4 of `doc/claude/plans/text-keyed-trie.md`, and it guards a
+    /// fault that was real: `for_each_owned_child` had no `Trie` arm, so a trie fell into
+    /// its catch-all, the keystone yielded no children and no container, and
+    /// `remove_claims` freed NOTHING — every element and the tree itself leaked, with
+    /// nothing said.  `claims_count` is the observable, because `claim` inserts and
+    /// `delete` removes: a teardown that works returns it to where it started.
+    #[test]
+    fn a_trie_frees_every_element_and_its_tree() {
+        let mut stores = Stores::new();
+        // struct Word { w: text }
+        let word_tp = stores.structure("Word", -1);
+        stores.field(word_tp, "w", 5); // text
+        stores.finish();
+        let trie_tp = stores.trie(word_tp, "w");
+        assert_ne!(trie_tp, u16::MAX, "the trie type registered");
+        stores.determine_keys();
+
+        // A record holding one trie field at payload offset 0.
+        let coll = stores.database(4);
+        let store_nr = coll.store_nr;
+        let baseline = stores.allocations[store_nr as usize].claims_count();
+
+        let keys = stores.types[trie_tp as usize].keys.clone();
+        assert_eq!(keys.len(), 1, "a trie registers exactly one key");
+        for w in ["kerkstraat", "kerk", "lonneker", "kerf"] {
+            let elm = {
+                let s = &mut stores.allocations[store_nr as usize];
+                let ptr = s.set_str(w);
+                let rec = s.claim(4);
+                s.set_u32_raw(rec, 8, ptr);
+                rec
+            };
+            let e = DbRef {
+                store_nr,
+                rec: elm,
+                pos: 8,
+            };
+            crate::trie_db::add(&coll, &e, &mut stores.allocations, &keys);
+        }
+        assert_eq!(
+            crate::trie_db::count(&coll, &stores.allocations),
+            4,
+            "four words are resident"
+        );
+        assert!(
+            stores.allocations[store_nr as usize].claims_count() > baseline,
+            "the inserts claimed records"
+        );
+
+        stores.remove_claims(&coll, trie_tp);
+
+        assert_eq!(
+            stores.allocations[store_nr as usize].get_u32_raw(coll.rec, coll.pos),
+            0,
+            "the field is cleared, so a re-bind starts empty"
+        );
+        assert_eq!(
+            stores.allocations[store_nr as usize].claims_count(),
+            baseline,
+            "every element record and the tree itself are freed"
+        );
     }
 }
