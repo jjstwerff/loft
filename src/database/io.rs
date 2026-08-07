@@ -227,7 +227,8 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Radix(_, _) => panic!(
+                | Parts::Radix(_, _)
+                | Parts::Trie(_, _) => panic!(
                     "binary I/O not supported for type '{}': it contains a collection field \
                      with store-internal references that cannot be serialized",
                     self.types[tp as usize].name
@@ -413,7 +414,8 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Radix(_, _) => panic!(
+                | Parts::Radix(_, _)
+                | Parts::Trie(_, _) => panic!(
                     "binary I/O not supported for type '{}': it contains a collection field \
                      with store-internal references that cannot be serialized",
                     self.types[tp as usize].name

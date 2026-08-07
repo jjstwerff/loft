@@ -669,6 +669,7 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Radix(c, _)
+            | Parts::Trie(c, _)
             | Parts::Index(c, _, _) => {
                 let crate::json::Parsed::Array(items) = parsed else {
                     return Err(mismatch());
@@ -1121,6 +1122,7 @@ impl Stores {
             Parts::Sorted(_, _)
             | Parts::Ordered(_, _)
             | Parts::Radix(_, _)
+            | Parts::Trie(_, _)
             | Parts::Hash(_, _)
             | Parts::Index(_, _, _)
             | Parts::Array(_)

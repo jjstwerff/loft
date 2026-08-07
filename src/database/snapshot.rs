@@ -370,6 +370,9 @@ fn write_parts(out: &mut String, parts: &Parts) {
             key_pairs(out, keys);
             let _ = write!(out, ",\"left\":{left}}}");
         }
+        Parts::Trie(c, k) => {
+            let _ = write!(out, "{{\"k\":\"Trie\",\"c\":{c},\"key\":{k}}}");
+        }
         Parts::Radix(c, keys) => {
             let _ = write!(out, "{{\"k\":\"Radix\",\"c\":{c},\"keys\":");
             u16_list(out, keys);
@@ -411,6 +414,7 @@ fn parts_from(p: &Parsed) -> Result<Parts, SchemaDecodeError> {
             key_pair_vec(field(p, "keys")?)?,
             as_u16(field(p, "left")?)?,
         ),
+        "Trie" => Parts::Trie(as_u16(field(p, "c")?)?, as_u16(field(p, "key")?)?),
         "Radix" => Parts::Radix(as_u16(field(p, "c")?)?, u16_vec(field(p, "keys")?)?),
         other => return Err(SchemaDecodeError::UnknownTag(format!("Parts::{other}"))),
     })

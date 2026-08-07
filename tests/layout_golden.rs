@@ -265,6 +265,14 @@ fn coverage(p: &Parts) -> (&'static str, Cover) {
         Parts::Enum(_) => ("Enum", Cover::Covered),
         Parts::EnumValue(..) => ("EnumValue", Cover::Covered),
         Parts::Index(..) => ("Index", Cover::Covered),
+        // The trie kind exists at the schema level (step 2 of
+        // doc/claude/plans/text-keyed-trie.md) but cannot be CONSTRUCTED until the
+        // keyword lands (step 6), so there is nothing in the corpus to cover it yet.
+        // This gate is what forced the verdict, which is the mechanism working.
+        Parts::Trie(..) => (
+            "Trie",
+            Cover::Gap("no keyword yet — text-keyed-trie plan step 6"),
+        ),
         // `sorted<T[k]>` as a struct field is array-backed → Ordered.
         Parts::Ordered(..) => ("Ordered", Cover::Covered),
         // The vector-backed `sorted` (Parts::Sorted) needs a local `sorted<T[k]>=[]`,

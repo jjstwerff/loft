@@ -3302,7 +3302,7 @@ impl Stores {
             // records WITHIN one.  Nothing would rewrite a foreign pointer at
             // the far end, so refuse rather than guess.
             Parts::DbRef => false,
-            Parts::Radix(..) => false,
+            Parts::Radix(..) | Parts::Trie(..) => false,
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
                 .clone()
                 .iter()

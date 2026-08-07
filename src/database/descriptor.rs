@@ -627,6 +627,13 @@ impl Stores {
                 keys: keys.clone(),
                 left: *left,
             }),
+            // The descriptor's `Iterated` needs its own trie variant, and that is a FORMAT
+            // change (it crosses to the JS `deliver` reader).  Deferred to step 3 with the
+            // rest of the trie's behaviour, so it lands with a test that can construct one —
+            // a codec arm you cannot exercise is worse than a loud stub.
+            Parts::Trie(_, _) => unimplemented!(
+                "trie layout descriptor — step 3 of doc/claude/plans/text-keyed-trie.md"
+            ),
             Parts::Radix(e, keys) => LayoutNode::Iterated(Iterated::Radix {
                 elem: *e,
                 keys: keys.clone(),

@@ -549,6 +549,13 @@ fn write_db_parts(stores: &mut Stores, r: &Record, parts: &Parts) {
             write_key_fields(stores, r, ds::PTKEYS, keys);
             r.set_field_int(stores, ds::PTINDEX_LEFT, i64::from(*left));
         }
+        // The IR codec needs its own `PT_TRIE` discriminant — a SCHEMA change
+        // (`data_store.rs` pins each id and `ir_schema_roundtrip` guards the drift).
+        // Deferred to step 3 for the same reason as the descriptor: it should land with
+        // a test that can construct a trie.
+        Parts::Trie(_, _) => {
+            unimplemented!("trie IR encoding — step 3 of doc/claude/plans/text-keyed-trie.md")
+        }
         Parts::Radix(c, fields) => {
             r.set_discriminant(stores, ds::PT_RADIX);
             r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));

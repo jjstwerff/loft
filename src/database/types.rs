@@ -225,6 +225,7 @@ impl Stores {
         | Parts::Ordered(c, _)
         | Parts::Hash(c, _)
         | Parts::Index(c, _, _)
+        | Parts::Trie(c, _)
         | Parts::Radix(c, _) = self.types[content as usize].parts
         {
             // A dead `main_vector<unknown>` wrapper — left over when a vector's
@@ -333,7 +334,8 @@ impl Stores {
             | Parts::Sorted(c, _)
             | Parts::Index(c, _, _)
             | Parts::Hash(c, _)
-            | Parts::Radix(c, _) => c,
+            | Parts::Radix(c, _)
+            | Parts::Trie(c, _) => c,
             _ => u16::MAX,
         }
     }
@@ -828,6 +830,7 @@ impl Stores {
             Parts::Hash(_, _) => "hash",
             Parts::Index(_, _, _) => "index",
             Parts::Radix(_, _) => "spatial",
+            Parts::Trie(_, _) => "trie",
             _ => "<other>",
         };
         let _ = writeln!(
@@ -842,6 +845,7 @@ impl Stores {
         | Parts::Sorted(c, _)
         | Parts::Ordered(c, _)
         | Parts::Hash(c, _)
+        | Parts::Trie(c, _)
         | Parts::Radix(c, _) = t.parts
         {
             let _ = writeln!(
@@ -2220,6 +2224,7 @@ impl Stores {
     fn render_layout_parts(&self, kt: u16) -> String {
         let name = |k: u16| self.layout_type_name(k);
         match &self.types[kt as usize].parts {
+            Parts::Trie(e, k) => format!("trie<{}[{k}]>", name(*e)),
             Parts::Base => "base".to_string(),
             Parts::Struct(fields) => {
                 let inner: Vec<String> = fields

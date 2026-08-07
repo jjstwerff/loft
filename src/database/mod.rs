@@ -183,6 +183,15 @@ pub enum Parts {
     Hash(u16, Vec<u16>), // A hash table, listing the field numbers that define its key
     Index(u16, Vec<(u16, bool)>, u16), // An index to a table, listing the key fields and the left field-nr
     Radix(u16, Vec<u16>),              // A spatial index with the listed coordinate fields as a key
+    // A trie: a radix tree over ONE `text` key field, answering exact lookup, key
+    // order and prefix.  Shares `radix_tree` with `Radix` and nothing above it —
+    // `Radix` is geometric (Morton interleave, boxes, near/within/nearest) and none
+    // of that means anything for a word, which is why `spatial` is not called `radix`
+    // at the surface.  See doc/claude/plans/text-keyed-trie.md.
+    //
+    // ONE key, held as a `u16` rather than a `Vec<u16>`: a trie over two text fields
+    // is not a thing, and encoding that in the type means no site has to check it.
+    Trie(u16, u16),
     // Plan-06 phase 4d.C step 2: 12-byte stored DbRef pointer (store_nr
     // u16 padded to u32 + rec u32 + pos u32).  Distinct from `Vector`
     // / `Hash` / etc. which all store a 4-byte rec pointer; this
