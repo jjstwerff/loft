@@ -1691,7 +1691,8 @@ impl Parser {
             Type::Hash(c, _, _)
             | Type::Sorted(c, _, _)
             | Type::Index(c, _, _)
-            | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
+            | Type::Radix(c, _, _)
+            | Type::Trie(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
             Type::Vector(elm, _) => {
                 Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
             }
@@ -2468,7 +2469,8 @@ impl Parser {
             Type::Sorted(td, _, _)
             | Type::Hash(td, _, _)
             | Type::Index(td, _, _)
-            | Type::Radix(td, _, _) => self.data.def(*td).known_type(),
+            | Type::Radix(td, _, _)
+            | Type::Trie(td, _, _) => self.data.def(*td).known_type(),
             _ => return None,
         };
         if content == u16::MAX {
@@ -3440,7 +3442,11 @@ impl Parser {
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp,
-        Type::Hash(_, _, _) | Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Radix(_, _, _)
+        Type::Hash(_, _, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
     )
 }
 

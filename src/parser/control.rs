@@ -1244,6 +1244,7 @@ impl Parser {
                         | Type::Hash(_, _, _)
                         | Type::Index(_, _, _)
                         | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
                 )
                 && matches!(l[last].unspan(), Value::If(_, _, _))
                 && self.unify_if_branches_work_refs(&mut l[last]).is_some();
@@ -2019,6 +2020,7 @@ impl Parser {
             | Type::Hash(_, _, d)
             | Type::Index(_, _, d)
             | Type::Radix(_, _, d)
+            | Type::Trie(_, _, d)
             | Type::Text(d) => Some(d),
             _ => None,
         };
@@ -8107,7 +8109,8 @@ impl Parser {
         } else if let Type::Sorted(dnr, _, dep)
         | Type::Index(dnr, _, dep)
         | Type::Hash(dnr, _, dep)
-        | Type::Radix(dnr, _, dep) = &in_type
+        | Type::Radix(dnr, _, dep)
+        | Type::Trie(dnr, _, dep) = &in_type
         {
             // C60 path 2c piece 2: hash iteration yields `reference<T>`,
             // same shape as Sorted/Index.  This is the parser-side

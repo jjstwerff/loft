@@ -872,7 +872,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Radix(_, _, _)
+        | Type::Radix(_, _, _) | Type::Trie(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _)
         // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
@@ -1060,7 +1060,7 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Radix(_, _, _)
+        | Type::Radix(_, _, _) | Type::Trie(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _)
         // N8b.1: exhausted / uninitialized generator variable.
@@ -1126,6 +1126,7 @@ fn is_collection_field(tp: &Type) -> bool {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
     )
 }
 

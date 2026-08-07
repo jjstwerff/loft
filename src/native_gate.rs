@@ -226,6 +226,7 @@ fn is_bridge_type(t: &Type) -> bool {
                 | Type::Index(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         )
 }
 

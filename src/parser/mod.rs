@@ -3207,6 +3207,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) {
             // A keyed-collection handle IS a `DbRef`, so it satisfies a bare
             // `reference` parameter unchanged — no conversion op.  Used by
@@ -3457,6 +3458,7 @@ impl Parser {
                         | Type::Sorted(_, _, _)
                         | Type::Index(_, _, _)
                         | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
                 )
             {
                 return true;
@@ -3896,7 +3898,10 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Index(_, _, _) | Type::Radix(_, _, _))
+            && matches!(
+                types[0],
+                Type::Index(_, _, _) | Type::Radix(_, _, _) | Type::Trie(_, _, _)
+            )
         {
             // @PLN110 1d: an `index` (red-black tree) / `spatial` (radix/Morton tree)
             // keeps its ordering as bookkeeping embedded IN each element record —
@@ -3905,7 +3910,9 @@ impl Parser {
             // struct-record path.  The arg is evaluated; only its element type feeds
             // the const record size.
             let elem_kt = match &types[0] {
-                Type::Index(tp, _, _) | Type::Radix(tp, _, _) => self.data.def(*tp).known_type(),
+                Type::Index(tp, _, _) | Type::Radix(tp, _, _) | Type::Trie(tp, _, _) => {
+                    self.data.def(*tp).known_type()
+                }
                 _ => u16::MAX,
             };
             let op_d_nr = self.data.def_nr("OpSizeStruct");
@@ -6263,7 +6270,8 @@ impl Parser {
                 Type::Hash(d, _, _)
                 | Type::Sorted(d, _, _)
                 | Type::Index(d, _, _)
-                | Type::Radix(d, _, _) => walk_def(data, db, *d, seen),
+                | Type::Radix(d, _, _)
+                | Type::Trie(d, _, _) => walk_def(data, db, *d, seen),
                 Type::Tuple(elems) => elems.iter().any(|e| walk(data, db, e, seen)),
                 _ => false,
             }
@@ -6375,6 +6383,7 @@ impl Parser {
             Type::Hash(_, _, _)
             | Type::Sorted(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _)
             | Type::Vector(_, _) => {
@@ -6548,6 +6557,7 @@ impl Parser {
                 Type::Sorted(c, keys, _) | Type::Index(c, keys, _) => {
                     (*c, keys.iter().map(|(k, _)| k.clone()).collect())
                 }
+                Type::Trie(c, key, _) => (*c, vec![key.clone()]),
                 Type::Hash(c, keys, _) | Type::Radix(c, keys, _) => (*c, keys.clone()),
                 _ => continue,
             };
@@ -6785,6 +6795,7 @@ impl Parser {
             Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Sorted(_, _, _) => self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value]),
             // Plan-06 phase 4d: nested tuple element — recurse into
             // `emit_tuple_set_ops` with the inner tuple's offsets so
@@ -6993,6 +7004,7 @@ impl Parser {
             Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Sorted(_, _, _)
                 if f_nr != usize::MAX
                     && !matches!(val_code.unspan(), Value::Int(_))
@@ -7023,6 +7035,7 @@ impl Parser {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Sorted(_, _, _) => {
                 // Collection header is a 4-byte u32 record pointer.  Post-2c
                 // `OpSetInt` writes 8 bytes (i64), which overflows into the
@@ -7970,6 +7983,7 @@ impl Parser {
             | Type::Hash(_, _, ad)
             | Type::Index(_, _, ad)
             | Type::Radix(_, _, ad)
+            | Type::Trie(_, _, ad)
             | Type::Reference(_, ad)
             | Type::Enum(_, true, ad) = &types[*ar as usize]
             {
@@ -10831,6 +10845,7 @@ impl Parser {
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _) => self.cl("OpNullRefSentinel", &[]),
             _ => self.null(tp),

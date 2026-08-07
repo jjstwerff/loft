@@ -1209,6 +1209,7 @@ impl Parser {
                     | Type::Sorted(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
         {
             return;
@@ -1370,6 +1371,7 @@ use a separate collection or add after the loop"
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
             && self.lexer.peek_token("[")
         {
@@ -1846,6 +1848,7 @@ use a separate collection or add after the loop"
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
         {
             let elm_tp = f_type.content();
@@ -2437,6 +2440,7 @@ use a separate collection or add after the loop"
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
             && !matches!(code, Value::Insert(_) | Value::Null)
         {
@@ -2484,7 +2488,8 @@ use a separate collection or add after the loop"
                     Type::Sorted(_, _, d)
                     | Type::Hash(_, _, d)
                     | Type::Index(_, _, d)
-                    | Type::Radix(_, _, d) => d.to_vec(),
+                    | Type::Radix(_, _, d)
+                    | Type::Trie(_, _, d) => d.to_vec(),
                     _ => Vec::new(),
                 };
                 for d in deps {
@@ -2605,6 +2610,7 @@ use a separate collection or add after the loop"
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
             && matches!(code, Value::Insert(_))
         {
@@ -4188,6 +4194,7 @@ use a separate collection or add after the loop"
                                         | Type::Sorted(_, _, _)
                                         | Type::Index(_, _, _)
                                         | Type::Radix(_, _, _)
+                                        | Type::Trie(_, _, _)
                                         | Type::Hash(_, _, _)
                                 );
                             if !contents_append {
@@ -4309,6 +4316,7 @@ use a separate collection or add after the loop"
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
                 | Type::Hash(_, _, _) => {
                     cur_type = cur_type.content();
                 }

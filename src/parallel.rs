@@ -659,6 +659,7 @@ pub fn rebase_walk_record(
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Enum(_, true, _) => {
                 let store = &mut stores.allocations[record_ref.store_nr as usize];
                 let cur: DbRef = *store.addr::<DbRef>(record_ref.rec, field_pos);
@@ -1094,6 +1095,7 @@ fn revive_record_chain(
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Enum(_, true, _) => {
                 let cur: DbRef =
                     *stores.allocations[store_nr as usize].addr::<DbRef>(record_ref.rec, field_pos);

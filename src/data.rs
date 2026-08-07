@@ -1077,7 +1077,8 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Radix(_, _, _) => Value::Int(0),
+        | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _) => Value::Int(0),
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
         // @PLN116 — `character`'s zero is the NUL codepoint `'\0'`, stored (like every
@@ -1689,7 +1690,7 @@ impl Type {
                 | Type::Routine(d)
                 | Type::Sorted(d, _, _)
                 | Type::Index(d, _, _)
-                | Type::Radix(d, _, _)
+                | Type::Radix(d, _, _) | Type::Trie(d, _, _)
                 | Type::Hash(d, _, _) if *d == d_nr)
         })
     }
@@ -1709,7 +1710,8 @@ impl Type {
             | Type::Sorted(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Index(_, _, dep)
-            | Type::Radix(_, _, dep) => Some(dep),
+            | Type::Radix(_, _, dep)
+            | Type::Trie(_, _, dep) => Some(dep),
             _ => None,
         }
     }
@@ -1817,6 +1819,7 @@ impl Type {
             | Type::Reference(_, dep)
             | Type::Index(_, _, dep)
             | Type::Radix(_, _, dep)
+            | Type::Trie(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Sorted(_, _, dep)
             | Type::Enum(_, _, dep)
@@ -1836,6 +1839,7 @@ impl Type {
             | Type::Reference(_, dep)
             | Type::Index(_, _, dep)
             | Type::Radix(_, _, dep)
+            | Type::Trie(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Sorted(_, _, dep)
             | Type::Enum(_, _, dep)
@@ -1864,6 +1868,7 @@ impl Type {
         match self {
             Type::Index(tp, _, dep)
             | Type::Radix(tp, _, dep)
+            | Type::Trie(tp, _, dep)
             | Type::Hash(tp, _, dep)
             | Type::Sorted(tp, _, dep) => Type::Reference(*tp, dep.clone()),
             Type::Vector(tp, _) => *tp.clone(),
@@ -1928,6 +1933,7 @@ impl Type {
             }
             (Type::Hash(r, rf, _), Type::Hash(o, of, _))
             | (Type::Radix(r, rf, _), Type::Radix(o, of, _)) => return r == o && rf == of,
+            (Type::Trie(r, rf, _), Type::Trie(o, of, _)) => return r == o && rf == of,
             (Type::Sorted(r, rf, _), Type::Sorted(o, of, _))
             | (Type::Index(r, rf, _), Type::Index(o, of, _)) => return r == o && rf == of,
             (Type::Function(sp, sr, _), Type::Function(op, or, _)) => {
@@ -2184,6 +2190,7 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::RefVar(_)
     ) || matches!(t, Type::Tuple(elems) if elems.iter().any(has_lifetime_concern))
 }
@@ -2216,6 +2223,7 @@ pub fn element_stack_align(t: &Type) -> u8 {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Enum(_, true, _) => 4,
         Type::Tuple(elems) => element_offsets_alignment_max(elems),
         _ => 1,
@@ -2257,6 +2265,7 @@ pub fn element_stack_size(t: &Type) -> usize {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
         Type::Tuple(elems) => {
             // @PLN114 — the STACK view: one `aligned_stack_step` slot per element,
@@ -2632,6 +2641,7 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Enum(_, true, _) => {
                 result.push((offsets[i], i));
             }
@@ -4598,6 +4608,7 @@ impl Data {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Optional(_)
             | Type::Null
             | Type::Function(_, _, _)
@@ -5407,6 +5418,7 @@ impl Data {
                     | Type::Index(_, _, _)
                     | Type::Sorted(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
         };
         if !is_collection(&visible[0].typedef) {
@@ -6279,7 +6291,8 @@ impl Data {
             Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Radix(_, _, _) => self.source_nr(0, "reference"),
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _) => self.source_nr(0, "reference"),
             // P189: tuple element types resolve to the synthetic
             // tuple struct registered by `tuple_def`.  Same lookup
             // as `type_def_nr`'s Tuple arm.

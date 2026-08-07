@@ -1159,6 +1159,19 @@ impl Output<'_> {
                             self.stores.name(&name)
                         }
                     }
+                    Type::Trie(td, key, _) => {
+                        let c = self.data.def(*td).known_type();
+                        if c == u16::MAX {
+                            u16::MAX
+                        } else {
+                            // Same spelling `Stores::trie` registers, built here
+                            // because this context holds `stores` immutably — a
+                            // LOOKUP, not a registration.
+                            let name =
+                                format!("trie<{}[{key}]>", self.stores.types[c as usize].name);
+                            self.stores.name(&name)
+                        }
+                    }
                     Type::Hash(td, key, _) | Type::Radix(td, key, _) => {
                         let c = self.data.def(*td).known_type();
                         if c == u16::MAX {
@@ -1314,6 +1327,7 @@ fn tuple_has_non_copy_leaf(elems: &[Type]) -> bool {
             | Type::Index(_, _, _)
             | Type::Sorted(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Iterator(_, _)
             | Type::Enum(_, true, _) => return true,
             Type::Tuple(inner) if tuple_has_non_copy_leaf(inner) => return true,

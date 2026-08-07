@@ -342,6 +342,7 @@ impl Parser {
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
         {
             return false;
@@ -2120,6 +2121,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) {
             *ctp = base;
             let lhs_type = ctp.clone();

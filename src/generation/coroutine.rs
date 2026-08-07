@@ -311,6 +311,7 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
                 | Type::Index(_, _, _)
         );
         if !suitable {
@@ -448,6 +449,7 @@ fn persistent_default(tp: &Type) -> String {
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Index(_, _, _)
         | Type::Enum(_, true, _) => "DbRef::NULL".to_string(),
         _ => "0_i64".to_string(),

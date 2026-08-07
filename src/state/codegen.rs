@@ -731,6 +731,7 @@ impl State {
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
                     | Type::Sorted(_, _, _)
                     | Type::Iterator(_, _) => {
                         // Collection-typed stack element: 12-byte DbRef
@@ -1417,6 +1418,7 @@ impl State {
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
                 | Type::Sorted(_, _, _)
                 | Type::Iterator(_, _) => {
                     stack.add_op("OpVarRef", self);
@@ -1784,6 +1786,7 @@ impl State {
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             ) && *value == Value::Null
             {
                 self.gen_keyed_null(stack, v, false);
@@ -2521,6 +2524,7 @@ impl State {
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) && *value == Value::Null
         {
             self.gen_set_first_keyed_null(stack, v);
@@ -2593,7 +2597,8 @@ impl State {
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Radix(_, _, _) => stack.add_op("OpPutRef", self),
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _) => stack.add_op("OpPutRef", self),
                 // @PLN87 L1 — first-Set of a local `&`-link (`b = &a` →
                 // `b: &T = OpCreateStack(a)`): the value is the 12-byte stack-cell
                 // ref; store it raw into `b`'s RefVar slot.  Reads/writes of `b`
@@ -3749,7 +3754,8 @@ impl State {
             Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Radix(_, _, _) => {
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _) => {
                 let tp = stack.function.tp(variable);
                 let name = tp.name(stack.data);
                 let mut tp_nr = self.database.name(&name);
@@ -4353,7 +4359,7 @@ impl State {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Radix(_, _, _) => {
+            | Type::Radix(_, _, _) | Type::Trie(_, _, _) => {
                 stack.add_op("OpPutRef", self);
             }
             Type::Tuple(elems) => {

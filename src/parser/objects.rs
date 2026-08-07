@@ -74,6 +74,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         )
     }
 
@@ -1076,6 +1077,7 @@ impl Parser {
                 | Type::Index(..)
                 | Type::Hash(..)
                 | Type::Radix(..)
+                | Type::Trie(..)
                 | Type::Text(_)
                 | Type::Vector(..) => return Some(a.name.clone()),
                 Type::Reference(inner, _) => {
@@ -2627,6 +2629,7 @@ impl Parser {
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
             | Type::Enum(_, true, _)
             | Type::Index(_, _, _) = td
             {
@@ -2693,6 +2696,7 @@ impl Parser {
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
                     | Type::Index(_, _, _)
             ) && {
                 let link = self.lexer.link();
@@ -3142,6 +3146,7 @@ impl Parser {
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             ) {
                 let prime = self.cl(
                     "OpSetInt4",
@@ -3333,6 +3338,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
                 | Type::Index(_, _, _)
         ) {
             // Issue #120: for vector fields assigned from a bare variable

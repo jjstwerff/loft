@@ -752,12 +752,19 @@ impl Parser {
             if self.parse_text_index(code, &mut p, &index_t) == Type::Character {
                 elm_type = Type::Character;
             }
-        } else if let Type::Hash(el, keys, _) | Type::Radix(el, keys, _) = &t {
+        } else if let Some((el_nr, keys)) = match &t {
+            Type::Hash(el, keys, _) | Type::Radix(el, keys, _) => Some((*el, keys.clone())),
+            // A trie carries ONE key name; this path wants a list, so wrap rather
+            // than fork it — the subscript logic below is identical for every keyed
+            // collection, and only the RANGE forms differ (guarded per kind).
+            Type::Trie(el, key, _) => Some((*el, vec![key.clone()])),
+            _ => None,
+        } {
             // @PLN25 E2 — key fields live in the `Some` variant when the element was
             // rewritten to `__nullable<S>`; resolve names against the key-bearing def.
-            let el = crate::typedef::key_bearing_def(&self.data, *el);
+            let el = crate::typedef::key_bearing_def(&self.data, el_nr);
             let mut key_types = Vec::new();
-            for k in keys {
+            for k in &keys {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
             // @PLN48 S3 — a `spatial` RANGE SLICE `xs[(fx,fy)..(tx,ty)]` /
@@ -948,7 +955,8 @@ impl Parser {
         } else if let Type::Sorted(d_nr, _, _)
         | Type::Hash(d_nr, _, _)
         | Type::Index(d_nr, _, _)
-        | Type::Radix(d_nr, _, _) = t
+        | Type::Radix(d_nr, _, _)
+        | Type::Trie(d_nr, _, _) = t
         {
             let ret = self.data.def(*d_nr).returned().clone();
             // S16b: struct-enum variants have .returned = Type::Enum(parent, true, []).

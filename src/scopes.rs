@@ -3237,6 +3237,7 @@ fn record_adopts_capture(data: &Data, function: &Function, record: u32, a: usize
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             ))
 }
 
@@ -3775,6 +3776,7 @@ impl Scopes {
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
         {
             return Value::Insert(Vec::new());
@@ -5056,6 +5058,7 @@ impl Scopes {
                         | Type::Hash(_, _, _)
                         | Type::Index(_, _, _)
                         | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
                 )
         };
         for v in vars {
@@ -5117,7 +5120,7 @@ impl Scopes {
             | Type::Index(_, _, dep)
             // @PLN25 slice (c): peel `Optional` so an owned `vector?`/`reference?` local is
             // still freed at scope exit (same reasoning as the `text?` case above).
-            | Type::Radix(_, _, dep) = function.tp(v).base()
+            | Type::Radix(_, _, dep) | Type::Trie(_, _, dep) = function.tp(v).base()
             {
                 // H2 step 5 (DEPS_INVENTORY): the declared return type's
                 // dep list is DEF-space — attr indices from `ref_return`,
@@ -5198,7 +5201,7 @@ impl Scopes {
                             Type::Sorted(_, _, _)
                                 | Type::Hash(_, _, _)
                                 | Type::Index(_, _, _)
-                                | Type::Radix(_, _, _)
+                                | Type::Radix(_, _, _) | Type::Trie(_, _, _)
                         ));
                 // Plan-57 Phase B (Mechanism B), widened by #323: a
                 // Reference-typed capture — a boxed `__cell_<T>` AND, per

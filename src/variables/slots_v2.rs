@@ -83,6 +83,7 @@ pub fn slot_kind(tp: &Type) -> SlotKind {
         | Type::Hash(_, _, _)
         | Type::Sorted(_, _, _)
         | Type::Radix(_, _, _)
+        | Type::Trie(_, _, _)
         | Type::Iterator(_, _)
         | Type::Enum(_, true, _)
         | Type::RefVar(_) => SlotKind::RefSlot,

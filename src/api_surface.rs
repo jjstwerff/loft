@@ -302,6 +302,7 @@ fn collect_type_defs(t: &Type, out: &mut Vec<u32>) {
         Type::Sorted(n, _, _)
         | Type::Index(n, _, _)
         | Type::Radix(n, _, _)
+        | Type::Trie(n, _, _)
         | Type::Hash(n, _, _) => out.push(*n),
         Type::Vector(b, _) | Type::Optional(b) | Type::RefVar(b) | Type::Rewritten(b) => {
             collect_type_defs(b, out);

@@ -510,13 +510,15 @@ impl Parser {
                 Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Radix(_, _, _) => {
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _) => {
                     // Derive element type for the block result annotation.
                     let elem_type = match is_type {
                         Type::Sorted(dnr, _, dep)
                         | Type::Index(dnr, _, dep)
                         | Type::Hash(dnr, _, dep)
-                        | Type::Radix(dnr, _, dep) => Type::Reference(*dnr, dep.clone()),
+                        | Type::Radix(dnr, _, dep)
+                        | Type::Trie(dnr, _, dep) => Type::Reference(*dnr, dep.clone()),
                         _ => Type::Null,
                     };
                     // Create a separate Long variable to hold the packed i64 iterator
@@ -896,6 +898,7 @@ impl Parser {
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) {
             if let Value::Var(nr) = to.unspan() {
                 if self.const_write_blocked(*nr, op) {
@@ -1876,7 +1879,10 @@ use #count instead"
             // loop epilogue can free a read-only source's DEDICATED scratch store
             // (`OpFreeScratch`, a no-op when co-located).  u16::MAX = not on=4.
             let mut hash_scratch_var: u16 = u16::MAX;
-            if let Type::Hash(content, _, dep) | Type::Radix(content, _, dep) = in_type.clone() {
+            if let Type::Hash(content, _, dep)
+            | Type::Radix(content, _, dep)
+            | Type::Trie(content, _, dep) = in_type.clone()
+            {
                 let is_radix = matches!(in_type, Type::Radix(_, _, _));
                 let scratch_tp = Type::Reference(content, dep.clone());
                 let scratch_var = self.create_unique("hash_scratch", &scratch_tp);
@@ -1958,6 +1964,7 @@ use #count instead"
                         | Type::Hash(_, _, _)
                         | Type::Index(_, _, _)
                         | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
                 ) && let Some((mat_fill_ir, mat_var, mat_in_type)) =
                     self.materialise_keyed_for_par(&in_type, &expr)
                 {
@@ -2489,7 +2496,8 @@ use #count instead"
             Type::Sorted(c, _, dep)
             | Type::Hash(c, _, dep)
             | Type::Index(c, _, dep)
-            | Type::Radix(c, _, dep) => (*c, dep.clone()),
+            | Type::Radix(c, _, dep)
+            | Type::Trie(c, _, dep) => (*c, dep.clone()),
             _ => return None,
         };
         let elem_ref_tp = Type::Reference(content_d, dep);
@@ -3069,6 +3077,7 @@ use #count instead"
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) {
             // Reference mode — workers return a DbRef into their own
             // store; main deep-copies via copy_from_worker.  Plan-06
@@ -3290,6 +3299,7 @@ use #count instead"
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
@@ -3600,6 +3610,7 @@ use #count instead"
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
         ) && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX

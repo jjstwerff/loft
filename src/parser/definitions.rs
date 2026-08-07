@@ -2476,6 +2476,7 @@ impl Parser {
                     | Type::Sorted(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
             )
             && self.type_carries_closure(&tp)
         {
