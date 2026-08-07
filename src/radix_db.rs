@@ -104,6 +104,95 @@ fn interleave(word: u32, n: usize, code: impl Fn(usize) -> u64) -> u64 {
     out
 }
 
+/// The text key's bytes, read through the field's string pointer.
+///
+/// `type_nr == 6` is a `text` key; the field holds a `u32` pointer to the string
+/// record, which is the same indirection `compare_key` follows.
+fn text_bytes<'a>(store: &'a Store, rec: u32, key: &Key) -> &'a str {
+    let p = PAYLOAD + u32::from(key.position);
+    store.get_str(store.get_u32_raw(rec, p))
+}
+
+/// Is this key spec a single `text` field — the bytewise case rather than the
+/// coordinate one?
+fn is_text_key(keys: &[Key]) -> bool {
+    keys.len() == 1 && keys[0].type_nr.abs() == TEXT_TYPE_NR
+}
+
+/// `text`'s key type number, as `compare_key` spells it.
+const TEXT_TYPE_NR: i8 = 6;
+
+/// How the tree reads a TEXT record's key: its bytes, big-endian, 8 at a time.
+///
+/// Big-endian is what makes bytewise order and bit order the same, so the tree's
+/// in-order traversal is lexicographic and a prefix descends to its extensions.
+/// `bits()` is per-record — the variable-length half of [`KeyOracle`] that the
+/// Morton oracle never exercises, and that `radix_tree`'s `TERM_BITS` suffix exists
+/// to order (`"ab"` sorts before `"abc"`; proven by `r8c`).
+struct TextOracle<'a> {
+    key: &'a Key,
+}
+
+impl KeyOracle for TextOracle<'_> {
+    fn bits(&self, store: &Store, rec: u32) -> u32 {
+        text_bytes(store, rec, self.key).len() as u32 * 8
+    }
+    fn word(&self, store: &Store, rec: u32, word: u32) -> u64 {
+        bytes_word(text_bytes(store, rec, self.key).as_bytes(), word)
+    }
+}
+
+/// The `word`-th big-endian 8-byte chunk of `b`, zero-padded past the end.
+/// Shared by the record oracle and the probe so both read a key the same way — the
+/// two disagreeing is the classic radix fault, and it presents as "inserted, not
+/// found".
+fn bytes_word(b: &[u8], word: u32) -> u64 {
+    let mut out = 0u64;
+    for i in 0..8 {
+        let idx = (word * 8 + i) as usize;
+        out = (out << 8) | u64::from(b.get(idx).copied().unwrap_or(0));
+    }
+    out
+}
+
+/// The oracle a collection's key spec calls for.
+///
+/// One enum rather than a generic parameter so every operation below keeps a SINGLE
+/// construction point: a kind selected in six places is how a per-kind dispatch
+/// omission gets in (DATABASE.md warns about exactly this, and loft#799 is what one
+/// looks like from the outside — a declaration accepted, then every lookup NULL).
+enum DbOracle<'a> {
+    Morton { keys: &'a [Key] },
+    Text { key: &'a Key },
+}
+
+impl<'a> DbOracle<'a> {
+    fn of(keys: &'a [Key]) -> DbOracle<'a> {
+        if is_text_key(keys) {
+            DbOracle::Text { key: &keys[0] }
+        } else {
+            DbOracle::Morton { keys }
+        }
+    }
+}
+
+impl KeyOracle for DbOracle<'_> {
+    fn bits(&self, store: &Store, rec: u32) -> u32 {
+        match self {
+            DbOracle::Morton { keys } => AXIS_BITS * keys.len() as u32,
+            DbOracle::Text { key } => TextOracle { key }.bits(store, rec),
+        }
+    }
+    fn word(&self, store: &Store, rec: u32, word: u32) -> u64 {
+        match self {
+            DbOracle::Morton { keys } => {
+                interleave(word, keys.len(), |a| axis_code(store, rec, &keys[a]))
+            }
+            DbOracle::Text { key } => TextOracle { key }.word(store, rec, word),
+        }
+    }
+}
+
 /// How the tree reads a record's key: the Morton interleave of its coordinate axes.
 struct RadixOracle<'a> {
     keys: &'a [Key],
@@ -138,7 +227,7 @@ pub fn add(coll: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
         tree = rt::rtree_init(store, 0);
         store.set_u32_raw(coll.rec, coll.pos, tree);
     }
-    let tree = rt::rtree_insert(store, tree, rec.rec, &RadixOracle { keys });
+    let tree = rt::rtree_insert(store, tree, rec.rec, &DbOracle::of(keys));
     store.set_u32_raw(coll.rec, coll.pos, tree);
 }
 
@@ -151,8 +240,20 @@ pub fn find(coll: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -> Db
     let rec = if tree == 0 {
         0
     } else {
-        let probe = |word: u32| interleave(word, key.len(), |a| probe_code(&key[a]));
-        rt::rtree_get(store, tree, &probe, key_bits(keys), &RadixOracle { keys })
+        // The probe must read a key the same way the oracle does; the two
+        // disagreeing presents as "inserted, then not found".
+        if is_text_key(keys) {
+            let q: &[u8] = match key.first() {
+                Some(Content::Str(v)) => v.str().as_bytes(),
+                // A non-text probe cannot match a text key.
+                _ => &[],
+            };
+            let probe = |word: u32| bytes_word(q, word);
+            rt::rtree_get(store, tree, &probe, q.len() as u32 * 8, &DbOracle::of(keys))
+        } else {
+            let probe = |word: u32| interleave(word, key.len(), |a| probe_code(&key[a]));
+            rt::rtree_get(store, tree, &probe, key_bits(keys), &DbOracle::of(keys))
+        }
     };
     DbRef {
         store_nr: coll.store_nr,
@@ -170,7 +271,7 @@ pub fn remove(coll: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) -> 
     if tree == 0 {
         return false;
     }
-    rt::rtree_remove(store, tree, rec.rec, &RadixOracle { keys })
+    rt::rtree_remove(store, tree, rec.rec, &DbOracle::of(keys))
 }
 
 /// Number of element records in the collection.  Reads the tree's cached length
@@ -280,6 +381,145 @@ mod tests {
     fn lcg(seed: &mut u64) -> i64 {
         *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
         (*seed >> 32) as i64
+    }
+
+    // ---- text keys: the bytewise oracle through the DB record layout ------
+
+    /// One `text` axis at payload offset 0.
+    fn w_key() -> Vec<Key> {
+        vec![Key {
+            type_nr: TEXT_TYPE_NR,
+            position: 0,
+        }]
+    }
+
+    /// An element record whose text field holds `w` — the same shape `compare_key`
+    /// reads: a `u32` pointer at `PAYLOAD + position` to the string record.
+    fn add_word(store: &mut Store, w: &str) -> u32 {
+        let ptr = store.set_str(w);
+        let rec = store.claim(4);
+        store.set_u32_raw(rec, PAYLOAD, ptr);
+        rec
+    }
+
+    /// The oracle selects on the KEY TYPE, and a text key must reach the bytewise
+    /// side.  Asserted first, because everything below is meaningless if the
+    /// selector silently fell through to Morton — which is exactly what a
+    /// coordinate-shaped answer to a text key looks like (loft#799).
+    #[test]
+    fn a_text_key_selects_the_bytewise_oracle() {
+        assert!(
+            is_text_key(&w_key()),
+            "a lone text field is the bytewise case"
+        );
+        assert!(!is_text_key(&xy_keys()), "two integer axes stay Morton");
+        assert!(
+            matches!(DbOracle::of(&w_key()), DbOracle::Text { .. }),
+            "a text key must select the text oracle"
+        );
+        assert!(
+            matches!(DbOracle::of(&xy_keys()), DbOracle::Morton { .. }),
+            "coordinate keys must keep the Morton oracle"
+        );
+    }
+
+    /// In-order traversal is lexicographic, and a prefix sorts before what extends
+    /// it — through the DB record layout, not the test fixture in `radix_tree`.
+    #[test]
+    fn text_keys_order_lexicographically_through_the_db_layout() {
+        let mut store = Store::new_in_use(1024);
+        let keys = w_key();
+        let mut tree = rt::rtree_init(&mut store, 8);
+        // Neither sorted nor reverse-sorted, so a pass cannot come from insert order.
+        let words = [
+            "kerkstraat",
+            "kerk",
+            "lonneker",
+            "kerf",
+            "kerkweg",
+            "kerklaan",
+        ];
+        let mut recs = Vec::new();
+        for w in words {
+            let rec = add_word(&mut store, w);
+            recs.push((w, rec));
+            tree = rt::rtree_insert(&mut store, tree, rec, &DbOracle::of(&keys));
+        }
+        rt::rtree_validate(&store, tree, &DbOracle::of(&keys));
+
+        let mut it = rt::rtree_first(&store, tree);
+        let mut seen = Vec::new();
+        let mut r = it.rec();
+        while r != 0 {
+            seen.push(
+                recs.iter()
+                    .find(|(_, rec)| *rec == r)
+                    .expect("record came from this tree")
+                    .0,
+            );
+            r = it.next(&store, tree).unwrap_or(0);
+        }
+        assert_eq!(
+            seen,
+            [
+                "kerf",
+                "kerk",
+                "kerklaan",
+                "kerkstraat",
+                "kerkweg",
+                "lonneker"
+            ],
+            "bytewise order, with `kerk` before the three keys that extend it"
+        );
+    }
+
+    /// A key just inserted must be found, and one that was not must not be — the
+    /// two halves loft#799 got wrong for a text-keyed `spatial`.
+    #[test]
+    fn text_keys_answer_exact_lookups_through_the_db_layout() {
+        let mut store = Store::new_in_use(1024);
+        let keys = w_key();
+        let mut tree = rt::rtree_init(&mut store, 8);
+        let words = [
+            "kerkstraat",
+            "kerk",
+            "lonneker",
+            "kerf",
+            "kerkweg",
+            "kerklaan",
+        ];
+        let mut recs = Vec::new();
+        for w in words {
+            let rec = add_word(&mut store, w);
+            recs.push((w, rec));
+            tree = rt::rtree_insert(&mut store, tree, rec, &DbOracle::of(&keys));
+        }
+        for (w, want) in &recs {
+            let q = w.as_bytes();
+            let probe = |word: u32| bytes_word(q, word);
+            let got = rt::rtree_get(
+                &store,
+                tree,
+                &probe,
+                q.len() as u32 * 8,
+                &DbOracle::of(&keys),
+            );
+            assert_eq!(got, *want, "exact lookup of {w:?}");
+        }
+        // `kerks` extends `kerk` AND is a prefix of `kerkstraat` — the shape a wrong
+        // terminator or a probe/oracle mismatch answers for.
+        for absent in ["kerks", "ker", "kerkstraatx", "aaa", "zzz"] {
+            let q = absent.as_bytes();
+            let probe = |word: u32| bytes_word(q, word);
+            let got = rt::rtree_get(
+                &store,
+                tree,
+                &probe,
+                q.len() as u32 * 8,
+                &DbOracle::of(&keys),
+            );
+            assert_eq!(got, 0, "{absent:?} is absent and must not be found");
+        }
     }
 
     /// Two `integer` axes at payload offsets 0 and 8.
