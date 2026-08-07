@@ -296,6 +296,29 @@ impl Parser {
             // closure record is a struct — add __closure as dep so the
             // store allocation stays alive while derived text/references are in use.
             t = t.depending(self.closure_param);
+        } else if name == "_" && self.at_binding_name() {
+            // loft#795 — `_` is the DISCARD, not a variable: nothing ever reads it, so
+            // each `_ = …` gets its own slot rather than re-binding one shared `_`.
+            //
+            // Sharing one slot made `_` the single name exempt from the
+            // one-type-per-name rule (`change_var_type` retyped it silently), and the
+            // backends then disagreed about what that meant.  The interpreter re-typed
+            // the slot per assignment and ran; native takes the Rust local's type from
+            // the FIRST assignment, so `_ = delete(…); _ = flag(); _ = delete(…)` emitted
+            // a `bool` lowering into a `u8` slot and the program did not compile (E0308).
+            // Three assignments were needed — two types alternating is what breaks it —
+            // which is why a discard-heavy function could work for a long time and then
+            // stop when one more `_` was added.
+            //
+            // A slot each fixes both halves without costing anyone the spelling: `_`
+            // keeps working for any mix of types (making it obey the rule instead would
+            // reject programs that run today, for the one name whose entire purpose is
+            // to be written more than once).  It is the same treatment `for _` loops
+            // already needed for their hidden counter, and for the same reason.
+            let v_nr = self.create_unique("discard", &Type::Unknown(0));
+            self.var_usages(v_nr, true);
+            *code = Value::Var(v_nr);
+            t = Type::Unknown(0);
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
             // on pass 2, if a variable has Unknown type, it may be a pass-1
@@ -578,7 +601,20 @@ impl Parser {
                     }
                     t = self.emit_variant_value(e_nr, name, code);
                 } else if !self.first_pass {
-                    diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                    if name == "_" {
+                        // loft#795 — `_` DISCARDS its value (each `_ = …` gets its own
+                        // slot), so there is nothing here to read back.  Say that rather
+                        // than "Unknown variable '_'", which reads as a typo in the one
+                        // case where the name is deliberate.
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "`_` discards the value assigned to it — there is nothing to \
+                             read back; give the value a name if you need it"
+                        );
+                    } else {
+                        diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                    }
                     t = Type::Unknown(0);
                 } else {
                     *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
@@ -1587,6 +1623,20 @@ impl Parser {
             }
             if !self.first_pass && (self.vars.tp(*nr).is_unknown() || !self.vars.is_defined(*nr)) {
                 let name = self.vars.name(*nr).to_string();
+                if name == "_" {
+                    // loft#795 — `_` DISCARDS its value (each `_ = …` gets its own slot),
+                    // so there is nothing here to read back.  Say that rather than
+                    // "Unknown variable '_'", which reads as a typo in the one case where
+                    // the name is deliberate — and never offer a rename suggestion for it.
+                    diagnostic_at!(
+                        self.lexer,
+                        pos,
+                        Level::Error,
+                        "`_` discards the value assigned to it — there is nothing to read \
+                         back; give the value a name if you need it"
+                    );
+                    return;
+                }
                 let candidates: Vec<&str> = (0..self.vars.count())
                     .filter(|&v| {
                         v != *nr && self.vars.is_defined(v) && !self.vars.tp(v).is_unknown()
