@@ -276,11 +276,20 @@ So step 6 must not be done the way step 2 was. Proposed split:
     `n_hash_sorted` for whole-collection iteration (the hash BUCKET walk over a radix
     tree), and its `-=` never reached `OpHashRemove`. Both sites name every keyed kind
     and both had been counted as mechanical.
-- **6c — the IR codec.** `ir_schema.rs`'s JSON side is DONE (self-describing, so both
-  encoder and decoder could land without regeneration). What remains is the STORE codec:
-  `tools/ir_schema/ir.loft` gains a `Trie` tag, `ir_schema_gen.rs` is regenerated, a
-  `PT_TRIE`/`TY_TRIE` discriminant lands with its assertion, and `ir_store.rs`'s two
-  stubs plus `ir_node.rs`'s one are retired.
+- **6c — the IR codec. DONE.** `ir_schema.rs`'s JSON side landed without regeneration
+  (self-describing, so encoder and decoder are both just the `"k"` tag). The store codec
+  needed the generator: `TyTrie` and `PtTrie` in `tools/ir_schema/ir.loft`, `TY_TRIE = 26`
+  / `PT_TRIE = 18`, a regenerated `ir_schema_gen.rs`, and the three stubs retired.
+
+  **Appended, not slotted beside their Radix siblings** — a discriminant is the variant's
+  POSITION in that enum, so inserting in the middle renumbers every variant after it. And
+  `TyTrie` carries `key: text` rather than `TyRadix`'s `vector<NameRef>`: the shape says
+  "exactly one" instead of leaving a round trip free to produce none or two.
+
+  It also stopped being optional the moment 6b landed. `corpus_store_codec_round_trips`
+  walks `tests/scripts/`, so 6d's own gate put a trie through the codec and the stub
+  fired — the step ORDER was wrong, not the step. A codec stub survives only while
+  nothing can construct the thing it decodes.
 - **6d — the `.loft` gate. DONE** — `tests/scripts/801-trie-text-keyed.loft`, both
   backends, with the leak case step 4 could not write (a trie as a struct field, torn
   down with its container).
@@ -304,10 +313,19 @@ on the host that compiles the audit, and whose `rewrite_iterated` closes with `_
 continue`. A wasm-only silent skip is the residual this design's own instrument could
 not see, and it is the same shape as *"a probe written in one platform's spelling"*.
 
-### Step 7 — the diagnostics (loft#799)
+### Step 7 — the diagnostics (loft#799) — DONE
 
-Only now is the advice true: a text key under `spatial` says use `trie`, a coordinate
-key under `trie` says use `spatial`.
+Only now is the advice true: a text key under `spatial` says use `trie`, a numeric key
+under `trie` says use `spatial` (or `sorted`/`index` for an order on a number).
+
+Refused at DECLARATION, which is the half #799 asked for and the worse half to leave: a
+refused range is a compile error fixed in seconds, while a point lookup answering NULL
+is indistinguishable from "not found" at the call site. Pass 2 only, per loft#683 — pass
+1 has an incomplete definition table by construction, so an element type declared further
+down the file would read as unknown there.
+
+Four `tests/parse_errors.rs` cases: the text-under-spatial and numeric-under-trie
+mirrors, plus the trie's own arity (exactly one key) and its bare form.
 
 ## The residual
 
@@ -315,3 +333,15 @@ The axis this design cannot see is **scale**. Every measurement here is six word
 test. The reason to want the kind at all — a 518 804-record name index — is where a
 structure's real behaviour appears, and no gate above touches it. Step 6 should be
 followed by a dogfood run against that data before the kind is documented as ready.
+
+**Confirmed, and it is the only one left.** Every step above is built and gated, so what
+remains is exactly the axis the design said it could not see. The half-million-record
+run is the next move.
+
+A second axis surfaced during the build and is worth recording because no probe here
+would have found it: **a cfg-gated consumer is invisible to an exhaustiveness audit.**
+`Iterated` is matched exhaustively in three places, which is why a missing kind is a
+compile error — except `ffi_deliver::collect_keyed`, which is
+`#[cfg(target_arch = "wasm32")]`, so the host that compiles the audit never sees it. The
+instrument that catches this is not a better read but a target: the suite's own wasm32 +
+wasip2 rlib builds. "Both backends" is not "every compile target".

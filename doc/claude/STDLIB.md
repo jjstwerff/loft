@@ -359,6 +359,39 @@ filter or `break` inside the loop for an exact shape. A slice is a
 [DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers) for
 the implementation.
 
+A text key is refused here — `spatial<Word[w]>` names `trie<Word[w]>` instead
+(loft#799).  Before that, it compiled and then answered `null` for a key just
+inserted.
+
+### `trie<T[k]>` — text-keyed collection
+
+The same radix tree over ONE **text** key, keyed on its bytes rather than a
+Morton code:
+
+| Syntax | Description |
+|--------|-------------|
+| `t: trie<Word[w]> = [];` | Construct; also legal as a struct field. |
+| `t += [Word{w: "kerk"}];` | Append. |
+| `for x in t { … }` | Iterate in key order — byte order, no sort. |
+| `t.len()` | Element count — O(1), the tree's cached length word. |
+| `x = t["kerk"]` | Exact lookup; `null` when absent, never a neighbour. |
+| `t["kerk"..]` | Every key BEGINNING with `"kerk"`, in key order. |
+| `t["kerk"..:n]` | The first `n` of them. |
+
+**The prefix is what earns the kind its place.** A `sorted<T[text]>` range
+needs a successor string — `t["kerk".."kerl"]` — that the caller must
+construct, gets wrong at a byte boundary, and that answers a key INTERVAL
+rather than a prefix.  So `t[a..b]` is refused, and the message names `sorted`
+as the kind that answers an interval.
+
+The terminator sorts before any byte, which is why `kerk` precedes
+`kerkstraat` precedes `kerkweg`.  Exactly one key field (several keys have no
+byte order to share — use `sorted<T[a, b]>`), and it must be `text`
+(a numeric key names `spatial` / `sorted` / `index`).  A prefix slice is a
+`for`-loop iterator, not a value, as with every keyed range slice.  See
+[DATABASE.md § Text Trie](DATABASE.md#text-trie-srctrie_dbrs) for the
+implementation.
+
 ---
 
 ## Output and Diagnostics

@@ -26,6 +26,36 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Words, and the prefix you actually wanted
+
+`trie<T[k]>` keys a collection on one **text** field and answers what no other
+kind could:
+
+```loft
+words: trie<Word[w]> = [];
+words += [Word { w: "kerk" }, Word { w: "kerkweg" }, Word { w: "lonneker" }];
+
+for x in words["kerk"..] { … }      // kerk, kerkweg — in key order
+for x in words["kerk"..:20] { … }   // the first 20 of them
+```
+
+The prefix IS the query. Doing this on a `sorted` means inventing a successor
+string — `words["kerk".."kerl"]` — which you have to construct, which is easy to
+get wrong at a byte boundary, and which asks for a key *interval* rather than a
+prefix. So loft refuses `t[a..b]` on a trie and tells you `sorted` is the kind
+that answers an interval.
+
+It also shares everything you already know: `+=`, `for` iteration (key order, no
+sort), `.len()`, and `t["kerk"]` for the one record — `null` when absent, never a
+neighbour.
+
+And the mistake that prompted it now gets caught. `spatial<Word[w]>` on a text
+key used to compile, count correctly, and then answer `null` for a key you had
+just inserted — indistinguishable from "not found" wherever you called it. It is
+refused at the declaration now, and the message points at `trie`. The mirror too:
+a numeric key under `trie` points back at `spatial`, or at `sorted` / `index` for
+an order on a number.
+
 ### A collection can fetch what it is asked for
 
 Bind a collection to a source and stop writing a loading step. A lookup that misses
