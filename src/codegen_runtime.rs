@@ -302,7 +302,7 @@ pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i3
     // P259 commit 3 — record the type allocated into this store so
     // free_named can recognise closure-record stores at free time
     // (cascade-free walks `__closure_*` records' DbRef fields).
-    stores.allocations[r.store_nr as usize].known_type = db_tp;
+    stores.allocations[r.store_nr as usize].set_known_type(db_tp);
     stores.store_mut(&r).set_u32_raw(r.rec, 4, u32::from(db_tp));
     stores.set_default_value(db_tp, &r);
     db.store_nr = r.store_nr;

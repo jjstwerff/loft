@@ -895,7 +895,7 @@ impl State {
         // P259 commit 3 — record the type allocated into this store so
         // free_named can recognise closure-record stores at free time
         // (cascade-free walks `__closure_*` records' DbRef fields).
-        self.database.allocations[r.store_nr as usize].known_type = db_tp;
+        self.database.allocations[r.store_nr as usize].set_known_type(db_tp);
         self.database
             .store_mut(&r)
             .set_u32_raw(r.rec, 4, u32::from(db_tp));

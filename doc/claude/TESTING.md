@@ -818,6 +818,61 @@ let config = LogConfig {
 
 ---
 
+## Store-memory ceiling (`LOFT_MEMORY_LIMIT`)
+
+The sibling of the execution timeout, for the failure it cannot catch. A corrupted
+length does not always end in a bad dereference — often it ends in an **allocation**,
+and a time bound is no help there: chasing loft#796 a single run reached 59.6 GiB in
+seconds. The kernel's OOM killer is worse than useless as a diagnostic, because it
+reports only that a process died and is free to kill a bystander instead of the
+culprit (it took out two unrelated agent sessions).
+
+So the ceiling lives inside loft, where the thing being allocated still has a name.
+When a store growth would cross it the run stops **at that growth** — the store is
+left exactly as it was — and prints what filled the heap:
+
+```
+loft: store memory limit reached — 1.7 GiB in use, limit 2.0 GiB
+
+  the growth that crossed it
+    a store of type `main_vector<Cell>` (kt=78) growing 1.7 GiB → 4.0 GiB
+    the store was allocated at pc=8001
+
+  where the memory is
+    main_vector<Cell>        kt=78        1.7 GiB  in 1 store
+    ?                        kt=65535     9.6 KiB  in 2 stores
+
+  One type holding nearly all of it in ONE store is a runaway length;
+  the same total spread over very many stores is a leak.
+```
+
+That last line is the whole point of the breakdown: **one store vs very many** is what
+separates a runaway length from a leak, and it is the first thing you would otherwise
+have to go and measure.
+
+| Mechanism | Default | How |
+|---|---|---|
+| Ordinary run | **off** | loft is unbounded by default; a real program may want the machine |
+| Under `--tests` / `loft test` | **on, 2 GiB** | a test wanting tens of GiB is a bug either way |
+| Env var | — | `LOFT_MEMORY_LIMIT=<size>` — `2G`, `512M`, `64M`, or `0` to remove it |
+
+A limit that cannot be parsed is reported and the default is **kept** — a typo must
+never silently remove the ceiling.
+
+Implementation is `src/store_budget.rs` (accounting, ceiling, report) with the
+accounting asserted at every site in `src/store.rs` that allocates, reallocates or
+frees a store buffer: `new`, `open`, `resize_store`, `shrink_to`, `clone_locked`,
+`snapshot_copy` and `Drop`. Type names reach the report through
+`Stores::publish_type_names`, called once per run and inert when no ceiling is set.
+Guarded by `tests/store_memory_limit.rs`.
+
+**No `file:line` in the report, deliberately.** The interpreter's span table records
+CALL SITES only, so resolving an arbitrary allocation pc through it returns the
+nearest span *below* — routinely in an unrelated function. A diagnostic that sends
+the reader to the wrong file costs more than one that stays quiet, so the report
+prints the pc and stops there; `LOFT_STORES=summary` resolves the same pc against the
+denser per-run table.
+
 ## Execution timeout (`LOFT_TIMEOUT` / `--timeout`)
 
 Guards against hangs that would wedge `cargo test` or `find_problems.sh`.  The

@@ -136,6 +136,17 @@ pub(crate) fn run_tests(
     use crate::data::DefType;
     use std::collections::BTreeMap;
 
+    // A ceiling on the store heap, for test runs only.  A test that wants tens of
+    // gigabytes is a bug either way, and a corrupted length does not always end in a
+    // bad dereference — often it ends in an allocation, which no time bound catches
+    // and which the kernel's OOM killer answers by killing something, not necessarily
+    // the culprit.  Crossing the ceiling stops the run at the growth that crossed it
+    // and says which type was growing and how the rest of the heap was distributed.
+    // `LOFT_MEMORY_LIMIT=0` removes it; ordinary `loft prog.loft` runs are never
+    // capped, because loft is unbounded by default and a real program may want the
+    // whole machine.
+    loft::store_budget::apply_env_limit(loft::store_budget::DEFAULT_TEST_LIMIT);
+
     struct FileResult {
         tests: Vec<(String, bool, Option<String>)>, // (fn_name, passed, fail_msg)
         warnings: Vec<String>,

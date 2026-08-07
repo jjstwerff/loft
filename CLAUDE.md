@@ -48,6 +48,15 @@ make view                                # branch-aware doc/code viewer (SSH-for
 for `--native` (rustc can hang): `LOFT_TIMEOUT=60 loft --native p.loft` or `loft --timeout 60 p.loft`
 (0 = off). Hard-kills at `timeout+grace` (grace 2s, `LOFT_TIMEOUT_GRACE`). Ref: DEBUG.md, TESTING.md.
 
+**A time bound does not bound MEMORY.** A corrupted length ends in a bad dereference on one run
+and an unbounded ALLOCATION on the next — loft#796 reached 59.6 GiB in seconds and the global OOM
+killer took two unrelated agent sessions with it. Test runs (`--tests` / `loft test`) therefore
+carry a **2 GiB store-heap ceiling**; crossing it stops the run at that growth and names the TYPE
+that filled the heap, with a one-store-vs-many breakdown that tells a runaway length from a leak.
+`LOFT_MEMORY_LIMIT=<2G|512M|0>` overrides it; ordinary runs are never capped. When writing a
+repeat-run harness for a corruption repro, cap the process too (`ulimit -v`) — the runaway is not
+necessarily the process the kernel kills. TESTING.md § Store-memory ceiling.
+
 For any multi-failure refactor, start `find_problems.sh --bg` before editing (detached
 `cargo test --release --no-fail-fast` → `/tmp/loft_problems.txt`).
 

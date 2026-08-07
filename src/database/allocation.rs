@@ -890,7 +890,26 @@ impl Stores {
         }
     }
 
-    /// Collect a description for every leaked store at program exit.
+    /// Tell the memory ceiling what every store type is called, so a refused growth
+    /// can name the type that filled the heap instead of printing a bare id.
+    ///
+    /// A whole-schema sweep rather than a hook on each naming site: the schema is
+    /// small, the sweep runs once per program, and it cannot miss a type the way a
+    /// per-site hook can.  Inert when no ceiling is set — there is no report to build
+    /// then, so there is nothing to pay for.
+    pub fn publish_type_names(&self) {
+        if crate::store_budget::limit() == 0 {
+            return;
+        }
+        for (kt, t) in self.types.iter().enumerate() {
+            if let Ok(kt) = u16::try_from(kt) {
+                crate::store_budget::note_type_name(kt, &t.name);
+            }
+        }
+    }
+
+    /// Collect a description for every leaked store at program exit, grouped BY TYPE,
+    /// most-leaked first.
     ///
     /// Mirrors `State::collect_store_leaks` (which operates on the
     /// interpreter's `State`) but lives on `Stores` so the **native**
@@ -901,13 +920,13 @@ impl Stores {
     /// (`stack_store_at_zero` — interp only; the native runtime's
     /// slot 0 is an ordinary heap store and MUST be checked, #490),
     /// locked constants / worker borrows, and `const_refs`.
+    ///
+    /// @P317 — the previous per-store `N(bc:created_at)` listing (truncated to 5 by
+    /// the leak-check preview) buried the signal in store numbers; naming the culprit
+    /// directly (e.g. `kt=68 ChunkKey×6026`) is what pinpointed the @P317 native
+    /// ref-local leak.  Used by `LOFT_NATIVE_LEAK_CHECK` (native) and
+    /// `LOFT_STORES=summary` (interp).
     #[must_use]
-    /// @P317 — leaked stores grouped BY TYPE, most-leaked first.  The previous
-    /// per-store `N(bc:created_at)` listing (truncated to 5 by the leak-check
-    /// preview) buried the signal in store numbers; aggregating by type names
-    /// the culprit directly (e.g. `kt=68 ChunkKey×6026`), which is what
-    /// pinpointed the @P317 native ref-local leak.  Used by
-    /// `LOFT_NATIVE_LEAK_CHECK` (native) and `LOFT_STORES=summary` (interp).
     pub fn collect_store_leaks(&self) -> Vec<String> {
         let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
             std::collections::BTreeMap::new();
@@ -2780,7 +2799,7 @@ impl Stores {
 
         // Re-apply preserved metadata onto the new Store.  Slot bitmap sees
         // continuity; the on-disk bytes carry the user data.
-        new_store.known_type = preserved.0;
+        new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
         new_store.created_at = preserved.2;
         new_store.last_op_at = preserved.3;
@@ -2863,7 +2882,7 @@ impl Stores {
             Err(_) => return false,
         };
 
-        new_store.known_type = preserved.0;
+        new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
         new_store.created_at = preserved.2;
         new_store.last_op_at = preserved.3;
@@ -2988,7 +3007,7 @@ impl Stores {
         let Ok(mut store) = opened else {
             return false;
         };
-        store.known_type = preserved.0;
+        store.set_known_type(preserved.0);
         store.free = preserved.1;
         store.created_at = preserved.2;
         store.last_op_at = preserved.3;
@@ -3328,7 +3347,7 @@ impl Stores {
         }
         // The slot's bookkeeping is the slot's, not the buffer's.
         let s = &self.allocations[idx];
-        rebuilt.known_type = tp;
+        rebuilt.set_known_type(tp);
         rebuilt.free = s.free;
         rebuilt.created_at = s.created_at;
         rebuilt.last_op_at = s.last_op_at;
@@ -3358,7 +3377,7 @@ impl Stores {
             Some(s) => s,
             None => return false,
         };
-        new_store.known_type = preserved.0;
+        new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
         new_store.created_at = preserved.2;
         new_store.last_op_at = preserved.3;

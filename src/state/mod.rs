@@ -779,7 +779,7 @@ impl State {
                         } else {
                             let sz = u32::from(self.database.size(tp_id));
                             let r = self.database.database(sz);
-                            self.database.allocations[r.store_nr as usize].known_type = tp_id;
+                            self.database.allocations[r.store_nr as usize].set_known_type(tp_id);
                             self.database
                                 .store_mut(&r)
                                 .set_u32_raw(r.rec, 4, u32::from(tp_id));
@@ -4594,6 +4594,10 @@ impl State {
         // RUNTIME panic must not be attributed to whatever line was compiled last.
         // The runtime has its own, better attribution (pc -> source span).
         crate::crash_report::clear_compile_pos();
+        // Give the memory-ceiling report its vocabulary before anything can trip it,
+        // so a refused growth names `Layer` rather than `kt=112`.  Costs nothing when
+        // no ceiling is set, which is every ordinary run.
+        let () = self.database.publish_type_names();
         let _ = name;
         let d_nr = data.def_nr(&format!("n_{name}"));
         // A missing entry function (e.g. running a file with no `fn main()`, or a
