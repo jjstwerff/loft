@@ -64,6 +64,23 @@ fn main() {
   b = FeBack.FeTwo;
   assert("{b}" == "FeTwo", "an ordinary enum declared BEFORE its use still works");
   assert(b == FeBack.FeTwo, "and still compares");
+
+  // THE NAME-COLLISION CONTROL.  `Format` is also a stdlib enum
+  // (`02_files.loft`: TextFile, LittleEndian, BigEndian, Directory, NotExists),
+  // so a registration that made this def idempotent by NAME rather than by DEF
+  // handed the program the stdlib's type: `Format.Number` is discriminant 2, and
+  // it read back `LittleEndian`.  A silent wrong value, from a program that
+  // mentions no forward reference at all — which is why it belongs beside the
+  // forward cells rather than in a file of its own.
+  f = Format.Number;
+  assert("{f}" == "Number", "a user enum shadowing a stdlib name keeps its OWN variants");
+  assert(f == Format.Number, "and compares within its own enum");
+  assert(!(f == Format.Text), "and its other variants stay distinct");
+  g = Format.FileName;
+  assert("{g}" == "FileName", "the third variant too — a shifted list would show here");
 }
 
 enum FeBack { FeOne, FeTwo }
+
+// Deliberately the STDLIB's enum name, with different variants at every position.
+enum Format { Text, Number, FileName }

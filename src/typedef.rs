@@ -739,21 +739,20 @@ fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
             name = format!("__nullable<{}>", data.qualified_type_name(sd));
         }
     }
-    // An ADOPTED stub can be reached twice under two different def numbers — the
-    // stub's and the declaration's — so a name already in the table is this
-    // enum's own registration, not a clash. `enumerate` would push a second type
-    // under the same name and leave the first unreachable.
-    let e_nr = match database.names.get(&name) {
-        Some(&nr)
-            if matches!(
-                database.types[nr as usize].parts,
-                crate::database::Parts::Enum(_)
-            ) =>
-        {
-            nr
-        }
-        _ => database.enumerate(&name),
-    };
+    // MINT, always — idempotence is keyed on the DEF above, never on the name.
+    //
+    // A db name is NOT unique across defs. The stdlib declares `enum Format`
+    // (`02_files.loft`) and a program may declare its own, which is the same
+    // collision the `__nullable<` disambiguation right above exists for. Reusing a
+    // same-named db type here made the user's `Format` adopt the STDLIB one, so
+    // its second variant read back `LittleEndian` — a silent wrong value, and
+    // precisely the failure this whole fix is about. `enumerate` shadows the name,
+    // and that shadowing is what keeps two same-named enums apart.
+    //
+    // Adoption needs nothing from here: it upgrades a stub IN PLACE, so there is
+    // one def and one `known_type`, and the early return above is the only guard a
+    // second visit needs.
+    let e_nr = database.enumerate(&name);
     stamp_enum_variants(data, database, d, e_nr);
     data.definitions[d as usize].known_type = e_nr;
 }

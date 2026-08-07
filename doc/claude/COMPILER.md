@@ -285,6 +285,15 @@ same way — which is what defeated the three earlier attempts on loft#803:
 which also skips the `__nullable<` name disambiguation — that keys on "the bare name is
 already a db type", which is true of the def's own second visit and would rename it.
 
+⚠ **Key that early return on the DEF, never on the NAME.** A db name is not unique
+across defs: the stdlib declares `enum Format` (`02_files.loft`) and a program may
+declare its own. Making registration idempotent by looking the name up in
+`Stores::names` handed the user's `Format` the STDLIB type, so `Format.Number`
+(discriminant 2) read back `LittleEndian` — in a program containing no forward
+reference at all. `enumerate` shadowing the name is exactly what keeps two same-named
+enums apart, so the mint must stay unconditional. Guarded by the name-collision cell in
+`tests/scripts/803-forward-enum-value.loft`.
+
 ### The H5 two-pass contract — the lazy-append law
 
 `assert_pass2_def_attr_stable` (`src/parser/mod.rs`, debug-assertions only —
