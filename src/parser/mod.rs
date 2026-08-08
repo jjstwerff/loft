@@ -1337,8 +1337,14 @@ impl Parser {
             .unwrap_or((0, 0));
         let name = self.data.def(self.context).original_name().clone();
         let at = crate::keys::COMPLEXITY_ADVICE_AT;
-        diagnostic!(
+        // The whole body is parsed before the score exists, so the cursor has
+        // drifted to the NEXT definition — the caret pointed at the following
+        // `fn` while the prose named this one, which reads as a diagnostic about
+        // a function that is fine.  Point at the definition's own position.
+        let at_pos = self.data.def(self.context).position.clone();
+        diagnostic_at!(
             self.lexer,
+            &at_pos,
             Level::Advice,
             code = "function-complexity",
             "`{name}` scores {score} for control-flow complexity (nudge at {at}) — its \
@@ -1378,8 +1384,11 @@ impl Parser {
         }
         let name = def.original_name().clone();
         let at = crate::keys::PARAM_ADVICE_AT;
-        diagnostic!(
+        // Emitted after the body is parsed — see `warn_function_complexity`.
+        let at_pos = def.position.clone();
+        diagnostic_at!(
             self.lexer,
+            &at_pos,
             Level::Advice,
             code = "too-many-parameters",
             "`{name}` takes {required} required parameters (nudge at {at}) — every caller \
@@ -1436,8 +1445,11 @@ impl Parser {
             return;
         }
         let name = def.original_name().clone();
-        diagnostic!(
+        // Emitted after the body is parsed — see `warn_function_complexity`.
+        let at_pos = def.position.clone();
+        diagnostic_at!(
             self.lexer,
+            &at_pos,
             Level::Advice,
             code = "trailing-boolean-parameters",
             "`{name}` ends with {trailing} boolean parameters — a call reading \

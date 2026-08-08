@@ -1,0 +1,79 @@
+// loft#815 — the three whole-function advices are emitted only after the body
+// is parsed, when the cursor has already reached the NEXT definition.  Each
+// caret therefore pointed at the following `fn` while the prose named this one,
+// which reads as advice about a function that is fine.
+//
+// Every advice below must point INSIDE the declaration it names — never at
+// `next_function_marker`, and never at `main`.
+
+// Complexity: a long flat chain, so the score is high and the nesting is 1.
+fn complex_function_marker(x: integer) -> integer {
+  n = 0;
+  if x == 0 { n += 1; }
+  if x == 1 { n += 1; }
+  if x == 2 { n += 1; }
+  if x == 3 { n += 1; }
+  if x == 4 { n += 1; }
+  if x == 5 { n += 1; }
+  if x == 6 { n += 1; }
+  if x == 7 { n += 1; }
+  if x == 8 { n += 1; }
+  if x == 9 { n += 1; }
+  if x == 10 { n += 1; }
+  if x == 11 { n += 1; }
+  if x == 12 { n += 1; }
+  if x == 13 { n += 1; }
+  if x == 14 { n += 1; }
+  if x == 15 { n += 1; }
+  if x == 16 { n += 1; }
+  if x == 17 { n += 1; }
+  if x == 18 { n += 1; }
+  if x == 19 { n += 1; }
+  if x == 20 { n += 1; }
+  if x == 21 { n += 1; }
+  if x == 22 { n += 1; }
+  if x == 23 { n += 1; }
+  if x == 24 { n += 1; }
+  if x == 25 { n += 1; }
+  if x == 26 { n += 1; }
+  if x == 27 { n += 1; }
+  if x == 28 { n += 1; }
+  if x == 29 { n += 1; }
+  if x == 30 { n += 1; }
+  if x == 31 { n += 1; }
+  if x == 32 { n += 1; }
+  if x == 33 { n += 1; }
+  if x == 34 { n += 1; }
+  if x == 35 { n += 1; }
+  if x == 36 { n += 1; }
+  if x == 37 { n += 1; }
+  if x == 38 { n += 1; }
+  if x == 39 { n += 1; }
+  n
+}
+
+// Parameter count + trailing booleans, on a MULTI-LINE signature — the shape
+// that made the drift obvious in the field (`hex_field`'s `doc_write_*`).
+fn wide_function_marker(
+  a: integer,
+  b: integer,
+  c: integer,
+  d: integer,
+  e: integer,
+  f: integer,
+  loud: boolean,
+  dry: boolean
+) -> integer {
+  n = a + b + c + d + e + f;
+  if loud { n += 1; }
+  if dry { n += 2; }
+  n
+}
+
+fn next_function_marker(y: integer) -> integer {
+  y * 2
+}
+
+fn main() {
+  println("{complex_function_marker(3)} {wide_function_marker(1,2,3,4,5,6,true,false)} {next_function_marker(4)}");
+}

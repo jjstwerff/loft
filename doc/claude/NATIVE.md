@@ -102,6 +102,14 @@ chokepoint reports it, and a catch-all `unwrap_or` still errors loudly if a futu
 fallback forgets to record one).  `--check` runs are exempt (they report parse status,
 not execution).  Guards: `tests/n3_use_native.rs::require_native_*`.
 
+**`--interpret` is NOT the escape hatch for a library that will not build**, and the
+refusal says so.  `--interpret` chooses the interpreter for **your program**; a `use`d
+library still builds its cdylib, so a broken library keeps failing under it.  The switch
+that makes every library interpret is **`LOFT_NO_NATIVE_LIBS=1`**.  The refusal used to
+advise `--interpret`, which sent a blocked reader nowhere — the command that hit it
+already was `--interpret` (loft#815).  When you change that message, check the cure by
+running it: `LOFT_FORCE_NATIVE_BUILD_FAIL=1` reproduces the refusal on any program.
+
 ### Architecture
 
 The generated code uses these loft library types (already public):

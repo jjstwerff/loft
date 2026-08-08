@@ -131,7 +131,13 @@ impl Stores {
     /// shape, and which sources a build happens to carry should not change it.
     #[cfg_attr(
         not(feature = "native-extensions"),
-        allow(unused_variables, clippy::needless_pass_by_value)
+        allow(
+            unused_variables,
+            clippy::needless_pass_by_value,
+            // Same reason as `db` above: without the SQL arm nothing in the body
+            // reaches `self`.  The seam's shape is not a per-build fact.
+            clippy::unused_self
+        )
     )]
     pub(crate) fn fetch_from_source(
         &mut self,
@@ -179,6 +185,14 @@ impl Stores {
     /// differently — the interpreter asks `Data`, `--native` asks the table
     /// generated `init()` filled — and neither of those is reachable from here.
     #[must_use]
+    // `LazySource`'s variant set is cfg-dependent (`Sql` needs the loader), so
+    // the catch-all covers two variants in a full build and one without it.
+    // Naming `File(_)` instead would make the arm wrong the moment a source is
+    // added — the arm means "anything core can drive", not one variant.
+    #[cfg_attr(
+        not(feature = "native-extensions"),
+        allow(clippy::match_wildcard_for_single_variants)
+    )]
     pub fn lazy_loft_source(&self, coll: &DbRef, have_driver: bool) -> Option<String> {
         let source = self.lazy_source(coll)?;
         match LazySource::of(&source) {

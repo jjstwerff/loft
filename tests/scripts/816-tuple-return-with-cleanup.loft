@@ -1,0 +1,123 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#816 — a function that returns a PURE-VALUE tuple and owns a
+// store-allocated local must return the tuple it computed, not the zero
+// initialiser.
+//
+// @PLN135 gave `-> (float, integer)` Rust's own tuple ABI, so the shape
+// reaches the scope pass as a bare `Type::Tuple`.  `is_value_return_type`
+// named only the scalars, so the anonymous tail tuple fell through to the
+// discard + fabricated `Return(Null)` path: the tail was emitted as a
+// statement, the frees ran, and native returned `(0.0_f64, 0)`.  Silent, and
+// on ONE backend only — the interpreter read the elements off eval-stack top,
+// which is why every assertion here has to run on both.
+//
+// The trigger needs BOTH halves: a pure-value tuple return AND a store local
+// requiring `OpFreeRef` (struct / vector / hash).  Either alone was correct,
+// so each is a control below.
+//
+// A NESTED pure-value tuple is deliberately not covered — a tuple variable
+// cannot hold a tuple-typed element, so the hoist cannot represent it
+// (loft#817).
+
+struct V816 { x: float, y: float, z: float }
+
+// ── control: tuple return, NO store local ────────────────────────────────────
+fn no_local(n: integer) -> (float, integer) { (7.5, n) }
+
+// ── control: store local, SCALAR return ──────────────────────────────────────
+fn scalar_ret() -> float {
+  a = V816 { x: 1.0, y: 2.0, z: 3.0 };
+  a.x + 6.5
+}
+
+// ── the defect: store local + tuple return, per store kind ───────────────────
+fn via_struct(n: integer) -> (float, integer) {
+  a = V816 { x: 1.0, y: 2.0, z: 3.0 };
+  (a.x + 6.5, n)
+}
+
+fn via_vector() -> (integer, integer) {
+  v: vector<integer> = [];
+  v += [1]; v += [2]; v += [3];
+  (v.len(), 42)
+}
+
+// Three elements — the tuple is wider than one slot.
+fn three() -> (integer, integer, integer) {
+  v: vector<integer> = [];
+  v += [5]; v += [6];
+  (v.len(), 11, 12)
+}
+
+// Mixed element types, all pure values.
+fn mixed() -> (boolean, float, integer) {
+  v: vector<integer> = [];
+  v += [1]; v += [2];
+  (true, 2.5, v.len())
+}
+
+// An EXPLICIT `return` of the tail, not just a tail expression.
+fn explicit_return(n: integer) -> (float, integer) {
+  a = V816 { x: 1.0, y: 2.0, z: 3.0 };
+  return (a.x + 6.5, n);
+}
+
+// The workaround shape from the report — a named local — must stay correct.
+fn named_local(n: integer) -> (float, integer) {
+  a = V816 { x: 1.0, y: 2.0, z: 3.0 };
+  r = (a.x + 6.5, n);
+  r
+}
+
+// An early `return` tuple AND a tail tuple in one function.
+fn early_and_tail(k: integer) -> (integer, integer) {
+  v: vector<integer> = [];
+  v += [7];
+  if k == 0 { return (100, 101); }
+  (v.len(), 200)
+}
+
+// A text element trips `has_lifetime_concern`, so this keeps the BOXED return
+// path.  It was already correct and must stay correct.
+fn boxed(n: integer) -> (text, integer) {
+  a = V816 { x: 1.0, y: 2.0, z: 3.0 };
+  ("v={a.x}", n)
+}
+
+fn controls() {
+  (a, b) = no_local(5);
+  assert(a == 7.5 && b == 5, "a tuple return with no store local is unchanged");
+  assert(scalar_ret() == 7.5, "a scalar return with a store local is unchanged");
+}
+
+fn store_kinds() {
+  (a, b) = via_struct(5);
+  assert(a == 7.5 && b == 5, "a struct local must not zero the returned tuple");
+  (c, d) = via_vector();
+  assert(c == 3 && d == 42, "a vector local must not zero the returned tuple");
+}
+
+fn shapes() {
+  (a, b, c) = three();
+  assert(a == 2 && b == 11 && c == 12, "every element of a 3-tuple survives the frees");
+  (d, e, f) = mixed();
+  assert(d && e == 2.5 && f == 2, "mixed pure-value elements survive the frees");
+}
+
+fn return_forms() {
+  (a, b) = explicit_return(5);
+  assert(a == 7.5 && b == 5, "an explicit `return` of a tuple survives the frees");
+  (c, d) = named_local(5);
+  assert(c == 7.5 && d == 5, "the named-local form stays correct");
+  (e, f) = early_and_tail(1);
+  assert(e == 1 && f == 200, "the tail tuple is returned when the early return is skipped");
+  (g, h) = early_and_tail(0);
+  assert(g == 100 && h == 101, "the early return tuple is returned when taken");
+}
+
+fn boxed_path() {
+  (a, b) = boxed(5);
+  assert(a == "v=1" && b == 5, "the boxed tuple-of-text path stays correct");
+}

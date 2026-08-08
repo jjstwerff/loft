@@ -330,6 +330,110 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// `ParFor` source expression (the `vector<T>` being iterated).
+    #[must_use]
+    pub fn parfor_input(&self) -> IrNode<'a> {
+        self.parfor_child(|b| &b.input, ds::PARFOR_INPUT, "parfor_input")
+    }
+
+    /// `ParFor` per-row worker call expression.
+    #[must_use]
+    pub fn parfor_worker(&self) -> IrNode<'a> {
+        self.parfor_child(|b| &b.worker, ds::PARFOR_WORKER, "parfor_worker")
+    }
+
+    /// `ParFor` thread-count expression.
+    #[must_use]
+    pub fn parfor_threads(&self) -> IrNode<'a> {
+        self.parfor_child(|b| &b.threads, ds::PARFOR_THREADS, "parfor_threads")
+    }
+
+    /// `ParFor` sequential main-thread body.
+    #[must_use]
+    pub fn parfor_body(&self) -> IrNode<'a> {
+        self.parfor_child(|b| &b.body, ds::PARFOR_BODY, "parfor_body")
+    }
+
+    /// Shared reader for the four child expressions of `ParFor`.  The store
+    /// backing holds them inside a boxed-of-one `ParForBody` record rather than
+    /// directly on the node, so the offset is read through `par_for_rec`.
+    fn parfor_child(
+        &self,
+        pick: impl Fn(&'a crate::data::ParForBody) -> &'a Value,
+        off: u32,
+        who: &str,
+    ) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::ParFor(b)) => IrNode::Native(pick(b)),
+            IrNode::Store(s, n) => IrNode::Store(s, n.par_for_rec(s).field_vec(off).get(0, s)),
+            IrNode::Native(_) => kind_panic(who, self),
+        }
+    }
+
+    /// Call `f` once per direct child expression — the backing-agnostic mirror
+    /// of [`Value::for_each_child`], and the ONE place that knows the IR tree's
+    /// shape for `IrNode` walkers.
+    ///
+    /// Use this for any traversal that must be TOTAL (reachability, liveness,
+    /// "find every X").  The match is exhaustive on purpose, so a new
+    /// [`ValueType`] variant forces a decision here instead of silently landing
+    /// in a per-walker `_ => {}` — which is how a `Tuple` element's call went
+    /// unmarked and its callee was pruned from native output, leaving rustc to
+    /// fail on the emitted call site with E0425 (loft#815).
+    pub fn for_each_child(&self, f: &mut impl FnMut(IrNode<'a>)) {
+        use ValueType as K;
+        match self.kind() {
+            K::Call => self.call_args().iter().for_each(&mut *f),
+            K::CallRef => self.callref_args().iter().for_each(&mut *f),
+            K::Insert => self.insert_items().iter().for_each(&mut *f),
+            K::Tuple => self.tuple_items().iter().for_each(&mut *f),
+            K::Parallel => self.parallel_arms().iter().for_each(&mut *f),
+            K::Block | K::Loop => self.as_block().operators().iter().for_each(&mut *f),
+            K::Set => f(self.set_inner()),
+            K::Return => f(self.return_inner()),
+            K::BreakWith => f(self.breakwith_inner()),
+            K::Drop => f(self.drop_inner()),
+            K::Yield => f(self.yield_inner()),
+            K::TuplePut => f(self.tupleput_inner()),
+            K::Span => f(self.span_inner()),
+            K::If => {
+                f(self.if_cond());
+                f(self.if_then());
+                f(self.if_else());
+            }
+            K::Iter => {
+                f(self.iter_create());
+                f(self.iter_next());
+                f(self.iter_init());
+            }
+            K::ParFor => {
+                f(self.parfor_input());
+                f(self.parfor_worker());
+                f(self.parfor_threads());
+                f(self.parfor_body());
+            }
+            // Leaves — no child expressions.
+            K::RawExpr
+            | K::Null
+            | K::Line
+            | K::Int
+            | K::Enum
+            | K::Boolean
+            | K::Float
+            | K::Long
+            | K::Single
+            | K::Text
+            | K::Var
+            | K::Break
+            | K::Continue
+            | K::Keys
+            | K::TupleGet
+            | K::FnRef
+            | K::FnRefDnr
+            | K::Other(_) => {}
+        }
+    }
+
     /// `FnRefDnr` source variable slot.
     #[must_use]
     pub fn fnref_dnr_var(&self) -> u16 {

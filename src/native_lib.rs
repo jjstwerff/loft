@@ -1433,6 +1433,11 @@ fn artifact_layout_fp(_so: &std::path::Path) -> LayoutProbe {
 /// does, and the fresh fast path adopts without taking the build lock, so the two
 /// must be told apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// A build without the loader has nothing that can OPEN an artifact, so its
+// `artifact_layout_fp` answers `Undeclared` unconditionally and these two are
+// never constructed there.  They are still matched by every reader, so the
+// variants stay — the outcome set is the type's contract, not a per-build fact.
+#[cfg_attr(not(feature = "native-extensions"), allow(dead_code))]
 enum LayoutProbe {
     /// Could not be opened — torn, half-written, or deleted between the existence
     /// check and the load.  Never adopt; rebuilding is always available.
