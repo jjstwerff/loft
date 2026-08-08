@@ -400,6 +400,20 @@ pub struct Parser {
     /// by `do_tret_bind`'s gate on the THIRD pass so the promotion is forward-ref-safe:
     /// the attr is decided before the pass, so every caller re-lowers with the buffer.
     force_tret: std::collections::HashSet<u32>,
+    /// loft#808 — def_nrs resolved as a `par(r = f(x), N)` worker, recorded on BOTH
+    /// passes and never cleared between them.  A worker's pure-value tuple return is
+    /// the one shape that must still be BOXED into the synthetic `__tuple<…>` record:
+    /// par dispatch carries a worker result through per-route buffers that only cover
+    /// ≤8-byte primitives, text, fn-refs and references, so a wider bare tuple is
+    /// rejected outright (`parse_parallel_for_loop`'s "return type … is not
+    /// supported").  Every OTHER tuple return keeps Rust's tuple ABI.
+    ///
+    /// Pass 1 fills the set as it reaches each par site, so a worker DECLARED BEFORE
+    /// its par site is still bare when `parse_function` runs; the gap closes in
+    /// `promote_par_worker_tuple_returns`, between the passes and before the H5
+    /// attribute snapshot, exactly like `reserve_late_return_buffers`.  By pass 2 the
+    /// set is complete, so `parse_function` reproduces the promoted type.
+    par_worker_defs: std::collections::HashSet<u32>,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
@@ -834,6 +848,7 @@ impl Parser {
             first_pass: true,
             ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
+            par_worker_defs: std::collections::HashSet::new(),
             reverse_iterator: false,
             iterable_context: false,
             last_range_from: None,
@@ -1558,6 +1573,12 @@ impl Parser {
         // pass-2 caller lowers a call, and pass 2's `ref_return` finds a buffer to
         // RENAME instead of one to grow.  Reserving here rather than at the signature
         // is what makes this cheap: no signature pre-pass, one O(defs) walk.
+        // loft#808 — a par worker DECLARED BEFORE its `par(...)` site was still a bare
+        // tuple return when pass 1 parsed it, because the set that says "this def is a
+        // worker" only fills as pass 1 reaches each par site.  Promote those here, so
+        // the boxing lands before `reserve_late_return_buffers` hands the now-heap
+        // return its `__retbuf` and before the H5 snapshot counts attributes.
+        self.promote_par_worker_tuple_returns();
         self.reserve_late_return_buffers();
         let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
             .map(|d| self.data.attributes(d as u32))
@@ -1661,6 +1682,44 @@ impl Parser {
     /// The variable is created alongside the attribute. `arguments()` yields argument
     /// vars in number order, so appending puts it last — which is where the attribute
     /// is too, and the position the callee's ABI expects.
+    /// loft#808 — box the pure-value tuple return of every def pass 1 saw used as a
+    /// `par(...)` worker, so pass 2 parses its body against `Reference(__tuple<…>)`.
+    ///
+    /// Runs between the passes because par-workerhood is only knowable once the whole
+    /// file is read: a worker declared above its par site was parsed while the set was
+    /// still empty. By pass 2 the set is complete, so `parse_function` computes the
+    /// same promoted type and the two passes agree. Idempotent — a worker declared
+    /// BELOW its par site was already promoted in pass 1 and is skipped by the
+    /// `Type::Tuple` guard.
+    fn promote_par_worker_tuple_returns(&mut self) {
+        let mut workers: Vec<u32> = self.par_worker_defs.iter().copied().collect();
+        workers.sort_unstable(); // deterministic `__tuple<…>` def order across runs
+        for d in workers {
+            if d as usize >= self.data.definitions.len() {
+                continue;
+            }
+            let Type::Tuple(elems) = self.data.def(d).returned().clone() else {
+                continue;
+            };
+            // Mirror `parse_function`'s size-driven arm exactly; the lifetime-bearing
+            // arm already promoted at signature time whether or not this is a worker.
+            if u32::from(crate::variables::size(
+                &Type::Tuple(elems.clone()),
+                &crate::data::Context::Argument,
+            )) <= 8
+                || elems.iter().any(|e| matches!(e, Type::Function(_, _, _)))
+            {
+                continue;
+            }
+            let synthetic_d_nr = self.data.tuple_def(&mut self.lexer, &elems);
+            // Assigned directly, not via `set_returned` — that one asserts the slot is
+            // still UNKNOWN (it guards the signature-time write), and pass 1 has
+            // already filled it with the bare tuple this promotion replaces.
+            self.data.definitions[d as usize].returned =
+                Type::Reference(synthetic_d_nr, crate::data::Deps::none());
+        }
+    }
+
     fn reserve_late_return_buffers(&mut self) {
         for d in 0..self.data.definitions.len() as u32 {
             let def = self.data.def(d);
@@ -2147,6 +2206,10 @@ impl Parser {
         self.lexer.parse_string(content, filename);
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // loft#808 — the same between-passes promotion `parse` does, so a program
+        // handed over as a STRING boxes a par worker's tuple return identically to
+        // one read from a file.
+        self.promote_par_worker_tuple_returns();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -2192,6 +2255,10 @@ impl Parser {
         self.lexer.parse_string(content, filename);
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // loft#808 — the same between-passes promotion `parse` does, so a program
+        // handed over as a STRING boxes a par worker's tuple return identically to
+        // one read from a file.
+        self.promote_par_worker_tuple_returns();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -2307,6 +2374,8 @@ impl Parser {
         self.pending_param_locks.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // loft#808 — the same between-passes promotion `parse` does; see there.
+        self.promote_par_worker_tuple_returns();
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
             self.diagnostics.fill(self.lexer.diagnostics());
@@ -2998,18 +3067,39 @@ impl Parser {
         // Without this, a value with a `Rewritten(Reference)` element
         // (e.g. `(Inner { … }, 11)` from inline struct construction)
         // fails to match a field declared as `(Inner, integer)` even
-        // though the underlying types are compatible.  We don't
-        // mutate `code` here — element conversions are by-shape only.
+        // though the underlying types are compatible.
+        //
+        // When `code` IS the tuple literal, each element is converted IN PLACE —
+        // a shape-only check accepts the tuple and leaves every element
+        // un-coerced, which for a bare `null` element means no op is emitted at
+        // all and the slot keeps whatever the stack held (loft#808:
+        // `fn f() -> (integer?, integer) { (null, 2) }` read back 8051).  The
+        // element needs the same `null` → `OpConvIntFromNull` coercion the
+        // synthetic-struct path gets from its per-field assignment.  Elements
+        // are converted through a temporary so a failing element leaves `code`
+        // untouched for the caller's fallback arms.
         if let (Type::Tuple(src_elems), Type::Tuple(dst_elems)) = (is_type, should)
             && src_elems.len() == dst_elems.len()
         {
+            let mut items = match code.unspan_mut() {
+                Value::Tuple(elements) if elements.len() == src_elems.len() => {
+                    std::mem::take(elements)
+                }
+                _ => Vec::new(),
+            };
             let mut all_compatible = true;
-            for (s, d) in src_elems.iter().zip(dst_elems.iter()) {
+            for (i, (s, d)) in src_elems.iter().zip(dst_elems.iter()).enumerate() {
                 let mut placeholder = Value::Null;
-                if !self.convert(&mut placeholder, s, d) {
+                let elem = items.get_mut(i).unwrap_or(&mut placeholder);
+                if !self.convert(elem, s, d) {
                     all_compatible = false;
                     break;
                 }
+            }
+            if !items.is_empty()
+                && let Value::Tuple(elements) = code.unspan_mut()
+            {
+                *elements = items;
             }
             if all_compatible {
                 return true;

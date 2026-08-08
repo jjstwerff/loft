@@ -213,6 +213,21 @@ impl Stores {
         }
     }
 
+    /// Back `reserve(h, n)` on a hash: size its bucket table for `n` entries up front
+    /// so filling it does not rebuild the table on the way (@PLN135 arc C).
+    ///
+    /// Capacity only — the collection's contents and its `len` are untouched, and a
+    /// count the table already covers does nothing.  A non-hash `tp` cannot reach here
+    /// (the parser only emits `OpReserveHash` for a hash), so it is a silent no-op
+    /// rather than a fault.
+    pub fn reserve_hash(&mut self, data: &DbRef, count: i64, tp: u16) {
+        if !matches!(self.types[tp as usize].parts, Parts::Hash(_, _)) {
+            return;
+        }
+        let keys = self.types[tp as usize].keys.clone();
+        crate::hash::reserve(data, count, &mut self.allocations, &keys);
+    }
+
     pub(super) fn insert_record(&mut self, data: &DbRef, rec: &DbRef, tp: u16, secondary: bool) {
         match self.types[tp as usize].parts.clone() {
             Parts::Vector(_) => {

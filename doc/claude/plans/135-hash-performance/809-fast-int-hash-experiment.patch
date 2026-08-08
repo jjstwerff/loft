@@ -1,0 +1,154 @@
+diff --git a/src/hash.rs b/src/hash.rs
+index 4bece4de..88dcb9cb 100644
+--- a/src/hash.rs
++++ b/src/hash.rs
+@@ -38,7 +38,41 @@ fn write_seed(store: &mut Store, claim: u32, seed: u64) {
+     store.set_u32_raw(claim, SEED_FLD + 4, (seed >> 32) as u32);
+ }
+ 
++/// EXPERIMENT (loft#809): `LOFT_HASH_STATS=1` reports how much of an insert build is
++/// the RESIZE re-hash rather than the inserts themselves.
++pub static RESIZE_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++pub static RESIZE_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++pub static ADD_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++fn hash_stats_on() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var("LOFT_HASH_STATS").as_deref() == Ok("1"))
++}
++
+ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
++    if hash_stats_on() {
++        let t0 = std::time::Instant::now();
++        add_inner(hash, rec, stores, keys);
++        ADD_NANOS.fetch_add(
++            t0.elapsed().as_nanos() as u64,
++            std::sync::atomic::Ordering::Relaxed,
++        );
++        let n = ADD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
++        if n % 1_000_000 == 0 {
++            eprintln!(
++                "[hash-stats] adds={n} add_total={}ms (of which resize={}ms over {} re-entries)",
++                ADD_NANOS.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
++                RESIZE_NANOS.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
++                RESIZE_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
++            );
++        }
++        return;
++    }
++    add_inner(hash, rec, stores, keys);
++}
++
++pub static ADD_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
++fn add_inner(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
+     let mut claim = keys::store(hash, stores).get_u32_raw(hash.rec, hash.pos);
+     let length = if claim == 0 {
+         // First insert: claim 10 words so the bucket array (room - 2 words,
+@@ -62,6 +96,7 @@ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
+     // `length >= 1.5·(room - 2) = 0.75·elms`.  (Was `+ 1` when only the
+     // header word was reserved.)
+     if (length * 2 / 3) + 2 >= room {
++        let _t0 = hash_stats_on().then(std::time::Instant::now);
+         // rehash
+         let mut move_rec = DbRef {
+             store_nr: hash.store_nr,
+@@ -85,6 +120,13 @@ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
+         }
+         claim = new_claim;
+         keys::mut_store(hash, stores).set_u32_raw(hash.rec, hash.pos, claim);
++        if let Some(t0) = _t0 {
++            RESIZE_NANOS.fetch_add(
++                t0.elapsed().as_nanos() as u64,
++                std::sync::atomic::Ordering::Relaxed,
++            );
++            RESIZE_ENTRIES.fetch_add(u64::from(length), std::sync::atomic::Ordering::Relaxed);
++        }
+     }
+     hash_set(claim, rec, stores, keys);
+     keys::mut_store(rec, stores).set_u32_raw(claim, LEN_FLD, length + 1);
+diff --git a/src/keys.rs b/src/keys.rs
+index e63dc3a7..0442993a 100644
+--- a/src/keys.rs
++++ b/src/keys.rs
+@@ -1258,8 +1258,69 @@ pub fn get_simple(record: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<Simple>
+     result
+ }
+ 
++/// EXPERIMENT (loft#809): `LOFT_FAST_INT_HASH=1` routes a single-integer key
++/// through `int_hash` instead of SipHash, so the end-to-end win can be measured.
++fn fast_int_hash_on() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| std::env::var("LOFT_FAST_INT_HASH").as_deref() == Ok("1"))
++}
++
++/// Does `type_nr` name a key that reconstructs as `Content::Long`?  The single
++/// place that answers it, so the record side (`hash`) and the lookup side
++/// (`key_hash`) cannot drift into hashing the same key two different ways.
++/// Mirrors `get_key`: 3/4 are Single/Float, 6 is Str, everything else is a Long.
++#[inline]
++fn is_long_key(type_nr: i8) -> bool {
++    !matches!(type_nr.abs(), 3 | 4 | 6)
++}
++
++/// Read a single integer key's `i64` view — exactly the value `hash_ref` feeds
++/// the hasher and `get_key` rebuilds as `Content::Long`.
++#[inline]
++fn long_key_value(r: &DbRef, stores: &[Store], key: &Key, p: u32) -> i64 {
++    let s = store(r, stores);
++    match key.type_nr.abs() {
++        1 => s.get_int(r.rec, p),
++        2 => s.get_long(r.rec, p),
++        8 => i64::from(s.get_i32_raw(r.rec, p)),
++        9 => i64::from(s.get_short(r.rec, p, 0)),
++        11 => {
++            let raw: u16 = *s.addr(r.rec, p);
++            i64::from(raw as i16)
++        }
++        _ => i64::from(s.get_byte(r.rec, p, 0)),
++    }
++}
++
++/// A seeded integer hash for the single-`integer`-key case (loft#809).
++///
++/// The seed is mixed in FIRST and the value then run through a full
++/// murmur3-style finalizer, so which keys share a bucket still depends on a seed
++/// the program never reveals — the P253 hash-DoS property SipHash is here for.
++/// What it drops is SipHash's per-lookup construction: a fresh `DefaultHasher`,
++/// an absorbed seed word, the `write_u64` buffering state machine and three
++/// finalization rounds, for a key that is already one machine word.
++#[inline]
++#[must_use]
++pub fn int_hash(v: i64, seed: u64) -> u64 {
++    let mut x = (v as u64) ^ seed;
++    x ^= x >> 33;
++    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
++    x ^= x >> 29;
++    x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
++    x ^= x >> 32;
++    x
++}
++
+ #[must_use]
+ pub fn hash(rec: &DbRef, stores: &[Store], keys: &[Key], seed: u64) -> u64 {
++    if fast_int_hash_on()
++        && let [key] = keys
++        && is_long_key(key.type_nr)
++    {
++        let pos = rec.pos + u32::from(key.position);
++        return int_hash(long_key_value(rec, stores, key, pos), seed);
++    }
+     let mut hasher = seeded_hasher(seed);
+     for key in keys {
+         let pos = rec.pos + u32::from(key.position);
+@@ -1270,6 +1331,11 @@ pub fn hash(rec: &DbRef, stores: &[Store], keys: &[Key], seed: u64) -> u64 {
+ 
+ #[must_use]
+ pub fn key_hash(key: &[Content], seed: u64) -> u64 {
++    if fast_int_hash_on()
++        && let [Content::Long(l)] = key
++    {
++        return int_hash(*l, seed);
++    }
+     let mut hasher = seeded_hasher(seed);
+     for k in key {
+         match k {

@@ -245,7 +245,7 @@ Operations on `vector<T>` — the primary ordered collection type.
 | Function | Description |
 |----------|-------------|
 | `len(v: vector) -> integer` | Number of elements in the vector. Use in loop bounds: `for i in 0..v.len()`. |
-| `reserve(v: vector, n: integer)` | Give `v` room for `n` elements so filling it does not repeatedly reallocate. Changes capacity only — never `len(v)`, its contents, or anything holding it — and an `n` at or below the current capacity does nothing. |
+| `reserve(v: vector, n: integer)` | Give `v` room for `n` elements so filling it does not repeatedly reallocate. Changes capacity only — never `len(v)`, its contents, or anything holding it — and an `n` at or below the current capacity does nothing. Also takes a `hash` (see below). |
 
 **When `reserve` is worth it — it is the INTERLEAVING that decides, not the
 number of vectors.** Appending grows a vector by doubling, so filling one of N
@@ -277,6 +277,32 @@ for feature in stream { tiles[feature.tile].points += [feature.point]; }
 
 An estimate is fine: reserving too little only means the ladder resumes from
 there, and too much costs the unused tail until the vector is copied.
+
+**`reserve(h, n)` also takes a `hash`**, where it sizes the bucket table instead
+of an element block. Here it pays on the plain shape — no interleaving needed —
+because a hash rebuilds its whole table every time it crosses a 0.75 load factor,
+re-bucketing every entry it already holds:
+
+```loft
+cache: hash<Entry[key]> = [];
+reserve(cache, expected_rows);
+for row in rows { cache += Entry { key: row.id, value: row.value }; }
+```
+
+Filling a million-entry hash rebuilds the table 17 times without it. Measured on
+`--native-release`, 1M `integer` keys: **618 → 352 ms**, and the finished table is
+**half the size** (10.2 MB → 5.3 MB) — the growth ladder doubles *past* the
+trigger and lands at load 0.42, while a reserved table sits at the 0.75 it asked
+for. So it buys time and memory at once.
+
+Same contract as the vector form: capacity only. It never changes `len(h)`, the
+records, or which keys are found; an `n` the table already covers does nothing;
+and reserving a hash that already holds entries re-buckets them with the *same*
+seed, so every key stays findable. Reserving too little just means the ladder
+resumes from there.
+
+`sorted`, `index`, `spatial` and `trie` have no capacity to set and are refused
+with a message that says so.
 
 ### Aggregates
 

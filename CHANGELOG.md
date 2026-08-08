@@ -56,6 +56,78 @@ refused at the declaration now, and the message points at `trie`. The mirror too
 a numeric key under `trie` points back at `spatial`, or at `sorted` / `index` for
 an order on a number.
 
+### A `float` key finds the record you stored under it
+
+A `hash`, `sorted` or `index` keyed on a `float` or `single` field accepted every
+insert, counted them all, and then found almost none of them again — and a `sorted`
+kept only the last one. The key was being read one byte at a time, so `0.5`, `1.5`
+and `2.0` were all the same key:
+
+```loft
+prices: sorted<Price[at]> = [];
+prices += Price { at: 0.5, name: "a" };
+prices += Price { at: 1.5, name: "b" };
+prices += Price { at: 2.5, name: "c" };
+len(prices)        // was 1 — now 3
+prices[1.5]        // was null — now the record you stored
+```
+
+Nothing about the stored data was wrong; only the reading of the key. So an
+existing collection starts answering correctly as soon as you re-run — there is
+nothing to rebuild.
+
+### A `u8` or `i32` key works under `--native` too
+
+The same story on one backend only: a collection keyed on a sized integer
+(`u8`, `u16`, `i32`, `u32`) looked up correctly under the interpreter and missed
+every record under `--native`, where a `hash` answered "not found" and a `sorted`
+answered a record whose fields all read `null`. Both backends now build the
+lookup key the same way.
+
+Still open, and refused rather than silently wrong is what we owe you here: a key
+declared `i8`, `i16`, or `integer limit(min, max)` with a non-zero minimum is
+still not found on either backend (loft#812). Use a plain `integer` for the key
+field and keep the narrow type on the others.
+
+### Inserting into a keyed collection is a little under twice as fast
+
+`collection += Item { … }` used to build the item in a scratch record, then copy
+that record into the collection and free the scratch — one allocation and one
+deep copy per insert, for a value that was freshly written and had nowhere else
+to be. It is now written straight into the collection's own slot. A million
+inserts of a two-field record went from 933 ms to 505 ms.
+
+Nothing changes about what you write. `collection += existing_item` still copies,
+because there the item genuinely exists elsewhere.
+
+Looking a key up got about a fifth faster too, on both backends — the work of
+deciding *how* to compare a key is now done once per lookup instead of once per
+record examined.
+
+### `reserve(h, n)` for a hash you know the size of
+
+`reserve` already gave a vector room for `n` elements. It now takes a `hash` as
+well, where it sizes the bucket table:
+
+```loft
+cache: hash<Entry[key]> = [];
+reserve(cache, expected_rows);
+for row in rows { cache += Entry { key: row.id, value: row.value }; }
+```
+
+A hash rebuilds its whole table each time it outgrows one — filling a
+million-entry hash rebuilds it seventeen times, re-placing every entry it already
+holds. Saying the size up front skips all of that: a million inserts went from
+618 ms to 352 ms, and the finished table came out **half the size** (10.2 MB →
+5.3 MB), because growing doubles past what it needed while reserving asks for
+exactly what you said.
+
+Same promise as the vector form: it changes capacity and nothing else — not
+`len(h)`, not the records, not which keys are found. Guessing low just means
+growth resumes from there, and reserving a hash that already holds entries is
+safe. `sorted`, `index`, `spatial` and `trie` have no capacity to set, and say so
+if you ask.
+
 ### A collection can fetch what it is asked for
 
 Bind a collection to a source and stop writing a loading step. A lookup that misses

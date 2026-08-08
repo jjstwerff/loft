@@ -1,0 +1,28 @@
+struct Entry { key: integer, val: integer }
+
+// The WORKING shape: a vector append of a fresh literal already elides the scratch
+// record (@PLN90 move_elide) — fields are written straight into the element slot.
+fn vec_literal(n: integer) -> integer {
+  v: vector<Entry> = [];
+  for i in 0..n { v += [Entry { key: i, val: i * 2 }]; }
+  return len(v);
+}
+
+// The BROKEN shape: the same fresh literal into a keyed collection still builds a
+// scratch record and OpCopyRecords it into the entry slot.
+fn hash_literal(n: integer) -> integer {
+  h: hash<Entry[key]> = [];
+  for i in 0..n { h += Entry { key: i, val: i * 2 }; }
+  return len(h);
+}
+
+// Must KEEP the copy: the RHS is a variable, not a fresh construction.
+fn hash_variable(n: integer) -> integer {
+  h: hash<Entry[key]> = [];
+  for i in 0..n { e = Entry { key: i, val: i * 2 }; h += e; }
+  return len(h);
+}
+
+fn main() {
+  println("vec={vec_literal(4)} hash={hash_literal(4)} var={hash_variable(4)}");
+}

@@ -1504,18 +1504,25 @@ impl Parser {
         // `text_return`.
         let is_generic_template =
             self.context != u32::MAX && self.data.def_type(self.context) == DefType::Generic;
-        // A7.1: also rewrite pure-value tuples wider than the 8-byte
-        // primitive return slot.  Three- and four-arity tuples and
-        // nested tuples don't fit in a single eval-stack slot under
-        // par dispatch; routing them through the synthetic struct
-        // unifies the par-tuple-return path with the lifetime-bearing
-        // case from Phase 07.  Safe after P236's fix (work-ref
-        // unification across If branches in
-        // `parser/control.rs::unify_if_branches_work_refs`); without
-        // it, `min_max(...) -> (integer, integer) { if cond { (a, b) }
-        // else { (c, d) } }` regressed on `--native` because each
-        // branch's separate synthetic-struct work-ref dropped the
-        // if/else's value.
+        // A7.1: a pure-value tuple wider than the 8-byte primitive return slot is
+        // boxed the same way, but ONLY for a par worker (loft#808).  Par dispatch
+        // carries a worker result home through per-route buffers that cover ≤8-byte
+        // primitives, text, fn-refs and references and nothing else, so a bare
+        // `(integer, integer)` return has nowhere to ride; routing it through the
+        // synthetic struct puts it on the reference route with the lifetime-bearing
+        // case from Phase 07.  Safe after P236's fix (work-ref unification across If
+        // branches in `parser/control.rs::unify_if_branches_work_refs`); without it,
+        // `min_max(...) -> (integer, integer) { if cond { (a, b) } else { (c, d) } }`
+        // regressed on `--native` because each branch's separate synthetic-struct
+        // work-ref dropped the if/else's value.
+        //
+        // Everywhere ELSE the boxing is pure cost: it turns `(float, float, float)`
+        // into a store record claimed and freed on every call, so the SAME arithmetic
+        // ran ~5.6x slower crossing a function boundary than inline (loft#808 measured
+        // 728ms vs 129ms on `--native-release`; the local compiles to a real Rust
+        // `(f64, f64, f64)`).  A tuple return keeps Rust's tuple ABI unless it is a
+        // worker's.  See `Parser::par_worker_defs` for why the set is complete here on
+        // pass 2 and topped up between the passes.
         //
         // P196 follow-up (2026-05-12): exclude tuples that contain a
         // `Type::Function` element from the size>8 trigger.  Function
@@ -1525,16 +1532,13 @@ impl Parser {
         // wrapping breaks at the assignment site `Pair { v: pp }` where
         // `Pair.v: (fn, integer)` stays as a bare tuple type but
         // `pp: Reference(__tuple<fn, integer>)` after the rewrite.
-        // Function-element tuple returns worked correctly BEFORE
-        // commit 44fdd098 added the size>8 trigger, so excluding them
-        // preserves the original P196 codegen path while keeping the
-        // A7.1 win for pure-primitive 3+ arity tuples.  The
-        // `has_lifetime_concern` arm still fires for Text / Reference /
-        // Vector / etc. elements that genuinely need by-reference
-        // passing; only the size-driven trigger is narrowed.
+        // The `has_lifetime_concern` arm still fires for Text / Reference /
+        // Vector / etc. elements that genuinely need by-reference passing;
+        // only the size-driven trigger is narrowed.
         let needs_tuple_rewrite = matches!(&result, crate::data::Type::Tuple(elems)
             if elems.iter().any(crate::data::has_lifetime_concern)
-                || (u32::from(crate::variables::size(&result, &crate::data::Context::Argument)) > 8
+                || (self.par_worker_defs.contains(&self.context)
+                    && u32::from(crate::variables::size(&result, &crate::data::Context::Argument)) > 8
                     && !elems.iter().any(|e| matches!(e, crate::data::Type::Function(_, _, _)))));
         // @PLN85 generic-tuple-return-fix.md — a generic template whose return SHAPE
         // is already concrete (`-> (text, text)`, no `T` in any element) is not the

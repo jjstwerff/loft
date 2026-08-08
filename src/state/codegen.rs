@@ -1509,6 +1509,18 @@ impl State {
                 Type::Text(_) => {
                     stack.add_op("OpConvTextFromNull", self);
                 }
+                // loft#808 — Character and payload-less Enum complete the table.  The
+                // three sibling walkers (`emit_tuple_put_ops`, `emit_tuple_var_pop_put`,
+                // `emit_tuple_var_push_recursive`) already carry both; only null-init
+                // was short, so `fn f() -> (character, character)` panicked here the
+                // moment its return stopped being boxed into a `__tuple<…>` record and
+                // became a real tuple local that needs initialising.
+                Type::Character => {
+                    stack.add_op("OpConvCharacterFromNull", self);
+                }
+                Type::Enum(_, false, _) => {
+                    stack.add_op("OpConvEnumFromNull", self);
+                }
                 other => panic!("emit_tuple_null_init: unsupported element type {other:?}"),
             }
             let pos = stack.position - elem_abs;
@@ -1521,6 +1533,8 @@ impl State {
                     stack.add_op("OpPutRef", self);
                 }
                 Type::Text(_) => stack.add_op("OpPutText", self),
+                Type::Character => stack.add_op("OpPutCharacter", self),
+                Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
                 _ => unreachable!(),
             }
             self.code_add(pos);

@@ -1198,6 +1198,10 @@ pub fn len(both: hash) -> integer {
 }
 #pure
 
+// @PLN135 arc C: the `reserve(h, n)` builtin for a hash.  `db_tp` is the collection's
+// own type, which is what names the key fields the pre-sized table has to re-bucket.
+fn OpReserveHash(r: hash, count: integer, db_tp: const u16);
+#rust"s.database.reserve_hash(&@r, @count, @db_tp);"
 fn OpSizeHash(r: hash) -> integer;
 #rust"i64::from(hash::table_bytes(&@r, &s.database.allocations))"
 // The byte footprint of a hash (@PLN110): its full bucket table, holes
