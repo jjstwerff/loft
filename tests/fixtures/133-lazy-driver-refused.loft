@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S9 — the two ways a set of lazy drivers is REFUSED.
+//
+// Its own program because a refusal poisons every lookup, which is the point:
+// the driver set is one answer, so a program carrying a broken one cannot be
+// half-served. The dispatch matrix beside this proves the working cells.
+//
+// **Both backends must word it identically, and that is not automatic.** The
+// interpreter asks `Data` at every miss and reports the sentence it wrote;
+// `--native` cannot ask `Data` at all, so the refusal has to travel as data
+// (generated `init()` installs it). Without that, the same program named a
+// different mistake depending on which backend you ran — and the one that named
+// the ACTUAL mistake was the one you did not get if you compiled.
+//
+// The other refusal — THE driver name carrying the wrong shape — is
+// `133-lazy-driver-malformed.loft`, separate for the same reason.
+
+struct LdrThing { id: integer, nm: text }
+struct LdrWorld { things: hash<LdrThing[id]> = [] }
+
+// Two drivers for ONE element type. Not a redefinition — the names differ — so
+// nothing before this refused it, and a miss would have run whichever the walk
+// reached first.
+fn lazy_fetch(coll: hash<LdrThing[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  coll += [LdrThing { id: key_int, nm: "first" }];
+  return 1;
+}
+
+fn lazy_fetch_also(coll: hash<LdrThing[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  coll += [LdrThing { id: key_int, nm: "second" }];
+  return 1;
+}
+
+fn main() {
+  w = LdrWorld { };
+  store_bind_lazy(w.things, "postgres://db/things");
+  r = w.things[1];
+  println("value {r.nm ?? "<none>"}");
+  println("why {store_lazy_error(w.things) ?? "<no error>"}");
+  println("refused ok");
+}

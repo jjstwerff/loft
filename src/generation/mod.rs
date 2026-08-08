@@ -2764,32 +2764,57 @@ extern crate loft;"
     /// list.
     fn roots_with_lazy_driver(&self, entries: &[u32]) -> Vec<u32> {
         let mut roots = entries.to_vec();
-        if let Ok(Some(d_nr)) = self.data.lazy_fetch_driver()
-            && !roots.contains(&d_nr)
-        {
-            roots.push(d_nr);
+        // @PLN133 S9 — EVERY driver is a root, not the one. A program declares
+        // one per element type, and a driver left out of the walk is the quiet
+        // failure again: the program compiles, installs a pointer to a body that
+        // was never emitted, and that collection alone has no driver.
+        if let Ok(drivers) = self.data.lazy_fetch_drivers() {
+            for (_, d_nr) in drivers {
+                if !roots.contains(&d_nr) {
+                    roots.push(d_nr);
+                }
+            }
         }
         roots
     }
 
-    /// @PLN133 S8 — hand the program's lazy driver to the runtime.
+    /// @PLN133 S8/S9 — hand the program's lazy drivers to the runtime.
     ///
     /// `OpGetRecord` lives in libloft and cannot see a function the generator
-    /// wrote, so `init()` installs a pointer to it. Emitted only when the
-    /// program HAS a driver of the one admitted signature — which is checked in
-    /// `Data::lazy_fetch_driver`, the same place the interpreter asks, so the
-    /// two backends cannot disagree about whether a driver is usable.
+    /// wrote, so `init()` installs a pointer per driver, keyed by the ELEMENT
+    /// TYPE it serves. Which drivers exist and what each serves is decided in
+    /// `Data::lazy_fetch_drivers` — the same place the interpreter asks — so the
+    /// two backends cannot disagree about which driver a miss reaches.
     ///
     /// A driver with the wrong shape emits nothing, and the runtime then reports
     /// "needs a loft driver" rather than calling a function whose parameters do
     /// not line up — a wrong VALUE, which is the class this channel exists to
     /// keep out.
     fn emit_lazy_fetch_registration(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
-        if let Ok(Some(d_nr)) = self.data.lazy_fetch_driver()
-            && d_nr < till
-            && (self.reachable.is_empty() || self.reachable.contains(&d_nr))
-        {
-            writeln!(w, "    codegen_runtime::register_lazy_fetch(n_lazy_fetch);")?;
+        let drivers = match self.data.lazy_fetch_drivers() {
+            Ok(d) => d,
+            // The refusal travels as data. The interpreter re-asks `Data` at
+            // every miss and reports the reason it wrote; native cannot ask, so
+            // without this it registered nothing and reported "needs a loft
+            // driver" — the same program naming a different mistake depending on
+            // which backend you ran.
+            Err(why) => {
+                writeln!(
+                    w,
+                    "    codegen_runtime::register_lazy_fetch_refusal({why:?});"
+                )?;
+                return Ok(());
+            }
+        };
+        for (element, d_nr) in drivers {
+            if d_nr < till && (self.reachable.is_empty() || self.reachable.contains(&d_nr)) {
+                writeln!(
+                    w,
+                    "    codegen_runtime::register_lazy_fetch({:?}, {});",
+                    element,
+                    self.data.def(d_nr).name
+                )?;
+            }
         }
         Ok(())
     }

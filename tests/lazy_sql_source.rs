@@ -988,6 +988,168 @@ fn a_lazy_fetch_can_be_a_loft_function() {
     );
 }
 
+/// @PLN133 S9 — a lazy driver serves ONE element type, and the miss finds it.
+///
+/// S8 let a program declare one `lazy_fetch`, and **nothing checked that the
+/// driver a miss reached was declared for THAT collection**. So a program with a
+/// second lazily-bound element type ran the first type's driver against it —
+/// measured on both backends, inserting a `Person` into a `hash<Order[id]>` and
+/// reading its `nm` straight back through `Order.what`'s offset. A plausible
+/// wrong value, which is the class @PLN129 arc C exists to keep out.
+///
+/// One mechanism does both jobs: the driver is looked up by the collection's
+/// ELEMENT TYPE, which makes several drivers possible and reaching the wrong one
+/// impossible. What each serves is read off its collection parameter — the name
+/// after `lazy_fetch_` is free, and exists only because loft refuses a
+/// redefinition.
+///
+/// **The cell that would have been silent is `orphan`**: a bound collection whose
+/// type no driver serves. It must now report, and the absence of a `driver=`
+/// line before it is the proof that no driver ran — a value assertion alone would
+/// pass on a driver that happened to answer nothing.
+///
+/// The two REFUSALS are separate programs because a refused driver set poisons
+/// every lookup, which is the point: the set is one answer, so a program carrying
+/// a broken one cannot be half-served.
+#[test]
+fn a_lazy_driver_serves_one_element_type_and_the_miss_finds_it() {
+    let _serial = SQLITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let run = |fixture: &str, backend: &str| -> String {
+        let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture);
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg(&script)
+            .env("LOFT_NATIVE_LEAK_CHECK", "1")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("failed to invoke loft");
+        assert!(
+            out.status.success(),
+            "{fixture} {backend} exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        for line in String::from_utf8_lossy(&out.stderr).lines() {
+            if line.starts_with("Warning:") {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        text
+    };
+
+    let s = run("133-lazy-driver-dispatch.loft", "--interpret");
+
+    // Each collection reached ITS OWN driver. The values name the driver that
+    // made them, so a dispatch that collapsed to one implementation reads as
+    // `order person-9` here rather than as a count that happens to match.
+    assert!(s.contains("person person-7"), "person driver: {s}");
+    assert!(s.contains("order order-9"), "order driver: {s}");
+    // …over an `index`, not only a `hash`: the element-type key is not a
+    // hash-shaped trick.
+    assert!(s.contains("ticket seat-3"), "index-collection driver: {s}");
+
+    // THE cell. A bound collection whose element type no driver serves must
+    // report, and must not reach somebody else's driver. The count is the proof:
+    // three misses reach a driver and this one reaches none.
+    assert!(
+        s.contains("orphan <none>"),
+        "a collection with no driver answers null: {s}"
+    );
+    assert!(
+        s.contains("orphan-why `postgres://db/orphans` needs a loft driver for LddNoDriver"),
+        "the refusal names the TYPE that has no driver: {s}"
+    );
+    assert_eq!(
+        s.matches("driver=").count(),
+        6,
+        "exactly six driver calls — person 7, order 9, ticket 3, person 8, \
+         order 400, order 66. The repeat of person 7 is a resident hit and the \
+         orphan reaches NO driver, so neither is in the count: {s}"
+    );
+    assert!(
+        !s.contains("orphan orphan") && !s.contains("orphan person"),
+        "the orphan must never be filled by another type's driver: {s}"
+    );
+
+    // A resident key does not re-enter the driver, and a neighbour with no driver
+    // does not disturb one that has.
+    assert_eq!(
+        s.matches("driver=person source=postgres://db/people key=7")
+            .count(),
+        1,
+        "a resident key must not re-enter the driver: {s}"
+    );
+    assert!(
+        s.contains("after person-8"),
+        "a later fetch still works: {s}"
+    );
+
+    // Absence and unreachability are the same null and must never be the same
+    // fact. The pair is what makes the channel non-vacuous.
+    assert!(
+        s.contains("absent <none> why=\n"),
+        "a genuine absence leaves the channel EMPTY: {s}"
+    );
+    assert!(
+        s.contains("unreachable <none> why=the duckdb:orders.db order service is not answering"),
+        "an unreachable source reports the driver's own reason: {s}"
+    );
+
+    // A helper sharing the drivers' name prefix is an ordinary function. Under a
+    // name-only membership rule it was read as a malformed driver and poisoned
+    // every lookup above, which is the cost that made the rule wrong.
+    assert!(s.contains("helper label-4"), "the helper still runs: {s}");
+    assert!(
+        !s.contains("not freed"),
+        "the dispatch must leave nothing behind: {s}"
+    );
+
+    let n = run("133-lazy-driver-dispatch.loft", "--native");
+    assert_eq!(
+        s, n,
+        "both backends must reach the same driver for the same collection"
+    );
+
+    // --- the refusals ------------------------------------------------------
+    //
+    // Byte-identical wording is not automatic here and is the thing being
+    // gated: the interpreter asks `Data` at every miss, while `--native` cannot
+    // ask at all and has the refusal installed as data by generated `init()`.
+    // Without that, the same program named a different mistake depending on
+    // which backend you ran.
+    let dup = run("133-lazy-driver-refused.loft", "--interpret");
+    assert!(
+        dup.contains("why `lazy_fetch` and `lazy_fetch_also` are both lazy drivers for LdrThing"),
+        "two drivers for one type are refused, naming BOTH: {dup}"
+    );
+    assert!(
+        dup.contains("value <none>"),
+        "and neither of them runs: {dup}"
+    );
+    assert_eq!(
+        dup,
+        run("133-lazy-driver-refused.loft", "--native"),
+        "both backends must word the duplicate-driver refusal identically"
+    );
+
+    let bad = run("133-lazy-driver-malformed.loft", "--interpret");
+    assert!(
+        bad.contains("why `lazy_fetch` takes 3 parameter(s)"),
+        "THE driver name with a wrong shape says what is wrong with IT, not \
+         that there is no driver: {bad}"
+    );
+    assert_eq!(
+        bad,
+        run("133-lazy-driver-malformed.loft", "--native"),
+        "both backends must word the malformed-driver refusal identically"
+    );
+}
+
 /// @PLN133 S8 — the releasing unwind, and the matrix that decides it is safe.
 ///
 /// A raise in loft short-circuits the dispatch loop, so the scope-exit frees the

@@ -222,6 +222,34 @@ resident, exactly as for a Rust source. The third answer, *the source is down*,
 goes through `store_lazy_fail(coll, why)`: it carries a reason, and answering `0`
 for it would make an unreachable source read as an empty table.
 
+### One driver per ELEMENT TYPE (@PLN133 S9)
+
+**A driver serves the type its collection parameter names, and only that type.**
+A program with several lazily-bound types declares one driver each. loft refuses a
+redefinition, so the extras take a suffix — and the suffix is a label for a
+reader, carrying nothing: what a driver serves is read off its parameter.
+
+```loft
+fn lazy_fetch(coll: hash<Person[id]>, …) -> integer { … }         // Person
+fn lazy_fetch_orders(coll: hash<Order[id]>, …) -> integer { … }   // Order
+fn lazy_fetch_seats(coll: index<Ticket[id]>, …) -> integer { … }  // Ticket
+```
+
+Three rules follow, and each exists because its absence was a wrong ANSWER rather
+than an error:
+
+- **A collection whose type no driver serves reaches NO driver**, and reports
+  *"`postgres://…` needs a loft driver for Order"*. Before this, a program's
+  single driver was called for every lazily-bound collection whatever it was
+  declared for — so a `Person` was inserted into a `hash<Order[id]>` and read
+  back through `Order`'s offsets.
+- **Two drivers for one element type are refused, naming both.** Picking one
+  silently is the same class in a new place.
+- **A helper may share the prefix.** `lazy_fetch_row(n: integer)` is an ordinary
+  function: past the exact name `lazy_fetch`, a candidate must also take a keyed
+  collection first. Anyone writing a driver names its helpers after it, and
+  treating those as malformed drivers would refuse the working driver beside them.
+
 **A fault inside the driver is CONTAINED.** For an ordinary call, propagating a
 fault is right; for a fetch it is not, because C80 says a failed fetch reports
 through `store_lazy_error` and the lookup answers null. So a buggy driver leaves
@@ -240,9 +268,16 @@ driver creates are remembered for the length of the call and freed if it faults.
 An insert copies into the collection's store, so a driver's own new stores are
 only ever its locals: what it inserted before faulting survives intact.
 
-**A binding with no `lazy_fetch` is REFUSED and says so** — *"`postgres://…`
-needs a loft driver"* — rather than being read as a `.store` image, which is what
-it used to be.
+**A binding with no driver is REFUSED and says so** — *"`postgres://…` needs a
+loft driver for Order"* — rather than being read as a `.store` image, which is
+what it used to be. It names the TYPE, because that is what has no driver;
+naming only the source would send a reader to a connection string that is fine.
+
+**A refused driver SET reports the same reason on both backends.** The
+interpreter re-asks at every miss and reports what it found; `--native` cannot
+ask, so generated `init()` installs the refusal as data. Without that the same
+program named a different mistake depending on which backend ran it, and the one
+naming the real mistake was the one you did not get if you compiled.
 
 ## `len` and iteration answer "what have I got"
 

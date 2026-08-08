@@ -23,8 +23,9 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S6 `introspect` (sqlite) + the round trip, run twice | **done** |
 | S7 the backend registry | **done** — `tests/fixtures/sqldb/registry/`, shape (1) |
 | S8 core's lazy fault calls loft | **done, both backends** |
-| S9 switch sqlite to the loft path | **blocked** — one driver per program, monomorphic (below) |
-| S10–S14 | not started, and S10–S13 sit behind S9 |
+| S9 prerequisite: per-type driver dispatch | **done** — and it closed a wrong-value hole S8 had left (below) |
+| S9 switch sqlite to the loft path | not started — unblocked |
+| S10–S14 | not started |
 
 Every measurement below is from the current tree and is cited so it can be
 re-checked rather than believed.
@@ -967,48 +968,76 @@ nothing downstream can fix it, and nothing downstream can see it is wrong.
 `Dialect.setup` had carried those statements since S3 with no one to run them;
 `connect` is the one place that can.
 
-### S9 has an unmet prerequisite: `lazy_fetch` is ONE driver, monomorphic
+### S9's prerequisite: per-type driver dispatch — and the corruption it was hiding
 
-Measured 2026-08-08, before starting S9. `Data::lazy_fetch_driver` looks up
-`n_lazy_fetch` — one def_nr — and requires its first parameter to be a keyed
-COLLECTION, which in loft is a concrete type. So a program declares its driver as
+**Done 2026-08-08.** The probe that was meant to measure a LIMIT found a wrong
+value instead, which is the more important half of this entry.
 
-```loft
-fn lazy_fetch(coll: hash<Person[id]>, source: text, key_int: integer, key_text: text) -> integer
-```
+**What was there.** `Data::lazy_fetch_driver` looked up `n_lazy_fetch` — one
+def_nr — so a program declared exactly one driver and a second was refused with
+*"Cannot redefine 'lazy_fetch'"*. That reads as a limit on how many collections a
+program may lazily bind. It is not:
 
-and a second one for a different element type is refused: *"Cannot redefine
-'lazy_fetch'"*. **A program can therefore lazily bind exactly one collection TYPE
-through a loft driver**, and a driver cannot live in a library at all, because a
-library cannot name the consumer's element type.
+> **Nothing checked that the driver a miss reached was declared for THAT
+> collection.** A program with two lazily-bound element types ran the FIRST
+> type's driver against the second collection.
 
-That is fine for S8, which added a path where there was none. It is a blocker for
-S9, which REPLACES one: core's Rust sqlite source serves any collection type in
-any program with no user code, so routing sqlite through loft as the plan writes
-it would be a strict loss of expressiveness — and S10 deletes the Rust behind it,
-which makes the loss permanent.
+Measured on both backends, with two `hash` collections bound to two sources:
+`w.orders[9]` ran the driver written for `TdcPerson`, which inserted a
+`TdcPerson` into a `hash<TdcOrder[id]>`, and reading `.what` back gave
+`person-9-postgres://db/people` — one type's field read through another type's
+offset. Not an error, not a null: a plausible value, which is the class @PLN129
+arc C exists to keep out of the value channel. S8's own shape check was about the
+driver's SIGNATURE and never about its subject.
 
-**So S9 needs a design step this plan had not named: the driver has to be
-dispatchable per collection type.** Three shapes, and the counting is not done:
+**One mechanism fixes both.** The driver is looked up by the collection's ELEMENT
+TYPE, which makes several drivers possible and makes reaching the wrong one
+impossible — the limit and the corruption were the same missing fact.
 
-1. **By NAME, from the element type** — core has the collection's type in hand at
-   the miss, so it can look up `lazy_fetch_Person`, or read a `#lazy_fetch`
-   annotation off any function. Smallest, and it keeps the typed `coll += [row]`
-   that makes a driver readable.
-2. **Generic over the collection** (`<C: KeyedCollection>`) — needs a language
-   feature that does not exist, since the key field names are part of the type.
-3. **One driver over a reflected handle**, dispatching in loft. Keeps one entry
-   point and loses the typed insert, which is the half a driver is mostly made of.
+- **What a driver serves is read off its declared collection parameter**, never
+  guessed from its name. `Data::lazy_fetch_drivers` answers
+  `(element type name, def_nr)` for every driver, and that is the single home both
+  backends ask.
+- **The key is a NAME, not a number.** The two sides count types in different
+  spaces — a parse-time `Definition` and a runtime `Stores::types` entry — and a
+  name is the one key both hold without a mapping to keep in step. @PLN133 S8's
+  own `LOFT_STRICT_SCHEMA_IDS` exists because that kind of mapping drifts.
+- **Membership needs more than a name.** `lazy_fetch` exactly is THE driver name,
+  so a wrong shape there is named rather than walked past; `lazy_fetch_<anything>`
+  additionally requires a keyed collection as its first parameter. That second
+  rule was not fussiness — anyone writing a driver names its helpers after it
+  (`lazy_fetch_row`, `lazy_fetch_query`), and under a name-only rule each helper
+  was read as a malformed driver and poisoned every lookup in the program,
+  including the working driver beside it. The first version did exactly that.
+- **Two drivers for one element type are refused, naming both.** Silently picking
+  one is the same wrong-value class in a new place.
+- **`--native` installs one pointer per driver**, keyed on the same name
+  (`register_lazy_fetch("TdcPerson", n_lazy_fetch)`), and every driver is a
+  reachability ROOT — a driver left out of the walk is the quiet failure S8
+  already documented, arriving once per type instead of once per program.
 
-Whichever wins, it is not free on the native side: `codegen_runtime` installs ONE
-function pointer today (`register_lazy_fetch`), so a per-type driver means a
-table there and a matching lookup in the interpreter's positional push — the two
-have to agree, which is the property `lazy_fetch_driver` exists to hold.
+**A backend divergence had to be closed to gate the refusals**, and it was S8's,
+not S9's: the interpreter asks `Data` at every miss and reports the sentence it
+wrote, while `--native` cannot ask `Data` at all — it registered nothing and said
+*"needs a loft driver"*. The same program named a different mistake depending on
+which backend you ran, and the one naming the ACTUAL mistake was the one you did
+not get if you compiled. The refusal now travels as data
+(`register_lazy_fetch_refusal`), and the "no driver" sentence has one home
+(`database::lazy::no_lazy_driver`) so the two cannot word it differently.
 
-**This does not falsify option B.** The re-entrant call, the containment and the
-releasing unwind all work and are gated; what is missing is only how a program
-names more than one driver. It does mean S9–S10 are gated behind a decision
-rather than being mechanical, and that S11–S14 sit behind that in turn.
+**The emission diff is one line.** `loft introspect` over the two-driver corpus
+before and after differs only in the registration — one
+`register_lazy_fetch(n_lazy_fetch)` becoming two keyed calls. Nothing else in the
+IR, the bytecode or the generated Rust moved, which is the whole claim of the
+change. Corpus and both captures: `bytecode-comparisons/two-drivers-*`.
+
+Gated by `tests/fixtures/133-lazy-driver-dispatch.loft` (three element types over
+`hash` and `index`, a fourth bound with no driver, a helper sharing the prefix,
+absent-vs-unreachable) plus the two refusal programs, through
+`tests/lazy_sql_source.rs`, both backends with the whole output compared. **The
+cell that matters is `orphan`**, and its assertion is a driver-call COUNT rather
+than a value: a collection whose type no driver serves must reach none, and a
+value check alone would pass on a driver that happened to answer nothing.
 
 ### Five language defects the build surfaced, all pre-existing on `main`
 
@@ -1092,7 +1121,8 @@ must agree on is the last thing that should have a gate that evaporates.
 | **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
 | **S7** | ~~The backend registry, used by the LIBRARY's own connect. No core change.~~ **DONE 2026-08-08** — `AnyDb`, a struct-enum satisfying `SqlDb` itself; `connect(spec)` parses, checks availability, opens and runs the dialect's session setup. Two core defects had to be fixed to write it; a third is filed. | the library's four backends already pass their tests, and the registry did not move them |
 | **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE 2026-08-07, both backends.** | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
-| **S9** | Switch sqlite to the loft path too. **BLOCKED — see § S9 has an unmet prerequisite**: `lazy_fetch` is one monomorphic driver per program, so replacing core's Rust source would lose expressiveness rather than move it. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
+| **S9a** | ~~Per-type driver dispatch, the prerequisite S9 turned out to need.~~ **DONE 2026-08-08** — a driver is found by the collection's element type, read off its own parameter; several drivers per program, and reaching the wrong one is impossible. It closed a wrong-value hole S8 had left. | the emission diff is one registration line; every existing @PLN129 and S8 test is the control |
+| **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
 | **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |
 
 ### Create-or-follow, then the write side

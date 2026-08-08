@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S9 prerequisite — the corpus for per-type driver dispatch.
+//
+// Two lazily-bound collections of DIFFERENT element types, each with its own
+// driver. This is what one `lazy_fetch` per program cannot express, and it is
+// the whole of what the dispatch has to make possible.
+//
+// It PARSES today — the two drivers have different names — so its current
+// emission is capturable beside the target one, and the diff is the spec:
+// today only one driver is a reachability root and only one pointer is
+// installed, so `tdc_order` misses report "needs a loft driver".
+
+struct TdcPerson { id: integer, nm: text }
+struct TdcOrder { id: integer, what: text }
+struct TdcWorld {
+  people: hash<TdcPerson[id]> = [],
+  orders: hash<TdcOrder[id]> = [],
+}
+
+// The bare name keeps serving one element type, so a program that had exactly
+// one driver needs no edit.
+fn lazy_fetch(coll: hash<TdcPerson[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  if key_int > 100 { return 0 }
+  coll += [TdcPerson { id: key_int, nm: "person-{key_int}-{source}" }];
+  return 1;
+}
+
+// The suffix after `lazy_fetch_` is FREE: what this driver serves is read off
+// its declared COLLECTION parameter, not guessed from its name.
+fn lazy_fetch_orders(coll: hash<TdcOrder[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  if key_int > 100 { return 0 }
+  coll += [TdcOrder { id: key_int, what: "order-{key_int}" }];
+  return 1;
+}
+
+fn main() {
+  w = TdcWorld { };
+  store_bind_lazy(w.people, "postgres://db/people");
+  store_bind_lazy(w.orders, "duckdb:orders.db");
+
+  p = w.people[7];
+  println("person {p.nm ?? "<none>"}");
+  o = w.orders[9];
+  println("order {o.what ?? "<none>"}");
+
+  // A second lookup of a resident key must cost no fetch on either collection.
+  p2 = w.people[7];
+  println("again {p2.nm ?? "<none>"}");
+
+  // Absent, reached: `0` is not a failure.
+  gone = w.orders[999];
+  println("absent {gone.what ?? "<none>"} err={store_lazy_error(w.orders) ?? "-"}");
+}

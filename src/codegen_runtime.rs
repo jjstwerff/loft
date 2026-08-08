@@ -484,12 +484,32 @@ pub fn OpFormatDatabase(
 /// about could not exist.
 pub type LazyFetchFn = fn(&std::cell::UnsafeCell<Stores>, DbRef, &str, i64, &str) -> i64;
 
-/// The installed driver, or null.
+/// The installed drivers, keyed by the ELEMENT TYPE each serves.
 ///
-/// A plain atomic word rather than a `Mutex`: it is written once by generated
-/// `init()` before anything runs and only read afterwards, and a `par` worker
-/// reading it needs the same pointer, not its own copy.
-static LAZY_FETCH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// @PLN133 S9 — a table rather than the one word this was, because one driver per
+/// program was not merely a limit: nothing checked that the driver a miss reached
+/// was declared for THAT collection, so a second lazily-bound element type ran
+/// the first type's driver and filled its collection with the wrong records.
+///
+/// The key is a NAME because the two backends count types in different spaces —
+/// a parse-time `Definition` and a runtime `Stores::types` entry — and a name is
+/// the one key both hold without a mapping to keep in step.
+///
+/// Written once by generated `init()` before anything runs and only read
+/// afterwards, so the lock is uncontended in practice; a `par` worker taking a
+/// fault reads the same table rather than its own copy.
+static LAZY_FETCH: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// Why this program's drivers were refused, if they were.
+///
+/// The interpreter asks `Data` at every miss, so a malformed driver — or two for
+/// one element type — reports its reason to whichever lookup happens first.
+/// `--native` cannot ask `Data` at all, so without this it registered nothing and
+/// reported *"needs a loft driver"*: the same program, two different reasons,
+/// and the one that named the actual mistake was the one you did not get if you
+/// compiled. Generated `init()` installs the refusal so both backends answer the
+/// sentence `Data` wrote.
+static LAZY_FETCH_REFUSAL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 thread_local! {
     /// @PLN133 S8 — is this thread inside a lazy DRIVER right now?
@@ -516,30 +536,60 @@ pub fn in_lazy_driver() -> bool {
     IN_LAZY_DRIVER.with(std::cell::Cell::get)
 }
 
-/// Install the program's lazy driver. Emitted by generated `init()`, once.
+/// Install one lazy driver, under the element type it serves. Emitted by
+/// generated `init()`, once per driver.
 ///
 /// This is the whole of what `--native` was missing: `OpGetRecord` is compiled
 /// into libloft and cannot see a function the generator wrote, so the generator
-/// hands it over instead.
-pub fn register_lazy_fetch(f: LazyFetchFn) {
-    LAZY_FETCH.store(f as usize, std::sync::atomic::Ordering::Relaxed);
+/// hands each one over instead.
+///
+/// `element` is the same key the interpreter looks up (`Data::lazy_fetch_drivers`
+/// reads it off the driver's collection parameter), which is what stops the two
+/// backends disagreeing about which driver a miss reaches.
+pub fn register_lazy_fetch(element: &str, f: LazyFetchFn) {
+    let mut table = LAZY_FETCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Replace rather than append on a repeat: `init()` runs once, but a host
+    // embedding that re-inits must not accumulate two answers for one type.
+    if let Some(slot) = table.iter_mut().find(|(e, _)| e == element) {
+        slot.1 = f as usize;
+    } else {
+        table.push((element.to_string(), f as usize));
+    }
     // A contained driver fault unwinds, and an unwind prints unless a hook says
-    // otherwise. Installed HERE — once, at init, before any thread exists —
-    // rather than around each call, because swapping the process-wide hook per
-    // fetch would race with any other thread that panics.
+    // otherwise. Installed HERE — at init, before any thread exists — rather than
+    // around each call, because swapping the process-wide hook per fetch would
+    // race with any other thread that panics.
     crate::crash_report::install_panic_hook();
 }
 
-/// The installed driver, if the program defined one.
-fn lazy_fetch_fn() -> Option<LazyFetchFn> {
-    let p = LAZY_FETCH.load(std::sync::atomic::Ordering::Relaxed);
-    if p == 0 {
-        None
-    } else {
-        // Safe by construction: the only writer is `register_lazy_fetch`, whose
-        // parameter is already typed `LazyFetchFn`.
-        Some(unsafe { std::mem::transmute::<usize, LazyFetchFn>(p) })
-    }
+/// Install the reason this program's drivers were refused. Emitted by generated
+/// `init()` in place of any registration, so a miss reports the mistake rather
+/// than its symptom.
+pub fn register_lazy_fetch_refusal(why: &str) {
+    *LAZY_FETCH_REFUSAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why.to_string());
+}
+
+/// The refusal, if the drivers were refused.
+fn lazy_fetch_refusal() -> Option<String> {
+    LAZY_FETCH_REFUSAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// The driver installed for this element type, if the program declared one.
+fn lazy_fetch_fn(element: &str) -> Option<LazyFetchFn> {
+    let table = LAZY_FETCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let p = table.iter().find(|(e, _)| e == element).map(|(_, p)| *p)?;
+    // Safe by construction: the only writer is `register_lazy_fetch`, whose
+    // parameter is already typed `LazyFetchFn`.
+    Some(unsafe { std::mem::transmute::<usize, LazyFetchFn>(p) })
 }
 
 /// Look up a record in a collection by key values.
@@ -575,15 +625,32 @@ pub fn OpGetRecord(
         // this helper is compiled into libloft and cannot see a function the
         // generator wrote. Two mechanisms, one answer.
         if let Some(source) = stores.lazy_loft_source(&data) {
-            let Some(driver) = lazy_fetch_fn() else {
+            // @PLN133 S9 — the driver is chosen by the collection's ELEMENT TYPE,
+            // the same key the interpreter looks up by, so a program with several
+            // lazily-bound types reaches the right one on both backends. The one
+            // installed pointer this replaced was called for every collection
+            // whatever it was declared for.
+            let element = stores.element_type_name(db_tp as u16).to_string();
+            // A refused driver set poisons every lookup, exactly as it does on the
+            // interpreter — which re-asks `Data` at each miss and gets the same
+            // `Err` back. Reporting the symptom here instead would mean the
+            // backend you compiled with hid which mistake you made.
+            if let Some(why) = lazy_fetch_refusal() {
+                stores.lazy_fail(&data, &why);
+                return DbRef {
+                    store_nr: data.store_nr,
+                    rec: 0,
+                    pos: 0,
+                };
+            }
+            let Some(driver) = lazy_fetch_fn(&element) else {
                 // Failure path 1: a backend that is not here reads as
-                // UNREACHABLE and names itself, never as "no such row".
+                // UNREACHABLE and names itself, never as "no such row". The
+                // message has one home so the two backends cannot word it
+                // differently.
                 stores.lazy_fail(
                     &data,
-                    &format!(
-                        "`{source}` needs a loft driver — define `fn lazy_fetch(coll, source, \
-                         key_int, key_text) -> integer` and bind the collection again"
-                    ),
+                    &crate::database::lazy::no_lazy_driver(&source, &element),
                 );
                 return DbRef {
                     store_nr: data.store_nr,

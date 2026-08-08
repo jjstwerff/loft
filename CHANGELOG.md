@@ -109,6 +109,27 @@ holding a `vector<text>`) were equally silent and now reach `store_lazy_error` t
 An unreachable source still reports its own connection error, and a binding that
 works still says nothing at all.
 
+**A database loft has no built-in driver for is served by a driver you write**, in
+loft — and a program may now have one per collection type:
+
+```loft
+fn lazy_fetch(coll: hash<Person[id]>, source: text,
+              key_int: integer, key_text: text) -> integer { … }
+fn lazy_fetch_orders(coll: hash<Order[id]>, source: text,
+                     key_int: integer, key_text: text) -> integer { … }
+```
+
+The name after `lazy_fetch_` is yours; what a driver serves is read from its
+collection parameter. That matters beyond convenience: with one driver per
+program, a *second* lazily-bound collection was filled by the first one's driver
+whatever it was written for, so a `Person` landed in a `hash<Order[id]>` and came
+back out as an `Order` — a record that looks like data and is not. A collection
+whose type has no driver now says so, naming the type, and no driver runs for it.
+
+Helpers may share the prefix: past the exact name `lazy_fetch`, a function only
+counts as a driver if it takes a keyed collection first — so `lazy_fetch_row(n)`
+is just a function.
+
 ### An enum works above the line that declares it
 
 Order stopped mattering for enums, the way it already did not matter for functions

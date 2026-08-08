@@ -61,6 +61,62 @@ the 5.9 MB image, and the second keystroke of a session costs ONE page.
 Paging a trie is still unwired: `store_bind_lazy` refuses one, and `store_load_key_text`
 reads a `hash`. The layout is the prerequisite that made those worth building.
 
+### A lazy driver serves ONE element type (@PLN133 S9 prerequisite, 2026-08-08)
+
+S8 let a program declare one `lazy_fetch`, which reads as a limit on how many
+collections may be lazily bound. It was not only that: **nothing checked that the
+driver a miss reached was declared for THAT collection.** S8's shape check was
+about the driver's signature and never about its subject, so a program with two
+lazily-bound element types ran the first type's driver against the second
+collection — measured on both backends, inserting a `TdcPerson` into a
+`hash<TdcOrder[id]>` and reading `.what` back as `person-9-postgres://db/people`.
+One type's field through another type's offset: a plausible value, which is the
+class @PLN129 arc C exists to keep out.
+
+One mechanism does both jobs — the driver is looked up by the collection's
+ELEMENT TYPE, so several drivers become possible and reaching the wrong one
+becomes impossible.
+
+- **`Data::lazy_fetch_drivers`** answers `(element type name, def_nr)` per driver
+  and is the single home both backends ask. What a driver serves is read off its
+  declared collection parameter, never guessed from its name.
+- **The key is a NAME**, because the two sides count types in different spaces (a
+  parse-time `Definition`, a runtime `Stores::types` entry) and a name is the one
+  key both hold without a mapping to keep in step — `LOFT_STRICT_SCHEMA_IDS`
+  exists because that kind of mapping drifts.
+- **Membership needs more than the name.** `lazy_fetch` exactly is THE driver
+  name, so a wrong shape there is named; `lazy_fetch_<anything>` additionally
+  requires a keyed collection as its first parameter. The first version of this
+  rule keyed on the name alone, and a plausible helper (`lazy_fetch_row`) was then
+  read as a malformed driver and poisoned every lookup in the program, including
+  the working driver beside it.
+- **Two drivers for one element type are refused, naming both.**
+- **`--native` installs one pointer per driver** under the same key, and every
+  driver is a reachability ROOT — a driver left out of the walk is S8's quiet
+  failure arriving once per type instead of once per program.
+
+**A backend divergence had to be closed to gate the refusals, and it was S8's.**
+The interpreter asks `Data` at every miss and reports the sentence it wrote;
+`--native` cannot ask, registered nothing, and said *"needs a loft driver"* — the
+same program naming a different mistake depending on which backend ran it, and
+the one naming the real mistake was the one you did not get if you compiled. The
+refusal now travels as data (`register_lazy_fetch_refusal`) and the no-driver
+sentence has one home (`database::lazy::no_lazy_driver`).
+
+**The emission diff is one line.** `loft introspect` over the two-driver corpus
+before and after differs only in the registration — one
+`register_lazy_fetch(n_lazy_fetch)` becoming two keyed calls — with nothing else
+in the IR, the bytecode or the generated Rust moved. Corpus and both captures:
+`doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-*`.
+
+Gated by `tests/fixtures/133-lazy-driver-dispatch.loft` (three element types over
+`hash` and `index`, a fourth bound with no driver, a prefix-sharing helper,
+absent-vs-unreachable) plus two refusal programs, through
+`tests/lazy_sql_source.rs`, both backends with the whole output compared. The
+`orphan` cell asserts a driver-call COUNT rather than a value: a collection whose
+type no driver serves must reach none, and a value check alone would pass on a
+driver that happened to answer nothing.
+
 ### One connection string, four C libraries (@PLN133 S7, 2026-08-08)
 
 Requirement 1 is *one configuration string switches every SQL consumer in the

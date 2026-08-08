@@ -103,6 +103,26 @@ pub enum Fetched {
     Unreachable(String),
 }
 
+/// What a collection with no driver reports, in ONE place.
+///
+/// Both backends reach a miss by different routes — the interpreter looks the
+/// driver up in `Data`, `--native` reads a pointer generated `init()` installed —
+/// and the gate for @PLN133 S8 compares their whole output rather than a line at
+/// a time. A message written twice is the first thing that would diverge, and it
+/// would diverge in the one place a user is already confused.
+///
+/// It names the ELEMENT TYPE, because that is what has no driver. Naming only the
+/// source would send someone to look at a connection string that is perfectly
+/// fine.
+#[must_use]
+pub fn no_lazy_driver(source: &str, element: &str) -> String {
+    format!(
+        "`{source}` needs a loft driver for {element} — define `fn lazy_fetch(coll: <the \
+         {element} collection>, source: text, key_int: integer, key_text: text) -> integer` \
+         and bind the collection again"
+    )
+}
+
 impl Stores {
     /// Ask one source for one key. The dispatch that makes the seam a seam.
     ///
@@ -152,6 +172,24 @@ impl Stores {
             LazySource::Loft(s) => Some(s),
             _ => None,
         }
+    }
+
+    /// @PLN133 S9 — the name of the ELEMENT type a collection holds.
+    ///
+    /// The key a lazy driver is looked up by, and the reason it is a name: the
+    /// driver is declared in parse-time `Data` and reached from runtime
+    /// `Stores`, which count types in different spaces. A name is the one key
+    /// both hold without a mapping that has to be kept in step — and @PLN133 S8's
+    /// own `LOFT_STRICT_SCHEMA_IDS` exists because that kind of mapping drifts.
+    ///
+    /// `""` for a type that holds no element, which no keyed lookup reaches.
+    #[must_use]
+    pub fn element_type_name(&self, db_tp: u16) -> &str {
+        let c = self.content(db_tp);
+        if c == u16::MAX {
+            return "";
+        }
+        &self.types[c as usize].name
     }
 
     /// Record a refusal against a collection, through arc C's channel.

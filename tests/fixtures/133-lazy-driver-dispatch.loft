@@ -1,0 +1,139 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S9 — a lazy driver serves ONE element type, and the miss finds it.
+//
+// S8 gave core a way to call loft on a miss, and a program declared exactly one
+// `lazy_fetch`. That was not merely a limit. **Nothing checked that the driver a
+// miss reached was declared for THAT collection**, so a program with two
+// lazily-bound element types ran the first driver against the second collection
+// — measured on both backends, inserting a `Person` into a `hash<Order[id]>` and
+// reading its `nm` straight back as an `Order.what`. A plausible wrong value,
+// which is the class @PLN129 arc C exists to keep out of the value channel.
+//
+// So the fix is one mechanism doing two jobs: the driver is looked up by the
+// collection's ELEMENT TYPE, which both makes several drivers possible and makes
+// reaching the wrong one impossible. What a driver serves is read off its
+// declared collection parameter — the name after `lazy_fetch_` is free, and
+// exists only because loft refuses a redefinition.
+//
+// The cells are ordered so the ones that would pass vacuously come last: every
+// driver answers a value naming ITSELF, so a dispatch that collapsed to one
+// implementation is visible in the output rather than merely in a count.
+//
+// Driven by `tests/lazy_sql_source.rs`, both backends, whole output compared.
+
+struct LddPerson { id: integer, nm: text }
+struct LddOrder { id: integer, what: text }
+struct LddTicket { id: integer, seat: text }
+struct LddNoDriver { id: integer, label: text }
+
+struct LddWorld {
+  people: hash<LddPerson[id]> = [],
+  orders: hash<LddOrder[id]> = [],
+  // A different collection KIND, so the element-type key is not a hash-only
+  // trick: `index` is a red-black tree and reaches the same lookup.
+  tickets: index<LddTicket[id]> = [],
+  // Bound to a source, and no driver declared for it anywhere. Before S9 this
+  // collection was filled by `lazy_fetch` — the one written for LddPerson.
+  orphans: hash<LddNoDriver[id]> = [],
+}
+
+// The bare name still works, so a program that had exactly one driver needs no
+// edit. What it serves is LddPerson, read from this parameter.
+fn lazy_fetch(coll: hash<LddPerson[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  println("  driver=person source={source} key={key_int}");
+  if key_int > 100 { return 0 }
+  coll += [LddPerson { id: key_int, nm: "person-{key_int}" }];
+  return 1;
+}
+
+// The suffix is free — `_orders` is a label for a reader, not data. Core reads
+// LddOrder off the collection parameter.
+fn lazy_fetch_orders(coll: hash<LddOrder[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  println("  driver=order source={source} key={key_int}");
+  // The third answer: reached, and the source cannot serve it. It carries a
+  // REASON, so it goes through `store_lazy_fail` rather than reading as absent.
+  if key_int == 66 {
+    store_lazy_fail(coll, "the {source} order service is not answering");
+    return 0;
+  }
+  if key_int > 100 { return 0 }
+  coll += [LddOrder { id: key_int, what: "order-{key_int}" }];
+  return 1;
+}
+
+// A third driver, over an `index` rather than a `hash`.
+fn lazy_fetch_seats(coll: index<LddTicket[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  println("  driver=ticket source={source} key={key_int}");
+  if key_int > 100 { return 0 }
+  coll += [LddTicket { id: key_int, seat: "seat-{key_int}" }];
+  return 1;
+}
+
+// A HELPER in the driver namespace, and the reason membership needs more than a
+// name. Anyone writing a driver names its helpers after it, and under a
+// name-only rule this one was read as a malformed driver and poisoned every
+// lookup in the program — including the three drivers above it. It is walked
+// past because its first parameter is not a keyed collection.
+fn lazy_fetch_label(n: integer) -> text { return "label-{n}"; }
+
+fn main() {
+  w = LddWorld { };
+  store_bind_lazy(w.people, "postgres://db/people");
+  store_bind_lazy(w.orders, "duckdb:orders.db");
+  store_bind_lazy(w.tickets, "maria://db/tickets");
+  store_bind_lazy(w.orphans, "postgres://db/orphans");
+
+  // --- each collection reaches ITS OWN driver -------------------------------
+  //
+  // The values name the driver that produced them, so a dispatch that collapsed
+  // to one implementation reads as `order person-9` here rather than as a count
+  // that happens to match.
+  p = w.people[7];
+  println("person {p.nm ?? "<none>"}");
+  o = w.orders[9];
+  println("order {o.what ?? "<none>"}");
+  t = w.tickets[3];
+  println("ticket {t.seat ?? "<none>"}");
+
+  // --- a resident hit costs no fetch ----------------------------------------
+  //
+  // Non-vacuous because every driver PRINTS: a second `driver=person` line here
+  // would say the miss path ran again.
+  p2 = w.people[7];
+  println("again {p2.nm ?? "<none>"}");
+
+  // --- the collection nothing serves ----------------------------------------
+  //
+  // THE cell. Before S9 this answered `person-5` — LddPerson's driver, run
+  // against a `hash<LddNoDriver[id]>`, its `nm` read back through `label`'s
+  // offset. Now it is a collection with no driver, and the refusal names the
+  // TYPE that has none rather than the connection string, which is fine.
+  orphan = w.orphans[5];
+  println("orphan {orphan.label ?? "<none>"}");
+  println("orphan-why {store_lazy_error(w.orphans) ?? "<no error>"}");
+
+  // …and a driver that IS declared is unaffected by the neighbour that is not.
+  p3 = w.people[8];
+  println("after {p3.nm ?? "<none>"}");
+
+  // --- absent, reached ------------------------------------------------------
+  //
+  // `0` is not a failure: "no such order" is stable and true. It must not leave
+  // a reason behind, or a later reader cannot tell it from a source that broke.
+  gone = w.orders[400];
+  println("absent {gone.what ?? "<none>"} why={store_lazy_error(w.orders) ?? "<no error>"}");
+
+  // --- reached, and cannot serve --------------------------------------------
+  //
+  // The reason arrives through arc C's channel and sticks, which is what makes
+  // it different from the line above.
+  broke = w.orders[66];
+  println("unreachable {broke.what ?? "<none>"} why={store_lazy_error(w.orders) ?? "<no error>"}");
+
+  // …and the helper sharing the drivers' name prefix is an ordinary function.
+  println("helper {lazy_fetch_label(4)}");
+
+  println("dispatch ok");
+}

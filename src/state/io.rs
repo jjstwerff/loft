@@ -973,7 +973,7 @@ impl State {
                 // is loft code, and the retry after it is arc A's rule
                 // unchanged: the collection stays the only authority on what is
                 // resident, so this never hands back what the fetch returned.
-                self.lazy_fetch_through_loft(&data, &key, &source);
+                self.lazy_fetch_through_loft(&data, db_tp, &key, &source);
                 self.database.find(&data, db_tp, &key)
             } else {
                 self.database.fetch_missing(&data, db_tp, &key)
@@ -984,15 +984,22 @@ impl State {
 
     /// @PLN133 S8 — run the program's own lazy driver for one missing key.
     ///
-    /// The driver is a loft function called `lazy_fetch`, and everything about
-    /// this is deliberately the ordinary call it looks like: it receives the
-    /// COLLECTION, so what it inserts lands in the very collection the lookup is
-    /// walking, and the caller then re-runs the lookup.
+    /// The driver is a loft function, and everything about this is deliberately
+    /// the ordinary call it looks like: it receives the COLLECTION, so what it
+    /// inserts lands in the very collection the lookup is walking, and the caller
+    /// then re-runs the lookup.
     ///
     /// ```loft
     /// fn lazy_fetch(coll: hash<Person[id]>, source: text,
     ///               key_int: integer, key_text: text) -> integer
     /// ```
+    ///
+    /// **S9 — the driver is chosen by the collection's ELEMENT TYPE.** A program
+    /// may declare one per type (`lazy_fetch`, `lazy_fetch_orders`, …), and what
+    /// each serves is read off its collection parameter rather than its name.
+    /// Before this, a program's single driver was called for every lazily-bound
+    /// collection whatever it was declared for, which inserted one element type's
+    /// record into another's collection — a wrong VALUE, on both backends.
     ///
     /// Answer `1` when the record was inserted, `0` when the source was reached
     /// and does not hold that key. **The two are not the same fact and must not
@@ -1008,6 +1015,7 @@ impl State {
     fn lazy_fetch_through_loft(
         &mut self,
         coll: &DbRef,
+        db_tp: u16,
         key: &[crate::keys::Content],
         source: &str,
     ) {
@@ -1019,7 +1027,8 @@ impl State {
             return;
         }
         let data: &crate::data::Data = unsafe { &*self.data_ptr };
-        let d_nr = match data.lazy_fetch_driver() {
+        let element = self.database.element_type_name(db_tp).to_string();
+        let d_nr = match data.lazy_fetch_driver_for(&element) {
             Ok(Some(d)) => d,
             Ok(None) => {
                 // Failure path 1, and it is the whole reason `Loft` is its own
@@ -1027,12 +1036,15 @@ impl State {
                 // UNREACHABLE and name itself. Before this, `postgres://…`
                 // classified as a `.store` image and reported something about a
                 // paged reader.
+                //
+                // S9 — it names the ELEMENT TYPE, because that is what has no
+                // driver. A program with a driver for another type used to reach
+                // that one instead and fill this collection with the wrong
+                // records; now it reads as a collection nothing serves, and the
+                // message says which one to write.
                 self.database.lazy_fail(
                     coll,
-                    &format!(
-                        "`{source}` needs a loft driver — define `fn lazy_fetch(coll, source, \
-                         key_int, key_text) -> integer` and bind the collection again"
-                    ),
+                    &crate::database::lazy::no_lazy_driver(source, &element),
                 );
                 return;
             }
