@@ -395,6 +395,149 @@ pub(crate) fn bfs_order(store: &Store, tree: u32) -> Vec<u32> {
     out
 }
 
+/// @PLN134 — node ids in DEPTH-FIRST pre-order, FALSE subtree first.
+///
+/// The layout that puts a subtree in one contiguous run, so the records of one
+/// prefix have their nodes together. It pays for that on the way in: a descent
+/// that turns TRUE skips the whole FALSE subtree, and near the root that skip is
+/// half the array.
+#[cfg(test)]
+pub(crate) fn dfs_order(store: &Store, tree: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+    if let Child::Node(root) = Child::decode(store.get_i32_raw(tree, TOP)) {
+        stack.push(root);
+    }
+    while let Some(n) = stack.pop() {
+        out.push(n);
+        // TRUE first, so FALSE comes off the stack first and the order is by key.
+        for dir in [true, false] {
+            if let Child::Node(c) = child(store, tree, n, dir) {
+                stack.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// @PLN134 — node ids in KEY order (in-order: FALSE subtree, node, TRUE subtree).
+///
+/// The node-level form of the placement `routing` used for its postings — number
+/// by walking the tree in key order, so one prefix is one contiguous interval.
+#[cfg(test)]
+pub(crate) fn key_order(store: &Store, tree: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut stack: Vec<(u32, bool)> = Vec::new();
+    if let Child::Node(root) = Child::decode(store.get_i32_raw(tree, TOP)) {
+        stack.push((root, false));
+    }
+    while let Some((n, emitted)) = stack.pop() {
+        if emitted {
+            out.push(n);
+            if let Child::Node(c) = child(store, tree, n, true) {
+                stack.push((c, false));
+            }
+        } else {
+            stack.push((n, true));
+            if let Child::Node(c) = child(store, tree, n, false) {
+                stack.push((c, false));
+            }
+        }
+    }
+    out
+}
+
+/// @PLN134 — every node's height, `1` at a node with no node children.
+///
+/// Bottom-up over the pre-order list read backwards: pre-order puts a parent
+/// before all of its descendants, so reading it in reverse settles every child
+/// before the node above it. Iterative because a text trie is as deep as its
+/// longest key (a 24-byte word gives ~230 levels) over a million nodes.
+#[cfg(test)]
+fn node_heights(store: &Store, tree: u32, nodes: u32) -> Vec<u32> {
+    let mut h = vec![0u32; (nodes + 2) as usize];
+    for &n in dfs_order(store, tree).iter().rev() {
+        let mut best = 1;
+        for dir in [false, true] {
+            if let Child::Node(c) = child(store, tree, n, dir) {
+                best = best.max(h[c as usize] + 1);
+            }
+        }
+        h[n as usize] = best;
+    }
+    h
+}
+
+/// @PLN134 — node ids in **van Emde Boas** order: the cache-oblivious layout,
+/// written against exactly this access pattern.
+///
+/// A subtree of height `h` is emitted as a top part of height `⌈h/2⌉`, laid out
+/// this same way, followed by each subtree hanging below it, laid out this same
+/// way. Recursively contiguous, so for *any* page size there is a level of the
+/// recursion whose parts are about one page — and a root→leaf path crosses only
+/// `O(log_B n)` of them. That is the property BFS lacks: BFS clusters the top,
+/// which every query shares, and then scatters exactly where the paths diverge.
+///
+/// Cache-*oblivious* matters here because the page size is not ours to pick: a
+/// local file, an HTTP range read and a browser cache disagree about it, and this
+/// layout is near-optimal for all of them at once.
+#[cfg(test)]
+pub(crate) fn veb_order(store: &Store, tree: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let nodes = store.get_u32_raw(tree, NODES);
+    let heights = node_heights(store, tree, nodes);
+    if let Child::Node(root) = Child::decode(store.get_i32_raw(tree, TOP)) {
+        veb_emit(
+            store,
+            tree,
+            root,
+            heights[root as usize],
+            &heights,
+            &mut out,
+        );
+    }
+    out
+}
+
+/// Emit exactly the nodes of `root`'s subtree that lie within `h` levels of it.
+///
+/// `h` is a BUDGET, not a height. The top half of a split is a truncated view of a
+/// deeper subtree, so a recursion that reads the child's own height there emits the
+/// whole subtree and the level below re-emits it — duplication that grows with the
+/// tree, not a wrong order at the margin. The budget is what keeps the two halves
+/// disjoint, and `min` with the real height only tightens the splits.
+///
+/// The recursion is over HEIGHT, not over nodes, so it nests `log2(height)` deep —
+/// about eight for a text trie.
+#[cfg(test)]
+fn veb_emit(store: &Store, tree: u32, root: u32, h: u32, heights: &[u32], out: &mut Vec<u32>) {
+    if h <= 1 {
+        out.push(root);
+        return;
+    }
+    let top_h = h.div_ceil(2);
+    let bot_h = h - top_h;
+    veb_emit(store, tree, root, top_h, heights, out);
+    // The roots of the subtrees that hang below the top part — the level the split
+    // cut through. Walked rather than remembered, because remembering it for every
+    // recursion level costs more than re-reading two child slots.
+    let mut level = vec![root];
+    for _ in 0..top_h {
+        let mut next = Vec::new();
+        for n in level.drain(..) {
+            for dir in [false, true] {
+                if let Child::Node(c) = child(store, tree, n, dir) {
+                    next.push(c);
+                }
+            }
+        }
+        level = next;
+    }
+    for b in level {
+        veb_emit(store, tree, b, bot_h.min(heights[b as usize]), heights, out);
+    }
+}
+
 #[cfg(test)]
 fn touch(off: u32) {
     TOUCHED.with(|t| {
@@ -1927,6 +2070,74 @@ mod tests {
             got, expect,
             "multi-word walk must be sorted by the full 128-bit key"
         );
+    }
+
+    /// R10 — every @PLN134 layout order is a PERMUTATION of the live nodes.
+    ///
+    /// The one property a layout measurement cannot survive without, and the one a
+    /// printed page count will not reveal: an order that emits a node twice, or drops
+    /// one, still produces a number — a better-looking number, because duplicates
+    /// crowd a path onto fewer distinct pages. `veb_order`'s recursion splits a
+    /// subtree by height and truncates the top half, which is exactly where a node
+    /// can be emitted by both halves. So this is the harness's own gate, and it runs
+    /// in the ordinary suite rather than beside the `#[ignore]` measurement.
+    #[test]
+    fn r10_layout_orders_are_permutations() {
+        let mut store = Store::new_in_use(1 << 15);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0x0bad_c0de_1234_5678;
+        for _ in 0..2000 {
+            let rec = add(&mut store, lcg(&mut seed));
+            tree = rtree_insert(&mut store, tree, rec, CODE);
+        }
+        let live: std::collections::BTreeSet<u32> = bfs_order(&store, tree).into_iter().collect();
+        assert_eq!(
+            live.len(),
+            rtree_len(&store, tree) as usize - 1,
+            "a PATRICIA tree over n records has n-1 internal nodes"
+        );
+        for (name, order) in [
+            ("bfs", bfs_order(&store, tree)),
+            ("dfs", dfs_order(&store, tree)),
+            ("key", key_order(&store, tree)),
+            ("veb", veb_order(&store, tree)),
+        ] {
+            assert_eq!(
+                order.len(),
+                live.len(),
+                "{name} emits {} of {} nodes",
+                order.len(),
+                live.len()
+            );
+            assert_eq!(
+                order
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                live,
+                "{name} must emit every live node exactly once"
+            );
+        }
+        // `key_order` claims the walk order the tree itself defines: the node above
+        // each record, in key order, appears in that order. Checking the claim rather
+        // than only the multiset is what separates a layout from a shuffle.
+        let keyed = key_order(&store, tree);
+        let mut rank = vec![u32::MAX; (store.get_u32_raw(tree, NODES) + 2) as usize];
+        for (i, &n) in keyed.iter().enumerate() {
+            rank[n as usize] = i as u32;
+        }
+        let mut it = rtree_first(&store, tree);
+        let (mut prev, mut r) = (0u32, it.rec());
+        while r != 0 {
+            if it.node != 0 {
+                assert!(
+                    rank[it.node as usize] >= prev,
+                    "key order must not go backwards at record {r}"
+                );
+                prev = rank[it.node as usize];
+            }
+            r = it.next(&store, tree).unwrap_or(0);
+        }
     }
 
     // ---- 2D Morton (Z-order) oracle: x at `fld 4`, y at `fld 8` -------------
