@@ -57,6 +57,16 @@ check_paths() {
   local hits=0
   # Match markdown links [...](url) where url contains plans/<NN>-<slug>.
   # Resolve the url relative to the containing file.
+  #
+  # Both loops read from a temp file / here-string rather than a `< <(...)`
+  # process substitution: macOS's stock bash 3.2 corrupts its heap and dies
+  # (SIGBUS/SIGKILL) on hundreds of nested process substitutions, so a local
+  # `make ci` on a Mac never got past this check.  Same output on Linux.
+  local links
+  links=$(mktemp)
+  grep -rn -E '\]\([^)]*(lib_plans|plans)/[^)]*[0-9]+-[a-z0-9-]+' \
+       doc/claude/ CLAUDE.md --include='*.md' 2>/dev/null \
+     | grep -v 'check_doc_drift.sh' > "$links"
   while IFS= read -r line; do
     file="${line%%:*}"
     rest="${line#*:}"
@@ -80,20 +90,20 @@ check_paths() {
         *plans/*[0-9]-*) ;;
         *) continue ;;
       esac
-      # Resolve relative to file's directory.
-      dir=$(dirname "$file")
-      candidate=$(realpath -m --relative-to=. "$dir/$clean" 2>/dev/null) || continue
-      check_path="${candidate%/}"
+      # Resolve relative to the file's directory.  `[ -e ]` resolves an
+      # embedded `..` itself, so no `realpath` is needed — which also keeps
+      # this portable, as BSD `realpath` rejects `-m --relative-to`.
+      # `${file%/*}` (not `dirname`, a subshell) — but for a top-level file
+      # with no `/` that leaves the name unchanged, so map that to `.`.
+      case "$file" in */*) dir="${file%/*}" ;; *) dir="." ;; esac
+      check_path="$dir/$clean"
       if [ ! -e "$check_path" ]; then
-        red "  $file:$lineno → $clean (resolved: $candidate)"
+        red "  $file:$lineno → $clean (resolved: $check_path)"
         hits=$((hits + 1))
       fi
-    done < <(echo "$text" \
-      | grep -oE '\]\([^)]*\)' \
-      | sed -E 's/^\]\(//; s/\)$//')
-  done < <(grep -rn -E '\]\([^)]*(lib_plans|plans)/[^)]*[0-9]+-[a-z0-9-]+' \
-              doc/claude/ CLAUDE.md --include='*.md' 2>/dev/null \
-            | grep -v 'check_doc_drift.sh')
+    done <<< "$(printf '%s\n' "$text" | grep -oE '\]\([^)]*\)' | sed -E 's/^\]\(//; s/\)$//')"
+  done < "$links"
+  rm -f "$links"
   HITS_PATHS=$hits
   if [ $hits -eq 0 ]; then
     green "  clean"
@@ -282,6 +292,13 @@ check_refs() {
   # Find every markdown link target containing plans/finished/ or plans/deferred/.
   # Tolerance pattern (closure narrative + status annotations + design-pointer phrases).
   local tol_pat='closed by|closure record|shipped (via|by)|historical|retrospective|moved to .*finished|moved to .*deferred|\(closed [0-9]|\(active\)|\(shipped|\(deferred|preserved at|originally documented|design lives|design content|Phase A \+ D|fixture catalogue|spec captured in|catalogue from|deferred follow-ups|trigger conditions'
+  # Temp file / here-string, not `< <(...)`: bash 3.2 (macOS) crashes on
+  # heavy process substitution — see check_paths.
+  local refs
+  refs=$(mktemp)
+  grep -rn -E '\]\([^)]*plans/(finished|deferred)/' \
+       doc/claude/ CLAUDE.md lib/ --include='*.md' 2>/dev/null \
+     | grep -v 'check_doc_drift.sh' > "$refs"
   while IFS= read -r line; do
     file="${line%%:*}"
     rest="${line#*:}"
@@ -323,12 +340,9 @@ check_refs() {
       esac
       red "  $file:$lineno → $clean"
       hits=$((hits + 1))
-    done < <(echo "$text" \
-      | grep -oE '\]\([^)]*\)' \
-      | sed -E 's/^\]\(//; s/\)$//')
-  done < <(grep -rn -E '\]\([^)]*plans/(finished|deferred)/' \
-              doc/claude/ CLAUDE.md lib/ --include='*.md' 2>/dev/null \
-            | grep -v 'check_doc_drift.sh')
+    done <<< "$(printf '%s\n' "$text" | grep -oE '\]\([^)]*\)' | sed -E 's/^\]\(//; s/\)$//')"
+  done < "$refs"
+  rm -f "$refs"
 
   HITS_REFS=$hits
   if [ $hits -eq 0 ]; then

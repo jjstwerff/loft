@@ -1556,10 +1556,23 @@ pub fn cached_or_build_shared_cdylib(
     };
 
     // 2. No artifact yet, or `loft` changed → build eagerly (native from the start).
-    // An artifact built for a DIFFERENT type layout counts as "no artifact"
-    // (loft#717): it can never be adopted, and letting it reach the edit-loop
-    // branch below would leave a foreign artifact sitting at this name.
-    if !so.exists() || !artifact_matches_layout(&so, layout_fp) {
+    //
+    // Do NOT probe the layout here (loft#777, macOS): reaching this point means we
+    // are past the fresh fast-path, so any existing artifact is stale and WILL be
+    // rebuilt — by this branch or branch 3 below, both of which call `build`.
+    // `artifact_matches_layout` opens the artifact with `dlopen`, and macOS dyld
+    // caches a loaded image BY PATH for the process (its `dlclose` is a no-op).  So
+    // probing the OLD artifact here, then rebuilding a fresh one at the same path,
+    // then loading it made dyld hand back the STALE image it had already cached — a
+    // `base` edit reached the interpret run but not the settling native run (the
+    // dependent kept serving its pre-edit inlined copy).  Linux keys `dlopen` on
+    // (dev,inode) and loaded the new file, so only macOS was affected.
+    //
+    // The #717 adoption guard that this probe belonged to still runs on the fast
+    // path (above), which is the only place an EXISTING artifact is adopted without
+    // a rebuild; here a rebuild always follows, and it produces the correct layout
+    // by construction, so a foreign artifact routes safely through branch 3 instead.
+    if !so.exists() {
         crate::cache::write_run_source_hash(&out_dir, source_content_hash(contributing));
         return build(&out_dir);
     }
