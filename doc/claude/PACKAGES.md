@@ -420,7 +420,7 @@ narrow-int returns automatically.
 (the interpreter passes the store of the first ref arg, with allocation
 callbacks for ref/vector returns).
 
-### Direct C binding — `#c` (planned, @PLN24)
+### Direct C binding — `#c` (@PLN24)
 
 `#native` above is the **Rust** binding: a hand-written `extern "C"` fn compiled
 by rustc into a cdylib.  A planned sibling annotation, **`#c "<symbol>"`**, binds
@@ -429,8 +429,10 @@ libffi**.  loft-core `dlopen`s the system library and calls the symbol through a
 small **fixed per-arity C-ABI caller** (`extern "C" fn(u64, …) -> u64`, one per
 arity — integer-class args collapse to a `u64` slot); the library is **pure loft**
 (`#c` decls) plus, for signatures the caller can't express (float / struct-by-
-value / varargs arguments), a `cc`-compiled **ANSI-C shim**.  Native-only (wasm
-has no C ABI / `dlopen`).  It is the foundation for binding system C libraries
+value / varargs arguments), a `cc`-compiled **ANSI-C shim**.  Native-only — a
+wasm module cannot `dlopen` a shared library, so both wasm targets refuse a
+reachable `#c` call by name (see [below](#the-wasm-and-browser-targets--arc-e)).
+It is the foundation for binding system C libraries
 (databases, codecs, …) without the rustc toolchain, keeping loft-core minimal —
 the linking tool lives in core, all complexity in the library + shim.
 
@@ -576,11 +578,58 @@ so while the user is installing packages, not inside the first run of their
 program.  A failure there is surfaced and the install still succeeds — the
 parser reports it again, with the `use` site, if the package is actually used.
 
-**Status: it works on both backends** — `--native` compiles the declaration into
-a typed `extern "C"` and calls it directly; the interpreter resolves the symbol
-and calls it through a fixed ladder of per-arity trampolines.  The two produce
-identical results, which is the bar.  What remains: the `cc` shim build, `loft install`
-integration, and the wasm/browser targets (arc E).  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
+#### The wasm and browser targets — arc E
+
+**A `#c` binding is refused on both wasm targets, at the call.**  `--native-wasm`
+(wasip2) and `--html` (the browser) each report one message naming the loft
+function, the C symbol, the declaring package and the target:
+
+```
+error: loft: `client_info` is bound to the C symbol 'mysql_get_client_info' with #c
+       (package `mariadb`), and the wasm (wasip2) target has no C ABI to reach it —
+       a wasm module cannot open a shared library. Give the library a wasm
+       implementation, host it out of process (@PLN119), or drop the
+       --native-wasm claim (@PLN24 arc E)
+```
+
+**Refused at the CALL, so a declaration is still portable.**  A library may
+declare `#c` bindings and still build for wasm as long as the wasm program does
+not reach one — the same rule `#native` follows for a routeless browser symbol.
+
+**Why refusal rather than support**, in the order the measurements came in.
+`wasm32-wasip2` links a libc, so a binding to `strlen` did *resolve* — and then
+trapped, because wasm32 is a third data model (ILP32: `long`, `size_t` and every
+pointer are 32 bits) while the extern carried the host's widths.  A symbol the
+sysroot does *not* export gave a raw linker error naming neither package nor
+library.  Neither is a capability a library can rely on: a `#c` library binds a
+system library, and there is no `dlopen` in wasm to reach one with.
+
+The two routes that do work are a **wasm implementation of the library** (the
+same answer `#native` needs — a `[wasm.bridge]`), or **hosting the C out of
+process** ([@PLN119](https://github.com/loft-lang/plans/issues/119)), where
+"another process" and "another machine" are already one mechanism.  Compiling a package's
+own `[c] shim` to wasm with a C cross-compiler is a third, and is not built: it
+needs a `wasm32-wasi` C toolchain in the build environment, and it would cover
+only a shim that is pure computation — never a database client, whose capability
+does not exist in a browser at all.
+
+`c_library_available` compiles on both wasm targets and answers **false** there,
+so the guard an optional backend already writes keeps working when the same
+source is built for wasm.
+
+#### Under the sandbox
+
+**A `#c` binding is gated by `native_ffi`, never by a `#cap` grant.**  A
+capability says what data a script may touch; a C call runs machine code loft
+cannot inspect, which is the line [`native_ffi`](SANDBOX.md) already draws for a
+Rust cdylib bridge — and `#c` is the stronger case, having no marshalling layer
+at all.  An allow-listed library (`allow_libs`) still admits its bindings: that
+is the host vetting the library as a unit, exactly as for `#native`.
+
+**Status: done on both backends and defined on all four targets** — `--native`
+compiles the declaration into a typed `extern "C"` and calls it directly; the
+interpreter resolves the symbol and calls it through a fixed ladder of per-arity
+trampolines.  The two produce identical results, which is the bar.  Design in [plans/24-c-abi-binding](plans/24-c-abi-binding/README.md) /
 [@PLN24](https://github.com/loft-lang/plans/issues/24) (first consumer: the
 MariaDB/PostgreSQL clients, @PLN23), matrix + probe in
 `tests/fixtures/c_abi/`.  `#native` remains today's path.

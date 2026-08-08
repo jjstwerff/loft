@@ -2195,6 +2195,97 @@ fn a_c_binding_reaches_a_versioned_system_library_on_both_backends() -> std::io:
     Ok(())
 }
 
+/// @PLN24 arc E — a wasm target gets a NAMED refusal, and only where a `#c`
+/// binding is actually called.
+///
+/// This is an EMISSION test on purpose: it needs no wasm toolchain, so the
+/// guarantee is checked on every machine that runs the suite rather than only on
+/// one that can cross-compile. The end-to-end halves live in `html_wasm.rs`.
+///
+/// Three separate failures used to come out of here, and a reader could not tell
+/// any of them from a bug in their own program:
+///
+/// * a symbol the wasm sysroot happens to export (`strlen`) LINKED — with a
+///   warning — and trapped at the call (`signature_mismatch: strlen`), because
+///   wasm32 is a third data model (ILP32) and the extern carried the host's
+///   widths;
+/// * one it does not export gave a raw `rust-lld: undefined symbol`;
+/// * a package declaring `[c] optional-libs` gave `E0433: cannot find c_call in
+///   loft` once per symbol — for bindings the program never called.
+///
+/// So the assertions are in three parts: the reachable call is refused by name,
+/// nothing in the file reaches for `c_call` or declares a C extern, and the
+/// availability tables survive (they are what makes `c_library_available`
+/// compile, and asking it is the idiom the refusal points an author towards).
+#[test]
+fn a_c_binding_is_refused_by_name_on_a_wasm_target() {
+    let dir = std::env::temp_dir().join(format!("loft_pln24_arce_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src_path = dir.join("arce.loft");
+    std::fs::write(
+        &src_path,
+        // `used` is called; `unused` is only declared.  Both are `#c`.
+        "fn used(s: text) -> integer;    #c \"strlen\" \"size_t(const char*)\"\n\
+         fn unused(v: integer) -> integer; #c \"abs\" \"int(int)\"\n\
+         fn main() { println(\"{used(\\\"hello\\\")}\") }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "the declaration itself must stay legal on every target: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let main_nr = p.data.def_nr("n_main");
+    let till = p.data.definitions();
+
+    let emit = |wasm: bool| -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut out = Output::new(&p.data, &state.database);
+        out.wasm_wasi = wasm;
+        out.output_native_reachable(&mut buf, 0, till, &[main_nr])
+            .expect("emit");
+        String::from_utf8(buf).expect("utf8")
+    };
+
+    // The calibration half: on the HOST target the same program emits the real
+    // binding.  Without this a refusal that fired everywhere would read as a pass.
+    let host = emit(false);
+    assert!(
+        host.contains("#[link_name = \"strlen\"]") && !host.contains("@PLN24 arc E"),
+        "the host target must still emit the typed extern and no refusal"
+    );
+
+    let wasm = emit(true);
+    assert!(
+        wasm.contains("`used` is bound to the C symbol 'strlen' with #c")
+            && wasm.contains("wasm (wasip2)")
+            && wasm.contains("--native-wasm")
+            && wasm.contains("@PLN24 arc E"),
+        "the reachable call must be refused by name: {wasm}"
+    );
+    assert!(
+        !wasm.contains("loft::c_call"),
+        "nothing may reach for `c_call` — it is not in a wasm build, and this is \
+         what broke a program for merely DECLARING an optional-library binding"
+    );
+    assert!(
+        !wasm.contains("#[link_name = \"strlen\"]") && !wasm.contains("#[link_name = \"abs\"]"),
+        "no C extern may be declared: one the sysroot satisfies links and then traps"
+    );
+    assert!(
+        wasm.contains("static __C_LIBS") && wasm.contains("static __C_LIB_SYMS"),
+        "the availability tables stay on every target — `c_library_available` \
+         reads them, and it used to fail to compile under --html for want of them"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// @PLN24 arc D — loft compiles the ANSI-C shim itself, with `cc` and no rustc.
 ///
 /// The plan's trade is that loft-core stays a generic linking tool and every

@@ -168,7 +168,14 @@ backend (generating + compiling Rust on the host is RCE by construction).
   FFI surface can be removed.
 - **Status: 🟢 GREEN (@PLN86 1.4) — interpret-only force DROPPED (2026-06-25).** The
   external-FFI ban stays: `sandbox::reachable_ffi_bridges` rejects a reachable external
-  cdylib bridge unless `native_ffi` is granted (that dlopen is the real RCE surface). The
+  cdylib bridge unless `native_ffi` is granted (that dlopen is the real RCE surface).
+  **A `#c` binding (@PLN24) is gated there too**, and was not: both the ban and the
+  bridge scan key on `def.native()`, which a `#c` definition leaves EMPTY by design, so a
+  script reaching one under a granted `#cap` ran arbitrary C with `native_ffi = false`.
+  A capability says what DATA a script may touch and cannot say "and arbitrary machine
+  code may run here"; `#c` is the stronger case of the same surface, having no marshalling
+  layer at all. (`allow_libs` still admits it, unchanged — that is the host vetting the
+  library as a unit, the answer `#native` bridges already get.) The
   former forced interpret-only was **removed** — it rested on a false "native traps where
   the interpreter is total" premise (re-probed: div/mod-zero, OOB, overflow all yield
   `null` on `--native` too), so admission is backend-agnostic and a sandboxed program runs

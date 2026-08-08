@@ -61,6 +61,68 @@ the 5.9 MB image, and the second keystroke of a session costs ONE page.
 Paging a trie is still unwired: `store_bind_lazy` refuses one, and `store_load_key_text`
 reads a `hash`. The layout is the prerequisite that made those worth building.
 
+### `#c` on a wasm target, and under the sandbox (@PLN24 arcs E–F, 2026-08-08)
+
+Closes @PLN24. Both remaining arcs plus the plan's last open design question.
+
+**Arc E — the two wasm targets get a defined answer, and it is a refusal.** The
+plan had recorded wasm as having "no C ABI to bind to at all". It has one:
+`wasm32-wasip2` links a libc, so a `#c` binding to `strlen` resolved, LINKED with
+a `rust-lld` warning, and then TRAPPED at the call — `signature_mismatch: strlen`,
+`(i32) -> i64` against the sysroot's `(i32) -> i32`, because wasm32 is a third
+data model (ILP32) while the extern carried the host's widths from
+`CTarget::host()`. That is this plan's counted `N × silence` risk arriving at a
+re-assertion site nobody listed: one of the targets is not the host.
+
+Two further cells, both measured on one tree: a symbol the sysroot does NOT export
+gave a raw `rust-lld: undefined symbol` naming neither package nor library, and a
+package declaring `[c] optional-libs` gave `E0433: cannot find c_call in loft`
+once per symbol — **for bindings the program never called**, because the lazy
+resolver is emitted per declaration rather than per call.
+
+- **Nothing `#c` is emitted on a wasm target** — no `extern "C"` block, no lazy
+  resolver. `Output::no_c_abi()` is the single reader of the two target flags, so
+  the three sites that consult it cannot drift into different answers.
+- **The refusal sits at the CALL** (`output_c_direct_call`), which scopes it to
+  reachability for free: an unused `#c` declaration still builds for wasm, the
+  rule `#native` already follows for a routeless browser symbol (@PLN26 / P269).
+  It names the loft function, the C symbol, the declaring package and the target.
+  The PACKAGE, not the library: a `#c` annotation never names the library it came
+  from (arc G), and one of a package's `[c]` entries is the shim loft built itself.
+- **`__C_LIBS` / `__C_LIB_SYMS` moved OUT of the target gate.** They were emitted
+  only on non-browser targets, so `c_library_available` — the query a library is
+  told to ask before calling into an optional backend — failed to compile under
+  `--html` with `E0425`. A refusal that names a cure has to leave the cure
+  reachable. It now compiles on both wasm shapes and answers `false`, which is the
+  true answer rather than a stub.
+- The static-`clang --target=wasm32-wasi` route stays unbuilt and is recorded as
+  such: no C cross-compiler was available to prove one cell, and it reaches only a
+  pure-computation shim. `@PLN119` (out-of-process) is the route the message names.
+
+**Arc F** was already closed by @PLN23 S1 (`libmariadb.so.3` through a versioned
+soname, both backends identical, zero rustc); the plan's status table said
+otherwise.
+
+**Open question 3 — a `#c` binding is gated by `native_ffi`, not by `#cap`.** The
+question asked whether an effect declaration could make `#c` admissible under the
+sandbox. Measured first: a sandboxed script reaching a `#c` binding tagged
+`db#read`, under a profile granting `db#read` with `native_ffi` at its default
+false, was **admitted and ran the C**. Both the external-FFI ban and
+`reachable_ffi_bridges` key on `def.native()`, which arc A leaves EMPTY on a `#c`
+definition on purpose so the Rust dispatch path cannot claim one — the inverse of
+arc D's three defects, where paths matching on *body-less* wrongly CLAIMED a `#c`
+def. `CapViolation::CBinding` is the new arm; `allow_libs` still admits it, which
+is the host vetting the library as a unit exactly as for `#native`.
+
+Guards: `a_c_binding_is_refused_by_name_on_a_wasm_target` (emission-level, so it
+runs without a wasm toolchain, and it calibrates against the host emission so a
+refusal that fired everywhere could not read as a pass),
+`pln24_a_reachable_c_binding_is_refused_end_to_end_on_wasm` (both shapes, asserts
+exactly ONE message and that loft's own feature gates never reach the author),
+`pln24_html_c_library_available_compiles_and_answers_false`, and
+`a_c_binding_is_gated_by_native_ffi_not_by_a_capability_grant` (three cells:
+granted cap rejects, `native_ffi = true` admits and calls, `allow_libs` admits).
+
 ### A module may name the entry's type in an EXPRESSION (loft#801) (2026-08-07)
 
 Companion to loft#797, which fixed the LAYOUT half of the same load-order story. This is

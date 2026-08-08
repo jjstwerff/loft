@@ -8139,6 +8139,10 @@ fn main() {
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN24 arc E — wasm32-wasip2.  It links a libc, so a `#c` binding
+            // to a sysroot symbol used to build and then trap at the call; the
+            // generator refuses the call instead.
+            out.wasm_wasi = true;
             // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
             if lean {
                 out.emit_live = false;

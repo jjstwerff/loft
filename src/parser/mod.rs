@@ -12017,7 +12017,8 @@ mod plan86_admission_tests {
         match v {
             CapViolation::UngrantedCap { symbol, .. }
             | CapViolation::UntaggedSymbol { symbol, .. }
-            | CapViolation::ExternalFfi { symbol, .. } => *symbol,
+            | CapViolation::ExternalFfi { symbol, .. }
+            | CapViolation::CBinding { symbol, .. } => *symbol,
         }
     }
 

@@ -28,7 +28,7 @@ names itself.
 | Linux x86-64 | yes | yes | proven, both loft backends | **green** |
 | macOS (Apple silicon) | yes, `@rpath` install name verified | yes — sqlite; the other three correctly skip | **sqlite proven, both loft backends** | **green** |
 | Windows | yes — P1 verified, `LNK1181` gone; and it now LOADS (X7) | **yes — `winsqlite3.dll`, named by the package (X8)** | **sqlite proven, both loft backends** | **green** |
-| wasm / browser | n/a | n/a | impossible by capability | **owed a clear refusal** |
+| wasm / browser | n/a | n/a | impossible by capability | **green — refused by name** (P6) |
 
 The macOS row is now a measurement, not a hope —
 [MACOS_RESULTS.md](MACOS_RESULTS.md) has the numbers. P2 is confirmed there:
@@ -405,9 +405,12 @@ reachable; @PLN24 arc E names a database client as its example of a capability
 that does not exist in wasm. The out-of-process route (@PLN119) is a real answer
 and is not this plan's.
 
-What is owed is therefore not support — it is a **clear error**. Today,
-`--native-wasm` on a `#c` package emits generated Rust that cannot compile, and
-the author reads rustc's account of loft's internals:
+What is owed is therefore not support — it is a **clear error**, and that is now
+what arrives (@PLN24 arc E). Both wasm shapes refuse a REACHABLE `#c` call in one
+message naming the loft function, the C symbol, the declaring package and the
+target; an unused declaration still builds, so a library carrying `#c` bindings
+is not thereby unbuildable for wasm. What follows is what the author used to read
+instead — rustc's account of loft's internals:
 
 ```
 error[E0433]: cannot find `c_call` in `loft`
@@ -420,13 +423,19 @@ note: found an item that was configured out
    ::: src/c_call.rs:34:8  |  #![cfg(feature = "native-extensions")]
 ```
 
-— once per bound symbol. The cause is plain: `#c` codegen emits
-`loft::c_call::resolve_native(…)` unconditionally, and `c_call` is gated behind
-`native-extensions`, which a wasm target does not enable. The requirement is to
-refuse where the target is chosen, naming the package and the library, instead of
-emitting a call to a module that is not there. One message, before codegen —
-which is also what the loft-ship cross-target gate wants, since it prefers a
-declared-unsupported column to a claimed-but-broken one.
+— once per bound symbol, **including symbols the program never called**. The cause
+was plain: `#c` codegen emitted `loft::c_call::resolve_native(…)` unconditionally,
+and `c_call` is gated behind `native-extensions`, which a wasm target does not
+enable. Two further cells were worse than this one, because they did not fail at
+all: a symbol the WASI sysroot happens to export LINKED and then trapped at the
+call (wasm32 is ILP32, so the host-width extern is a signature mismatch), and
+`c_library_available` — the query a library is told to ask before calling into an
+optional backend — did not compile under `--html`.
+
+The fix is the one loft-ship's cross-target gate wants: a declared-unsupported
+column rather than a claimed-but-broken one. Nothing `#c` is emitted on a wasm
+target, and the refusal sits at the CALL, which scopes it to reachability for
+free.
 
 ## The ladder
 
@@ -443,7 +452,7 @@ produce a green that means nothing.
 | **P3** — done for sqlite | macOS runs what Linux runs | **confirmed on Apple silicon**: `["sqlite"]` exercised, matching the same hard-coded `sqlite` / `sqlite bound` / `sqlite tx` constants Linux matches, `--interpret` == `--native`. postgres / maria / duckdb remain correct skips until P5 answers the search path |
 | **P4** | Windows runs what Linux runs | the same three lines, from a Windows runner with sqlite present |
 | **P5** | the servers, or a declared skip | postgres + maria on macOS/Windows are a CI-provisioning question, not a language one; a skip is fine, an untested green is not |
-| **P6** | wasm refuses clearly | one named error before codegen, naming package and library — asserted on, so it cannot regress into a rustc dump |
+| **P6** — done | wasm refuses clearly | **@PLN24 arc E**: one named error naming the function, the C symbol, the package and the target, on BOTH wasm shapes; asserted end to end (`pln24_a_reachable_c_binding_is_refused_end_to_end_on_wasm`) including the "exactly one message" half, so it cannot regress into a rustc dump. An unused `#c` declaration still builds |
 
 P1 and P6 are independent of everything else and can land in either order. **P2
 is the one that decides whether P3 and P4 are worth running**, so it comes before

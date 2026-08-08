@@ -516,6 +516,14 @@ pub enum CapViolation {
         symbol: u32,
         crate_name: String,
     },
+    /// @PLN24 — `symbol` is a `#c` binding and the profile does not set
+    /// `native_ffi`.  Same gate as [`Self::ExternalFfi`] and for a stronger
+    /// reason: a `#c` call enters a C library with no marshalling layer at all.
+    CBinding {
+        from: u32,
+        symbol: u32,
+        c_symbol: String,
+    },
 }
 
 /// @PLN86 — the library a def belongs to, the wholesale-admission key for
@@ -596,6 +604,31 @@ pub fn admit_capabilities(
                 }
                 continue;
             }
+            // @PLN24 — a `#c` binding is FFI too, and the check above cannot see
+            // it: `reachable_ffi_bridges` and the branch above both key on
+            // `def.native()`, which arc A leaves EMPTY on a `#c` definition on
+            // purpose, so the Rust dispatch path cannot claim one.  Measured
+            // before it was closed: a sandboxed script reaching a `#c` binding
+            // tagged `db#read`, under a profile granting `db#read` and leaving
+            // `native_ffi` at its default false, ran arbitrary code out of a
+            // declared `.so`.
+            //
+            // A capability grant says what DATA a script may touch.  It cannot
+            // say "and arbitrary machine code may run in this process", which is
+            // exactly the line `native_ffi` draws — so a `#c` binding is gated
+            // there, never by its `#cap` tag.  (An allow-listed library still
+            // admits it, unchanged: that is the host vetting the library as a
+            // unit, the same answer `#native` bridges already get.)
+            if !def.c_sig.is_empty() {
+                if !profile.is_some_and(|p| p.native_ffi) {
+                    violations.push(CapViolation::CBinding {
+                        from,
+                        symbol,
+                        c_symbol: def.c_symbol.clone(),
+                    });
+                }
+                continue;
+            }
             // 2.3: capability check (deny-by-default).
             let cap = def.cap();
             if cap.is_empty() {
@@ -639,7 +672,8 @@ impl CapViolation {
         match self {
             Self::UngrantedCap { from, .. }
             | Self::UntaggedSymbol { from, .. }
-            | Self::ExternalFfi { from, .. } => *from,
+            | Self::ExternalFfi { from, .. }
+            | Self::CBinding { from, .. } => *from,
         }
     }
 
@@ -649,7 +683,8 @@ impl CapViolation {
         match self {
             Self::UngrantedCap { symbol, .. }
             | Self::UntaggedSymbol { symbol, .. }
-            | Self::ExternalFfi { symbol, .. } => *symbol,
+            | Self::ExternalFfi { symbol, .. }
+            | Self::CBinding { symbol, .. } => *symbol,
         }
     }
 }
@@ -754,6 +789,14 @@ pub fn describe_violation(
              crate `{crate_name}` — native code is not permitted (`native_ffi = false`).\n  \
              fix: add its library `{libhint}` to `allow_libs` (you vet its native code), or \
              set `native_ffi = true` for this profile."
+        ),
+        CapViolation::CBinding { c_symbol, .. } => format!(
+            "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, a `#c` binding to the C \
+             symbol `{c_symbol}` — native code is not permitted (`native_ffi = false`).\n  \
+             fix: add its library `{libhint}` to `allow_libs` (you vet the C library it \
+             binds), or set `native_ffi = true` for this profile.\n  note: a `#cap` grant \
+             cannot admit this — a capability says what data the script may touch, and a C \
+             call runs machine code loft cannot inspect."
         ),
     }
 }

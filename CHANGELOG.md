@@ -192,6 +192,34 @@ Only the load order decided it, so the same code was correct or corrupt dependin
 on which module `use`d which. It is now correct either way — including when the
 field is a `vector<T>`, a `T?`, or a struct that itself holds one.
 
+### A C binding says what it does on wasm
+
+A library bound straight to a C library (`#c`) cannot work in a browser or in a
+wasm module: there is no way to open a shared library there. That used to be
+discovered late and badly — one build linked against the wasm sysroot's own libc
+and then crashed at the call, another printed a page of Rust errors naming loft's
+internals. Now both wasm targets say it once, in a sentence:
+
+```
+error: loft: `client_info` is bound to the C symbol 'mysql_get_client_info' with #c
+       (package `mariadb`), and the wasm (wasip2) target has no C ABI to reach it —
+       a wasm module cannot open a shared library. …
+```
+
+Only a call is refused, so a library may declare `#c` bindings and still build for
+wasm as long as the wasm program does not reach one. And
+`c_library_available("…")` — the question to ask before calling into an optional
+backend — now compiles there too, answering `false`.
+
+### A sandboxed script cannot call C on a capability alone
+
+Granting a sandboxed script a capability such as `db#read` used to let it through
+to a `#c` binding, and from there into arbitrary C. A capability describes what
+data a script may touch; it cannot describe "and any machine code may run here".
+That second question has always had its own answer — `native_ffi` — and C bindings
+are now gated by it, exactly like Rust ones. Allow-listing a whole library still
+admits it: that is you vetting the library.
+
 ### `store_verify` on a collection inside a struct
 
 `store_verify(firm.people)` reported a corruption that was not there — it read the

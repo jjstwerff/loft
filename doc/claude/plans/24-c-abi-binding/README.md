@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Arcs A, B, C, D, G done; E and F open.** The architecture probe is built and has run
+**Done — every arc.** The architecture probe is built and has run
 (`tests/fixtures/c_abi/`, `make check && make probe`): the fixture is a C
 library with one function per loft type, and the probe is loft-core's proposed
 caller run against all of it. Two of the issue's premises came back changed and
@@ -195,6 +195,84 @@ argument, an out-parameter, and a caller-frees `char *`. The float cell is
 hand-computed — 2.5 × 4.0 is exactly 10.0 — so a shim returning a plausible
 wrong double fails rather than agreeing with itself.
 
+**Arc F is closed by @PLN23 S1**, on a real system library rather than the
+fixture: `mysql_get_client_info()` and `mysql_get_client_version()` bound against
+`libmariadb.so.3`, both backends byte-identical, zero rustc and no dev headers
+(`a_c_binding_reaches_a_versioned_system_library_on_both_backends`). What it
+proved that the fixture could not is the VERSIONED soname: `-l dylib=mariadb`
+sends the linker to `libmariadb.so`, the `-dev` symlink, while the interpreter
+`dlopen`s `libmariadb.so.3`, the runtime file — one declaration resolving to two
+different files, so the program ran interpreted and failed to LINK on a machine
+where the library is plainly installed. `-l:<file>` is the fix, and it is the
+same defect arc G's design later had to keep from re-opening one level up.
+
+**Arc E — the answer is a refusal, and the measurement is why.** The plan wrote
+wasm off as having "no C ABI to bind to at all". It has one. `wasm32-wasip2`
+links a libc, so a binding to `strlen` resolved, LINKED with a warning, and then
+trapped at the call — `signature_mismatch: strlen`, `(i32) -> i64` against the
+sysroot's `(i32) -> i32` — because wasm32 is a THIRD data model (ILP32: `long`,
+`size_t` and every pointer are 32 bits) and the extern carried the host's widths.
+That is the plan's own `N × silence` arriving at a site nobody had counted:
+`CTarget::host()` is read at every emission site, and one of the targets is not
+the host.
+
+The three ways it used to end, all on one tree, none of them distinguishable by
+a reader from a bug in their own program:
+
+| cell | before |
+|---|---|
+| `--native-wasm`, reachable `#c`, symbol IS in the WASI sysroot | **builds** (linker warning) and **traps at the call** |
+| `--native-wasm`, reachable `#c`, symbol is not | `rust-lld: undefined symbol: lc_strlen` — names neither package nor library |
+| `--native-wasm`, a package declaring `[c] optional-libs` | `E0433: cannot find c_call in loft`, once per symbol — **for bindings the program never called** |
+| `--html`, reachable `#c` | already refused by name (the one column that was defined) |
+| `--html`, `c_library_available("…")` | `E0425: cannot find value __C_LIB_SYMS` |
+
+The last row is the one that decided the shape of the fix. `c_library_available`
+is the query a `#c` library is *told* to ask before calling into an optional
+backend — and it did not compile on the target where every C library is missing,
+because its tables were emitted only on non-browser targets. A refusal that
+names a cure has to leave the cure reachable.
+
+So: **no `#c` emission on either wasm target** — no `extern "C"`, no lazy
+resolver — and the refusal at the CALL, which makes it reachability-scoped for
+free. A library may declare `#c` bindings and still build for wasm as long as
+the wasm program does not reach one; that was already true for `#native`
+(@PLN26 / P269) and it is what keeps a multi-target library from having to fork
+its source. The tables move OUT of the target gate and are emitted everywhere.
+
+**Why the refusal rather than the static-C route**, which the plan listed first.
+Making the sysroot-libc cell *work* is possible — it is a `CTarget` for ILP32 —
+and it would be the worst of the three answers: a `#c` symbol would resolve on
+wasm if and only if it happened to live in the WASI sysroot, a rule invisible
+from the declaration and different on every toolchain, while every real `#c`
+library (which binds a SYSTEM library, not libc) still failed. Compiling a
+package's own `[c] shim` to wasm with `clang --target=wasm32-wasi` remains the
+honest affirmative route and is **not built**: it needs a C cross-compiler in the
+build environment (this host has none, so nothing about it could be proven here),
+and it covers only a shim that is pure computation — never a database client,
+whose capability does not exist in a browser at all. It changes the refusal into
+a build step; it does not change the refusal's shape. The manifest key it needs
+lands with it, because a key with one legal value is not a choice.
+
+**Open question 3 — answered, and it was a hole.** A `#c` binding is gated by
+the sandbox's `native_ffi`, exactly like an external `#native` bridge, and never
+by a `#cap` grant. Measured before it was closed: a sandboxed script reaching a
+`#c` binding tagged `db#read`, under a profile granting `db#read` and leaving
+`native_ffi` at its default false, was **admitted and ran the C**. The cause is
+this plan's recurring shape seen from the other side — arc D's three defects were
+paths that pattern-matched on *body-less* and wrongly CLAIMED a `#c` definition;
+this is a path that pattern-matches on `#native` and therefore silently ADMITTED
+one. Both the FFI ban and `reachable_ffi_bridges` key on `def.native()`, which
+arc A leaves empty on purpose so the Rust dispatch path cannot take a `#c` def.
+
+The rule, stated so it does not have to be re-derived: **a capability grant says
+what DATA a script may touch; it cannot say "and arbitrary machine code may run
+in this process".** That is the line `native_ffi` draws, and `#c` is the stronger
+case of the same surface — a Rust bridge at least has a marshalling layer, and a
+`#c` call has none. An allow-listed library still admits its bindings, unchanged:
+that is the host vetting the library as a unit, the answer `#native` bridges
+already get.
+
 ## Goal
 
 A loft library binds directly to a system C library — **no rustc anywhere in
@@ -203,8 +281,9 @@ the library**, no libffi — and reaches the same standard of proof as a Rust
 the same failure reporting, the same capability declarations.
 
 - **Effort:** M for arcs A–D (the native + interpreter halves). Arc E (the other
-  two targets) is separate and larger, and is where "full parity" is bought.
-- **Design:** ✓ — invariant named, claims probed, one open question left (E).
+  two targets) came in far smaller than budgeted, because the honest answer there
+  is a refusal rather than a port — see the status section.
+- **Design:** ✓ — invariant named, claims probed, every open question answered.
 
 ## The invariant
 
@@ -270,8 +349,8 @@ differ*, or *simpler*.
 | Checking | macro + compiler check | compile-time parse + arity/width check | forced — no runtime signal exists |
 | Interpreter call | `dlopen` → generated uniform bridge (`LoftBridgeFn`), one ABI for every fn | `dlopen` → `dlsym` → fixed per-arity trampoline, keyed on (arity, return class) | differs — nobody can generate a per-fn adapter |
 | `--native` call | typed `extern "C"` decl + direct call (`add_native_extern_flags`) | **the same emission**, from the declared C types | **reuse — parity is nearly free here** |
-| `--native-wasm` | cross-compiled wasm rlib | the C compiled to wasm, where the capability exists | arc E |
-| `--html` | hand-built `[wasm.bridge]` crate | same options, same cost | arc E |
+| `--native-wasm` | cross-compiled wasm rlib | **refused at the call, by name** | differs — a wasm module cannot `dlopen` |
+| `--html` | hand-built `[wasm.bridge]` crate | **refused at the call, by name** | same, and `#native` needs the hand-built bridge anyway |
 | Registration | `build.rs` source-scans `.loft`, generates registers | **nothing to register** | simpler — there is no artifact to build |
 | Manifest | `[native] crate` / `runtime-libs` / `build-deps` | `[c] lib` / optional `shim` | reuse the shape |
 | Effects / capability | declared in the loft signature (`fs#read`) | identical, declared not inferred | reuse |
@@ -425,6 +504,7 @@ optionality from a name, a path shape, or a `dlopen` outcome.
 - **`dlopen` from a generated binary needs a link flag on some target** (`-ldl`
   historically), which would put a flag back on the line this arc exists to
   empty. Check against the target list arc E settles, not just this host.
+  (Moot on the wasm targets themselves: no `#c` call is emitted there at all.)
 - **The `--interpret` cell above is a bug, not a feature.** A required library
   that is absent should arguably fail at load with the package named, and today
   it does not — the discarded `load_c_library` result. If tightening that is
@@ -482,8 +562,8 @@ carrying into any future work on this plan.
 | **B** — the interpreter caller: `dlsym` + the per-arity trampolines + return-width dispatch | **Done** — `src/c_call.rs`; both backends answer identically |
 | **C** — the `--native` caller: emit the typed `extern "C"` decl from `CSignature` | **Done** — loft calls libc directly, no rustc in any library |
 | **D** — packaging | **Done** — `[c] libs` declares + loads + links, a `char *` return crosses as `text` / `text?`, and `[c] shim` is ANSI-C loft compiles itself (`cc`, never rustc) at parse and at `loft install` |
-| **E** — the other two targets (the parity arc) | Open — see below |
-| **F** — prove it: a libpq subset for @PLN23, zero rustc | Open |
+| **E** — the other two targets (the parity arc) | **Done** — both wasm shapes refuse a REACHABLE `#c` call by name (function, symbol, package, target); an unused declaration still builds; `c_library_available` compiles and answers `false` there |
+| **F** — prove it: a real system library for @PLN23, zero rustc | **Done** — @PLN23 S1: `libmariadb.so.3` through a versioned soname, both backends identical |
 | **G** — optional libraries: `[c] optional-libs` loaded on demand, both backends, plus the availability query | **Done** — `c_library_available`, a duckdb backend in `tests/fixtures/sqldb/duckdb/`, both backends byte-identical present AND absent |
 
 ## Phase ordering
@@ -513,27 +593,30 @@ opaque handles, arities straddling the register/stack split) with hand-computed
 expectations and a C self-test that validates the oracle before any loft is
 involved. Arc B is done when every cell is green on both backends.
 
-## Open design questions
+## Open design questions — all answered
 
 1. ~~Does the C integer width need spelling in the declaration?~~ **Settled by
    measurement: yes, at least for returns.** Whether arguments also need it is a
    narrower question — the probe says they cross correctly regardless, so the
    spelling may be *required for the return, checked for the arguments*.
-2. **Arc E — what does a `#c` library do on wasm and in the browser?** Three
-   honest answers, and the choice is per library rather than global: compile the
-   C to wasm with `clang --target=wasm32-wasi` and link it statically (works
-   where the capability exists in wasm — a codec; not a database client, which
-   needs sockets a browser cannot open at all); **relocate out-of-process**
-   (@PLN119 — "another process" and "another machine" are already one mechanism
-   there, which makes a browser calling a native-hosted C library the *same*
-   shape as a second process); or declare the target unsupported, which the
-   loft-ship gate already prefers over a claimed-but-broken column. The cost the
-   owner flagged is bought here.
-3. **Does a `#c` symbol need an effect declaration to be admissible?** The loft
-   signature carries effects (`fs#read`) and the sandbox admits on them. A C
-   symbol can do anything, so the declaration is an assertion the compiler
-   cannot check — which may mean `#c` is simply inadmissible under `--sandbox`.
-   Decide before D, not after someone ships a library.
+2. ~~**Arc E — what does a `#c` library do on wasm and in the browser?**~~
+   **Answered: it is refused, by name, at the call.** Of the three routes the
+   question listed, out-of-process (@PLN119) and a wasm implementation of the
+   library are the ones that work, and both are the author's to take; the
+   static-`clang` route is real but unbuilt (no C cross-compiler was available to
+   prove a single cell, and it reaches only a pure-computation shim). See the
+   status section for the measurement that killed the fourth option — making the
+   sysroot-libc case work — which would have shipped a capability whose
+   availability no author could predict.
+3. ~~**Does a `#c` symbol need an effect declaration to be admissible?**~~
+   **Answered: no — effects are the wrong instrument, `native_ffi` is the right
+   one.** The question assumed the choice was between trusting the declared
+   effect and refusing `#c` under `--sandbox` outright. It is neither: the
+   sandbox already separates *what data may be touched* (`#cap`) from *may
+   foreign code run at all* (`native_ffi`), and a `#c` binding belongs on the
+   second axis. It had fallen onto the first, so a granted `db#read` admitted an
+   arbitrary C call — see the status section. A `#c` symbol may still carry a
+   `#cap` tag and it is still checked; it is simply never sufficient.
 
 ## Cross-arc dependencies
 
@@ -541,8 +624,8 @@ involved. Arc B is done when every cell is green on both backends.
   the fixture carries the opaque-handle shape. Blocked on this, and the reason
   arc G exists: it binds three C libraries, and without G a user gets one
   database by installing three.
-- **@PLN119** (out-of-process libraries) — arc E's most likely answer for any
-  `#c` library whose capability does not exist in wasm at all.
+- **@PLN119** (out-of-process libraries) — arc E's answer for any `#c` library
+  that has to be reachable from wasm at all; the refusal names it.
 - **@PLN21** (prebuilt native libs) — a `#c` library needs no rustc prebuild,
   only the system lib and the optional `cc` shim; the manifest keys are shared.
 
