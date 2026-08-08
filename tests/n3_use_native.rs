@@ -863,3 +863,91 @@ fn inserting_into_a_keyed_collection_over_an_imported_struct_works() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// loft#715's tail — a package's `native-auto/` stays BOUNDED.
+///
+/// The artifact name carries the consumer's type-layout fingerprint, so a new file
+/// appears per distinct consumer context, and nothing collected the old ones.
+/// Measured before this guard existed: `tests/lib/typeshift/native-auto` held 532
+/// artifacts and 9.1 GB, growing ~28 MB per suite run, and the tree carried 25 GB
+/// of it.  Disk, not correctness — which is exactly why nobody looked.
+///
+/// Builds more distinct contexts than the keep window and requires the directory to
+/// stop growing.  The count is what carries this: a fix that pruned nothing would
+/// still leave every program RUNNING, so no behavioural assertion can see it.
+#[test]
+fn a_packages_artifact_directory_stays_bounded() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_prune_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    // A private copy, for the same reason the two tests above take one: this
+    // COUNTS `native-auto/`, so it must own it.
+    let lib = private_lib(&tmp, &["mathnative", "typeshift"]);
+    let native_auto = lib.join("mathnative/native-auto");
+
+    // Each program pads its own type table with a different number of structs, so
+    // every one is a distinct layout fingerprint and mints its own artifact.
+    let mut built = 0;
+    for n in 0..12 {
+        let pad: String = (0..n)
+            .map(|i| format!("struct Pad{i} {{ p_a: integer, p_b: text }}\n"))
+            .collect();
+        let prog = tmp.join(format!("ctx{n}.loft"));
+        std::fs::write(
+            &prog,
+            format!("use mathnative;\n{pad}fn main() {{ println(\"{{double(21)}}\"); }}\n"),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--lib")
+            .arg(&lib)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary");
+        assert!(
+            out.status.success(),
+            "context {n} must still RUN — pruning is a disk policy, never a failure.\
+             \nstderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "42\n",
+            "context {n} produced the wrong answer"
+        );
+        built += 1;
+    }
+
+    let count = std::fs::read_dir(&native_auto)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .is_some_and(|x| x == "so" || x == "dylib" || x == "dll")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+
+    // The CONTROL: distinct contexts really did mint distinct artifacts, so the
+    // bound below is a bound and not an artifact of everything sharing one name.
+    assert!(
+        count > 1,
+        "the {built} contexts shared one artifact, so this test proves nothing about \
+         pruning — the padding no longer shifts the layout fingerprint"
+    );
+    assert!(
+        count <= 8,
+        "`native-auto/` grew to {count} artifacts from {built} contexts; it must keep \
+         at most the 8 most recent (`KEEP_ARTIFACTS`)"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
