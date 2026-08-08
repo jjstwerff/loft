@@ -654,7 +654,7 @@ pub fn disassemble(
 
 /// Decode the byte length of the single instruction at `pc`, reading the
 /// actual operands so variable-length constants advance correctly:
-/// `Text` is `[len:u8][bytes]` and `Keys` is `[len:u8][(i8,u16) × len]`.
+/// `Text` is `[len:u8][bytes]` and `Keys` is `[len:u8][(i8,u16,i32) × len]`.
 /// A fixed per-opcode table cannot express these (`size(Text)` reports the
 /// in-memory pointer width, not the inline byte count).  `None` if the
 /// opcode is unknown or its operands run past the buffer.
@@ -677,7 +677,7 @@ fn instruction_len(bytecode: &[u8], pc: usize, data: &Data) -> Option<usize> {
         }
         let n = match &a.typedef {
             Type::Text(_) => 1 + *bytecode.get(cursor)? as usize,
-            Type::Keys => 1 + (*bytecode.get(cursor)? as usize) * 3,
+            Type::Keys => 1 + (*bytecode.get(cursor)? as usize) * 7,
             t => type_size(t, &Context::Constant) as usize,
         };
         cursor += n;

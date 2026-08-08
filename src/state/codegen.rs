@@ -4103,6 +4103,9 @@ impl State {
                     for k in keys {
                         self.code_add(k.type_nr);
                         self.code_add(k.position);
+                        // loft#812 — the shift travels with the descriptor, so a ranged
+                        // scan compares against the same decode the record side uses.
+                        self.code_add(k.start);
                     }
                 }
             }

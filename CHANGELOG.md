@@ -56,6 +56,52 @@ refused at the declaration now, and the message points at `trie`. The mirror too
 a numeric key under `trie` points back at `spatial`, or at `sorted` / `index` for
 an order on a number.
 
+### An `i8`, `i16` or `limit(...)` key finds its record too
+
+The last of the key widths that could be stored but not looked up. A collection
+keyed on `i8`, `i16`, or `integer limit(min, max)` with a non-zero minimum
+accepted every insert and counted them all, and then found none of them again:
+
+```loft
+prices: hash<Price[at]> = [];
+prices += Price { at: 120, name: "a" };   // at: integer limit(100, 300)
+prices[120]                               // was null — now the record you stored
+```
+
+Those widths store a value as `val - min` to save space, and the key was being
+read back without adding the `min` again, so the two sides differed by exactly
+that amount and never matched.
+
+Two more things travelled with it. A `u16` key of 32768 or more came back
+negative, so it too was unfindable — the same read, sign-extended. And a
+collection keyed on any of these could be built and counted but never walked:
+under `--native` a `sorted` iterated in the wrong order and a ranged scan came
+back empty, while the interpreter stopped with `Unknown key type`.
+
+As before, nothing about the stored data was wrong, only the reading of the key,
+so an existing collection starts answering correctly as soon as you re-run.
+
+### A variant satisfies the interface its enum satisfies
+
+Passing a struct-enum variant to a function with an interface bound accepted the
+call and then returned an empty value — `""` from a text method, `0` from an
+integer one — with nothing said. Under `--native` it stopped with
+`not yet implemented`.
+
+```loft
+x = AsA { a: A { nm: "ada" } };   // x is the VARIANT AsA, not the enum Any
+c1(x)                             // was "" — now "ada"
+```
+
+Calling the method directly, `x.one()`, always worked and reached the method
+declared on the enum. Now the generic reaches the same one. A variant that
+declares its own version of the method still gets its own — the enum's is only
+the fallback, exactly as on the direct call.
+
+The workaround, annotating the binding with the enum type
+(`x: Any = AsA { … }`), keeps working and is still worth writing where you mean
+it; it is no longer required.
+
 ### A `float` key finds the record you stored under it
 
 A `hash`, `sorted` or `index` keyed on a `float` or `single` field accepted every
@@ -84,10 +130,8 @@ every record under `--native`, where a `hash` answered "not found" and a `sorted
 answered a record whose fields all read `null`. Both backends now build the
 lookup key the same way.
 
-Still open, and refused rather than silently wrong is what we owe you here: a key
-declared `i8`, `i16`, or `integer limit(min, max)` with a non-zero minimum is
-still not found on either backend (loft#812). Use a plain `integer` for the key
-field and keep the narrow type on the others.
+The remaining shifted widths — `i8`, `i16`, and `integer limit(min, max)` with a
+non-zero minimum — are fixed too; see above.
 
 ### Inserting into a keyed collection is a little under twice as fast
 

@@ -698,8 +698,8 @@ impl Output<'_> {
                     }
                     write!(
                         w,
-                        "Key {{ type_nr: {}, position: {} }}",
-                        k.type_nr, k.position
+                        "Key {{ type_nr: {}, position: {}, start: {} }}",
+                        k.type_nr, k.position, k.start
                     )?;
                 }
                 write!(w, "]")?;

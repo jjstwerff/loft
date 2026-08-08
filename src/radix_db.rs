@@ -313,10 +313,12 @@ mod tests {
             Key {
                 type_nr: 1,
                 position: 0,
+                start: 0,
             },
             Key {
                 type_nr: 1,
                 position: 8,
+                start: 0,
             },
         ]
     }

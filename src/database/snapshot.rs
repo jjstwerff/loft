@@ -434,8 +434,8 @@ fn write_type(out: &mut String, t: &Type) {
         }
         let _ = write!(
             out,
-            "{{\"type_nr\":{},\"position\":{}}}",
-            k.type_nr, k.position
+            "{{\"type_nr\":{},\"position\":{},\"start\":{}}}",
+            k.type_nr, k.position, k.start
         );
     }
     out.push_str("],\"parents\":");
@@ -457,6 +457,12 @@ fn type_from(p: &Parsed) -> Result<Type, SchemaDecodeError> {
             Ok(Key {
                 type_nr: as_i8(field(it, "type_nr")?)?,
                 position: as_u16(field(it, "position")?)?,
+                // loft#812 added `start`; a snapshot written before it cannot contain a
+                // shifted key, so absent reads as 0 instead of failing the load.
+                start: match field(it, "start") {
+                    Ok(v) => as_i64(v)? as i32,
+                    Err(_) => 0,
+                },
             })
         })
         .collect::<Result<_, SchemaDecodeError>>()?;

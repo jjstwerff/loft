@@ -248,6 +248,7 @@ mod tests {
         Key {
             type_nr: TEXT_TYPE_NR,
             position: 0,
+            start: 0,
         }
     }
 
@@ -636,6 +637,7 @@ mod pages {
         Key {
             type_nr: TEXT_TYPE_NR,
             position: 0,
+            start: 0,
         }
     }
 

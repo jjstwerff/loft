@@ -204,6 +204,23 @@ impl PartialOrd<Str> for &str {
 pub struct Key {
     pub type_nr: i8,
     pub position: u16,
+    /// The field's storage START — the `min` of a `Parts::Byte` / `Parts::Short`, which
+    /// is what those two widths subtract when they store a value and must add back when
+    /// they read one (loft#812).
+    ///
+    /// It has to travel WITH the key because the comparison happens in `compare_key` /
+    /// `hash_ref` / `get_key`, none of which can see the type table. Before this field
+    /// they passed a literal `0`, so the record side decoded `val - min` while the lookup
+    /// side had the user's `val`: the two differed by exactly `min` and never compared
+    /// Equal. A key declared `i8`, `i16` or `integer limit(min, max)` with a non-zero
+    /// `min` therefore inserted fine, counted fine, and could never be looked up. Ordering
+    /// survived, because subtracting a constant is monotonic — only equality was wrong,
+    /// which is why it read as "the record is missing" rather than as a decode bug.
+    ///
+    /// `0` for every width that stores raw (`integer`, `long`, `text`, `float`, `single`,
+    /// `Parts::Int`, `Parts::ShortRaw`) — for those it is inert, and it is also the
+    /// correct value for a `u8` / `u16` whose range starts at zero.
+    pub start: i32,
 }
 
 #[derive(Clone)]
@@ -1181,13 +1198,26 @@ fn compare_key(k: &Content, record: &DbRef, stores: &[Store], key: &Key, pos: u3
             .cmp(s.get_str(s.get_u32_raw(record.rec, record.pos + pos))),
         // Narrow integer keys — match hash_ref / get_key.
         (Content::Long(v), 8) => v.cmp(&i64::from(s.get_i32_raw(record.rec, record.pos + pos))),
-        (Content::Long(v), 9) => v.cmp(&i64::from(s.get_short(record.rec, record.pos + pos, 0))),
-        (Content::Long(v), 10) => v.cmp(&i64::from(s.get_byte(record.rec, record.pos + pos, 0))),
-        (Content::Long(v), 11) => {
-            let raw: u16 = *s.addr(record.rec, record.pos + pos);
-            v.cmp(&i64::from(raw as i16))
-        }
-        (Content::Long(v), _) => v.cmp(&i64::from(s.get_byte(record.rec, record.pos + pos, 0))),
+        (Content::Long(v), 9) => v.cmp(&i64::from(s.get_short(
+            record.rec,
+            record.pos + pos,
+            key.start,
+        ))),
+        (Content::Long(v), 10) => v.cmp(&i64::from(s.get_byte(
+            record.rec,
+            record.pos + pos,
+            key.start,
+        ))),
+        (Content::Long(v), 11) => v.cmp(&i64::from(s.get_short_full(
+            record.rec,
+            record.pos + pos,
+            key.start,
+        ))),
+        (Content::Long(v), _) => v.cmp(&i64::from(s.get_byte(
+            record.rec,
+            record.pos + pos,
+            key.start,
+        ))),
         _ => panic!("Undefined compare {k:?} vs {}", key.type_nr),
     };
     if key.type_nr < 0 { c.reverse() } else { c }
@@ -1213,8 +1243,8 @@ pub enum FastKey<'a> {
     Long(u32, i64),
     /// A `size(4)` integer (8), sign-extended from the raw 4 bytes.
     I32(u32, i64),
-    /// A raw 2-byte integer (11), sign-extended through `i16`.
-    ShortRaw(u32, i64),
+    /// A `Parts::ShortRaw` 2-byte integer (11), decoded `read + start`.
+    ShortRaw(u32, i32, i64),
     /// `text` (6): the offset holds a 4-byte string handle.
     Str(u32, &'a str),
 }
@@ -1230,7 +1260,7 @@ pub fn fast_key<'a>(keys: &[Key], key: &'a [Content]) -> Option<FastKey<'a>> {
         (Content::Long(v), 1) => Some(FastKey::Int(pos, *v)),
         (Content::Long(v), 2) => Some(FastKey::Long(pos, *v)),
         (Content::Long(v), 8) => Some(FastKey::I32(pos, *v)),
-        (Content::Long(v), 11) => Some(FastKey::ShortRaw(pos, *v)),
+        (Content::Long(v), 11) => Some(FastKey::ShortRaw(pos, k.start, *v)),
         (Content::Str(v), 6) => Some(FastKey::Str(pos, v.str())),
         _ => None,
     }
@@ -1247,9 +1277,8 @@ impl FastKey<'_> {
             FastKey::Int(pos, v) => s.get_int(rec, 8 + pos) == *v,
             FastKey::Long(pos, v) => s.get_long(rec, 8 + pos) == *v,
             FastKey::I32(pos, v) => i64::from(s.get_i32_raw(rec, 8 + pos)) == *v,
-            FastKey::ShortRaw(pos, v) => {
-                let raw: u16 = *s.addr(rec, 8 + pos);
-                i64::from(raw as i16) == *v
+            FastKey::ShortRaw(pos, start, v) => {
+                i64::from(s.get_short_full(rec, 8 + pos, *start)) == *v
             }
             FastKey::Str(pos, v) => s.get_str(s.get_u32_raw(rec, 8 + pos)) == *v,
         }
@@ -1267,14 +1296,18 @@ fn compare_ref(r1: &DbRef, r2: &DbRef, stores: &[Store], key: &Key, p1: u32, p2:
             .get_str(s.get_u32_raw(r1.rec, p1))
             .cmp(s.get_str(s.get_u32_raw(r2.rec, p2))),
         8 => s.get_i32_raw(r1.rec, p1).cmp(&s.get_i32_raw(r2.rec, p2)),
-        9 => s.get_short(r1.rec, p1, 0).cmp(&s.get_short(r2.rec, p2, 0)),
-        10 => s.get_byte(r1.rec, p1, 0).cmp(&s.get_byte(r2.rec, p2, 0)),
-        11 => {
-            let v1: u16 = *s.addr(r1.rec, p1);
-            let v2: u16 = *s.addr(r2.rec, p2);
-            (v1 as i16).cmp(&(v2 as i16))
-        }
-        _ => s.get_byte(r1.rec, p1, 0).cmp(&s.get_byte(r2.rec, p2, 0)),
+        9 => s
+            .get_short(r1.rec, p1, key.start)
+            .cmp(&s.get_short(r2.rec, p2, key.start)),
+        10 => s
+            .get_byte(r1.rec, p1, key.start)
+            .cmp(&s.get_byte(r2.rec, p2, key.start)),
+        11 => s
+            .get_short_full(r1.rec, p1, key.start)
+            .cmp(&s.get_short_full(r2.rec, p2, key.start)),
+        _ => s
+            .get_byte(r1.rec, p1, key.start)
+            .cmp(&s.get_byte(r2.rec, p2, key.start)),
     };
     if key.type_nr < 0 { c.reverse() } else { c }
 }
@@ -1320,19 +1353,19 @@ pub fn get_key(record: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<Content> {
                 result.push(Content::Long(i64::from(v)));
             }
             9 => {
-                let v = store(record, stores).get_short(record.rec, p, 0);
+                let v = store(record, stores).get_short(record.rec, p, k.start);
                 result.push(Content::Long(i64::from(v)));
             }
             10 => {
-                let v = store(record, stores).get_byte(record.rec, p, 0);
+                let v = store(record, stores).get_byte(record.rec, p, k.start);
                 result.push(Content::Long(i64::from(v)));
             }
             11 => {
-                let raw: u16 = *store(record, stores).addr(record.rec, p);
-                result.push(Content::Long(i64::from(raw as i16)));
+                let v = store(record, stores).get_short_full(record.rec, p, k.start);
+                result.push(Content::Long(i64::from(v)));
             }
             _ => {
-                let v = store(record, stores).get_byte(record.rec, p, 0);
+                let v = store(record, stores).get_byte(record.rec, p, k.start);
                 result.push(Content::Long(i64::from(v)));
             }
         }
@@ -1388,16 +1421,13 @@ fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut Default
         // Each yields an i64 view so the hash matches `get_key`'s
         // Content::Long(i64) reconstruction at the lookup site.
         8 => i64::from(s.get_i32_raw(r.rec, p)).hash(hasher),
-        9 => i64::from(s.get_short(r.rec, p, 0)).hash(hasher),
-        10 => i64::from(s.get_byte(r.rec, p, 0)).hash(hasher),
-        11 => {
-            // Parts::ShortRaw stores a raw u16; no min shift, no null
-            // sentinel.  Sign-extend through i16 → i64 to match
-            // compare_key / get_key's reconstruction.
-            let raw: u16 = *s.addr(r.rec, p);
-            i64::from(raw as i16).hash(hasher);
-        }
-        _ => i64::from(s.get_byte(r.rec, p, 0)).hash(hasher),
+        9 => i64::from(s.get_short(r.rec, p, key.start)).hash(hasher),
+        10 => i64::from(s.get_byte(r.rec, p, key.start)).hash(hasher),
+        // `Parts::ShortRaw` stores `(val - min) as u16` with no null sentinel, so it
+        // decodes as `read + min` — the `get_short_full` its own writer is paired with
+        // (loft#812).
+        11 => i64::from(s.get_short_full(r.rec, p, key.start)).hash(hasher),
+        _ => i64::from(s.get_byte(r.rec, p, key.start)).hash(hasher),
     }
 }
 

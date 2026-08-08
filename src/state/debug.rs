@@ -1144,6 +1144,7 @@ impl State {
                     keys.push(Key {
                         type_nr: self.code::<i8>(),
                         position: self.code::<u16>(),
+                        start: self.code::<i32>(),
                     });
                 }
                 format!("{keys:?}")
@@ -1566,6 +1567,7 @@ impl State {
             keys.push(Key {
                 type_nr: self.code::<i8>(),
                 position: self.code::<u16>(),
+                start: self.code::<i32>(),
             });
         }
         let from_key = self.code::<u8>();

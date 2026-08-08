@@ -1142,6 +1142,7 @@ impl State {
             keys.push(Key {
                 type_nr: self.code::<i8>(),
                 position: self.code::<u16>(),
+                start: self.code::<i32>(),
             });
         }
         let from_key = self.code::<u8>();
@@ -1291,6 +1292,18 @@ impl State {
                 5 => key.push(Content::Long(i64::from(*self.get_stack::<bool>()))),
                 6 => key.push(Content::Str(self.string())),
                 7 => key.push(Content::Long(i64::from(*self.get_stack::<u8>()))),
+                // The four narrow STORAGE widths (`Parts::Int` / `Short` / `Byte` /
+                // `ShortRaw`).  Narrowing happens at the field boundary, so the bound a
+                // caller pushes for a ranged scan is an ordinary 8-byte integer whatever
+                // the field's width — the same rule `generation/text.rs::emit_content`
+                // states for the native side, where every integer width answers a
+                // `Content::Long(i64)` and the WIDTH lives in the stored record.
+                //
+                // Without these arms the interpreter panicked "Unknown key type" on any
+                // iteration of a collection keyed on `u8` / `i16` / `i32` / a limited
+                // integer — including a bare `for r in coll`, which pushes bounds too, so
+                // the collection could be built and counted but never walked (loft#812).
+                8..=11 => key.push(Content::Long(*self.get_stack::<i64>())),
                 _ => panic!("Unknown key type"),
             }
         }

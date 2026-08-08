@@ -648,8 +648,8 @@ fn write_key_list(out: &mut String, keys: &[Key]) {
         }
         let _ = write!(
             out,
-            "{{\"type_nr\":{},\"position\":{}}}",
-            k.type_nr, k.position
+            "{{\"type_nr\":{},\"position\":{},\"start\":{}}}",
+            k.type_nr, k.position, k.start
         );
     }
     out.push(']');
@@ -732,6 +732,12 @@ fn key_list(p: &Parsed) -> Result<Vec<Key>, TypeDecodeError> {
                 Ok(Key {
                     type_nr: as_i64(field(it, "type_nr")?)? as i8,
                     position: as_u16(field(it, "position")?)?,
+                    // loft#812 added `start`; a document written before it simply has
+                    // no shifted key, so absent means 0 rather than malformed.
+                    start: match field(it, "start") {
+                        Ok(v) => as_i64(v)? as i32,
+                        Err(_) => 0,
+                    },
                 })
             })
             .collect()
@@ -1758,10 +1764,12 @@ mod tests {
                 Key {
                     type_nr: -1,
                     position: 5,
+                    start: 100,
                 },
                 Key {
                     type_nr: 3,
                     position: 0,
+                    start: 0,
                 },
             ]),
         ];
@@ -1799,9 +1807,10 @@ mod tests {
         assert_eq!(
             value_to_json(&Value::Keys(vec![Key {
                 type_nr: -1,
-                position: 5
+                position: 5,
+                start: -32768
             }])),
-            r#"{"k":"Keys","keys":[{"type_nr":-1,"position":5}]}"#
+            r#"{"k":"Keys","keys":[{"type_nr":-1,"position":5,"start":-32768}]}"#
         );
     }
 
