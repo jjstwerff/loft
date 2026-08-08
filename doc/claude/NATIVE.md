@@ -204,6 +204,47 @@ text/format/buffer family.  A regression guard
 (`tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`,
 ratchet at 0) fails if a `"Op…" =>` match arm is ever re-introduced.
 
+### An argument may not borrow the store the call already borrowed
+
+Rust evaluates a method call's **receiver place before its arguments**, so a
+`#rust` template shaped `stores.method(@count)` holds `&mut *stores` for the
+whole of `@count`.  An argument that itself calls a `&mut Stores` method is then
+a second mutable borrow, and rustc rejects the entire generated function with
+E0499 — two-phase borrows rescue a nested SHARED read and not this.  What
+produces such an argument is ordinary loft: `/` and `%` expand to a
+divide-by-zero guard, `v[i]` and `s[i]` to a bounds guard, each of which raises
+through `&mut Stores`.
+
+**The invariant:** an argument that can borrow the store is evaluated into a
+local BEFORE the call takes its own borrow.  Two passes enforce it, split by
+what they can see:
+
+| | covers | where |
+|---|---|---|
+| `pre_eval.rs` | user-fn and Op-stub CALLS (`f(g(x))`, `f(c, h(c.field))`) | @P312, @P199 |
+| `calls.rs::substitute_template_body` | `#rust` TEMPLATE arguments | loft#818 |
+
+The template half is the one that kept being missed, because a template's
+argument list is a string and no pass was reading it.  It was hand-patched into
+individual templates three times — `OpGetVector`'s receiver (@P321d), then its
+index (@P338), then `reserve` on a hash (loft#818) — before the third made the
+shape legible.  Writing `{let __x = @arg; …}` into a `default/01_code.loft`
+template still works and the two earlier ones are still there, but a NEW template
+needs nothing: the emitter hoists for it.
+
+Two properties of the hoist worth knowing before changing it:
+
+- **It hoists a PREFIX, not one argument.** A hoisted argument keeps its position
+  in evaluation order only if every argument before it is hoisted too; otherwise
+  an earlier inline argument runs after a later hoisted one, and two arguments
+  that both raise report the wrong error first.
+- **A `text` argument blocks it.** Binding one to a local either MOVES a `String`
+  out of the caller's frame or borrows a temporary that dies at the end of the
+  `let`.  So if a text argument sits before the one that needs hoisting, nothing
+  is hoisted and the call fails to compile exactly as it did before — loudly.
+  `tests/scripts/818-store-borrow-in-argument.loft` is the matrix; `store_load_key(h,
+  p(), n / 2)` is the shape that would show the residual.
+
 The fn-ref dispatch (`emit.rs::output_fn_ref_dispatch`) hoists
 arguments into `let _farg_N` Rust bindings before the runtime
 match, then routes each candidate arm through `output_call_user_fn`
