@@ -6534,23 +6534,23 @@ fn is_value_return_type(tp: &Type) -> bool {
     // (`return (0.0_f64, 0)`) for the whole tuple.  Silent, and on one backend
     // only — the interpreter read the elements off eval-stack top.
     //
-    // The bound is what a hoist TEMP can hold, not what the ABI allows: the
-    // wrap emits `Set(__ret_N, <tuple>)`, and a tuple variable's elements are
-    // read one `OpVar*` each (`state/codegen.rs`), which has no opcode for a
-    // nested tuple.  So a scalar element list only — a NESTED pure-value tuple
-    // keeps the old path (loft#817).  An element with a lifetime (text /
-    // vector / record) is either rewritten to the boxed `Reference` shape
-    // upstream or belongs to the @P329 tuple-of-text branch, and neither may be
-    // hoisted by a plain `Set`.
+    // Recursing per element is what keeps the bound exact.  A NESTED pure-value
+    // tuple qualifies too (loft#817): the wrap emits `Set(__ret_N, <tuple>)` and
+    // then reads the temp back, and both halves are nested-aware —
+    // `emit_tuple_var_pop_put` writes the leaves and `generate_var` delegates to
+    // `emit_tuple_var_push_recursive` to read them.  An element with a lifetime
+    // (text / vector / record) is either rewritten to the boxed `Reference`
+    // shape upstream or belongs to the @P329 tuple-of-text branch, and neither
+    // may be hoisted by a plain `Set` — so those stop the recursion here.
     if let Type::Tuple(elems) = tp.base() {
-        return !elems.is_empty() && elems.iter().all(is_scalar_value_type);
+        return !elems.is_empty() && elems.iter().all(is_value_return_type);
     }
     is_scalar_value_type(tp)
 }
 
 /// The scalar half of [`is_value_return_type`]: a type returned in a register,
-/// owning nothing on the heap.  Split out so the pure-value tuple case can ask
-/// it per element without recursing into a nested tuple it cannot hoist.
+/// owning nothing on the heap.  Split out so the tuple case reads as "every
+/// element is itself a value return", with this as the recursion's base.
 fn is_scalar_value_type(tp: &Type) -> bool {
     matches!(
         tp.base(),

@@ -459,6 +459,30 @@ tuple. The codegen for `TupleGet` already handles this by computing the byte off
 the element within the outer tuple's stack slot. A nested `TupleGet(inner, i)` where
 `inner` is another `TupleGet` chains the offset correctly.
 
+### A nested element is a RECURSION, and it needs one helper per direction
+
+A tuple's stack layout FLATTENS — `element_stack_size(Tuple)` sums one
+`aligned_stack_step` slot per element, so `((1,4),5)` puts its leaves at exactly the
+offsets `(1,4,5)` would. Every site that moves a WHOLE tuple therefore walks leaves,
+and a tuple-typed element is simply a recursion into the same walk.
+
+There are two directions and one helper each, both in `src/state/codegen.rs`:
+
+| direction | helper | used by |
+|---|---|---|
+| push leaves onto the eval stack | `emit_tuple_var_push_recursive` | `TupleGet`, and `generate_var`'s `Type::Tuple` arm |
+| pop leaves into a variable's slots | `emit_tuple_var_pop_put` / `emit_tuple_put_ops` | `set_var`, tuple literals |
+
+**Route every new whole-tuple site through them — never re-inline the per-element
+match.** The same defect has now landed three times from exactly that: @P212 (a tuple
+literal containing a tuple panicked "unsupported elem" in `gen_set_first_at_tos`),
+then the `TupleGet` side, and then loft#817 — `generate_var` kept a hand-rolled copy
+of the push loop that had no `Type::Tuple` case, so **reading a whole nested tuple
+variable was an ICE** (`r = ((1,4),5); r`). That ICE is what bounded loft#816's return
+hoist, which is why a nested tuple return with a store local silently answered the
+zero initialiser on native while the interpreter was right. The arm is now a
+delegation, and the emitted bytecode for every flat shape is byte-identical to before.
+
 ---
 
 ## Implementation Plan

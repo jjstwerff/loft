@@ -17,11 +17,13 @@
 // requiring `OpFreeRef` (struct / vector / hash).  Either alone was correct,
 // so each is a control below.
 //
-// A NESTED pure-value tuple is deliberately not covered — a tuple variable
-// cannot hold a tuple-typed element, so the hoist cannot represent it
-// (loft#817).
+// Nested pure-value tuples are covered too (loft#817).  They were not at first:
+// the hoist emits `Set(__ret_N, <tuple>)` and reads the temp back, and reading a
+// whole nested tuple variable was an ICE, so the predicate was bounded to a flat
+// element list until `generate_var` learned to recurse.
 
 struct V816 { x: float, y: float, z: float }
+struct KV817 { k: integer, v: integer }
 
 // ── control: tuple return, NO store local ────────────────────────────────────
 fn no_local(n: integer) -> (float, integer) { (7.5, n) }
@@ -120,4 +122,90 @@ fn return_forms() {
 fn boxed_path() {
   (a, b) = boxed(5);
   assert(a == "v=1" && b == 5, "the boxed tuple-of-text path stays correct");
+}
+
+// ── loft#817 — the NESTED half ───────────────────────────────────────────────
+// Same trigger (pure-value tuple return + a store local), with a tuple element
+// that is itself a tuple.  Reading a whole nested tuple variable used to be an
+// ICE ("Tuple var: unsupported element type"), which is why the hoist could not
+// represent these and native answered the zero initialiser.
+
+fn nested_via_vector() -> ((integer, integer), integer) {
+  v: vector<integer> = [];
+  v += [9];
+  ((v.len(), 4), 5)
+}
+
+// Depth three, so the recursion is exercised past one level.
+fn nested_depth3() -> (((integer, integer), integer), integer) {
+  v: vector<integer> = [];
+  v += [9];
+  (((v.len(), 2), 3), 4)
+}
+
+// Nested on BOTH sides, a struct local, mixed pure-value leaves.
+fn nested_both_sides() -> ((integer, float), (boolean, integer)) {
+  a = V816 { x: 1.0, y: 2.0, z: 3.0 };
+  ((7, a.x + 0.5), (true, 4))
+}
+
+// A hash local — the third store kind that forces `OpFreeRef`.
+fn nested_via_hash() -> ((integer, integer), integer) {
+  h: hash<KV817[k]> = [];
+  h += KV817 { k: 1, v: 2 };
+  ((h[1].v, 4), 5)
+}
+
+// An early nested return AND a nested tail in one function.
+fn nested_early_and_tail(k: integer) -> ((integer, integer), integer) {
+  v: vector<integer> = [];
+  v += [9];
+  if k == 0 { return ((100, 101), 102); }
+  ((v.len(), 4), 5)
+}
+
+// A text leaf keeps the BOXED path even when nested — must stay correct.
+fn nested_with_text() -> ((text, integer), integer) {
+  v: vector<integer> = [];
+  v += [9];
+  (("hi", v.len()), 5)
+}
+
+// Reading a whole nested tuple VARIABLE — the operation that used to ICE.
+fn nested_named_local() -> ((integer, integer), integer) {
+  r = ((1, 4), 5);
+  r
+}
+
+fn nested_takes(t: ((integer, integer), integer)) -> integer {
+  t.0.0 + t.0.1 + t.1
+}
+
+fn nested_returns() {
+  (a, b) = nested_via_vector();
+  assert(a.0 == 1 && a.1 == 4 && b == 5, "a nested tuple return survives the frees");
+  (c, d) = nested_depth3();
+  assert(c.0.0 == 1 && c.0.1 == 2 && c.1 == 3 && d == 4, "nesting recurses past one level");
+  (e, f) = nested_both_sides();
+  assert(e.0 == 7 && e.1 == 1.5 && f.0 && f.1 == 4, "both elements may be tuples");
+  (g, h) = nested_via_hash();
+  assert(g.0 == 2 && g.1 == 4 && h == 5, "a hash local must not zero the returned tuple");
+}
+
+fn nested_forms() {
+  (a, b) = nested_early_and_tail(1);
+  assert(a.0 == 1 && a.1 == 4 && b == 5, "the nested tail is returned when the early return is skipped");
+  (c, d) = nested_early_and_tail(0);
+  assert(c.0 == 100 && c.1 == 101 && d == 102, "the nested early return is returned when taken");
+  (e, f) = nested_with_text();
+  assert(e.0 == "hi" && e.1 == 1 && f == 5, "a nested tuple with a text leaf stays correct");
+}
+
+fn nested_whole_variable() {
+  (a, b) = nested_named_local();
+  assert(a.0 == 1 && a.1 == 4 && b == 5, "a whole nested tuple variable can be returned");
+  r = ((1, 4), 5);
+  s = r;
+  assert(s.0.0 == 1 && s.0.1 == 4 && s.1 == 5, "a whole nested tuple variable can be copied");
+  assert(nested_takes(r) == 10, "a whole nested tuple variable can be passed as an argument");
 }
