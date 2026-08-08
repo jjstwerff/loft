@@ -122,9 +122,10 @@ Full design + implementation history:
 store and writes a `<path>.dschema` **layout-identity sidecar** beside it
 (`src/schema_sidecar.rs`: `LayoutIdentity` = the `layout_algo_hash` + per-type
 layout dump). The **working-set loaders** — `store_load_key` / `store_load_keys`
-/ `store_load_key_text` (hash point lookups) and `store_load_range` (sorted
-range) — materialise only the entries a query touches, reading just the pages
-those touch from a **local file or an `http(s)://` Range server**
+/ `store_load_key_text` (hash and trie point lookups), `store_load_range` (sorted
+range) and `store_load_prefix` (trie prefix) — materialise only the entries a
+query touches, reading just the pages those touch from a **local file or an
+`http(s)://` Range server**
 (`src/paged_reader.rs`), then relocate each matched entry's heap graph into a
 sound local store (`store_verify` proves the copy; every copyable field shape is
 handled, `vector<text>`/`vector<vector>` safely refused).
@@ -1007,22 +1008,42 @@ Together: ~2.8 + 1.0 = **3.8 pages, 250 KB** per cold query, against 27 + 20 = 4
 as built and a 5.9 MB gzipped whole image — and a second keystroke costs ONE page
 with the reader's 64-page cache warm.
 
-What the layout unblocks, and is not itself: **a trie still cannot be paged** (see
-the note above on whole-image persistence). The work that remains, in dependency
-order, and worth building at 3.8 pages a query where it was not at 47:
+What the layout unblocked: **a trie is paged** — the work the numbers above made
+worth building at 3.8 pages a query where it was not at 47.
 
-1. a paged descent + bounded prefix walk over `PagedReader`, beside
-   `find_hash_entry` and `sorted_range_positions`. The tree's layout constants
-   (`HDR`, `NODE_SIZE`, `node_off`, `child_off`, the child sign encoding) should be
-   EXPORTED from `radix_tree` for it rather than mirrored — the hash and sorted
-   ports mirror theirs, and one home for a layout fact is worth the export;
-2. `store_load_key_text` dispatching to it when the root is a trie;
-3. the prefix form, which must answer `t["kerk"..:8]` **without** materialising the
-   untaken tail — the cap is what makes a search box cheap, and this is the one
-   operation where a paged walk could quietly become a full one;
-4. `Stores::unservable_kind` narrowing, and the loft#802 refusal message with it.
+#### A paged trie — `store_load_key_text` and `store_load_prefix`
 
-Two things the pass deliberately does NOT do, so neither reads as a defect:
+`paged_reader::trie_find_rec` answers one text key by a root→leaf descent, and
+`trie_prefix_recs` answers a prefix by a seek plus a bounded in-order walk. They
+sit beside `find_hash_entry` and `sorted_range_positions`, and reach the surface
+as `store_load_key_text` (extended to a trie root) and `store_load_prefix`
+(`local, path, pre, limit`; `limit < 0` = no cap). `store_bind_lazy` accepts a
+trie image, so a bound trie faults into its source like a bound hash.
+
+**One walk, two storages.** The paged reader does not carry its own copy of the
+descent. `radix_tree` exposes the geometry over a `TreeNodes` / `TreeKeys` source
+(`descend_gen`, `split_point_gen`, `descend_extreme_gen`, `RadixIter::step_gen`,
+`seek_gen`) plus the two subtlest derived facts — `composed_bit` (the
+`user bits ‖ 0x00 ‖ id` string) and `first_diff_words`. The resident tree passes
+`StoreNodes`/`StoreKeys`; the reader passes a source that answers a node by
+FETCHING, which is why the trait methods take `&mut self`. What remains in
+`paged_reader` is the node accessor, the key read (a string record through its
+pointer) and the two query wrappers. `trie_db::paged::r12` pins the two answering
+identically — every key, every prefix, every cap, on both node layouts.
+
+**Fuel, because an image is a file.** Reads are already total (the reader
+zero-pads past EOF), but a cyclic child pointer in a truncated or foreign image
+would spin a descent. The paged source refills a hop budget at `walk_begin` — per
+WALK, not per query, since a seek runs four of them and a guessed multiple
+under-provisions on a small tree and over-provisions on a large one. Exhausting
+it answers `Empty`, so a corrupt image reports ABSENT instead of hanging.
+
+**The cap bounds the walk.** `t["kerk"..:8]` stops stepping at the eighth record,
+so the ninth's pages are never fetched. A walk that materialised the run and then
+truncated would read all 459 records for `kerk` to return 8 — the one operation
+where paging could quietly become a whole-image read.
+
+Two things the layout pass deliberately does NOT do, so neither reads as a defect:
 
 - **It runs on the FRESH bind only.** Re-binding an existing file leaves its
   layout alone — the image is already laid out if this loft wrote it, and
@@ -1050,7 +1071,7 @@ later as a crash or as silent corruption. loft#720 was three such omissions of
 | The `is_radix` scratch selector (`parser/collections.rs`) | `for x in coll` takes the HASH builder — a bucket walk over a tree. `trie` hit this: the site names every keyed kind, so the sweep had counted it as mechanical and handled. |
 | `emit_field` (`generation/mod.rs`) | A keyed STRUCT FIELD's type id is never registered on `--native`, and its record reads as a struct with no fields (`field_type` indexes an empty list). Local-only vars still work, so it looks kind-specific rather than field-specific. |
 | `Iterated` (`database/descriptor.rs`) and its readers | The layout descriptor, `type_of(…).collection` and the lazy-store SQL deriver all match `Iterated` exhaustively, so these are compile errors — EXCEPT `ffi_deliver::collect_keyed`, which is `#[cfg(target_arch = "wasm32")]` and therefore dead on the host that compiles the audit, and `rewrite_iterated`, which closes with `_ => continue`. Check the wasm target explicitly. |
-| `Stores::unservable_kind` (`database/allocation.rs`) and `collection_type_of_store`'s `is_keyed` | **A binding that reports itself healthy and answers nothing.** The paged loader serves only a `hash`, so every other kind must be refused at `store_bind_lazy`; a kind missing from the check binds, answers `null` at every lookup, and leaves `store_lazy_error` empty — whose documented meaning is "reachable, genuinely no such key" (loft#802). The refusal is a STATIC property of the pair, so it costs no I/O to give and there is no reason to defer it to a lookup. |
+| `Stores::unservable_kind` (`database/allocation.rs`) and `collection_type_of_store`'s `is_keyed` | **A binding that reports itself healthy and answers nothing.** The paged loader serves a `hash` and a `trie`, so every other kind must be refused at `store_bind_lazy`; a kind missing from the check binds, answers `null` at every lookup, and leaves `store_lazy_error` empty — whose documented meaning is "reachable, genuinely no such key" (loft#802). The refusal is a STATIC property of the pair, so it costs no I/O to give and there is no reason to defer it to a lookup. The list runs BOTH ways: a kind that becomes servable and is not removed keeps refusing a binding that would now work, which is why @PLN134 moved the trie out of it in the same change that made it pageable. |
 
 Two habits that make the class visible instead of latent:
 

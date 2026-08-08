@@ -432,6 +432,10 @@ fn nested_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_nested.loft")
 }
 
+fn prefix_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_prefix.loft")
+}
+
 fn vecstruct_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_vecstruct.loft")
 }
@@ -1031,6 +1035,105 @@ fn store_load_range_over_sorted_both_backends() {
         assert!(
             out.contains("rng verify=true"),
             "{backend}: the loaded sorted collection must be sound: {out:?}"
+        );
+    }
+}
+
+/// @PLN134 — a persisted TRIE read a page at a time: one text key by descent
+/// (`store_load_key_text`) and a prefix run by a bounded walk
+/// (`store_load_prefix`), on both backends.
+///
+/// The cells that carry weight are the ones a walk answering *something* would
+/// still fail: `kerf` shares `ker` with the run and must be left OUT, `kerx` sorts
+/// INSIDE the key range and must answer nothing (a seek lands on `lonneker`, so a
+/// missing stop-check reports that instead), and the cap must take the first two
+/// IN KEY ORDER. `store_verify` then says the collection the loader built is a
+/// sound trie — a working-set copy that linked its records wrongly would still
+/// print the right words.
+#[test]
+fn store_load_prefix_over_trie_both_backends() {
+    let dir = scratch("store_load_prefix");
+    let path = dir.join("words.store");
+
+    let (out_w, code_w) = run_mode(&prefix_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+    assert!(out_w.contains("write ok"), "{out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        // One key, by a root→leaf descent — and a miss that stays a miss.
+        let (out, code) = run_mode_backend(backend, &prefix_script(), &path, "one");
+        assert_eq!(code, 0, "{backend} one exit: {out:?}");
+        assert!(out.contains("one ok=true"), "{backend}: {out:?}");
+        assert!(
+            out.contains("one hits=5"),
+            "{backend}: the entry's own fields must arrive: {out:?}"
+        );
+        assert!(out.contains("one len=1"), "{backend}: {out:?}");
+        assert!(
+            out.contains("one miss=false") && out.contains("one miss_len=0"),
+            "{backend}: `kerks` extends `kerk` and prefixes `kerkstraat`, and is \
+             neither — a descent lands on SOME leaf, so this is where a missing key \
+             comparison shows: {out:?}"
+        );
+
+        // The prefix run.
+        let (out, code) = run_mode_backend(backend, &prefix_script(), &path, "prefix");
+        assert_eq!(code, 0, "{backend} prefix exit: {out:?}");
+        assert!(out.contains("pre loaded=4"), "{backend}: {out:?}");
+        assert!(
+            out.contains("pre keys=kerk,kerklaan,kerkstraat,kerkweg"),
+            "{backend}: the prefix itself is included and the run is in key order: {out:?}"
+        );
+        assert!(
+            out.contains("pre hits=9"),
+            "{backend}: every element's fields relocate, not just the first: {out:?}"
+        );
+        assert!(
+            out.contains("pre absent=true"),
+            "{backend}: `kerf` shares `ker` but does not extend `kerk`: {out:?}"
+        );
+        assert!(
+            out.contains("pre verify=true"),
+            "{backend}: the trie the loader BUILT must be sound: {out:?}"
+        );
+
+        // The cap, and the three empty answers.
+        let (out, code) = run_mode_backend(backend, &prefix_script(), &path, "cap");
+        assert_eq!(code, 0, "{backend} cap exit: {out:?}");
+        assert!(out.contains("cap loaded=2"), "{backend}: {out:?}");
+        assert!(
+            out.contains("cap keys=kerk,kerklaan"),
+            "{backend}: the cap takes the FIRST n in key order: {out:?}"
+        );
+        assert!(
+            out.contains("cap none=0"),
+            "{backend}: `kerx` sorts inside the range and extends nothing: {out:?}"
+        );
+        assert!(out.contains("cap past=0"), "{backend}: {out:?}");
+        assert!(
+            out.contains("cap all=6"),
+            "{backend}: the empty prefix is every record: {out:?}"
+        );
+
+        // loft#802's refusal narrows: a trie image can be PAGED now, so the bind is
+        // accepted and a lookup that misses consults the source.
+        let (out, code) = run_mode_backend(backend, &prefix_script(), &path, "bind");
+        assert_eq!(code, 0, "{backend} bind exit: {out:?}");
+        assert!(
+            out.contains("bind ok=true"),
+            "{backend}: a trie bound to a `.store` image is servable now: {out:?}"
+        );
+        assert!(
+            out.contains("bind hits=3"),
+            "{backend}: the lazy fetch must reach the record: {out:?}"
+        );
+        assert!(
+            out.contains("bind quiet=true") && out.contains("bind faults=0"),
+            "{backend}: a healthy binding says nothing: {out:?}"
+        );
+        assert!(
+            out.contains("bind absent=true") && out.contains("still_quiet=true"),
+            "{backend}: a genuine absence must not start speaking: {out:?}"
         );
     }
 }
@@ -2938,11 +3041,12 @@ fn lazy_bound_collection_fetches_only_the_touched_entry_both_backends() {
 ///
 /// FOUR refusal cells, because a refusal is decided in two different places and
 /// a fix for one leaves the other silent: the KIND is static and refuses at the
-/// bind (`trie`, `sorted`), while a foreign layout and a non-relocatable entry
-/// are only knowable when a fetch runs. THREE controls carry the test: a working
-/// hash must stay quiet (a fix that reported every null as a refusal would pass
-/// every refusal cell), an unreachable source must keep its own more specific
-/// reason, and a refused DIRECT load must not poison a later healthy binding.
+/// bind (`index`, `sorted`), while a foreign layout and a non-relocatable entry
+/// are only knowable when a fetch runs. FOUR controls carry the test: the
+/// REPORTED kind is served now (@PLN134) and must stay quiet, a working hash must
+/// stay quiet (a fix that reported every null as a refusal would pass every
+/// refusal cell), an unreachable source must keep its own more specific reason,
+/// and a refused DIRECT load must not poison a later healthy binding.
 #[test]
 fn a_refused_lazy_binding_is_visible_to_the_program_both_backends() {
     let dir = scratch("lazy_refusal_802");
@@ -2951,44 +3055,64 @@ fn a_refused_lazy_binding_is_visible_to_the_program_both_backends() {
 
     let (out_w, code_w) = run_lazy("--interpret", &script, &path, "write");
     assert_eq!(code_w, 0, "write exit: {out_w:?}");
-    assert!(out_w.contains("seeded=2,1,1,1"), "write: {out_w:?}");
+    assert!(out_w.contains("seeded=2,1,1,1,1"), "write: {out_w:?}");
 
     for backend in ["--interpret", "--native"] {
         let (out, code) = run_lazy(backend, &script, &path, "read");
         assert_eq!(code, 0, "{backend} read exit: {out:?}");
 
-        // The reported case. The kind can never page, and that is known with no
-        // I/O — so it fails at the call that is wrong, not at a later lookup.
+        // The reported shape, on a kind still unserved. It can never page, and
+        // that is known with no I/O — so it fails at the call that is wrong, not
+        // at a later lookup.
         assert!(
-            out.contains("trie_bound=false"),
+            out.contains("idx_bound=false"),
             "{backend}: a kind a paged image can never serve must be refused AT \
              THE BIND — `true` here is what made every later null look like an \
              absent key: {out:?}"
         );
         assert!(
-            out.contains("trie_null=true trie_speaks=true"),
+            out.contains("idx_null=true idx_speaks=true"),
             "{backend}: the lookup still answers null (C80), and the channel that \
              exists to break that tie must carry the reason: {out:?}"
         );
         assert!(
-            out.contains("trie_faults=1"),
+            out.contains("idx_faults=1"),
             "{backend}: a binding that can serve NOTHING is maximally incomplete, \
              and `0` reads as healthy: {out:?}"
         );
         // The message is the deliverable here: the old one blamed the #632
-        // wrapper-struct trap and told a plain `trie` local to declare itself as
-        // an annotated local, which it already was.
+        // wrapper-struct trap and told a plain local to declare itself as an
+        // annotated local, which it already was.
         assert!(
-            out.contains("trie_names_kind=true") && out.contains("trie_names_cure=true"),
+            out.contains("idx_names_kind=true") && out.contains("idx_names_cure=true"),
             "{backend}: the refusal must name the KIND that was refused and the \
              call that does work: {out:?}"
         );
-        // The rule is the kind SET, not `trie` — a fix keyed on one kind would
-        // leave `sorted` and `index` exactly as silent.
+        // The rule is the kind SET, not one kind — a fix keyed on one would leave
+        // `sorted` exactly as silent.
         assert!(
             out.contains("sorted_bound=false") && out.contains("sorted_speaks=true"),
             "{backend}: `sorted` cannot page either, and must refuse the same \
              way: {out:?}"
+        );
+
+        // CONTROL 0 — @PLN134 narrowed the refused set, and the kind the report
+        // was ABOUT is the one that moved. It must now bind, answer, and stay
+        // quiet; keeping the old expectation here would pin a refusal that has
+        // itself become the bug.
+        assert!(
+            out.contains("trie_bound=true") && out.contains("trie_hits=3"),
+            "{backend}: a trie image is pageable now, so the bind is accepted and \
+             the lookup reaches the record: {out:?}"
+        );
+        assert!(
+            out.contains("trie_quiet=true trie_faults=0"),
+            "{backend}: a served binding must not speak: {out:?}"
+        );
+        assert!(
+            out.contains("trie_absent=true trie_still_quiet=true"),
+            "{backend}: and a genuine absence in a SERVED trie is still an \
+             absence: {out:?}"
         );
 
         // The refusals a bind CANNOT decide: the local is a `hash`, so the pair

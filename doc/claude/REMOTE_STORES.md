@@ -63,11 +63,19 @@ for the world.
 | `store_load_url_trusted(r, url)` | the **whole** image, once | it is small, or you need all of it anyway |
 | `store_load_url(r, url, sha256)` | the whole image, **pinned** to a hash | the origin is not trusted |
 | `store_load_key(local, url, key)` | only the pages that ONE lookup touches | the dataset is large and reads are sparse |
-| `store_load_key_text(local, url, key)` | same, for a text-keyed hash | |
+| `store_load_key_text(local, url, key)` | same, for a text-keyed hash or trie | |
 | `store_load_keys(local, url, keys)` | several keys, reader opened once | a batch — cheaper than N calls |
 | `store_load_range(local, url, lo, hi)` | a contiguous key range | ordered collections |
+| `store_load_prefix(local, url, pre, n)` | a text prefix, capped at `n` | a search box over a `trie` |
 
-The four paged forms take **a local path or an `http(s)://` URL, interchangeably**,
+`store_load_prefix` is the one a phone typing into a search box wants: a laid-out
+vocabulary trie answers `"kerk"` in about **3.8 pages** — a root→leaf descent plus
+the records it returns — where the alternative is downloading the whole 5.9 MB
+image (@PLN134). The cap bounds the WALK, not just the answer, so asking for 8 of
+459 matches fetches 8 records' worth of pages; a negative cap means no limit and
+on a common prefix reads the whole run.
+
+The five paged forms take **a local path or an `http(s)://` URL, interchangeably**,
 on every target including the browser (`--html`). Nothing in the program changes
 when the data moves from disk to a CDN — which is what makes "develop against a
 local file, ship against a URL" work.

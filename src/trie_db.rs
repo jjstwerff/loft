@@ -16,15 +16,17 @@
 //! so a shorter key sorts before a longer one that extends it — a string concern,
 //! proven by `r8c`. This module supplies the bytes; the tree does the rest.
 //!
-//! Nothing consumes it yet — the trie KIND is step 2 of the plan. It lands first, and
-//! proven, so the steps that build on it start from a known-good key reading.
+//! The same key reading serves a PAGED trie: `paged_reader::trie_find_rec` and
+//! `trie_prefix_recs` answer over an image instead of a `Store`, composing keys with
+//! this module's `bytes_word` and descending with `radix_tree`'s own geometry, so
+//! there is one answer and not two (@PLN134). `mod paged` below pins that they agree.
 
 use crate::keys::{Content, DbRef, Key};
 use crate::radix_tree::{self as rt, KeyOracle};
 use crate::store::Store;
 
 /// Payload offset of an element record's fields; mirrors `radix_db`.
-const PAYLOAD: u32 = 8;
+pub(crate) const PAYLOAD: u32 = 8;
 
 /// The text key's bytes, read through the field's string pointer.
 ///
@@ -67,8 +69,10 @@ impl KeyOracle for TextOracle<'_> {
 /// The `word`-th big-endian 8-byte chunk of `b`, zero-padded past the end.
 /// Shared by the record oracle and the probe so both read a key the same way — the
 /// two disagreeing is the classic radix fault, and it presents as "inserted, not
-/// found".
-fn bytes_word(b: &[u8], word: u32) -> u64 {
+/// found". `pub(crate)` for the same reason one step out: the PAGED walk over a
+/// persisted trie reads keys out of an image and must compose them identically
+/// (@PLN134).
+pub(crate) fn bytes_word(b: &[u8], word: u32) -> u64 {
     let mut out = 0u64;
     for i in 0..8 {
         let idx = (word * 8 + i) as usize;
@@ -580,6 +584,411 @@ mod tests {
     }
 }
 
+/// @PLN134 step 4 — the PAGED walk answers exactly what the resident walk answers.
+///
+/// The one gate that matters for a second reader of the same tree. `paged_reader`
+/// reads the node array out of an IMAGE, a page at a time, and every piece of
+/// geometry it uses — descent, split point, in-order step, seek — comes from
+/// `radix_tree` itself, so the two cannot silently disagree about where a key
+/// lives. What they still could disagree about is everything around that: how a key
+/// is read (a string record through a pointer, versus `get_str`), where the tree
+/// record sits, whether a cap stops the walk or just the answer. That is what these
+/// compare, record for record, against the resident functions the interpreter runs.
+///
+/// The corpus is generated rather than borrowed from the host, because it has to run
+/// in the ordinary suite; it is built for prefix SHARING (a small syllable alphabet,
+/// every length from 2 to 5 characters), which is the property a trie is about and
+/// the one a random string set does not have.
+#[cfg(all(test, paged_store))]
+mod paged {
+    use super::*;
+    use crate::keys::Str;
+    use crate::paged_reader::{PagedReader, trie_find_rec, trie_prefix_recs};
+
+    /// One `text` key at payload offset 0 — the same shape `mod tests` builds.
+    fn w_key() -> Key {
+        Key {
+            type_nr: TEXT_TYPE_NR,
+            position: 0,
+            start: 0,
+        }
+    }
+
+    /// An in-memory image that counts the pages asked for — the bounded-walk
+    /// assertion is a COUNT, so the provider has to keep one.
+    struct Image {
+        img: Vec<u8>,
+        fetches: usize,
+        bytes: usize,
+    }
+
+    impl crate::paged_reader::PageProvider for Image {
+        fn size(&self) -> u64 {
+            self.img.len() as u64
+        }
+        fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
+            self.fetches += 1;
+            self.bytes += len;
+            let mut buf = vec![0u8; len];
+            let start = off as usize;
+            if start < self.img.len() {
+                let end = (start + len).min(self.img.len());
+                buf[..end - start].copy_from_slice(&self.img[start..end]);
+            }
+            buf
+        }
+    }
+
+    /// Words with heavy prefix sharing: every syllable pair, then every triple, and
+    /// a fourth syllable on a slice of them. Deterministic, so a failure reproduces.
+    fn corpus() -> Vec<String> {
+        const SYL: [&str; 12] = [
+            "ke", "ker", "lo", "am", "st", "ra", "at", "we", "la", "no", "ei", "de",
+        ];
+        let mut out = std::collections::BTreeSet::new();
+        for a in SYL {
+            for b in SYL {
+                out.insert(format!("{a}{b}"));
+                for c in SYL {
+                    out.insert(format!("{a}{b}{c}"));
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// Every fourth word appears TWICE.
+    ///
+    /// Two records may share a user key — they differ only in the 32-bit id suffix,
+    /// and that suffix is the ONLY thing that orders them. Without a duplicate in
+    /// the corpus the suffix region is never reached by a comparison whose outcome
+    /// matters, so a paged reader that composed the id at the wrong bit offset would
+    /// answer every query correctly and the differential test would confirm it.
+    /// (It did: an oracle deliberately broken that way passed until this landed.)
+    const DUP_EVERY: usize = 4;
+
+    /// The corpus as a trie collection, in shuffled insertion order — the node array
+    /// scatters exactly as a real build's does, so the paged walk is not being handed
+    /// a layout that happens to be easy. Answers the words and how many RECORDS were
+    /// inserted, which differ because of [`DUP_EVERY`].
+    fn build(relayout: bool) -> (Store, DbRef, Vec<Key>, Vec<String>, usize) {
+        let words = corpus();
+        let keys = vec![w_key()];
+        let mut store = Store::new_in_use(1 << 20);
+        let coll_rec = store.claim(1);
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
+        let mut order: Vec<usize> = (0..words.len()).collect();
+        for i in 0..words.len() {
+            if i % DUP_EVERY == 0 {
+                order.push(i);
+            }
+        }
+        let records = order.len();
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        for i in (1..order.len()).rev() {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            order.swap(i, (seed >> 33) as usize % (i + 1));
+        }
+        for &i in &order {
+            let ptr = store.set_str(&words[i]);
+            let rec = store.claim(4);
+            store.set_u32_raw(rec, PAYLOAD, ptr);
+            add(
+                &coll,
+                &DbRef {
+                    store_nr: 0,
+                    rec,
+                    pos: PAYLOAD,
+                },
+                std::slice::from_mut(&mut store),
+                &keys,
+            );
+        }
+        if relayout {
+            // What `store_persist_bind` does before it writes the image, so this is
+            // the layout a reader actually pages.
+            let tree = store.get_u32_raw(coll.rec, coll.pos);
+            assert!(crate::radix_tree::rtree_relayout(&mut store, tree));
+        }
+        (store, coll, keys, words, records)
+    }
+
+    fn reader_over(store: &Store, page: usize, cache: usize) -> PagedReader<Image> {
+        PagedReader::with_config(
+            Image {
+                img: store.raw_bytes().to_vec(),
+                fetches: 0,
+                bytes: 0,
+            },
+            page,
+            cache,
+        )
+    }
+
+    /// The prefixes every comparison runs over: every length from 1 to 4 that the
+    /// corpus can produce, plus the empty one, plus shapes with no match.
+    fn probes(words: &[String]) -> Vec<String> {
+        let mut set = std::collections::BTreeSet::new();
+        set.insert(String::new());
+        for (i, w) in words.iter().enumerate() {
+            if i % 7 != 0 {
+                continue;
+            }
+            for n in 1..=w.len().min(4) {
+                set.insert(w[..n].to_string());
+            }
+        }
+        for absent in ["zz", "kex", "amstx", "q", "keral"] {
+            set.insert(absent.to_string());
+        }
+        set.into_iter().collect()
+    }
+
+    /// **r12 — every exact lookup and every prefix query agrees, on both layouts.**
+    #[test]
+    fn the_paged_walk_answers_what_the_resident_walk_answers() {
+        for relayout in [false, true] {
+            let (store, coll, keys, words, records) = build(relayout);
+            let stores = std::slice::from_ref(&store);
+            let mut reader = reader_over(&store, 4096, 64);
+
+            let mut hits = 0;
+            for w in &words {
+                // `find` answers the FIRST record of a duplicated key's run, so this
+                // pins which of the two the paged descent lands on, not merely that
+                // it lands on one of them.
+                let want = find(&coll, stores, &keys, &[Content::Str(Str::new(w))]).rec;
+                let got = trie_find_rec(&mut reader, coll.rec, coll.pos, w, &keys);
+                assert_eq!(got, want, "exact {w:?} (relayout={relayout})");
+                hits += usize::from(want != 0);
+            }
+            assert_eq!(hits, words.len(), "the fixture itself must be findable");
+
+            // Absent keys must answer 0 through BOTH readers — a walk that returned
+            // the neighbour a seek landed on would pass every cell above.
+            for absent in ["ke", "kerx", "keram", "", "zzzz", "amstraatx"] {
+                let want = find(&coll, stores, &keys, &[Content::Str(Str::new(absent))]).rec;
+                let got = trie_find_rec(&mut reader, coll.rec, coll.pos, absent, &keys);
+                assert_eq!(got, want, "absent {absent:?} (relayout={relayout})");
+            }
+
+            let mut widest = 0;
+            for pre in probes(&words) {
+                for cap in [None, Some(0), Some(1), Some(3), Some(8)] {
+                    let want = prefix(&coll, stores, &keys, pre.as_bytes(), cap);
+                    let got = trie_prefix_recs(&mut reader, coll.rec, coll.pos, &pre, &keys, cap);
+                    assert_eq!(
+                        got, want,
+                        "prefix {pre:?} cap={cap:?} (relayout={relayout})"
+                    );
+                    if cap.is_none() {
+                        widest = widest.max(want.len());
+                    }
+                }
+            }
+            // Non-vacuity: a harness answering an empty vector everywhere would
+            // satisfy every equality above. `records`, not `words`, so a walk that
+            // skipped the second half of every duplicated key's run still fails.
+            assert!(
+                widest >= records,
+                "the empty prefix must reach every record, got {widest} of {records}"
+            );
+        }
+    }
+
+    /// **A query reads a small part of the image — the claim the whole plan rests
+    /// on.**
+    ///
+    /// Every other test here says the paged walk gives the RIGHT answer; a walk that
+    /// fetched the whole file would satisfy all of them. This one says it gives that
+    /// answer cheaply, and it is the property that regresses silently — one stray
+    /// full read inside the descent costs nothing in correctness and everything in
+    /// what the feature is for.
+    ///
+    /// Calibrated against a measured control rather than a constant: the same reader
+    /// walking the WHOLE collection is what "reading everything" costs in these
+    /// units, so the bound holds whatever the corpus, the page size or the machine.
+    /// 512-byte pages because the node array is 37 kB — at 64 kB it is one page and
+    /// the number could not distinguish a descent from a scan.
+    #[test]
+    fn a_query_fetches_a_small_fraction_of_what_a_full_scan_does() {
+        let (store, coll, keys, _, records) = build(true);
+
+        let mut full = reader_over(&store, 512, 4096);
+        let scanned = trie_prefix_recs(&mut full, coll.rec, coll.pos, "", &keys, None);
+        assert_eq!(scanned.len(), records, "the control must read everything");
+        let whole = full.provider().fetches;
+
+        let mut exact = reader_over(&store, 512, 4096);
+        assert_ne!(
+            trie_find_rec(&mut exact, coll.rec, coll.pos, "kerst", &keys),
+            0,
+            "the fixture holds `kerst`, so this is a real descent"
+        );
+        assert!(
+            exact.provider().fetches * 20 < whole,
+            "one exact lookup is a root→leaf descent plus its record: {} pages \
+             against {whole} for the whole collection",
+            exact.provider().fetches
+        );
+
+        for pre in ["ke", "amst", "lo", "kerst"] {
+            let mut r = reader_over(&store, 512, 4096);
+            let hits = trie_prefix_recs(&mut r, coll.rec, coll.pos, pre, &keys, Some(20));
+            assert!(
+                hits.len() >= 10,
+                "{pre:?} answered {} records — too few for the page count to mean \
+                 anything",
+                hits.len()
+            );
+            assert!(
+                r.provider().fetches * 5 < whole,
+                "a 20-record prefix query on {pre:?} costs {} pages against {whole} \
+                 for the whole collection",
+                r.provider().fetches
+            );
+        }
+    }
+
+    /// **A SMALL tree answers too** — the case a large corpus cannot show.
+    ///
+    /// Every bound in the paged walk scales with the node count, so a tree with
+    /// five nodes is where an under-provisioned one bites and a tree with 1 700 is
+    /// where it hides. It bit exactly here: with one budget for a whole seek rather
+    /// than one per bounded walk, this six-word trie answered every exact lookup as
+    /// ABSENT while the prefix walk on the same image still worked.
+    #[test]
+    fn a_tree_of_six_records_answers_every_lookup() {
+        const SIX: [&str; 6] = [
+            "kerkstraat",
+            "kerk",
+            "lonneker",
+            "kerf",
+            "kerkweg",
+            "kerklaan",
+        ];
+        let keys = vec![w_key()];
+        let mut store = Store::new_in_use(1 << 14);
+        let coll_rec = store.claim(1);
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
+        for w in SIX {
+            let ptr = store.set_str(w);
+            let rec = store.claim(4);
+            store.set_u32_raw(rec, PAYLOAD, ptr);
+            add(
+                &coll,
+                &DbRef {
+                    store_nr: 0,
+                    rec,
+                    pos: PAYLOAD,
+                },
+                std::slice::from_mut(&mut store),
+                &keys,
+            );
+        }
+        let tree = store.get_u32_raw(coll.rec, coll.pos);
+        assert!(crate::radix_tree::rtree_relayout(&mut store, tree));
+        let stores = std::slice::from_ref(&store);
+        let mut reader = reader_over(&store, 4096, 64);
+
+        for w in SIX {
+            let want = find(&coll, stores, &keys, &[Content::Str(Str::new(w))]).rec;
+            assert_ne!(want, 0, "the fixture holds {w:?}");
+            assert_eq!(
+                trie_find_rec(&mut reader, coll.rec, coll.pos, w, &keys),
+                want,
+                "exact {w:?} on a six-record tree"
+            );
+        }
+        for pre in ["kerk", "ker", "kerkl", "lon", "", "kerx", "zzz"] {
+            assert_eq!(
+                trie_prefix_recs(&mut reader, coll.rec, coll.pos, pre, &keys, None),
+                prefix(&coll, stores, &keys, pre.as_bytes(), None),
+                "prefix {pre:?} on a six-record tree"
+            );
+        }
+    }
+
+    /// **The cap bounds the WALK, not just the answer.**
+    ///
+    /// `t["ke"..:4]` must stop after the fourth record — the fifth is never stepped
+    /// to, so its pages are never asked for. Measured as a page count, because that
+    /// is the only thing that tells a bounded walk from a full one that truncates:
+    /// both return four records.
+    #[test]
+    fn a_capped_prefix_walk_stops_fetching_at_the_cap() {
+        let (store, coll, keys, _, _) = build(true);
+        // One node per page, no cache: every record the walk visits shows up as a
+        // fetch, so the two runs differ by exactly the records not visited.
+        let mut capped = reader_over(&store, 64, 1);
+        let mut whole = reader_over(&store, 64, 1);
+
+        let few = trie_prefix_recs(&mut capped, coll.rec, coll.pos, "ke", &keys, Some(4));
+        let all = trie_prefix_recs(&mut whole, coll.rec, coll.pos, "ke", &keys, None);
+        assert_eq!(few.len(), 4, "the cap is what it says");
+        assert!(all.len() > 40, "and the run it stops short of is long");
+        assert_eq!(&all[..4], &few[..], "the same first four, in key order");
+        assert!(
+            capped.provider().fetches * 4 < whole.provider().fetches,
+            "a capped walk must not read the untaken tail: {} fetches capped vs {} whole",
+            capped.provider().fetches,
+            whole.provider().fetches
+        );
+    }
+
+    /// **A corrupted image answers; it does not hang.**
+    ///
+    /// The bytes are a FILE — truncated, foreign or hostile — and a child pointer
+    /// that cycles would spin a descent forever where a resident tree cannot, because
+    /// this process built that one. The fuel bound turns it into an absence.
+    ///
+    /// Proven non-vacuous by the control: the same query on the same image, with the
+    /// cycle NOT written, still answers its records.
+    #[test]
+    fn a_cyclic_node_pointer_ends_the_walk_instead_of_spinning() {
+        let (store, coll, keys, _, _) = build(true);
+        let tree = store.get_u32_raw(coll.rec, coll.pos);
+
+        let mut healthy = reader_over(&store, 4096, 64);
+        assert!(
+            !trie_prefix_recs(&mut healthy, coll.rec, coll.pos, "ke", &keys, None).is_empty(),
+            "control: the intact image answers"
+        );
+
+        // Point the root node's FALSE child at the root node itself.
+        let mut bytes = store.raw_bytes().to_vec();
+        let off = usize::try_from(u64::from(tree) * 8).unwrap()
+            + crate::radix_tree::child_off(1, false) as usize;
+        bytes[off..off + 4].copy_from_slice(&(-1i32).to_ne_bytes());
+        let mut broken = PagedReader::with_config(
+            Image {
+                img: bytes,
+                fetches: 0,
+                bytes: 0,
+            },
+            4096,
+            64,
+        );
+
+        // The assertion is that these RETURN. A value is asserted too so the calls
+        // cannot be optimised into nothing.
+        let found = trie_find_rec(&mut broken, coll.rec, coll.pos, "kera", &keys);
+        let run = trie_prefix_recs(&mut broken, coll.rec, coll.pos, "ke", &keys, None);
+        assert!(
+            found == 0 || run.len() <= 1,
+            "a cycle degrades to an absence, it does not invent a run"
+        );
+    }
+}
+
 /// @PLN134 — how many 64 KB PAGES one prefix query touches, and what a LAYOUT
 /// would do to that number.
 ///
@@ -711,9 +1120,9 @@ mod pages {
             let rec = add_word(&mut store, &words[i]);
             tree = rt::rtree_insert(&mut store, tree, rec, &TextOracle { key: &key });
         }
-        // fld 12 is the tree's node high-water mark (`radix_tree::NODES`), which is
-        // private there — the array's SIZE is what a page count is measured against.
-        let nodes = store.get_u32_raw(tree, 12);
+        // The node high-water mark — the array's SIZE is what a page count is
+        // measured against.
+        let nodes = store.get_u32_raw(tree, crate::radix_tree::NODES);
         Some(Fixture {
             words,
             store,

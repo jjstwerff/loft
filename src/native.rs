@@ -192,6 +192,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(paged_store)]
     ("n_store_load_keys", n_store_load_keys),
     #[cfg(paged_store)]
+    ("n_store_load_prefix", n_store_load_prefix),
+    #[cfg(paged_store)]
     ("n_store_load_range", n_store_load_range),
     // Whole-image URL loads, verified and trusted. BOTH are available on the browser
     // (`--html`) target, where the fetch is bridged to JS `fetch()` via the asyncify
@@ -1411,6 +1413,19 @@ fn n_store_load_key_text(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.load_key_text(&v_ref, v_path.str(), v_key.str());
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_prefix` — load every entry whose text key
+/// begins with `pre` from a persisted TRIE; returns the count.  Args pop in
+/// reverse: limit, pre, path, local.  @PLN134.
+#[cfg(paged_store)]
+fn n_store_load_prefix(stores: &mut Stores, stack: &mut DbRef) {
+    let v_limit = *stores.get::<i64>(stack);
+    let v_pre = *stores.get::<Str>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_prefix(&v_ref, v_path.str(), v_pre.str(), v_limit);
+    stores.put(stack, n);
 }
 
 /// Interpreter handler for `store_load_range` — load the entries with integer

@@ -6511,6 +6511,10 @@ pub fn len(both: spatial) -> integer
 
 Number of elements in a spatial (radix / Morton tree) collection.
 
+```rust
+pub fn len(both: trie) -> integer
+```
+
 == Vector aggregates
 
 ```rust
@@ -6817,7 +6821,8 @@ The entry's own fields are RELOCATED into the local store, so `text`, nested str
 Per COLLECTION, not per store: `persons` and `companies` are different sources, and two collections of one type can bind differently. Binding replaces, and may be done before the collection holds anything.
 `source` is either an IMAGE — what `store\_load\_key` accepts: a local `.store` file or an `http(s)://` URL served with Range — or a DATABASE, named by a driver prefix. Returns false for a null collection. persons: hash\<Person\[id\]\> = \[\] store\_bind\_lazy(persons, "people.store") p = persons\[42\]        // fetches exactly entry 42, then holds it
 \@PLN129 arc B — `sqlite:\<path\>` binds to a table instead, and the query is DERIVED from the collection's own type: the table is the element type's name lowercased, the columns are its fields, and the `WHERE` is the collection's key. Nothing is written down twice. persons: hash\<Person\[id\]\> = \[\]              // struct Person { id: integer, name: text } store\_bind\_lazy(persons, "sqlite:people.db") p = persons\[42\]        // SELECT "id","name" FROM "person" WHERE "id" = 42
-Read-only, and the connection enforces it. A binding whose type cannot become a query — a collection that is not a `hash`, a field that is not a column — is REFUSED rather than served wrongly, and says so through `store\_lazy\_error`. sqlite is opened on the first fault, so a program that binds no database loads nothing.
+Read-only, and the connection enforces it. A binding that cannot be served — a field that is not a column, a collection whose KIND the source cannot read — is REFUSED rather than served wrongly, and says so through `store\_lazy\_error`. sqlite is opened on the first fault, so a program that binds no database loads nothing.
+FALSE means the binding was not made, and it is worth checking. A `.store` IMAGE is read a page at a time, which only a `hash` or a `trie` supports: a `sorted`, `index` or `spatial` bound to one is refused HERE, at the call that is wrong, rather than answering `null` at every later lookup (loft\#802). Those kinds load whole — `store\_load` / `store\_load\_url\_trusted` carry all of them. A DATABASE source judges its own schema on the first fault instead, since what it can serve is a fact about the other end. if !store\_bind\_lazy(tiles, "tiles.store") { store\_load(tiles, "tiles.store");     // whole-image, every kind }
 
 ```rust
 pub fn store_lazy_query(local: reference, condition: text) -> integer
@@ -6861,6 +6866,15 @@ pub fn store_lazy_clear(local: reference) -> boolean
 The ONLY thing that clears them. A later fetch happening to succeed does NOT: a traversal whose first lookup could not reach the source and whose second could is MISSING data, and answering "healthy" afterwards would be exactly the silent wrong answer this channel exists to prevent. Clearing is a caller saying "I have seen this", which is a different event entirely.
 
 ```rust
+pub fn store_lazy_fail(local: reference, why: text) fs#read
+```
+
+\@PLN133 S8 — a loft DRIVER reporting that it could not reach its source.
+The writing end of the channel `store\_lazy\_error` reads. A driver written in loft (`fn lazy\_fetch(...)`) has the same three answers a Rust source has, and two of them are an integer: `1` inserted, `0` absent. The third is not — "the source is down" carries a REASON, and answering `0` for it is exactly the silent wrong answer arc C exists to prevent, because a caller cannot tell it from "no such person".
+fn lazy\_fetch(coll: hash\<Person\[id\]\>, source: text, key\_int: integer, key\_text: text) -\> integer { if !db.db\_open(source) { store\_lazy\_fail(coll, "cannot open {source}: {db.db\_last\_error()}"); return 0; } ... }
+Sticky and counted exactly like a Rust source's failure: the FIRST reason is kept, every failure is counted, and only `store\_lazy\_clear` clears them.
+
+```rust
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read
 ```
 
@@ -6868,7 +6882,14 @@ pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#
 pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read
 ```
 
-Text-keyed form of `store\_load\_key`: fetch ONE entry from a persisted `hash\<T\[textkey\]\>` (a place-name / string-id index) into `local`, reading only the pages the lookup touches. Returns false when the key is absent or the collection isn't a copyable text-keyed hash. \@PLN97 arc G (loft\#522). places: hash\<Place\[name\]\> = \[\] store\_load\_key\_text(places, "gazetteer.store", "Amsterdam")
+Text-keyed form of `store\_load\_key`: fetch ONE entry from a persisted `hash\<T\[textkey\]\>` or `trie\<T\[textkey\]\>` (a place-name / string-id index) into `local`, reading only the pages the lookup touches. Returns false when the key is absent or the collection isn't a copyable text-keyed hash or trie. \@PLN97 arc G (loft\#522), \@PLN134 for the trie. places: hash\<Place\[name\]\> = \[\] store\_load\_key\_text(places, "gazetteer.store", "Amsterdam")
+
+```rust
+pub fn store_load_prefix(local: reference, path: text, pre: text, limit: integer) -> integer fs#read
+```
+
+Prefix form: fetch every entry whose text key begins with `pre` from a persisted `trie\<T\[k\]\>` into `local`, reading only the pages the prefix walk touches — what a search box needs, and what a `sorted` range cannot express without a hand-built successor string. Returns the count loaded.
+`limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is never stepped to, so its pages are never fetched. A negative `limit` means no cap, which on a common prefix reads the whole run. \@PLN134. words: trie\<Word\[w\]\> = \[\] store\_load\_prefix(words, "vocab.store", "kerk", 20)
 
 ```rust
 pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> integer fs#read

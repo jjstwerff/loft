@@ -49,6 +49,22 @@ It also shares everything you already know: `+=`, `for` iteration (key order, no
 sort), `.len()`, and `t["kerk"]` for the one record — `null` when absent, never a
 neighbour.
 
+And it does not have to be in memory. A persisted trie is read **a page at a
+time**, so a phone typing one letter reads a few kilobytes instead of the whole
+vocabulary:
+
+```loft
+words: trie<Word[w]> = [];
+store_load_prefix(words, "https://…/vocab.store", "kerk", 20);   // ~4 pages
+```
+
+`store_load_key_text` answers one key the same way, and `store_bind_lazy` accepts
+a trie image, so a lookup that misses simply fetches. The count is what makes it
+worth having: the pages a query touches depend entirely on where the tree's nodes
+sit in the file, so persisting now writes them in a cache-oblivious order — which
+took one prefix query from 27 pages to under 3. The limit caps the *walk*, not
+just the answer: asking for 20 of 459 matches reads 20 records' worth of pages.
+
 And the mistake that prompted it now gets caught. `spatial<Word[w]>` on a text
 key used to compile, count correctly, and then answer `null` for a key you had
 just inserted — indistinguishable from "not found" wherever you called it. It is

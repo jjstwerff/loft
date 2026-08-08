@@ -11,6 +11,19 @@ use crate::store::Store;
 use crate::tree;
 use crate::vector;
 
+/// Which keyed collection a paged working-set load is reading and filling.
+///
+/// The only thing that differs between the two once a record is located: a `hash`
+/// probes a bucket table, a `trie` descends a PATRICIA tree (@PLN134). Everything
+/// between — the flat copy, the pointer relocation, the copyability refusal — is
+/// shared, so the kind is a parameter rather than a second loader.
+#[cfg(paged_store)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PagedKind {
+    Hash,
+    Trie,
+}
+
 // @PLN103 P3 — the `LOFT_STORES=timeline` runtime store timeline. A pure diagnostic
 // (gated on the env var), so its state lives thread-local rather than on `Stores` — no
 // struct/constructor ripple. A per-logical-store id is `<store_nr>.<seq>`: `store_nr` is a
@@ -4182,24 +4195,34 @@ impl Stores {
     /// the loader needs (`want` names it, e.g. "a hash"). Spells out the cause
     /// because the type name alone does not suggest the fix.
     ///
-    /// TWO causes, and telling them apart is the whole value of the message.
+    /// THREE causes, and telling them apart is the whole value of the message.
     /// When the root is a keyed collection of the WRONG KIND, the shape is
     /// already what the author wrote and no declaration change can help — the
     /// answer is `store_load`, and saying "declare it as an annotated local"
     /// sends them to rewrite a line that is correct (a `trie` local was told
-    /// exactly that, loft#802). When the root is anything else, it is the #632
+    /// exactly that, loft#802). When the root is a `trie` the answer is neither:
+    /// a trie IS pageable (@PLN134), just not by the loader that asked, so the
+    /// cure is the trie's own call and sending the author to `store_load` would
+    /// cost them the whole saving. When the root is anything else, it is the #632
     /// wrapper-struct trap and the declaration IS the fix.
     #[cfg(paged_store)]
     fn wrong_collection_reason(&self, tp: u16, want: &str) -> String {
         let name = self.type_name(tp);
+        let parts = self.types.get(tp as usize).map(|t| &t.parts);
+        if matches!(parts, Some(Parts::Trie(..))) {
+            return format!(
+                "its bound store roots `{name}`, not {want} — a trie is keyed on \
+                 TEXT, so read it with `store_load_key_text` for one key or \
+                 `store_load_prefix` for a prefix"
+            );
+        }
         let keyed = matches!(
-            self.types.get(tp as usize).map(|t| &t.parts),
+            parts,
             Some(
                 Parts::Hash(..)
                     | Parts::Sorted(..)
                     | Parts::Ordered(..)
                     | Parts::Index(..)
-                    | Parts::Trie(..)
                     | Parts::Radix(..)
             )
         );
@@ -4254,10 +4277,21 @@ impl Stores {
         // sorted collection whose element is shared by >1 container), so a
         // collection that is `Sorted` in a small program is `Ordered` in one where
         // its element is reused — both are the same keyed collection here.
+        //
+        // `Trie` belongs for the same reason `Hash` does and `Sorted` does not:
+        // its field form is a 4-byte claim slot holding the tree record id, and it
+        // never promotes, so the layout a paged descent reads at `local.pos` is the
+        // same whether the collection was declared as a local or as a struct field
+        // (@PLN134). A `sorted` field can be promoted to `ordered` by unrelated
+        // program structure, which is why `load_range` refuses that form audibly.
         let is_keyed = |t: u16| {
             matches!(
                 self.types[t as usize].parts,
-                Parts::Hash(..) | Parts::Sorted(..) | Parts::Ordered(..) | Parts::Index(..)
+                Parts::Hash(..)
+                    | Parts::Sorted(..)
+                    | Parts::Ordered(..)
+                    | Parts::Index(..)
+                    | Parts::Trie(..)
             )
         };
         match &self.types[tp as usize].parts {
@@ -4336,10 +4370,10 @@ impl Stores {
     /// is at least possible.
     ///
     /// Static, and that is the point: a `.store` IMAGE is read by the paged
-    /// loader, which serves one kind — a `hash`, integer- or text-keyed. Every
-    /// other keyed kind is refused at the first lookup and would be refused at
-    /// every lookup after it, so the answer is already known when the binding is
-    /// made and costs no I/O to give.
+    /// loader, which serves a `hash` (integer- or text-keyed) and a `trie` (one
+    /// text-keyed descent, @PLN134). Every other keyed kind is refused at the
+    /// first lookup and would be refused at every lookup after it, so the answer
+    /// is already known when the binding is made and costs no I/O to give.
     ///
     /// A DATABASE source is NOT judged here. Its refusals depend on the schema
     /// on the other end — a column that is missing, a type that will not map —
@@ -4364,14 +4398,15 @@ impl Stores {
         let tp = self.collection_type_of_store(root_tp);
         if matches!(
             self.types.get(tp as usize).map(|t| &t.parts),
-            Some(Parts::Hash(..))
+            Some(Parts::Hash(..) | Parts::Trie(..))
         ) {
             return None;
         }
         Some(format!(
             "a lazily-bound `.store` image is read a page at a time, which only a \
-             `hash` supports, and `{}` is not one — read it whole with `store_load` \
-             (or `store_load_url_trusted` for a URL), which carries every kind",
+             `hash` or a `trie` supports, and `{}` is neither — read it whole with \
+             `store_load` (or `store_load_url_trusted` for a URL), which carries \
+             every kind",
             self.type_name(root_tp)
         ))
     }
@@ -4576,12 +4611,18 @@ impl Stores {
             return false;
         }
         let tp = self.collection_type_of_store(root_tp); // field form → the field's hash (#632)
-        let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
-            let reason = self.wrong_collection_reason(root_tp, "a hash");
-            self.refuse_paged(path, &reason);
-            return false;
+        // @PLN134 — a TRIE serves an exact text lookup too, by one root→leaf
+        // descent. Which kind decides how the record is LOCATED and how it is
+        // linked once copied; everything between is the same working-set copy.
+        let (content_tp, kind) = match self.types.get(tp as usize).map(|t| &t.parts) {
+            Some(Parts::Hash(c, _)) => (*c, PagedKind::Hash),
+            Some(Parts::Trie(c, _)) => (*c, PagedKind::Trie),
+            _ => {
+                let reason = self.wrong_collection_reason(root_tp, "a hash or a trie");
+                self.refuse_paged(path, &reason);
+                return false;
+            }
         };
-        let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
             let reason = self.not_copyable_reason(content_tp);
             self.refuse_paged(path, &reason);
@@ -4589,7 +4630,74 @@ impl Stores {
         }
         let keys = self.keys(tp).to_vec();
         let key_content = [crate::keys::Content::Str(crate::keys::Str::new(key))];
-        self.load_one(&mut reader, local, content_tp, &keys, &key_content)
+        self.load_one(&mut reader, local, content_tp, &keys, &key_content, kind)
+    }
+
+    /// @PLN134 — load every entry whose TEXT key begins with `pre` from a persisted
+    /// `trie<T[k]>` image into the (empty) local trie, fetching only the pages the
+    /// prefix walk touches. Returns the count loaded.
+    ///
+    /// The capability the trie kind exists for, now over a link: `t["kerk"..:20]`
+    /// costs a root→leaf descent plus the records it returns — ~3.8 pages of a
+    /// laid-out image (@PLN134 step 2) against a 5.9 MB whole-image download. A
+    /// phone typing one letter should not pull the vocabulary.
+    ///
+    /// `limit < 0` means no cap, matching `build_trie_prefix_vec`. The cap bounds
+    /// the WALK, not just the answer: `paged_reader::trie_prefix_recs` stops
+    /// stepping at the cap, so the untaken tail is never fetched.
+    #[cfg(paged_store)]
+    pub fn load_prefix(&mut self, local: &DbRef, path: &str, pre: &str, limit: i64) -> i64 {
+        if !self.layout_gate_ok(path, local) {
+            return 0;
+        }
+        use crate::paged_reader::{PageSource, PagedReader};
+        let Ok(source) = PageSource::open(path) else {
+            self.refuse_paged(path, "it cannot be opened as a paged source");
+            return 0;
+        };
+        let mut reader = PagedReader::new(source);
+        let root_tp = self.allocations[local.store_nr as usize].known_type;
+        if root_tp == u16::MAX {
+            self.refuse_paged(path, "the target collection's store has no recorded type");
+            return 0;
+        }
+        let tp = self.collection_type_of_store(root_tp);
+        let Some(Parts::Trie(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
+            let reason = self.wrong_collection_reason(root_tp, "a trie");
+            self.refuse_paged(path, &reason);
+            return 0;
+        };
+        let content_tp = *content_tp;
+        if !self.is_copyable_entry(content_tp) {
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
+            return 0;
+        }
+        let keys = self.keys(tp).to_vec();
+        let cap = (limit >= 0).then(|| usize::try_from(limit).unwrap_or(usize::MAX));
+        let found = crate::paged_reader::trie_prefix_recs(
+            &mut reader,
+            local.rec,
+            local.pos,
+            pre,
+            &keys,
+            cap,
+        );
+        let mut loaded = 0i64;
+        for rec in found {
+            if self.copy_entry(&mut reader, local, content_tp, &keys, rec, PagedKind::Trie) {
+                loaded += 1;
+            }
+        }
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_load_prefix: {pre:?} limit={limit} loaded={loaded} bytes_fetched={} requests={} file={}",
+                reader.provider().bytes_fetched(),
+                reader.provider().requests(),
+                reader.size()
+            );
+        }
+        loaded
     }
 
     /// @PLN97 arc G Phase 3a — load the requested integer keys' entries from a
@@ -4719,7 +4827,9 @@ impl Stores {
         // Pass 2 — materialise.
         let mut loaded = 0i64;
         for (k, &matched) in key_sets.iter().zip(&found) {
-            if matched != 0 && self.load_one(&mut reader, local, content_tp, &keys, k) {
+            if matched != 0
+                && self.load_one(&mut reader, local, content_tp, &keys, k, PagedKind::Hash)
+            {
                 loaded += 1;
             }
         }
@@ -4741,8 +4851,8 @@ impl Stores {
         loaded
     }
 
-    /// Find one integer key in the paged image and, if present, FLAT-copy its
-    /// entry record into `local` and link it via the verified `hash::add`. The
+    /// Find one key in the paged image and, if present, FLAT-copy its entry record
+    /// into `local` and link it via the verified `hash::add` / `trie_db::add`. The
     /// entry's field words (fld 8 .. size·8) hold only scalars, so a straight
     /// word copy into a fresh claim is correct — no internal `rec` pointers to
     /// relocate. Returns whether the key was found.
@@ -4754,12 +4864,47 @@ impl Stores {
         content_tp: u16,
         keys: &[crate::keys::Key],
         key_content: &[crate::keys::Content],
+        kind: PagedKind,
     ) -> bool {
-        let matched =
-            crate::paged_reader::find_hash_entry(reader, local.rec, local.pos, key_content, keys);
+        let matched = match kind {
+            PagedKind::Hash => crate::paged_reader::find_hash_entry(
+                reader,
+                local.rec,
+                local.pos,
+                key_content,
+                keys,
+            ),
+            // A trie keys on ONE text column, so the probe is that column's string;
+            // any other spelling cannot match and locates nothing.
+            PagedKind::Trie => match key_content.first() {
+                Some(crate::keys::Content::Str(s)) => {
+                    crate::paged_reader::trie_find_rec(reader, local.rec, local.pos, s.str(), keys)
+                }
+                _ => 0,
+            },
+        };
         if matched == 0 {
             return false;
         }
+        self.copy_entry(reader, local, content_tp, keys, matched, kind)
+    }
+
+    /// Copy the ALREADY-LOCATED entry record `matched` out of the paged image into
+    /// `local`, relocate its heap graph, and link it into the local collection.
+    ///
+    /// Split from [`load_one`](Stores::load_one) because a prefix walk locates many
+    /// records in one pass and must not re-descend per record — locating and copying
+    /// are separate costs, and only the first depends on the query shape.
+    #[cfg(paged_store)]
+    fn copy_entry(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<crate::paged_reader::PageSource>,
+        local: &DbRef,
+        content_tp: u16,
+        keys: &[crate::keys::Key],
+        matched: u32,
+        kind: PagedKind,
+    ) -> bool {
         let size = reader.record_words(matched);
         if size < 2 {
             return false;
@@ -4801,7 +4946,13 @@ impl Stores {
             rec: new_rec,
             pos: 8,
         };
-        crate::hash::add(local, &entry, &mut self.allocations, keys);
+        // The verified linker for the kind, never a hand-rolled insert: a working-set
+        // copy that built its own bucket or node would be a second implementation of
+        // the structure the collection is checked against.
+        match kind {
+            PagedKind::Hash => crate::hash::add(local, &entry, &mut self.allocations, keys),
+            PagedKind::Trie => crate::trie_db::add(local, &entry, &mut self.allocations, keys),
+        }
         true
     }
 
