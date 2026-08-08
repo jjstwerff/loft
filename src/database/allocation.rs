@@ -2952,6 +2952,14 @@ impl Stores {
         };
 
         if !exists {
+            // @PLN134 — lay the tries out BEFORE the snapshot. This is the image a
+            // reader will page, and a trie numbered in insertion order costs it 27
+            // pages of 64 KB per prefix query instead of 3. Semantics-preserving, so
+            // the live store simply keeps the better layout too.
+            let laid = self.relayout_tries(slot);
+            if laid > 0 && std::env::var_os("LOFT_LOADER_STATS").is_some() {
+                eprintln!("store_persist_bind: laid out {laid} trie(s) for paging");
+            }
             // FRESH PATH — snapshot current bytes, size the image to the data,
             // write to disk, then re-open via mmap.
             let src_words = self.allocations[slot_idx].capacity_words();
@@ -3279,6 +3287,137 @@ impl Stores {
             | Parts::Enum(_)
             | Parts::DbRef => false,
             _ => true,
+        }
+    }
+
+    /// @PLN134 — lay every trie in `slot` out for PAGING, and answer how many.
+    ///
+    /// A trie's node ids are handed out in INSERTION order, which puts a root→leaf
+    /// path nowhere near itself. Measured over 978 842 words, one prefix query then
+    /// touches 27 pages of 64 KB to read ~330 bytes of nodes — so a reader that
+    /// range-reads the image fetches 1.7 MB to answer a keystroke, and downloading
+    /// the whole thing is cheaper by the fourth one. Renumbered van Emde Boas the
+    /// same query touches 2.8.
+    ///
+    /// Runs when an IMAGE IS WRITTEN, because that is the copy a reader pages and
+    /// the one moment the whole tree is in hand. It rewrites node ids only — the
+    /// records, their order and every answer are untouched — so a caller that keeps
+    /// using the store afterwards sees no difference beyond a faster walk.
+    ///
+    /// Only trees in `slot` are laid out. The walk can reach another store through
+    /// a `ChildRec` or a cross-store element, and rewriting a tree the caller did
+    /// not ask to persist would be a surprise, so the pass drops those. It does not
+    /// descend through a trie's own ELEMENTS either — a trie of tries is not a shape
+    /// worth spending a million walk steps to rule out.
+    pub(crate) fn relayout_tries(&mut self, slot: u16) -> u32 {
+        let idx = slot as usize;
+        if idx >= self.allocations.len() {
+            return 0;
+        }
+        let tp = self.allocations[idx].known_type;
+        if tp == u16::MAX {
+            return 0;
+        }
+        // The DATA walk is skipped entirely where the SCHEMA cannot hold a trie.
+        // Persisting is a whole-image write on every kind of store, and a walk over
+        // a million hash elements to conclude "no tries here" would be a cost every
+        // one of them pays for a kind it does not have. The type graph answers the
+        // same question in the number of TYPES.
+        if !self.type_has_trie(tp, &mut Vec::new()) {
+            return 0;
+        }
+        let root = DbRef {
+            store_nr: slot,
+            rec: crate::store::PRIMARY,
+            pos: 8,
+        };
+        // Collected first, applied second: the walk reads the schema through `&self`
+        // and the pass needs `&mut Store`.
+        let mut found = Vec::new();
+        let mut budget = 200_000u32;
+        self.trie_roots(&root, tp, &mut budget, &mut found);
+        let mut done = 0;
+        for at in found {
+            if at.store_nr != slot {
+                continue;
+            }
+            let store = &mut self.allocations[at.store_nr as usize];
+            let tree = store.get_u32_raw(at.rec, at.pos);
+            if tree != 0 && crate::radix_tree::rtree_relayout(store, tree) {
+                done += 1;
+            }
+        }
+        done
+    }
+
+    /// Can a value of `tp` contain a `trie` at all?
+    ///
+    /// A question about the SCHEMA, so it costs the number of types rather than the
+    /// number of records — which is what lets [`relayout_tries`](Self::relayout_tries)
+    /// decline instantly on the stores that have no trie in them.
+    fn type_has_trie(&self, tp: u16, seen: &mut Vec<u16>) -> bool {
+        if tp as usize >= self.types.len() || seen.contains(&tp) {
+            return false;
+        }
+        seen.push(tp);
+        match &self.types[tp as usize].parts {
+            Parts::Trie(_, _) => true,
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .clone()
+                .iter()
+                .any(|f| self.type_has_trie(f.content, seen)),
+            Parts::Vector(c)
+            | Parts::Sorted(c, _)
+            | Parts::Array(c)
+            | Parts::Ordered(c, _)
+            | Parts::Hash(c, _)
+            | Parts::Radix(c, _)
+            | Parts::ChildRec(c) => self.type_has_trie(*c, seen),
+            Parts::Index(c, _, _) => self.type_has_trie(*c, seen),
+            // Spelled out rather than closed with `_`: a new collection kind that
+            // can hold a trie must be named here, and the compiler is what says so.
+            // DATABASE.md § "Adding or changing a collection kind".
+            Parts::Base
+            | Parts::Byte(..)
+            | Parts::Short(..)
+            | Parts::Int(..)
+            | Parts::ShortRaw(..)
+            | Parts::Enum(_)
+            | Parts::DbRef => false,
+        }
+    }
+
+    /// Every `trie` field reachable from `rec`, as the `DbRef` holding its tree id.
+    ///
+    /// `budget` stops the walk on a pathological graph, the same way
+    /// [`intra_record_slack`](Self::intra_record_slack) bounds its own: running out
+    /// lays out fewer tries, which costs pages on a query and never correctness.
+    fn trie_roots(&self, rec: &DbRef, tp: u16, budget: &mut u32, out: &mut Vec<DbRef>) {
+        if *budget == 0 || tp as usize >= self.types.len() {
+            return;
+        }
+        *budget -= 1;
+        match &self.types[tp as usize].parts {
+            Parts::Trie(_, _) => out.push(*rec),
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                for f in fields.clone() {
+                    // A field that owns no heap record cannot hold a collection, so
+                    // the descent stops at the scalars rather than at every field.
+                    if self.type_owns_heap(f.content, &mut Vec::new()) {
+                        let at = DbRef {
+                            store_nr: rec.store_nr,
+                            rec: rec.rec,
+                            pos: rec.pos + u32::from(f.position),
+                        };
+                        self.trie_roots(&at, f.content, budget, out);
+                    }
+                }
+            }
+            _ => {
+                for c in self.for_each_owned_child(rec, tp).children {
+                    self.trie_roots(&c.child, c.child_tp, budget, out);
+                }
+            }
         }
     }
 

@@ -709,6 +709,8 @@ mod pages {
             let rec = add_word(&mut store, &words[i]);
             tree = rt::rtree_insert(&mut store, tree, rec, &TextOracle { key: &key });
         }
+        // fld 12 is the tree's node high-water mark (`radix_tree::NODES`), which is
+        // private there — the array's SIZE is what a page count is measured against.
         let nodes = store.get_u32_raw(tree, 12);
         Some(Fixture {
             words,

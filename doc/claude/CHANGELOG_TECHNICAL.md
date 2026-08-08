@@ -9,6 +9,58 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A persisted trie is laid out so it can be paged (@PLN134) (2026-08-08)
+
+`trie<T[k]>` ships whole-image only: a prefix query over `routing`'s 220 032-word
+vocabulary is 5.9 MB gzipped, downloaded once. @PLN134 asked whether a paged reader could
+answer it in a few range reads instead, and opened on the measurement that decides it —
+**pages touched, not nodes**.
+
+The first answer killed the cheap design. A PATRICIA descent reads ~330 bytes of nodes and
+spreads them over **27 pages of 64 KB**, because node ids are handed out in INSERTION
+order and a root→leaf path visits nodes created at wildly different times. Renumbering
+breadth-first halves it and stops there. 1.7 MB to answer a keystroke is worse than the
+download by the fourth one.
+
+The second answer is the plan's own declined branch, reached on evidence: it is not "page
+a trie", it is **lay a trie out so it can be paged**. Same tree, same walk, same touch
+sets, five numberings:
+
+| node order | pages @ 64 KB | @ 4 KB |
+|---|---|---|
+| as built | 27.1 | 36.4 |
+| breadth-first | 15.4 | 26.0 |
+| key order | 8.7 | 14.5 |
+| depth-first pre-order | 4.2 | 7.2 |
+| **van Emde Boas** | **2.8** | **3.8** |
+
+The 4 KB column identifies the mechanism rather than the number: vEB barely moves where
+every other order inflates by half. That is what cache-*oblivious* means, and it matters
+here because the page size is not ours to pick — a local file, an HTTP range read and a
+browser cache disagree about it.
+
+The records matter more than the nodes, and step 1 had not measured them at all: the 20
+records a query RETURNS sit on ~20 distinct pages when claimed in insertion order, and on
+**1** when written in trie key order. Together a cold query is ~3.8 pages / 250 KB against
+the 5.9 MB image, and the second keystroke of a session costs ONE page.
+
+- **`radix_tree::rtree_relayout`** renumbers a tree van Emde Boas and compacts the free
+  list. Node ids are internal, so nothing observable moves — `r11` holds it to the same
+  walk and the same record for every key, which is the gate that matters: rewriting the
+  array in place produces a structurally valid PATRICIA tree holding the wrong records,
+  and `rtree_validate` alone passes that. Idempotent, and it refuses a tree whose walk
+  does not account for `n-1` nodes over `n` records.
+- **`store_persist_bind` runs it before writing the image** (`Stores::relayout_tries`),
+  because that image is what a reader pages. Stores whose SCHEMA cannot hold a trie skip
+  the data walk entirely, so no other kind pays for it.
+- The measurement lives on as `trie_db::pages` (`#[ignore]`, three tests: the layouts, the
+  record placement, the warm session) and `r10` asserts every candidate order is a
+  permutation of the live nodes — not decoration, since a duplicate-emitting order reports
+  a BETTER page count.
+
+Paging a trie is still unwired: `store_bind_lazy` refuses one, and `store_load_key_text`
+reads a `hash`. The layout is the prerequisite that made those worth building.
+
 ### A module may name the entry's type in an EXPRESSION (loft#801) (2026-08-07)
 
 Companion to loft#797, which fixed the LAYOUT half of the same load-order story. This is

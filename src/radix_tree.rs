@@ -401,14 +401,25 @@ pub(crate) fn bfs_order(store: &Store, tree: u32) -> Vec<u32> {
 /// prefix have their nodes together. It pays for that on the way in: a descent
 /// that turns TRUE skips the whole FALSE subtree, and near the root that skip is
 /// half the array.
-#[cfg(test)]
+///
+/// Also the walk [`node_heights`] runs on, because pre-order puts a parent before
+/// every one of its descendants — so reading it backwards settles a subtree before
+/// the node above it.
 pub(crate) fn dfs_order(store: &Store, tree: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut stack = Vec::new();
+    // A walk over a CORRUPTED tree must stop rather than spin: a stale child
+    // pointer can close a cycle, and the node high-water mark bounds how many
+    // distinct nodes any honest walk can visit. Same discipline as `RadixIter`'s
+    // budget — it degrades, it does not hang.
+    let budget = store.get_u32_raw(tree, NODES) as usize;
     if let Child::Node(root) = Child::decode(store.get_i32_raw(tree, TOP)) {
         stack.push(root);
     }
     while let Some(n) = stack.pop() {
+        if out.len() >= budget {
+            break;
+        }
         out.push(n);
         // TRUE first, so FALSE comes off the stack first and the order is by key.
         for dir in [true, false] {
@@ -453,7 +464,6 @@ pub(crate) fn key_order(store: &Store, tree: u32) -> Vec<u32> {
 /// before all of its descendants, so reading it in reverse settles every child
 /// before the node above it. Iterative because a text trie is as deep as its
 /// longest key (a 24-byte word gives ~230 levels) over a million nodes.
-#[cfg(test)]
 fn node_heights(store: &Store, tree: u32, nodes: u32) -> Vec<u32> {
     let mut h = vec![0u32; (nodes + 2) as usize];
     for &n in dfs_order(store, tree).iter().rev() {
@@ -481,7 +491,11 @@ fn node_heights(store: &Store, tree: u32, nodes: u32) -> Vec<u32> {
 /// Cache-*oblivious* matters here because the page size is not ours to pick: a
 /// local file, an HTTP range read and a browser cache disagree about it, and this
 /// layout is near-optimal for all of them at once.
-#[cfg(test)]
+///
+/// Measured over 978 842 real words: a prefix query touches 2.8 pages of 64 KB
+/// here against 27.1 as built, 15.4 breadth-first and 8.7 in key order — and at
+/// 4 KB it barely moves where every other order inflates by half. [`rtree_relayout`]
+/// is what applies it.
 pub(crate) fn veb_order(store: &Store, tree: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let nodes = store.get_u32_raw(tree, NODES);
@@ -494,6 +508,7 @@ pub(crate) fn veb_order(store: &Store, tree: u32) -> Vec<u32> {
             heights[root as usize],
             &heights,
             &mut out,
+            nodes as usize,
         );
     }
     out
@@ -509,15 +524,31 @@ pub(crate) fn veb_order(store: &Store, tree: u32) -> Vec<u32> {
 ///
 /// The recursion is over HEIGHT, not over nodes, so it nests `log2(height)` deep —
 /// about eight for a text trie.
-#[cfg(test)]
-fn veb_emit(store: &Store, tree: u32, root: u32, h: u32, heights: &[u32], out: &mut Vec<u32>) {
+///
+/// `cap` is the node high-water mark, and it bounds both the nodes emitted and the
+/// width of one level. Neither can legitimately exceed it, and a stale child pointer
+/// that closes a cycle makes both grow without bound — the same reason [`RadixIter`]
+/// carries a budget. It degrades; it does not spin, and `rtree_relayout`'s own count
+/// then refuses the tree rather than writing a truncated layout.
+fn veb_emit(
+    store: &Store,
+    tree: u32,
+    root: u32,
+    h: u32,
+    heights: &[u32],
+    out: &mut Vec<u32>,
+    cap: usize,
+) {
+    if out.len() >= cap {
+        return;
+    }
     if h <= 1 {
         out.push(root);
         return;
     }
     let top_h = h.div_ceil(2);
     let bot_h = h - top_h;
-    veb_emit(store, tree, root, top_h, heights, out);
+    veb_emit(store, tree, root, top_h, heights, out, cap);
     // The roots of the subtrees that hang below the top part — the level the split
     // cut through. Walked rather than remembered, because remembering it for every
     // recursion level costs more than re-reading two child slots.
@@ -531,11 +562,109 @@ fn veb_emit(store: &Store, tree: u32, root: u32, h: u32, heights: &[u32], out: &
                 }
             }
         }
+        if next.len() > cap {
+            return;
+        }
         level = next;
     }
     for b in level {
-        veb_emit(store, tree, b, bot_h.min(heights[b as usize]), heights, out);
+        veb_emit(
+            store,
+            tree,
+            b,
+            bot_h.min(heights[b as usize]),
+            heights,
+            out,
+            cap,
+        );
     }
+}
+
+/// One node's four words, read out before the array is rewritten.
+struct NodeBody {
+    bit: u32,
+    parent: u32,
+    lo: i32,
+    hi: i32,
+}
+
+/// @PLN134 — renumber the node array into [`veb_order`], and compact it.
+///
+/// The tree is unchanged as a TREE: same records, same key order, same answers to
+/// every lookup. What changes is where each node SITS, and that is the whole
+/// difference between a prefix query that fetches 27 pages of a remote image and
+/// one that fetches 3. Node ids are handed out in INSERTION order, which places a
+/// root→leaf path nowhere near itself; this places it in one run.
+///
+/// Apply it when an image is WRITTEN — that is the copy a reader pages, and the one
+/// moment the whole tree is in hand. A live tree may be relaid out too; ids are
+/// internal, so nothing outside the record refers to them.
+///
+/// Compacting is the second half: removals leave holes threaded on a free list, and
+/// a fresh numbering has no holes to carry. `NODES` becomes the live count and the
+/// free list empties, so the array's tail is available again.
+///
+/// Unlike [`rtree_insert`] this never RELOCATES the tree record — it claims nothing,
+/// so the caller's id stays good and there is nothing to write back.
+///
+/// Answers whether it ran. It REFUSES a tree whose walk does not account for every
+/// node it should have — a PATRICIA tree over `n` records has exactly `n-1` internal
+/// nodes, which is an independent count, checked before anything is written. A tree
+/// that fails it is left exactly as it was.
+pub fn rtree_relayout(store: &mut Store, tree: u32) -> bool {
+    let order = veb_order(store, tree);
+    if order.len() != rtree_len(store, tree).saturating_sub(1) as usize {
+        return false;
+    }
+    if order.is_empty() {
+        // No nodes to place — but a tree emptied by removals still carries a free
+        // list over ids nobody holds, and leaving that behind is the one way this
+        // path can differ from the general one.
+        store.set_u32_raw(tree, NODES, 0);
+        store.set_u32_raw(tree, FREE, 0);
+        return true;
+    }
+    let high = store.get_u32_raw(tree, NODES);
+    let mut new_id = vec![0u32; (high + 2) as usize];
+    for (i, &n) in order.iter().enumerate() {
+        new_id[n as usize] = u32::try_from(i).unwrap_or(u32::MAX) + 1;
+    }
+    let moved = |new_id: &[u32], c: Child| match c {
+        Child::Node(n) => Child::Node(new_id[n as usize]),
+        other => other,
+    };
+    // Read every node BEFORE writing one. The numbering is a permutation, so an
+    // in-place rewrite overwrites nodes the pass has not read yet — and the result
+    // is a structurally valid tree holding the wrong records, which no walk reports
+    // as broken.
+    let body: Vec<NodeBody> = order
+        .iter()
+        .map(|&n| {
+            let parent = node_parent(store, tree, n);
+            NodeBody {
+                bit: node_bit(store, tree, n),
+                parent: if parent == 0 {
+                    0
+                } else {
+                    new_id[parent as usize]
+                },
+                lo: moved(&new_id, child(store, tree, n, false)).encode(),
+                hi: moved(&new_id, child(store, tree, n, true)).encode(),
+            }
+        })
+        .collect();
+    for (i, b) in body.iter().enumerate() {
+        let n = u32::try_from(i).unwrap_or(u32::MAX) + 1;
+        set_node_bit(store, tree, n, b.bit);
+        set_node_parent(store, tree, n, b.parent);
+        store.set_i32_raw(tree, child_off(n, false), b.lo);
+        store.set_i32_raw(tree, child_off(n, true), b.hi);
+    }
+    let root = moved(&new_id, top(store, tree));
+    set_top(store, tree, root);
+    store.set_u32_raw(tree, NODES, u32::try_from(body.len()).unwrap_or(u32::MAX));
+    store.set_u32_raw(tree, FREE, 0);
+    true
 }
 
 #[cfg(test)]
@@ -2138,6 +2267,143 @@ mod tests {
             }
             r = it.next(&store, tree).unwrap_or(0);
         }
+    }
+
+    /// Every node's four words, so two layouts can be compared byte for byte.
+    fn node_array(store: &Store, tree: u32) -> Vec<[i32; 4]> {
+        (1..=store.get_u32_raw(tree, NODES))
+            .map(|n| {
+                [
+                    store.get_i32_raw(tree, node_off(n)),
+                    store.get_i32_raw(tree, node_off(n) + 4),
+                    store.get_i32_raw(tree, child_off(n, false)),
+                    store.get_i32_raw(tree, child_off(n, true)),
+                ]
+            })
+            .collect()
+    }
+
+    /// R11 — `rtree_relayout` moves every node and changes no answer.
+    ///
+    /// The pass rewrites the whole node array through a permutation, so the failure
+    /// it invites is not a wrong order but a wrong TREE: rewriting in place clobbers
+    /// nodes the pass has not read yet, and the result is still a structurally valid
+    /// PATRICIA tree — `rtree_validate` alone would pass it. So the gate is the
+    /// ANSWERS: the same walk, and the same record for every key that was in it.
+    #[test]
+    fn r11_relayout_preserves_every_answer() {
+        let mut store = Store::new_in_use(1 << 15);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0x5eed_1134_5eed_1134;
+        let mut codes = Vec::new();
+        for _ in 0..2000 {
+            let code = lcg(&mut seed);
+            let rec = add(&mut store, code);
+            codes.push((code, rec));
+            tree = rtree_insert(&mut store, tree, rec, CODE);
+        }
+        let before_walk = collect(&store, tree);
+        let before_len = rtree_len(&store, tree);
+        let before_array = node_array(&store, tree);
+
+        assert!(rtree_relayout(&mut store, tree), "a healthy tree lays out");
+        rtree_validate(&store, tree, CODE);
+        assert_eq!(rtree_len(&store, tree), before_len, "no record is lost");
+        assert_eq!(
+            collect(&store, tree),
+            before_walk,
+            "key order must survive the renumbering"
+        );
+        for &(code, rec) in &codes {
+            assert_eq!(
+                rtree_get(&store, tree, &code_probe(code), 32, CODE),
+                rec,
+                "every key must still find its own record"
+            );
+        }
+        let after_array = node_array(&store, tree);
+        assert_ne!(
+            after_array, before_array,
+            "insertion order and vEB order must differ, or this proves nothing"
+        );
+        assert_eq!(
+            store.get_u32_raw(tree, NODES),
+            before_len - 1,
+            "a PATRICIA tree over n records has n-1 nodes, and the array now holds \
+             exactly those"
+        );
+        assert_eq!(
+            store.get_u32_raw(tree, FREE),
+            0,
+            "the free list is compacted"
+        );
+
+        // Idempotent: the layout is a function of the tree, so a second pass over an
+        // already-laid-out tree is the identity. A pass that renumbered relative to
+        // the CURRENT ids instead would drift on every persist.
+        assert!(rtree_relayout(&mut store, tree));
+        assert_eq!(
+            node_array(&store, tree),
+            after_array,
+            "relayout is idempotent"
+        );
+    }
+
+    /// R11b — removals leave holes; a relayout returns them.
+    #[test]
+    fn r11b_relayout_compacts_what_removal_freed() {
+        let mut store = Store::new_in_use(1 << 15);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0xdead_1134_beef_1134;
+        let mut codes = Vec::new();
+        for _ in 0..500 {
+            let code = lcg(&mut seed);
+            let rec = add(&mut store, code);
+            codes.push((code, rec));
+            tree = rtree_insert(&mut store, tree, rec, CODE);
+        }
+        for &(_, rec) in codes.iter().step_by(2) {
+            assert!(rtree_remove(&mut store, tree, rec, CODE));
+        }
+        let high = store.get_u32_raw(tree, NODES);
+        let len = rtree_len(&store, tree);
+        assert!(
+            high > len - 1,
+            "the removals must have left holes, or the compaction is untested"
+        );
+        assert!(rtree_relayout(&mut store, tree));
+        rtree_validate(&store, tree, CODE);
+        assert_eq!(store.get_u32_raw(tree, NODES), len - 1);
+        assert_eq!(store.get_u32_raw(tree, FREE), 0);
+        for (i, &(code, rec)) in codes.iter().enumerate() {
+            let want = if i % 2 == 0 { 0 } else { rec };
+            assert_eq!(rtree_get(&store, tree, &code_probe(code), 32, CODE), want);
+        }
+    }
+
+    /// R11c — the degenerate trees: none, one, and two records.
+    ///
+    /// A tree with no NODES is the shape where "renumber the array" has nothing to
+    /// say and every off-by-one lives — an empty tree, and a single record hanging
+    /// straight off TOP.
+    #[test]
+    fn r11c_relayout_handles_trees_with_no_nodes() {
+        let mut store = Store::new_in_use(64);
+        let mut tree = rtree_init(&mut store, 0);
+        assert!(rtree_relayout(&mut store, tree), "an empty tree lays out");
+        assert_eq!(rtree_len(&store, tree), 0);
+
+        let one = add(&mut store, 7);
+        tree = rtree_insert(&mut store, tree, one, CODE);
+        assert!(rtree_relayout(&mut store, tree));
+        rtree_validate(&store, tree, CODE);
+        assert_eq!(rtree_get(&store, tree, &code_probe(7), 32, CODE), one);
+
+        let two = add(&mut store, 9);
+        tree = rtree_insert(&mut store, tree, two, CODE);
+        assert!(rtree_relayout(&mut store, tree));
+        rtree_validate(&store, tree, CODE);
+        assert_eq!(collect(&store, tree), vec![one, two]);
     }
 
     // ---- 2D Morton (Z-order) oracle: x at `fld 4`, y at `fld 8` -------------

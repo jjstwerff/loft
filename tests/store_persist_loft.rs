@@ -345,6 +345,69 @@ fn sorted_fresh_then_reload_round_trip() {
     );
 }
 
+/// @PLN134 — persisting a `trie<T[k]>` lays its node array out for paging, and
+/// moves no answer.
+///
+/// `bind_path` renumbers every trie in the store van Emde Boas before it writes
+/// the image, because that image is what a paged reader fetches: node ids handed
+/// out in INSERTION order cost one prefix query 27 pages of 64 KB to read ~330
+/// bytes of nodes, and 2.8 after.  The pass rewrites ids and nothing else, so the
+/// gate is that nothing observable moves — and what a renumbering could break is
+/// exactly key order, exact lookup, and the prefix walk.
+///
+/// Both halves are asserted, and they are different claims: the `LOFT_LOADER_STATS`
+/// line proves the pass RAN (without it a silently-skipped pass reads identically
+/// to a working one), and the fresh/reload agreement proves it broke nothing.
+/// Reload is a separate process, so the image alone carries the answers.
+///
+/// `kerx` is the cell that matters, as it is in the trie's own tests: it sorts
+/// immediately after `kerkweg`, so a prefix walk that loses its stop condition
+/// answers `kerx*` for `kerk`.
+#[test]
+fn trie_persist_lays_out_and_keeps_every_answer() {
+    let script = workspace_root().join("tests/scripts/134-trie-paged-layout.loft");
+    let dir = scratch("trie_persist_layout");
+    let path = dir.join("words.store");
+    const KERK: &str = "kerk=kerk,kerkdijk,kerkhof,kerklaan,kerkpad,kerkplein,\
+                        kerksloot,kerkstraat,kerkweg";
+
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&script)
+        .env("LOFT_PERSIST_TEST_PATH", &path)
+        .env("LOFT_PERSIST_TEST_MODE", "fresh")
+        .env("LOFT_LOADER_STATS", "1")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let fresh = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stats = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code().unwrap_or(-1), 0, "fresh exit: {fresh:?}");
+    assert!(
+        stats.contains("laid out 1 trie(s) for paging"),
+        "the layout pass must run on the image being written: {stats:?}"
+    );
+    assert!(fresh.contains("fresh len=72"), "fresh: {fresh:?}");
+    assert!(
+        fresh.contains(&format!("fresh {KERK}")),
+        "the prefix walk must stop before `kerx`: {fresh:?}"
+    );
+    assert!(fresh.contains("fresh lookup=3"), "fresh: {fresh:?}");
+    assert!(fresh.contains("fresh absent=null"), "fresh: {fresh:?}");
+    assert!(path.exists(), "bind should have created the file");
+
+    // A SEPARATE process, reading only the laid-out image.
+    let (reload, code) = run_mode(&script, &path, "reload");
+    assert_eq!(code, 0, "reload exit: {reload:?}");
+    for line in fresh.lines().filter_map(|l| l.strip_prefix("fresh ")) {
+        assert!(
+            reload.contains(&format!("reload {line}")),
+            "the image must answer exactly as the live trie did — missing {line:?} \
+             in {reload:?}"
+        );
+    }
+}
+
 fn load_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_smoke.loft")
 }
