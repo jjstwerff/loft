@@ -1400,7 +1400,38 @@ ci-miri:  ## @PLAN53: run the loft interpreter under Miri (hard-UB gate). SLOW (
 		cargo +nightly miri test --test issues -- --exact \
 		p213_struct_field_basic_int
 
-ci:
+.PHONY: ci-guard
+ci-guard:
+	@# REFUSE to start while another gate is running in this tree, BEFORE the
+	@# truncation below — because two concurrent runs do not merely interleave,
+	@# they FAKE FAILURES in each other and both reports become fiction:
+	@#
+	@#   * they share `target/`, so the second run's `cargo build` replaces the
+	@#     debug rlib the first is linking tests against.  The symptom is
+	@#     `error: extern location for loft does not exist:
+	@#     target/debug/deps/libloft.rlib` across ~20 native tests — a red gate
+	@#     naming a file that is present when you look;
+	@#   * they share `result.txt`, so the second truncates the first's report
+	@#     mid-write and the surviving text belongs to neither run.
+	@#
+	@# Both were read as real failures before this guard existed, and the cost
+	@# is a full cycle each time — the gate is ~10 minutes.
+	@#
+	@# Keyed on LIVENESS, not on the file existing: the pid is make's own
+	@# ($$PPID from a recipe shell), so a run killed with ^C or an OOM leaves a
+	@# stale file that the next `kill -0` steps straight over.  A lock that
+	@# outlives its holder is worse than no lock — it fails runs that should
+	@# pass, and gets deleted by hand until nobody trusts it.
+	@if [ -f .ci-running ] && kill -0 "$$(cat .ci-running 2>/dev/null)" 2>/dev/null; then \
+	    echo "make ci: REFUSED — a gate is already running in this tree (make pid $$(cat .ci-running))."; \
+	    echo "  Two runs share target/ and result.txt; the second deletes the rlib the first"; \
+	    echo "  links against and truncates its report, so BOTH results would be fiction."; \
+	    echo "  Wait for it to finish, or stop it first."; \
+	    exit 1; \
+	fi
+
+ci: ci-guard
+	@echo $$PPID > .ci-running
 	@# Fresh header FIRST so result.txt can never be mistaken for a stale
 	@# run.  rebuild-native-cdylibs is invoked INSIDE the chain below (not as
 	@# an order-only prerequisite) so its output — and any failure — lands in
@@ -1471,7 +1502,10 @@ ci:
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
 	cargo nextest run --profile ci >> result.txt 2>&1 && \
 	echo 'CI-RESULT: ALL GATES PASSED' >> result.txt || \
-	{ echo 'CI-RESULT: FAILED — see the last failing command above in result.txt' >> result.txt; exit 1; }
+	{ echo 'CI-RESULT: FAILED — see the last failing command above in result.txt' >> result.txt; rm -f .ci-running; exit 1; }
+	@# Tidiness only — the guard above tests whether the recorded pid is ALIVE,
+	@# so a run that dies without reaching either branch blocks nothing.
+	@rm -f .ci-running
 
 # Local-only superset of `ci`: same gates plus the development suites
 # that are NOT in .github/workflows/ci.yml — package smoke tests and
