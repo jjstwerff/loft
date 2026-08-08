@@ -65,6 +65,20 @@
 //! disagree with key order for that pair.  It degrades, it does not corrupt — and
 //! nothing here panics on any input.
 //!
+//! # Two storages, one walk
+//!
+//! The read-only half of the tree — [`descend_gen`], [`split_point_gen`],
+//! [`descend_extreme_gen`], [`RadixIter::step_gen`] and [`seek_gen`], plus
+//! [`composed_bit`] and [`first_diff_words`] — is written against a [`TreeNodes`] /
+//! [`TreeKeys`] source rather than a `Store` directly.  A resident tree passes
+//! [`StoreNodes`]/[`StoreKeys`] and reads exactly as before; a PAGED reader over a
+//! persisted image passes its own source and answers a node by fetching (@PLN134).
+//! Mutation is not expressible through the trait and stays on `&mut Store`.
+//!
+//! The point is that the seek algorithm and the key composition have ONE home.  A
+//! second reader with its own copy of them is a reader that can silently descend to
+//! a different leaf, and nothing about the two answers would say which is right.
+//!
 //! Design and the step-by-step verification plan:
 //! `doc/claude/plans/48-spacial-index/RADIX_TREE.md`.
 
@@ -128,19 +142,24 @@ impl<T: KeyOracle> KeyOracle for &T {
 
 /// The zero byte that separates a user key from the id suffix, so a shorter key
 /// sorts before a longer one that extends it.
-const TERM_BITS: u32 = 8;
+pub(crate) const TERM_BITS: u32 = 8;
 /// The record id, which makes every key unique.
-const ID_BITS: u32 = 32;
+pub(crate) const ID_BITS: u32 = 32;
 /// Everything the tree appends to a user key.
-const SUFFIX_BITS: u32 = TERM_BITS + ID_BITS;
+pub(crate) const SUFFIX_BITS: u32 = TERM_BITS + ID_BITS;
 
 // Container-record header, in bytes.  `fld 0..4` is the Store's own claim header.
+//
+// `pub(crate)` because a PAGED reader walks the very same bytes out of a
+// persisted image (`paged_reader::trie_prefix_recs`), and a second copy of these
+// offsets is a second thing to keep in step: the tree writes them, so the tree is
+// where they live (@PLN134).
 /// Root child: `0` empty, `>0` a record id, `<0` a node id.
-const TOP: u32 = 4;
+pub(crate) const TOP: u32 = 4;
 /// Number of records held.
-const LEN: u32 = 8;
+pub(crate) const LEN: u32 = 8;
 /// Node high-water mark; live ids are drawn from `1..=NODES`.
-const NODES: u32 = 12;
+pub(crate) const NODES: u32 = 12;
 /// How many nodes the current claim can hold.
 const CAP: u32 = 16;
 /// Head of the free-node list, `0` when empty.
@@ -164,21 +183,31 @@ struct View<F: Fn(u32) -> u64> {
 impl<F: Fn(u32) -> u64> View<F> {
     /// Bit `b` of the composed string: user bits, terminator, record id, then zeros.
     fn bit(&self, b: u32) -> bool {
-        let n = self.bits;
-        if b < n {
-            ((self.word)(b / 64) >> (63 - b % 64)) & 1 == 1
-        } else if b < n + TERM_BITS {
-            false
-        } else if b < n + SUFFIX_BITS {
-            (self.id >> (ID_BITS - 1 - (b - n - TERM_BITS))) & 1 == 1
-        } else {
-            false
-        }
+        composed_bit(&self.word, self.bits, self.id, b)
     }
 
     /// Bits beyond which the string is all zeros.
     fn total(&self) -> u32 {
         self.bits + SUFFIX_BITS
+    }
+}
+
+/// Bit `b` of the composed string — user bits, terminator, record id, then zeros —
+/// read out of a key that supplies whole 64-bit words.
+///
+/// The composition rule itself, with no view around it, because a second reader of
+/// the same tree has to compose the string EXACTLY the same way or it descends to a
+/// different leaf.  A paged walk over a persisted image is such a reader
+/// (`paged_reader`, @PLN134), and this is the one place the rule is written.
+pub(crate) fn composed_bit(word: impl FnOnce(u32) -> u64, bits: u32, id: u32, b: u32) -> bool {
+    if b < bits {
+        (word(b / 64) >> (63 - b % 64)) & 1 == 1
+    } else if b < bits + TERM_BITS {
+        false
+    } else if b < bits + SUFFIX_BITS {
+        (id >> (ID_BITS - 1 - (b - bits - TERM_BITS))) & 1 == 1
+    } else {
+        false
     }
 }
 
@@ -197,38 +226,61 @@ where
     A: Fn(u32) -> u64,
     B: Fn(u32) -> u64,
 {
-    let common = a.bits.min(b.bits);
+    first_diff_words(a.bits, a.id, |w| (a.word)(w), b.bits, b.id, |w| (b.word)(w))
+}
+
+/// [`first_diff`] over two keys given as `(bits, id, word accessor)` rather than as
+/// two [`View`]s.
+///
+/// The accessors are `FnMut` for one reason: a reader that FETCHES — a paged image —
+/// mutates itself to answer a word, so the closure that reads a record's key over it
+/// has to hold `&mut`.  A `Fn` bound compiles for the resident tree and quietly
+/// excludes the other reader, which would then need its own copy of the comparison —
+/// the piece most worth having exactly one of.
+pub(crate) fn first_diff_words<A, B>(
+    a_bits: u32,
+    a_id: u32,
+    mut a_word: A,
+    b_bits: u32,
+    b_id: u32,
+    mut b_word: B,
+) -> Option<(u32, bool)>
+where
+    A: FnMut(u32) -> u64,
+    B: FnMut(u32) -> u64,
+{
+    let common = a_bits.min(b_bits);
     let mut w = 0;
     while w * 64 < common {
-        let (av, bv) = ((a.word)(w), (b.word)(w));
+        let (av, bv) = (a_word(w), b_word(w));
         let x = av ^ bv;
         if x != 0 {
             let bit = w * 64 + x.leading_zeros();
             if bit < common {
-                return Some((bit, a.bit(bit)));
+                return Some((bit, composed_bit(&mut a_word, a_bits, a_id, bit)));
             }
             // The difference lies past the shorter key; the tail walk settles it.
             break;
         }
         w += 1;
     }
-    let limit = a.total().max(b.total());
+    let limit = (a_bits + SUFFIX_BITS).max(b_bits + SUFFIX_BITS);
     (common..limit).find_map(|bit| {
-        let x = a.bit(bit);
-        (x != b.bit(bit)).then_some((bit, x))
+        let x = composed_bit(&mut a_word, a_bits, a_id, bit);
+        (x != composed_bit(&mut b_word, b_bits, b_id, bit)).then_some((bit, x))
     })
 }
 
 /// A child slot: the sign encoding lives here and nowhere else.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Child {
+pub(crate) enum Child {
     Empty,
     Rec(u32),
     Node(u32),
 }
 
 impl Child {
-    fn decode(v: i32) -> Child {
+    pub(crate) fn decode(v: i32) -> Child {
         match v.cmp(&0) {
             Ordering::Equal => Child::Empty,
             Ordering::Greater => Child::Rec(v as u32),
@@ -277,10 +329,15 @@ impl RadixIter {
 
     /// A cursor at `rec` (whose parent is `node`), allowed to walk the whole tree.
     fn at(store: &Store, tree: u32, rec: u32, node: u32) -> RadixIter {
+        RadixIter::at_gen(&mut StoreNodes { store, tree }, rec, node)
+    }
+
+    /// [`RadixIter::at`] over any storage.
+    pub(crate) fn at_gen<N: TreeNodes>(src: &mut N, rec: u32, node: u32) -> RadixIter {
         RadixIter {
             rec,
             node,
-            budget: rtree_len(store, tree) + 1,
+            budget: src.len() + 1,
         }
     }
 
@@ -305,6 +362,12 @@ impl RadixIter {
     }
 
     fn step(&mut self, store: &Store, tree: u32, forward: bool) -> Option<u32> {
+        self.step_gen(&mut StoreNodes { store, tree }, forward)
+    }
+
+    /// [`RadixIter::step`] over any storage — the in-order successor/predecessor.
+    pub(crate) fn step_gen<N: TreeNodes>(&mut self, src: &mut N, forward: bool) -> Option<u32> {
+        src.walk_begin();
         if self.rec == 0 || self.budget == 0 {
             self.rec = 0;
             return None;
@@ -315,16 +378,16 @@ impl RadixIter {
         while n != 0 {
             // Which side did we come up from?  The children are distinct, so one
             // comparison settles it.
-            let came_true = child(store, tree, n, true) == from;
+            let came_true = src.child(n, true) == from;
             if came_true != forward {
-                let c = child(store, tree, n, forward);
-                let (rec, node) = descend_extreme(store, tree, c, !forward, n);
+                let c = src.child(n, forward);
+                let (rec, node) = descend_extreme_gen(src, c, !forward, n);
                 self.rec = rec;
                 self.node = node;
                 return Some(rec);
             }
             from = Child::Node(n);
-            n = node_parent(store, tree, n);
+            n = src.node_parent(n);
         }
         self.rec = 0;
         self.node = 0;
@@ -336,7 +399,7 @@ impl RadixIter {
 // Container + node accessors
 // ---------------------------------------------------------------------------
 
-fn node_off(node: u32) -> u32 {
+pub(crate) fn node_off(node: u32) -> u32 {
     debug_assert!(node >= 1, "node ids are 1-based");
     HDR + NODE_SIZE * (node - 1)
 }
@@ -700,7 +763,7 @@ fn set_node_parent(store: &mut Store, tree: u32, node: u32, parent: u32) {
     store.set_u32_raw(tree, node_off(node) + 4, parent);
 }
 
-fn child_off(node: u32, dir: bool) -> u32 {
+pub(crate) fn child_off(node: u32, dir: bool) -> u32 {
     node_off(node) + if dir { 12 } else { 8 }
 }
 
@@ -795,22 +858,167 @@ fn free_node(store: &mut Store, tree: u32, node: u32) {
 // Descent
 // ---------------------------------------------------------------------------
 
-/// Follow `key` down to the candidate leaf, and the node directly above it.
-/// Leaf `0` = empty tree; parent `0` = the leaf is the root.
-fn descend<F: Fn(u32) -> u64>(store: &Store, tree: u32, key: &View<F>) -> (u32, u32) {
-    let mut cur = top(store, tree);
-    let mut parent = 0;
+/// Everything a read-only walk asks of a tree: the root slot, the record count, and
+/// each node's bit / parent / children.
+///
+/// It exists so the tree has ONE descent, one split point and one in-order step,
+/// whichever storage they run over.  The resident tree reads a [`Store`]
+/// ([`StoreNodes`]); a paged reader reads the same node array out of a persisted
+/// image, page by page, and answers a node by FETCHING — which is why every method
+/// takes `&mut self`.  `&self` would compile for the resident case and force the
+/// paged one to keep its own copy of the geometry (@PLN134).
+///
+/// Read-only on purpose.  Mutation stays on `&mut Store` and is not expressible
+/// here, so no implementor can be asked to write into a page it does not own.
+pub(crate) trait TreeNodes {
+    /// One bounded walk is about to start — a descent, a split point, an extreme
+    /// descent or an in-order step.
+    ///
+    /// It exists so a source that does not trust its bytes can bound each walk
+    /// EXACTLY: a healthy walk visits each node at most once, so `node count` hops
+    /// is a ceiling no correct query reaches, and a pointer cycle stops instead of
+    /// spinning. One budget for a whole *query* would not do, because a seek runs
+    /// four such walks and the ceiling would have to be a guessed multiple —
+    /// which under-provisions on a small tree (a 5-node trie answered every
+    /// lookup as ABSENT) and over-provisions on a large one.
+    ///
+    /// The resident tree needs none of this and gets the default no-op.
+    fn walk_begin(&mut self) {}
+    /// The root child slot.
+    fn top(&mut self) -> Child;
+    /// How many records the tree holds — a walk's budget.
+    fn len(&mut self) -> u32;
+    /// The absolute key bit node `n` tests.
+    fn node_bit(&mut self, n: u32) -> u32;
+    /// The node `n` hangs under; `0` at the root.
+    fn node_parent(&mut self, n: u32) -> u32;
+    /// Node `n`'s child on side `dir`.
+    fn child(&mut self, n: u32, dir: bool) -> Child;
+}
+
+/// A [`TreeNodes`] that can also read a stored record's KEY — what a seek needs and
+/// a plain traversal does not.
+///
+/// The split is not tidiness: iteration and teardown walk the tree with no key oracle
+/// at all (`rtree_first`, `RadixIter::next`), and requiring one there would make every
+/// caller build a key reader it never uses.
+pub(crate) trait TreeKeys: TreeNodes {
+    /// How many bits `rec`'s user key has.
+    fn rec_bits(&mut self, rec: u32) -> u32;
+    /// 64 key bits of `rec` starting at bit `word * 64`; see [`WordFn`].
+    fn rec_word(&mut self, rec: u32, word: u32) -> u64;
+}
+
+/// [`TreeNodes`] over a resident tree — the whole of what the walk needed from
+/// `(store, tree)`, in one value.
+pub(crate) struct StoreNodes<'a> {
+    store: &'a Store,
+    tree: u32,
+}
+
+impl TreeNodes for StoreNodes<'_> {
+    fn top(&mut self) -> Child {
+        top(self.store, self.tree)
+    }
+    fn len(&mut self) -> u32 {
+        rtree_len(self.store, self.tree)
+    }
+    fn node_bit(&mut self, n: u32) -> u32 {
+        node_bit(self.store, self.tree, n)
+    }
+    fn node_parent(&mut self, n: u32) -> u32 {
+        node_parent(self.store, self.tree, n)
+    }
+    fn child(&mut self, n: u32, dir: bool) -> Child {
+        child(self.store, self.tree, n, dir)
+    }
+}
+
+/// [`StoreNodes`] plus the caller's [`KeyOracle`], for the seek path.
+pub(crate) struct StoreKeys<'a, K: KeyOracle> {
+    nodes: StoreNodes<'a>,
+    spec: K,
+}
+
+impl<K: KeyOracle> TreeNodes for StoreKeys<'_, K> {
+    fn top(&mut self) -> Child {
+        self.nodes.top()
+    }
+    fn len(&mut self) -> u32 {
+        self.nodes.len()
+    }
+    fn node_bit(&mut self, n: u32) -> u32 {
+        self.nodes.node_bit(n)
+    }
+    fn node_parent(&mut self, n: u32) -> u32 {
+        self.nodes.node_parent(n)
+    }
+    fn child(&mut self, n: u32, dir: bool) -> Child {
+        self.nodes.child(n, dir)
+    }
+}
+
+impl<K: KeyOracle> TreeKeys for StoreKeys<'_, K> {
+    fn rec_bits(&mut self, rec: u32) -> u32 {
+        self.spec.bits(self.nodes.store, rec)
+    }
+    fn rec_word(&mut self, rec: u32, word: u32) -> u64 {
+        self.spec.word(self.nodes.store, rec, word)
+    }
+}
+
+/// Follow `key_bit` down from `cur` to the candidate leaf, and the node directly
+/// above it.  Leaf `0` = nothing there; `parent` starts at what `cur` hangs under.
+///
+/// The whole descent, for every storage: pass `(top(), 0)` for a root descent and
+/// `(Child::Node(f), parent(f))` for a finger one.
+pub(crate) fn descend_gen<N: TreeNodes>(
+    src: &mut N,
+    mut key_bit: impl FnMut(u32) -> bool,
+    mut cur: Child,
+    mut parent: u32,
+) -> (u32, u32) {
+    src.walk_begin();
     loop {
         match cur {
             Child::Empty => return (0, 0),
             Child::Rec(r) => return (r, parent),
             Child::Node(n) => {
-                let dir = key.bit(node_bit(store, tree, n));
-                cur = child(store, tree, n, dir);
+                let dir = key_bit(src.node_bit(n));
+                cur = src.child(n, dir);
                 parent = n;
             }
         }
     }
+}
+
+/// Always branch the same way; reaches the FALSE-most (or TRUE-most) leaf below
+/// `cur` and the node above it.
+pub(crate) fn descend_extreme_gen<N: TreeNodes>(
+    src: &mut N,
+    mut cur: Child,
+    dir: bool,
+    mut parent: u32,
+) -> (u32, u32) {
+    src.walk_begin();
+    loop {
+        match cur {
+            Child::Empty => return (0, 0),
+            Child::Rec(r) => return (r, parent),
+            Child::Node(n) => {
+                cur = src.child(n, dir);
+                parent = n;
+            }
+        }
+    }
+}
+
+/// Follow `key` down to the candidate leaf, and the node directly above it.
+/// Leaf `0` = empty tree; parent `0` = the leaf is the root.
+fn descend<F: Fn(u32) -> u64>(store: &Store, tree: u32, key: &View<F>) -> (u32, u32) {
+    let mut src = StoreNodes { store, tree };
+    let start = src.top();
+    descend_gen(&mut src, |b| key.bit(b), start, 0)
 }
 
 /// Follow `key` from `start` rather than the root — the finger descent.
@@ -820,40 +1028,15 @@ fn descend_from<F: Fn(u32) -> u64>(
     key: &View<F>,
     start: u32,
 ) -> (u32, u32) {
-    let mut cur = Child::Node(start);
-    let mut parent = node_parent(store, tree, start);
-    loop {
-        match cur {
-            Child::Empty => return (0, 0),
-            Child::Rec(r) => return (r, parent),
-            Child::Node(n) => {
-                let dir = key.bit(node_bit(store, tree, n));
-                cur = child(store, tree, n, dir);
-                parent = n;
-            }
-        }
-    }
+    let mut src = StoreNodes { store, tree };
+    let parent = src.node_parent(start);
+    descend_gen(&mut src, |b| key.bit(b), Child::Node(start), parent)
 }
 
 /// Always branch the same way; reaches the FALSE-most (or TRUE-most) leaf and the
 /// node above it.
-fn descend_extreme(
-    store: &Store,
-    tree: u32,
-    mut cur: Child,
-    dir: bool,
-    mut parent: u32,
-) -> (u32, u32) {
-    loop {
-        match cur {
-            Child::Empty => return (0, 0),
-            Child::Rec(r) => return (r, parent),
-            Child::Node(n) => {
-                cur = child(store, tree, n, dir);
-                parent = n;
-            }
-        }
-    }
+fn descend_extreme(store: &Store, tree: u32, cur: Child, dir: bool, parent: u32) -> (u32, u32) {
+    descend_extreme_gen(&mut StoreNodes { store, tree }, cur, dir, parent)
 }
 
 /// Where a new node testing bit `d` must be spliced in: the node whose child slot
@@ -865,15 +1048,29 @@ fn descend_extreme(
 /// at `d`, contradicting `d` being their first difference.  So `<` and `>` partition
 /// the path and no third case exists.
 fn split_point<F: Fn(u32) -> u64>(store: &Store, tree: u32, key: &View<F>, d: u32) -> (u32, bool) {
-    let mut cur = top(store, tree);
-    let (mut parent, mut dir) = (0, false);
+    let mut src = StoreNodes { store, tree };
+    let start = src.top();
+    split_point_gen(&mut src, |b| key.bit(b), d, start, 0, false)
+}
+
+/// [`split_point`] for any storage: walk down from `cur` while the node's bit is at
+/// or below `d`, and report the child slot the walk stopped in.
+pub(crate) fn split_point_gen<N: TreeNodes>(
+    src: &mut N,
+    mut key_bit: impl FnMut(u32) -> bool,
+    d: u32,
+    mut cur: Child,
+    mut parent: u32,
+    mut dir: bool,
+) -> (u32, bool) {
+    src.walk_begin();
     while let Child::Node(n) = cur {
-        let bit = node_bit(store, tree, n);
+        let bit = src.node_bit(n);
         if bit > d {
             break;
         }
-        dir = key.bit(bit);
-        cur = child(store, tree, n, dir);
+        dir = key_bit(bit);
+        cur = src.child(n, dir);
         parent = n;
     }
     (parent, dir)
@@ -888,28 +1085,23 @@ fn split_point_from<F: Fn(u32) -> u64>(
     d: u32,
     start: u32,
 ) -> (u32, bool) {
-    let mut parent = start;
-    let mut dir = key.bit(node_bit(store, tree, start));
-    let mut cur = child(store, tree, start, dir);
-    while let Child::Node(n) = cur {
-        let bit = node_bit(store, tree, n);
-        if bit > d {
-            break;
-        }
-        dir = key.bit(bit);
-        parent = n;
-        cur = child(store, tree, n, dir);
-    }
-    (parent, dir)
+    let mut src = StoreNodes { store, tree };
+    let dir = key.bit(src.node_bit(start));
+    let cur = src.child(start, dir);
+    split_point_gen(&mut src, |b| key.bit(b), d, cur, start, dir)
 }
 
 /// The child slot `split_point` named — the subtree a split displaces.
-fn subtree_below(store: &Store, tree: u32, parent: u32, dir: bool) -> Child {
+pub(crate) fn subtree_below_gen<N: TreeNodes>(src: &mut N, parent: u32, dir: bool) -> Child {
     if parent == 0 {
-        top(store, tree)
+        src.top()
     } else {
-        child(store, tree, parent, dir)
+        src.child(parent, dir)
     }
+}
+
+fn subtree_below(store: &Store, tree: u32, parent: u32, dir: bool) -> Child {
+    subtree_below_gen(&mut StoreNodes { store, tree }, parent, dir)
 }
 
 /// A probe key: the caller's words, then zeros — the same string a record gets, but
@@ -959,31 +1151,55 @@ fn seek_inner<P, K: KeyOracle + Copy>(
 where
     P: Fn(u32) -> u64,
 {
-    let kp = probe_view(probe, probe_bits);
-    let (cand, cand_parent) = descend(store, tree, &kp);
+    seek_gen(
+        &mut StoreKeys {
+            nodes: StoreNodes { store, tree },
+            spec,
+        },
+        probe,
+        probe_bits,
+    )
+}
+
+/// [`seek_inner`] over any storage — the lower bound, and where the probe left the
+/// candidate.
+///
+/// The probe reads its own words and never touches `src`, which is what lets the
+/// CANDIDATE's key be read through the same `&mut` source: a paged image answers a
+/// key by fetching the record's page.
+pub(crate) fn seek_gen<S: TreeKeys, P>(
+    src: &mut S,
+    probe: &P,
+    probe_bits: u32,
+) -> (RadixIter, Option<u32>)
+where
+    P: Fn(u32) -> u64,
+{
+    let probe_bit_at = |b: u32| composed_bit(probe, probe_bits, 0, b);
+    let start = src.top();
+    let (cand, cand_parent) = descend_gen(src, probe_bit_at, start, 0);
     if cand == 0 {
         return (RadixIter::empty(), None);
     }
-    let cw = |w: u32| spec.word(store, cand, w);
-    let kc = View {
-        word: cw,
-        bits: spec.bits(store, cand),
-        id: cand,
+    let cand_bits = src.rec_bits(cand);
+    let diff = first_diff_words(probe_bits, 0, probe, cand_bits, cand, |w| {
+        src.rec_word(cand, w)
+    });
+    let Some((d, probe_bit)) = diff else {
+        return (RadixIter::at_gen(src, cand, cand_parent), None);
     };
-    let Some((d, probe_bit)) = first_diff(&kp, &kc) else {
-        return (RadixIter::at(store, tree, cand, cand_parent), None);
-    };
-    let (parent, dir) = split_point(store, tree, &kp, d);
-    let sub = subtree_below(store, tree, parent, dir);
+    let start = src.top();
+    let (parent, dir) = split_point_gen(src, probe_bit_at, d, start, 0, false);
+    let sub = subtree_below_gen(src, parent, dir);
     let it = if probe_bit {
         // The probe sorts after every record in the subtree: take its last, step on.
-        let (rec, node) = descend_extreme(store, tree, sub, true, parent);
-        let mut it = RadixIter::at(store, tree, rec, node);
-        it.next(store, tree);
+        let (rec, node) = descend_extreme_gen(src, sub, true, parent);
+        let mut it = RadixIter::at_gen(src, rec, node);
+        it.step_gen(src, true);
         it
     } else {
-        let (rec, node) = descend_extreme(store, tree, sub, false, parent);
-        RadixIter::at(store, tree, rec, node)
+        let (rec, node) = descend_extreme_gen(src, sub, false, parent);
+        RadixIter::at_gen(src, rec, node)
     };
     (it, Some(d))
 }

@@ -500,6 +500,7 @@ fn write_db_type(stores: &mut Stores, r: &Record, t: &SchemaType) {
         let e = kv.push(stores);
         e.set_field_int(stores, ds::KEY_TYPE_NR, i64::from(k.type_nr));
         e.set_field_int(stores, ds::KEY_POSITION, i64::from(k.position));
+        e.set_field_int(stores, ds::KEY_START, i64::from(k.start));
     }
     materialize_field_groups(stores, r, ds::DBTYPE_FIELD_GROUPS, &t.field_groups);
 }
@@ -893,6 +894,7 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
                 let e = kv.push(stores);
                 e.set_field_int(stores, ds::KEY_TYPE_NR, i64::from(k.type_nr));
                 e.set_field_int(stores, ds::KEY_POSITION, i64::from(k.position));
+                e.set_field_int(stores, ds::KEY_START, i64::from(k.start));
             }
         }
         // ── carries a vector<TypeT> ────────────────────────────────────────────
@@ -1249,10 +1251,12 @@ mod tests {
             Key {
                 type_nr: 3,
                 position: 7,
+                start: -128,
             },
             Key {
                 type_nr: -1,
                 position: 42,
+                start: 0,
             },
         ]);
 
@@ -1346,6 +1350,7 @@ mod tests {
             Value::Keys(vec![Key {
                 type_nr: 3,
                 position: 7,
+                start: 100,
             }]),
             Value::Tuple(vec![Value::Int(1), Value::Text("a".into())]),
             Value::TupleGet(0, 1),

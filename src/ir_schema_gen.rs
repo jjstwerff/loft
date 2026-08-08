@@ -353,6 +353,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t11, "pos", 0);
     db.field(t12, "type_nr", 0);
     db.field(t12, "position", 0);
+    db.field(t12, "start", 0);
     db.field(t13, "name", t5);
     db.field(t13, "asc", t4);
     db.field(t14, "name", t5);

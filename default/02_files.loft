@@ -549,14 +549,14 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 // nothing.
 //
 // FALSE means the binding was not made, and it is worth checking. A `.store`
-// IMAGE is read a page at a time, which only a `hash` supports: a `sorted`,
-// `index`, `trie` or `spatial` bound to one is refused HERE, at the call that is
-// wrong, rather than answering `null` at every later lookup (loft#802). Those
+// IMAGE is read a page at a time, which only a `hash` or a `trie` supports: a
+// `sorted`, `index` or `spatial` bound to one is refused HERE, at the call that
+// is wrong, rather than answering `null` at every later lookup (loft#802). Those
 // kinds load whole — `store_load` / `store_load_url_trusted` carry all of them.
 // A DATABASE source judges its own schema on the first fault instead, since what
 // it can serve is a fact about the other end.
-//   if !store_bind_lazy(words, "vocab.store") {
-//     store_load(words, "vocab.store");     // whole-image, every kind
+//   if !store_bind_lazy(tiles, "tiles.store") {
+//     store_load(tiles, "tiles.store");     // whole-image, every kind
 //   }
 pub fn store_bind_lazy(local: reference, source: text) -> boolean;
 #rust"{{ let r = @local; r.rec != 0 && stores.bind_lazy(&r, @source) }}"
@@ -667,13 +667,28 @@ pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#
 #impure(io)
 
 // Text-keyed form of `store_load_key`: fetch ONE entry from a persisted
-// `hash<T[textkey]>` (a place-name / string-id index) into `local`, reading only
-// the pages the lookup touches. Returns false when the key is absent or the
-// collection isn't a copyable text-keyed hash. @PLN97 arc G (loft#522).
+// `hash<T[textkey]>` or `trie<T[textkey]>` (a place-name / string-id index) into
+// `local`, reading only the pages the lookup touches. Returns false when the key
+// is absent or the collection isn't a copyable text-keyed hash or trie.
+// @PLN97 arc G (loft#522), @PLN134 for the trie.
 //   places: hash<Place[name]> = []
 //   store_load_key_text(places, "gazetteer.store", "Amsterdam")
 pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read;
 #rust"stores.load_key_text(&(@local), @path, @key)"
+#impure(io)
+
+// Prefix form: fetch every entry whose text key begins with `pre` from a
+// persisted `trie<T[k]>` into `local`, reading only the pages the prefix walk
+// touches — what a search box needs, and what a `sorted` range cannot express
+// without a hand-built successor string. Returns the count loaded.
+//
+// `limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is
+// never stepped to, so its pages are never fetched. A negative `limit` means no
+// cap, which on a common prefix reads the whole run. @PLN134.
+//   words: trie<Word[w]> = []
+//   store_load_prefix(words, "vocab.store", "kerk", 20)
+pub fn store_load_prefix(local: reference, path: text, pre: text, limit: integer) -> integer fs#read;
+#rust"stores.load_prefix(&(@local), @path, @pre, @limit)"
 #impure(io)
 
 // Plural form of `store_load_key`: fetch the given integer keys' entries into

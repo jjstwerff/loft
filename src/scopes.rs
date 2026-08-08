@@ -6526,6 +6526,32 @@ fn is_value_return_type(tp: &Type) -> bool {
     // the B5-L3 wrap: the call was emitted as a DISCARDED statement + a
     // fabricated `return null`, which native materialised as `return 0.0`
     // — a silent NON-NULL corruption (the routing elevation-kernel bug).
+    // loft#816 — a FLAT pure-value tuple is a value return too.  @PLN135 gave
+    // `-> (float, integer)` Rust's own tuple ABI (no synthetic `__tuple`
+    // record), and that shape reaches here as a bare `Type::Tuple`; unnamed, an
+    // anonymous tail tuple with pending frees fell through to the discard +
+    // fabricated `Return(Null)` path and native answered the ZERO initialiser
+    // (`return (0.0_f64, 0)`) for the whole tuple.  Silent, and on one backend
+    // only — the interpreter read the elements off eval-stack top.
+    //
+    // Recursing per element is what keeps the bound exact.  A NESTED pure-value
+    // tuple qualifies too (loft#817): the wrap emits `Set(__ret_N, <tuple>)` and
+    // then reads the temp back, and both halves are nested-aware —
+    // `emit_tuple_var_pop_put` writes the leaves and `generate_var` delegates to
+    // `emit_tuple_var_push_recursive` to read them.  An element with a lifetime
+    // (text / vector / record) is either rewritten to the boxed `Reference`
+    // shape upstream or belongs to the @P329 tuple-of-text branch, and neither
+    // may be hoisted by a plain `Set` — so those stop the recursion here.
+    if let Type::Tuple(elems) = tp.base() {
+        return !elems.is_empty() && elems.iter().all(is_value_return_type);
+    }
+    is_scalar_value_type(tp)
+}
+
+/// The scalar half of [`is_value_return_type`]: a type returned in a register,
+/// owning nothing on the heap.  Split out so the tuple case reads as "every
+/// element is itself a value return", with this as the recursion's base.
+fn is_scalar_value_type(tp: &Type) -> bool {
     matches!(
         tp.base(),
         Type::Integer(_)

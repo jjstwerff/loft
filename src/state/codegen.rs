@@ -3804,42 +3804,18 @@ impl State {
                 stack.add_op("OpVarRef", self);
             }
             Type::Tuple(elems) => {
-                // T1.4: read whole tuple by reading each element.
+                // T1.4: read the whole tuple by reading each element.  Delegated to
+                // the same helper `TupleGet` uses, which is where the element set
+                // and the nested-tuple recursion live.  This arm used to hand-roll
+                // its own copy of that loop, which is how it came to be narrower
+                // than its sibling: no `Type::Tuple` recursion, so reading a whole
+                // NESTED tuple variable was an ICE (`r = ((1,4),5); r`), and no
+                // collection arms either.  That ICE is what bounded loft#816's
+                // return hoist and left loft#817 — a nested tuple return with a
+                // store local answering the zero initialiser on native.
                 let elems = elems.clone();
                 let tuple_base = stack.function.stack(variable);
-                let offsets = crate::data::element_stack_offsets(&elems);
-                for (i, elem_tp) in elems.iter().enumerate() {
-                    let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
-                    match elem_tp.base() {
-                        Type::Integer(_) => {
-                            stack.add_op("OpVarInt", self);
-                        }
-                        // P249 — fn-ref slots are 20 B (8 d_nr + 12
-                        // closure DbRef); OpVarInt would only push 8
-                        // and truncate the closure.  OpVarFnRef pushes
-                        // the full 20 with the same +4 stack tracker
-                        // bump generate_var uses for plain Function
-                        // vars.
-                        Type::Function(_, _, _) => {
-                            stack.add_op("OpVarFnRef", self);
-                            stack.position += stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
-                        }
-                        Type::Boolean => stack.add_op("OpVarBool", self),
-                        Type::Float => stack.add_op("OpVarFloat", self),
-                        Type::Single => stack.add_op("OpVarSingle", self),
-                        Type::Character => stack.add_op("OpVarCharacter", self),
-                        Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
-                        Type::Text(_) => stack.add_op("OpArgText", self),
-                        Type::Reference(c, _) | Type::Enum(c, true, _) => {
-                            self.types
-                                .insert(self.code_pos, stack.data.def(*c).known_type());
-                            stack.add_op("OpVarRef", self);
-                        }
-                        _ => panic!("Tuple var: unsupported element type {elem_tp:?}"),
-                    }
-                    self.code_add(elem_pos);
-                    // Note: add_op already adjusts stack.position for the pushed value.
-                }
+                self.emit_tuple_var_push_recursive(stack, &elems, tuple_base);
                 return self.insert_types(stack.function.tp(variable).clone(), code, stack);
             }
             _ => panic!(
@@ -4103,6 +4079,9 @@ impl State {
                     for k in keys {
                         self.code_add(k.type_nr);
                         self.code_add(k.position);
+                        // loft#812 — the shift travels with the descriptor, so a ranged
+                        // scan compares against the same decode the record side uses.
+                        self.code_add(k.start);
                     }
                 }
             }

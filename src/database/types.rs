@@ -79,15 +79,34 @@ fn mint_trace(kind: &str, name: &str, found: Option<u16>, len: usize) {
 }
 
 fn key_type_nr_for_content(content: u16, types: &[Type]) -> i8 {
+    key_descriptor_for_content(content, types).0
+}
+
+/// The key width AND the field's storage start, from the one place that already knows
+/// both (loft#812).
+///
+/// `Parts::Byte`, `Parts::Short` and `Parts::ShortRaw` all encode a value as `val - min`,
+/// so a reader that assumes `min == 0` is off by exactly `min`. Deriving the width and the
+/// shift together here is what keeps them from drifting: a width that grows a shift later
+/// cannot get one without this match naming it.
+///
+/// `ShortRaw`'s name is about the absence of the `+1` NULL SENTINEL, not the absence of a
+/// shift — it stores `(val - min) as u16` (`set_i16_raw`) and reads `read + min`
+/// (`get_short_full`). Reading it as a sign-extended `i16` instead is what made an `i16`
+/// key unfindable, and a `u16` key at or above 32768 decode NEGATIVE.
+///
+/// `Parts::Int` really is raw (`set_i32_raw` stores the value itself), so it and every
+/// base type answer `0`, which is inert at the read sites.
+fn key_descriptor_for_content(content: u16, types: &[Type]) -> (i8, i32) {
     if content <= 5 {
-        return 1 + content as i8;
+        return (1 + content as i8, 0);
     }
     match &types[content as usize].parts {
-        Parts::Int(_, _) => 8,
-        Parts::Short(_, _) => 9,
-        Parts::Byte(_, _) => 10,
-        Parts::ShortRaw(_, _) => 11,
-        _ => 7,
+        Parts::Int(_, _) => (8, 0),
+        Parts::Short(min, _) => (9, *min),
+        Parts::Byte(min, _) => (10, *min),
+        Parts::ShortRaw(min, _) => (11, *min),
+        _ => (7, 0),
     }
 }
 
@@ -738,10 +757,11 @@ impl Stores {
             Parts::Trie(c, k) => {
                 self.types[t_nr].keys.clear();
                 if let Some((content, position)) = self.key_field(c, k) {
-                    let tp = key_type_nr_for_content(content, &self.types);
+                    let (tp, start) = key_descriptor_for_content(content, &self.types);
                     self.types[t_nr].keys.push(crate::keys::Key {
                         type_nr: tp,
                         position,
+                        start,
                     });
                 }
             }
@@ -749,10 +769,11 @@ impl Stores {
                 self.types[t_nr].keys.clear();
                 for key_field in key_fields {
                     if let Some((content, position)) = self.key_field(c, key_field) {
-                        let tp = key_type_nr_for_content(content, &self.types);
+                        let (tp, start) = key_descriptor_for_content(content, &self.types);
                         self.types[t_nr].keys.push(crate::keys::Key {
                             type_nr: tp,
                             position,
+                            start,
                         });
                     }
                 }
@@ -763,13 +784,14 @@ impl Stores {
                 self.types[t_nr].keys.clear();
                 for (key_field, asc) in &key_fields {
                     if let Some((content, position)) = self.key_field(c, *key_field) {
-                        let mut tp = key_type_nr_for_content(content, &self.types);
+                        let (mut tp, start) = key_descriptor_for_content(content, &self.types);
                         if !asc {
                             tp = -tp;
                         }
                         self.types[t_nr].keys.push(crate::keys::Key {
                             type_nr: tp,
                             position,
+                            start,
                         });
                     }
                 }

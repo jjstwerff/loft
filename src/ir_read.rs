@@ -386,6 +386,7 @@ fn read_keys(stores: &Stores, slot: Node) -> Vec<Key> {
             Key {
                 type_nr: e.field_int(stores, ds::KEY_TYPE_NR) as i8,
                 position: e.field_int(stores, ds::KEY_POSITION) as u16,
+                start: e.field_int(stores, ds::KEY_START) as i32,
             }
         })
         .collect()
@@ -846,6 +847,7 @@ fn read_db_type(stores: &Stores, r: Record) -> SchemaType {
             Key {
                 type_nr: e.field_int(stores, ds::KEY_TYPE_NR) as i8,
                 position: e.field_int(stores, ds::KEY_POSITION) as u16,
+                start: e.field_int(stores, ds::KEY_START) as i32,
             }
         })
         .collect();
@@ -1120,10 +1122,12 @@ mod tests {
             Key {
                 type_nr: 3,
                 position: 7,
+                start: -128,
             },
             Key {
                 type_nr: -1,
                 position: 42,
+                start: 0,
             },
         ]));
         round_trip_value(&Value::FnRef(42, 3, Box::new(Type::Boolean)));

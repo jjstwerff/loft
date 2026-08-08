@@ -297,6 +297,16 @@ fix-on-save applies.
    none, and `every_offered_door_resolves_to_a_catalogue_entry` fails a `@F` that is not in
    the catalogue. If the fix genuinely cannot be offered yet, add a row to `FIX_BLOCKED`
    naming what blocks it — a listed exception, never a silent one.
+4. **Point the caret with `diagnostic_at!` whenever detection happens after parsing.**
+   `diagnostic!` uses the lexer's CURRENT cursor, which is only right while the offending
+   construct is still under it. A whole-function judgement (complexity, parameter count,
+   trailing booleans) needs the whole body first, and by then the cursor sits on the NEXT
+   definition — so all three of those pointed at the following `fn` while the prose named
+   this one, which reads as advice about a function that is fine (loft#815). Pass the
+   definition's own `position`. Same rule for anything checked after its expression is
+   consumed. Guard: the golden case
+   `tests/error_messages/cases/48_advice_points_at_the_function_it_names.loft`, whose
+   fixture deliberately ends in a `next_function_marker` no caret may land on.
 
 ## See also
 

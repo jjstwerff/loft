@@ -9,6 +9,12 @@
 // went to stderr, which no program can read — so a search box bound to a source
 // it cannot page shows "no results" forever, in perfect health.
 //
+// @PLN134 MOVED the trie out of the refused set — a paged image can serve one now
+// — so the reported KIND is here as a control that it stays quiet, and the refusal
+// cells run on the kinds that remain unserved (`index`, `sorted`). That split is
+// the point of the file: the refusal must narrow when a capability lands, and the
+// channel must survive the narrowing.
+//
 // The CONTROLS are what make this a test rather than a description. `hash_ok`
 // must stay silent — a fix that reported every null as a refusal would pass the
 // refusal cells and destroy the channel. `unreachable` must keep its own,
@@ -32,12 +38,17 @@ fn main() {
   hash_img = "{base}.hash";
   big_img = "{base}.big";
   sort_img = "{base}.sorted";
+  idx_img = "{base}.index";
 
   if mode == "write" {
     t: trie<RfWord[w]> = [];
     if !store_persist_bind(t, trie_img) { println("FAIL write-trie"); return }
     t += [RfWord { w: "kerkstraat", hits: 3 }];
     t += [RfWord { w: "lonneker", hits: 7 }];
+
+    x: index<RfRow[id]> = [];
+    if !store_persist_bind(x, idx_img) { println("FAIL write-index"); return }
+    x += [RfRow { id: 42, v: 4200 }];
 
     h: hash<RfRow[id]> = [];
     if !store_persist_bind(h, hash_img) { println("FAIL write-hash"); return }
@@ -55,27 +66,36 @@ fn main() {
     if !store_persist_bind(s, sort_img) { println("FAIL write-sorted"); return }
     s += [RfRow { id: 1, v: 10 }];
 
-    println("seeded={t.len()},{h.len()},{b.len()},{s.len()}");
+    println("seeded={t.len()},{h.len()},{b.len()},{s.len()},{len(x)}");
     return
   }
 
-  // A — the reported case. The kind can never be paged, and that is known at
-  // BIND: refusing at the call that is wrong beats refusing at an arbitrary
-  // later lookup.
-  tr: trie<RfWord[w]> = [];
-  println("trie_bound={store_bind_lazy(tr, trie_img)}");
-  println("trie_null={tr["kerkstraat"] == null} trie_speaks={store_lazy_error(tr) != ""}");
-  println("trie_faults={store_lazy_faults(tr)}");
+  // A — the refusal the report is about, on a kind that still cannot be paged.
+  // The kind can never be paged, and that is known at BIND: refusing at the call
+  // that is wrong beats refusing at an arbitrary later lookup.
+  ix: index<RfRow[id]> = [];
+  println("idx_bound={store_bind_lazy(ix, idx_img)}");
+  println("idx_null={ix[42] == null} idx_speaks={store_lazy_error(ix) != ""}");
+  println("idx_faults={store_lazy_faults(ix)}");
   // The message must name the KIND and the way out, not the #632 wrapper-struct
   // trap — a `trie` local was told to "declare it as an annotated local", which
   // it already was.
-  println("trie_names_kind={store_lazy_error(tr).contains("trie<RfWord[w]>")}");
-  println("trie_names_cure={store_lazy_error(tr).contains("store_load")}");
+  println("idx_names_kind={store_lazy_error(ix).contains("index<RfRow[id]>")}");
+  println("idx_names_cure={store_lazy_error(ix).contains("store_load")}");
 
-  // F — the rule is the KIND SET, not `trie`. A `sorted` cannot page either.
+  // F — the rule is the KIND SET, not one kind. A `sorted` cannot page either.
   so: sorted<RfRow[id]> = [];
   println("sorted_bound={store_bind_lazy(so, sort_img)}");
   println("sorted_speaks={store_lazy_error(so) != ""}");
+
+  // CONTROL 0 — @PLN134: the reported kind is SERVED now, so it must bind, answer
+  // and stay quiet. Without this cell the narrowing is invisible here, and the
+  // file would keep asserting a refusal that has become a bug of its own.
+  tr: trie<RfWord[w]> = [];
+  println("trie_bound={store_bind_lazy(tr, trie_img)}");
+  println("trie_hits={(tr["kerkstraat"] ?? RfWord { w: "?", hits: 0 }).hits}");
+  println("trie_quiet={store_lazy_error(tr) == ""} trie_faults={store_lazy_faults(tr)}");
+  println("trie_absent={tr["nosuchword"] == null} trie_still_quiet={store_lazy_error(tr) == ""}");
 
   // D — a refusal only a FETCH can decide: the local is a `hash`, so the bind is
   // accepted, and the IMAGE is a foreign layout.
@@ -119,5 +139,5 @@ fn main() {
 
   // The sticky contract is unchanged: a refusal survives a later success and
   // only an explicit acknowledgement clears it.
-  println("cleared={store_lazy_clear(tr)} after_clear={store_lazy_error(tr) == ""}");
+  println("cleared={store_lazy_clear(ix)} after_clear={store_lazy_error(ix) == ""}");
 }

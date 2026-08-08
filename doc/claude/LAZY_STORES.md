@@ -362,10 +362,10 @@ loader's, turned into a fault by `fetch_from_file`) and `Stores::bind_lazy` (the
 static ones, answered at the bind).
 
 - **A collection kind an IMAGE cannot page — at the BIND.** `store_bind_lazy`
-  answers `false` for a `sorted` / `index` / `trie` / `spatial` bound to a
-  `.store` file or URL: the paged reader serves a `hash`, that is a static
+  answers `false` for a `sorted` / `index` / `spatial` bound to a `.store` file or
+  URL: the paged reader serves a `hash` and a `trie` (@PLN134), that is a static
   property of the pair, and refusing at the call that is wrong beats refusing at
-  an arbitrary later lookup. Those kinds load WHOLE (`store_load`,
+  an arbitrary later lookup. The refused kinds load WHOLE (`store_load`,
   `store_load_url_trusted`), which carries every kind. A DATABASE source is not
   judged here — a `trie` gets `sorted`'s SQL shape and is served.
 - **Writes.** Read-only. A write to a lazily-backed record is refused loudly;

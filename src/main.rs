@@ -7888,12 +7888,20 @@ fn main() {
                         "rustc is installed, so this is a real build failure, not a \
                          missing-toolchain fallback"
                     };
+                    // Name the escape hatch that actually applies.  `--interpret`
+                    // chooses the interpreter for the PROGRAM; a `use`d library
+                    // still builds its cdylib, so advising it sent a blocked
+                    // reader nowhere — the failing command already was
+                    // `--interpret` (loft#815).  `LOFT_NO_NATIVE_LIBS=1` is the
+                    // switch that makes every library interpret.
                     eprintln!(
                         "loft: library '{pkg_dir}' failed to build native ({e}).\n\
                          {why} — refusing to silently interpret it (that would hand back a \
                          partly-interpreted binary, or one whose #native functions panic \
-                         when called).  Fix the library's native build, or run with \
-                         --interpret to run interpreted on purpose."
+                         when called).  Fix the library's native build, or set \
+                         LOFT_NO_NATIVE_LIBS=1 to run every `use`d library interpreted on \
+                         purpose (--interpret alone does not: it selects the interpreter \
+                         for your program, while a library still builds its cdylib)."
                     );
                     std::process::exit(1);
                 }

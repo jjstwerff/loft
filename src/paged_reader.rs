@@ -1081,6 +1081,238 @@ pub fn sorted_range_positions<P: PageProvider>(
     (inner, out)
 }
 
+// ---------------------------------------------------------------------------
+// @PLN134 — a TRIE read a page at a time
+// ---------------------------------------------------------------------------
+
+/// Payload offset of an element record's fields; mirrors `trie_db::PAYLOAD`.
+const TRIE_PAYLOAD: u32 = 8;
+
+/// `text`'s key type number, as `compare_key` spells it. A trie over any other key
+/// type has no bytes to walk, so the paged form declines it rather than reading a
+/// number as a string.
+const TRIE_TEXT_TYPE: i8 = 6;
+
+/// The tree's node array and key oracle, read out of a PAGED image.
+///
+/// This is the whole of what a paged trie query adds: the descent, the split point,
+/// the in-order step and the seek all come from [`radix_tree`](crate::radix_tree) —
+/// the tree that WROTE the image is where its geometry lives, so a query over a file
+/// and a query over resident memory cannot drift apart (`r12` pins that they do not).
+///
+/// **Fuel, because the bytes are not ours.** A resident tree is one this process
+/// built; an image is a file, and a file can be truncated, foreign or hostile. Every
+/// read is already total (the reader zero-pads past EOF, so no offset faults), but a
+/// child pointer that cycles would make a *descent* spin. A legitimate walk visits
+/// each node at most once — `bit` strictly increases along a path — so `nodes + 4`
+/// hops is a bound no healthy walk reaches, and passing it answers `Empty`: a
+/// corrupted image reports the key as ABSENT instead of hanging the program.
+///
+/// The budget is refilled per WALK (`walk_begin`), not per query, and that
+/// distinction is not academic: a seek runs four bounded walks, so one budget for
+/// the whole query would have to be a guessed multiple of the depth — and the guess
+/// under-provisioned on a SMALL tree, where a 5-node trie answered every exact
+/// lookup as absent while the prefix walk still worked.
+struct PagedTrie<'a, P: PageProvider> {
+    reader: &'a mut PagedReader<P>,
+    /// The tree container record, `0` when the collection is empty.
+    tree: u32,
+    /// Byte offset of the text-key field within an element record.
+    key_pos: u32,
+    /// Node high-water mark, read once — what each walk's fuel is drawn from.
+    nodes: u32,
+    /// Node hops left in the CURRENT walk; refilled by `walk_begin`.
+    fuel: u32,
+    /// The last record's key bytes. `first_diff_words` asks for word after word of
+    /// one record's key, and the prefix walk then compares that same key again, so
+    /// without this every 8 bytes of comparison costs a string-record read.
+    cached: Option<(u32, Vec<u8>)>,
+}
+
+impl<'a, P: PageProvider> PagedTrie<'a, P> {
+    /// Open the tree rooted in the image at `(root_rec, root_pos)` — the same
+    /// 4-byte claim slot a resident trie keeps its tree id in.
+    fn open(reader: &'a mut PagedReader<P>, root_rec: u32, root_pos: u32, key_pos: u32) -> Self {
+        let tree = reader.u32_at(root_rec, root_pos);
+        let nodes = if tree == 0 {
+            0
+        } else {
+            reader.u32_at(tree, crate::radix_tree::NODES)
+        };
+        Self {
+            reader,
+            tree,
+            key_pos,
+            nodes,
+            fuel: 0,
+            cached: None,
+        }
+    }
+
+    /// The record's key bytes, read through its string pointer (fld 4 = length,
+    /// fld 8.. = the UTF-8 bytes), and kept until another record is asked for.
+    fn key_bytes(&mut self, rec: u32) -> &[u8] {
+        if self.cached.as_ref().is_none_or(|(r, _)| *r != rec) {
+            let ptr = self.reader.u32_at(rec, self.key_pos);
+            let len = if ptr == 0 {
+                0
+            } else {
+                self.reader.u32_at(ptr, 4) as usize
+            };
+            let bytes = if len == 0 {
+                Vec::new()
+            } else {
+                self.reader.resolve(u64::from(ptr) * 8 + 8, len)
+            };
+            self.cached = Some((rec, bytes));
+        }
+        self.cached.as_ref().map_or(&[], |(_, b)| b.as_slice())
+    }
+}
+
+impl<P: PageProvider> crate::radix_tree::TreeNodes for PagedTrie<'_, P> {
+    fn walk_begin(&mut self) {
+        self.fuel = self.nodes.saturating_add(4);
+    }
+    fn top(&mut self) -> crate::radix_tree::Child {
+        if self.tree == 0 {
+            return crate::radix_tree::Child::Empty;
+        }
+        crate::radix_tree::Child::decode(self.reader.i32_at(self.tree, crate::radix_tree::TOP))
+    }
+    fn len(&mut self) -> u32 {
+        if self.tree == 0 {
+            return 0;
+        }
+        self.reader.u32_at(self.tree, crate::radix_tree::LEN)
+    }
+    fn node_bit(&mut self, n: u32) -> u32 {
+        self.reader
+            .u32_at(self.tree, crate::radix_tree::node_off(n))
+    }
+    fn node_parent(&mut self, n: u32) -> u32 {
+        self.reader
+            .u32_at(self.tree, crate::radix_tree::node_off(n) + 4)
+    }
+    fn child(&mut self, n: u32, dir: bool) -> crate::radix_tree::Child {
+        if self.fuel == 0 || n == 0 || n > self.nodes {
+            return crate::radix_tree::Child::Empty;
+        }
+        self.fuel -= 1;
+        crate::radix_tree::Child::decode(
+            self.reader
+                .i32_at(self.tree, crate::radix_tree::child_off(n, dir)),
+        )
+    }
+}
+
+impl<P: PageProvider> crate::radix_tree::TreeKeys for PagedTrie<'_, P> {
+    fn rec_bits(&mut self, rec: u32) -> u32 {
+        self.key_bytes(rec).len() as u32 * 8
+    }
+    fn rec_word(&mut self, rec: u32, word: u32) -> u64 {
+        crate::trie_db::bytes_word(self.key_bytes(rec), word)
+    }
+}
+
+/// The key field's byte offset within an element record, when the collection is a
+/// TEXT-keyed trie. `None` for any other key shape — a numeric trie has no bytes to
+/// walk, and answering a miss beats reading an integer as a string.
+fn trie_key_pos(keys: &[crate::keys::Key]) -> Option<u32> {
+    match keys.first() {
+        Some(k) if k.type_nr == TRIE_TEXT_TYPE => Some(TRIE_PAYLOAD + u32::from(k.position)),
+        _ => None,
+    }
+}
+
+/// Locate the record stored under `key` in a TRIE rooted at `(root_rec, root_pos)`
+/// of the paged image — the reader port of `trie_db::find`, and the trie's twin of
+/// [`find_hash_entry`]. `0` when absent.
+///
+/// One root→leaf descent plus one key comparison, so the pages it touches are the
+/// node pages on that path and the candidate's own — which is the whole reason a
+/// trie is worth paging (@PLN134 step 2 measured 2.8 of them, mean, on a 239-page
+/// node array laid out by `rtree_relayout`).
+pub fn trie_find_rec<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    root_rec: u32,
+    root_pos: u32,
+    key: &str,
+    keys: &[crate::keys::Key],
+) -> u32 {
+    let Some(key_pos) = trie_key_pos(keys) else {
+        return 0;
+    };
+    let mut src = PagedTrie::open(reader, root_rec, root_pos, key_pos);
+    if src.tree == 0 {
+        return 0;
+    }
+    let q = key.as_bytes();
+    let probe = |w: u32| crate::trie_db::bytes_word(q, w);
+    let probe_bits = q.len() as u32 * 8;
+    let (it, d) = crate::radix_tree::seek_gen(&mut src, &probe, probe_bits);
+    let rec = it.rec();
+    if rec == 0 {
+        return 0;
+    }
+    // `rtree_get`'s rule, and both halves carry weight: agreement over the probe's
+    // whole length does not exclude a LONGER stored key (`"ab"` against `"abc"`),
+    // and equal lengths alone say nothing about the bits.
+    let matched = d.is_none_or(|d| d >= probe_bits);
+    if matched && src.key_bytes(rec).len() as u32 * 8 == probe_bits {
+        rec
+    } else {
+        0
+    }
+}
+
+/// Every record in the paged TRIE whose key begins with `pre`, in key order, capped
+/// at `limit` — the reader port of `trie_db::prefix`, and the paged counterpart of
+/// [`sorted_range_positions`].
+///
+/// **The cap is what makes a search box cheap, so it bounds the WALK and not just
+/// the answer.** `t["kerk"..:8]` stops after the eighth record: the ninth is never
+/// stepped to, so its pages are never fetched. A prefix walk that materialised the
+/// run and then truncated would read all 459 records for `kerk` to return 8 — the
+/// one operation where paging could quietly become a whole-image read.
+///
+/// `rtree_seek` positions at the lowest key `>= pre`, and because a probe carries id
+/// `0` that is the first record BEARING the prefix; in-order traversal is increasing
+/// key order, so the first key that does not begin with `pre` is a correct stop.
+pub fn trie_prefix_recs<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    root_rec: u32,
+    root_pos: u32,
+    pre: &str,
+    keys: &[crate::keys::Key],
+    limit: Option<usize>,
+) -> Vec<u32> {
+    let mut out = Vec::new();
+    let Some(key_pos) = trie_key_pos(keys) else {
+        return out;
+    };
+    let mut src = PagedTrie::open(reader, root_rec, root_pos, key_pos);
+    if src.tree == 0 {
+        return out;
+    }
+    let cap = limit.unwrap_or(usize::MAX);
+    if cap == 0 {
+        return out;
+    }
+    let q = pre.as_bytes();
+    let probe = |w: u32| crate::trie_db::bytes_word(q, w);
+    let (mut it, _) = crate::radix_tree::seek_gen(&mut src, &probe, q.len() as u32 * 8);
+    let mut rec = it.rec();
+    while rec != 0 && out.len() < cap {
+        if !src.key_bytes(rec).starts_with(q) {
+            break;
+        }
+        out.push(rec);
+        rec = it.step_gen(&mut src, true).unwrap_or(0);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

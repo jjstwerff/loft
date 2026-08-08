@@ -63,7 +63,7 @@ is checked per consumer).
 | `src/parser/vectors.rs` | `cell_struct_name` (pub), `cell_value_type` (`&Type`) | STAY — cell-promotion policy (plan-22 closure cells); every caller is inside vectors.rs, the policy's home | ✅ wave 5: audited |
 | `src/parser/objects.rs` | construction emission reaches `database.position` (fine — asks the home); `replace_record_ref` Value rewriter | mutable keystone added (`for_each_child_mut` + `map_nodes`); `replace_record_ref` is now a 5-line closure (in-place; preserves `Block.var_size` the old rebuild zeroed — fresh-parsed default exprs carry 0 anyway, suite-verified) | ✅ wave 5 |
 | `src/parser/operators.rs`, `fields.rs`, `builtins.rs` | call_to_set GET→SET table (stays — op-layer fact); `code_references_var` (a FOURTH reads-var copy, drifted: missed If/Loop/CallRef/Iter), nested `contains_break`; `lit_int`/`lit_nonzero`/`is_struct_returning_call` shape tests | `code_references_var` died into `Value::reads_var` (wider = more protective work-text wrapping, the safe direction — the doc comment itself described the bug when it under-detected); `contains_break` → `any_node`; shape tests stay | ✅ wave 5 |
-| `src/generation/mod.rs` | `narrow_int_cast`, `default_native_value` (pub), `is_collection_field` (`&Type`); direct `data.definitions[]`/`known_type` reads | classifiers STAY — they encode the NATIVE layer's value-mapping policy over Type, not Type's structure (their Spacial omissions are the known N9 native-coverage enhancement, [NATIVE.md § N9](NATIVE.md)); field reads → privacy pass | ✅ wave 5: audited |
+| `src/generation/mod.rs` | `narrow_int_cast`, `default_native_value` (pub), `is_collection_field` (`&Type`); direct `data.definitions[]`/`known_type` reads; **the three REACHABILITY walkers** `collect_calls` / `collect_fn_ref_literals` / `collect_int_fn_refs` | classifiers STAY — they encode the NATIVE layer's value-mapping policy over Type, not Type's structure (their Spacial omissions are the known N9 native-coverage enhancement, [NATIVE.md § N9](NATIVE.md)); field reads → privacy pass.  The three walkers were MISSED by the wave-5 audit (it listed only the Type classifiers) and are now closures over the keystone — see the note below | ✅ wave 5: audited; walkers converted (loft#815) |
 | `src/generation/emit.rs` | nested local `walk` (ncc skip-free finder), `tail_is_return` (`&Value`) | `walk` → `any_node` closure (done); `tail_is_return` stays — positional | ✅ wave 2 |
 | `src/generation/ops/parallel.rs` | `closure_shape`, `is_narrow_int_return`, `tuple_elem_read`, `is_by_value_scalar` (`&Type`) | STAY — parallel-marshalling policy over Type (native layer), not Type structure | ✅ wave 5: audited |
 | `src/generation/dispatch.rs` | reads `stores.types[].name` directly | accessor DEFERRED → privacy pass; #260's declaration move EXECUTED (the `__vdb` declaration point now derives from the variable table — prologue in `generation/mod.rs::output_function` + `state/codegen.rs::def_code`; `dispatch.rs` gained only the `predeclared` first-Set handling) | ▶ #260 done; accessor deferred |
@@ -85,6 +85,51 @@ leaves) + `Type::any_node` + `Type::contains_def`.  Remaining `&Type`
 classifiers (`type_carries_closure` — prunes at the pointer marker, so it
 keeps a hand-rolled match even after moving; `has_value_cycle` — a `Data`
 graph walk, not a type-tree walk) move in later waves.
+
+## The `IrNode` keystone — and what one missed walker cost
+
+`IrNode::for_each_child` (`src/ir_node.rs`) is the backing-agnostic twin of
+`Value::for_each_child`: exhaustive over `ValueType`, no wildcard, so a new
+variant forces a decision instead of landing in a per-walker default arm.
+Every walker that must be TOTAL (reachability, liveness, "find every X") is a
+closure over one of the two.
+
+Note this is **not** the `ir_node.rs` deferral in the work list above.  That
+row defers the *codecs* — they encode per-variant FIELDS, which child edges
+alone cannot drive.  A child walk over the same handle is a separate, smaller
+fact, and it was missing.
+
+The cost of it missing: `src/generation/mod.rs` kept three hand-rolled
+reachability descents (`collect_calls`, `collect_fn_ref_literals`,
+`collect_int_fn_refs`), each a whitelist of node kinds ending in `_ => {}`.
+None listed `Tuple`.  Native emits only the functions the reachable set names,
+so a callee reached ONLY from a tuple element was pruned while its call site
+was still emitted — rustc then failed `E0425: cannot find function` and the
+library refused to build.  The registry library `hex_way` hit it on
+`(0.0 - sin(a) * dir, cos(a) * dir)`, taking down every program in its
+dependency cone (loft#815).  `Tuple`, `Parallel`, `BreakWith`, `TuplePut` and
+`ParFor` were all absent from all three.
+
+Two lessons for the remaining waves:
+
+- **A wave-5 "audited" row is only as wide as what the audit enumerated.**  The
+  `generation/mod.rs` row named the `&Type` classifiers and concluded "stay";
+  the three `&Value`/`IrNode` walkers in the same file were never listed, so
+  "audited" read as "no hand-rolled walkers here".  Enumerate by SHAPE (every
+  recursive descent over the IR), not by the names already in the row.
+- **The extraction/recursion split is what makes a conversion safe.**  Each
+  walker keeps its special cases as `match` arms that only EXTRACT (a worker
+  fn-nr riding as an integer literal, a fn-ref `Set` target), then delegates
+  recursion to the keystone.  Nothing about the tree's shape is restated.
+  `collect_int_fn_refs` keeps exactly one deliberate exception — it does not
+  descend into `Call` args, where the fn-ref is the call's RESULT and the
+  arguments are ordinary integers that must not be read as def numbers.
+
+Guards: `tests/issues.rs::i815_callee_of_a_tuple_element_stays_reachable` and
+`::i815_reachable_set_is_closed_under_calls` — the second asserts the general
+property (the reachable set is closed under the call relation) with an
+independent walker, so it catches the next omitted node kind rather than this
+one.
 
 ## Move log
 

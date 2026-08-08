@@ -1337,8 +1337,14 @@ impl Parser {
             .unwrap_or((0, 0));
         let name = self.data.def(self.context).original_name().clone();
         let at = crate::keys::COMPLEXITY_ADVICE_AT;
-        diagnostic!(
+        // The whole body is parsed before the score exists, so the cursor has
+        // drifted to the NEXT definition — the caret pointed at the following
+        // `fn` while the prose named this one, which reads as a diagnostic about
+        // a function that is fine.  Point at the definition's own position.
+        let at_pos = self.data.def(self.context).position.clone();
+        diagnostic_at!(
             self.lexer,
+            &at_pos,
             Level::Advice,
             code = "function-complexity",
             "`{name}` scores {score} for control-flow complexity (nudge at {at}) — its \
@@ -1378,8 +1384,11 @@ impl Parser {
         }
         let name = def.original_name().clone();
         let at = crate::keys::PARAM_ADVICE_AT;
-        diagnostic!(
+        // Emitted after the body is parsed — see `warn_function_complexity`.
+        let at_pos = def.position.clone();
+        diagnostic_at!(
             self.lexer,
+            &at_pos,
             Level::Advice,
             code = "too-many-parameters",
             "`{name}` takes {required} required parameters (nudge at {at}) — every caller \
@@ -1436,8 +1445,11 @@ impl Parser {
             return;
         }
         let name = def.original_name().clone();
-        diagnostic!(
+        // Emitted after the body is parsed — see `warn_function_complexity`.
+        let at_pos = def.position.clone();
+        diagnostic_at!(
             self.lexer,
+            &at_pos,
             Level::Advice,
             code = "trailing-boolean-parameters",
             "`{name}` ends with {trailing} boolean parameters — a call reading \
@@ -5047,6 +5059,30 @@ impl Parser {
                 let s_type = data.def(s).returned().clone();
                 resolved = data.find_fn(u16::MAX, fn_name, &s_type);
             }
+        }
+        // loft#813 — the receiver monomorphised to a struct-enum VARIANT (`x = AsA { … }`
+        // types as `Reference(AsA)`, not as the enum), and the method is declared on the
+        // parent ENUM.  `find_fn` looks for `t_3AsA_one`, which does not exist, so the
+        // call stayed on the type PARAMETER: `--interpret` answered the return type's
+        // empty value and `--native` emitted a `todo!("t_1S_one")` stub — an empty answer
+        // indistinguishable from a real one, with no diagnostic.
+        //
+        // The bound itself was already satisfied against the enum, because
+        // `check_satisfaction` reads `def(variant).returned()` and for a variant that IS
+        // the parent enum type.  So the two halves disagreed: satisfaction said yes on
+        // `Any`'s method while the body bound `S` to the variant.  This makes them agree.
+        //
+        // Retried only AFTER the variant's own lookup fails, which is what keeps a
+        // per-variant impl winning over the enum's — the same precedence
+        // `parser/fields.rs`'s method-on-parent-enum dispatch already gives the DIRECT
+        // call path, so `c1(v)` now answers what `v.one()` answers.  Inert for a plain
+        // struct or a bare enum receiver (neither is an `EnumValue`).
+        if resolved == u32::MAX
+            && let Type::Reference(vd, _) = &concrete_arg
+            && data.def_type(*vd) == DefType::EnumValue
+        {
+            let enum_type = data.def(*vd).returned().clone();
+            resolved = data.find_fn(u16::MAX, fn_name, &enum_type);
         }
         if resolved != u32::MAX && resolved != d_nr {
             resolved

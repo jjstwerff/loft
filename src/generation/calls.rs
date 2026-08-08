@@ -25,6 +25,53 @@ fn placeholder_boundary_at(hay: &str, ph: &str, at: usize) -> bool {
         .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_')
 }
 
+/// The `&mut` store helpers a template can call from inside a VALUE expression.
+///
+/// Read off the templates rather than listed as op names, so a new raising op
+/// inherits the fix by spelling its guard the way every other one does. Shared
+/// reads (`stores.store(&db)`) are deliberately absent: two-phase borrows already
+/// allow one during argument evaluation, and treating them as conflicts hoists
+/// constants and float literals for nothing.
+///
+/// A `&mut` use NOT on this list fails to compile at its own call site, loudly and
+/// with rustc naming both borrows — the same way loft#818 was found. Extending the
+/// list is then a one-line change.
+const STORE_MUT_MARKERS: [&str; 3] = ["s.raise", "_or_raise", "store_mut"];
+
+/// Can this argument expression take a MUTABLE borrow of the store while it is
+/// evaluated?  loft#818.
+///
+/// Rust evaluates a method call's RECEIVER PLACE before its arguments, so a
+/// template shaped `stores.method(@count)` holds `&mut *stores` while `@count`
+/// runs.  An argument that itself calls a `&mut Stores` method — the
+/// divide-by-zero guard behind `/` and `%`, the bounds guard behind `v[i]` — is
+/// then a second mutable borrow and rustc rejects the whole function (E0499).
+///
+/// Answered from the IR rather than from generated text: the text does not exist
+/// until the argument is emitted, and emitting it twice would duplicate the
+/// pre-eval bindings it appends. A USER function is not a conflict — it is called
+/// with `cell`, not with a live `&mut Stores` — so only `#rust` templates count.
+fn may_borrow_store(v: &Value, data: &Data) -> bool {
+    match v.unspan() {
+        Value::Call(d, args) => {
+            let rust = data.def(*d).rust();
+            STORE_MUT_MARKERS.iter().any(|m| rust.contains(m))
+                || args.iter().any(|a| may_borrow_store(a, data))
+        }
+        Value::CallRef(_, args) | Value::Insert(args) => {
+            args.iter().any(|a| may_borrow_store(a, data))
+        }
+        Value::Set(_, inner) | Value::Return(inner) | Value::Drop(inner) => {
+            may_borrow_store(inner, data)
+        }
+        Value::If(c, t, e) => {
+            may_borrow_store(c, data) || may_borrow_store(t, data) || may_borrow_store(e, data)
+        }
+        Value::Block(b) | Value::Loop(b) => b.operators.iter().any(|s| may_borrow_store(s, data)),
+        _ => false,
+    }
+}
+
 /// Count whole-token occurrences of the placeholder `@name` in `hay`, skipping
 /// any that sit inside a longer identifier (see [`placeholder_boundary_at`]).
 fn count_placeholder(hay: &str, ph: &str) -> usize {
@@ -476,6 +523,59 @@ impl Output<'_> {
                 res = format!("{{ let {local} = {placeholder}; {res} }}");
             }
         }
+        // loft#818 — evaluate store-borrowing ARGUMENTS before the template takes
+        // its own store borrow.
+        //
+        // The same defect has now been hand-patched into three templates one at a
+        // time (`OpGetVector` @P321d, again @P338, then `reserve` on a hash), each
+        // time by writing `{{let __x = @arg; …}}` into `default/01_code.loft`. The
+        // producer is the GENERATOR, not any of those templates, so this is where
+        // it is settled: whichever template comes next inherits the fix.
+        //
+        // A hoisted argument keeps its position in evaluation order, so every
+        // argument up to the last one needing a hoist is hoisted too — otherwise
+        // an earlier inline argument would run AFTER a later hoisted one, and two
+        // arguments that both raise would report the wrong one first.
+        //
+        // TEXT blocks it. Binding a `text` argument to a local either MOVES a
+        // `String` variable out of the caller's frame or borrows a temporary that
+        // dies at the end of the `let` — so if a text argument sits before the one
+        // that needs hoisting, nothing is hoisted and the call fails to compile
+        // exactly as it does today. Loud, not silent, and `store_load_key(h, p(),
+        // n / 2)` is what would show it.
+        let hoist_upto = def_fn
+            .attributes()
+            .iter()
+            .enumerate()
+            .filter(|(i, a)| {
+                *i < vals.len()
+                    && count_placeholder(&res, &format!("@{}", a.name)) > 0
+                    && may_borrow_store(&vals[*i], self.data)
+            })
+            .map(|(i, _)| i)
+            .next_back();
+        let hoist_upto = hoist_upto.filter(|last| {
+            def_fn
+                .attributes()
+                .iter()
+                .take(*last + 1)
+                .all(|a| !matches!(a.typedef.base(), Type::Text(_)))
+        });
+        let mut prelude = String::new();
+        // Bind `with` to a fresh local when this argument is hoisted, and answer
+        // the text to substitute in its place. The local holds the RAW value; any
+        // cast or wrapper the template needs is still applied at the use site, so
+        // nothing about the emitted call's types changes.
+        let hoisted = |a_nr: usize, with: String, prelude: &mut String| -> String {
+            if hoist_upto.is_some_and(|last| a_nr <= last) {
+                let local = format!("_ha{a_nr}");
+                use std::fmt::Write as _;
+                let _ = write!(prelude, "let {local} = {with}; ");
+                local
+            } else {
+                with
+            }
+        };
         for (a_nr, a) in def_fn.attributes().iter().enumerate() {
             let name = "@".to_string() + &a.name;
             if a_nr < vals.len() {
@@ -508,6 +608,7 @@ impl Output<'_> {
                         res = replace_placeholder(&res, &name, "(255u8)");
                     } else {
                         let inner = self.generate_expr_buf(&vals[a_nr])?;
+                        let inner = hoisted(a_nr, inner, &mut prelude);
                         res = replace_placeholder(&res, &name, &format!("(({inner}) as u8)"));
                     }
                     continue;
@@ -532,6 +633,7 @@ impl Output<'_> {
                     )
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    let inner = hoisted(a_nr, inner, &mut prelude);
                     res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
@@ -551,6 +653,7 @@ impl Output<'_> {
                         .is_some_and(|e| matches!(e.base(), Type::Character))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    let inner = hoisted(a_nr, inner, &mut prelude);
                     res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
@@ -564,6 +667,7 @@ impl Output<'_> {
                     && matches!(self.data.def(*d).returned().base(), Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    let inner = hoisted(a_nr, inner, &mut prelude);
                     res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
@@ -585,6 +689,7 @@ impl Output<'_> {
                     && matches!(b.result.base(), Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    let inner = hoisted(a_nr, inner, &mut prelude);
                     res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
@@ -600,6 +705,7 @@ impl Output<'_> {
                     continue;
                 }
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
+                with = hoisted(a_nr, with, &mut prelude);
                 // Integer parameter receiving a char value needs explicit cast.
                 if matches!(a.typedef, Type::Integer(_)) {
                     let val_is_char = match vals[a_nr].unspan() {
@@ -674,6 +780,11 @@ impl Output<'_> {
                 );
                 break;
             }
+        }
+        // loft#818 — the hoisted arguments, in their original order, ahead of the
+        // call that would otherwise have borrowed the store before evaluating them.
+        if !prelude.is_empty() {
+            res = format!("{{ {prelude}{res} }}");
         }
         // Templates use `s.database.` and `s.` for bytecode interpreter (State).
         // In generated native code, `stores` is the direct Stores reference.

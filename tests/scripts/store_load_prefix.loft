@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN134 — a TRIE read a page at a time. `store_load_key_text` answers one key by
+// a root→leaf descent, and `store_load_prefix` answers `"kerk"` by a seek plus a
+// BOUNDED in-order walk — the capability the trie kind exists for, now over an
+// image instead of a resident collection. Driven by `store_persist_loft.rs`.
+//
+// What each cell is for:
+//   * `one`    — the exact lookup, and that a MISS stays a miss.
+//   * `pre`    — the run, in key order, with the prefix itself included and the
+//                prefix-sibling that does not extend it (`kerf`) left out.
+//   * `cap`    — the cap takes the FIRST n in key order, not an arbitrary n.
+//   * `empty`  — a prefix with no extension loads NOTHING, rather than the
+//                neighbour a seek lands on (the shape a missing stop-check gives).
+//   * `verify` — the collection the loader BUILT is a sound trie, so what it
+//                linked can be walked and looked up like any other.
+
+struct Word {
+  w: text not null,
+  hits: integer not null,
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  t: trie<Word[w]> = [];
+  if mode == "write" {
+    t += Word { w: "kerkstraat", hits: 3 };
+    t += Word { w: "kerk", hits: 11 };
+    t += Word { w: "lonneker", hits: 7 };
+    t += Word { w: "kerf", hits: 2 };
+    t += Word { w: "kerkweg", hits: 5 };
+    t += Word { w: "kerklaan", hits: 9 };
+    if !store_persist_bind(t, path) { println("FAIL write-bind"); return }
+    println("write ok");
+    return
+  }
+
+  if mode == "one" {
+    println("one ok={store_load_key_text(t, path, "kerkweg")}");
+    println("one hits={(t["kerkweg"] ?? Word { w: "?", hits: 0 }).hits}");
+    println("one len={len(t)}");
+    // A key that is not there must stay absent — a descent lands on SOME leaf, so
+    // a walk that skipped the key comparison would answer this one.
+    miss: trie<Word[w]> = [];
+    println("one miss={store_load_key_text(miss, path, "kerks")}");
+    println("one miss_len={len(miss)}");
+    return
+  }
+
+  if mode == "prefix" {
+    n = store_load_prefix(t, path, "kerk", -1);
+    println("pre loaded={n}");
+    keys = "";
+    for w in t {
+      if keys == "" { keys = w.w } else { keys = "{keys},{w.w}" }
+    }
+    println("pre keys={keys}");
+    println("pre hits={(t["kerklaan"] ?? Word { w: "?", hits: 0 }).hits}");
+    println("pre absent={t["kerf"] == null}");
+    println("pre verify={store_verify(t)}");
+    return
+  }
+
+  if mode == "cap" {
+    n = store_load_prefix(t, path, "kerk", 2);
+    println("cap loaded={n}");
+    keys = "";
+    for w in t {
+      if keys == "" { keys = w.w } else { keys = "{keys},{w.w}" }
+    }
+    println("cap keys={keys}");
+
+    // A prefix with no extension at all, and one past the last key.
+    e1: trie<Word[w]> = [];
+    println("cap none={store_load_prefix(e1, path, "kerx", -1)}");
+    e2: trie<Word[w]> = [];
+    println("cap past={store_load_prefix(e2, path, "zzz", -1)}");
+    // The empty prefix is every record — what "begins with nothing" means.
+    e3: trie<Word[w]> = [];
+    println("cap all={store_load_prefix(e3, path, "", -1)}");
+    return
+  }
+
+  if mode == "bind" {
+    // @PLN134 / loft#802 — a trie image can now be PAGED, so the bind that used
+    // to be refused is accepted and a lookup that misses consults the source.
+    println("bind ok={store_bind_lazy(t, path)}");
+    println("bind hits={(t["kerkstraat"] ?? Word { w: "?", hits: 0 }).hits}");
+    println("bind quiet={store_lazy_error(t) == ""}");
+    println("bind faults={store_lazy_faults(t)}");
+    // A genuine absence must still read as an absence, not as a refusal.
+    println("bind absent={t["nosuchword"] == null} still_quiet={store_lazy_error(t) == ""}");
+    return
+  }
+
+  println("FAIL unknown-mode")
+}

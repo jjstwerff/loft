@@ -20,11 +20,10 @@
 // hash resize, because a degenerate key answers a plausible length right up to the
 // point where two keys collide.
 //
-// The widths NOT covered here are the ones whose storage carries a non-zero start —
-// `i8`, `i16`, `integer limit(min, max)` — which cannot be looked up on EITHER
-// backend (loft#812): the record side decodes them with the start hardcoded to 0
-// while the lookup side reads the raw value, so the two differ by exactly that
-// start.  That needs `Key` to carry the field's start, which is a schema surface.
+// The widths whose storage carries a non-zero start — `i8`, `i16`,
+// `integer limit(min, max)` — are covered by `812-shifted-collection-keys.loft`
+// instead: `Key` now carries the field's start, so the record side and the lookup
+// side agree (loft#812).
 
 struct KFloat  { k: float, n: integer }
 struct KSingle { k: single, n: integer }

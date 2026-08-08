@@ -141,9 +141,10 @@ pub(crate) const PARFOR_BODY: u32 = 36;
 // (probed — none promoted to a linked `Array`), so a stride-parameterised
 // vector handle ([`RecVector`]) works for it and every other non-`Node` vector.
 pub(crate) const NDKEYS_KEYS: u32 = 4;
-pub(crate) const KEY_STRIDE: u32 = 16; // `Key` record size
+pub(crate) const KEY_STRIDE: u32 = 24; // `Key` record size
 pub(crate) const KEY_TYPE_NR: u32 = 0;
 pub(crate) const KEY_POSITION: u32 = 8;
+pub(crate) const KEY_START: u32 = 16;
 
 // `NdFnRef` carries a `vector<TypeT>` — needs the TypeT half below.
 pub(crate) const NDFNREF_T: u32 = 4;
@@ -1335,6 +1336,7 @@ mod tests {
         assert_eq!(u32::from(stores.size(ids.key)), KEY_STRIDE);
         assert_eq!(pos(ids.key, "type_nr"), KEY_TYPE_NR);
         assert_eq!(pos(ids.key, "position"), KEY_POSITION);
+        assert_eq!(pos(ids.key, "start"), KEY_START);
 
         // NdFnRef (carries vector<TypeT>).
         assert_eq!(pos(ids.nd_fn_ref, "def_nr"), NDFNREF_DEF_NR);
