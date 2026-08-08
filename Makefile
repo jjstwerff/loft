@@ -1462,6 +1462,7 @@ ci:
 	cargo clippy -- -D warnings >> result.txt 2>&1 && \
 	cargo clippy --all-targets --all-features -- -D warnings >> result.txt 2>&1 && \
 	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
+	$(MAKE) --no-print-directory label-guard-test >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
 	cargo build --no-default-features --target-dir target/nodefault >> result.txt 2>&1 && \
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random >> result.txt 2>&1 && \
@@ -1692,6 +1693,25 @@ loft-test:
 # depend on other people's uptime, buying flakiness for a class of rot that
 # moves slowly.  Nightly is its home; there a red run is information, not a
 # blocked merge.
+# The label guard's body parser, held to real issue-body shapes.
+#
+# `.github/workflows/label-guard.yml` turns what a filer wrote into `sev:` /
+# `wa:` / `area:` labels — including for a reporter who CANNOT set labels, since
+# GitHub restricts that to triage permission.  Every failure mode of that parsing
+# is silent (no label applied, which is what an unanswered form looks like), and
+# the workflow only runs on an issue event, so nothing else would catch a
+# regression until someone filed a bug and got no labels.
+#
+# Skips where node is absent, like the bundle integrity check above; CI's
+# `Doc hygiene` job always runs it.
+.PHONY: label-guard-test
+label-guard-test:
+	@if command -v node >/dev/null 2>&1; then \
+	    node tools/label_guard_selftest.mjs || exit 1; \
+	else \
+	    echo "  WARN: node not found — skipping label-guard selftest"; \
+	fi
+
 .PHONY: linkcheck linkcheck-external
 linkcheck:
 	scripts/linkcheck.sh
