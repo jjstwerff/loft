@@ -388,6 +388,24 @@ pub fn dialect_named(nm: text) -> Dialect? {
   return null;
 }
 
+/// The statements a driver must run on a fresh connection to this backend.
+///
+/// Total where `dialect_named` is not, and that difference is the point: an
+/// unknown backend has NOTHING to run, which is an answer rather than a
+/// fabricated default. A `Dialect` has no honest empty value — one with no type
+/// spellings renders `CREATE TABLE "" ()` — so it must stay nullable; a list
+/// does, so the caller that only needs the setup never has to invent a dialect
+/// to reach it.
+///
+/// It exists because P3 measured a session SETTING deciding what a float reads
+/// back at. Nothing but the connect can run it, so nothing but the connect can
+/// make that read exact.
+pub fn dialect_setup(nm: text) -> vector<text> {
+  d = dialect_named(nm);
+  if d == null { return [] }
+  return d.setup;
+}
+
 /// How a float column must be SELECTed to come back with every bit.
 pub fn float_read(self: Dialect, col: text) -> text {
   return "{self.float_before}{col}{self.float_after}";

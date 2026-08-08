@@ -1,0 +1,124 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `τ?` is a `τ?` whatever it was handed back through.
+//
+// `Type::Optional` is a COMPILE-TIME wrapper — a nullable and its base share one
+// runtime layout — but `Type::is_same` compared the wrapper with derived `==`,
+// which reaches the inner DEPS. Every rule below that comparison exists to
+// ignore deps (a text's, an integer's range, a vector's element buffer), and the
+// wrapper made all of them unreachable: two `text?` differing only in which
+// local they were bound to read as different types.
+//
+// It presents as a refusal that quotes the same name twice — *"cannot unify:
+// text? and text?"* — and the shape that walks into it is ordinary: a `match`
+// whose arms forward to methods on different types, where one implementation
+// returns a local and the other returns a call's result directly. Found building
+// @PLN133 S7's four-backend registry, where `db_col` is exactly that.
+//
+// Every function below returns the SAME declared type through a DIFFERENT route,
+// so the arms can only unify if the deps are ignored.
+
+// --- text? ------------------------------------------------------------------
+//
+// Each type answers its OWN tag, so an arm that unified by collapsing to one
+// implementation is visible in the value rather than merely compiling.
+struct TDirect { s: text }
+struct TLocal { s: text }
+struct TField { s: text }
+
+fn text_src(i: integer, tag: text) -> text? { if i == 0 { return null } return tag; }
+
+// Straight from the call: no dep.
+pub fn take(self: TDirect, i: integer) -> text? { return text_src(i, self.s); }
+// Through a local: the type carries a dep on that variable.
+pub fn take(self: TLocal, i: integer) -> text? { t = text_src(i, self.s); return t; }
+// Built here, so the dep is a different variable again.
+pub fn take(self: TField, i: integer) -> text? {
+  if i == 0 { return null }
+  b = "{self.s}-{i}";
+  return b;
+}
+
+enum AnyText { AtDirect { d: TDirect }, AtLocal { l: TLocal }, AtField { f: TField },
+               AtNone { why: text } }
+
+pub fn take(self: AnyText, i: integer) -> text? {
+  match self {
+    AtDirect { d } => d.take(i),
+    AtLocal { l } => l.take(i),
+    AtField { f } => f.take(i),
+    // The null arm must still lower to the result type's sentinel rather than
+    // pinning the result — the #365 rule this must not disturb.
+    AtNone => null,
+  }
+}
+
+// --- vector<T>? — the same wrapper over a base with its own dep list ---------
+struct VDirect { step: integer }
+struct VLocal { step: integer }
+
+fn vec_src(i: integer, step: integer) -> vector<integer>? {
+  if i == 0 { return null }
+  return [i, i + step];
+}
+
+pub fn take_v(self: VDirect, i: integer) -> vector<integer>? { return vec_src(i, self.step); }
+pub fn take_v(self: VLocal, i: integer) -> vector<integer>? {
+  v = vec_src(i, self.step);
+  return v;
+}
+
+enum AnyVec { AvDirect { d: VDirect }, AvLocal { l: VLocal } }
+
+pub fn take_v(self: AnyVec, i: integer) -> vector<integer>? {
+  match self {
+    AvDirect { d } => d.take_v(i),
+    AvLocal { l } => l.take_v(i),
+  }
+}
+
+// --- an INTERFACE over the same shape ---------------------------------------
+//
+// Satisfaction asks `is_same` too, so a method whose `text?` carried a dep the
+// declaration's did not could fail to satisfy an interface it plainly matches.
+// A generic bounded by it is the check: it does not compile unless every
+// implementation satisfies.
+interface Taker {
+  fn take(self: Self, i: integer) -> text?
+}
+
+fn through <T: Taker> (t: T, i: integer) -> text {
+  got = t.take(i);
+  return got ?? "<null>";
+}
+
+fn main() {
+  d: AnyText = AtDirect { d: TDirect { s: "from-direct" } };
+  l: AnyText = AtLocal { l: TLocal { s: "from-local" } };
+  f: AnyText = AtField { f: TField { s: "row" } };
+  none: AnyText = AtNone { why: "no source" };
+
+  // Each route answers its own value, so an arm that unified by collapsing to
+  // one implementation would be visible here rather than merely compiling.
+  assert(through(d, 1) == "from-direct", "direct: {through(d, 1)}");
+  assert(through(l, 1) == "from-local", "local: {through(l, 1)}");
+  assert(through(f, 3) == "row-3", "field: {through(f, 3)}");
+
+  // …and nullability survived the peel. This is the half that would break if
+  // `is_same` had been made to ignore the wrapper instead of look through it.
+  assert(through(d, 0) == "<null>", "direct null");
+  assert(through(l, 0) == "<null>", "local null");
+  assert(through(none, 1) == "<null>", "the null arm");
+
+  vd: AnyVec = AvDirect { d: VDirect { step: 10 } };
+  vl: AnyVec = AvLocal { l: VLocal { step: 20 } };
+  gd = vd.take_v(4) ?? [];
+  gl = vl.take_v(6) ?? [];
+  assert(len(gd) == 2 && (gd[1] ?? 0) == 14, "vector direct: {gd[1] ?? 0}");
+  assert(len(gl) == 2 && (gl[1] ?? 0) == 26, "vector local: {gl[1] ?? 0}");
+  gn = vd.take_v(0);
+  assert(gn == null, "vector null survives");
+
+  println("pln133-optional-unify ok");
+}

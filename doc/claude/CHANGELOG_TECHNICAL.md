@@ -61,6 +61,92 @@ the 5.9 MB image, and the second keystroke of a session costs ONE page.
 Paging a trie is still unwired: `store_bind_lazy` refuses one, and `store_load_key_text`
 reads a `hash`. The layout is the prerequisite that made those worth building.
 
+### One connection string, four C libraries (@PLN133 S7, 2026-08-08)
+
+Requirement 1 is *one configuration string switches every SQL consumer in the
+process*. S5 delivered the parser; this is the half that hands back a connection,
+and it had no obvious spelling because **loft interfaces are static dispatch** —
+`SqlDb` is satisfied by four unrelated types and no function can return "one of
+them".
+
+- **`tests/fixtures/sqldb/registry/`** — `AnyDb`, a struct-enum over the four
+  backends plus a refusal variant, satisfying `SqlDb` itself. `connect(spec)`
+  parses the string, asks whether that backend's library is on this machine,
+  opens it, and runs the dialect's session setup. Shape (1) of the three the plan
+  named; the decision and the two it was chosen over are recorded in the file's
+  header, because (2) is cheaper and the difference is visible to every consumer.
+- **The method must be on the ENUM, not the variant.** A per-variant method
+  dispatches correctly and does not satisfy an interface for the enum — the
+  compiler says so: *"'AnyDb' does not satisfy interface 'SqlDb': missing
+  db_exec"*. Fifteen `match self` forwarders, none of which decides anything.
+- **A refusal is the fifth variant, not a null** — every operation false, every
+  column null (not `""`, which is a value), `db_last_error` saying why. The idiom
+  `TableDef`, `Binding`, `Conn` and `SqlText` already use in that package.
+- **The connection string is not one string.** What a driver's own `db_open`
+  wants is a fact about the driver: sqlite and duckdb take a path, libpq reads a
+  URI itself (so it must arrive WITH its scheme), and mariadb's client takes
+  keywords, so a `mysql://…` URL is translated. A PORT in that URL is **refused
+  rather than dropped** — the driver connects on 3306 and reads no port, so
+  honouring the string would reach a different server than it names.
+- **The session setup finally has somewhere to run.** `Dialect.setup` has carried
+  PostgreSQL's `SET extra_float_digits = 3` since S3 with no caller. @PLN133 P3
+  measured 1887 of 2000 random doubles inexact without it and 0 of 2000 with it,
+  and it is a SESSION setting — so the connect is the only place that can make a
+  float read back exactly, and nothing downstream can see that it did not.
+
+Gated by `tests/fixtures/sqldb/registry_pure.loft` (unconditional — it opens no
+library, so it cannot skip into a green that asserted nothing) and
+`registry_live.loft`, through `tests/native.rs`, both loft backends with the whole
+output compared.
+
+### `τ?` is one type however it was handed back (2026-08-08)
+
+`Type::is_same` compared `Optional(τ)` with derived `==`, which reaches the inner
+`Deps`. Every dep-ignoring rule below that comparison — a text's deps, an
+integer's range, a vector's element buffer — was therefore unreachable for a
+nullable, so two `text?` differing only in which local they came through read as
+different types. It presents as a refusal quoting the same name twice:
+
+```
+error: cannot unify: text? and text?
+```
+
+Peeled on BOTH sides only, so a `τ?` and a bare `τ` stay different kinds — that
+distinction is the whole of DN1. Found by @PLN133 S7, where a `match` forwards
+`db_col` to four backends and one of them returns through a local; the same
+comparison also gates interface satisfaction and the @P344 loop-variable reuse
+check, both of which wanted the dep-insensitive answer all along. Guarded by
+`tests/scripts/pln133-optional-unify.loft`.
+
+### A returned text is owned by the return, not borrowed from a buffer (2026-08-08)
+
+A branch in tail position delivers each arm into the return accumulator. An arm
+whose text is not a bare variable is first built into a work buffer and handed
+back as `OpCreateStack(buf)` — a REFERENCE — and `push_text_arms_into` wrapped
+that reference in the delivery, while the enclosing scope frees the buffer on the
+next statement.
+
+- **The interpreter answered `""`** — a wrong value, silently, exit 0.
+- **`--native` emitted `*var_acc = ().to_string()`**, which is not Rust.
+
+The shape is ordinary: `return x ?? "fallback"`. Binding to a local first
+(`y = x ?? "fallback"; return y`) avoided it, which is what made the failure look
+like it was about `??` rather than about delivery. The leaf rewrite now delivers
+the BUFFER, so the accumulator copies the bytes it is about to own. Guarded by
+`tests/scripts/pln133-text-tail-delivery.loft`, whose every cell has a
+deliver-through-a-local twin.
+
+Found not by the registry — which does not contain that shape — but by the
+regression test written for the `Optional` fix above, whose helper happened to
+spell `return got ?? "<null>"`.
+
+**Still open:** [loft#806](https://github.com/loft-lang/loft/issues/806) — a
+METHOD call coalesced in return position (`return t.m(i) ?? "x"`) SIGSEGVs the
+interpreter while `--native` is correct. The caller-retbuf promotion makes the
+callee's work buffer a `&text` PARAMETER and the `#default ref` site then wraps an
+already-borrowed variable in `OpCreateStack`, building a reference to a reference.
+Workaround: one intermediate local.
+
 ### `#c` on a wasm target, and under the sandbox (@PLN24 arcs E–F, 2026-08-08)
 
 Closes @PLN24. Both remaining arcs plus the plan's last open design question.

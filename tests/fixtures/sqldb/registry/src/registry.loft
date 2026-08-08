@@ -1,0 +1,451 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S7 — one connection string, one open connection, four C libraries.
+//
+// Requirement 1 is *one configuration string switches every SQL consumer in the
+// process*. S5 delivered the half that is a parser: a string names a backend.
+// This is the other half — handing back a connection the caller then USES — and
+// it has no obvious spelling, because **loft interfaces are static dispatch**.
+// `SqlDb` is satisfied by four unrelated types, and no function can return "one
+// of them".
+//
+// **The decision, written down rather than arrived at.** Three shapes were
+// available and the plan named all three:
+//
+//   1. a struct-enum over the four backends, satisfying `SqlDb` itself;
+//   2. the caller matches on the backend name and holds a concrete type;
+//   3. core does the dispatch, and the registry lives inside a loft function it
+//      calls by name (that is S8 and later, and it needs this either way).
+//
+// (1) is what this is. It keeps the promise requirement 1 makes — one string,
+// and no `match` in any consumer — at the cost of naming all four backends in
+// one type, so a program that wants only sqlite links the other three. (2) is
+// defensible and cheaper, and the difference is visible to every consumer,
+// which is why the choice belongs in a file rather than in a habit.
+//
+// **What makes (1) work is that the ENUM carries the methods, not the variant.**
+// A method on a variant does not satisfy an interface for the enum — measured,
+// and the compiler says so outright: *"'AnyDb' does not satisfy interface
+// 'SqlDb': missing db_exec"*. Each method below therefore matches on `self` and
+// forwards. Fifteen small functions is the whole cost of the uniform API, and
+// none of them decides anything.
+//
+// **The refusal is the fifth variant, not a null.** A connection that could not
+// be made is still a connection-shaped value, and it answers every question the
+// way a failed connection should: every operation false, every column null, and
+// `db_last_error` saying why. That is the idiom `TableDef`, `Binding`, `Conn`
+// and `SqlText` already use here — a refusal a caller may pass on without
+// discharging it at every hop — and it is what keeps failure path 1 closed: a
+// backend this build cannot reach reads as UNREACHABLE, never as an empty
+// answer that looks like an empty table.
+
+use sql;
+use schema;
+use sqlite;
+use postgres;
+use maria;
+use duckdb;
+
+// --- the connection --------------------------------------------------------
+
+/// A connection to whichever backend the string named.
+///
+/// **The payload field names differ per variant on purpose.** loft has one type
+/// per name per FUNCTION, and a match capture is an ordinary local — so
+/// `DbSqlite { c }` beside `DbPostgres { c }` in one method would be `c` typed
+/// two ways, which is a compile error. Distinct names are what let all five arms
+/// live in one function, which is the whole shape.
+pub enum AnyDb {
+  DbSqlite { sq: Sqlite },
+  DbPostgres { pg: Postgres },
+  DbMaria { my: Maria },
+  DbDuck { dk: Duck },
+  /// No connection, and the reason. Every method below answers failure.
+  DbNone { why: text },
+}
+
+/// A refusal carrying its own reason.
+fn refuse(why: text) -> AnyDb {
+  a: AnyDb = DbNone { why: why };
+  return a;
+}
+
+/// Is there a connection here at all?
+pub fn db_ok(self: AnyDb) -> boolean {
+  match self {
+    DbNone => false,
+    _ => true,
+  }
+}
+
+/// Which driver this is — `sqlite`, `postgres`, `maria`, `duckdb`, or `""`.
+///
+/// Read off the VARIANT, which is the only place it is recorded: the string that
+/// chose the backend is gone by the time a consumer holds the connection, and
+/// storing the name beside the variant would be a second description of the
+/// same fact.
+pub fn db_backend(self: AnyDb) -> text {
+  match self {
+    DbSqlite => "sqlite",
+    DbPostgres => "postgres",
+    DbMaria => "maria",
+    DbDuck => "duckdb",
+    DbNone => "",
+  }
+}
+
+/// The dialect this connection speaks, or `null` when there is no connection.
+///
+/// Nullable rather than carrying a refusal, unlike everything else here, and for
+/// the reason `dialect_named` already gives: a `Dialect` has no honest empty
+/// value. One with no type spellings renders `CREATE TABLE "" ()`, which is a
+/// wrong statement dressed as a default.
+pub fn db_dialect(self: AnyDb) -> Dialect? {
+  nm = self.db_backend();
+  d = dialect_named(nm);
+  return d;
+}
+
+// --- the connection string, per backend ------------------------------------
+//
+// `parse_conn` says WHICH driver a string names. What that driver then wants
+// handed to its own `db_open` is a fact about the driver, and the three answers
+// genuinely differ — which is why `Conn` carries both the target and the whole
+// string rather than picking one.
+
+/// The string one backend's `db_open` wants, or a refusal saying why this string
+/// cannot become one.
+pub struct Dsn { const value: text, refusal: text = "" }
+
+pub fn dsn_ok(self: Dsn) -> boolean { return self.refusal == ""; }
+
+fn no_dsn(why: text) -> Dsn { return Dsn { value: "", refusal: why }; }
+
+/// Strip the `//` an authority-style URL starts with.
+///
+/// `sqlite:app.db`, `sqlite://app.db` and `sqlite:///tmp/app.db` all name a
+/// path, and the third is the spelling a URL-shaped config file produces. A file
+/// backend has no host to put in an authority, so the slashes carry nothing.
+fn as_path(target: text) -> text {
+  if target.starts_with("//") { return target[2..size(target)] }
+  return target;
+}
+
+/// libpq reads a URI itself, and reads a keyword string too.
+///
+/// So the only decision is WHICH of the two it is being given: `postgres://…`
+/// must arrive with its scheme, because that is what makes it a URI, while
+/// `postgres:dbname=loft` must arrive without.
+fn pg_conninfo(c: Conn) -> Dsn {
+  if c.target.starts_with("//") { return Dsn { value: c.full } }
+  return Dsn { value: c.target };
+}
+
+/// `//ada:secret@db.host/loft` → `host=db.host user=ada pass=secret db=loft`.
+///
+/// mariadb's client takes keywords, not a URL, so a URL has to be translated —
+/// and translating it is what lets one config string reach this backend at all.
+///
+/// **A port is REFUSED rather than dropped.** The driver connects on 3306 and
+/// nothing in its `db_open` reads a port, so honouring `:5555` would mean
+/// reaching a different server than the string named. That is the failure class
+/// this plan exists to keep out of the value channel: not an error, a plausible
+/// answer from the wrong place.
+pub fn maria_keywords(target: text) -> Dsn {
+  if !target.starts_with("//") { return Dsn { value: target } }
+  rest = target[2..size(target)];
+  user = "";
+  pass = "";
+  at = rest.find("@");
+  if at != null {
+    cut = at ?? 0;
+    creds = rest[0..cut];
+    rest = rest[(cut + 1)..size(rest)];
+    colon = creds.find(":");
+    if colon == null {
+      user = creds;
+    } else {
+      ccut = colon ?? 0;
+      user = creds[0..ccut];
+      pass = creds[(ccut + 1)..size(creds)];
+    }
+  }
+  host = rest;
+  dbnm = "";
+  slash = rest.find("/");
+  if slash != null {
+    scut = slash ?? 0;
+    host = rest[0..scut];
+    dbnm = rest[(scut + 1)..size(rest)];
+  }
+  if host.find(":") != null {
+    return no_dsn("this driver connects on 3306 and cannot be told otherwise, so "
+                + "`{host}` would reach a different server than the string names — "
+                + "drop the port, or open the connection with `maria()` directly");
+  }
+  out = "";
+  if host != "" { out += "host={host} " }
+  if user != "" { out += "user={user} " }
+  if pass != "" { out += "pass={pass} " }
+  if dbnm != "" { out += "db={dbnm}" }
+  return Dsn { value: out.trim() };
+}
+
+/// What this connection string means to the backend it names.
+pub fn dsn_for(c: Conn) -> Dsn {
+  if c.refusal != "" { return no_dsn(c.refusal) }
+  if c.backend == "sqlite" { return Dsn { value: as_path(c.target) } }
+  if c.backend == "duckdb" { return Dsn { value: as_path(c.target) } }
+  if c.backend == "postgres" { return pg_conninfo(c) }
+  if c.backend == "maria" { return maria_keywords(c.target) }
+  return no_dsn("loft has no driver for {c.backend}");
+}
+
+// --- connect ---------------------------------------------------------------
+
+/// Open the database a connection string names.
+///
+/// Three questions, in this order, and the order is what keeps their answers
+/// apart: does the string name a backend, is that backend's library HERE, and
+/// does the server accept us. Each answers with its own reason, so "unreachable"
+/// never arrives dressed as "no such row" (README failure path 1).
+///
+/// The connection comes back open, with its session already set up.
+pub fn connect(spec: text) -> AnyDb {
+  c = parse_conn(spec);
+  if !c.conn_ok() { return refuse(c.refusal) }
+  d = dsn_for(c);
+  if !d.dsn_ok() { return refuse("{c.backend}: {d.refusal}") }
+  a = open_backend(c.backend, d.value);
+  if !a.db_ok() { return a }
+
+  // **The session setup is why this function has to exist**, rather than merely
+  // being convenient. P3 measured PostgreSQL returning 1887 of 2000 random
+  // doubles inexact at `extra_float_digits = 0` and 0 of 2000 at 1 or 3 — and
+  // that is a SESSION setting, so the precision a float reads back at is decided
+  // by whoever connected. Nothing downstream can fix it, and nothing downstream
+  // can see that it is wrong: the number comes back almost right.
+  for stmt in dialect_setup(c.backend) {
+    if !a.db_exec(stmt) {
+      why = a.db_last_error();
+      a.db_shut();
+      return refuse("{c.backend}: [{stmt}] was refused, so a float would not read "
+                  + "back exactly: {why}");
+    }
+  }
+  return a;
+}
+
+/// Ask the machine, then the server.
+///
+/// The availability question comes first on every backend, because a `#c` call
+/// into a library that is not installed is a FAULT and not a null — `#c` is the
+/// declared edge of loft's totality (@PLN24 arc G). Each backend answers it
+/// about itself, so this never guesses at a file name.
+fn open_backend(backend: text, dsn: text) -> AnyDb {
+  if backend == "sqlite" {
+    if !sqlite_available() { return refuse("sqlite: {SQLITE_SONAME} is not installed here") }
+    ds = sqlite();
+    if !ds.db_open(dsn) {
+      whys = ds.db_last_error();
+      ds.db_shut();
+      return refuse("sqlite cannot open `{dsn}`: {whys}");
+    }
+    asq: AnyDb = DbSqlite { sq: ds };
+    return asq;
+  }
+  if backend == "postgres" {
+    if !postgres_available() { return refuse("postgres: {PQ_SONAME} is not installed here") }
+    dp = postgres();
+    if !dp.db_open(dsn) {
+      whyp = dp.db_last_error();
+      dp.db_shut();
+      return refuse("postgres cannot open `{dsn}`: {whyp}");
+    }
+    apg: AnyDb = DbPostgres { pg: dp };
+    return apg;
+  }
+  if backend == "maria" {
+    if !maria_available() { return refuse("maria: {MARIA_SONAME} is not installed here") }
+    dm = maria();
+    if !dm.db_open(dsn) {
+      whym = dm.db_last_error();
+      dm.db_shut();
+      return refuse("maria cannot open `{dsn}`: {whym}");
+    }
+    ama: AnyDb = DbMaria { my: dm };
+    return ama;
+  }
+  if backend == "duckdb" {
+    if !duckdb_available() { return refuse("duckdb: {DUCKDB_SONAME} is not installed here") }
+    dd = duck();
+    if !dd.db_open(dsn) {
+      whyd = dd.db_last_error();
+      dd.db_shut();
+      return refuse("duckdb cannot open `{dsn}`: {whyd}");
+    }
+    adk: AnyDb = DbDuck { dk: dd };
+    return adk;
+  }
+  return refuse("loft has no driver for {backend}");
+}
+
+// --- SqlDb, forwarded ------------------------------------------------------
+//
+// One method per interface method, five arms each. Nothing here decides
+// anything: every arm forwards to a backend that already passes its own tests,
+// and the `DbNone` arm answers the way a failed connection must — false, null,
+// empty, never a value that could be mistaken for data.
+
+pub fn db_open(self: AnyDb, target: text) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_open(target),
+    DbPostgres { pg } => pg.db_open(target),
+    DbMaria { my } => my.db_open(target),
+    DbDuck { dk } => dk.db_open(target),
+    DbNone => false,
+  }
+}
+
+pub fn db_exec(self: AnyDb, sql: text) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_exec(sql),
+    DbPostgres { pg } => pg.db_exec(sql),
+    DbMaria { my } => my.db_exec(sql),
+    DbDuck { dk } => dk.db_exec(sql),
+    DbNone => false,
+  }
+}
+
+pub fn db_select(self: AnyDb, sql: text) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_select(sql),
+    DbPostgres { pg } => pg.db_select(sql),
+    DbMaria { my } => my.db_select(sql),
+    DbDuck { dk } => dk.db_select(sql),
+    DbNone => false,
+  }
+}
+
+pub fn db_next(self: AnyDb) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_next(),
+    DbPostgres { pg } => pg.db_next(),
+    DbMaria { my } => my.db_next(),
+    DbDuck { dk } => dk.db_next(),
+    DbNone => false,
+  }
+}
+
+pub fn db_col(self: AnyDb, i: integer) -> text? {
+  match self {
+    DbSqlite { sq } => sq.db_col(i),
+    DbPostgres { pg } => pg.db_col(i),
+    DbMaria { my } => my.db_col(i),
+    DbDuck { dk } => dk.db_col(i),
+    // Not `""`. A connection that was never made has no column, and the empty
+    // string is a VALUE — the distinction the whole binding layer exists to keep.
+    DbNone => null,
+  }
+}
+
+pub fn db_width(self: AnyDb) -> integer {
+  match self {
+    DbSqlite { sq } => sq.db_width(),
+    DbPostgres { pg } => pg.db_width(),
+    DbMaria { my } => my.db_width(),
+    DbDuck { dk } => dk.db_width(),
+    DbNone => 0,
+  }
+}
+
+pub fn db_last_error(self: AnyDb) -> text {
+  match self {
+    DbSqlite { sq } => sq.db_last_error(),
+    DbPostgres { pg } => pg.db_last_error(),
+    DbMaria { my } => my.db_last_error(),
+    DbDuck { dk } => dk.db_last_error(),
+    DbNone { why } => why,
+  }
+}
+
+pub fn db_shut(self: AnyDb) {
+  match self {
+    DbSqlite { sq } => sq.db_shut(),
+    DbPostgres { pg } => pg.db_shut(),
+    DbMaria { my } => my.db_shut(),
+    DbDuck { dk } => dk.db_shut(),
+    DbNone => {},
+  }
+}
+
+pub fn db_run(self: AnyDb, q: SqlText) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_run(q),
+    DbPostgres { pg } => pg.db_run(q),
+    DbMaria { my } => my.db_run(q),
+    DbDuck { dk } => dk.db_run(q),
+    DbNone => false,
+  }
+}
+
+pub fn db_rows(self: AnyDb, q: SqlText) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_rows(q),
+    DbPostgres { pg } => pg.db_rows(q),
+    DbMaria { my } => my.db_rows(q),
+    DbDuck { dk } => dk.db_rows(q),
+    DbNone => false,
+  }
+}
+
+pub fn db_begin(self: AnyDb) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_begin(),
+    DbPostgres { pg } => pg.db_begin(),
+    DbMaria { my } => my.db_begin(),
+    DbDuck { dk } => dk.db_begin(),
+    DbNone => false,
+  }
+}
+
+pub fn db_commit(self: AnyDb) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_commit(),
+    DbPostgres { pg } => pg.db_commit(),
+    DbMaria { my } => my.db_commit(),
+    DbDuck { dk } => dk.db_commit(),
+    DbNone => false,
+  }
+}
+
+pub fn db_rollback(self: AnyDb) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_rollback(),
+    DbPostgres { pg } => pg.db_rollback(),
+    DbMaria { my } => my.db_rollback(),
+    DbDuck { dk } => dk.db_rollback(),
+    DbNone => false,
+  }
+}
+
+pub fn db_deploy(self: AnyDb, p: SqlProc) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_deploy(p),
+    DbPostgres { pg } => pg.db_deploy(p),
+    DbMaria { my } => my.db_deploy(p),
+    DbDuck { dk } => dk.db_deploy(p),
+    DbNone => false,
+  }
+}
+
+pub fn db_call(self: AnyDb, p: SqlProc, args: SqlText) -> boolean {
+  match self {
+    DbSqlite { sq } => sq.db_call(p, args),
+    DbPostgres { pg } => pg.db_call(p, args),
+    DbMaria { my } => my.db_call(p, args),
+    DbDuck { dk } => dk.db_call(p, args),
+    DbNone => false,
+  }
+}

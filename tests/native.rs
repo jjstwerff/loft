@@ -1918,6 +1918,152 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
     Ok(())
 }
 
+/// @PLN133 S7 — one connection string, and the registry that turns it into a
+/// connection every consumer can use.
+///
+/// `SqlDb` is satisfied by four unrelated types and loft interfaces are STATIC
+/// dispatch, so no function can return "one of them". The registry is a
+/// struct-enum that satisfies the interface itself — and the strongest claim in
+/// the fixture is one nothing asserts: `uniform` there is generic over `SqlDb`
+/// and is handed an `AnyDb`. If the enum did not satisfy the interface the
+/// program would not compile, which is the entire question S7 had to answer.
+///
+/// **Unconditional**, like the pure schema gate beside it: this half opens no
+/// library, so it cannot skip into a green that asserted nothing. The cells that
+/// need a database live in the live gate below.
+#[test]
+fn one_connection_string_reaches_its_driver_and_a_refusal_behaves_like_one() -> std::io::Result<()>
+{
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        // The registry holds no `#c` itself, but it names all four backends in
+        // one type, so their shims are compiled with it.
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("registry_pure.loft");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && stdout.contains("registry ok"),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !stdout.contains("not freed"),
+            "{backend}: a refused connection must leave nothing behind:\n{stdout}"
+        );
+    }
+    Ok(())
+}
+
+/// @PLN133 S7 — the schema round trip, over a connection ONE STRING opened.
+///
+/// The pure gate above proves a string reaches its driver. This proves the
+/// connection it produced is a connection: `introspect` — generic over `SqlDb`
+/// and written before the registry existed — takes the enum unchanged, a cursor
+/// walks rows through it, and a transaction lands on the same connection the
+/// insert did.
+///
+/// **The cursor cell is the one that could quietly fail.** A variant holds a
+/// COPY of the backend struct, so the handle `db_select` writes and `db_next`
+/// reads has to live INSIDE the enum. A copy that came apart reads as an empty
+/// result set — which looks exactly like an empty table.
+#[test]
+fn a_connection_the_registry_opened_is_a_connection() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("registry_live.loft");
+
+    // Each token is a separate claim, and they fail in different directions:
+    //
+    //   connected backend=sqlite quote="   the STRING chose the driver, and the
+    //           dialect came with it rather than being asked for separately.
+    //   round trip cols=4 ix=1 bound=true   `derive` → `render` → `introspect` →
+    //           `reconcile`, all over the enum. @PLN129 refuses a bind whose
+    //           lookup no index serves, so `ix=1` is what makes the table usable.
+    //   cursor names=ada grace alan   bound INSERTs and a walked cursor, so the
+    //           mutation reached inside the variant. An enum holding a stale copy
+    //           answers "" here, which is what an empty table also answers.
+    //   float naive=false dialect=true   sqlite renders a REAL as %!.15g, so the
+    //           portable `SELECT score` loses the low bits of a full-mantissa
+    //           double. The PAIR is the claim: `dialect=true` alone could mean the
+    //           naive read was fine too, `naive=false` alone that the write failed.
+    //   tx … rows=3/4   rollback discarded, commit kept. A db_begin that quietly
+    //           did nothing answers 4/4 and one that discarded everything 3/3.
+    let expect = [
+        "connected backend=sqlite quote=\"",
+        "round trip cols=4 ix=1 bound=true",
+        "cursor names=ada grace alan",
+        "float naive=false dialect=true",
+        "tx begin=true/true rollback=true commit=true rows=3/4",
+        "registry_live ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            assert!(
+                stdout.contains("not installed"),
+                "an absent library must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one registry"),
+        }
+    }
+    Ok(())
+}
+
 /// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
 /// compiled itself, with SQL NULL kept distinct from the empty string.
 ///

@@ -395,6 +395,35 @@ assignment would never have needed. Both forms now agree on what a name may be �
 where one is genuinely refused (a global function like `chr` or `print`), you get one
 error that says so by name.
 
+### `return x ?? "fallback"` gives you the fallback
+
+A function that returned a fallback text straight from a `??` handed back an empty
+string instead — silently, exit 0 — while writing the same thing through a local
+first was right:
+
+```loft
+fn label(row: Row) -> text {
+  got = row.name();
+  return got ?? "<unnamed>";     // gave back "", not "<unnamed>"
+}
+```
+
+`--native` did not compile the same program at all, which is the only reason it
+was not worse: an empty string where a fallback belongs is a wrong ANSWER, and
+`<unnamed>` never appearing looks like the data was fine. The same fault reached
+any `if` or `match` in return position whose arms build text, `return if x { "a-{n}" } else { "b" }`
+included.
+
+Alongside it, `text?` is now one type however you obtained it. A `match` whose
+arms call the same method on different types could be refused with a message that
+quoted the same name twice —
+
+```
+error: cannot unify: text? and text?
+```
+
+— which is now what it looks like: two identical types, and they unify.
+
 ### A function ending in `v[i].field` gives you the field
 
 A function whose body ended in a value read out of a collection — no `return`, the

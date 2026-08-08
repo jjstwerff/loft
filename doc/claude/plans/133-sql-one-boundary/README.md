@@ -4,10 +4,11 @@
 ## Status
 
 **Building. All four probes ran 2026-08-06 and decided the architecture; S1–S6
-and S8 landed 2026-08-07.** S1–S5 are pure values and pure functions, S6 only
-READS a catalogue, and S8 is the first change to core: a lazy fetch can now BE a
-loft function, on BOTH backends, with byte-identical output — including P4's
-releasing unwind, so a contained fault leaves nothing behind.
+and S8 landed 2026-08-07, S7 on 2026-08-08.** S1–S5 are pure values and pure
+functions, S6 only READS a catalogue, S7 is the library's own connect, and S8 is
+the first change to core: a lazy fetch can now BE a loft function, on BOTH
+backends, with byte-identical output — including P4's releasing unwind, so a
+contained fault leaves nothing behind.
 
 P1 **passes**, so **option B is viable**. P2 **passes for reads and fails for
 writes on sqlite**, which is a bounded, documented limit rather than a blocker.
@@ -20,7 +21,7 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S4 `reconcile` | **done** — read and write verdicts, six hand-built pairs |
 | S5 the connection string | **done** |
 | S6 `introspect` (sqlite) + the round trip, run twice | **done** |
-| S7 the backend registry | not started — see § the design question below |
+| S7 the backend registry | **done** — `tests/fixtures/sqldb/registry/`, shape (1) |
 | S8 core's lazy fault calls loft | **done, both backends** |
 | S9–S14 | not started |
 
@@ -34,7 +35,7 @@ re-checked rather than believed.
 - **Effort:** H
 - **Design:** the invariant is named and its load-bearing claims have probes; the
   reconcile rules for a foreign schema are stated but untested against a real one.
-- **Last touched:** 2026-08-07
+- **Last touched:** 2026-08-08
 
 ## Goal
 
@@ -862,22 +863,22 @@ Two break-checks:
   own locals. The `!faulted` guard stays because it is right in principle, not
   because the matrix needs it.
 
-### S7 has a design question the plan did not name: `SqlDb` is STATIC dispatch
+### S7 had a design question the plan did not name: `SqlDb` is STATIC dispatch
 
 Requirement 1 is *one string switches every SQL consumer in the process*, and S5
 delivers the half that is a parser. The other half — handing back a connection
-the caller then uses — has no obvious spelling, because **loft interfaces are
+the caller then uses — had no obvious spelling, because **loft interfaces are
 static dispatch**: `SqlDb` is satisfied by four unrelated types, and no function
 can return "one of them". `sql.loft`'s own header states this as the reason the
 cursor is state ON the connection rather than a second type the connection
-returns; it applies to the registry too.
+returns; it applied to the registry too.
 
-Three shapes, and the choice is not free:
+Three shapes, and the choice was not free:
 
-1. **A struct-enum over the four backends** (`enum AnyDb { Sq { c: Sqlite }, … }`)
-   with one method per variant. This is loft's native polymorphism and it works
-   today — but it names all four backends in one type, so a program that wants
-   only sqlite links the other three, and adding a fifth edits the enum.
+1. **A struct-enum over the four backends** (`enum AnyDb { DbSqlite { sq: Sqlite }, … }`).
+   This is loft's native polymorphism — but it names all four backends in one
+   type, so a program that wants only sqlite links the other three, and adding a
+   fifth edits the enum.
 2. **The caller matches on `Conn.backend` itself** and holds a concrete type.
    Honest and zero-cost, and it makes requirement 1 a smaller claim than it
    sounds: the string picks the driver, and the caller still has a `match`.
@@ -885,10 +886,85 @@ Three shapes, and the choice is not free:
    so it calls a loft function by name and the registry can be inside that
    function.
 
-**(1) is the one to build for S7** — it keeps the promise the requirement makes,
-and the linking cost is the price of a uniform API over four C libraries — but it
-should be written down as a decision rather than arrived at, because (2) is
-defensible and cheaper and the difference is visible to every consumer.
+**(1) is what was built**, and the decision is recorded in
+`tests/fixtures/sqldb/registry/src/registry.loft`'s header rather than left to be
+inferred: it keeps the promise requirement 1 makes — one string, and no `match`
+in any consumer — and the linking cost is the price of a uniform API over four C
+libraries. (2) stays defensible and cheaper, and the difference is visible to
+every consumer, which is why it belongs in a file.
+
+### S7 — the correction the shape needed, and the two it did not survive
+
+**The method must be on the ENUM, not on the variant.** The obvious reading of
+loft's struct-enum polymorphism is `fn db_exec(self: DbSqlite, …)` per variant,
+and that dispatches correctly — but it does not satisfy an interface for the
+enum, which the compiler says outright: *"'AnyDb' does not satisfy interface
+'SqlDb': missing db_exec"*. Fifteen `match self` forwarders is the whole cost,
+and none of them decides anything.
+
+**Two neighbouring language defects had to be fixed to write it, and both are
+core, not fixture.** Neither was in this plan's code and both reproduce on the
+released binary:
+
+- **`Type::is_same` did not peel `Optional`.** Every dep-ignoring rule in it (a
+  text's deps, an integer's range, a vector's element buffer) was unreachable for
+  a `τ?`, because derived `==` on the wrapper reaches the inner `Deps`. Two
+  `text?` differing only in which local they came through read as different
+  types, and it presents as a refusal quoting the same name twice: *"cannot
+  unify: text? and text?"*. `db_col` is exactly the shape — four backends, one
+  of which (`duckdb`) returns through a local. Peeled on BOTH sides only, so a
+  `τ?` and a bare `τ` stay different kinds, which is the whole of DN1.
+- **A tail branch delivered a BORROW into the return accumulator.** An arm whose
+  text is not a bare variable is built into a work buffer and handed back as
+  `OpCreateStack(buf)`; `push_text_arms_into` wrapped that reference in the
+  delivery, and the enclosing scope frees the buffer on the next statement. The
+  interpreter answered `""` — a wrong value, silently, exit 0 — and `--native`
+  emitted `*var_acc = ().to_string()`, which is not Rust. The shape is
+  `return x ?? "fallback"`, and binding to a local first
+  (`y = x ?? "fallback"; return y`) avoided it, **which is what made it look like
+  a bug about `??` rather than about delivery**.
+
+**The instructive part is how the second was found.** It was not found by the
+registry — the registry does not contain that shape. It was found by the
+REGRESSION TEST written for the first fix, whose helper happened to spell
+`return got ?? "<null>"`. A guard written for one defect walked into another,
+which is the argument for writing the guard rather than checking the fix by hand.
+
+**And one is filed rather than fixed** — [loft#806](https://github.com/loft-lang/loft/issues/806):
+a METHOD call coalesced in RETURN position (`return t.m(i) ?? "x"`) SIGSEGVs the
+interpreter while `--native` is correct. The caller-retbuf promotion (loft#662)
+makes the callee's work buffer a `&text` PARAMETER, and the `#default ref` site
+then wraps an already-borrowed variable in `OpCreateStack`, building a reference
+to a reference. `src/parser/mod.rs` guards exactly that for non-text references;
+the text arm below it does not. Filed because the fix is a decision inside the
+promotion path that reaches every text-returning call, not just this one; the
+workaround is one intermediate local.
+
+Gated by `tests/fixtures/sqldb/registry_pure.loft` (unconditional — it opens no
+library) and `registry_live.loft`, through `tests/native.rs`, on both loft
+backends with the whole output compared. The two core fixes have their own
+guarantee probes in `tests/scripts/` — `pln133-optional-unify.loft` and
+`pln133-text-tail-delivery.loft` — and both were run against a pristine `main`
+build first, where each fails in the way its fix describes.
+
+**What S7 settled that the plan had not costed: the connection string is not one
+string.** `parse_conn` says which driver a string names; what that driver's own
+`db_open` wants is a fact about the DRIVER, and the answers genuinely differ —
+sqlite and duckdb take a path, libpq reads a URI itself (so it must arrive WITH
+its scheme, which is why `Conn` carries the whole string beside the target), and
+mariadb's client takes keywords, so `mysql://ada:secret@db.host/loft` has to be
+TRANSLATED. That last one produced a refusal worth keeping: **a port is refused,
+not dropped**, because this driver connects on 3306 and nothing in its `db_open`
+reads a port — honouring the string would reach a different server than it names,
+which is a plausible answer from the wrong place rather than an error.
+
+**And the session setup is why `connect` has to exist rather than merely be
+convenient.** P3 measured PostgreSQL returning 1887 of 2000 random doubles
+inexact at `extra_float_digits = 0` and 0 of 2000 at 1 or 3. That is a SESSION
+setting, so the precision a float reads back at is decided by whoever connected —
+nothing downstream can fix it, and nothing downstream can see it is wrong.
+`Dialect.setup` had carried those statements since S3 with no one to run them;
+`connect` is the one place that can.
 
 ### Five language defects the build surfaced, all pre-existing on `main`
 
@@ -970,7 +1046,7 @@ must agree on is the last thing that should have a gate that evaporates.
 | # | do | safe because |
 |---|---|---|
 | **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
-| **S7** | The backend registry, used by the LIBRARY's own connect. No core change. **See the note below first — the obvious shape does not exist in loft.** | the library's four backends already pass their tests; the registry must not move them |
+| **S7** | ~~The backend registry, used by the LIBRARY's own connect. No core change.~~ **DONE 2026-08-08** — `AnyDb`, a struct-enum satisfying `SqlDb` itself; `connect(spec)` parses, checks availability, opens and runs the dialect's session setup. Two core defects had to be fixed to write it; a third is filed. | the library's four backends already pass their tests, and the registry did not move them |
 | **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE 2026-08-07, both backends.** | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
 | **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
 | **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |

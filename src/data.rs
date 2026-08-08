@@ -1906,6 +1906,18 @@ impl Type {
                 && sp.iter().zip(op.iter()).all(|(a, b)| a.is_equal(b))
                 && sr.is_equal(or);
         }
+        // `Optional(τ)` is a COMPILE-TIME wrapper over the same runtime layout, so two
+        // nullables are the same kind exactly when their bases are. Peel it, or every
+        // dep-ignoring rule below becomes unreachable for a `τ?`: derived `==` on the
+        // wrapper compares the INNER deps, so a `text?` handed back through a local and
+        // one returned straight from a call read as different types — with the same
+        // name, which is how it presents (*"cannot unify: text? and text?"*).
+        //
+        // Peeled on BOTH sides only. A `τ?` and a bare `τ` stay different kinds, which
+        // is the whole of DN1: one admits null and the other refuses it.
+        if let (Type::Optional(s), Type::Optional(o)) = (self, other) {
+            return s.is_same(o);
+        }
         self == other
             || (matches!(self, Type::Enum(_, _, _)) && matches!(other, Type::Enum(_, _, _)))
             || (matches!(self, Type::Reference(_, _)) && matches!(other, Type::Reference(_, _)))
