@@ -23,7 +23,8 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S6 `introspect` (sqlite) + the round trip, run twice | **done** |
 | S7 the backend registry | **done** — `tests/fixtures/sqldb/registry/`, shape (1) |
 | S8 core's lazy fault calls loft | **done, both backends** |
-| S9–S14 | not started |
+| S9 switch sqlite to the loft path | **blocked** — one driver per program, monomorphic (below) |
+| S10–S14 | not started, and S10–S13 sit behind S9 |
 
 Every measurement below is from the current tree and is cited so it can be
 re-checked rather than believed.
@@ -966,6 +967,49 @@ nothing downstream can fix it, and nothing downstream can see it is wrong.
 `Dialect.setup` had carried those statements since S3 with no one to run them;
 `connect` is the one place that can.
 
+### S9 has an unmet prerequisite: `lazy_fetch` is ONE driver, monomorphic
+
+Measured 2026-08-08, before starting S9. `Data::lazy_fetch_driver` looks up
+`n_lazy_fetch` — one def_nr — and requires its first parameter to be a keyed
+COLLECTION, which in loft is a concrete type. So a program declares its driver as
+
+```loft
+fn lazy_fetch(coll: hash<Person[id]>, source: text, key_int: integer, key_text: text) -> integer
+```
+
+and a second one for a different element type is refused: *"Cannot redefine
+'lazy_fetch'"*. **A program can therefore lazily bind exactly one collection TYPE
+through a loft driver**, and a driver cannot live in a library at all, because a
+library cannot name the consumer's element type.
+
+That is fine for S8, which added a path where there was none. It is a blocker for
+S9, which REPLACES one: core's Rust sqlite source serves any collection type in
+any program with no user code, so routing sqlite through loft as the plan writes
+it would be a strict loss of expressiveness — and S10 deletes the Rust behind it,
+which makes the loss permanent.
+
+**So S9 needs a design step this plan had not named: the driver has to be
+dispatchable per collection type.** Three shapes, and the counting is not done:
+
+1. **By NAME, from the element type** — core has the collection's type in hand at
+   the miss, so it can look up `lazy_fetch_Person`, or read a `#lazy_fetch`
+   annotation off any function. Smallest, and it keeps the typed `coll += [row]`
+   that makes a driver readable.
+2. **Generic over the collection** (`<C: KeyedCollection>`) — needs a language
+   feature that does not exist, since the key field names are part of the type.
+3. **One driver over a reflected handle**, dispatching in loft. Keeps one entry
+   point and loses the typed insert, which is the half a driver is mostly made of.
+
+Whichever wins, it is not free on the native side: `codegen_runtime` installs ONE
+function pointer today (`register_lazy_fetch`), so a per-type driver means a
+table there and a matching lookup in the interpreter's positional push — the two
+have to agree, which is the property `lazy_fetch_driver` exists to hold.
+
+**This does not falsify option B.** The re-entrant call, the containment and the
+releasing unwind all work and are gated; what is missing is only how a program
+names more than one driver. It does mean S9–S10 are gated behind a decision
+rather than being mechanical, and that S11–S14 sit behind that in turn.
+
 ### Five language defects the build surfaced, all pre-existing on `main`
 
 None of them is in this plan's code, all three reproduce on the released binary,
@@ -1048,7 +1092,7 @@ must agree on is the last thing that should have a gate that evaporates.
 | **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
 | **S7** | ~~The backend registry, used by the LIBRARY's own connect. No core change.~~ **DONE 2026-08-08** — `AnyDb`, a struct-enum satisfying `SqlDb` itself; `connect(spec)` parses, checks availability, opens and runs the dialect's session setup. Two core defects had to be fixed to write it; a third is filed. | the library's four backends already pass their tests, and the registry did not move them |
 | **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE 2026-08-07, both backends.** | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
-| **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
+| **S9** | Switch sqlite to the loft path too. **BLOCKED — see § S9 has an unmet prerequisite**: `lazy_fetch` is one monomorphic driver per program, so replacing core's Rust source would lose expressiveness rather than move it. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
 | **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |
 
 ### Create-or-follow, then the write side
