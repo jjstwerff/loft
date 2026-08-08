@@ -8184,12 +8184,55 @@ impl Parser {
                         );
                         0
                     };
-                    ls.push(self.cl("OpCreateStack", &[Value::Var(vr)]));
-                    actual[a_nr] = v_block(
-                        ls,
-                        Type::Reference(self.data.def_nr("reference"), Deps::frame1(vr)),
-                        "default ref",
-                    );
+                    // A var whose own type is already `RefVar(_)` HOLDS the borrow.
+                    // `OpCreateStack` is how a var that OWNS its value hands out a
+                    // reference to it; applied to a reference it builds a DbRef pointing
+                    // at the reference SLOT, and the callee's single deref then reads that
+                    // slot as the value — loft#806, a SIGSEGV in the interpreter.
+                    // `--native` passes the reference by the Rust ABI and is immune, which
+                    // is why the two backends disagreed instead of both crashing.
+                    //
+                    // `caller_text_buf` reaches such a var because it re-finds `__work_cN`
+                    // by NAME, and that name can already be a `&text` PARAMETER of this
+                    // function: `text_return` promotes a text local the return value
+                    // depends on into a hidden caller buffer (loft#662), and the promotion
+                    // persists in the var table across the pass boundary.  This is the same
+                    // rule #266 states for non-text references at the argument-coercion
+                    // site; that site compares TYPES, so a var already holding the wanted
+                    // reference never reaches its conversion at all.  This one picks its
+                    // variable by NAME, so it has to ask.
+                    //
+                    // Hand over the BARE variable, not a wrapper.  Both backends already
+                    // forward a `RefVar` argument into a `RefVar` parameter without a
+                    // deref (`codegen.rs` OpVarRef; `generation/calls.rs` `var_x`), and
+                    // both recognise that shape only as a literal `Value::Var` — wrapped
+                    // in a block or an `Insert` the generic path runs instead and re-derefs.
+                    // The per-call clear is not lost: a promoted buffer is cleared by the
+                    // function preamble, once per invocation, and promotion only happens
+                    // when the RETURN VALUE depends on the buffer, which puts its call in
+                    // tail position — reached once.
+                    //
+                    // Restricted to the no-default case (`ls` holding only that clear).
+                    // A `&text` parameter carrying a `= "…"` default needs the default
+                    // WRITTEN into the buffer, which a bare var cannot express; that path
+                    // keeps its existing lowering rather than trading this crash for a
+                    // dropped default.  `vr == 0` is the pass-1 defer / unexpected-type
+                    // sentinel from the arms above, not a variable.
+                    // `ls` is exactly the buffer-clearing `Set` when the parameter has no
+                    // `= "…"` default; a default adds the `OpAppendText` that writes it.
+                    let only_the_clear = ls.len() == 1;
+                    let holds_borrow =
+                        vr != 0 && only_the_clear && matches!(self.vars.tp(vr), Type::RefVar(_));
+                    if holds_borrow {
+                        actual[a_nr] = Value::Var(vr);
+                    } else {
+                        ls.push(self.cl("OpCreateStack", &[Value::Var(vr)]));
+                        actual[a_nr] = v_block(
+                            ls,
+                            Type::Reference(self.data.def_nr("reference"), Deps::frame1(vr)),
+                            "default ref",
+                        );
+                    }
                     all_types[a_nr] = tp.clone();
                 } else {
                     // default expressions may reference earlier

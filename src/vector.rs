@@ -180,6 +180,16 @@ pub fn reserve_vector(db: &DbRef, count: i64, elem_size: u32, stores: &mut [Stor
     }
 }
 
+/// Make room for one more element at the end of the vector `db` points at, and
+/// answer where to write it.  Grows the backing record ~2x when it is full, and
+/// follows the record if the grow had to move it.
+///
+/// # Panics
+///
+/// If the owner slot holds a non-zero handle whose target has a non-positive size
+/// word — a record that has been freed, or was never claimed.  Reading a capacity
+/// from that word would wrap, and the append would then copy an unbounded length
+/// (loft#810); the message names the owner slot and the target record.
 pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     // Appending to a null (absent) vector is a no-op for now — it must never
     // index stores[u16::MAX].  Plan-25 Q4: make this a loud error once null is
@@ -218,7 +228,25 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
         // `get_u32_raw` field accessor — `valid()` forbids field offset 0
         // (header), so the accessor panics in debug builds.  `claim`/`resize`
         // read the header the same way.
-        let cur_words = *store.addr::<i32>(vec_rec, 0) as u32;
+        // A non-zero handle must point at a CLAIMED record, and every claimed record
+        // has a positive size word (`Store::claim` asserts it).  A handle that reads
+        // zero or negative here outlived what it pointed at — the vector was freed, or
+        // its owning record was reused — and the append is about to derive a capacity
+        // and a copy length from that word.  Both wrap, so the failure surfaces far
+        // away as an unbounded `memcpy` inside `resize`, naming the copy and not the
+        // stale handle (loft#810).  Refuse HERE instead, where the owner slot is still
+        // in hand and can be named; the header is already loaded, so this costs one
+        // comparison.
+        let cur_words_signed = *store.addr::<i32>(vec_rec, 0);
+        assert!(
+            cur_words_signed > 0,
+            "vector_append: the vector handle in record {}.{} points at record {vec_rec}, \
+             whose size word is {cur_words_signed} — the record it named has been freed or \
+             was never claimed, so this vector's capacity cannot be read (loft#810)",
+            db.rec,
+            db.pos
+        );
+        let cur_words = cur_words_signed as u32;
         let cur_cap = cur_words.saturating_mul(8).saturating_sub(8) / size;
         let target = if needed <= cur_cap {
             needed

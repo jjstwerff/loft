@@ -9,6 +9,87 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A buffer that is already a reference is handed over, not wrapped (loft#806) (2026-08-08)
+
+`return t.m(i) ?? "x"` SIGSEGV'd the interpreter while `--native` answered correctly.
+
+`OpCreateStack(v)` is how a variable that OWNS its text hands out a reference to it.
+The call site that fills a callee's hidden `&text` return buffer picks that buffer BY
+NAME (`__work_cN`, so the two passes agree on it), which means it never looked at the
+variable's TYPE — and the name can already belong to a `&text` PARAMETER of the calling
+function, because `text_return` promotes a text local the return value depends on into a
+caller-allocated buffer (loft#662). Wrapping it again built a DbRef pointing at the
+reference SLOT; the callee's single deref then read that slot as text. `--native` passes
+the reference by the Rust ABI and is immune, which is why the two backends disagreed
+instead of both crashing.
+
+This is the rule #266 already states for non-text references at the argument-coercion
+site. That site compares TYPES, so a variable already holding the wanted reference never
+reaches its conversion at all — which is why only this one, keyed on a name, could reach
+the double wrap.
+
+**The filed boundary was a tenth of the defect.** A 20-cell matrix over the composition
+axes put 8 cells on the crash, and two of the three conditions the report listed as
+required are not:
+
+| axis | filed | measured |
+|---|---|---|
+| enclosing function returns `text` | required | `text?` crashes too |
+| fallback is a non-empty literal | implied | `?? ""` crashes too — the buffer-append is skipped, so the wrap alone is the fault |
+| receiver is a plain variable | implied | a field read (`h.inner.m(i)`) crashes too |
+
+The passing cells are not incidental: a free function, an intermediate local, an extra
+text parameter and interpolation all avoid it, and each does so by changing which
+variable the promotion picks. An attribution pass over the IR — `OpCreateStack` applied
+to a var the same function declares `&text`, keyed on the (name, scope) PAIR because
+`n_main`'s plain local and a callee's promoted parameter routinely share a `__work_cN`
+name — flags exactly the 8 crashing cells and none of the 12 passing ones, before and
+after.
+
+The fix hands over the BARE variable. Both backends already forward a `RefVar` argument
+into a `RefVar` parameter with no deref (`codegen.rs` `OpVarRef`; `generation/calls.rs`
+`var_x`), and both recognise that shape only as a literal `Value::Var` — wrapped in a
+block or an `Insert` the generic path runs instead and re-derefs, which is a second wrong
+read one layer down rather than a fix. The per-call clear is not lost: a promoted buffer
+is cleared by the function preamble once per invocation, and promotion only happens when
+the RETURN VALUE depends on the buffer, which puts its call in tail position. Restricted
+to the no-default case, so a `&text` parameter carrying a `= "…"` default keeps its
+existing lowering rather than trading this crash for a dropped default.
+
+`tests/scripts/issue-806-retbuf-double-reference.loft` carries the axes as value
+assertions — a wrong read here is as likely to answer `""` as to fault, so "did not
+crash" is not the bar — plus the forwarded-buffer control that says the fix did not
+simply delete the wrap everywhere.
+
+### A record that claims size zero is refused, not wrapped (loft#810) (2026-08-08)
+
+Diagnosability only — this does not fix loft#810, which stays open.
+
+Every whole-payload walk in the store derives its length from the record's size word as
+`size * 8 - 4`. A size of `0` is already a corrupted record, and the subtraction WRAPS:
+release builds read ~18 exabytes and die inside `memcpy`, so the report names the copy —
+which is innocent — and says nothing about the corruption that reached it. A debug build
+is no better placed, pointing `attempt to subtract with overflow` at the same line.
+
+Two guards, both `assert!` rather than `debug_assert!` on purpose: a debug build already
+catches the underflow, and it is the RELEASE build, where the wrap is silent, that needed
+one.
+
+- **`Store::copy` / `Store::zero_fill`** derive the length through one `payload_bytes`
+  helper that refuses a non-positive size word, naming the record.
+- **`vector::vector_append`** refuses a non-zero vector handle whose target has a
+  non-positive size word, naming the OWNER slot (`rec.pos`) as well. This is the better
+  attribution of the two — a zeroed header there means the handle outlived what it
+  pointed at — and it is free, because the append already loads that word to compute
+  capacity.
+
+loft#810's own repro cannot be run on this tree: it calls `select_by_key`, a @PLN133 S9
+schema-package method that was never committed. Reconstructions against the real `sql` /
+`schema` fixtures — the library, the `vector` local, the returned foreign-package record
+and the loop-body local, on both backends — all came out clean, so the fourth ingredient
+is inside that function. The store guards are what the report asked for on the way past;
+the store-lifetime cause is still open.
+
 ### A persisted trie is laid out so it can be paged (@PLN134) (2026-08-08)
 
 `trie<T[k]>` ships whole-image only: a prefix query over `routing`'s 220 032-word
