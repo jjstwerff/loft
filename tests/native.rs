@@ -2178,6 +2178,114 @@ fn a_lazy_read_gives_one_answer_down_rust_and_down_loft() -> std::io::Result<()>
     Ok(())
 }
 
+/// @PLN133 S14 — THE GATE. Write rows, bind lazily to the SAME connection
+/// string, traverse, and get back what was written.
+///
+/// The plan's three requirements as one program: one string switches every
+/// consumer; a structure written is immediately readable through lazy loading;
+/// and a loft type has ONE table definition — created where the database has
+/// nothing, FOLLOWED where it already holds a table.
+///
+/// **It runs TWICE, and the second run is the one that matters.** Run 1 goes
+/// into an empty database, where loft writes the schema. Run 2 goes into a table
+/// made by hand — different column ORDER, the float kept in a `VARCHAR`, and an
+/// extra column loft knows nothing about — where loft must follow it. Run 1
+/// passes even if `reconcile` is a stub that always agrees; only run 2 proves
+/// requirement 3.
+///
+/// **The trip count is the oracle the values cannot be.** A reader that fetched
+/// the whole table would return exactly these rows. Only the number of trips
+/// separates a lazy read from an eager one, so the driver prints one line per
+/// trip: 42 reaches the database, the repeat of 42 does not, 7 does, and the
+/// absent 999 does — three per run, six in all.
+///
+/// CI reaches sqlite only. `LOFT_SQLDB_MODE` selects the other three, and the
+/// local four-backend run is written into the plan where it was measured
+/// (doc/claude/TESTING.md § Database backends).
+#[test]
+fn a_structure_written_is_immediately_readable_through_one_connection_string() -> std::io::Result<()>
+{
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("round_trip.loft");
+
+    // Each token is one claim, and the `created`/`followed` prefix says which of
+    // the two runs made it — so a design that only works on a table loft wrote
+    // itself shows up as HALF the lines rather than as none.
+    //
+    //   value=grace float=0.25 flag=false  the row came back through a SELECT
+    //           built from the same TableDef the INSERT was built from.
+    //   identity=true                      one record however it is reached: a
+    //           write through the second handle is visible through the first.
+    //   resident=1 then touched=2          `len` counts what was TOUCHED, so an
+    //           eager load would read 3.
+    //   absent=true clean=[]               a genuine absence is not a failure —
+    //           the mirror of the bug @PLN129 arc C exists for.
+    let expect = [
+        "created value=grace float=0.25 flag=false",
+        "created identity=true resident=1",
+        "created second=alan touched=2",
+        "created absent=true clean=[]",
+        "followed value=grace float=0.25 flag=false",
+        "followed identity=true resident=1",
+        "followed second=alan touched=2",
+        "followed absent=true clean=[]",
+        "round_trip ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            assert!(
+                stdout.contains("not installed") || stdout.contains("cannot"),
+                "an unreachable backend must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        assert_eq!(
+            stdout.matches("  trip key=").count(),
+            6,
+            "{backend}: three trips per run and none for a resident hit:\n{stdout}"
+        );
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one round trip"),
+        }
+    }
+    Ok(())
+}
+
 /// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
 /// compiled itself, with SQL NULL kept distinct from the empty string.
 ///

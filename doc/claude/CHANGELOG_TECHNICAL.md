@@ -9,6 +9,56 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### One SQL boundary closes: a table loft made and a table loft found are the same value (@PLN133) (2026-08-08)
+
+@PLN133's gate passes, on **four database backends and both loft backends, with
+byte-identical output in all eight cells**. Write a struct graph through the derived
+`INSERT`, bind a collection lazily to the SAME connection string, traverse it, and
+get back the values, the identity across two paths, and the trip counts laziness
+predicts. **Run twice** — once into an empty database where loft writes the schema,
+once into a table made by hand with a different column order, the float kept in a
+`VARCHAR`, and an extra column loft knows nothing about. Only the second run proves
+requirement 3; the first passes even against a `reconcile` that always agrees.
+
+- **S11 + S12 are ONE call.** `ensure(d, dial, want)` is the whole absent-or-present
+  decision, because it is one decision — splitting it puts the test in every caller,
+  which is where two callers eventually disagree about what absence means. Absence is
+  decided by ASKING THE CATALOGUE, never by an `IF NOT EXISTS`: the rule *loft never
+  touches a table it did not find missing* belongs in loft's code where it can be read,
+  not in an engine's tolerance for a repeated `CREATE`. After creating, it reads the
+  table BACK and reconciles against what the engine actually stored — mariadb turns
+  `BOOLEAN` into `tinyint`, so reconciling against the derivation would assert the
+  round trip instead of testing it.
+- **`introspect` now reads all four catalogues**, which is what S12 needed and what S6
+  had deferred with a scope statement. The columns half unifies on
+  `information_schema.columns` (scoped by an expression the `Dialect` carries); the
+  INDEX half does not and is not pretended to — `information_schema` has no index view,
+  so PostgreSQL answers from `pg_index`, mariadb from `information_schema.statistics`,
+  and duckdb hands back the `CREATE INDEX` TEXT rather than a row per column. Every
+  query was RUN against a live server of its engine before it was written down.
+  Two things a guess would have got wrong: PostgreSQL's `indkey`/`indoption` are
+  **0-based** `int2vector`s, so `indoption[ord-1]` reads every direction as NULL; and
+  the type mapping is a WHITELIST rather than sqlite's substring test, because sqlite
+  has affinity — a rule the engine itself applies — while PostgreSQL's `point`
+  merely contains `INT`.
+- **S13's statement is derived, its values are not.** `insert_row` renders the writer's
+  `INSERT` from the same `TableDef` the reader's `SELECT` comes from, so they cannot
+  drift. The generic walk from an arbitrary struct's fields to those values is NOT
+  built and cannot be here: loft's reflection reports types, not values.
+- **S10's deletion is REFUSED, and that is the finding.** Deleting core's Rust sqlite
+  path makes a driver mandatory for `sqlite:`, a driver names a concrete element type
+  so it cannot be generic, and `store_bind_lazy(c, "sqlite:x.db")` needing no user code
+  is a shipped promise. The alternative — core synthesising a driver that calls the loft
+  library — makes a fixture a dependency of core. So S9's precedence rule IS the answer:
+  a demotion, not a deletion. What it buys is not deletion but a stopped clock, which
+  was the plan's actual complaint: N=4 backends now and **+1 forever**. The +1 is gone.
+
+Found on the way and filed rather than absorbed: **[loft#813](https://github.com/loft-lang/loft/issues/813)** —
+a value whose static type is a struct-enum VARIANT (`x = AsA { … }` rather than
+`x: Any = AsA { … }`) is accepted where a bounded generic wants the ENUM and then
+answers the type's empty value. Silent on `--interpret`, a `todo!()` panic on
+`--native`, a SIGSEGV with two generic hops.
+
 ### A buffer that is already a reference is handed over, not wrapped (loft#806) (2026-08-08)
 
 `return t.m(i) ?? "x"` SIGSEGV'd the interpreter while `--native` answered correctly.

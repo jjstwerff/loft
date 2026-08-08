@@ -316,6 +316,16 @@ pub struct Dialect {
   /// How this engine spells a bound parameter — `SQL_QMARK` or `SQL_DOLLAR`
   /// from the `sql` package.
   style: integer = 0,
+  /// The expression naming the schema an `information_schema` query must be
+  /// scoped to — `current_schema()` on PostgreSQL and duckdb, `DATABASE()` on
+  /// mariadb. Empty for sqlite, whose catalogue is `PRAGMA` instead, and empty
+  /// for any engine loft has not READ a catalogue from: `introspect` refuses on
+  /// an empty one rather than sending a query nobody has run.
+  ///
+  /// It is an expression rather than a value because the answer is the server's
+  /// to give — a connection string can name a database, a search path can move
+  /// it, and asking is the only way that stays true.
+  const catalog_schema: text = "",
 }
 
 pub fn dialect_sqlite() -> Dialect {
@@ -344,6 +354,7 @@ pub fn dialect_postgres() -> Dialect {
     boolean_type: "BOOLEAN",
     setup: ["SET extra_float_digits = 3"],
     style: SQL_DOLLAR,
+    catalog_schema: "current_schema()",
   };
 }
 
@@ -359,6 +370,7 @@ pub fn dialect_maria() -> Dialect {
     int_type: "BIGINT", float_type: "DOUBLE", text_type: "TEXT",
     boolean_type: "BOOLEAN",
     style: SQL_QMARK,
+    catalog_schema: "DATABASE()",
   };
 }
 
@@ -368,6 +380,7 @@ pub fn dialect_duckdb() -> Dialect {
     int_type: "BIGINT", float_type: "DOUBLE", text_type: "VARCHAR",
     boolean_type: "BOOLEAN",
     style: SQL_QMARK,
+    catalog_schema: "current_schema()",
   };
 }
 
@@ -804,12 +817,18 @@ pub fn conn_dialect(self: Conn) -> Dialect? {
 // catalogue — and because both answer the same value, everything downstream is
 // written once.
 //
-// **sqlite only, and that is a scope statement rather than a shape one.** Its
-// catalogue is `PRAGMA`; the other three have `information_schema`, which is one
-// query for all of them — but a cross-backend claim made without running it
-// against a live server of each is exactly the gap P3 found in the float
-// rendering. Its per-backend query hangs off the `Dialect`, where the rest of
-// the dialect facts already are.
+// **All four backends, and each query was RUN against a live server of that
+// engine before it was written down** — the rule P3 exists to enforce. sqlite's
+// catalogue is `PRAGMA`; the other three answer columns from
+// `information_schema.columns`, scoped by the expression their `Dialect`
+// carries.
+//
+// The INDEX half does not unify and is not pretended to: `information_schema`
+// has no index view at all. PostgreSQL answers from `pg_index`, mariadb from
+// `information_schema.statistics`, duckdb from `duckdb_indexes()` — and duckdb
+// gives back the `CREATE INDEX` TEXT rather than a row per column, so its
+// columns are read out of that. Three shapes for one question is what the
+// engines actually offer, and a table of them beats a claim that they agree.
 //
 // Read-only: it runs `SELECT`s and changes nothing, which is what makes this the
 // first step allowed to touch a connection at all.
@@ -833,6 +852,130 @@ fn sqlite_kind(declared: text) -> ColumnType {
   return ColumnType.ColOther;
 }
 
+/// The column type an `information_schema.data_type` names.
+///
+/// **A whitelist, and deliberately not sqlite's substring test.** sqlite has
+/// AFFINITY — a rule the engine itself applies to any declared name, so
+/// following it is agreeing with the engine. The other three have real types,
+/// and a substring test there is only a guess wearing a rule's clothes:
+/// PostgreSQL's `point` contains `INT`, and reading a geometry column as an
+/// integer would put a plausible wrong number in a record. A name that is not
+/// here answers `ColOther`, which `reconcile` refuses by NAME — the answer a DBA
+/// can act on.
+///
+/// Every spelling below was read out of a live server of that engine, which is
+/// why mariadb's list carries `TINYINT`: mariadb stores `BOOLEAN` as
+/// `tinyint(1)` and reports it as `tinyint`, so a boolean field arrives here as
+/// an integer exactly as it does from sqlite. That is not a special case — the
+/// BINDING converts, and both engines end up in the same one.
+fn ansi_kind(declared: text) -> ColumnType {
+  t = declared.to_uppercase();
+  if t == "BOOLEAN" || t == "BOOL" { return ColumnType.ColBoolean }
+  if t == "BIGINT" || t == "INTEGER" || t == "INT" || t == "SMALLINT"
+     || t == "TINYINT" || t == "MEDIUMINT" || t == "HUGEINT"
+     || t == "SERIAL" || t == "BIGSERIAL" { return ColumnType.ColInteger }
+  if t == "DOUBLE" || t == "DOUBLE PRECISION" || t == "REAL" || t == "FLOAT"
+     || t == "NUMERIC" || t == "DECIMAL" { return ColumnType.ColFloat }
+  if t == "TEXT" || t == "VARCHAR" || t == "CHARACTER VARYING" || t == "CHARACTER"
+     || t == "CHAR" || t == "LONGTEXT" || t == "MEDIUMTEXT" || t == "TINYTEXT"
+     || t == "CLOB" || t == "STRING" { return ColumnType.ColText }
+  return ColumnType.ColOther;
+}
+
+/// The query that lists `table`'s columns, in this engine's catalogue.
+///
+/// The table NAME is bound, never interpolated — the property this whole package
+/// exists to keep. The schema expression is INLINED, and may be: it is a
+/// `Dialect` constant this file wrote, which is the same admission `hole_sql_ident`
+/// makes for an identifier and for the same reason — no placeholder can stand
+/// where SQL expects an expression.
+fn catalog_columns(dial: Dialect, table: text) -> SqlText {
+  q: SqlText = SqlText { };
+  if dial.nm == "sqlite" {
+    // `pragma_table_info` is a table-valued function precisely so its argument
+    // can be a VALUE.
+    q.lit("SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info(");
+    q.hole_text(table);
+    q.lit(")");
+    return q;
+  }
+  q.lit("SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = ");
+  q.hole_text(table);
+  q.lit(" AND table_schema = {dial.catalog_schema} ORDER BY ordinal_position");
+  return q;
+}
+
+/// The query that lists `table`'s index columns in key order, as
+/// `(index_name, column_name, descending)` — or, for duckdb, as
+/// `(index_name, the CREATE INDEX statement)`.
+///
+/// Empty when this engine has no query here, which `introspect` reads as "no
+/// indexes were asked for" rather than "there are none".
+fn catalog_indexes(dial: Dialect, table: text) -> SqlText {
+  q: SqlText = SqlText { };
+  if dial.nm == "postgres" {
+    // `indkey` and `indoption` are 0-based `int2vector`s, so the subscript is
+    // the ordinal AND the option index — measured, because using `ord-1` for
+    // one of them reads every direction as NULL. `indnkeyatts` drops an
+    // INCLUDE column, which is stored but is not part of the key.
+    q.lit(`SELECT i.relname, a.attname, (ix.indoption[k.ord] & 1)
+             FROM pg_class t
+             JOIN pg_index ix ON ix.indrelid = t.oid
+             JOIN pg_class i ON i.oid = ix.indexrelid
+             JOIN LATERAL generate_subscripts(ix.indkey, 1) AS k(ord) ON k.ord < ix.indnkeyatts
+             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ix.indkey[k.ord]
+            WHERE t.relname = `);
+    q.hole_text(table);
+    q.lit(" ORDER BY i.relname, k.ord");
+    return q;
+  }
+  if dial.nm == "maria" {
+    // `COLLATION` is `A`, `D` or NULL (an unordered index); `D` is descending.
+    q.lit("SELECT INDEX_NAME, COLUMN_NAME, CASE COLLATION WHEN 'D' THEN 1 ELSE 0 END FROM information_schema.statistics WHERE TABLE_NAME = ");
+    q.hole_text(table);
+    q.lit(" AND TABLE_SCHEMA = {dial.catalog_schema} ORDER BY INDEX_NAME, SEQ_IN_INDEX");
+    return q;
+  }
+  if dial.nm == "duckdb" {
+    q.lit("SELECT index_name, sql FROM duckdb_indexes() WHERE table_name = ");
+    q.hole_text(table);
+    q.lit(" ORDER BY index_name");
+    return q;
+  }
+  return q;
+}
+
+/// The key columns of `CREATE INDEX x ON t(a, b DESC);` — duckdb's catalogue
+/// answers the statement, not its columns.
+///
+/// It is duckdb's OWN rendering rather than the text loft submitted, so the
+/// shape is normalised and this parse is over an engine's output. Anything it
+/// cannot read comes back empty, which `reconcile` then reports as a missing
+/// index — a refusal naming what it wanted, never a silent match.
+fn index_columns_of_sql(sql: text) -> vector<IndexColumn> {
+  out: vector<IndexColumn> = [];
+  open_at = sql.find("(");
+  close_at = sql.rfind(")");
+  if open_at == null || close_at == null { return out }
+  ob = open_at ?? 0;
+  cb = close_at ?? 0;
+  if cb <= ob + 1 { return out }
+  inner = sql[(ob + 1)..cb];
+  for part in inner.split(',') {
+    one = part.trim();
+    if one == "" { continue }
+    desc = one.to_uppercase().ends_with(" DESC");
+    if desc { one = one[0..(len(one) - 5)].trim() }
+    if one.to_uppercase().ends_with(" ASC") { one = one[0..(len(one) - 4)].trim() }
+    // duckdb quotes a name only when it must; strip either spelling.
+    if one.starts_with("\"") && one.ends_with("\"") && len(one) > 1 {
+      one = one[1..(len(one) - 1)];
+    }
+    if one != "" { out += [IndexColumn { nm: one, ascending: !desc }] }
+  }
+  return out;
+}
+
 /// Read back the table called `table`, as a `TableDef`.
 ///
 /// A refusal carries its reason, exactly as `derive`'s does — and the reason a
@@ -840,62 +983,116 @@ fn sqlite_kind(declared: text) -> ColumnType {
 /// what tells `render` it may create it, and it is the whole of the
 /// absent-versus-present decision.
 pub fn introspect <D: SqlDb> (d: D, dial: Dialect, table: text) -> TableDef {
-  if dial.nm != "sqlite" {
-    return no_table("loft cannot read {dial.nm}'s catalogue yet — only sqlite's");
+  if dial.nm != "sqlite" && dial.catalog_schema == "" {
+    return no_table("loft has not read {dial.nm}'s catalogue — no schema expression for it");
   }
   cols: vector<ColumnDef> = [];
-  // Bound, not interpolated. `pragma_table_info` is a table-valued function
-  // precisely so its argument can be a VALUE, and a table name reaching a
-  // statement as text is the one thing this package exists to prevent.
-  q: SqlText = "SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info({table})";
-  if !d.db_rows(q) {
+  qc = catalog_columns(dial, table);
+  if !d.db_rows(qc) {
     return no_table("cannot read the catalogue: {d.db_last_error()}");
   }
   while d.db_next() {
     cn = d.db_col(0) ?? "";
     ct = d.db_col(1) ?? "";
-    nn = d.db_col(2) ?? "0";
+    // sqlite answers `notnull` as `1`/`0`, `information_schema` as `YES`/`NO`.
+    // Two spellings of one fact, and each engine's own is what it is read in.
+    nn = d.db_col(2) ?? "";
     dflt = d.db_col(3);
+    ck: ColumnType = ColOther;
+    if dial.nm == "sqlite" { ck = sqlite_kind(ct) } else { ck = ansi_kind(ct) }
+    can_null = nn.to_uppercase() != "NO";
+    if dial.nm == "sqlite" { can_null = nn != "1" }
     cols += [ColumnDef {
       nm: cn,
-      kind: sqlite_kind(ct),
+      kind: ck,
       db_type: ct,
-      nullable: nn != "1",
-      // Absent `dflt_value` is SQL NULL, which is not the empty string — the
+      nullable: can_null,
+      // Absent default is SQL NULL, which is not the empty string — the
       // distinction the whole binding layer exists to keep, showing up as the
       // difference between a table loft may write to and one it may not.
       has_default: dflt != null,
     }];
   }
   if len(cols) == 0 {
-    // sqlite answers an EMPTY result for a table that is not there rather than
-    // an error, so absence arrives as no rows. Saying so plainly is what lets
-    // the caller create it.
+    // Every one of the four answers an EMPTY result for a table that is not
+    // there rather than an error, so absence arrives as no rows. Saying so
+    // plainly is what lets the caller create it.
     return no_table("there is no table {table}");
   }
 
-  // The index names first, in full. There is one cursor per connection — it is
-  // state ON the connection, not a second type — so a second query cannot run
-  // while this one is being walked.
-  ix_names: vector<text> = [];
-  qi: SqlText = "SELECT name FROM pragma_index_list({table})";
-  if d.db_rows(qi) {
-    while d.db_next() { ix_names += [d.db_col(0) ?? ""] }
-  }
   ixs: vector<IndexDef> = [];
-  for ixn in ix_names {
-    ixc: vector<IndexColumn> = [];
-    qx: SqlText = "SELECT name, \"desc\" FROM pragma_index_xinfo({ixn}) WHERE key = 1 ORDER BY seqno";
-    if d.db_rows(qx) {
-      while d.db_next() {
-        xn = d.db_col(0) ?? "";
-        xd = d.db_col(1) ?? "0";
-        if xn != "" { ixc += [IndexColumn { nm: xn, ascending: xd != "1" }] }
-      }
+  if dial.nm == "sqlite" {
+    // The index names first, in full. There is one cursor per connection — it
+    // is state ON the connection, not a second type — so a second query cannot
+    // run while this one is being walked.
+    ix_names: vector<text> = [];
+    qi: SqlText = "SELECT name FROM pragma_index_list({table})";
+    if d.db_rows(qi) {
+      while d.db_next() { ix_names += [d.db_col(0) ?? ""] }
     }
-    if len(ixc) > 0 { ixs += [IndexDef { nm: ixn, columns: ixc }] }
+    for ixn in ix_names {
+      ixc: vector<IndexColumn> = [];
+      qx: SqlText = "SELECT name, \"desc\" FROM pragma_index_xinfo({ixn}) WHERE key = 1 ORDER BY seqno";
+      if d.db_rows(qx) {
+        while d.db_next() {
+          xn = d.db_col(0) ?? "";
+          xd = d.db_col(1) ?? "0";
+          if xn != "" { ixc += [IndexColumn { nm: xn, ascending: xd != "1" }] }
+        }
+      }
+      if len(ixc) > 0 { ixs += [IndexDef { nm: ixn, columns: ixc }] }
+    }
+    return TableDef { nm: table, columns: cols, indexes: ixs };
   }
+
+  // The other three answer in ONE query, so the whole result is read out before
+  // anything is built from it — the single cursor again.
+  ix_of: vector<text> = [];
+  ix_col: vector<text> = [];
+  ix_desc: vector<boolean> = [];
+  qx2 = catalog_indexes(dial, table);
+  if d.db_rows(qx2) {
+    while d.db_next() {
+      i0 = d.db_col(0) ?? "";
+      i1 = d.db_col(1) ?? "";
+      i2 = d.db_col(2) ?? "0";
+      if i0 != "" { ix_of += [i0]; ix_col += [i1]; ix_desc += [i2 == "1" || i2.to_lowercase() == "true"] }
+    }
+  }
+  if dial.nm == "duckdb" { ixs = duck_indexes(ix_of, ix_col) } else { ixs = grouped_indexes(ix_of, ix_col, ix_desc) }
   return TableDef { nm: table, columns: cols, indexes: ixs };
+}
+
+/// One `IndexDef` per row, reading duckdb's `CREATE INDEX` text for its columns.
+fn duck_indexes(names: vector<text>, sqls: vector<text>) -> vector<IndexDef> {
+  out: vector<IndexDef> = [];
+  for dn in names {
+    dcols = index_columns_of_sql(sqls[dn#count] ?? "");
+    if len(dcols) > 0 { out += [IndexDef { nm: dn, columns: dcols }] }
+  }
+  return out;
+}
+
+/// One `IndexDef` per RUN of equal index names.
+///
+/// PostgreSQL and mariadb answer a row per index COLUMN, ordered by index name
+/// and then key position — so a run of equal names is one index, and the walk
+/// needs no second pass and no map.
+fn grouped_indexes(names: vector<text>, cols: vector<text>, descs: vector<boolean>) -> vector<IndexDef> {
+  out: vector<IndexDef> = [];
+  run: vector<IndexColumn> = [];
+  run_nm = "";
+  for gn in names {
+    if gn != run_nm {
+      if run_nm != "" && len(run) > 0 { out += [IndexDef { nm: run_nm, columns: run }] }
+      run = [];
+      run_nm = gn;
+    }
+    cnm = cols[gn#count] ?? "";
+    if cnm != "" { run += [IndexColumn { nm: cnm, ascending: !(descs[gn#count] ?? false) }] }
+  }
+  if run_nm != "" && len(run) > 0 { out += [IndexDef { nm: run_nm, columns: run }] }
+  return out;
 }
 
 /// Is there a table called `table` here?
@@ -905,4 +1102,105 @@ pub fn introspect <D: SqlDb> (d: D, dial: Dialect, table: text) -> TableDef {
 /// a caller should not have to read a refusal string to learn it.
 pub fn table_absent(self: TableDef) -> boolean {
   return self.refusal.starts_with("there is no table ");
+}
+
+// --- S11 + S12: create when absent, follow when present -----------------------
+//
+// The two are one function because they are one DECISION, and splitting them
+// would put the absent-or-present test in every caller — which is where two
+// callers eventually disagree about what absence means.
+//
+// The rule the whole design rests on: **loft never touches a table it did not
+// find missing.** Creating a table where there was none fills an absence.
+// Altering one that is there mutates somebody else's schema, and the fact that
+// loft could derive a better one is not permission.
+
+/// The table `want` describes, made ready — and the binding that says how.
+///
+/// Absent → loft creates it from its own derivation, then reads it BACK and
+/// reconciles against what the engine actually stored. Present → loft follows
+/// it, and `reconcile` decides whether it can.
+///
+/// **The read-back is not ceremony.** An engine rewrites what it was given: a
+/// mariadb `BOOLEAN` becomes `tinyint`, and a sqlite column keeps the affinity
+/// of a name nobody else would recognise. Reconciling against the DERIVED
+/// definition instead would assert the round trip rather than test it, and this
+/// function's whole job is that a table loft made and a table loft found are
+/// indistinguishable afterwards.
+///
+/// The absence is decided by ASKING THE CATALOGUE, never by an `IF NOT EXISTS`
+/// in the DDL: the rule belongs in loft's own code where it can be read, not in
+/// an engine's tolerance for a repeated `CREATE`.
+pub fn ensure <D: SqlDb> (d: D, dial: Dialect, want: TableDef) -> Binding {
+  if want.refusal != "" { return no_binding(want.refusal) }
+  have = introspect(d, dial, want.nm);
+  if have.table_absent() {
+    for stmt in want.render(dial) {
+      if !d.db_exec(stmt) {
+        return no_binding("cannot create {want.nm}: {d.db_last_error()}");
+      }
+    }
+    have = introspect(d, dial, want.nm);
+    if have.table_absent() {
+      return no_binding("created {want.nm} and the catalogue still does not show it");
+    }
+  }
+  if !have.table_ok() { return no_binding(have.refusal) }
+  return reconcile(want, have);
+}
+
+// --- S13: the INSERT the same definition implies ------------------------------
+//
+// The reader's `SELECT` and the writer's `INSERT` come from ONE `TableDef`, and
+// that is the whole of requirement 2: a writer that named its own columns could
+// drift from the reader by one rename, and nothing would catch it until a row
+// came back wrong.
+//
+// **Values are BOUND, never interpolated** — the same property `select_by_key`
+// keeps, and the reason `SqlText` exists.
+
+/// One value to write, in the column order the definition fixes.
+///
+/// `Bound` is the `sql` package's own carrier, reused rather than mirrored: a
+/// second value type here would be a second description of the same four cases,
+/// which is the failure this plan is about.
+pub fn val_int(v: integer) -> Bound { b = Bound { kind: SQL_INT, t: "", i: v, f: 0.0 }; return b; }
+pub fn val_text(v: text) -> Bound { b = Bound { kind: SQL_TEXT, t: v, i: 0, f: 0.0 }; return b; }
+pub fn val_float(v: float) -> Bound { b = Bound { kind: SQL_FLOAT, t: "", i: 0, f: v }; return b; }
+pub fn val_boolean(v: boolean) -> Bound {
+  n = if v { 1 } else { 0 };
+  b = Bound { kind: SQL_BOOLEAN, t: "", i: n, f: 0.0 };
+  return b;
+}
+/// SQL NULL — which is not the empty string, the distinction the binding layer
+/// exists to keep.
+pub fn val_null() -> Bound { b = Bound { kind: SQL_NULL, t: "", i: 0, f: 0.0 }; return b; }
+
+/// `INSERT INTO "person" ("id","nm") VALUES (?,?)` — one row, from the
+/// definition and nothing else.
+///
+/// `values` is in the definition's own column order, which is the order
+/// `derive` fixed from the loft type's field positions. A count that does not
+/// match refuses: a row written into the wrong columns is a wrong value that
+/// reads back perfectly.
+pub fn insert_row(self: TableDef, d: Dialect, values: vector<Bound>) -> SqlText {
+  q: SqlText = SqlText { };
+  if self.refusal != "" { q.refused = true; return q }
+  if len(values) != len(self.columns) { q.refused = true; return q }
+  q.lit("INSERT INTO {d.quote_ident(self.nm)} (");
+  for c in self.columns {
+    if c#count > 0 { q.lit(", ") }
+    q.lit(d.quote_ident(c.nm));
+  }
+  q.lit(") VALUES (");
+  for b in values {
+    if b#count > 0 { q.lit(", ") }
+    if b.kind == SQL_INT { q.hole_int(b.i) }
+    else if b.kind == SQL_FLOAT { q.hole_float(b.f) }
+    else if b.kind == SQL_BOOLEAN { q.hole_boolean(b.i != 0) }
+    else if b.kind == SQL_NULL { q.hole_text(null) }
+    else { q.hole_text(b.t) }
+  }
+  q.lit(")");
+  return q;
 }

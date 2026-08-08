@@ -257,6 +257,14 @@ type's reads onto loft; every type with no driver keeps the Rust source. So a
 program adopts the loft path one collection at a time rather than all at once,
 and a program that declares nothing is unchanged.
 
+**This is the permanent arrangement, not a migration step.** @PLN133 asked
+whether core's Rust sqlite path could then be DELETED, and the answer is no:
+deleting it makes a driver mandatory for `sqlite:`, a driver names a concrete
+element type so it cannot be generic, and `store_bind_lazy(persons,
+"sqlite:people.db")` needing no user code is a shipped promise. What the
+precedence rule buys is not deletion but a stopped clock — core's Rust never
+gains a fifth backend, and every new one is a loft driver.
+
 The two are meant to be indistinguishable, and that is measured rather than
 asserted: the same lookups down each path give the same values, the same
 identity, the same residency counts and the same number of trips to the source
@@ -449,12 +457,15 @@ is standing on.
 ## Open work
 
 Most of the table below is superseded in shape by
-[@PLN133](https://github.com/loft-lang/plans/issues/133), which unifies this read
-path with the `#c` database clients: one connection string selecting one driver,
-and one table definition — derived from the type, or read back from the database —
-that a writer creates when absent and follows when present. Under it the mapping's
-loft-source spelling, the narrow-int refusal and the sqlite-only limit are all one
-question rather than four. The rows below are the state as BUILT.
+[@PLN133](https://github.com/loft-lang/plans/issues/133) — **closed 2026-08-08** —
+which unified this read path with the `#c` database clients: one connection string
+selecting one driver, and one table definition (derived from the type, or read
+back from the database) that a writer creates when absent and follows when
+present. Its gate writes rows through the derived `INSERT`, binds lazily to the
+same string and reads them back, byte-identically on four database backends and
+both loft backends. Under it the mapping's loft-source spelling, the narrow-int
+refusal and the sqlite-only limit are one question rather than four. The rows
+below are the state as BUILT here, in core's own read path.
 
 | item | why it waits |
 |---|---|

@@ -1,0 +1,260 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S14 — THE GATE. Write rows, bind lazily to the SAME connection string,
+// traverse, and get back what was written.
+//
+// The plan's three requirements, stated as one program:
+//
+//   1. ONE configuration string switches every SQL consumer. Nothing below names
+//      a backend: `LOFT_SQLDB_MODE` picks a connection string, and `connect`,
+//      `ensure`, the `INSERT`, the lazy driver and the `SELECT` all follow it.
+//   2. A structure written to the database is IMMEDIATELY usable through lazy
+//      loading — no export step, no schema hand-off. The writer's `INSERT` and
+//      the reader's `SELECT` are built from the same `TableDef` value, so they
+//      cannot drift.
+//   3. A loft structure has ONE universal table definition: created where the
+//      database has nothing, FOLLOWED where it already holds a table.
+//
+// **Run twice, and the second run is the one that matters.** Run 1 goes into an
+// empty database, where loft writes the schema. Run 2 goes into a table made by
+// hand — different column ORDER, a number kept in a `VARCHAR`, and one extra
+// nullable column loft knows nothing about — where loft must follow it. Same
+// program, same assertions. Run 1 passes even if `reconcile` is a stub that
+// always agrees; only run 2 proves requirement 3.
+//
+// **The counts are the oracle the values cannot be.** A reader that fetched the
+// whole table would return exactly these rows. Only the number of trips to the
+// source separates a lazy read from an eager one, so the driver prints and the
+// program counts: three distinct keys reach the database, a repeat of a resident
+// key reaches nothing, and an absent key is an absence rather than a failure.
+//
+// The float is `0.5` / `0.25` / `0.125` on purpose. P3 measured that sqlite and
+// duckdb lose the low bits of most doubles on the WRITE side — a bounded,
+// documented limit of the write path, not something this gate can fix — so it
+// uses values every engine stores exactly, and the round trip it claims is
+// exact for those. `uniform.loft`'s `floats` cell is where the full-precision
+// question lives.
+
+use registry;
+use schema;
+use sql;
+
+struct RtPerson { id: integer, nm: text, score: float, flag: boolean }
+struct RtWorld { by_id: hash<RtPerson[id]> = [] }
+
+// The lazy driver: one element type, and NOTHING in it names a column. The
+// table, the columns and the `WHERE` all come from `derive(type_of(coll))` —
+// the same `TableDef` the writer rendered into `CREATE TABLE` and built its
+// `INSERT` from. That single derivation is requirement 2.
+fn lazy_fetch(coll: hash<RtPerson[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  // The driver PRINTS its trips rather than counting them, because it is called
+  // by CORE: its return value says how many rows it stored, never how often it
+  // ran. One line per trip makes the count assertable from outside — which is
+  // the only place an eager read and a lazy one differ.
+  println("  trip key={key_int}");
+  d = connect(source);
+  if !d.db_ok() { store_lazy_fail(coll, d.db_last_error()); return 0 }
+  dial = d.db_dialect();
+  if dial == null { d.db_shut(); store_lazy_fail(coll, "no dialect for {source}"); return 0 }
+  ti = type_of(coll);
+  want = derive(ti);
+  if !want.table_ok() { d.db_shut(); store_lazy_fail(coll, want.refusal); return 0 }
+  q = select_by_key(want, dial, key_int, key_text, false);
+  if !d.db_rows(q) {
+    why = d.db_last_error();
+    d.db_shut();
+    store_lazy_fail(coll, "query failed: {why}");
+    return 0;
+  }
+  if !d.db_next() {
+    // Reached, and no such row. `0`, not a failure — the distinction @PLN129
+    // arc C exists for.
+    d.db_shut();
+    return 0;
+  }
+  got_id = ((d.db_col(0) ?? "") as integer?) ?? 0;
+  got_nm = d.db_col(1) ?? "";
+  got_score = ((d.db_col(2) ?? "") as float?) ?? 0.0;
+  got_flag = truthy(d.db_col(3) ?? "");
+  d.db_shut();
+  coll += [RtPerson { id: got_id, nm: got_nm, score: got_score, flag: got_flag }];
+  return 1;
+}
+
+/// A boolean, in whichever of three spellings the engine chose.
+///
+/// sqlite stores one as `INTEGER` and mariadb as `tinyint(1)`, so it arrives as
+/// `1`; PostgreSQL and duckdb have a real `BOOLEAN` and answer `t` or `true`.
+/// Three spellings of one value, and the BINDING is what makes them one again —
+/// `reconcile` already reported `ConvBoolean` for every case here.
+fn truthy(s: text) -> boolean {
+  t = s.to_lowercase();
+  return t == "1" || t == "t" || t == "true" || t == "y";
+}
+
+/// The connection string this run uses, or `""` when this backend is not here.
+fn conn_for(mode: text, scratch: text) -> text {
+  if mode == "sqlite" { return "sqlite:{scratch}" }
+  if mode == "postgres" {
+    v = env_variable("LOFT_PG_CONN") ?? "";
+    if v == "" { v = "dbname=loft_test_pg" }
+    return "postgres:{v}";
+  }
+  if mode == "maria" {
+    m = env_variable("LOFT_MY_CONN") ?? "";
+    if m == "" { m = "host=127.0.0.1 user=loft pass=loft db=loft_test_uni" }
+    return "maria:{m}";
+  }
+  if mode == "duckdb" {
+    k = env_variable("LOFT_DUCKDB_FILE") ?? "";
+    if k == "" { k = scratch }
+    return "duckdb:{k}";
+  }
+  return "";
+}
+
+/// Take the table away, so a run starts from the absence it claims to start
+/// from. Not part of the gate — the gate is what happens AFTERWARDS.
+fn drop_table(conn: text, table: text) -> boolean {
+  d = connect(conn);
+  if !d.db_ok() { return false }
+  ok = d.db_exec("DROP TABLE IF EXISTS {table}");
+  d.db_shut();
+  return ok;
+}
+
+/// Run 2's table: made by somebody else, and loft has to follow it.
+///
+/// Different column ORDER, a float kept in a `VARCHAR`, and an extra nullable
+/// column loft knows nothing about. Nullable on purpose — an extra `NOT NULL`
+/// column with no default is READABLE and impossible to `INSERT` into, which
+/// `schema_live.loft` already gates as its own cell; this run has to get all the
+/// way to a written row.
+fn make_foreign(conn: text, table: text, mode: text) -> text {
+  d = connect(conn);
+  if !d.db_ok() { return "connect: {d.db_last_error()}" }
+  vc = "VARCHAR(40)";
+  bl = "INTEGER";
+  if mode == "postgres" || mode == "duckdb" { bl = "BOOLEAN" }
+  if mode == "maria" { bl = "TINYINT" }
+  ddl = "CREATE TABLE {table} (note {vc}, flag {bl} NOT NULL, score {vc} NOT NULL, nm {vc} NOT NULL, id BIGINT NOT NULL)";
+  if !d.db_exec(ddl) { why = d.db_last_error(); d.db_shut(); return "ddl: {why}" }
+  if !d.db_exec("CREATE INDEX {table}_byid ON {table} (id)") {
+    why2 = d.db_last_error();
+    d.db_shut();
+    return "index: {why2}";
+  }
+  d.db_shut();
+  return "";
+}
+
+/// Write three rows through the definition the type implies — and CREATE the
+/// table first if it is not there.
+///
+/// This is the writer half of requirement 2, and every statement it sends came
+/// out of `want`: the DDL through `render`, the row through `insert_row`. The
+/// only thing the program supplies is the values.
+fn write_three(conn: text) -> text {
+  w = RtWorld { };
+  ti = type_of(w.by_id);
+  want = derive(ti);
+  if !want.table_ok() { return "derive: {want.refusal}" }
+
+  d = connect(conn);
+  if !d.db_ok() { return "connect: {d.db_last_error()}" }
+  dial = d.db_dialect();
+  if dial == null { d.db_shut(); return "no dialect" }
+
+  // S11 + S12 in one call: absent → create, present → follow.
+  b = ensure(d, dial, want);
+  if !b.binding_ok() { why = b.refusal; d.db_shut(); return "bind: {why}" }
+  if !b.binding_writable() { ww = b.write_refusal; d.db_shut(); return "write: {ww}" }
+
+  ids = [1, 42, 7];
+  names = ["ada", "grace", "alan"];
+  scores = [0.5, 0.25, 0.125];
+  flags = [true, false, true];
+  for k in ids {
+    row = want.insert_row(dial, [
+      val_int(k),
+      val_text(names[k#count] ?? ""),
+      val_float(scores[k#count] ?? 0.0),
+      val_boolean(flags[k#count] ?? false),
+    ]);
+    if !d.db_run(row) { why3 = d.db_last_error(); d.db_shut(); return "insert: {why3}" }
+  }
+  d.db_shut();
+  return "";
+}
+
+/// The gate itself: bind lazily to the string the writer used, and read.
+fn read_back(conn: text, label: text) {
+  w = RtWorld { };
+  if !store_bind_lazy(w.by_id, conn) { println("FAIL {label} bind"); return }
+
+  hit = w.by_id[42];
+  if hit == null { println("FAIL {label} no row 42: {store_lazy_error(w.by_id)}"); return }
+  println("{label} value={hit.nm} float={hit.score} flag={hit.flag}");
+
+  // Identity, not equality: the second lookup must answer the SAME record, and
+  // must not go to the database again. A cache that copied would pass a value
+  // check and fail this one.
+  again = w.by_id[42];
+  if again == null { println("FAIL {label} lost row 42"); return }
+  again.nm = "GRACE";
+  println("{label} identity={hit.nm == "GRACE"} resident={len(w.by_id)}");
+
+  second = w.by_id[7];
+  if second == null { println("FAIL {label} no row 7"); return }
+  println("{label} second={second.nm} touched={len(w.by_id)}");
+
+  // A key that is not there is an ABSENCE, not a failure — the mirror of the
+  // bug @PLN129 arc C exists for. It costs one trip and leaves the channel
+  // clean.
+  missing = w.by_id[999];
+  println("{label} absent={missing == null} clean=[{store_lazy_error(w.by_id)}]");
+}
+
+fn main() {
+  mode = env_variable("LOFT_SQLDB_MODE") ?? "";
+  if mode == "" { mode = "sqlite" }
+  scratch = "{directory()}/.loft/pln133_round_trip.db";
+  if mode == "sqlite" || mode == "duckdb" {
+    // Silent either way: whether a previous run left a file is not something a
+    // reader has to act on, and saying so makes the run's output depend on what
+    // ran before it.
+    stale = delete(scratch);
+    _ = stale.ok();
+  }
+  conn = conn_for(mode, scratch);
+  if conn == "" { println("FAIL unknown-mode {mode}"); return }
+
+  probe = connect(conn);
+  if !probe.db_ok() {
+    // A backend that is not installed or not running is a SKIP, never a pass:
+    // CI reaches sqlite only, and the other three are the LOCAL bar.
+    println("SKIP {mode} {probe.db_last_error()}");
+    return;
+  }
+  probe.db_shut();
+
+  table = table_name_for("RtPerson");
+
+  // --- run 1: an EMPTY database. loft writes the schema. ---------------------
+  if !drop_table(conn, table) { println("FAIL drop before run 1"); return }
+  made = write_three(conn);
+  if made != "" { println("FAIL created {made}"); return }
+  read_back(conn, "created");
+
+  // --- run 2: somebody ELSE's table. loft follows it. ------------------------
+  if !drop_table(conn, table) { println("FAIL drop before run 2"); return }
+  foreign = make_foreign(conn, table, mode);
+  if foreign != "" { println("FAIL foreign {foreign}"); return }
+  followed = write_three(conn);
+  if followed != "" { println("FAIL followed {followed}"); return }
+  read_back(conn, "followed");
+
+  if !drop_table(conn, table) { println("note: the gate's table was not removable") }
+  println("round_trip ok");
+}
