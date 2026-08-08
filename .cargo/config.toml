@@ -1,27 +1,33 @@
 # Cargo project config.
 #
-# Activates the `mold` linker on Linux x64 for slightly faster link
-# time AND — more importantly — a unified cache.  Without this,
-# devs who occasionally invoke cargo with custom RUSTFLAGS end up
-# with a separate cache keyed on the flag set, forcing rebuilds
-# when alternating between flagged and unflagged invocations.
-# Pinning the linker here keeps every cargo run from this checkout
-# on a single cache key.
+# Linux x64 links through `scripts/cc-mold`, which is `cc` plus
+# `-fuse-ld=mold` on machines that HAVE mold and plain `cc` on the
+# ones that do not.  Nothing to install, and no setup step: the
+# faster linker is used where it exists and skipped where it does
+# not.
 #
-# Required setup:
-# - Linux x64: `sudo apt-get install mold` (~3 MB).
+# This was `rustflags = ["-C", "link-arg=-fuse-ld=mold"]`, an
+# unconditional demand, so a clone on a machine without mold — and
+# without the root access to install it — failed to build, naming
+# neither mold nor this file (loft#805):
+#
+#   error: linking with `cc` failed
+#     = note: collect2: fatal error: cannot find 'ld'
+#
+# The path is relative to the directory holding `.cargo/`; cargo
+# resolves `linker` against it, so it works from any cwd.
+#
 # - macOS / Windows: nothing.  This block targets only
 #   `x86_64-unknown-linux-gnu`; other platforms ignore it and use
 #   the system default linker.
 # - CI: `.github/workflows/ci.yml` installs mold on the ubuntu
-#   runner; mac / windows runners are unaffected.
-#
-# If you must build without mold (e.g. on a system without apt or
-# behind a firewall), comment out the rustflags line below.
-# Cargo will fall back to the system linker.
+#   runner, so CI keeps using it; mac / windows are unaffected.
+# - To use a different driver entirely, set
+#   `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` — an env linker
+#   replaces this one and nothing here needs editing.
 
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+linker = "scripts/cc-mold"
 
 # Activates the bundled `rust-lld` linker on Windows x64 (MSVC).  The default
 # `link.exe` is the slowest part of a Windows build — CI's Windows `Build` was
