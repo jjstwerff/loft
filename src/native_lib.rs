@@ -1433,6 +1433,66 @@ fn artifact_matches_layout(so: &std::path::Path, layout_fp: u64) -> bool {
     artifact_layout_fp(so).is_none_or(|found| found == layout_fp)
 }
 
+/// The same question as [`artifact_matches_layout`], asked about an artifact that
+/// is about to be REPLACED at this path.
+///
+/// macOS dyld caches a loaded image BY PATH for the life of the process, and its
+/// `dlclose` is a no-op.  So probing the old artifact and then rebuilding a fresh
+/// one at the same path made the later `load_all` hand back the STALE image dyld
+/// had already cached: the settling run executed pre-edit code while writing the
+/// correct file for next time (loft#777's macOS tail).  Linux keys `dlopen` on
+/// `(dev, inode)` and loaded the new file, which is why only macOS broke.
+///
+/// Dropping the probe instead is what this replaces, and it cost the loft#717
+/// guard: the justification was that a rebuild always follows here, and it does
+/// not — branch 3's edit-loop arm answers `Ok(None)` and leaves the artifact in
+/// place, so a foreign-layout cdylib stopped being rebuilt
+/// (`n3_use_native::a_foreign_context_artifact_is_rejected_not_adopted`).
+///
+/// So the probe stays and moves off the path instead: load a COPY at a throwaway
+/// name, let dyld cache THAT, and leave the real path clean for the load that
+/// follows.  Same bytes, same answer.
+fn artifact_matches_layout_before_replace(so: &std::path::Path, layout_fp: u64) -> bool {
+    layout_fp_via_copy(so).is_none_or(|found| found == layout_fp)
+}
+
+/// Read an artifact's layout fingerprint through a throwaway copy, so the caller's
+/// path is never handed to `dlopen`.  Falls back to probing in place when the copy
+/// cannot be made — that is the pre-existing behaviour, and it beats answering
+/// "no layout declared" (which means ADOPT) because a temp file failed.
+fn layout_fp_via_copy(so: &std::path::Path) -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let (Some(dir), Some(name)) = (so.parent(), so.file_name()) else {
+        return artifact_layout_fp(so);
+    };
+    // A SUBDIRECTORY rather than a sibling file, and the copy keeps the artifact's
+    // own file NAME inside it.  `native-auto/` is enumerated by extension elsewhere
+    // — the parity tests count `so`/`dylib`/`dll` to assert how many artifacts a
+    // context built — so a probe copy beside the real one would be counted as a
+    // second artifact.  A dot-prefixed directory has no such extension, and the
+    // name inside stays the one `LoadLibrary` wants on Windows.
+    let probe_dir = dir.join(format!(
+        ".layout-probe-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::create_dir_all(&probe_dir).is_err() {
+        return artifact_layout_fp(so);
+    }
+    let probe = probe_dir.join(name);
+    let fp = if std::fs::copy(so, &probe).is_ok() {
+        artifact_layout_fp(&probe)
+    } else {
+        artifact_layout_fp(so)
+    };
+    // The copy has been read; the process may keep the image mapped (dlclose is a
+    // no-op on macOS), and unlinking a mapped file is fine on both unixes.
+    let _ = std::fs::remove_dir_all(&probe_dir);
+    fp
+}
+
 fn type_layout_fingerprint(stores: &Stores) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -1556,23 +1616,19 @@ pub fn cached_or_build_shared_cdylib(
     };
 
     // 2. No artifact yet, or `loft` changed → build eagerly (native from the start).
+    // An artifact built for a DIFFERENT type layout counts as "no artifact"
+    // (loft#717): it can never be adopted, and letting it reach the edit-loop
+    // branch below would leave a foreign artifact sitting at this name — branch 3
+    // does NOT always rebuild, its edit-loop arm answers `Ok(None)` and leaves the
+    // file alone.
     //
-    // Do NOT probe the layout here (loft#777, macOS): reaching this point means we
-    // are past the fresh fast-path, so any existing artifact is stale and WILL be
-    // rebuilt — by this branch or branch 3 below, both of which call `build`.
-    // `artifact_matches_layout` opens the artifact with `dlopen`, and macOS dyld
-    // caches a loaded image BY PATH for the process (its `dlclose` is a no-op).  So
-    // probing the OLD artifact here, then rebuilding a fresh one at the same path,
-    // then loading it made dyld hand back the STALE image it had already cached — a
-    // `base` edit reached the interpret run but not the settling native run (the
-    // dependent kept serving its pre-edit inlined copy).  Linux keys `dlopen` on
-    // (dev,inode) and loaded the new file, so only macOS was affected.
-    //
-    // The #717 adoption guard that this probe belonged to still runs on the fast
-    // path (above), which is the only place an EXISTING artifact is adopted without
-    // a rebuild; here a rebuild always follows, and it produces the correct layout
-    // by construction, so a foreign artifact routes safely through branch 3 instead.
-    if !so.exists() {
+    // The probe goes through a COPY, because this path is about to REPLACE the file
+    // it is asking about, and on macOS dyld caches a loaded image by PATH for the
+    // process — probing here and rebuilding at the same path made the later load
+    // return the stale image (loft#777).  See
+    // [`artifact_matches_layout_before_replace`]; the fast path above keeps the
+    // direct probe, because there the file it opens IS the one it adopts.
+    if !so.exists() || !artifact_matches_layout_before_replace(&so, layout_fp) {
         crate::cache::write_run_source_hash(&out_dir, source_content_hash(contributing));
         return build(&out_dir);
     }
