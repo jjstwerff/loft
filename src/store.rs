@@ -2290,26 +2290,53 @@ impl Store {
         true
     }
 
+    /// The payload length of `rec` in bytes, read from the size word it claims.
+    ///
+    /// A record's first word is its size, and every whole-payload walk derives its
+    /// length from that word as `size * 8 - 4`.  A size that is not POSITIVE is
+    /// already a corrupted record — freed, or never written — and the subtraction
+    /// then wraps: `0 * 8 - 4` is ~18 exabytes, so the caller reads or writes off
+    /// the end of the store and the process dies inside `memcpy`.  That reports the
+    /// copy, which is innocent, and says nothing about the corruption that reached
+    /// it; loft#810 is a SIGSEGV in the value channel for exactly this reason, with
+    /// a debug build's `attempt to subtract with overflow` pointing at the same
+    /// innocent line.
+    ///
+    /// So refuse here instead, naming the record and its claimed size.  `assert!`
+    /// rather than `debug_assert!` deliberately: a debug build already catches the
+    /// underflow, and it is the RELEASE build — where the wrap is silent — that
+    /// needs the guard.  This does not fix any cause; it converts an unbounded
+    /// access into a report at the first read that cannot be satisfied.
+    #[inline]
+    fn payload_bytes(&self, rec: u32, op: &str) -> usize {
+        let size = *self.addr::<i32>(rec, 0);
+        assert!(
+            size >= 1,
+            "{op}: record {rec} claims size {size}, but a record's size word must be \
+             positive — it has been freed or was never written, so its payload length \
+             cannot be derived (loft#810)"
+        );
+        size as usize * 8 - 4
+    }
+
     #[inline]
     /// Copy only the content of a record, not the claimed size
     fn copy(&self, rec: u32, into: u32) {
+        let bytes = self.payload_bytes(rec, "Store::copy");
         unsafe {
             std::ptr::copy_nonoverlapping(
                 self.ptr.offset(rec as isize * 8 + 4),
                 self.ptr.offset(into as isize * 8 + 4),
-                *self.addr::<i32>(rec, 0) as usize * 8 - 4,
+                bytes,
             );
         }
     }
 
     #[inline]
     pub fn zero_fill(&self, rec: u32) {
+        let bytes = self.payload_bytes(rec, "Store::zero_fill");
         unsafe {
-            std::ptr::write_bytes(
-                self.ptr.offset(rec as isize * 8 + 4),
-                0,
-                *self.addr::<i32>(rec, 0) as usize * 8 - 4,
-            );
+            std::ptr::write_bytes(self.ptr.offset(rec as isize * 8 + 4), 0, bytes);
         }
     }
 
@@ -3384,6 +3411,50 @@ mod tests {
         store.set_free_protected("call_bracket(test)");
         assert!(store.is_free_protected(), "the marker is set");
         store.delete(rec); // must not panic — this is the regression
+    }
+
+    /// loft#810 — a record whose size word is not positive is refused, not wrapped.
+    ///
+    /// Every whole-payload walk derives its length as `size * 8 - 4`, so a size of `0`
+    /// wraps to ~18 exabytes and the process dies inside `memcpy` — a SIGSEGV that
+    /// names the copy rather than the corruption that reached it. The guard cannot
+    /// prevent a record from being corrupted; it makes the first read that cannot be
+    /// satisfied say so.
+    ///
+    /// Written against `Store` for the same reason as the delete tests above: the loft
+    /// shape that produces a size-`0` record needs a whole consumer package to arise
+    /// (the report's own reduction, and the reconstructions here, all came out clean),
+    /// while the invariant being asserted is one bit.
+    #[test]
+    #[should_panic(expected = "claims size 0")]
+    fn a_record_claiming_size_zero_is_refused_not_wrapped() {
+        let mut store = Store::new(8);
+        store.free = false;
+        let rec = store.claim(3);
+        store.set_i32_raw(rec, 0, 0); // the corruption the report observed
+        store.zero_fill(rec);
+    }
+
+    /// The positive control for the guard above: a well-formed record still copies its
+    /// whole payload. Without this, the `should_panic` test would pass just as well if
+    /// the guard refused EVERY record.
+    #[test]
+    fn a_well_formed_record_still_zero_fills_its_payload() {
+        let mut store = Store::new(8);
+        store.free = false;
+        let rec = store.claim(3);
+        store.set_i32_raw(rec, 4, 0x7f7f_7f7f);
+        store.zero_fill(rec);
+        assert_eq!(
+            *store.addr::<i32>(rec, 4),
+            0,
+            "the payload after the size word is cleared"
+        );
+        assert_eq!(
+            *store.addr::<i32>(rec, 0),
+            3,
+            "the size word itself is kept"
+        );
     }
 
     /// The other direction, so the test above cannot pass by the guard being gone

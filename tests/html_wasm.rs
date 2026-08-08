@@ -47,12 +47,19 @@ fn which(cmd: &str) -> Option<PathBuf> {
 }
 
 fn wasm32_target_installed() -> bool {
+    rustup_target_installed("wasm32-unknown-unknown")
+}
+
+/// Is `triple` an installed rustup target on this machine?  A test that needs one
+/// skips rather than fails without it — a machine that cannot cross-compile says
+/// nothing about the code under test.
+fn rustup_target_installed(triple: &str) -> bool {
     Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .is_some_and(|s| s.lines().any(|l| l == "wasm32-unknown-unknown"))
+        .is_some_and(|s| s.lines().any(|l| l == triple))
 }
 
 fn repo_root() -> PathBuf {
@@ -1400,4 +1407,113 @@ fn issue620_html_browser_clocks_are_real_not_zero() {
         stdout.contains("now_is_epoch=true"),
         "now() must return real epoch milliseconds on --html, not 0 (#620).\nstdout: {stdout}"
     );
+}
+
+/// @PLN24 arc E — the availability query compiles on the browser target.
+///
+/// `c_library_available` is the idiom a `#c` library is told to use before
+/// calling into C, and under `--html` it did not COMPILE: its `#rust` body reads
+/// the `__C_LIBS` / `__C_LIB_SYMS` tables, and those were emitted only on
+/// non-browser targets (`E0425: cannot find value __C_LIB_SYMS`).  So the one
+/// question that lets a program survive a missing library was itself unavailable
+/// exactly where every library is missing.  It now answers **false**, which is
+/// not a stub: a wasm module has no `dlopen`, so no C library is available.
+#[test]
+fn pln24_html_c_library_available_compiles_and_answers_false() {
+    let Some((stdout, stderr, ok)) = run_html_wasm(
+        "pln24_avail",
+        "fn main() { println(\"avail {c_library_available(\"libc.so.6\")}\") }\n",
+    ) else {
+        return;
+    };
+    assert!(ok, "the browser build must succeed: {stdout}{stderr}");
+    assert!(
+        stdout.contains("avail false"),
+        "no wasm module can dlopen a C library: {stdout}{stderr}"
+    );
+}
+
+/// @PLN24 arc E — a reachable `#c` call is refused with ONE named message, on
+/// both wasm shapes, and an unreachable declaration still builds.
+///
+/// The emission-level guarantee is pinned in `tests/native.rs`; this is the half
+/// that only an end-to-end run can show — that what reaches the author is a
+/// single sentence naming their function, the C symbol and the target, rather
+/// than a rustc cascade against loft's own internals.
+#[test]
+fn pln24_a_reachable_c_binding_is_refused_end_to_end_on_wasm() {
+    let loft_bin = repo_root().join("target/release/loft");
+    if !loft_bin.exists() || !wasm32_target_installed() {
+        eprintln!("SKIP: release binary or wasm32 target missing");
+        return;
+    }
+    let tmp = std::env::temp_dir().join(format!("loft_pln24_arce_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).expect("create per-test dir");
+    let used = tmp.join("used.loft");
+    let unused = tmp.join("unused.loft");
+    std::fs::write(
+        &used,
+        "fn c_len(s: text) -> integer;  #c \"strlen\" \"size_t(const char*)\"\n\
+         fn main() { println(\"len {c_len(\"hello\")}\") }\n",
+    )
+    .expect("write used");
+    std::fs::write(
+        &unused,
+        "fn c_len(s: text) -> integer;  #c \"strlen\" \"size_t(const char*)\"\n\
+         fn main() { println(\"no c call\") }\n",
+    )
+    .expect("write unused");
+
+    let build = |flag: &str, out: &str, src: &std::path::Path| -> (bool, String) {
+        let o = Command::new(&loft_bin)
+            .args([flag, tmp.join(out).to_str().unwrap()])
+            .arg(src)
+            .output()
+            .expect("invoke loft");
+        (
+            o.status.success(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        )
+    };
+
+    for (flag, artifact, target) in [
+        ("--html", "r.html", "browser"),
+        ("--native-wasm", "r.wasm", "wasm (wasip2)"),
+    ] {
+        if flag == "--native-wasm" && !rustup_target_installed("wasm32-wasip2") {
+            eprintln!("SKIP {flag}: rustup target wasm32-wasip2 not installed");
+            continue;
+        }
+        let (ok, err) = build(flag, artifact, &used);
+        assert!(!ok, "{flag} must refuse a reachable #c call: {err}");
+        assert!(
+            err.contains("`c_len` is bound to the C symbol 'strlen' with #c")
+                && err.contains(target)
+                && err.contains("@PLN24 arc E"),
+            "{flag} must name the function, the symbol and the target: {err}"
+        );
+        // One message, not a cascade — the failure this replaced emitted one
+        // rustc error per bound symbol, plus a `note: the item is gated behind
+        // the native-extensions feature` pointing into loft's own source.
+        // Counted on the `error:` LINE rather than the message text, because
+        // rustc echoes the offending source line underneath and the literal
+        // therefore appears twice in a single-error build.
+        assert_eq!(
+            err.matches("error: loft: `c_len`").count(),
+            1,
+            "exactly one refusal: {err}"
+        );
+        assert!(
+            !err.contains("native-extensions"),
+            "the author must never be shown loft's own feature gates: {err}"
+        );
+
+        // The same declaration, never called, still builds.  An unused binding
+        // must not reject an otherwise-valid wasm program (the shape @PLN26 /
+        // P269 already settled for `#native`).
+        let (ok2, err2) = build(flag, &format!("un_{artifact}"), &unused);
+        assert!(ok2, "{flag} must build an UNUSED #c declaration: {err2}");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
 }

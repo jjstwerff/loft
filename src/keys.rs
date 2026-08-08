@@ -807,6 +807,22 @@ pub fn no_slot_reuse() -> bool {
     *NR.get_or_init(|| std::env::var_os("LOFT_NO_SLOT_REUSE").is_some() || strict_stores())
 }
 
+/// `LOFT_TRACE_DB=1` — print every record allocation (`OpDatabase`) with the type it
+/// allocates and the `DbRef` the target slot held on entry.  Reach for it when a store
+/// slot looks like it has two owners: the entry `DbRef` is what says whether an
+/// allocation ADOPTED a slot some other variable still names.
+///
+/// Read once because both backends call it on every struct-typed local's
+/// initialisation.  Answered in ONE place so the two backends cannot disagree about
+/// what the switch means — the interpreter had it and the native runtime did not,
+/// which made the trace silent for exactly the calls that go through a package's
+/// shared library (loft#810).
+#[must_use]
+pub fn trace_db() -> bool {
+    static TD: OnceLock<bool> = OnceLock::new();
+    *TD.get_or_init(|| std::env::var_os("LOFT_TRACE_DB").is_some())
+}
+
 /// `LOFT_STRICT_STORES=1` (@PLN130 F8) — strict store lifetime, for PROBES.
 ///
 /// Turns the two store-lifetime faults from silent-or-advisory into hard errors:
@@ -1177,6 +1193,69 @@ fn compare_key(k: &Content, record: &DbRef, stores: &[Store], key: &Key, pos: u3
     if key.type_nr < 0 { c.reverse() } else { c }
 }
 
+/// A one-field key whose EQUALITY test is a single direct read, resolved once so a
+/// probe loop does not re-derive it. Carries the field's byte offset within the record
+/// and the value to match.
+///
+/// [`compare_key`] answers a full `Ordering` and re-runs its `(Content, type_nr)` match
+/// for every record probed. A hash probe only ever asks *equal or not*, and it asks it
+/// about the same key each time, so the match belongs outside the loop: measured on 1M
+/// `integer`-keyed lookups it is ~10 ns of a ~33 ns cache-resident lookup (@PLN135
+/// arc B).
+///
+/// Only widths whose test is exactly the arm above are listed — the shifted ones
+/// (`Short`, `Byte`, and the catch-all) are deliberately absent, so [`fast_key`]
+/// answers `None` for them and the probe falls back to `compare_key` unchanged.
+pub enum FastKey<'a> {
+    /// `integer` (type_nr 1), the 8-byte read with the in-band null sentinel.
+    Int(u32, i64),
+    /// `long` (2), the raw 8-byte read.
+    Long(u32, i64),
+    /// A `size(4)` integer (8), sign-extended from the raw 4 bytes.
+    I32(u32, i64),
+    /// A raw 2-byte integer (11), sign-extended through `i16`.
+    ShortRaw(u32, i64),
+    /// `text` (6): the offset holds a 4-byte string handle.
+    Str(u32, &'a str),
+}
+
+/// Resolve a one-field key to its [`FastKey`], or `None` when the probe must keep
+/// using [`key_compare`] — a compound key, a width not listed there, or a `Content`
+/// that does not match the descriptor.
+#[must_use]
+pub fn fast_key<'a>(keys: &[Key], key: &'a [Content]) -> Option<FastKey<'a>> {
+    let ([k], [c]) = (keys, key) else { return None };
+    let pos = u32::from(k.position);
+    match (c, k.type_nr.abs()) {
+        (Content::Long(v), 1) => Some(FastKey::Int(pos, *v)),
+        (Content::Long(v), 2) => Some(FastKey::Long(pos, *v)),
+        (Content::Long(v), 8) => Some(FastKey::I32(pos, *v)),
+        (Content::Long(v), 11) => Some(FastKey::ShortRaw(pos, *v)),
+        (Content::Str(v), 6) => Some(FastKey::Str(pos, v.str())),
+        _ => None,
+    }
+}
+
+impl FastKey<'_> {
+    /// Does the record at `rec` (whose fields start at byte 8) carry this key?
+    ///
+    /// Each arm is the equality half of the identically-numbered arm of
+    /// [`compare_key`]; keep them together when either changes.
+    #[must_use]
+    pub fn matches(&self, s: &Store, rec: u32) -> bool {
+        match self {
+            FastKey::Int(pos, v) => s.get_int(rec, 8 + pos) == *v,
+            FastKey::Long(pos, v) => s.get_long(rec, 8 + pos) == *v,
+            FastKey::I32(pos, v) => i64::from(s.get_i32_raw(rec, 8 + pos)) == *v,
+            FastKey::ShortRaw(pos, v) => {
+                let raw: u16 = *s.addr(rec, 8 + pos);
+                i64::from(raw as i16) == *v
+            }
+            FastKey::Str(pos, v) => s.get_str(s.get_u32_raw(rec, 8 + pos)) == *v,
+        }
+    }
+}
+
 fn compare_ref(r1: &DbRef, r2: &DbRef, stores: &[Store], key: &Key, p1: u32, p2: u32) -> Ordering {
     let s = store(r1, stores);
     let c = match key.type_nr.abs() {
@@ -1213,6 +1292,23 @@ pub fn get_key(record: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<Content> {
             2 => {
                 let v = store(record, stores).get_long(record.rec, p);
                 result.push(Content::Long(v));
+            }
+            // A `single` / `float` key.  Without these two arms the width fell to the
+            // catch-all below, which reads ONE BYTE and calls it a `Content::Long` — so
+            // every key whose low byte is zero (0.5, 1.5, 2.0, … — almost every float a
+            // program writes) became the SAME key.  `compare_key` then had no
+            // `(Content::Long, 3|4)` arm either and compared that byte, answering Equal
+            // for every pair: a `sorted<T[k]>` collapsed to its LAST insert, and a
+            // `hash<T[k]>` lookup hashed a byte where `hash_ref` hashes nothing, so it
+            // probed the wrong bucket and missed records that were present.  The
+            // comparator arms for both widths already existed; only the reader was short.
+            3 => {
+                let v = store(record, stores).get_single(record.rec, p);
+                result.push(Content::Single(v));
+            }
+            4 => {
+                let v = store(record, stores).get_float(record.rec, p);
+                result.push(Content::Float(v));
             }
             6 => {
                 let v =

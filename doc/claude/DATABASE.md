@@ -966,6 +966,73 @@ The gate is `tests/scripts/801-trie-text-keyed.loft` — hand-computed values on
 both backends with a `sorted` control alongside;
 `tests/scripts/802-lazy-refusal-visible.loft` is the refusal's.
 
+### The node array is laid out for paging when an image is written (@PLN134)
+
+A PATRICIA descent is cheap in NODES — one root→leaf path, branching on bits of a
+probe the caller already holds — and **that says nothing about what it costs over
+a link**. A reader fetches 64 KB pages, and node ids are handed out in INSERTION
+order, so a path visits nodes created at wildly different times. Measured over
+978 842 real words (`trie_db::pages`, `#[ignore]`):
+
+| node order | pages per prefix query, 64 KB | at 4 KB |
+|---|---|---|
+| as built (insertion) | 27.1 | 36.4 |
+| breadth-first | 15.4 | 26.0 |
+| key order (in-order) | 8.7 | 14.5 |
+| depth-first pre-order | 4.2 | 7.2 |
+| **van Emde Boas** | **2.8** | **3.8** |
+
+To read ~330 bytes of nodes. The 4 KB column is what identifies the mechanism
+rather than the number: vEB barely moves where every other order inflates by
+half, which is the cache-oblivious property doing what it is for — and it matters
+beyond elegance, because the page size is not ours to pick (a local file, an HTTP
+range read and a browser cache disagree, and one layout is near-optimal for all).
+
+So `store_persist_bind` runs `Stores::relayout_tries` before it writes the image
+— `radix_tree::rtree_relayout` renumbers each tree van Emde Boas and compacts the
+free list. **Node ids are internal**, so nothing observable moves: same records,
+same key order, same answer to every lookup, which is what `r11` holds it to. It
+is idempotent (the layout is a function of the tree, not of the current ids) and
+it REFUSES a tree whose walk does not account for `n-1` nodes over `n` records,
+leaving it exactly as it was. Stores whose SCHEMA holds no trie skip the data
+walk entirely (`type_has_trie`), so the cost falls only on the kind that has one.
+
+The other half is where the RECORDS land, and it is the larger one: a query also
+reads what it returns, and 20 records claimed in insertion order sit on ~20
+distinct pages — one fetch per row. Written in trie key order they occupy **1**.
+A deep copy already claims them in key order (`copy_claims_trie_body` walks the
+tree), so a rebuilt store has this; a store persisted as built does not.
+
+Together: ~2.8 + 1.0 = **3.8 pages, 250 KB** per cold query, against 27 + 20 = 47
+as built and a 5.9 MB gzipped whole image — and a second keystroke costs ONE page
+with the reader's 64-page cache warm.
+
+What the layout unblocks, and is not itself: **a trie still cannot be paged** (see
+the note above on whole-image persistence). The work that remains, in dependency
+order, and worth building at 3.8 pages a query where it was not at 47:
+
+1. a paged descent + bounded prefix walk over `PagedReader`, beside
+   `find_hash_entry` and `sorted_range_positions`. The tree's layout constants
+   (`HDR`, `NODE_SIZE`, `node_off`, `child_off`, the child sign encoding) should be
+   EXPORTED from `radix_tree` for it rather than mirrored — the hash and sorted
+   ports mirror theirs, and one home for a layout fact is worth the export;
+2. `store_load_key_text` dispatching to it when the root is a trie;
+3. the prefix form, which must answer `t["kerk"..:8]` **without** materialising the
+   untaken tail — the cap is what makes a search box cheap, and this is the one
+   operation where a paged walk could quietly become a full one;
+4. `Stores::unservable_kind` narrowing, and the loft#802 refusal message with it.
+
+Two things the pass deliberately does NOT do, so neither reads as a defect:
+
+- **It runs on the FRESH bind only.** Re-binding an existing file leaves its
+  layout alone — the image is already laid out if this loft wrote it, and
+  rewriting someone's file to improve a read cost is not a bind's business.
+- **A bound store drifts.** Inserts after the bind mint node ids at the tail in
+  insertion order again, so a long-lived writable image slowly loses the layout.
+  For the shape this is for — build a vocabulary, persist it, serve it read-only
+  — that never happens; for a store written to over months it would, and the
+  answer is to persist afresh rather than to relayout on every insert.
+
 ### Adding or changing a collection kind — the per-kind lists
 
 A `Parts` collection variant is not implemented in one place. It has to be

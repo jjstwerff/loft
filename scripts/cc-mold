@@ -1,0 +1,47 @@
+#!/bin/sh
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# The Linux x64 link driver: `cc`, with `mold` when this machine has it.
+#
+# `.cargo/config.toml` used to pass `-C link-arg=-fuse-ld=mold` unconditionally,
+# which turns a machine without mold into a build that fails — and fails pointing
+# somewhere else entirely (loft#805):
+#
+#     error: linking with `cc` failed: exit status: 1
+#       = note: collect2: fatal error: cannot find 'ld'
+#
+# There is a working `/usr/bin/ld` the whole time.  `cc` reports the linker it was
+# TOLD to use as a missing `ld`, so the message names neither mold nor the file
+# that asked for it, and the fix — comment one line out of a tracked config — is
+# invisible unless you already suspect it.  On a machine with no root or no apt
+# (a sandbox, a restricted CI image, a managed dev environment) that is a
+# multi-step debugging session before the first build.
+#
+# cargo has no conditionals, so the decision has to happen at link time, which is
+# what this script is for.  It is named as the LINKER rather than added as a link
+# ARG deliberately: cargo resolves `target.<triple>.linker` relative to the
+# directory holding `.cargo/`, so the path works from any cwd — and rustc invokes
+# the linker from each crate's own directory, not from the project root.
+#
+# The flag set is now identical with and without mold, so a machine that lacks it
+# no longer needs a local edit to build, and two checkouts no longer disagree
+# about the cache key because one of them commented a line out.
+#
+# Override for a machine that wants a different driver entirely:
+#     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang cargo build
+# An env linker replaces this script; nothing here has to be edited.
+
+# AFTER "$@", not before.  rustc already passes `-fuse-ld=lld` of its own (with a
+# `-B .../gcc-ld` pointing at the bundled rust-lld), and `cc` takes the LAST
+# `-fuse-ld` it is given — so a flag placed first is silently overridden and mold
+# never runs, which looks exactly like a working build.  `-C link-arg=` appended
+# it last, and this has to as well.  `readelf -p .comment <binary>` names the
+# linker that actually ran, which is how to check.
+#
+# Without mold the fallback is therefore rustc's own default — the bundled
+# rust-lld, not the system `ld`.  It needs no install either, which is the point.
+if command -v mold >/dev/null 2>&1; then
+    exec cc "$@" -fuse-ld=mold
+fi
+exec cc "$@"

@@ -1,0 +1,93 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN134 — `store_persist_bind` on a `trie<T[k]>`, and the layout pass it runs.
+//
+// Writing the image is where the trie's node array is renumbered van Emde Boas,
+// because that image is what a reader pages: numbered in INSERTION order, one
+// prefix query touches 27 pages of 64 KB to read ~330 bytes of nodes, and 2.8
+// after. The pass rewrites node ids and nothing else, so the property to hold it
+// to is that NO ANSWER MOVES — and the answers that could move are exactly the
+// ones a renumbering touches: key order, exact lookup, and the prefix walk.
+//
+// Driven by `tests/store_persist_loft.rs` twice against the same path: fresh
+// (build + persist), then reload in a SEPARATE process. Enough words that the
+// tree has real depth — a six-word trie is three nodes, and a layout pass over
+// three nodes proves nothing about one over a million.
+//
+// Env in:
+//   LOFT_PERSIST_TEST_PATH   the store file
+//   LOFT_PERSIST_TEST_MODE   "fresh" | "reload"
+
+struct PWord {
+  w: text,
+  n: integer,
+}
+
+// A vocabulary with real prefix SHARING, which is what a trie's shape is made of:
+// every stem carries the same eight suffixes, so `kerk` has descendants at several
+// depths and the split points are not all near the root.
+fn vocabulary() -> vector<text> {
+  out: vector<text> = [];
+  for st in ["kerk", "kerx", "lonneker", "aap", "aardvark", "aardappel", "beek", "berg"] {
+    out += [st];
+    for sf in ["straat", "weg", "laan", "pad", "plein", "hof", "dijk", "sloot"] {
+      out += ["{st}{sf}"];
+    }
+  }
+  out
+}
+
+fn keys_of(t: trie<PWord[w]>) -> text {
+  result = "";
+  for tk_e in t {
+    if result == "" { result = tk_e.w } else { result = "{result},{tk_e.w}" }
+  }
+  result
+}
+
+// The prefix walk — the operation the whole plan is about. `kerk` must yield its
+// nine words and NOT `kerx*`, which sorts immediately after them.
+fn prefix_of(t: trie<PWord[w]>, pre: text) -> text {
+  result = "";
+  for tp_e in t[pre..] {
+    if result == "" { result = tp_e.w } else { result = "{result},{tp_e.w}" }
+  }
+  result
+}
+
+fn lookup(t: trie<PWord[w]>, w: text) -> text {
+  found = t[w];
+  if found == null { "null" } else { "{found.n}" }
+}
+
+fn report(t: trie<PWord[w]>, tag: text) {
+  println("{tag} len={t.len()}");
+  println("{tag} keys={keys_of(t)}");
+  println("{tag} kerk={prefix_of(t, \"kerk\")}");
+  println("{tag} aard={prefix_of(t, \"aard\")}");
+  println("{tag} lookup={lookup(t, \"kerkweg\")}");
+  println("{tag} absent={lookup(t, \"kerkwe\")}");
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  t: trie<PWord[w]> = [];
+
+  if mode == "fresh" {
+    n = 0;
+    for w in vocabulary() {
+      n += 1;
+      t += [PWord { w: w, n: n }];
+    }
+    ok = store_persist_bind(t, path);
+    if !ok { println("FAIL fresh-bind-returned-false"); return }
+    report(t, "fresh");
+  } else if mode == "reload" {
+    ok = store_persist_bind(t, path);
+    if !ok { println("FAIL reload-bind-returned-false"); return }
+    report(t, "reload");
+  } else { println("FAIL unknown-mode") }
+}

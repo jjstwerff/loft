@@ -1403,34 +1403,192 @@ fn mix_fp(a: u64, b: u64) -> u64 {
 /// declare. Only a generated artifact is held to the check, and every generated
 /// artifact now carries the symbol.
 #[cfg(feature = "native-extensions")]
-fn artifact_layout_fp(so: &std::path::Path) -> Option<u64> {
+fn artifact_layout_fp(so: &std::path::Path) -> LayoutProbe {
     unsafe {
-        let lib = libloading::Library::new(so).ok()?;
+        let Ok(lib) = libloading::Library::new(so) else {
+            return LayoutProbe::Unopenable;
+        };
         let sym = format!("{LAYOUT_FP_SYMBOL}\0");
-        let f = lib
-            .get::<unsafe extern "C" fn() -> u64>(sym.as_bytes())
-            .ok()?;
-        Some(f())
+        match lib.get::<unsafe extern "C" fn() -> u64>(sym.as_bytes()) {
+            Ok(f) => LayoutProbe::Declares(f()),
+            Err(_) => LayoutProbe::Undeclared,
+        }
     }
 }
 
 #[cfg(not(feature = "native-extensions"))]
-fn artifact_layout_fp(_so: &std::path::Path) -> Option<u64> {
-    None
+fn artifact_layout_fp(_so: &std::path::Path) -> LayoutProbe {
+    // No loader in this build, so nothing can be asked — the same answer a
+    // hand-written cdylib gives, which is what the caller already tolerates.
+    LayoutProbe::Undeclared
+}
+
+/// What asking an artifact for its layout produced.
+///
+/// Three outcomes, because two of them used to be one.  `artifact_layout_fp`
+/// answered `None` both when the artifact declared nothing (a hand-written
+/// cdylib, which is fine to adopt) and when it could not be OPENED at all — and
+/// the adopter read that as "fine to adopt", then handed the caller a path whose
+/// `dlopen` would fail.  Harmless while nothing removed artifacts; `prune_artifacts`
+/// does, and the fresh fast path adopts without taking the build lock, so the two
+/// must be told apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayoutProbe {
+    /// Could not be opened — torn, half-written, or deleted between the existence
+    /// check and the load.  Never adopt; rebuilding is always available.
+    Unopenable,
+    /// Opened, and names no layout: a hand-written cdylib, generated against no
+    /// type table and with nothing to declare.
+    Undeclared,
+    /// Opened, and names the layout it was generated for.
+    Declares(u64),
 }
 
 /// May the artifact at `so` be adopted by a context whose type layout is
 /// `layout_fp`?
 ///
 /// True when it declares `layout_fp`, or declares nothing at all (a hand-written
-/// cdylib — see [`artifact_layout_fp`]).  False only when it declares a DIFFERENT
-/// layout, which is the case that used to corrupt.
+/// cdylib — see [`artifact_layout_fp`]).  False when it declares a DIFFERENT
+/// layout, which is the case that used to corrupt, and false when it cannot be
+/// OPENED — an artifact this process cannot load is not one it can adopt, and
+/// saying so here is what lets `prune_artifacts` delete concurrently.
 ///
 /// Note this compares the RAW `type_layout_fingerprint`, not the mixed key the
 /// filename carries: an artifact built by a different loft BUILD cannot link
 /// against this one's rlib at all, so the layout is the part worth asserting here.
 fn artifact_matches_layout(so: &std::path::Path, layout_fp: u64) -> bool {
-    artifact_layout_fp(so).is_none_or(|found| found == layout_fp)
+    match artifact_layout_fp(so) {
+        LayoutProbe::Undeclared => true,
+        LayoutProbe::Declares(found) => found == layout_fp,
+        LayoutProbe::Unopenable => false,
+    }
+}
+
+/// How many built artifacts a package's `native-auto/` keeps.
+///
+/// The name carries the caller's type-layout fingerprint (#715), so a NEW file
+/// appears whenever a consumer's type table differs — and nothing ever removed the
+/// old ones.  Measured in this repo: `tests/lib/typeshift/native-auto` held 532
+/// artifacts, 9.1 GB, at ~28 MB per suite run, because that fixture's whole job is
+/// to shift type layouts.  Across the tree it was 25 GB.
+///
+/// Generous on purpose.  A pruned artifact that is wanted again is REBUILT, so the
+/// cost of keeping too few is `rustc` latency and the cost of keeping too many is
+/// disk; 8 covers a package used from several consumer contexts in one session
+/// while still bounding the directory.
+const KEEP_ARTIFACTS: usize = 8;
+
+/// Drop all but the [`KEEP_ARTIFACTS`] most recent artifacts in `dir`, each with
+/// the generated `.rs` / `.args` it was built from.
+///
+/// Called after a successful build, while the build lock is still held.  Ordering
+/// is by mtime, so the survivors are the most recently BUILT — including the one
+/// that just finished.
+///
+/// A concurrent process can be adopting one of these without holding the lock (the
+/// fresh fast path takes none).  That is why [`artifact_layout_probe`] refuses to
+/// adopt an artifact it cannot OPEN: the loser of that race rebuilds instead of
+/// dlopening a file that just vanished.
+fn prune_artifacts(dir: &std::path::Path) {
+    let ext = if cfg!(target_os = "windows") {
+        "dll"
+    } else if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut built: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == ext))
+        .filter_map(|e| {
+            let m = e.metadata().ok()?.modified().ok()?;
+            Some((m, e.path()))
+        })
+        .collect();
+    if built.len() <= KEEP_ARTIFACTS {
+        return;
+    }
+    // Newest first; everything past the keep window goes.
+    built.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    for (_, so) in built.drain(KEEP_ARTIFACTS..) {
+        // `libfoo_<fp>.so` / `foo_<fp>.dll` → the `foo_<fp>` the generated sources
+        // are named after.  Only the platform prefix differs, and stripping it is
+        // what lets one loop delete all three files.
+        let Some(name) = so.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let stem = name.strip_prefix("lib").unwrap_or(name);
+        let _ = std::fs::remove_file(&so);
+        let _ = std::fs::remove_file(dir.join(format!("{stem}.rs")));
+        let _ = std::fs::remove_file(dir.join(format!("{stem}.args")));
+    }
+}
+
+/// The same question as [`artifact_matches_layout`], asked about an artifact that
+/// is about to be REPLACED at this path.
+///
+/// macOS dyld caches a loaded image BY PATH for the life of the process, and its
+/// `dlclose` is a no-op.  So probing the old artifact and then rebuilding a fresh
+/// one at the same path made the later `load_all` hand back the STALE image dyld
+/// had already cached: the settling run executed pre-edit code while writing the
+/// correct file for next time (loft#777's macOS tail).  Linux keys `dlopen` on
+/// `(dev, inode)` and loaded the new file, which is why only macOS broke.
+///
+/// Dropping the probe instead is what this replaces, and it cost the loft#717
+/// guard: the justification was that a rebuild always follows here, and it does
+/// not — branch 3's edit-loop arm answers `Ok(None)` and leaves the artifact in
+/// place, so a foreign-layout cdylib stopped being rebuilt
+/// (`n3_use_native::a_foreign_context_artifact_is_rejected_not_adopted`).
+///
+/// So the probe stays and moves off the path instead: load a COPY at a throwaway
+/// name, let dyld cache THAT, and leave the real path clean for the load that
+/// follows.  Same bytes, same answer.
+fn artifact_matches_layout_before_replace(so: &std::path::Path, layout_fp: u64) -> bool {
+    match layout_fp_via_copy(so) {
+        LayoutProbe::Undeclared => true,
+        LayoutProbe::Declares(found) => found == layout_fp,
+        LayoutProbe::Unopenable => false,
+    }
+}
+
+/// Read an artifact's layout fingerprint through a throwaway copy, so the caller's
+/// path is never handed to `dlopen`.  Falls back to probing in place when the copy
+/// cannot be made — that is the pre-existing behaviour, and it beats answering
+/// "no layout declared" (which means ADOPT) because a temp file failed.
+fn layout_fp_via_copy(so: &std::path::Path) -> LayoutProbe {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let (Some(dir), Some(name)) = (so.parent(), so.file_name()) else {
+        return artifact_layout_fp(so);
+    };
+    // A SUBDIRECTORY rather than a sibling file, and the copy keeps the artifact's
+    // own file NAME inside it.  `native-auto/` is enumerated by extension elsewhere
+    // — the parity tests count `so`/`dylib`/`dll` to assert how many artifacts a
+    // context built — so a probe copy beside the real one would be counted as a
+    // second artifact.  A dot-prefixed directory has no such extension, and the
+    // name inside stays the one `LoadLibrary` wants on Windows.
+    let probe_dir = dir.join(format!(
+        ".layout-probe-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::create_dir_all(&probe_dir).is_err() {
+        return artifact_layout_fp(so);
+    }
+    let probe = probe_dir.join(name);
+    let fp = if std::fs::copy(so, &probe).is_ok() {
+        artifact_layout_fp(&probe)
+    } else {
+        artifact_layout_fp(so)
+    };
+    // The copy has been read; the process may keep the image mapped (dlclose is a
+    // no-op on macOS), and unlinking a mapped file is fine on both unixes.
+    let _ = std::fs::remove_dir_all(&probe_dir);
+    fp
 }
 
 fn type_layout_fingerprint(stores: &Stores) -> u64 {
@@ -1552,14 +1710,27 @@ pub fn cached_or_build_shared_cdylib(
     let build = |out_dir: &std::path::Path| -> Result<Option<std::path::PathBuf>, String> {
         let built = build_shared_cdylib(data, stores, export_set, out_dir, &stem)?;
         crate::cache::write_native_artifact_fingerprint(out_dir, fp);
+        // Bound the directory, while the build lock is still held.  A new artifact
+        // appears per consumer type-layout (#715) and nothing collected the old
+        // ones — 25 GB across this repo's fixtures, 532 files in one package.
+        prune_artifacts(out_dir);
         Ok(Some(built))
     };
 
     // 2. No artifact yet, or `loft` changed → build eagerly (native from the start).
     // An artifact built for a DIFFERENT type layout counts as "no artifact"
     // (loft#717): it can never be adopted, and letting it reach the edit-loop
-    // branch below would leave a foreign artifact sitting at this name.
-    if !so.exists() || !artifact_matches_layout(&so, layout_fp) {
+    // branch below would leave a foreign artifact sitting at this name — branch 3
+    // does NOT always rebuild, its edit-loop arm answers `Ok(None)` and leaves the
+    // file alone.
+    //
+    // The probe goes through a COPY, because this path is about to REPLACE the file
+    // it is asking about, and on macOS dyld caches a loaded image by PATH for the
+    // process — probing here and rebuilding at the same path made the later load
+    // return the stale image (loft#777).  See
+    // [`artifact_matches_layout_before_replace`]; the fast path above keeps the
+    // direct probe, because there the file it opens IS the one it adopts.
+    if !so.exists() || !artifact_matches_layout_before_replace(&so, layout_fp) {
         crate::cache::write_run_source_hash(&out_dir, source_content_hash(contributing));
         return build(&out_dir);
     }

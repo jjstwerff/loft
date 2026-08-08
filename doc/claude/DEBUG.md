@@ -693,9 +693,34 @@ file it wrote, on a line after the diagnostic — so if you see the report but n
 such line, the write failed and stderr is all there is.
 
 Reading it back: the `pc:` value is a bytecode position, which
-`LOFT_LOG=static` maps to source; `fn:` and `at:` are usually enough on their
-own. If the report says `(none — crash outside interpreter)`, the fault was not
-in an opcode — look at `--native` code or a library call instead.
+`LOFT_LOG=static` maps to source. If the report says `(none — crash outside
+interpreter)`, the fault was not in an opcode — look at `--native` code or a
+library call instead.
+
+**`at:` is a lower bound, not an answer — read the `pc+` suffix.** The span table
+holds one entry per statement and none at all for regions no statement produced,
+and the lookup takes the last entry at or before the crashing pc. When something
+is recorded nearby, that IS the site and the line prints bare. When nothing is,
+the lookup reaches arbitrarily far back, so the report says how far:
+
+```
+  at:      /…/default/05_coroutine.loft:18:27  (nearest span, pc+280 — NOT necessarily this line)
+  at:      (no source span covers this pc)
+```
+
+Unqualified, that first line sent loft#806's reader into coroutine code the
+program never calls. A confident wrong location is worse than none: silence makes
+you look, an answer sends you away. So treat any non-zero `pc+` as "the nearest
+thing recorded", and `fn:`/`op:` as the reliable pair.
+
+**`last op:` names the opcode**, resolved through a table the interpreter
+publishes once per process (`crash_report::set_op_names`) — a signal handler
+cannot borrow the definitions table, so the names are made `'static` up front.
+The number alone (`op=249`) identifies nothing; the name is what points at a
+subsystem, and on loft#806 `OpAppendStackText` did in one line what a matrix of
+19 probes had not. Cross-check it against `LOFT_LOG=minimal`, whose trace ends at
+the same op by an independent path — that agreement is what calibrates the
+reading.
 
 ### An unexplained SIGSEGV in a package: suspect the auto-built cdylib
 
@@ -871,7 +896,7 @@ where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
 | `LOFT_STORES=warn` | Warns when >30 stores are active. | Catch a runaway leak early.  **Note (@PLN103):** this OVER-warns — a large *working set* (many concurrently-live stores, all freed) trips it though it is not a leak.  Prefer `=timeline` to disambiguate. |
 | `LOFT_STORES=timeline` (@PLN103) | Per-store lifeline with a STABLE id `#<store_nr>.<seq>` (the `seq` disambiguates the reused `store_nr` slot, so a `free` prints the same id as its `alloc`), plus an exit SUMMARY: `<allocs>, <frees>, peak <N> concurrently-live (working set)` reconciled with the authoritative leak count. Both backends. | The working-set-vs-leak question `=warn` can't answer: a high `peak` with `NO leak` is a big-but-clean working set; a real leak reports `N user store(s) LEAKED`.  Also: match a freed-then-reused slot by its `.seq`.  **The label column is native-only** (loft#759): generated code passes the variable to `free_named`, so a native line reads `free #3.5 var___ref_1`, while every interpreter line reads `·` — the interp `FreeRef` opcode takes its `DbRef` off the stack and carries no name.  So on `--interpret` the timeline says WHICH store died, never which site killed it; pair it with `loft introspect` (which does name the free) rather than reading the interp column for attribution. |
 | `LOFT_TEXT_TIMELINE` (@PLN104) | The **text-buffer** analogue of `LOFT_STORES=timeline` — text values are Rust `String`s on the stack frame, so their heap allocation is INVISIBLE to the store timeline / `check_store_leaks`. Any value → exit SUMMARY (`<allocs>, <frees>, peak <N> bytes live`) + a `LEAKED #seq fn=<d_nr> <bytes> <content>` line for every `String` still live at exit; `=timeline` adds a per-op `grow`/`free` lifeline. Interp only (native RAII frees text). Realloc-safe (capacity delta by ptr). | **The loft#568 owned-text-return orphan class** — the leak `LOFT_STORES=timeline` is blind to and the ASan `ir_read` suppression measures UNRELIABLY (stack-substring, false-pos/negs by `malloc_context_size`). This is DETERMINISTIC and names the leaking fn + content. Reach for it first on a suspected text-return leak. |
-| `LOFT_TRACE_DB=1` | Every `OpDatabase` call with var, type, current DbRef. | Pin cross-iter slot dangling (a slot's stale DbRef gets `clear+claim`'d, clobbering another var's record).  Added during PLAN51 Cluster II diagnosis. |
+| `LOFT_TRACE_DB=1` | Every `OpDatabase` call with the type it allocates and the `DbRef` the target slot held ON ENTRY.  **Both backends** — the native runtime's line names the type too, so a call that crosses into a package's shared library still prints (it did not before loft#810, which is exactly where the adoption was). | Pin cross-iter slot dangling (a slot's stale DbRef gets `clear+claim`'d, clobbering another var's record).  The ENTRY `DbRef` is the whole point: a non-null one means this allocation ADOPTED a slot, and if a fresh `null_named` handed that same slot to somebody else first, the record now has two owners.  Pair with `LOFT_STORES=log` — the interleaving of `+ alloc #N` against the adoptions is what names the second owner — and confirm with `LOFT_NO_SLOT_REUSE=1`.  Added during PLAN51 Cluster II diagnosis. |
 | `LOFT_TRACE_CR=1` | Every interp `OpCopyRecord` with src+dst + Canvas field reads BEFORE and AFTER copy. | Pin same-store copy corruption (`remove_claims` frees nested vec records before `copy_block` reads them) or wrong-source mid-copy.  Added during PLAN51 Cluster II diagnosis. |
 | `LOFT_TRACE_LEX=1` (#625) | The lexer's POSITION bookkeeping: every recorded identifier position (`idpos`), every `to()` seek, every `revert`, every memory `replay`. | **A diagnostic naming the wrong LINE.** The reporting cursor is shared and long-lived: any warning pass may seek it BACKWARDS to point at an earlier site, and `to()` moves only that cursor — the tokenizer keeps counting lines from wherever it was left, so an unrestored seek shifts every LATER diagnostic and the symptom surfaces in an unrelated message. Run it and **diff the two passes**: the pass that records a token at the wrong line names the seek just before it. |
 | `LOFT_TRACE_SCHEMA=1` (#618) | Every `Stores` type registration and rollback, plus the **DEF** behind each (`fill d_nr=… name=… -> reg=…`). | **"Double structure type" aborts**, and any suspicion that a speculative parse (REPL capture, `infer_type`) is not schema-neutral. The abort names only the colliding type; the fault is normally ONE def filled twice (a rolled-back parse re-creating it), which is visible only as the same `d_nr` registering a bare name and then a `src0::`-qualified one. |

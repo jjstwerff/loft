@@ -246,3 +246,100 @@ fn sandbox_check_reports_verdict_without_executing() {
         "a rejected sandbox-check must NOT execute the program: {out2}"
     );
 }
+
+/// @PLN24 — a `#c` binding is gated by `native_ffi`, never by a `#cap` grant.
+///
+/// The plan left this as an open design question ("does a `#c` symbol need an
+/// effect declaration to be admissible?") and the answer came from measuring the
+/// tree rather than reading it: a sandboxed script reaching a `#c` binding
+/// tagged `db#read`, under a profile that granted `db#read` and left `native_ffi`
+/// at its default false, was **admitted and ran the C**.
+///
+/// The reason is worth keeping beside the test.  Both the FFI gate and
+/// `reachable_ffi_bridges` key on `def.native()`, which arc A leaves EMPTY on a
+/// `#c` definition on purpose — so the Rust dispatch path cannot claim one — and
+/// a `#c` binding therefore fell through to the capability check.  A capability
+/// grant says what DATA a script may touch; it cannot say "and arbitrary machine
+/// code may run in this process".  That is the line `native_ffi` already draws
+/// for a Rust cdylib bridge, and a `#c` call is the stronger case: there is no
+/// marshalling layer between the script and the library at all.
+///
+/// Three cells, because the fix has to reject exactly one of them.
+#[test]
+fn a_c_binding_is_gated_by_native_ffi_not_by_a_capability_grant() {
+    let dir = std::env::temp_dir().join(format!("loft_sbcli_cbind_{}", std::process::id()));
+    let pkg = dir.join("lib").join("cbind").join("src");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        dir.join("lib").join("cbind").join("loft.toml"),
+        "[library]\nname = \"cbind\"\nversion = \"0.0.1\"\n",
+    )
+    .unwrap();
+    // libc, so the binding needs no `[c] libs` entry and no library on disk:
+    // admission runs at LOAD, and what is under test is the verdict.
+    std::fs::write(
+        pkg.join("cbind.loft"),
+        "pub fn c_len(s: text) -> integer db#read;   #c \"strlen\" \"size_t(const char*)\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prog.loft"),
+        "use cbind;\nfn scripted() -> integer { cbind::c_len(\"hello\") }\n\
+         fn main() { println(\"len {scripted()}\") }\n",
+    )
+    .unwrap();
+
+    let verdict = |toml: &str| -> (bool, String) {
+        std::fs::write(dir.join("loft.toml"), toml).unwrap();
+        let out = Command::new(loft_bin())
+            .arg("--interpret")
+            .arg("--timeout")
+            .arg("60")
+            .arg("--lib")
+            .arg(dir.join("lib"))
+            .arg(dir.join("prog.loft"))
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let mut both = String::from_utf8_lossy(&out.stdout).into_owned();
+        both.push_str(&String::from_utf8_lossy(&out.stderr));
+        (out.status.success(), both)
+    };
+
+    const HEAD: &str = "[sandbox]\nmod = [\"fn:scripted\"]\n[profile.mod]\n";
+
+    // 1. The cap is granted and `native_ffi` is unset: REJECTED, and the message
+    //    says why the grant cannot admit it.
+    let (ok, out) = verdict(&format!(
+        "{HEAD}allow_libs = [\"code\"]\nallow = [\"db#read\"]\n"
+    ));
+    assert!(!ok, "a granted #cap must not admit a `#c` binding: {out}");
+    assert!(
+        out.contains("`#c` binding")
+            && out.contains("strlen")
+            && out.contains("native_ffi")
+            && out.contains("fix:"),
+        "the rejection names the C symbol and the gate that governs it: {out}"
+    );
+    assert!(
+        !out.contains("len 5"),
+        "a rejected program must not have run: {out}"
+    );
+
+    // 2. The host says yes explicitly: admitted, and it really calls the C.
+    let (ok2, out2) = verdict(&format!(
+        "{HEAD}allow_libs = [\"code\"]\nallow = [\"db#read\"]\nnative_ffi = true\n"
+    ));
+    assert!(ok2, "`native_ffi = true` must admit it: {out2}");
+    assert!(out2.contains("len 5"), "and the call must work: {out2}");
+
+    // 3. The library is allow-listed wholesale: admitted, UNCHANGED.  That is the
+    //    host vetting the library as a unit — the same answer a `#native` bridge
+    //    in an allow-listed library already gets, and narrowing it here would be
+    //    a different policy change wearing this fix's clothes.
+    let (ok3, out3) = verdict(&format!("{HEAD}allow_libs = [\"code\", \"cbind\"]\n"));
+    assert!(ok3, "a wholesale-allowed library still admits it: {out3}");
+    assert!(out3.contains("len 5"), "and the call must work: {out3}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

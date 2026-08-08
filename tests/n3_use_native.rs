@@ -12,6 +12,52 @@
 
 use std::process::Command;
 
+/// Copy `pkgs` out of `tests/lib` into a `lib/` of this test's own, and answer the
+/// path to pass as `--lib`.
+///
+/// A test that WIPES and COUNTS `native-auto/` must own the directory it counts.
+/// Two tests here did neither: `use_compile_native_library_dispatches_on_real_binary`
+/// and `a_foreign_context_artifact_is_rejected_not_adopted` both wiped and then
+/// counted `tests/lib/mathnative/native-auto`, so whichever ran second saw the
+/// other's artifact — or had its own wiped mid-run — and the count assert failed
+/// in 5 runs out of 8.
+///
+/// An in-process `Mutex` would not fix it: the suite runs under **nextest**, which
+/// gives every test its own PROCESS. Only isolation works, and it is cheap —
+/// `tests/lib` is 18 MB without the build directories and 9.4 GB with them, so
+/// copying is fast precisely because `native-auto/` is what gets skipped.
+///
+/// Skipping `native-auto/` is also what makes the copy CORRECT rather than merely
+/// small: an inherited artifact is exactly the thing these tests are counting.
+fn private_lib(dir: &std::path::Path, pkgs: &[&str]) -> std::path::PathBuf {
+    let lib = dir.join("lib");
+    for pkg in pkgs {
+        copy_pkg(&std::path::Path::new("tests/lib").join(pkg), &lib.join(pkg));
+    }
+    lib
+}
+
+/// Recursive copy that skips build output (`native-auto/`, `target/`).
+fn copy_pkg(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).expect("create the private package dir");
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        if name == "native-auto" || name == "target" {
+            continue;
+        }
+        let src = e.path();
+        let dst = to.join(&name);
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            copy_pkg(&src, &dst);
+        } else {
+            std::fs::copy(&src, &dst).expect("copy a fixture file");
+        }
+    }
+}
+
 /// Is an auto-built cdylib for `mathnative` present in `dir`?
 ///
 /// loft#715 — the artifact name carries the caller's type-layout fingerprint
@@ -62,14 +108,17 @@ fn use_compile_native_library_dispatches_on_real_binary() {
     )
     .unwrap();
 
-    // The library's auto-built cdylib lands in its package's `native-auto/` dir
-    // (git-ignored); start clean so its presence afterwards proves the build ran.
-    let native_auto = std::path::Path::new("tests/lib/mathnative/native-auto");
-    let _ = std::fs::remove_dir_all(native_auto);
+    // The library's auto-built cdylib lands in its package's `native-auto/` dir;
+    // its presence afterwards proves the build ran.  A PRIVATE copy of the package,
+    // because that directory is asserted on and a sibling test wipes the shared one
+    // (see `private_lib`).
+    let lib = private_lib(&tmp, &["mathnative"]);
+    let native_auto = lib.join("mathnative/native-auto");
+    let native_auto = native_auto.as_path();
 
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
         .arg("--lib")
-        .arg("tests/lib")
+        .arg(&lib)
         .arg(&prog)
         .env("LOFT_NO_CACHE", "1") // auto-native programs bypass the program cache anyway
         .output()
@@ -496,11 +545,15 @@ fn a_foreign_context_artifact_is_rejected_not_adopted() {
         eprintln!("skip: rustc unavailable");
         return;
     }
-    let native_auto = std::path::Path::new("tests/lib/mathnative/native-auto");
     let pid = std::process::id();
     let tmp = std::env::temp_dir().join(format!("loft_717_layout_{pid}"));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
+    // A PRIVATE copy: this test COUNTS the artifacts in `native-auto/`, and a
+    // sibling test builds into the shared one (see `private_lib`).
+    let lib = private_lib(&tmp, &["mathnative", "typeshift"]);
+    let native_auto = lib.join("mathnative/native-auto");
+    let native_auto = native_auto.as_path();
 
     // Two programs over the SAME library whose type tables differ: the second
     // loads another library first, which shifts every later type index.
@@ -521,7 +574,7 @@ fn a_foreign_context_artifact_is_rejected_not_adopted() {
     let run = |prog: &std::path::Path| {
         Command::new(env!("CARGO_BIN_EXE_loft"))
             .arg("--lib")
-            .arg("tests/lib")
+            .arg(&lib)
             .arg(prog)
             .env("LOFT_NO_CACHE", "1")
             .output()
@@ -806,6 +859,94 @@ fn inserting_into_a_keyed_collection_over_an_imported_struct_works() {
     assert_eq!(
         outputs[0], outputs[1],
         "the two backends disagree on the keyed inserts"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// loft#715's tail — a package's `native-auto/` stays BOUNDED.
+///
+/// The artifact name carries the consumer's type-layout fingerprint, so a new file
+/// appears per distinct consumer context, and nothing collected the old ones.
+/// Measured before this guard existed: `tests/lib/typeshift/native-auto` held 532
+/// artifacts and 9.1 GB, growing ~28 MB per suite run, and the tree carried 25 GB
+/// of it.  Disk, not correctness — which is exactly why nobody looked.
+///
+/// Builds more distinct contexts than the keep window and requires the directory to
+/// stop growing.  The count is what carries this: a fix that pruned nothing would
+/// still leave every program RUNNING, so no behavioural assertion can see it.
+#[test]
+fn a_packages_artifact_directory_stays_bounded() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_prune_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    // A private copy, for the same reason the two tests above take one: this
+    // COUNTS `native-auto/`, so it must own it.
+    let lib = private_lib(&tmp, &["mathnative", "typeshift"]);
+    let native_auto = lib.join("mathnative/native-auto");
+
+    // Each program pads its own type table with a different number of structs, so
+    // every one is a distinct layout fingerprint and mints its own artifact.
+    let mut built = 0;
+    for n in 0..12 {
+        let pad: String = (0..n)
+            .map(|i| format!("struct Pad{i} {{ p_a: integer, p_b: text }}\n"))
+            .collect();
+        let prog = tmp.join(format!("ctx{n}.loft"));
+        std::fs::write(
+            &prog,
+            format!("use mathnative;\n{pad}fn main() {{ println(\"{{double(21)}}\"); }}\n"),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--lib")
+            .arg(&lib)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary");
+        assert!(
+            out.status.success(),
+            "context {n} must still RUN — pruning is a disk policy, never a failure.\
+             \nstderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "42\n",
+            "context {n} produced the wrong answer"
+        );
+        built += 1;
+    }
+
+    let count = std::fs::read_dir(&native_auto)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .is_some_and(|x| x == "so" || x == "dylib" || x == "dll")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+
+    // The CONTROL: distinct contexts really did mint distinct artifacts, so the
+    // bound below is a bound and not an artifact of everything sharing one name.
+    assert!(
+        count > 1,
+        "the {built} contexts shared one artifact, so this test proves nothing about \
+         pruning — the padding no longer shifts the layout fingerprint"
+    );
+    assert!(
+        count <= 8,
+        "`native-auto/` grew to {count} artifacts from {built} contexts; it must keep \
+         at most the 8 most recent (`KEEP_ARTIFACTS`)"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

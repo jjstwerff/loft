@@ -103,6 +103,26 @@ pub enum Fetched {
     Unreachable(String),
 }
 
+/// What a collection with no driver reports, in ONE place.
+///
+/// Both backends reach a miss by different routes — the interpreter looks the
+/// driver up in `Data`, `--native` reads a pointer generated `init()` installed —
+/// and the gate for @PLN133 S8 compares their whole output rather than a line at
+/// a time. A message written twice is the first thing that would diverge, and it
+/// would diverge in the one place a user is already confused.
+///
+/// It names the ELEMENT TYPE, because that is what has no driver. Naming only the
+/// source would send someone to look at a connection string that is perfectly
+/// fine.
+#[must_use]
+pub fn no_lazy_driver(source: &str, element: &str) -> String {
+    format!(
+        "`{source}` needs a loft driver for {element} — define `fn lazy_fetch(coll: <the \
+         {element} collection>, source: text, key_int: integer, key_text: text) -> integer` \
+         and bind the collection again"
+    )
+}
+
 impl Stores {
     /// Ask one source for one key. The dispatch that makes the seam a seam.
     ///
@@ -140,18 +160,54 @@ impl Stores {
         }
     }
 
-    /// @PLN133 S8 — the binding's source, when it is one a LOFT driver serves.
+    /// @PLN133 S8/S9 — the binding's source, when a LOFT driver is what serves it.
     ///
     /// Asked before the fetch rather than inside it, because the answer decides
     /// WHO fetches: `Stores` cannot run a loft function and `State` can, so the
     /// two callers of the miss path make this call while they still hold both.
+    ///
+    /// **S9 — a declared driver WINS, including over a source core drives in
+    /// Rust.** Core binds sqlite and the loft library binds four behind one
+    /// interface; this is how a program moves its sqlite reads onto the loft
+    /// driver, one element type at a time, with the Rust source still serving
+    /// every type that has none. That is what makes the swap measurable rather
+    /// than a flag day: the same program, the same database, one collection on
+    /// each path, and @PLN129's count assertions comparing them.
+    ///
+    /// `have_driver` is the caller's answer to *"is there a driver for this
+    /// collection's element type"*, because the two backends learn it
+    /// differently — the interpreter asks `Data`, `--native` asks the table
+    /// generated `init()` filled — and neither of those is reachable from here.
     #[must_use]
-    pub fn lazy_loft_source(&self, coll: &DbRef) -> Option<String> {
+    pub fn lazy_loft_source(&self, coll: &DbRef, have_driver: bool) -> Option<String> {
         let source = self.lazy_source(coll)?;
         match LazySource::of(&source) {
+            // No Rust driver exists for it, so loft is the only answer — and when
+            // the program has none either, the refusal is what the caller reports.
             LazySource::Loft(s) => Some(s),
+            // A source core CAN drive. The program's own driver takes it only if
+            // it declared one for this type; otherwise nothing changes.
+            _ if have_driver => Some(source),
             _ => None,
         }
+    }
+
+    /// @PLN133 S9 — the name of the ELEMENT type a collection holds.
+    ///
+    /// The key a lazy driver is looked up by, and the reason it is a name: the
+    /// driver is declared in parse-time `Data` and reached from runtime
+    /// `Stores`, which count types in different spaces. A name is the one key
+    /// both hold without a mapping that has to be kept in step — and @PLN133 S8's
+    /// own `LOFT_STRICT_SCHEMA_IDS` exists because that kind of mapping drifts.
+    ///
+    /// `""` for a type that holds no element, which no keyed lookup reaches.
+    #[must_use]
+    pub fn element_type_name(&self, db_tp: u16) -> &str {
+        let c = self.content(db_tp);
+        if c == u16::MAX {
+            return "";
+        }
+        &self.types[c as usize].name
     }
 
     /// Record a refusal against a collection, through arc C's channel.

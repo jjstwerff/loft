@@ -3,11 +3,10 @@
 
 ## Status
 
-**Building. All four probes ran 2026-08-06 and decided the architecture; S1–S6
-and S8 landed 2026-08-07.** S1–S5 are pure values and pure functions, S6 only
-READS a catalogue, and S8 is the first change to core: a lazy fetch can now BE a
-loft function, on BOTH backends, with byte-identical output — including P4's
-releasing unwind, so a contained fault leaves nothing behind.
+**CLOSED 2026-08-08. The gate passes.** All four probes ran 2026-08-06 and
+decided the architecture; S1–S6 and S8 landed 2026-08-07, S7 and S9 on
+2026-08-08, S11–S14 the same day. S10 is DECIDED rather than built, and the
+decision is that the deletion it asked for must not happen — § S10.
 
 P1 **passes**, so **option B is viable**. P2 **passes for reads and fails for
 writes on sqlite**, which is a bounded, documented limit rather than a blocker.
@@ -20,9 +19,19 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S4 `reconcile` | **done** — read and write verdicts, six hand-built pairs |
 | S5 the connection string | **done** |
 | S6 `introspect` (sqlite) + the round trip, run twice | **done** |
-| S7 the backend registry | not started — see § the design question below |
+| S7 the backend registry | **done** — `tests/fixtures/sqldb/registry/`, shape (1) |
 | S8 core's lazy fault calls loft | **done, both backends** |
-| S9–S14 | not started |
+| S9 prerequisite: per-type driver dispatch | **done** — and it closed a wrong-value hole S8 had left (below) |
+| S9 sqlite down the loft path | **done** — a declared driver WINS, and the two paths are proven indistinguishable |
+| S10 delete core's Rust sqlite source | **DECIDED: no — a demotion, and it already shipped in S9** (§ S10) |
+| S11 absent → create | **done** — `ensure`, all four backends |
+| S12 present → follow | **done** — same call, same four backends |
+| S13 `insert_row` from the same `TableDef` | **done** for the statement; the GENERIC struct walk stays @PLN23 S5 (§ S13) |
+| S14 the gate, run twice | **done** — 4 database backends × 2 loft backends, byte-identical |
+
+`introspect` now reads all four catalogues, so requirement 3 is no longer a
+sqlite claim. Every query was run against a live server of its engine before it
+was written down — the rule P3 exists to enforce.
 
 Every measurement below is from the current tree and is cited so it can be
 re-checked rather than believed.
@@ -32,9 +41,10 @@ re-checked rather than believed.
 ## Effort + design
 
 - **Effort:** H
-- **Design:** the invariant is named and its load-bearing claims have probes; the
-  reconcile rules for a foreign schema are stated but untested against a real one.
-- **Last touched:** 2026-08-07
+- **Design:** the invariant is named, every load-bearing claim has a probe, and
+  the reconcile rules for a foreign schema are now tested against real tables on
+  four engines rather than only stated.
+- **Last touched:** 2026-08-08
 
 ## Goal
 
@@ -752,10 +762,11 @@ have looked right:
 - **`extra bound=true write=false`.** One table, two verdicts, from one
   `reconcile`.
 
-**`introspect` is sqlite only, and that is a scope statement.** The other three
-have `information_schema`, which is one query for all of them — but a
-cross-backend claim made without running it against a live server of each is
-exactly the gap P3 found in the float rendering.
+**`introspect` was sqlite only at S6, and that was a scope statement.** S12
+closed it: all four catalogues, each query run against a live server of its
+engine first — and the columns half did unify on `information_schema` while the
+INDEX half did not, which is the sort of thing only running it tells you. See
+§ S11 + S12.
 
 ### S8 — the mechanism works, and it is smaller than @PLN129 costed it
 
@@ -862,22 +873,22 @@ Two break-checks:
   own locals. The `!faulted` guard stays because it is right in principle, not
   because the matrix needs it.
 
-### S7 has a design question the plan did not name: `SqlDb` is STATIC dispatch
+### S7 had a design question the plan did not name: `SqlDb` is STATIC dispatch
 
 Requirement 1 is *one string switches every SQL consumer in the process*, and S5
 delivers the half that is a parser. The other half — handing back a connection
-the caller then uses — has no obvious spelling, because **loft interfaces are
+the caller then uses — had no obvious spelling, because **loft interfaces are
 static dispatch**: `SqlDb` is satisfied by four unrelated types, and no function
 can return "one of them". `sql.loft`'s own header states this as the reason the
 cursor is state ON the connection rather than a second type the connection
-returns; it applies to the registry too.
+returns; it applied to the registry too.
 
-Three shapes, and the choice is not free:
+Three shapes, and the choice was not free:
 
-1. **A struct-enum over the four backends** (`enum AnyDb { Sq { c: Sqlite }, … }`)
-   with one method per variant. This is loft's native polymorphism and it works
-   today — but it names all four backends in one type, so a program that wants
-   only sqlite links the other three, and adding a fifth edits the enum.
+1. **A struct-enum over the four backends** (`enum AnyDb { DbSqlite { sq: Sqlite }, … }`).
+   This is loft's native polymorphism — but it names all four backends in one
+   type, so a program that wants only sqlite links the other three, and adding a
+   fifth edits the enum.
 2. **The caller matches on `Conn.backend` itself** and holds a concrete type.
    Honest and zero-cost, and it makes requirement 1 a smaller claim than it
    sounds: the string picks the driver, and the caller still has a `match`.
@@ -885,10 +896,392 @@ Three shapes, and the choice is not free:
    so it calls a loft function by name and the registry can be inside that
    function.
 
-**(1) is the one to build for S7** — it keeps the promise the requirement makes,
-and the linking cost is the price of a uniform API over four C libraries — but it
-should be written down as a decision rather than arrived at, because (2) is
-defensible and cheaper and the difference is visible to every consumer.
+**(1) is what was built**, and the decision is recorded in
+`tests/fixtures/sqldb/registry/src/registry.loft`'s header rather than left to be
+inferred: it keeps the promise requirement 1 makes — one string, and no `match`
+in any consumer — and the linking cost is the price of a uniform API over four C
+libraries. (2) stays defensible and cheaper, and the difference is visible to
+every consumer, which is why it belongs in a file.
+
+### S7 — the correction the shape needed, and the two it did not survive
+
+**The method must be on the ENUM, not on the variant.** The obvious reading of
+loft's struct-enum polymorphism is `fn db_exec(self: DbSqlite, …)` per variant,
+and that dispatches correctly — but it does not satisfy an interface for the
+enum, which the compiler says outright: *"'AnyDb' does not satisfy interface
+'SqlDb': missing db_exec"*. Fifteen `match self` forwarders is the whole cost,
+and none of them decides anything.
+
+**Two neighbouring language defects had to be fixed to write it, and both are
+core, not fixture.** Neither was in this plan's code and both reproduce on the
+released binary:
+
+- **`Type::is_same` did not peel `Optional`.** Every dep-ignoring rule in it (a
+  text's deps, an integer's range, a vector's element buffer) was unreachable for
+  a `τ?`, because derived `==` on the wrapper reaches the inner `Deps`. Two
+  `text?` differing only in which local they came through read as different
+  types, and it presents as a refusal quoting the same name twice: *"cannot
+  unify: text? and text?"*. `db_col` is exactly the shape — four backends, one
+  of which (`duckdb`) returns through a local. Peeled on BOTH sides only, so a
+  `τ?` and a bare `τ` stay different kinds, which is the whole of DN1.
+- **A tail branch delivered a BORROW into the return accumulator.** An arm whose
+  text is not a bare variable is built into a work buffer and handed back as
+  `OpCreateStack(buf)`; `push_text_arms_into` wrapped that reference in the
+  delivery, and the enclosing scope frees the buffer on the next statement. The
+  interpreter answered `""` — a wrong value, silently, exit 0 — and `--native`
+  emitted `*var_acc = ().to_string()`, which is not Rust. The shape is
+  `return x ?? "fallback"`, and binding to a local first
+  (`y = x ?? "fallback"; return y`) avoided it, **which is what made it look like
+  a bug about `??` rather than about delivery**.
+
+**The instructive part is how the second was found.** It was not found by the
+registry — the registry does not contain that shape. It was found by the
+REGRESSION TEST written for the first fix, whose helper happened to spell
+`return got ?? "<null>"`. A guard written for one defect walked into another,
+which is the argument for writing the guard rather than checking the fix by hand.
+
+**And one is filed rather than fixed** — [loft#806](https://github.com/loft-lang/loft/issues/806):
+a METHOD call coalesced in RETURN position (`return t.m(i) ?? "x"`) SIGSEGVs the
+interpreter while `--native` is correct. The caller-retbuf promotion (loft#662)
+makes the callee's work buffer a `&text` PARAMETER, and the `#default ref` site
+then wraps an already-borrowed variable in `OpCreateStack`, building a reference
+to a reference. `src/parser/mod.rs` guards exactly that for non-text references;
+the text arm below it does not. Filed because the fix is a decision inside the
+promotion path that reaches every text-returning call, not just this one; the
+workaround is one intermediate local.
+
+Gated by `tests/fixtures/sqldb/registry_pure.loft` (unconditional — it opens no
+library) and `registry_live.loft`, through `tests/native.rs`, on both loft
+backends with the whole output compared. The two core fixes have their own
+guarantee probes in `tests/scripts/` — `pln133-optional-unify.loft` and
+`pln133-text-tail-delivery.loft` — and both were run against a pristine `main`
+build first, where each fails in the way its fix describes.
+
+**What S7 settled that the plan had not costed: the connection string is not one
+string.** `parse_conn` says which driver a string names; what that driver's own
+`db_open` wants is a fact about the DRIVER, and the answers genuinely differ —
+sqlite and duckdb take a path, libpq reads a URI itself (so it must arrive WITH
+its scheme, which is why `Conn` carries the whole string beside the target), and
+mariadb's client takes keywords, so `mysql://ada:secret@db.host/loft` has to be
+TRANSLATED. That last one produced a refusal worth keeping: **a port is refused,
+not dropped**, because this driver connects on 3306 and nothing in its `db_open`
+reads a port — honouring the string would reach a different server than it names,
+which is a plausible answer from the wrong place rather than an error.
+
+**And the session setup is why `connect` has to exist rather than merely be
+convenient.** P3 measured PostgreSQL returning 1887 of 2000 random doubles
+inexact at `extra_float_digits = 0` and 0 of 2000 at 1 or 3. That is a SESSION
+setting, so the precision a float reads back at is decided by whoever connected —
+nothing downstream can fix it, and nothing downstream can see it is wrong.
+`Dialect.setup` had carried those statements since S3 with no one to run them;
+`connect` is the one place that can.
+
+### S9's prerequisite: per-type driver dispatch — and the corruption it was hiding
+
+**Done 2026-08-08.** The probe that was meant to measure a LIMIT found a wrong
+value instead, which is the more important half of this entry.
+
+**What was there.** `Data::lazy_fetch_driver` looked up `n_lazy_fetch` — one
+def_nr — so a program declared exactly one driver and a second was refused with
+*"Cannot redefine 'lazy_fetch'"*. That reads as a limit on how many collections a
+program may lazily bind. It is not:
+
+> **Nothing checked that the driver a miss reached was declared for THAT
+> collection.** A program with two lazily-bound element types ran the FIRST
+> type's driver against the second collection.
+
+Measured on both backends, with two `hash` collections bound to two sources:
+`w.orders[9]` ran the driver written for `TdcPerson`, which inserted a
+`TdcPerson` into a `hash<TdcOrder[id]>`, and reading `.what` back gave
+`person-9-postgres://db/people` — one type's field read through another type's
+offset. Not an error, not a null: a plausible value, which is the class @PLN129
+arc C exists to keep out of the value channel. S8's own shape check was about the
+driver's SIGNATURE and never about its subject.
+
+**One mechanism fixes both.** The driver is looked up by the collection's ELEMENT
+TYPE, which makes several drivers possible and makes reaching the wrong one
+impossible — the limit and the corruption were the same missing fact.
+
+- **What a driver serves is read off its declared collection parameter**, never
+  guessed from its name. `Data::lazy_fetch_drivers` answers
+  `(element type name, def_nr)` for every driver, and that is the single home both
+  backends ask.
+- **The key is a NAME, not a number.** The two sides count types in different
+  spaces — a parse-time `Definition` and a runtime `Stores::types` entry — and a
+  name is the one key both hold without a mapping to keep in step. @PLN133 S8's
+  own `LOFT_STRICT_SCHEMA_IDS` exists because that kind of mapping drifts.
+- **Membership needs more than a name.** `lazy_fetch` exactly is THE driver name,
+  so a wrong shape there is named rather than walked past; `lazy_fetch_<anything>`
+  additionally requires a keyed collection as its first parameter. That second
+  rule was not fussiness — anyone writing a driver names its helpers after it
+  (`lazy_fetch_row`, `lazy_fetch_query`), and under a name-only rule each helper
+  was read as a malformed driver and poisoned every lookup in the program,
+  including the working driver beside it. The first version did exactly that.
+- **Two drivers for one element type are refused, naming both.** Silently picking
+  one is the same wrong-value class in a new place.
+- **`--native` installs one pointer per driver**, keyed on the same name
+  (`register_lazy_fetch("TdcPerson", n_lazy_fetch)`), and every driver is a
+  reachability ROOT — a driver left out of the walk is the quiet failure S8
+  already documented, arriving once per type instead of once per program.
+
+**A backend divergence had to be closed to gate the refusals**, and it was S8's,
+not S9's: the interpreter asks `Data` at every miss and reports the sentence it
+wrote, while `--native` cannot ask `Data` at all — it registered nothing and said
+*"needs a loft driver"*. The same program named a different mistake depending on
+which backend you ran, and the one naming the ACTUAL mistake was the one you did
+not get if you compiled. The refusal now travels as data
+(`register_lazy_fetch_refusal`), and the "no driver" sentence has one home
+(`database::lazy::no_lazy_driver`) so the two cannot word it differently.
+
+**The emission diff is one line.** `loft introspect` over the two-driver corpus
+before and after differs only in the registration — one
+`register_lazy_fetch(n_lazy_fetch)` becoming two keyed calls. Nothing else in the
+IR, the bytecode or the generated Rust moved, which is the whole claim of the
+change. Corpus and both captures: `bytecode-comparisons/two-drivers-*`.
+
+Gated by `tests/fixtures/133-lazy-driver-dispatch.loft` (three element types over
+`hash` and `index`, a fourth bound with no driver, a helper sharing the prefix,
+absent-vs-unreachable) plus the two refusal programs, through
+`tests/lazy_sql_source.rs`, both backends with the whole output compared. **The
+cell that matters is `orphan`**, and its assertion is a driver-call COUNT rather
+than a value: a collection whose type no driver serves must reach none, and a
+value check alone would pass on a driver that happened to answer nothing.
+
+### S9 — sqlite down the loft path, and the two paths measured against each other
+
+**Done 2026-08-08.** The step is *"switch sqlite to the loft path"*, and taken
+literally it cannot preserve what it must: every @PLN129 test binds `sqlite:` with
+NO user code, so routing sqlite to loft wholesale leaves them with no driver.
+`store_bind_lazy(persons, "sqlite:people.db")` needing no loading step is the
+promise CHANGELOG.md already ships.
+
+So S9 is an OPT-IN with a measurement, and the two halves are separable on
+purpose:
+
+- **A declared driver WINS, including over a source core drives in Rust.** A
+  program moves its sqlite reads onto loft one element type at a time; every type
+  with no driver stays on the Rust source, unchanged. That is what makes the swap
+  measurable rather than a flag day — and the whole @PLN129 suite is the control,
+  because nothing in it declares a driver.
+- **The two paths are proven indistinguishable.**
+  `tests/fixtures/sqldb/s9_two_paths.loft` puts two element types of one shape
+  over two identical tables in ONE program bound to ONE connection string:
+  `S9Rust` has no driver, `S9Loft` has one. Same values, same float, same
+  identity, same residency counts, same absence handling — and the trip count,
+  which is the only thing a value check cannot see. Both backends, byte-identical.
+
+**Nothing in the driver names a column.** The table, the columns and the `WHERE`
+come from `derive(type_of(coll))` — the same `TableDef` a writer would `render`
+into `CREATE TABLE`. That is requirement 2's one derivation serving both
+directions, and it is what `select_by_key` (new here, the `select(TableDef, key)`
+the design table always listed) exists to do. It wraps a float column in the
+dialect's read expression, because a portable `SELECT score` is lossy on two
+engines of four and silent about it (P3).
+
+#### The cost, attributed rather than assumed
+
+A loft driver has **nowhere to keep a connection**: loft has no process-level
+state a library can hold, so the driver connects, queries and disconnects per
+missed row, where core's Rust source caches a handle per target. Measured on a
+release build, 400 single-key fetches each:
+
+| | per fetch |
+|---|---|
+| core's Rust source | **67 µs** |
+| the loft driver (connect + derive + query + close) | **140 µs** |
+
+**~2.1×, not the order of magnitude the shape suggests** — a local sqlite file
+reopens cheaply. The number is worth keeping for what it does NOT cover: for a
+client-server backend the same shape is a TCP connect and an auth per row, and
+those are exactly the backends core has no Rust driver for, so it is the case
+that matters most and the one no measurement here reaches. Connection reuse is
+therefore a real requirement of the write side (S13) rather than a nicety, and it
+needs somewhere for a library to keep state.
+
+### S10 — the deletion is REFUSED, and the plan is better for it
+
+S10 was written as *delete core's 15 typed externs and `sql_query.rs`*. Building
+S9 turned that into a question, and the answer is **no**. It is a decision rather
+than a slice, and stating it is the honest close.
+
+**Deleting the Rust path makes a driver MANDATORY**, and a driver names a
+concrete element type, so it cannot be generic and cannot come from a library.
+`store_bind_lazy(persons, "sqlite:people.db")` needing no user code is a promise
+CHANGELOG.md already ships. Under
+[COMPATIBILITY.md](../../COMPATIBILITY.md) that settles it on its own: no
+functioning program breaks, and this would break every one that binds `sqlite:`
+without writing a driver.
+
+The one alternative the plan named — core SYNTHESISES a per-type driver whose
+body calls the loft sqldb library — trades the compatibility break for a
+dependency break. `tests/fixtures/sqldb` is a fixture, and core cannot require a
+fixture. Publishing it as a registry library does not help: core would then need
+an INSTALLED library to serve its own built-in connection scheme, which moves a
+guaranteed capability behind a download.
+
+**So S10 is a demotion, and S9 already shipped it.** The precedence rule is the
+whole answer: *a declared driver WINS, per element type; where there is none,
+core's Rust source serves.* What that buys is not deletion but a stopped clock —
+core's Rust never gains a fifth backend, every new one is a loft driver, and the
+duplication is frozen at what exists instead of growing with the backend count.
+That was the plan's actual complaint, measured in its own § What is actually
+duplicated: N=4 now and **+1 forever**. The +1 is gone.
+
+The deletion becomes possible the day the derivation ships INSIDE loft's
+distribution rather than as a fixture, because only then can core synthesise a
+driver without depending on something a user might not have. That is a decision
+about what the distribution contains (@PLN112, the registry), and it is named
+here so the next person does not re-derive it from scratch.
+
+### S11 + S12 — create-or-follow is ONE call, on four engines
+
+`ensure(d, dial, want)` is the whole absent-or-present decision, and it is one
+function because it is one DECISION: splitting it would put the test in every
+caller, which is where two callers eventually disagree about what absence means.
+
+The rule it holds: **loft never touches a table it did not find missing.**
+Creating a table where there was none fills an absence. Altering one that is
+there mutates somebody else's schema, and the fact that loft could derive a
+better one is not permission — so a mismatch REFUSES, naming the column or the
+index, and `reconcile` was already written to do exactly that.
+
+**The read-back is not ceremony.** `ensure` creates, then reads the table BACK
+out of the catalogue and reconciles against what the engine actually stored — not
+against the derivation it just sent. An engine rewrites what it was given:
+mariadb stores `BOOLEAN` as `tinyint(1)` and reports `tinyint`; sqlite keeps the
+affinity of a declared name nobody else would recognise. Reconciling against the
+derived definition would ASSERT the round trip instead of testing it, and the
+whole point of this function is that a table loft made and a table loft found are
+indistinguishable afterwards.
+
+**S12 needed `introspect` to stop being sqlite-only**, which is the work S6
+deferred with its scope statement. All four catalogues now, and each query was
+RUN against a live server of that engine before it was written down:
+
+| | columns | indexes |
+|---|---|---|
+| sqlite | `pragma_table_info` | `pragma_index_list` + `pragma_index_xinfo` |
+| postgres | `information_schema.columns`, scoped `current_schema()` | `pg_index` ⋈ `pg_attribute` |
+| maria | `information_schema.columns`, scoped `DATABASE()` | `information_schema.statistics` |
+| duckdb | `information_schema.columns`, scoped `current_schema()` | `duckdb_indexes()` |
+
+The columns half unified and the index half did not, and the table says so rather
+than pretending: `information_schema` has **no index view at all**. duckdb is the
+sharp end — it answers the `CREATE INDEX` TEXT rather than a row per column, so
+its columns are read back out of its own normalised rendering.
+
+Two facts measured on the way, both of which would have been guessed wrong:
+
+- **PostgreSQL's `indkey`/`indoption` are 0-based `int2vector`s.** Subscripting
+  `indoption[ord-1]` reads every direction as NULL, which looks like "no index
+  is descending" and is not.
+- **A whitelist, not sqlite's substring test.** sqlite has AFFINITY — a rule the
+  engine applies to any declared name — so following it agrees with the engine.
+  The other three have real types, and a substring test there is a guess wearing
+  a rule's clothes: PostgreSQL's `point` contains `INT`. An unlisted type answers
+  `ColOther`, which `reconcile` refuses BY NAME.
+
+### S13 — the statement, and the half that is not this plan's
+
+`insert_row(want, dial, values)` renders `INSERT INTO "person" ("id","nm",…)
+VALUES (?,?,…)` from the same `TableDef` the reader's `SELECT` comes from, with
+every value BOUND. That is requirement 2's load-bearing half: a writer that named
+its own columns could drift from the reader by one rename, and nothing would
+catch it until a row came back wrong.
+
+**What is NOT built, and cannot be here:** the generic walk that takes an
+arbitrary loft struct and produces those values. loft's reflection reports TYPES,
+not VALUES — `TypeInfo`/`FieldInfo` describe the layout and there is no way to
+read field *n* of a record generically — so an ORM writer has to be either
+generated or hand-written per type. That is @PLN23 S5's problem plus a language
+gap, and it is named here rather than absorbed: this plan's claim is that the
+STATEMENT has one derivation, and it does.
+
+The gate therefore supplies its own values in the definition's column order, and
+a count that does not match REFUSES — a row written into the wrong columns is a
+wrong value that reads back perfectly.
+
+### S14 — the gate, and it passes on four backends where it asked for two
+
+`tests/fixtures/sqldb/round_trip.loft`, driven by
+`tests/native.rs::a_structure_written_is_immediately_readable_through_one_connection_string`.
+Write three rows through the derived `INSERT`, bind a collection lazily to the
+SAME connection string, traverse it, and read back values, identity and the trip
+counts laziness predicts.
+
+**Run twice, and the second run is the one that matters.** Run 1 goes into an
+empty database, where loft writes the schema. Run 2 goes into a table made by
+hand — different column ORDER, the float kept in a `VARCHAR`, and an extra
+column loft knows nothing about — where loft must FOLLOW it. Same program, same
+assertions. Run 1 passes even if `reconcile` is a stub that always agrees; only
+run 2 proves requirement 3.
+
+**Byte-identical across eight cells**, measured 2026-08-08 on this box
+(sha256 of stdout `70fbf61a…` for every one):
+
+| | `--interpret` | `--native` |
+|---|---|---|
+| sqlite | ✅ | ✅ |
+| postgres 16.14 | ✅ | ✅ |
+| maria 10.11.14 | ✅ | ✅ |
+| duckdb 1.5.5 | ✅ | ✅ |
+
+CI reaches sqlite only, as ever; `LOFT_SQLDB_MODE` selects the others and the
+four-backend run is a LOCAL measurement, written here because that is where it
+was made.
+
+**The trip count is the oracle the values cannot be.** A reader that fetched the
+whole table would return exactly these rows; only the number of trips separates a
+lazy read from an eager one. Six per program — 42, 7 and the absent 999 in each
+run — and the repeat of a resident 42 reaches nothing, which is what says the
+working set is the authority rather than a cache beside it.
+
+The float is `0.5`/`0.25`/`0.125` on purpose. P3 measured that sqlite and duckdb
+lose the low bits of most doubles on the WRITE side; that is a bounded, recorded
+limit of the write path, not something a round-trip gate can fix, so this one
+uses values every engine stores exactly and claims exactness only for those.
+`uniform.loft`'s `floats` cell is where the full-precision question lives.
+
+#### What the gate cost, in defects found
+
+- **[loft#810](https://github.com/loft-lang/loft/issues/810)** — fixed on the way
+  in (a method's return adopted by one half of the compiler and freed by the
+  other). It was filed off this plan's cost measurement and turned out to need
+  no library at all.
+- **[loft#813](https://github.com/loft-lang/loft/issues/813)** — found extracting
+  a helper out of `introspect`: a value whose static type is a struct-enum
+  VARIANT (`x = AsA { … }` rather than `x: Any = AsA { … }`) is accepted where a
+  bounded generic wants the ENUM, and then answers the type's empty value. Silent
+  on `--interpret`, a `todo!()` panic on `--native`, a SIGSEGV with two generic
+  hops. The fixture is unaffected because it annotates; the extraction was
+  reverted, which is why `introspect` still scores 40 on the complexity nudge.
+
+#### A `Dialect?` that is known non-null still warns
+
+`d.db_dialect()` answers `Dialect?`, and an `if dial == null { return }` above the
+use does not narrow it — so every consumer here carries *"a nullable `Dialect?` is
+stored into parameter 2 … it becomes null there"*. It does not; the fixture runs
+with `--no-warnings`, and `s9_two_paths.loft` has carried the same line since S9.
+Recorded rather than worked around: the honest discharge would be to fabricate a
+`Dialect`, and a `Dialect` has no honest empty value — which is the whole reason
+`dialect_named` returns null instead of a default.
+
+#### A store-lifetime crash the probes found — [loft#810](https://github.com/loft-lang/loft/issues/810)
+
+Attributing the cost above walked into a SIGSEGV that has nothing to do with lazy
+loading: a function **in a library** that both holds a `vector` local and
+builds+returns a record of ANOTHER package's type crashes on the second call, when
+the caller binds the result to a loop-body local. `Store::copy` computes
+`size * 8 - 4` from a record whose size word reads `0`; in release that wraps
+rather than panicking, so it arrives as a segfault.
+
+Six axes were moved one at a time to find the boundary — unroll the loop, drop
+the local, drop the vector, return the own package's record, move the function
+into the program — and each one alone makes it run. It does not block S9: the
+driver derives its `TableDef` per fetch, which is the fresh-argument cell that
+passes. Filed rather than fixed because the question is why `record_new` reaches
+a zero-size record, which is store/vector work, and the six-way boundary is what
+a fix has to keep green.
 
 ### Five language defects the build surfaced, all pre-existing on `main`
 
@@ -970,19 +1363,20 @@ must agree on is the last thing that should have a gate that evaporates.
 | # | do | safe because |
 |---|---|---|
 | **S6** | ~~`introspect(conn, table) -> TableDef?` in the loft library, sqlite only.~~ **DONE 2026-08-07** — with the round trip, run twice, in `tests/fixtures/sqldb/schema_live.loft`. | read-only; changes no existing behaviour |
-| **S7** | The backend registry, used by the LIBRARY's own connect. No core change. **See the note below first — the obvious shape does not exist in loft.** | the library's four backends already pass their tests; the registry must not move them |
+| **S7** | ~~The backend registry, used by the LIBRARY's own connect. No core change.~~ **DONE 2026-08-08** — `AnyDb`, a struct-enum satisfying `SqlDb` itself; `connect(spec)` parses, checks availability, opens and runs the dialect's session setup. Two core defects had to be fixed to write it; a third is filed. | the library's four backends already pass their tests, and the registry did not move them |
 | **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE 2026-08-07, both backends.** | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
-| **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
-| **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |
+| **S9a** | ~~Per-type driver dispatch, the prerequisite S9 turned out to need.~~ **DONE 2026-08-08** — a driver is found by the collection's element type, read off its own parameter; several drivers per program, and reaching the wrong one is impossible. It closed a wrong-value hole S8 had left. | the emission diff is one registration line; every existing @PLN129 and S8 test is the control |
+| **S9** | ~~Switch sqlite to the loft path too.~~ **DONE 2026-08-08** — a declared driver WINS over the Rust source, per element type, and the two paths are proven indistinguishable on one database in one program. | the count assertions are the oracle, and they held: same values, same identity, three trips and no fourth, both backends |
+| **S10** | ~~Delete core's 15 typed externs and `sql_query.rs`.~~ **DECIDED 2026-08-08 — the deletion is REFUSED.** It would make a driver mandatory for `sqlite:`, breaking a shipped promise, and the alternative makes a fixture a dependency of core. S9's precedence rule IS the answer: a demotion, not a deletion. See § S10. | — |
 
 ### Create-or-follow, then the write side
 
 | # | do | |
 |---|---|---|
-| **S11** | Absent → `render(derive(T))`. Only into a table that is not there. | a fresh database becomes usable with no setup |
-| **S12** | Present → `reconcile`, refusing through arc C's channel with the column or index NAMED. | a foreign database becomes usable with no rewrite |
-| **S13** | `insert(TableDef)` and the ORM write path (@PLN23 S5). | |
-| **S14** | **The gate** (below), run twice. | |
+| **S11** | ~~Absent → `render(derive(T))`. Only into a table that is not there.~~ **DONE 2026-08-08** — `ensure`, which asks the CATALOGUE rather than leaning on `IF NOT EXISTS`. | a fresh database becomes usable with no setup |
+| **S12** | ~~Present → `reconcile`, refusing with the column or index NAMED.~~ **DONE 2026-08-08** — the same call, and it needed `introspect` on all four catalogues. | a foreign database becomes usable with no rewrite |
+| **S13** | ~~`insert(TableDef)`~~ **DONE 2026-08-08** — one derivation renders the reader's `SELECT` and the writer's `INSERT`. The ORM's generic struct walk stays @PLN23 S5: reflection reports types, not values. | |
+| **S14** | ~~**The gate**, run twice.~~ **DONE 2026-08-08** — 4 database backends × 2 loft backends, byte-identical. | |
 
 **Every step's cross-backend claim is a LOCAL measurement.** CI gates sqlite only;
 PostgreSQL, MariaDB and duckdb are run locally and their results written down
@@ -996,6 +1390,12 @@ provable); S11 must not touch a table that exists (that is the whole of "the
 database is the authority").
 
 ## The gate — the round trip, run twice
+
+**MET 2026-08-08**, on four database backends and both loft backends, with
+byte-identical output in all eight cells —
+`tests/fixtures/sqldb/round_trip.loft` (§ S14 for the measurement). What follows
+is the specification it was built against, kept as written so the claim can be
+checked against what was asked for rather than against what was built.
 
 Write a struct graph through the ORM to a database, bind a collection lazily to
 the **same connection string**, traverse it, and get back what was written:
@@ -1040,9 +1440,12 @@ almost right.
   in Rust and requirement 2 is met by core generating the DDL instead — a smaller
   unification, and one that leaves the ORM asking core for its schema.
 - **The round trip needs a writable path the ORM has not built.** @PLN23's S5–S7
-  are designed, not built. This design assumes the writer exists; if the ORM
-  slips, the gate cannot run — but S1–S12 still stand on their own and deliver
-  requirements 1 and 3 without it.
+  are designed, not built. **This one landed on its feet**: the writer's
+  STATEMENT is derived here (`insert_row`), and only the generic walk from a
+  struct's fields to its values belongs to the ORM — so the gate runs with the
+  program supplying values in the definition's own column order. The falsifying
+  case would have been a writer that had to name its own columns, and it did not
+  arise.
 
 ## Cross-plan effect
 

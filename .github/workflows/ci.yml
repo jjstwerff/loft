@@ -1332,6 +1332,16 @@ jobs:
       - name: Run drift checks
         run: scripts/check_doc_drift.sh
 
+      # The label guard's parser (`.github/scripts/label-guard.js`) decides which
+      # triage labels an issue body asks for.  Every way it can be wrong is
+      # SILENT — "no label applied" is what an unanswered form looks like — and
+      # nothing else exercises it: the workflow only runs on an issue event, long
+      # after the PR that broke it.  Here, on the PR.  It found two live defects
+      # on the way in (the `wa:` dropdown was never read; a freeform filer had no
+      # channel), so this is not a formality.
+      - name: Label-guard parser selftest
+        run: node tools/label_guard_selftest.mjs
+
       - name: Summary
         if: always()
         run: |

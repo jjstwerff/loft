@@ -439,6 +439,12 @@ claim is a local measurement, and when it matters it should be re-run and the
 result written into the plan or the commit message rather than assumed to have
 held since last time.
 
+**How a fixture selects a backend:** `LOFT_SQLDB_MODE=sqlite|postgres|maria|duckdb`
+for `uniform.loft` and `round_trip.loft` (@PLN133's gate).  duckdb additionally
+needs `LD_LIBRARY_PATH=$HOME/.local/lib` unless the library is on the loader
+path.  A backend that is not reachable prints `SKIP` and is never counted as a
+pass — which is the reason the mode is a variable rather than a compiled-in list.
+
 ### Running the other three
 
 Both servers run as ordinary system services on a development box; the fixtures

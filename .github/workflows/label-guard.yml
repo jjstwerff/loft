@@ -1,11 +1,20 @@
 # Label guard — ensure every BUG-shaped issue carries the required triage labels.
 #
 # Two jobs in one: (1) auto-apply the `sev:` / `wa:` / `area:` labels a filer
-# chose in the bug-report form (issue-form dropdown/checkbox answers land in the
-# issue BODY, not as labels — GitHub does not label them for you); (2) if a
-# required category is still missing (e.g. an agent filed via `gh issue create`
-# freeform, bypassing the form), apply `needs:labels` + a one-time comment naming
-# the missing categories.  Clears itself once the labels are set.
+# ASKED for in the issue body (form dropdown/checkbox answers land in the BODY,
+# not as labels — GitHub does not label them for you, and a filer without triage
+# permission cannot label at all); (2) if a required category is still missing,
+# apply `needs:labels` + a one-time comment naming what is missing AND how to
+# supply it.  Clears itself once the labels are set.
+#
+# The parsing lives in `.github/scripts/label-guard.js`, not inline here, because
+# every way it can be wrong is SILENT — the failure is "no label applied", which
+# is indistinguishable from "the filer did not answer".  It is a pure function of
+# the body, and `tools/label_guard_selftest.mjs` holds it to real body shapes
+# (`make label-guard-test`, run by `make ci`).  Two defects it found on the way
+# in: the `wa:` dropdown was never read (the free-text `### Workaround` textarea
+# shares the substring and comes first), and a freeform filer had no channel at
+# all — see the script's own comments.
 #
 # Scope (#626): only DEFECTS carry the sev/wa/area contract.  Issues opened from
 # the showcase / feature-request / library-proposal templates are exempt and have
@@ -27,6 +36,12 @@
 # Loop-safe: label edits made with GITHUB_TOKEN do not trigger new workflow runs,
 # so the workflow's own add/remove of labels never re-fires it.  (That covers the
 # workflow's OWN edits only — see the #627 note above for the events it does not.)
+#
+# The body is written by anyone who can open an issue, so it is UNTRUSTED input.
+# It is read through the API into a JS string and never interpolated into a shell
+# command, and only labels on the script's allowlist are ever applied — the worst
+# a filer can do is mislabel their own issue, which is what the form already lets
+# them do.
 name: Label guard
 
 on:
@@ -48,9 +63,17 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
+      # The parser is repo content, so it has to be on disk to be required.
+      # Pinned to the default branch: an issue event carries no ref, and the rule
+      # a body is judged by must be the one that is merged.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
       - uses: actions/github-script@v7
         with:
           script: |
+            const guard = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/label-guard.js`);
             const { owner, repo } = context.repo;
             const number = context.payload.issue.number;
             const NEEDS = "needs:labels";
@@ -86,69 +109,17 @@ jobs:
               return;
             }
 
-            // Required label categories for a loft BUG (LABELS.md).
-            const categories = [
-              { key: "sev:",  name: "severity — one `sev:high` / `sev:medium` / `sev:low`" },
-              { key: "wa:",   name: "workaround — one `wa:clean` / `wa:partial` / `wa:none`" },
-              { key: "area:", name: "area — one or more `area:*` (parser / codegen / store-lifetime / …)" },
-            ];
-            // Only these tokens may be auto-applied (never create a stray label).
-            const valid = new Set([
-              "sev:high","sev:medium","sev:low",
-              "wa:clean","wa:partial","wa:none",
-              "area:parser","area:codegen","area:store-lifetime","area:closures",
-              "area:runtime","area:native","area:wasm","area:stdlib","area:packages",
-            ]);
-
-            // 1) Auto-apply from the form answers.
-            //    sev/wa: single dropdown answer.  area: only the CHECKED boxes.
-            //
-            // Scan the form's OWN answer sections, not the whole body.  An issue
-            // form renders each field as `### <label>` followed by the answer, so
-            // scoping to those sections is immune to tokens that merely appear in
-            // prose or in a quoted block.  Scanning the whole body scraped every
-            // `sev:`/`wa:` token anywhere in the text: #626 quotes this guard's own
-            // comment (which lists all three severities and all three workarounds)
-            // and so was labelled with all SIX mutually-exclusive tokens — exactly
-            // the triage-query poisoning that issue is about.
-            const sections = new Map();
-            let head = null;
-            for (const line of body.split(/\r?\n/)) {
-              const m = /^###\s+(.+?)\s*$/.exec(line);
-              if (m) { head = m[1].toLowerCase(); sections.set(head, []); }
-              else if (head) { sections.get(head).push(line); }
-            }
-            const section = (want) => {
-              for (const [h, lines] of sections) if (h.includes(want)) return lines.join("\n");
-              return null;
-            };
-            // Freeform issues (`gh issue create`, no form) have no `###` headings —
-            // fall back to the whole body minus fenced blocks, so a pasted log or a
-            // quoted example still cannot contribute labels.
-            const unfenced = body.replace(/```[\s\S]*?```/g, "");
-            const sevText  = section("severity")  ?? unfenced;
-            const waText   = section("workaround") ?? unfenced;
-            const areaText = section("area")       ?? unfenced;
-
-            const found = new Set();
-            // `sev:` and `wa:` are SINGLE-CHOICE.  Take a value only when the
-            // section names exactly one — ambiguity means the guard must not
-            // guess; leaving it unset flags the issue, which is the safe outcome.
-            for (const [text, key] of [[sevText, "sev"], [waText, "wa"]]) {
-              const hits = new Set(
-                [...text.matchAll(new RegExp("\\b" + key + ":[a-z0-9-]+", "g"))].map(m => m[0]),
-              );
-              if (hits.size === 1) found.add([...hits][0]);
-            }
-            for (const m of areaText.matchAll(/-\s*\[[xX]\]\s*`?(area:[a-z0-9-]+)/g)) found.add(m[1]);
-            const toApply = [...found].filter(l => valid.has(l) && !labels.has(l));
+            // 1) Apply what the body asked for.
+            const toApply = guard.chooseLabels(body).filter(l => !labels.has(l));
             if (toApply.length) {
               await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: toApply });
               toApply.forEach(l => labels.add(l));
             }
 
             // 2) Enforce: is each required category present now?
-            const missing = categories.filter(c => ![...labels].some(l => l.startsWith(c.key)));
+            const missing = guard.CATEGORIES.filter(
+              c => ![...labels].some(l => l.startsWith(c.key)),
+            );
 
             if (missing.length === 0) {
               if (labels.has(NEEDS)) {
@@ -170,11 +141,24 @@ jobs:
             if (comments.some(c => (c.body || "").includes(MARKER))) {
               return;
             }
+            // The values are PLACEHOLDERS (`sev:<high|medium|low>`), and that is
+            // deliberate: #626 was an issue whose body quoted this comment, and
+            // a quoted example holding real tokens is a body asking for them.
+            // `sev:<` cannot match the parser's `sev:[a-z0-9-]+`, so quoting this
+            // applies nothing.
+            const block = missing
+              .map(c => `${c.key}<${c.values.map(v => v.slice(c.key.length)).join("|")}>`)
+              .join("\n");
             const list = missing.map(c => `- **${c.name}**`).join("\n");
             await github.rest.issues.createComment({
               owner, repo, issue_number: number,
               body: `${MARKER}\nThis issue is missing required triage labels:\n\n${list}\n\n`
-                + `Apply one label from each missing category — see `
-                + `[\`.github/LABELS.md\`](https://github.com/${owner}/${repo}/blob/main/.github/LABELS.md). `
+                + `**If you can set labels**, apply one from each category — see `
+                + `[\`.github/LABELS.md\`](https://github.com/${owner}/${repo}/blob/main/.github/LABELS.md).\n\n`
+                + `**If you cannot** — GitHub only lets repository triagers label, so a reporter `
+                + `usually cannot — say which you want and this guard will apply them for you. `
+                + `Edit this issue's description and add a \`### Triage\` section naming one value `
+                + `per line, replacing each placeholder below with a single choice:\n\n`
+                + "```\n### Triage\n" + block + "\n```\n\n"
                 + `The \`${NEEDS}\` flag clears automatically once they are set.`,
             });

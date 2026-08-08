@@ -1,0 +1,18 @@
+struct Entry { key: integer, val: integer }
+fn main() {
+  n = 1000000;
+  // A: record allocation + vector append only — no hashing, no bucket table.
+  va: vector<Entry> = [];
+  t0 = ticks();
+  for i in 0..n { va += [Entry { key: i, val: i * 2 }]; }
+  t1 = ticks();
+  // B: the same records, but into a hash — adds bucket table, hashing, probing, rehash.
+  hb: hash<Entry[key]> = [];
+  for i in 0..n { hb += Entry { key: i, val: i * 2 }; }
+  t2 = ticks();
+  // C: 1M lookups, all hits.
+  hits = 0;
+  for i in 0..n { e = hb[i]; if e != null { hits += e.val; } }
+  t3 = ticks();
+  println("vector_insert={(t1 - t0) / 1000}ms hash_insert={(t2 - t1) / 1000}ms lookup={(t3 - t2) / 1000}ms hits={hits}");
+}

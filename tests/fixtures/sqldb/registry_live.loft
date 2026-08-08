@@ -1,0 +1,160 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S7 — the schema round trip, over a connection ONE STRING opened.
+//
+// `schema_live.loft` proves the derivation against a `Sqlite` the program
+// constructed itself. This proves the same round trip over an `AnyDb` — the
+// struct-enum a connection string produced — and nothing in it names a backend
+// after the first line. That is requirement 1 stated as a program: change the
+// string, and `introspect`, the DDL and the cursor all follow.
+//
+// **Three things could break here that cannot break in the pure half**, and each
+// is a cell below:
+//
+//   - `introspect` is generic over `SqlDb`. Handing it an `AnyDb` is the claim
+//     that a consumer written before the registry existed needs no edit.
+//   - The variant holds a COPY of the backend struct, so every mutation a
+//     cursor makes — `db_select` writing the statement handle, `db_next`
+//     advancing it — has to reach the payload INSIDE the enum. A copy that came
+//     apart reads as an empty result set, which looks exactly like an empty
+//     table.
+//   - A transaction is state on the connection, and rollback/commit must land on
+//     the same one the insert did.
+//
+// sqlite, because it needs no server.
+
+use registry;
+use schema;
+use sql;
+use sqlite;
+
+struct Person {
+  id: integer,
+  nm: text,
+  score: float,
+  flag: boolean,
+}
+
+// Written once, generic over `SqlDb`, and handed the enum. If `AnyDb` did not
+// satisfy the interface this would not compile — and if the payload copy came
+// apart, `db_next` would answer false and this would return "".
+fn read_names <D: SqlDb> (d: D) -> text {
+  out = "";
+  q: SqlText = "SELECT nm FROM person WHERE id >= {0} ORDER BY id";
+  if !d.db_rows(q) { return "FAIL rows {d.db_last_error()}" }
+  while d.db_next() { out += "{d.db_col(0) ?? "?"} " }
+  return out.trim();
+}
+
+fn count_rows <D: SqlDb> (d: D) -> integer {
+  n = 0;
+  if !d.db_select("SELECT id FROM person") { return -1 }
+  while d.db_next() { n += 1 }
+  return n;
+}
+
+fn main() {
+  if !sqlite_available() {
+    println("SKIP registry_live — libsqlite3 is not installed here");
+    return;
+  }
+  path = "{directory()}/.loft/pln133_registry.db";
+  fresh = delete(path);
+
+  // The one line that names a backend, and it names it in a STRING.
+  d = connect("sqlite:{path}");
+  if !d.db_ok() {
+    println("FAIL connect: {d.db_last_error()}");
+    return;
+  }
+  dial = d.db_dialect();
+  if dial == null {
+    println("FAIL dialect");
+    return;
+  }
+  println("connected backend={d.db_backend()} quote={dial.quote}");
+
+  // --- the schema round trip, through the enum ------------------------------
+  people: hash<Person[id]> = [];
+  ti = type_of(people);
+  want = derive(ti);
+  for stmt in want.render(dial) {
+    if !d.db_exec(stmt) {
+      println("FAIL ddl [{stmt}]: {d.db_last_error()}");
+      return;
+    }
+  }
+  // `introspect` is generic over `SqlDb` and was written before this registry
+  // existed. It takes the enum unchanged.
+  have = introspect(d, dial, "person");
+  if !have.table_ok() {
+    println("FAIL introspect: {have.refusal}");
+    return;
+  }
+  b = reconcile(want, have);
+  println("round trip cols={len(have.columns)} ix={len(have.indexes)} bound={b.binding_ok()}");
+
+  // --- the cursor: a mutation that must reach INSIDE the variant -------------
+  //
+  // Bound values, so this also proves `db_run` and `db_rows` forward with their
+  // `SqlText` intact rather than losing the binds on the way through the arm.
+  names: vector<text> = ["ada", "grace", "alan"];
+  for nm in names {
+    ins: SqlText = "INSERT INTO person (id, nm, score, flag) VALUES ({nm#count}, {nm}, {0.5}, {true})";
+    if !d.db_run(ins) {
+      println("FAIL insert {nm}: {d.db_last_error()}");
+      return;
+    }
+  }
+  println("cursor names={read_names(d)}");
+
+  // --- a float, read at full precision through the dialect -------------------
+  //
+  // **The PAIR is the claim.** sqlite renders a `REAL` as `%!.15g`, so the
+  // portable spelling `SELECT score` drops the low bits of a full-mantissa
+  // double — silently, as a number that is almost right. `Dialect.float_read`
+  // is the only place that per-engine fact is written down, and a registry that
+  // handed back a connection without it would be a string that switches the
+  // driver and not the precision.
+  //
+  // Either half alone reads as correct while being wrong: `dialect=true` on its
+  // own could mean the naive read was fine too, and `naive=false` on its own
+  // could mean the value never survived the write.
+  //
+  // A third of one, whose shortest round-trip form needs 16 significant digits.
+  // NOT one of P3's extreme-exponent values: sqlite's own decimal PARSER stores
+  // those a ULP off whatever the reader does (0 of 3000 in the ±1e6 range were
+  // affected), and this cell is about the READ.
+  hard = 1.0 / 3.0;
+  upd: SqlText = "UPDATE person SET score = {hard} WHERE id = {0}";
+  if !d.db_run(upd) { println("FAIL update: {d.db_last_error()}"); return }
+  naive = 0.0;
+  if d.db_select("SELECT score FROM person WHERE id = 0") {
+    while d.db_next() { naive = ((d.db_col(0) ?? "") as float?) ?? 0.0 }
+  }
+  exact = 0.0;
+  if d.db_select("SELECT {dial.float_read("score")} FROM person WHERE id = 0") {
+    while d.db_next() { exact = ((d.db_col(0) ?? "") as float?) ?? 0.0 }
+  }
+  println("float naive={naive == hard} dialect={exact == hard}");
+
+  // --- a transaction, on the connection the enum holds -----------------------
+  //
+  // `rows=3/4` is the pair that makes this non-vacuous: a `db_begin` that
+  // quietly did nothing would answer 4/4, and one that discarded everything 3/3.
+  b1 = d.db_begin();
+  _ = d.db_exec("INSERT INTO person (id, nm, score, flag) VALUES (7, 'ghost', 0.0, 0)");
+  r1 = d.db_rollback();
+  after_rollback = count_rows(d);
+  b2 = d.db_begin();
+  _ = d.db_exec("INSERT INTO person (id, nm, score, flag) VALUES (8, 'kept', 0.0, 0)");
+  c1 = d.db_commit();
+  after_commit = count_rows(d);
+  println("tx begin={b1}/{b2} rollback={r1} commit={c1} rows={after_rollback}/{after_commit}");
+
+  d.db_shut();
+  gone = delete(path);
+  if !fresh.ok() && !gone.ok() { println("note: the temp database was not removable") }
+  println("registry_live ok");
+}

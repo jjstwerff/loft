@@ -3891,14 +3891,14 @@ impl Scopes {
             record_target,
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && let Value::Call(fn_nr, _) = unspanned_value
-            // A user-defined callee: an `n_` global OR a `t_` method / generic
+            // A loft-defined callee — an `n_` global OR a `t_` method / generic
             // monomorph (@PLN85 generic-tuple-return-fix.md — a generic tuple return
             // is a `t_<Type>_<fn>` monomorph; without `t_` the adopts-fresh /
             // OpFreeRefIfDistinct pairing was skipped and the caller freed the
             // aliased return with a plain OpFreeRef, orphaning its text fields).
-            // `code != Null` excludes native `t_` methods (Rust bodies).
-            && (data.def(*fn_nr).name.starts_with("n_") || data.def(*fn_nr).name.starts_with("t_"))
-            && data.def(*fn_nr).code != Value::Null
+            // This decision and codegen's copy-or-adopt one have to name the SAME set
+            // of callees, which is why the predicate lives in one place (loft#810).
+            && data.def(*fn_nr).is_loft_defined()
         {
             let adopts_fresh_store = data.def(*fn_nr).return_adopts_fresh_store();
             // @PLN85 `local_source` over-free fix (LOFT_JOIN_OWN): `v` holds an OWNED
@@ -5791,7 +5791,7 @@ impl Scopes {
         let def = data.def(*fn_nr);
         // Only user/method bodies (n_* / t_*) — native helpers and the
         // OpCreateStack/OpVar* lowering ops never own a fresh return store here.
-        if (!def.name.starts_with("n_") && !def.name.starts_with("t_")) || def.code == Value::Null {
+        if !def.is_loft_defined() {
             return None;
         }
         match &def.returned {
@@ -5979,8 +5979,7 @@ impl Scopes {
         // receiver = arg0).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
-            if (def.name.starts_with("n_") || def.name.starts_with("t_")) && def.code != Value::Null
-            {
+            if def.is_loft_defined() {
                 match &def.returned {
                     Type::Vector(elem, dep) if dep.is_empty() => {
                         return Some(Type::Vector(elem.clone(), Deps::none()));

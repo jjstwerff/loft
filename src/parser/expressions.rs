@@ -816,7 +816,7 @@ impl Parser {
         };
         // A loft-defined callee: only those take a caller-allocated buffer.
         let def = self.data.def(*fn_nr);
-        if !(def.name.starts_with("n_") || def.name.starts_with("t_")) || def.code == Value::Null {
+        if !def.is_loft_defined() {
             return None;
         }
         let buf = args.iter().rev().find_map(|a| match a.unspan() {
@@ -1315,6 +1315,24 @@ use a separate collection or add after the loop"
         VecBind::NotABind
     }
 
+    /// Is the next thing in the source the struct literal `<name> { … }`, without
+    /// consuming it?  Used to decide, BEFORE the right-hand side is parsed, that it is a
+    /// fresh construction and can therefore be built directly into its destination
+    /// record rather than into a throwaway one (@PLN135 arc A).
+    ///
+    /// The name is compared verbatim, so a qualified or generic spelling of the same
+    /// type answers `false` — the caller then keeps its ordinary by-copy path.
+    fn peek_literal_of(&mut self, name: &str) -> bool {
+        if !matches!(&self.lexer.peek().has, crate::lexer::LexItem::Identifier(n) if n == name) {
+            return false;
+        }
+        let saved = self.lexer.link();
+        self.lexer.cont();
+        let braced = self.lexer.peek_token("{");
+        self.lexer.revert(saved);
+        braced
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_assign_op(
         &mut self,
@@ -1409,6 +1427,77 @@ use a separate collection or add after the loop"
             }
             self.lexer.token("]");
             *code = Value::Insert(all_steps);
+            return Type::Void;
+        }
+        // @PLN135 arc A — `local_keyed += Struct { … }` (no brackets) builds the entry
+        // IN PLACE, the way the bracketed `+= [Struct { … }]` above already does.
+        //
+        // The P188 branch below runs AFTER the RHS parse and retargets the literal's
+        // field writes onto the fresh element (`substitute_value(Var(var_nr) →
+        // Var(elm))`).  That retarget never fired: the RHS parses with the COLLECTION
+        // local as its target, and `parse_object` rejects a target whose type is not
+        // `Reference(<this struct>)` — a `hash<Entry[key]>` is not — so it allocates a
+        // throwaway work-ref instead, and the append became claim-scratch, write fields,
+        // `OpCopyRecord` into the entry, free scratch.  Handing the parse a target of the
+        // ELEMENT type removes all three: the literal writes straight into the slot
+        // `OpNewRecord` carved out of the collection.  Measured on 1M `integer`-keyed
+        // inserts, `--native-release`: 933ms → 555ms.
+        //
+        // Gated on the RHS being a fresh literal of exactly the element type, peeked as
+        // `<element-name> {`:
+        //  - a variable / call / field read must keep the deep copy (it names a record
+        //    that already exists elsewhere), and reaches `new_record`'s `OpCopyRecord`
+        //    arm unchanged;
+        //  - a qualified (`pkg::Entry {`) or generic (`Pair<integer> {`) spelling does
+        //    not match the bare name and keeps the copy — slower, never wrong;
+        //  - a `__nullable<S>` element (@PLN25 E2) is excluded: its literal is written
+        //    `S { … }` but the element var is typed as the `Some` VARIANT, so the names
+        //    do not correspond and the transparent-construction path owns that shape.
+        if op == "+="
+            && var_nr != u16::MAX
+            && matches!(
+                f_type,
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
+            )
+            && let elm_tp = f_type.content()
+            && let Type::Reference(elm_d, _) = &elm_tp
+            && !self.data.def(*elm_d).name.starts_with("__nullable<")
+            && self.peek_literal_of(&self.data.def(*elm_d).name.clone())
+        {
+            let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, var_nr);
+            let mut item = Value::Var(elm);
+            let mut item_parent = Type::Null;
+            let item_tp = self.parse_operators(&elm_tp, &mut item, &mut item_parent, 0);
+            if !elm_tp.is_equal(&item_tp) {
+                // Unreachable in practice — the peek matched the element type's own
+                // name.  It becomes reachable if that name resolves to a DIFFERENT
+                // definition (a shadowing import), and a silent `OpCopyRecord` against
+                // the element's layout would then mis-lay the other struct's fields
+                // into the entry.  Refuse instead.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot append {item_tp} to a collection of {elm_tp}"
+                );
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            let mut steps: Vec<Value> = Vec::new();
+            if !self.first_pass {
+                steps = self.new_record(
+                    &mut Value::Var(var_nr),
+                    f_type,
+                    elm,
+                    var_nr,
+                    &[item],
+                    &elm_tp,
+                );
+            }
+            *code = Value::Insert(steps);
             return Type::Void;
         }
         // Hint the RHS that the destination has this type — `f#read`

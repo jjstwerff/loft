@@ -4665,6 +4665,18 @@ impl State {
         // (e.g. arithmetic overflow in `checked_long!`, the `panic`
         // builtin) can print `at file:line:col` for the offending pc.
         crate::crash_report::set_source_spans(Some(Arc::new(self.source_spans.clone())));
+        // loft#806 — and the opcode NAMES, so a crash report says which op was
+        // dispatching instead of a bare `op=249`.  Leaked once per process: a
+        // signal handler cannot borrow the definitions table (the crashing thread
+        // may hold it), so the names have to already be `'static` when it runs.
+        crate::crash_report::set_op_names(
+            (0..=u16::from(u8::MAX))
+                .map(|op| {
+                    data.operator_name(op)
+                        .map_or("", |n| &*Box::leak(n.to_owned().into_boxed_str()))
+                })
+                .collect(),
+        );
         // Fix #88: push a synthetic CallFrame for the entry function so it
         // appears in stack_trace() output.
         self.call_stack.push(CallFrame {

@@ -993,7 +993,7 @@ impl Parser {
                 if let Value::Return(inner) = tail {
                     tail = *inner;
                 }
-                Self::push_text_arms_into(&mut tail, av);
+                Self::push_text_arms_into(&mut tail, av, self.data.def_nr("OpCreateStack"));
                 l[last] = tail;
                 // loft#733 — introduce `av` at THIS scope, BEFORE the branch that
                 // writes it. The per-arm `Set`s live INSIDE the branch, so without
@@ -9375,23 +9375,27 @@ impl Parser {
         {
             return false;
         }
-        Self::push_text_arms_into(code, var_nr);
+        Self::push_text_arms_into(code, var_nr, self.data.def_nr("OpCreateStack"));
         let branch = std::mem::replace(code, Value::Null);
         *code = Value::Insert(vec![v_set(var_nr, Value::Text(String::new())), branch]);
         true
     }
 
-    pub(super) fn push_text_arms_into(op: &mut Value, av: u16) {
+    /// `create_stack` is `OpCreateStack`'s def_nr, threaded in rather than looked
+    /// up per leaf — see the leaf arm for what it decides.
+    pub(super) fn push_text_arms_into(op: &mut Value, av: u16, create_stack: u32) {
         match op {
-            Value::Span(b) => Self::push_text_arms_into(&mut b.1, av),
-            Value::Return(inner) | Value::Drop(inner) => Self::push_text_arms_into(inner, av),
+            Value::Span(b) => Self::push_text_arms_into(&mut b.1, av, create_stack),
+            Value::Return(inner) | Value::Drop(inner) => {
+                Self::push_text_arms_into(inner, av, create_stack);
+            }
             Value::If(_, then, els) => {
-                Self::push_text_arms_into(then, av);
-                Self::push_text_arms_into(els, av);
+                Self::push_text_arms_into(then, av, create_stack);
+                Self::push_text_arms_into(els, av, create_stack);
             }
             Value::Block(bl) => {
                 if let Some(last) = bl.operators.last_mut() {
-                    Self::push_text_arms_into(last, av);
+                    Self::push_text_arms_into(last, av, create_stack);
                 }
                 // The arm now ends in a `Set(av, …)` (or a void nested `If`), so
                 // the block yields VOID, not text — retype it, else native emits
@@ -9401,11 +9405,30 @@ impl Parser {
             }
             Value::Insert(ops) => {
                 if let Some(last) = ops.last_mut() {
-                    Self::push_text_arms_into(last, av);
+                    Self::push_text_arms_into(last, av, create_stack);
                 }
             }
             leaf => {
-                let v = std::mem::replace(leaf, Value::Null);
+                let mut v = std::mem::replace(leaf, Value::Null);
+                // A `text_ref` arm ends in `OpCreateStack(buf)` — a BORROW of the
+                // work buffer, not a value, and the enclosing scope frees that
+                // buffer before the accumulator is read. Deliver the BUFFER
+                // instead, so the accumulator copies the bytes it is about to own.
+                //
+                // This is the shape `return x ?? "fallback"` takes when the
+                // fallback is not a bare variable: the `??` lowers to an `if`
+                // whose else arm is a text_ref block, and `av` then held a
+                // dangling reference. The interpreter answered `""` — a wrong
+                // value, silently — and native emitted `*var_acc = ().to_string()`,
+                // which is not Rust. Binding the result to a local first
+                // (`x = a ?? b; return x`) avoided it, which is what made the
+                // failure look like it was about `??` rather than about delivery.
+                if let Value::Call(d, args) = &v
+                    && *d == create_stack
+                    && args.len() == 1
+                {
+                    v = args[0].clone();
+                }
                 *leaf = crate::data::v_set(av, v);
             }
         }

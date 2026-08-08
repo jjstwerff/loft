@@ -1,0 +1,15 @@
+[library]
+name = "registry"
+version = "0.0.1"
+
+# No `[c]` section here either, and for a different reason than `schema`'s. This
+# package opens connections, but it opens them through the four backend packages
+# beside it — each of which declares its own optional library. A `[c]` section
+# here would be a second declaration of the same fact, and the availability
+# answer is symbol-granular precisely because it is keyed on the DECLARATION.
+#
+# The linking cost of naming all four in one type is real and accepted: a
+# program that uses this registry pulls in the shims of every backend, because
+# `AnyDb` names every backend. That is the price of requirement 1 — one string
+# switches the driver — and it is why a program that only ever wants sqlite
+# should use the `sqlite` package directly.

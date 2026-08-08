@@ -578,3 +578,486 @@ mod tests {
         assert_eq!(got, ["kerk", "kerkstraat", "kerkweg"], "the run closes up");
     }
 }
+
+/// @PLN134 — how many 64 KB PAGES one prefix query touches, and what a LAYOUT
+/// would do to that number.
+///
+/// The measurement the plan opens on, and the reason it opens on one at all: a
+/// PATRICIA descent is cheap in NODES — one root→leaf path, branching on bits of a
+/// probe the caller already holds — and that says nothing about what it costs over a
+/// link. A reader fetches `paged_reader::PAGE_SIZE` (64 KB) at a time, and node ids
+/// are handed out in INSERTION order, so a path through a large tree can land on a
+/// fresh page at every hop.
+///
+/// Nodes are one contiguous array (`radix_tree::node_off` is `HDR + 16*(id-1)`), so
+/// the span a descent can reach is bounded by `16 × node_count` — which is the fact
+/// that makes the answer worth measuring rather than assuming in either direction.
+/// Step 1 measured it: ~27 pages as built, ~15 renumbered breadth-first, to read
+/// ~330 bytes of nodes. So the question became which layout reaches the floor, and
+/// every candidate here is a PERMUTATION fed to the same counter — nothing is
+/// rebuilt, so a layout costs one walk to evaluate rather than a persist pass.
+///
+/// Three questions, one fixture:
+///
+/// * [`prefix_query_page_span`] — the node array, under five numberings.
+/// * [`record_placement`] — the records a query RETURNS, which live elsewhere.
+/// * [`warm_cache_session`] — what the second keystroke costs, cache still warm.
+///
+/// `#[ignore]` because they read the host's dictionaries and print rather than
+/// assert — they answer a design question, they do not defend an invariant.
+///
+/// ```text
+/// cargo test --release --lib trie_db::pages -- --ignored --nocapture
+/// ```
+#[cfg(test)]
+mod pages {
+    #![allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+
+    use super::*;
+    use crate::radix_tree as rt;
+    use std::collections::{BTreeSet, HashMap};
+
+    const PAGE: u64 = 64 * 1024;
+    /// The finer granularity the same touch set is bucketed at. A descent reads a
+    /// handful of 16-byte nodes; what that costs is decided by the fetch size, not
+    /// by the walk, and one page size cannot show that.
+    const FINE: u64 = 4096;
+    /// `PagedReader`'s default cache, in pages — what a warm session keeps.
+    const CACHE_PAGES: usize = 64;
+    /// How many records a query returns; `t["kerk"..:20]` caps it, and the cap is
+    /// what makes a search box cheap.
+    const CAP: usize = 20;
+
+    fn w_key() -> Key {
+        Key {
+            type_nr: TEXT_TYPE_NR,
+            position: 0,
+        }
+    }
+
+    fn add_word(store: &mut Store, w: &str) -> u32 {
+        let ptr = store.set_str(w);
+        let rec = store.claim(4);
+        store.set_u32_raw(rec, PAYLOAD, ptr);
+        rec
+    }
+
+    /// Real words, not generated ones: prefix SHARING is the whole subject, and a
+    /// synthetic vocabulary has whatever sharing its generator happened to produce.
+    /// Several languages, because routing's index is place names — proper nouns
+    /// across languages, which is closer to this than one language's lexicon.
+    fn vocabulary() -> Vec<String> {
+        let mut words = BTreeSet::new();
+        for f in [
+            "/usr/share/dict/american-english",
+            "/usr/share/dict/british-english",
+            "/usr/share/dict/french",
+            "/usr/share/dict/spanish",
+            "/usr/share/dict/italian",
+            "/usr/share/dict/ngerman",
+            "/usr/share/dict/portuguese",
+        ] {
+            let Ok(text) = std::fs::read_to_string(f) else {
+                continue;
+            };
+            for w in text.lines() {
+                let w = w.trim().to_lowercase();
+                // ASCII only: the oracle is bytewise and a multi-byte word is not
+                // wrong here, just harder to reason about when reading the output.
+                if (2..=24).contains(&w.len()) && w.chars().all(|c| c.is_ascii_lowercase()) {
+                    words.insert(w);
+                }
+            }
+        }
+        words.into_iter().collect()
+    }
+
+    /// The tree all three measurements read.
+    struct Fixture {
+        words: Vec<String>,
+        store: Store,
+        tree: u32,
+        key: Key,
+        nodes: u32,
+    }
+
+    /// Build the vocabulary trie, or `None` where the host has no dictionaries.
+    fn build() -> Option<Fixture> {
+        let words = vocabulary();
+        if words.len() < 20_000 {
+            println!("SKIP — only {} words available on this host", words.len());
+            return None;
+        }
+        let key = w_key();
+        let mut store = Store::new_in_use(1 << 20);
+        let mut tree = rt::rtree_init(&mut store, 8);
+        // INSERTION ORDER IS THE VARIABLE UNDER TEST. Sorted input would hand the
+        // node array the one layout that cannot scatter, and answer a question
+        // nobody asked — a real vocabulary arrives in whatever order its source
+        // had. Shuffled deterministically so the number is reproducible.
+        let mut order: Vec<usize> = (0..words.len()).collect();
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        for i in (1..order.len()).rev() {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            order.swap(i, (seed >> 33) as usize % (i + 1));
+        }
+        for &i in &order {
+            let rec = add_word(&mut store, &words[i]);
+            tree = rt::rtree_insert(&mut store, tree, rec, &TextOracle { key: &key });
+        }
+        // fld 12 is the tree's node high-water mark (`radix_tree::NODES`), which is
+        // private there — the array's SIZE is what a page count is measured against.
+        let nodes = store.get_u32_raw(tree, 12);
+        Some(Fixture {
+            words,
+            store,
+            tree,
+            key,
+            nodes,
+        })
+    }
+
+    impl Fixture {
+        /// Bytes the node array occupies — `HDR + 16 × nodes`.
+        fn node_bytes(&self) -> u64 {
+            24 + 16 * u64::from(self.nodes)
+        }
+
+        /// The prefixes a search box actually issues: what a person has typed after
+        /// `plen` keystrokes, sampled across the vocabulary so every probe HITS. A
+        /// miss walks less, so hits are the honest side.
+        fn probes(&self, plen: usize, want: usize) -> Vec<&str> {
+            let step = (self.words.len() / want).max(1);
+            self.words
+                .iter()
+                .step_by(step)
+                .filter(|w| w.len() >= plen)
+                .map(|w| &w[..plen])
+                .collect()
+        }
+
+        /// The seek + bounded walk `prefix` performs, without the `DbRef`/`Stores`
+        /// plumbing — this measures the TREE, and a collection wrapper would only
+        /// add its own constant. Returns the records it would hand back.
+        fn query(&self, pre: &str) -> Vec<u32> {
+            let pre = pre.as_bytes();
+            let probe = |word: u32| bytes_word(pre, word);
+            let spec = TextOracle { key: &self.key };
+            let mut it =
+                rt::rtree_seek(&self.store, self.tree, &probe, pre.len() as u32 * 8, &spec);
+            let mut hits = Vec::new();
+            let mut rec = it.rec();
+            while rec != 0 && hits.len() < CAP {
+                if !text_bytes(&self.store, rec, &self.key)
+                    .as_bytes()
+                    .starts_with(pre)
+                {
+                    break;
+                }
+                hits.push(rec);
+                rec = it.next(&self.store, self.tree).unwrap_or(0);
+            }
+            hits
+        }
+
+        /// One query's node reads and its results, in one recording window.
+        fn query_touch(&self, pre: &str) -> (BTreeSet<u32>, Vec<u32>) {
+            rt::touch_begin();
+            let hits = self.query(pre);
+            (rt::touch_end(), hits)
+        }
+    }
+
+    /// A candidate node numbering: where each node would sit if a persist-time pass
+    /// wrote the array in this order.
+    ///
+    /// It maps a RECORDED offset to the offset it would have had, so one walk of the
+    /// tree evaluates a layout — no image is rewritten to ask what one costs.
+    struct Layout {
+        name: &'static str,
+        rank: Vec<u32>,
+    }
+
+    impl Layout {
+        fn new(name: &'static str, order: &[u32], nodes: u32) -> Layout {
+            let mut rank = vec![u32::MAX; (nodes + 2) as usize];
+            for (i, &n) in order.iter().enumerate() {
+                assert_eq!(
+                    rank[n as usize],
+                    u32::MAX,
+                    "{name} numbers node {n} twice — not a permutation"
+                );
+                rank[n as usize] = u32::try_from(i).unwrap_or(u32::MAX);
+            }
+            assert_eq!(
+                order.len(),
+                nodes as usize,
+                "{name} covers {} of {nodes} nodes",
+                order.len()
+            );
+            Layout { name, rank }
+        }
+
+        /// Ids as handed out, so every number below has its own baseline rather
+        /// than a separately computed one.
+        fn as_built(nodes: u32) -> Layout {
+            Layout::new("as built", &(1..=nodes).collect::<Vec<_>>(), nodes)
+        }
+
+        /// Offset -> node id -> rank -> the offset it WOULD have had.
+        fn moved(&self, off: u32) -> u64 {
+            let id = (off - 24) / 16 + 1;
+            let within = u64::from((off - 24) % 16);
+            match self.rank.get(id as usize) {
+                Some(&r) if r != u32::MAX => 24 + 16 * u64::from(r) + within,
+                _ => u64::from(off),
+            }
+        }
+
+        fn pages(&self, touched: &BTreeSet<u32>, page: u64) -> usize {
+            touched
+                .iter()
+                .map(|o| self.moved(*o) / page)
+                .collect::<BTreeSet<u64>>()
+                .len()
+        }
+    }
+
+    /// Every candidate, in the order they are worth reading.
+    fn layouts(f: &Fixture) -> Vec<Layout> {
+        vec![
+            Layout::as_built(f.nodes),
+            Layout::new("BFS", &rt::bfs_order(&f.store, f.tree), f.nodes),
+            Layout::new("DFS", &rt::dfs_order(&f.store, f.tree), f.nodes),
+            Layout::new("key order", &rt::key_order(&f.store, f.tree), f.nodes),
+            Layout::new("vEB", &rt::veb_order(&f.store, f.tree), f.nodes),
+        ]
+    }
+
+    /// One printed row: each item formatted and appended in turn.
+    ///
+    /// `map(format!).collect::<String>()` is the obvious spelling and allocates per
+    /// cell; one helper keeps the four tables here reading the same way.
+    fn row<T>(items: impl IntoIterator<Item = T>, cell: impl Fn(T) -> String) -> String {
+        items.into_iter().fold(String::new(), |mut s, i| {
+            s.push_str(&cell(i));
+            s
+        })
+    }
+
+    fn mean(v: &[usize]) -> f64 {
+        v.iter().sum::<usize>() as f64 / v.len().max(1) as f64
+    }
+
+    fn pct(v: &[usize], p: f64) -> usize {
+        if v.is_empty() {
+            return 0;
+        }
+        let mut s = v.to_vec();
+        s.sort_unstable();
+        s[((s.len() - 1) as f64 * p) as usize]
+    }
+
+    /// Add the pages a byte span covers. A record straddles a boundary as often as
+    /// not, and counting only its first page understates every layout equally —
+    /// which is worse than it sounds, because the comparison is the point.
+    fn add_span(pages: &mut BTreeSet<u64>, off: u64, len: u64, page: u64) {
+        for p in (off / page)..=((off + len.saturating_sub(1)) / page) {
+            pages.insert(p);
+        }
+    }
+
+    /// The node array under five numberings.
+    #[test]
+    #[ignore = "measurement — run with --release --lib --ignored --nocapture"]
+    fn prefix_query_page_span() {
+        let Some(f) = build() else { return };
+        println!(
+            "\nvocabulary {} words | {} nodes | node array {:.2} MB = {} pages of 64 KB",
+            f.words.len(),
+            f.nodes,
+            f.node_bytes() as f64 / (1024.0 * 1024.0),
+            f.node_bytes().div_ceil(PAGE)
+        );
+        let ls = layouts(&f);
+        println!(
+            "\n  distinct pages per query, mean (p95)      floor = 1 page\n  {:>6} {:>5} {}",
+            "prefix",
+            "page",
+            row(&ls, |l| format!("{:>13}", l.name))
+        );
+        for plen in [2usize, 3, 4, 6, 8] {
+            let probes = f.probes(plen, 400);
+            let touched: Vec<BTreeSet<u32>> = probes
+                .iter()
+                .map(|p| f.query_touch(p).0)
+                .collect::<Vec<_>>();
+            let bytes = mean(&touched.iter().map(|t| t.len() * 4).collect::<Vec<_>>());
+            for (page, label) in [(PAGE, "64K"), (FINE, "4K")] {
+                let cells = row(&ls, |l| {
+                    let v: Vec<usize> =
+                        touched.iter().map(|t| l.pages(t, page)).collect::<Vec<_>>();
+                    format!("{:>8.1} ({:>2})", mean(&v), pct(&v, 0.95))
+                });
+                println!("  {plen:>4}ch {label:>5}{cells}");
+            }
+            println!(
+                "         {:>5}  {bytes:.0} bytes of node data actually read",
+                ""
+            );
+        }
+    }
+
+    /// The records a query RETURNS — a separate allocation with its own layout, and
+    /// the half the node measurement says nothing about.
+    ///
+    /// The counterfactual is the placement `routing` already uses for its postings:
+    /// write the records in trie KEY order, so one prefix is one contiguous run.
+    #[test]
+    #[ignore = "measurement — run with --release --lib --ignored --nocapture"]
+    fn record_placement() {
+        let Some(f) = build() else { return };
+        // Where a key-order pass would put each record: its element record and its
+        // string, together, in the order the tree walks them.
+        let mut place: HashMap<u32, (u64, u64)> = HashMap::with_capacity(f.words.len());
+        let mut at = 0u64;
+        let mut it = rt::rtree_first(&f.store, f.tree);
+        let mut rec = it.rec();
+        while rec != 0 {
+            let len =
+                u64::from(f.store.record_words(rec) + f.store.record_words(str_of(&f, rec))) * 8;
+            place.insert(rec, (at, len));
+            at += len;
+            rec = it.next(&f.store, f.tree).unwrap_or(0);
+        }
+        println!(
+            "\n  records {} | {:.2} MB packed in key order = {} pages of 64 KB",
+            place.len(),
+            at as f64 / (1024.0 * 1024.0),
+            at.div_ceil(PAGE)
+        );
+        println!(
+            "\n  distinct pages for the {CAP} records a query returns, mean (p95)\n  \
+             {:>6} {:>5} {:>13} {:>13}",
+            "prefix", "page", "as inserted", "key order"
+        );
+        for plen in [2usize, 3, 4, 6, 8] {
+            let hits: Vec<Vec<u32>> = f
+                .probes(plen, 400)
+                .iter()
+                .map(|p| f.query(p))
+                .collect::<Vec<_>>();
+            for (page, label) in [(PAGE, "64K"), (FINE, "4K")] {
+                let built: Vec<usize> = hits
+                    .iter()
+                    .map(|h| {
+                        let mut pages = BTreeSet::new();
+                        for &r in h {
+                            let s = str_of(&f, r);
+                            add_span(
+                                &mut pages,
+                                u64::from(r) * 8,
+                                u64::from(f.store.record_words(r)) * 8,
+                                page,
+                            );
+                            add_span(
+                                &mut pages,
+                                u64::from(s) * 8,
+                                u64::from(f.store.record_words(s)) * 8,
+                                page,
+                            );
+                        }
+                        pages.len()
+                    })
+                    .collect();
+                let keyed: Vec<usize> = hits
+                    .iter()
+                    .map(|h| {
+                        let mut pages = BTreeSet::new();
+                        for &r in h {
+                            let (off, len) = place[&r];
+                            add_span(&mut pages, off, len, page);
+                        }
+                        pages.len()
+                    })
+                    .collect();
+                println!(
+                    "  {plen:>4}ch {label:>5} {:>8.1} ({:>2}) {:>8.1} ({:>2})",
+                    mean(&built),
+                    pct(&built, 0.95),
+                    mean(&keyed),
+                    pct(&keyed, 0.95)
+                );
+            }
+        }
+    }
+
+    /// One search box session: the keystrokes of a single word, against a reader
+    /// that keeps `CACHE_PAGES` pages.
+    ///
+    /// Every number in the other two measurements is the COLD cost of one query.
+    /// A real search box issues a query per keystroke, each a prefix of the last,
+    /// and the top of the tree is shared by all of them — so what a user waits for
+    /// is the MARGINAL fetch, not the first one.
+    #[test]
+    #[ignore = "measurement — run with --release --lib --ignored --nocapture"]
+    fn warm_cache_session() {
+        let Some(f) = build() else { return };
+        let ls = layouts(&f);
+        let keys = [1usize, 2, 3, 4, 5, 6, 7, 8];
+        println!(
+            "\n  pages FETCHED per keystroke, {CACHE_PAGES}-page cache, cold at keystroke 1\n  \
+             {:>10}{}",
+            "layout",
+            row(&keys, |k| format!("{k:>6}"))
+        );
+        for l in &ls {
+            let words: Vec<&String> = f
+                .words
+                .iter()
+                .step_by((f.words.len() / 200).max(1))
+                .filter(|w| w.len() >= 8)
+                .collect();
+            let mut per_key = vec![Vec::new(); keys.len()];
+            for w in &words {
+                // A cache per session: a user types one word, and the next user
+                // starts cold. The steady state across many words is kinder still,
+                // and this is the honest side.
+                let mut cache: Vec<u64> = Vec::with_capacity(CACHE_PAGES);
+                for (i, &k) in keys.iter().enumerate() {
+                    let touched = f.query_touch(&w[..k]).0;
+                    let want: BTreeSet<u64> = touched.iter().map(|o| l.moved(*o) / PAGE).collect();
+                    let mut fetched = 0;
+                    for p in want {
+                        if let Some(at) = cache.iter().position(|&c| c == p) {
+                            let p = cache.remove(at);
+                            cache.push(p);
+                        } else {
+                            fetched += 1;
+                            if cache.len() == CACHE_PAGES {
+                                cache.remove(0);
+                            }
+                            cache.push(p);
+                        }
+                    }
+                    per_key[i].push(fetched);
+                }
+            }
+            println!(
+                "  {:>10}{}",
+                l.name,
+                row(&per_key, |v| format!("{:>6.1}", mean(v)))
+            );
+        }
+    }
+
+    /// The string record behind an element record's only field.
+    fn str_of(f: &Fixture, rec: u32) -> u32 {
+        f.store
+            .get_u32_raw(rec, PAYLOAD + u32::from(f.key.position))
+    }
+}

@@ -10,6 +10,38 @@ file is the detail.  Convention + workflow: [`doc/claude/ISSUE_TRACKING.md`](../
 
 Apply **one `sev:`, one `wa:`, and one or more `area:`** to every bug.
 
+## If you cannot set labels — ask for them in the body
+
+GitHub only lets people with repository **triage** permission attach a label, so
+a reporter usually cannot: an issue filed from outside arrives bare, and there is
+no setting that grants labelling without granting triage.
+
+You do not need it. Say which labels you want and
+[`label-guard`](workflows/label-guard.yml) applies them for you:
+
+- **From the bug form**, nothing to do — your Severity, workaround and Area(s)
+  answers land in the issue body, and the guard turns them into labels. (GitHub
+  does not do this itself; a form's dropdown answer is text, not a label.)
+- **Filed freeform** (`gh issue create`, the API — both ignore issue templates):
+  add a `### Triage` section to the description, one value per line.
+
+```
+### Triage
+sev:medium
+wa:clean
+area:native
+```
+
+Editing the description re-runs the guard, so a missed label is one edit away and
+`needs:labels` clears itself. Only the values listed on this page are ever
+applied — an unknown one is ignored rather than created.
+
+Two things it will not guess. `sev:` and `wa:` are single-choice, so naming more
+than one leaves the category unset (prose that mentions all three severities
+labels none of them — issue #626 was labelled with six mutually exclusive tokens
+that way). And `area:` is read only from the form's checked boxes or a `### Triage`
+block, never from prose, for the same reason.
+
 ## `sev:` — severity (how bad WHEN you hit it)
 
 | Label | Meaning |

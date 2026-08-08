@@ -180,6 +180,16 @@ pub fn reserve_vector(db: &DbRef, count: i64, elem_size: u32, stores: &mut [Stor
     }
 }
 
+/// Make room for one more element at the end of the vector `db` points at, and
+/// answer where to write it.  Grows the backing record ~2x when it is full, and
+/// follows the record if the grow had to move it.
+///
+/// # Panics
+///
+/// If the owner slot holds a non-zero handle whose target has a non-positive size
+/// word — a record that has been freed, or was never claimed.  Reading a capacity
+/// from that word would wrap, and the append would then copy an unbounded length
+/// (loft#810); the message names the owner slot and the target record.
 pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     // Appending to a null (absent) vector is a no-op for now — it must never
     // index stores[u16::MAX].  Plan-25 Q4: make this a loud error once null is
@@ -218,7 +228,58 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
         // `get_u32_raw` field accessor — `valid()` forbids field offset 0
         // (header), so the accessor panics in debug builds.  `claim`/`resize`
         // read the header the same way.
-        let cur_words = *store.addr::<i32>(vec_rec, 0) as u32;
+        // Two ways the handle just read can be meaningless, and they need separate
+        // messages because they send you to opposite halves of the runtime.
+        //
+        // The handle came from `db.rec`.`db.pos`, so FIRST ask whether that field is
+        // inside the owner record at all.  `Store::valid` bounds a field with
+        // `fld <= size * 8`, which admits a read starting exactly AT the record's end
+        // — off by the width of the field being read — and it is a `debug_assert!`,
+        // so it is compiled out of the test profile the loft library builds under.
+        // An owner whose claimed size does not reach `pos` therefore hands back
+        // whatever bytes follow it in the arena, and those bytes then read as a
+        // vector handle.
+        //
+        // What that means is a record OF ANOTHER TYPE sitting where this one should
+        // be, and the way it gets there is TWO OWNERS FOR ONE STORE SLOT: a store
+        // freed while another variable still named it, recycled to somebody else, and
+        // then re-`claim`ed at the original name — which is exactly loft#810 (a
+        // 2-word owner under a `pos` of 16).  So the question to take upstairs is who
+        // freed a store that was still named, not who computed the offset: the offset
+        // is right for the type the caller thinks it is holding.  `LOFT_NO_SLOT_REUSE=1`
+        // settles it in one run — if the fault vanishes, the slot had two owners.
+        let owner_words = *store.addr::<i32>(db.rec, 0);
+        assert!(
+            owner_words >= 1 && u64::from(db.pos) + 4 <= owner_words as u64 * 8,
+            "vector_append: in store {}, field {}.{} lies outside its own record, which \
+             claims {owner_words} words ({} bytes) — so the vector handle read there is \
+             whatever follows the record in the arena, not a vector.  The record in this \
+             slot is not the one the field offset was computed for: re-run with \
+             LOFT_NO_SLOT_REUSE=1, and if that clears it the store was freed while \
+             another variable still named it (loft#810)",
+            db.store_nr,
+            db.rec,
+            db.pos,
+            i64::from(owner_words) * 8
+        );
+        // Only then: the field IS inside the record, so the handle is a real one — and
+        // a non-zero handle must point at a CLAIMED record, every one of which has a
+        // positive size word (`Store::claim` asserts it).  Zero or negative here means
+        // the handle outlived what it pointed at.  Either way the append is about to
+        // derive a capacity and a copy length from that word, and both wrap, so the
+        // failure would otherwise surface far away as an unbounded `memcpy` inside
+        // `resize` — naming the copy, which is innocent.
+        let cur_words_signed = *store.addr::<i32>(vec_rec, 0);
+        assert!(
+            cur_words_signed > 0,
+            "vector_append: in store {}, the vector handle in record {}.{} points at record \
+             {vec_rec}, whose size word is {cur_words_signed} — the record it named has been \
+             freed or was never claimed, so this vector's capacity cannot be read (loft#810)",
+            db.store_nr,
+            db.rec,
+            db.pos
+        );
+        let cur_words = cur_words_signed as u32;
         let cur_cap = cur_words.saturating_mul(8).saturating_sub(8) / size;
         let target = if needed <= cur_cap {
             needed

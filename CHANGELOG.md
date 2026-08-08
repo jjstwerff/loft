@@ -56,6 +56,78 @@ refused at the declaration now, and the message points at `trie`. The mirror too
 a numeric key under `trie` points back at `spatial`, or at `sorted` / `index` for
 an order on a number.
 
+### A `float` key finds the record you stored under it
+
+A `hash`, `sorted` or `index` keyed on a `float` or `single` field accepted every
+insert, counted them all, and then found almost none of them again — and a `sorted`
+kept only the last one. The key was being read one byte at a time, so `0.5`, `1.5`
+and `2.0` were all the same key:
+
+```loft
+prices: sorted<Price[at]> = [];
+prices += Price { at: 0.5, name: "a" };
+prices += Price { at: 1.5, name: "b" };
+prices += Price { at: 2.5, name: "c" };
+len(prices)        // was 1 — now 3
+prices[1.5]        // was null — now the record you stored
+```
+
+Nothing about the stored data was wrong; only the reading of the key. So an
+existing collection starts answering correctly as soon as you re-run — there is
+nothing to rebuild.
+
+### A `u8` or `i32` key works under `--native` too
+
+The same story on one backend only: a collection keyed on a sized integer
+(`u8`, `u16`, `i32`, `u32`) looked up correctly under the interpreter and missed
+every record under `--native`, where a `hash` answered "not found" and a `sorted`
+answered a record whose fields all read `null`. Both backends now build the
+lookup key the same way.
+
+Still open, and refused rather than silently wrong is what we owe you here: a key
+declared `i8`, `i16`, or `integer limit(min, max)` with a non-zero minimum is
+still not found on either backend (loft#812). Use a plain `integer` for the key
+field and keep the narrow type on the others.
+
+### Inserting into a keyed collection is a little under twice as fast
+
+`collection += Item { … }` used to build the item in a scratch record, then copy
+that record into the collection and free the scratch — one allocation and one
+deep copy per insert, for a value that was freshly written and had nowhere else
+to be. It is now written straight into the collection's own slot. A million
+inserts of a two-field record went from 933 ms to 505 ms.
+
+Nothing changes about what you write. `collection += existing_item` still copies,
+because there the item genuinely exists elsewhere.
+
+Looking a key up got about a fifth faster too, on both backends — the work of
+deciding *how* to compare a key is now done once per lookup instead of once per
+record examined.
+
+### `reserve(h, n)` for a hash you know the size of
+
+`reserve` already gave a vector room for `n` elements. It now takes a `hash` as
+well, where it sizes the bucket table:
+
+```loft
+cache: hash<Entry[key]> = [];
+reserve(cache, expected_rows);
+for row in rows { cache += Entry { key: row.id, value: row.value }; }
+```
+
+A hash rebuilds its whole table each time it outgrows one — filling a
+million-entry hash rebuilds it seventeen times, re-placing every entry it already
+holds. Saying the size up front skips all of that: a million inserts went from
+618 ms to 352 ms, and the finished table came out **half the size** (10.2 MB →
+5.3 MB), because growing doubles past what it needed while reserving asks for
+exactly what you said.
+
+Same promise as the vector form: it changes capacity and nothing else — not
+`len(h)`, not the records, not which keys are found. Guessing low just means
+growth resumes from there, and reserving a hash that already holds entries is
+safe. `sorted`, `index`, `spatial` and `trie` have no capacity to set, and say so
+if you ask.
+
 ### A collection can fetch what it is asked for
 
 Bind a collection to a source and stop writing a loading step. A lookup that misses
@@ -108,6 +180,27 @@ anything. The refusals it can only learn while fetching (a foreign layout, an en
 holding a `vector<text>`) were equally silent and now reach `store_lazy_error` too.
 An unreachable source still reports its own connection error, and a binding that
 works still says nothing at all.
+
+**A database loft has no built-in driver for is served by a driver you write**, in
+loft — and a program may now have one per collection type:
+
+```loft
+fn lazy_fetch(coll: hash<Person[id]>, source: text,
+              key_int: integer, key_text: text) -> integer { … }
+fn lazy_fetch_orders(coll: hash<Order[id]>, source: text,
+                     key_int: integer, key_text: text) -> integer { … }
+```
+
+The name after `lazy_fetch_` is yours; what a driver serves is read from its
+collection parameter. That matters beyond convenience: with one driver per
+program, a *second* lazily-bound collection was filled by the first one's driver
+whatever it was written for, so a `Person` landed in a `hash<Order[id]>` and came
+back out as an `Order` — a record that looks like data and is not. A collection
+whose type has no driver now says so, naming the type, and no driver runs for it.
+
+Helpers may share the prefix: past the exact name `lazy_fetch`, a function only
+counts as a driver if it takes a keyed collection first — so `lazy_fetch_row(n)`
+is just a function.
 
 ### An enum works above the line that declares it
 
@@ -191,6 +284,34 @@ third, and the failure never pointed at the field.
 Only the load order decided it, so the same code was correct or corrupt depending
 on which module `use`d which. It is now correct either way — including when the
 field is a `vector<T>`, a `T?`, or a struct that itself holds one.
+
+### A C binding says what it does on wasm
+
+A library bound straight to a C library (`#c`) cannot work in a browser or in a
+wasm module: there is no way to open a shared library there. That used to be
+discovered late and badly — one build linked against the wasm sysroot's own libc
+and then crashed at the call, another printed a page of Rust errors naming loft's
+internals. Now both wasm targets say it once, in a sentence:
+
+```
+error: loft: `client_info` is bound to the C symbol 'mysql_get_client_info' with #c
+       (package `mariadb`), and the wasm (wasip2) target has no C ABI to reach it —
+       a wasm module cannot open a shared library. …
+```
+
+Only a call is refused, so a library may declare `#c` bindings and still build for
+wasm as long as the wasm program does not reach one. And
+`c_library_available("…")` — the question to ask before calling into an optional
+backend — now compiles there too, answering `false`.
+
+### A sandboxed script cannot call C on a capability alone
+
+Granting a sandboxed script a capability such as `db#read` used to let it through
+to a `#c` binding, and from there into arbitrary C. A capability describes what
+data a script may touch; it cannot describe "and any machine code may run here".
+That second question has always had its own answer — `native_ffi` — and C bindings
+are now gated by it, exactly like Rust ones. Allow-listing a whole library still
+admits it: that is you vetting the library.
 
 ### `store_verify` on a collection inside a struct
 
@@ -366,6 +487,35 @@ knows, none of the three errors named `chr`, and the fix was a rename that ordin
 assignment would never have needed. Both forms now agree on what a name may be — and
 where one is genuinely refused (a global function like `chr` or `print`), you get one
 error that says so by name.
+
+### `return x ?? "fallback"` gives you the fallback
+
+A function that returned a fallback text straight from a `??` handed back an empty
+string instead — silently, exit 0 — while writing the same thing through a local
+first was right:
+
+```loft
+fn label(row: Row) -> text {
+  got = row.name();
+  return got ?? "<unnamed>";     // gave back "", not "<unnamed>"
+}
+```
+
+`--native` did not compile the same program at all, which is the only reason it
+was not worse: an empty string where a fallback belongs is a wrong ANSWER, and
+`<unnamed>` never appearing looks like the data was fine. The same fault reached
+any `if` or `match` in return position whose arms build text, `return if x { "a-{n}" } else { "b" }`
+included.
+
+Alongside it, `text?` is now one type however you obtained it. A `match` whose
+arms call the same method on different types could be refused with a message that
+quoted the same name twice —
+
+```
+error: cannot unify: text? and text?
+```
+
+— which is now what it looks like: two identical types, and they unify.
 
 ### A function ending in `v[i].field` gives you the field
 

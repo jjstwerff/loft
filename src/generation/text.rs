@@ -122,8 +122,18 @@ impl Output<'_> {
 
     /// Use this to emit a single key value as a typed `Content::…` constructor.
     /// `type_nr` is from a `Key` struct; sign indicates sort direction (ignored here),
-    /// absolute value indicates the data type:
-    /// 1 = integer, 2 = long, 3 = f32, 4 = f64, 5 = bool, 6 = text, 7 = byte.
+    /// absolute value indicates the data type: 1 = integer, 2 = long, 3 = f32, 4 = f64,
+    /// 5 = bool, 6 = text, 7 = byte, 8/9/10/11 = the narrow integer storage widths
+    /// (`Parts::Int` / `Short` / `Byte` / `ShortRaw`).
+    ///
+    /// Every integer width answers a `Content::Long(i64)`, which is what the runtime
+    /// side reconstructs from the record (`keys::get_key`) and hashes (`keys::hash_ref`);
+    /// the WIDTH lives in the stored record, not in the lookup key.  loft#811: the four
+    /// narrow widths were missing here and fell to the catch-all, so a lookup in a
+    /// collection with a `u8`/`i16`/`i32` KEY searched for `Content::Long(0)` on
+    /// `--native` — a `hash<T[k]>` missed every present record and a `sorted<T[k]>`
+    /// answered a reference whose fields all read null, while the interpreter (which
+    /// shares `get_key` for both sides) was correct.
     pub(super) fn emit_content(
         &mut self,
         w: &mut dyn Write,
@@ -132,7 +142,7 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         let expr = self.generate_expr_buf(v)?;
         match type_nr.unsigned_abs() {
-            1 | 5 | 7 => write!(w, "Content::Long({expr} as i64)"),
+            1 | 5 | 7 | 8 | 9 | 10 | 11 => write!(w, "Content::Long({expr} as i64)"),
             2 => write!(w, "Content::Long({expr})"),
             3 => write!(w, "Content::Single({expr})"),
             4 => write!(w, "Content::Float({expr})"),

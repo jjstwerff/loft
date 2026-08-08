@@ -1906,6 +1906,18 @@ impl Type {
                 && sp.iter().zip(op.iter()).all(|(a, b)| a.is_equal(b))
                 && sr.is_equal(or);
         }
+        // `Optional(τ)` is a COMPILE-TIME wrapper over the same runtime layout, so two
+        // nullables are the same kind exactly when their bases are. Peel it, or every
+        // dep-ignoring rule below becomes unreachable for a `τ?`: derived `==` on the
+        // wrapper compares the INNER deps, so a `text?` handed back through a local and
+        // one returned straight from a call read as different types — with the same
+        // name, which is how it presents (*"cannot unify: text? and text?"*).
+        //
+        // Peeled on BOTH sides only. A `τ?` and a bare `τ` stay different kinds, which
+        // is the whole of DN1: one admits null and the other refuses it.
+        if let (Type::Optional(s), Type::Optional(o)) = (self, other) {
+            return s.is_same(o);
+        }
         self == other
             || (matches!(self, Type::Enum(_, _, _)) && matches!(other, Type::Enum(_, _, _)))
             || (matches!(self, Type::Reference(_, _)) && matches!(other, Type::Reference(_, _)))
@@ -3326,6 +3338,34 @@ impl Definition {
         })
     }
 
+    /// Is this a LOFT-DEFINED function — one written in loft, with a body the
+    /// compiler lowered itself?  That is a global (`n_<name>`) or a method /
+    /// generic monomorph (`t_<len><Type>_<name>`) that carries loft IR; a native
+    /// stub (`#rust` body, a shared-library symbol, an `Op*` lowering helper)
+    /// has no `code` and answers `false`.
+    ///
+    /// **Ask this before reading any of the carried return-ownership facts**
+    /// ([`Self::return_adopts_fresh_store`], [`Self::returns_borrowed_view`]):
+    /// only a loft-defined callee takes a caller-allocated buffer, so only for
+    /// one of those does the adopt-vs-copy question mean anything.
+    ///
+    /// It lives here because it is the GATE on those facts and had drifted apart
+    /// from them.  `scopes.rs` accepted `n_` and `t_` alike — and on that basis
+    /// stripped the binding's deps, which is what makes the scope-exit
+    /// `OpFreeRef` fire — while the two interpreter sites that decide whether to
+    /// deep-COPY accepted only `n_`.  So a `t_` METHOD returning through the
+    /// caller's `__ref_N` buffer was adopted (aliasing the buffer) and then
+    /// freed as if it were owned: the buffer's store went back to the pool while
+    /// the caller still named it, and the next iteration handed that slot to
+    /// someone else.  Two owners, one record — a wrong value where the recycled
+    /// slot merely overlapped, a SIGSEGV where a record header did (loft#810).
+    /// Cluster A collapsed the ANSWERS into one fact each; this collapses the
+    /// question that reaches them.
+    #[must_use]
+    pub fn is_loft_defined(&self) -> bool {
+        (self.name.starts_with("n_") || self.name.starts_with("t_")) && self.code != Value::Null
+    }
+
     /// Cluster-A.3 (OWNERSHIP_MODEL row 102) — THE adopt-vs-copy answer for a
     /// heap binding from a struct/Reference-returning call: *may the caller
     /// ADOPT the callee's returned store directly (no deep copy), or must it
@@ -3548,11 +3588,46 @@ pub struct CLibrary {
     pub optional: bool,
 }
 
+/// The answer to [`Data::lazy_fetch_drivers`], kept beside the definition count
+/// that produced it.
+///
+/// **Clones EMPTY, on purpose.** `Data` is `Clone` and the REPL clones it to take
+/// a savepoint; the copy's definitions then diverge from the original's, so
+/// carrying an answer across would key it to a program it was not computed from.
+/// An empty cache costs one walk and cannot be wrong.
+#[derive(Default)]
+struct LazyDriverCache(
+    #[allow(clippy::type_complexity)]
+    std::sync::Mutex<Option<(usize, std::result::Result<Vec<(String, u32)>, String>)>>,
+);
+
+impl Clone for LazyDriverCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 /// The immutable data of a parsed loft program
 pub struct Data {
     pub definitions: Vec<Definition>,
+    /// @PLN133 S9 — the lazy drivers, answered once per definition set.
+    ///
+    /// [`Data::lazy_fetch_drivers`] walks every definition, and it is asked on
+    /// the MISS path — the one place @PLN129 measures in queries per lookup, so
+    /// a per-miss scan of the whole program is exactly the cost that feature
+    /// exists not to pay.
+    ///
+    /// Keyed on the definition COUNT rather than answered once and for all: the
+    /// REPL and the debugger parse fresh sources into a live `Data`, so a driver
+    /// can appear after a lookup has already asked. Parsing only appends, so the
+    /// count is a sufficient witness — and getting this wrong would cache
+    /// "no driver" past the point where one exists.
+    ///
+    /// A `Mutex` rather than a `Cell` because a `par` worker taking its own
+    /// fault reads the same `Data` through a shared pointer.
+    lazy_drivers: LazyDriverCache,
     /// Index on definitions on name
     def_names: HashMap<(String, u16), u32>,
     use_names: HashMap<String, u16>,
@@ -3879,6 +3954,7 @@ impl Data {
     pub fn new() -> Data {
         Data {
             definitions: Vec::new(),
+            lazy_drivers: LazyDriverCache::default(),
             def_names: HashMap::new(),
             use_names: HashMap::new(),
             applied: Vec::new(),
@@ -5378,78 +5454,178 @@ impl Data {
         }
     }
 
-    /// @PLN133 S8 — the program's lazy DRIVER, checked.
+    /// Could this definition be a lazy driver, and must it therefore be checked?
+    ///
+    /// Two rules, because the two names mean different things:
+    ///
+    /// - **`lazy_fetch` exactly** is THE driver name. A function called that is
+    ///   claiming to be one, so a wrong shape is a mistake worth naming rather
+    ///   than a function to walk past.
+    /// - **`lazy_fetch_<anything>`** is the namespace that lets a program declare
+    ///   more than one (loft refuses a redefinition, so two drivers need two
+    ///   names). The suffix is FREE and carries no meaning — what a driver serves
+    ///   is read off its collection parameter, never guessed from its name — so
+    ///   membership needs a second signal: **the first parameter is a keyed
+    ///   collection.**
+    ///
+    /// That second rule is not fussiness. Anyone writing a driver names its
+    /// helpers after it — `lazy_fetch_row`, `lazy_fetch_query` — and under a
+    /// name-only rule each of those was read as a malformed driver and poisoned
+    /// the whole lazy path, including the perfectly good driver beside it.
+    fn is_lazy_driver_candidate(&self, d_nr: u32) -> bool {
+        let def = self.def(d_nr);
+        if def.def_type != DefType::Function {
+            return false;
+        }
+        if def.name == "n_lazy_fetch" {
+            return true;
+        }
+        if !def.name.starts_with("n_lazy_fetch_") {
+            return false;
+        }
+        def.attributes()
+            .iter()
+            .find(|a| !a.hidden)
+            .is_some_and(|a| Self::collection_element(&a.typedef).is_some())
+    }
+
+    /// The element type a keyed-collection type holds, if it is one.
+    fn collection_element(t: &Type) -> Option<u32> {
+        match t.base() {
+            Type::Hash(tp, _, _)
+            | Type::Index(tp, _, _)
+            | Type::Sorted(tp, _, _)
+            | Type::Radix(tp, _, _)
+            | Type::Trie(tp, _, _) => Some(*tp),
+            _ => None,
+        }
+    }
+
+    /// @PLN133 S8/S9 — the program's lazy DRIVERS, checked, keyed by what they serve.
     ///
     /// A collection bound to a scheme core has no Rust driver for is fetched by
-    /// calling a loft function named `lazy_fetch`. Both backends have to agree
-    /// about whether one is there and whether it is usable, so the question has
-    /// ONE home: the interpreter pushes arguments in this order and the native
-    /// generator installs a function pointer of exactly this shape, and a
-    /// mismatch caught in only one of them is how the two would start disagreeing
-    /// about what a lookup answers.
+    /// calling a loft function. Both backends have to agree about which driver a
+    /// miss reaches and whether it is usable, so the question has ONE home: the
+    /// interpreter pushes arguments in this order and looks the driver up by
+    /// element type, and the native generator installs one pointer per driver
+    /// under the same key — a disagreement caught in only one of them is how the
+    /// two would start answering different things for one lookup.
     ///
     /// Required shape — the collection, its source, and the key in whichever of
     /// two spellings it arrived in:
     ///
     /// ```loft
-    /// fn lazy_fetch(coll: <a keyed collection>, source: text,
+    /// fn lazy_fetch(coll: hash<Person[id]>, source: text,
     ///               key_int: integer, key_text: text) -> integer
     /// ```
     ///
+    /// **The element type is the KEY, and it comes from the parameter.** One
+    /// driver per program was not merely a limit: nothing checked that the driver
+    /// a miss reached was declared for THAT collection, so a program with two
+    /// lazily-bound element types ran the first driver against the second
+    /// collection — measured, on both backends, inserting a `Person` into a
+    /// `hash<Order[id]>` and reading its `nm` back as an `Order.what`. A wrong
+    /// VALUE, silently, which is the class this whole channel exists to keep out.
+    ///
+    /// Answers each driver as `(element type name, def_nr)`. The name rather than
+    /// a number, because the two sides count in different spaces — a parse-time
+    /// `Definition` and a runtime `Stores::types` entry — and a name is the one
+    /// key both hold without a mapping to keep in step.
+    ///
     /// # Errors
-    /// When a `lazy_fetch` exists with a different shape. Refusing beats calling
-    /// it: the arguments are pushed positionally, so a driver with a different
-    /// signature reads someone else's bytes as its own — a wrong VALUE rather
-    /// than a failure, which is the class this whole channel exists to keep out.
-    pub fn lazy_fetch_driver(&self) -> std::result::Result<Option<u32>, String> {
-        let d_nr = self.def_nr("n_lazy_fetch");
-        if d_nr == u32::MAX {
-            return Ok(None);
+    /// When a function in the `lazy_fetch…` namespace has a different shape, or
+    /// two of them serve one element type. Refusing beats calling: the arguments
+    /// are pushed positionally, so a driver whose shape or subject is wrong reads
+    /// someone else's bytes as its own.
+    pub fn lazy_fetch_drivers(&self) -> std::result::Result<Vec<(String, u32)>, String> {
+        let n = self.definitions.len();
+        let mut slot = self
+            .lazy_drivers
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, cached)) = slot.as_ref()
+            && *at == n
+        {
+            return cached.clone();
         }
+        let answer = self.scan_lazy_fetch_drivers();
+        *slot = Some((n, answer.clone()));
+        answer
+    }
+
+    fn scan_lazy_fetch_drivers(&self) -> std::result::Result<Vec<(String, u32)>, String> {
+        let mut found: Vec<(String, u32)> = Vec::new();
+        for d_nr in 0..self.definitions() {
+            if !self.is_lazy_driver_candidate(d_nr) {
+                continue;
+            }
+            let elem = self.lazy_driver_subject(d_nr)?;
+            if let Some((_, other)) = found.iter().find(|(e, _)| *e == elem) {
+                return Err(format!(
+                    "`{}` and `{}` are both lazy drivers for {elem}; one collection type \
+                     has one driver",
+                    self.def(*other).original_name(),
+                    self.def(d_nr).original_name()
+                ));
+            }
+            found.push((elem, d_nr));
+        }
+        Ok(found)
+    }
+
+    /// The element type one driver serves, or why it is not a driver at all.
+    fn lazy_driver_subject(&self, d_nr: u32) -> std::result::Result<String, String> {
         let def = self.def(d_nr);
+        let nm = def.original_name();
         let visible: Vec<&Attribute> = def.attributes().iter().filter(|a| !a.hidden).collect();
-        let wanted = "fn lazy_fetch(coll: <a keyed collection>, source: text, \
+        let wanted = "fn lazy_fetch…(coll: <a keyed collection>, source: text, \
                       key_int: integer, key_text: text) -> integer";
         if visible.len() != 4 {
             return Err(format!(
-                "`lazy_fetch` takes {} parameter(s); a lazy driver is `{wanted}`",
+                "`{nm}` takes {} parameter(s); a lazy driver is `{wanted}`",
                 visible.len()
             ));
         }
         let is_text = |t: &Type| matches!(t.base(), Type::Text(_));
         let is_int = |t: &Type| matches!(t.base(), Type::Integer(_));
-        let is_collection = |t: &Type| {
-            matches!(
-                t.base(),
-                Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
-        };
-        if !is_collection(&visible[0].typedef) {
+        let Some(tp) = Self::collection_element(&visible[0].typedef) else {
             return Err(format!(
-                "`lazy_fetch`'s first parameter must be the keyed COLLECTION it fills; \
+                "`{nm}`'s first parameter must be the keyed COLLECTION it fills; \
                  a lazy driver is `{wanted}`"
             ));
-        }
+        };
+        let element = self.def(tp).name.clone();
         if !is_text(&visible[1].typedef)
             || !is_int(&visible[2].typedef)
             || !is_text(&visible[3].typedef)
         {
             return Err(format!(
-                "`lazy_fetch`'s parameters after the collection must be \
+                "`{nm}`'s parameters after the collection must be \
                  `source: text, key_int: integer, key_text: text`; a lazy driver is `{wanted}`"
             ));
         }
         if !is_int(def.returned()) {
             return Err(format!(
-                "`lazy_fetch` must answer an integer — 1 inserted, 0 absent; \
+                "`{nm}` must answer an integer — 1 inserted, 0 absent; \
                  a lazy driver is `{wanted}`"
             ));
         }
-        Ok(Some(d_nr))
+        Ok(element)
+    }
+
+    /// The driver that serves `element`, if the program declares one.
+    ///
+    /// # Errors
+    /// Whatever [`Data::lazy_fetch_drivers`] refuses — a malformed driver is
+    /// reported even to a miss on a collection it was not for, because a program
+    /// carrying one is a program whose next lookup could reach it.
+    pub fn lazy_fetch_driver_for(&self, element: &str) -> std::result::Result<Option<u32>, String> {
+        Ok(self
+            .lazy_fetch_drivers()?
+            .into_iter()
+            .find(|(e, _)| e == element)
+            .map(|(_, d)| d))
     }
 
     /// @PLN102 arc C — is `source` the compilation's OWNED entry project (vs a

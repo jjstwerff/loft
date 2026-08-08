@@ -12,6 +12,36 @@ returning multiple values without defining a named struct.
 
 ---
 
+## How a tuple RETURN travels
+
+A tuple returned from a function stays a value: under `--native` it is a real Rust
+tuple (`-> (f64, f64, f64)`, returned in registers), and the interpreter carries it
+in the frame. Two shapes are the exception and travel as a **`Reference` to the
+synthetic `__tuple<…>` struct** instead — the same record a stored tuple uses:
+
+1. **Any element with a lifetime concern** — Text, Reference, Vector, Enum-struct, a
+   keyed collection, RefVar, or a nested tuple containing one (`data::has_lifetime_concern`).
+   Those elements need store-side ownership tracking, which the existing
+   `ref_return` / `text_return` transfer machinery already provides for struct returns
+   (@P234).
+2. **A `par(...)` worker's return wider than 8 bytes.** Par dispatch carries a worker
+   result home through per-route buffers that cover ≤8-byte primitives, text, fn-refs
+   and references and nothing else, so a bare `(integer, integer)` has nowhere to ride.
+   Boxing puts it on the reference route. This is decided per FUNCTION, from the set of
+   defs seen as a worker (`Parser::par_worker_defs`), not per tuple shape.
+
+The distinction is worth keeping honest because the boxing is not free: it claims and
+frees a store record on **every call**. loft#808 measured a `(float, float, float)`
+helper at 728 ms boxed against 129 ms as a value on `--native-release` — the identical
+arithmetic, ~5.6x, entirely from crossing a function boundary. Boxing every tuple
+return is what that issue was.
+
+A tuple containing a `Type::Function` element is never boxed by the size rule (P196):
+the synthetic-struct wrapping breaks at the assignment site, where the field type stays
+a bare tuple while the value has become a reference.
+
+---
+
 ## Syntax
 
 ```loft

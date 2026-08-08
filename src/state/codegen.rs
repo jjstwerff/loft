@@ -1509,6 +1509,18 @@ impl State {
                 Type::Text(_) => {
                     stack.add_op("OpConvTextFromNull", self);
                 }
+                // loft#808 — Character and payload-less Enum complete the table.  The
+                // three sibling walkers (`emit_tuple_put_ops`, `emit_tuple_var_pop_put`,
+                // `emit_tuple_var_push_recursive`) already carry both; only null-init
+                // was short, so `fn f() -> (character, character)` panicked here the
+                // moment its return stopped being boxed into a `__tuple<…>` record and
+                // became a real tuple local that needs initialising.
+                Type::Character => {
+                    stack.add_op("OpConvCharacterFromNull", self);
+                }
+                Type::Enum(_, false, _) => {
+                    stack.add_op("OpConvEnumFromNull", self);
+                }
                 other => panic!("emit_tuple_null_init: unsupported element type {other:?}"),
             }
             let pos = stack.position - elem_abs;
@@ -1521,6 +1533,8 @@ impl State {
                     stack.add_op("OpPutRef", self);
                 }
                 Type::Text(_) => stack.add_op("OpPutText", self),
+                Type::Character => stack.add_op("OpPutCharacter", self),
+                Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
                 _ => unreachable!(),
             }
             self.code_add(pos);
@@ -2020,8 +2034,12 @@ impl State {
                     stack.function.tp(v).clone()
                     && !stack.function.is_argument(v)
                     && let Value::Call(fn_nr, _) = value.unspan()
-                    && stack.data.def(*fn_nr).name().starts_with("n_")
-                    && *stack.data.def(*fn_nr).code() != Value::Null
+                    // The shared gate on the carried ownership facts — a METHOD
+                    // (`t_`) takes a caller-allocated buffer exactly like a global
+                    // (`n_`) does, and reading the fact for only one of them is what
+                    // made a method's return adopt the buffer and then free it
+                    // (loft#810).  See `Def::is_loft_defined`.
+                    && stack.data.def(*fn_nr).is_loft_defined()
                     && (if crate::keys::reassign_copy_enabled() {
                         // The carried A.3 fact (see the comment above).
                         !stack.data.def(*fn_nr).return_adopts_fresh_store()
@@ -2470,8 +2488,12 @@ impl State {
         } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
             stack.function.tp(v).clone()
             && let Value::Call(fn_nr, _) = value.unspan()
-            && stack.data.def(*fn_nr).name().starts_with("n_")
-            && *stack.data.def(*fn_nr).code() != Value::Null
+            // The shared gate on the carried ownership facts (`Def::is_loft_defined`) —
+            // methods and generic monomorphs (`t_`) reach this arm too.  While it read
+            // `n_` alone, a method returning through the caller's `__ref_N` fell to the
+            // plain-adopt fallthrough at the bottom of this dispatch and was then freed
+            // as an owner, taking the caller's buffer with it (loft#810).
+            && stack.data.def(*fn_nr).is_loft_defined()
         {
             // Cluster A.3 (OWNERSHIP_MODEL row 102): read the carried
             // adopt-vs-copy fact.  When the callee returns a genuinely FRESH

@@ -3032,6 +3032,18 @@ use #count instead"
             } else {
                 self.parse_parallel_worker(elem_var, &elem_tp)
             };
+        // loft#808 — the one place BOTH worker-resolution shapes converge, so it is
+        // where "this def is a par worker" is recorded.  A pure-value tuple return
+        // keeps Rust's tuple ABI everywhere else; only a worker's still needs the
+        // synthetic-`__tuple<…>` boxing, because the routes below carry a result
+        // through buffers sized for ≤8-byte primitives / text / fn-refs / refs.
+        // Recorded on pass 1 too (the destructure path answers with the USER worker
+        // there, and with its synthesized wrapper on pass 2 — the wrapper inherits
+        // the already-promoted return type, so both answers are the right one to
+        // record).  See `Parser::par_worker_defs`.
+        if fn_d_nr != u32::MAX {
+            self.par_worker_defs.insert(fn_d_nr);
+        }
 
         // Plan-06 phase 5b' — par-safety DEEP check at ERROR level.
         // Recurses through user-fn callees until it hits a direct
@@ -4743,22 +4755,39 @@ use #count instead"
             );
             return Type::Void;
         }
-        let Type::Vector(elm, _) = &types[0] else {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "reserve requires a vector as its first argument"
-            );
-            return Type::Void;
-        };
         if !matches!(types[1].base(), Type::Integer(_)) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "reserve's count must be an integer — reserve(vector, count)"
+                "reserve's count must be an integer — reserve(collection, count)"
             );
             return Type::Void;
         }
+        // @PLN135 arc C — a `hash` reserves its BUCKET TABLE, which is a different
+        // allocation from a vector's element block, so it needs its own op.  The
+        // contract is the same one `reserve(v, n)` states: capacity only, never the
+        // contents or the length, and a count the collection already covers does
+        // nothing.  Filling a 1M-entry hash otherwise rebuilds the table 17 times.
+        if matches!(&types[0], Type::Hash(_, _, _)) {
+            let Some(kt) = self.keyed_known_type(&types[0]) else {
+                // The collection type never resolved; the cause is already reported.
+                return Type::Void;
+            };
+            *val = self.cl(
+                "OpReserveHash",
+                &[list[0].clone(), list[1].clone(), Value::Int(i32::from(kt))],
+            );
+            return Type::Void;
+        }
+        let Type::Vector(elm, _) = &types[0] else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "reserve takes a vector or a hash as its first argument — a sorted, \
+                 index, spatial or trie collection has no capacity to set"
+            );
+            return Type::Void;
+        };
         let elm_size = self.element_store_size(elm);
         *val = self.cl(
             "OpReserveVector",

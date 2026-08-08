@@ -594,6 +594,12 @@ pub struct Output<'a> {
     /// When true, emit `#[no_mangle] pub extern "C" fn loft_start()`
     /// instead of `fn main()` and use WASM imports for native package functions.
     pub wasm_browser: bool,
+    /// `--native-wasm`: the emitted Rust is compiled for `wasm32-wasip2`.
+    ///
+    /// Set beside `wasm_browser` rather than derived from it — they are two
+    /// different targets, not two names for one — and the only thing that reads
+    /// their disjunction is [`Self::no_c_abi`].
+    pub wasm_wasi: bool,
     /// When true, the host-native backend: emit `unsafe extern "C"` declarations
     /// for `#native` package functions (instead of `extern crate <pkg>`) and link
     /// each package's cdylib `.so` by C-ABI, sealing the package's Rust crate graph
@@ -1182,6 +1188,7 @@ impl<'a> Output<'a> {
             tuple_text_to_string: false,
             call_stack_prefix: None,
             wasm_browser: false,
+            wasm_wasi: false,
             native_cabi: false,
             native_collisions: data
                 .native_symbol_collisions()
@@ -1193,6 +1200,25 @@ impl<'a> Output<'a> {
             program_src: None,
             debug_name: None,
         }
+    }
+
+    /// @PLN24 arc E — is this target one a `#c` binding cannot reach?
+    ///
+    /// True for both wasm shapes. A wasm module has no `dlopen`, so a declared
+    /// `[c] libs` soname is unreachable by construction; and where a symbol IS
+    /// satisfiable — `wasm32-wasip2` links a libc, so `strlen` resolves — it is
+    /// satisfied under a THIRD data model (ILP32: `long`, `size_t` and every
+    /// pointer are 32 bits) that the host-derived `CTarget` does not describe.
+    /// Measured, and worth stating because the plan originally recorded wasm as
+    /// having "no C ABI at all": that binding LINKED, with a warning, and then
+    /// trapped at the call.
+    ///
+    /// One reader, so the two target flags cannot drift into two different
+    /// answers at the three sites that consult them — the `extern` block, the
+    /// lazy resolver, and the call itself.
+    #[must_use]
+    pub fn no_c_abi(&self) -> bool {
+        self.wasm_browser || self.wasm_wasi
     }
 }
 
@@ -1388,6 +1414,7 @@ impl Output<'_> {
         w: &mut dyn Write,
         data: &Data,
         wasm_browser: bool,
+        no_c_abi: bool,
         native_cabi: bool,
         reachable: &HashSet<u32>,
     ) -> std::io::Result<()> {
@@ -1738,7 +1765,24 @@ extern crate loft;"
         // emitter writes a wrapper for every body-less def, so every symbol
         // needs a declaration or the wrapper fails to compile.  An unreferenced
         // extern is dead, not a link error.
-        if !wasm_browser {
+        //
+        // @PLN24 arc E — except on a wasm target, where nothing is declared and
+        // nothing is resolved.  Both halves matter and they fail differently: an
+        // `extern "C"` that IS satisfied by the wasm sysroot's own libc links
+        // against the wrong data model (wasm32 is ILP32 — `long`, `size_t` and
+        // every pointer are 32 bits, against the host's 64) and traps at the
+        // call, while the lazy resolver names `loft::c_call`, which is gated
+        // behind `native-extensions` and so is not in a wasm build at all.  The
+        // second one fired for a binding the program never called, so this skip
+        // is what keeps an unused `#c` declaration from rejecting an otherwise
+        // valid wasm program.  A REACHABLE call is refused by name, at the call
+        // site (`output_c_direct_call`).
+        // Emitted AFTER the tables below, which is where it has always sat: the
+        // wrappers read `__C_LIBS` / `__C_LIB_SYMS`, and keeping the order means
+        // a non-wasm target's generated Rust is unchanged, byte for byte, by
+        // arc E.
+        let mut lazy = String::new();
+        if !no_c_abi {
             let target = crate::c_signature::CTarget::host();
             let mut declared_c: HashSet<String> = HashSet::new();
             let mut block = String::new();
@@ -1748,7 +1792,6 @@ extern crate loft;"
             // the program fails to build (measured — `rust-lld: unable to find
             // library`, even for a call the program never reaches).  It gets a
             // resolving wrapper instead, below.
-            let mut lazy = String::new();
             for d_nr in 0..data.definitions() {
                 let def = data.def(d_nr);
                 if def.c_sig.is_empty() || *def.code() != Value::Null {
@@ -1828,44 +1871,47 @@ extern crate loft;"
                 write!(w, "{block}")?;
                 writeln!(w, "}}")?;
             }
-            // The tables a compiled program needs because it never runs
-            // `c_call::register`: which libraries may be opened on demand, and
-            // which `#c` symbols each is expected to provide (the availability
-            // query's symbol-granular half).
-            //
-            // EVERY declared library is listed, not just the optional ones: with
-            // its symbols resolved lazily a required library may have no
-            // undefined reference left to keep its `DT_NEEDED` entry alive, and
-            // re-opening one that is already loaded costs nothing.
-            //
-            // Emitted UNCONDITIONALLY, even empty. `c_library_available`'s
-            // `#rust` body reads them, and that body is compiled into whichever
-            // unit calls it — the main binary or an auto-built package cdylib,
-            // which links its own copy of loft and therefore has its own copy of
-            // these tables. Emitting them only "when needed" is what made the
-            // same query answer true from a program and false from inside the
-            // package that declared the library.
-            writeln!(w, "static __C_LIBS: &[(&str, &str)] = &[")?;
-            for lib in &data.c_libraries {
-                writeln!(w, "    ({:?}, {:?}),", lib.name, lib.pkg_dir)?;
+        }
+        // The tables a compiled program needs because it never runs
+        // `c_call::register`: which libraries may be opened on demand, and
+        // which `#c` symbols each is expected to provide (the availability
+        // query's symbol-granular half).
+        //
+        // EVERY declared library is listed, not just the optional ones: with
+        // its symbols resolved lazily a required library may have no
+        // undefined reference left to keep its `DT_NEEDED` entry alive, and
+        // re-opening one that is already loaded costs nothing.
+        //
+        // Emitted UNCONDITIONALLY, even empty, and on EVERY target including the
+        // two wasm ones. `c_library_available`'s `#rust` body reads them, and
+        // that body is compiled into whichever unit calls it — the main binary,
+        // an auto-built package cdylib (which links its own copy of loft and
+        // therefore has its own copy of these tables), or a wasm module.
+        // Emitting them only "when needed" is what made the same query answer
+        // true from a program and false from inside the package that declared
+        // the library; emitting them only on non-browser targets is what made
+        // `c_library_available` — the very question a library is told to ask
+        // before calling into C — fail to compile under `--html` (@PLN24 arc E).
+        writeln!(w, "static __C_LIBS: &[(&str, &str)] = &[")?;
+        for lib in &data.c_libraries {
+            writeln!(w, "    ({:?}, {:?}),", lib.name, lib.pkg_dir)?;
+        }
+        writeln!(w, "];")?;
+        writeln!(w, "static __C_LIB_SYMS: &[(&str, &[&str])] = &[")?;
+        // The table lives in `c_call`, which exists only with
+        // `native-extensions`. Without it nothing can be `dlopen`ed, so the
+        // right table is the empty one rather than a build failure.
+        #[cfg(feature = "native-extensions")]
+        for (lib, syms) in crate::c_call::library_symbol_table(data) {
+            write!(w, "    ({lib:?}, &[")?;
+            for s in &syms {
+                write!(w, "{s:?}, ")?;
             }
-            writeln!(w, "];")?;
-            writeln!(w, "static __C_LIB_SYMS: &[(&str, &[&str])] = &[")?;
-            // The table lives in `c_call`, which exists only with
-            // `native-extensions`. Without it nothing can be `dlopen`ed, so the
-            // right table is the empty one rather than a build failure.
-            #[cfg(feature = "native-extensions")]
-            for (lib, syms) in crate::c_call::library_symbol_table(data) {
-                write!(w, "    ({lib:?}, &[")?;
-                for s in &syms {
-                    write!(w, "{s:?}, ")?;
-                }
-                writeln!(w, "]),")?;
-            }
-            writeln!(w, "];")?;
-            if !lazy.is_empty() {
-                write!(w, "{lazy}")?;
-            }
+            writeln!(w, "]),")?;
+        }
+        writeln!(w, "];")?;
+        if !lazy.is_empty() {
+            write!(w, "{lazy}")?;
         }
         Ok(())
         // @PLAN12 phase 3.5a (2026-05-24) — removed the `mod external {…}`
@@ -1967,6 +2013,7 @@ extern crate loft;"
             w,
             self.data,
             self.wasm_browser,
+            self.no_c_abi(),
             self.native_cabi,
             &self.reachable,
         )?;
@@ -2104,6 +2151,7 @@ extern crate loft;"
             w,
             self.data,
             self.wasm_browser,
+            self.no_c_abi(),
             self.native_cabi,
             &reachable,
         )?;
@@ -2716,32 +2764,57 @@ extern crate loft;"
     /// list.
     fn roots_with_lazy_driver(&self, entries: &[u32]) -> Vec<u32> {
         let mut roots = entries.to_vec();
-        if let Ok(Some(d_nr)) = self.data.lazy_fetch_driver()
-            && !roots.contains(&d_nr)
-        {
-            roots.push(d_nr);
+        // @PLN133 S9 — EVERY driver is a root, not the one. A program declares
+        // one per element type, and a driver left out of the walk is the quiet
+        // failure again: the program compiles, installs a pointer to a body that
+        // was never emitted, and that collection alone has no driver.
+        if let Ok(drivers) = self.data.lazy_fetch_drivers() {
+            for (_, d_nr) in drivers {
+                if !roots.contains(&d_nr) {
+                    roots.push(d_nr);
+                }
+            }
         }
         roots
     }
 
-    /// @PLN133 S8 — hand the program's lazy driver to the runtime.
+    /// @PLN133 S8/S9 — hand the program's lazy drivers to the runtime.
     ///
     /// `OpGetRecord` lives in libloft and cannot see a function the generator
-    /// wrote, so `init()` installs a pointer to it. Emitted only when the
-    /// program HAS a driver of the one admitted signature — which is checked in
-    /// `Data::lazy_fetch_driver`, the same place the interpreter asks, so the
-    /// two backends cannot disagree about whether a driver is usable.
+    /// wrote, so `init()` installs a pointer per driver, keyed by the ELEMENT
+    /// TYPE it serves. Which drivers exist and what each serves is decided in
+    /// `Data::lazy_fetch_drivers` — the same place the interpreter asks — so the
+    /// two backends cannot disagree about which driver a miss reaches.
     ///
     /// A driver with the wrong shape emits nothing, and the runtime then reports
     /// "needs a loft driver" rather than calling a function whose parameters do
     /// not line up — a wrong VALUE, which is the class this channel exists to
     /// keep out.
     fn emit_lazy_fetch_registration(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
-        if let Ok(Some(d_nr)) = self.data.lazy_fetch_driver()
-            && d_nr < till
-            && (self.reachable.is_empty() || self.reachable.contains(&d_nr))
-        {
-            writeln!(w, "    codegen_runtime::register_lazy_fetch(n_lazy_fetch);")?;
+        let drivers = match self.data.lazy_fetch_drivers() {
+            Ok(d) => d,
+            // The refusal travels as data. The interpreter re-asks `Data` at
+            // every miss and reports the reason it wrote; native cannot ask, so
+            // without this it registered nothing and reported "needs a loft
+            // driver" — the same program naming a different mistake depending on
+            // which backend you ran.
+            Err(why) => {
+                writeln!(
+                    w,
+                    "    codegen_runtime::register_lazy_fetch_refusal({why:?});"
+                )?;
+                return Ok(());
+            }
+        };
+        for (element, d_nr) in drivers {
+            if d_nr < till && (self.reachable.is_empty() || self.reachable.contains(&d_nr)) {
+                writeln!(
+                    w,
+                    "    codegen_runtime::register_lazy_fetch({:?}, {});",
+                    element,
+                    self.data.def(d_nr).name
+                )?;
+            }
         }
         Ok(())
     }
@@ -4496,11 +4569,45 @@ extern crate loft;"
             )?;
             return Ok(());
         };
-        if self.wasm_browser {
+        if self.no_c_abi() {
+            // @PLN24 arc E — the refusal, at the only site that knows a `#c`
+            // binding is actually CALLED.  Reachability-scoped for free, which
+            // is the property that matters: a library declaring bindings a wasm
+            // program never uses still builds for wasm.
+            //
+            // The three ways this used to end, all measured on one tree: a
+            // symbol the wasm sysroot happens to export LINKED and then trapped
+            // (`signature_mismatch: strlen`); one it does not export produced a
+            // raw `rust-lld: undefined symbol` naming neither package nor
+            // library; and an optional-library binding produced `E0433: cannot
+            // find c_call in loft`, once per symbol, pointing at loft's own
+            // internals.  A reader could not tell any of the three from a bug in
+            // their own program.
             let name = def.name().strip_prefix("n_").unwrap_or(def.name());
+            let (which, flag) = if self.wasm_browser {
+                ("browser", "--html")
+            } else {
+                ("wasm (wasip2)", "--native-wasm")
+            };
+            // The PACKAGE, not the library.  A `#c` annotation never names the
+            // library it came from (@PLN24 arc G), so listing the package's
+            // `[c]` entries would name several libraries of which at most one is
+            // this symbol's — and one of them is the shim loft built itself,
+            // which arc D deliberately made indistinguishable from a declared
+            // one.  The package is the thing the author can act on.
+            let from =
+                self.data
+                    .c_owner_pkg(&def.position().file)
+                    .map_or_else(String::new, |pkg| {
+                        let stem = std::path::Path::new(pkg)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(pkg);
+                        format!(" (package `{stem}`)")
+                    });
             writeln!(
                 w,
-                "{{ compile_error!(\"loft: `{name}` is bound to the C symbol '{}' with #c, and the browser target has no C ABI to bind to. Give the library a wasm path or drop the --html claim (@PLN24 arc E)\") }}",
+                "{{ compile_error!(\"loft: `{name}` is bound to the C symbol '{}' with #c{from}, and the {which} target has no C ABI to reach it — a wasm module cannot open a shared library. Give the library a wasm implementation, host it out of process (@PLN119), or drop the {flag} claim (@PLN24 arc E)\") }}",
                 sig.symbol
             )?;
             return Ok(());

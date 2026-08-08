@@ -1,0 +1,131 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S7 — the registry, on the half that needs no database.
+//
+// Two claims live here, and neither of them can skip:
+//
+//   1. **A string reaches its driver.** `parse_conn` says which backend a string
+//      names; `dsn_for` says what that backend's own `db_open` wants, and the
+//      three answers genuinely differ. A translation that is wrong produces a
+//      connection to the wrong place, which is the failure this plan exists to
+//      keep out of the value channel.
+//   2. **A refusal behaves like a connection.** Every operation on a connection
+//      that could not be made must fail, and `db_col` must answer null and not
+//      the empty string — because the empty string is a VALUE. This needs no
+//      library at all, so it is the cell that keeps the whole registry honest on
+//      a machine with no database.
+//
+// And the strongest claim in the file is one nothing asserts: `uniform` below is
+// generic over `SqlDb` and is handed an `AnyDb`. If the struct-enum did not
+// satisfy the interface this program would not compile — which is the entire
+// question S7 had to answer.
+//
+// Driven by `tests/native.rs`, on both loft backends.
+
+use registry;
+use schema;
+use sql;
+
+// The whole point of the registry, in one signature: a consumer that never names
+// a backend, handed the value one connection string produced.
+fn uniform <D: SqlDb> (d: D) -> text {
+  ran = d.db_exec("SELECT 1");
+  rows = d.db_select("SELECT 1");
+  nxt = d.db_next();
+  col = d.db_col(0);
+  w = d.db_width();
+  tx = d.db_begin();
+  return "exec={ran} select={rows} next={nxt} col_null={col == null} width={w} begin={tx}";
+}
+
+fn dsn_of(spec: text) -> Dsn {
+  c = parse_conn(spec);
+  return dsn_for(c);
+}
+
+fn main() {
+  // --- 1: the string reaches its driver -------------------------------------
+  //
+  // sqlite and duckdb take a PATH, and the authority slashes a URL-shaped config
+  // file writes carry nothing for a file backend.
+  d_plain = dsn_of("sqlite:app.db");
+  assert(d_plain.dsn_ok() && d_plain.value == "app.db", "sqlite plain: {d_plain.value}");
+  d_slash = dsn_of("sqlite://app.db");
+  assert(d_slash.value == "app.db", "sqlite //: {d_slash.value}");
+  d_abs = dsn_of("sqlite:///tmp/app.db");
+  assert(d_abs.value == "/tmp/app.db", "sqlite absolute URL: {d_abs.value}");
+  d_mem = dsn_of("sqlite::memory:");
+  assert(d_mem.value == ":memory:", "sqlite memory: {d_mem.value}");
+  d_duck = dsn_of("duckdb:w.duckdb");
+  assert(d_duck.value == "w.duckdb", "duckdb: {d_duck.value}");
+
+  // libpq reads a URI itself and reads a keyword string too, so the only
+  // decision is WHICH it is being handed — and a URI without its scheme is not
+  // a URI. That is why `Conn` carries the whole string beside the target.
+  d_pg_kw = dsn_of("postgres:dbname=loft");
+  assert(d_pg_kw.value == "dbname=loft", "pg keywords: {d_pg_kw.value}");
+  d_pg_uri = dsn_of("postgresql://ada@localhost/loft");
+  assert(d_pg_uri.value == "postgresql://ada@localhost/loft", "pg URI: {d_pg_uri.value}");
+
+  // mariadb's client takes keywords and not a URL, so a URL has to be
+  // TRANSLATED. Doing it wrong is silent — every field lands somewhere.
+  d_my = dsn_of("mysql://ada:secret@db.host/loft");
+  assert(d_my.value == "host=db.host user=ada pass=secret db=loft", "maria URL: {d_my.value}");
+  d_my_bare = dsn_of("mariadb:host=h user=u pass=p db=d");
+  assert(d_my_bare.value == "host=h user=u pass=p db=d", "maria keywords: {d_my_bare.value}");
+  d_my_min = dsn_of("mysql://db.host/loft");
+  assert(d_my_min.value == "host=db.host db=loft", "maria no creds: {d_my_min.value}");
+
+  // A port is REFUSED, not dropped. This driver connects on 3306, so honouring
+  // the string would mean reaching a different server than it names — a
+  // plausible answer from the wrong place, which is worse than no answer.
+  d_port = dsn_of("mysql://ada@db.host:5555/loft");
+  assert(!d_port.dsn_ok(), "a port maria cannot honour must refuse");
+  assert(d_port.refusal.find("3306") != null, "the refusal names the port it uses: {d_port.refusal}");
+
+  // A string that names no backend never reaches a driver at all.
+  d_none = dsn_of("oracle:whatever");
+  assert(!d_none.dsn_ok(), "an unknown scheme has no DSN");
+
+  // --- 2: a refusal behaves like a connection -------------------------------
+  //
+  // No library is opened here, on purpose. Nothing below needs one, which is
+  // what makes this half of the gate unconditional.
+  bad = connect("oracle://host/db");
+  assert(!bad.db_ok(), "an unknown scheme must not produce a connection");
+  assert(bad.db_last_error().find("oracle") != null,
+         "the reason names the scheme it saw: {bad.db_last_error()}");
+  assert(bad.db_backend() == "", "a refusal names no backend: {bad.db_backend()}");
+  assert(bad.db_dialect() == null, "a refusal speaks no dialect");
+
+  // Every operation fails, and the failure is uniform: this is the value a
+  // caller may pass on without discharging it at every hop, so it has to behave
+  // at every hop.
+  u = uniform(bad);
+  assert(u == "exec=false select=false next=false col_null=true width=0 begin=false",
+         "a refused connection must fail uniformly: {u}");
+  // `db_shut` on a refusal is a no-op rather than a fault — a caller that closes
+  // what it opened should not have to ask whether it opened anything.
+  bad.db_shut();
+
+  // A string with no scheme at all is a different refusal, and it says so.
+  nos = connect("app.db");
+  assert(!nos.db_ok(), "a bare path is not a connection string");
+  assert(nos.db_last_error().find("scheme") != null, "the reason: {nos.db_last_error()}");
+
+  // --- the session setup a connect must run ---------------------------------
+  //
+  // Requirement 1's teeth: PostgreSQL renders a float at whatever
+  // `extra_float_digits` the SESSION carries, so the connect is the only place
+  // that can make the read exact. If this list ever empties, 1887 of 2000 random
+  // doubles come back almost right (P3) and nothing downstream can tell.
+  pg_setup = dialect_setup("postgres");
+  assert(len(pg_setup) == 1, "postgres has one setup statement, not {len(pg_setup)}");
+  assert((pg_setup[0] ?? "").find("extra_float_digits") != null,
+         "and it is the float-precision one: {pg_setup[0] ?? ""}");
+  assert(len(dialect_setup("sqlite")) == 0, "sqlite needs no session setup");
+  assert(len(dialect_setup("oracle")) == 0, "an unknown backend has nothing to run");
+
+  println("registry ok");
+}

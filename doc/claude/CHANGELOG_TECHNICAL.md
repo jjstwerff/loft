@@ -9,6 +9,484 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### One SQL boundary closes: a table loft made and a table loft found are the same value (@PLN133) (2026-08-08)
+
+@PLN133's gate passes, on **four database backends and both loft backends, with
+byte-identical output in all eight cells**. Write a struct graph through the derived
+`INSERT`, bind a collection lazily to the SAME connection string, traverse it, and
+get back the values, the identity across two paths, and the trip counts laziness
+predicts. **Run twice** — once into an empty database where loft writes the schema,
+once into a table made by hand with a different column order, the float kept in a
+`VARCHAR`, and an extra column loft knows nothing about. Only the second run proves
+requirement 3; the first passes even against a `reconcile` that always agrees.
+
+- **S11 + S12 are ONE call.** `ensure(d, dial, want)` is the whole absent-or-present
+  decision, because it is one decision — splitting it puts the test in every caller,
+  which is where two callers eventually disagree about what absence means. Absence is
+  decided by ASKING THE CATALOGUE, never by an `IF NOT EXISTS`: the rule *loft never
+  touches a table it did not find missing* belongs in loft's code where it can be read,
+  not in an engine's tolerance for a repeated `CREATE`. After creating, it reads the
+  table BACK and reconciles against what the engine actually stored — mariadb turns
+  `BOOLEAN` into `tinyint`, so reconciling against the derivation would assert the
+  round trip instead of testing it.
+- **`introspect` now reads all four catalogues**, which is what S12 needed and what S6
+  had deferred with a scope statement. The columns half unifies on
+  `information_schema.columns` (scoped by an expression the `Dialect` carries); the
+  INDEX half does not and is not pretended to — `information_schema` has no index view,
+  so PostgreSQL answers from `pg_index`, mariadb from `information_schema.statistics`,
+  and duckdb hands back the `CREATE INDEX` TEXT rather than a row per column. Every
+  query was RUN against a live server of its engine before it was written down.
+  Two things a guess would have got wrong: PostgreSQL's `indkey`/`indoption` are
+  **0-based** `int2vector`s, so `indoption[ord-1]` reads every direction as NULL; and
+  the type mapping is a WHITELIST rather than sqlite's substring test, because sqlite
+  has affinity — a rule the engine itself applies — while PostgreSQL's `point`
+  merely contains `INT`.
+- **S13's statement is derived, its values are not.** `insert_row` renders the writer's
+  `INSERT` from the same `TableDef` the reader's `SELECT` comes from, so they cannot
+  drift. The generic walk from an arbitrary struct's fields to those values is NOT
+  built and cannot be here: loft's reflection reports types, not values.
+- **S10's deletion is REFUSED, and that is the finding.** Deleting core's Rust sqlite
+  path makes a driver mandatory for `sqlite:`, a driver names a concrete element type
+  so it cannot be generic, and `store_bind_lazy(c, "sqlite:x.db")` needing no user code
+  is a shipped promise. The alternative — core synthesising a driver that calls the loft
+  library — makes a fixture a dependency of core. So S9's precedence rule IS the answer:
+  a demotion, not a deletion. What it buys is not deletion but a stopped clock, which
+  was the plan's actual complaint: N=4 backends now and **+1 forever**. The +1 is gone.
+
+Found on the way and filed rather than absorbed: **[loft#813](https://github.com/loft-lang/loft/issues/813)** —
+a value whose static type is a struct-enum VARIANT (`x = AsA { … }` rather than
+`x: Any = AsA { … }`) is accepted where a bounded generic wants the ENUM and then
+answers the type's empty value. Silent on `--interpret`, a `todo!()` panic on
+`--native`, a SIGSEGV with two generic hops.
+
+### A buffer that is already a reference is handed over, not wrapped (loft#806) (2026-08-08)
+
+`return t.m(i) ?? "x"` SIGSEGV'd the interpreter while `--native` answered correctly.
+
+`OpCreateStack(v)` is how a variable that OWNS its text hands out a reference to it.
+The call site that fills a callee's hidden `&text` return buffer picks that buffer BY
+NAME (`__work_cN`, so the two passes agree on it), which means it never looked at the
+variable's TYPE — and the name can already belong to a `&text` PARAMETER of the calling
+function, because `text_return` promotes a text local the return value depends on into a
+caller-allocated buffer (loft#662). Wrapping it again built a DbRef pointing at the
+reference SLOT; the callee's single deref then read that slot as text. `--native` passes
+the reference by the Rust ABI and is immune, which is why the two backends disagreed
+instead of both crashing.
+
+This is the rule #266 already states for non-text references at the argument-coercion
+site. That site compares TYPES, so a variable already holding the wanted reference never
+reaches its conversion at all — which is why only this one, keyed on a name, could reach
+the double wrap.
+
+**The filed boundary was a tenth of the defect.** A 20-cell matrix over the composition
+axes put 8 cells on the crash, and two of the three conditions the report listed as
+required are not:
+
+| axis | filed | measured |
+|---|---|---|
+| enclosing function returns `text` | required | `text?` crashes too |
+| fallback is a non-empty literal | implied | `?? ""` crashes too — the buffer-append is skipped, so the wrap alone is the fault |
+| receiver is a plain variable | implied | a field read (`h.inner.m(i)`) crashes too |
+
+The passing cells are not incidental: a free function, an intermediate local, an extra
+text parameter and interpolation all avoid it, and each does so by changing which
+variable the promotion picks. An attribution pass over the IR — `OpCreateStack` applied
+to a var the same function declares `&text`, keyed on the (name, scope) PAIR because
+`n_main`'s plain local and a callee's promoted parameter routinely share a `__work_cN`
+name — flags exactly the 8 crashing cells and none of the 12 passing ones, before and
+after.
+
+The fix hands over the BARE variable. Both backends already forward a `RefVar` argument
+into a `RefVar` parameter with no deref (`codegen.rs` `OpVarRef`; `generation/calls.rs`
+`var_x`), and both recognise that shape only as a literal `Value::Var` — wrapped in a
+block or an `Insert` the generic path runs instead and re-derefs, which is a second wrong
+read one layer down rather than a fix. The per-call clear is not lost: a promoted buffer
+is cleared by the function preamble once per invocation, and promotion only happens when
+the RETURN VALUE depends on the buffer, which puts its call in tail position. Restricted
+to the no-default case, so a `&text` parameter carrying a `= "…"` default keeps its
+existing lowering rather than trading this crash for a dropped default.
+
+`tests/scripts/issue-806-retbuf-double-reference.loft` carries the axes as value
+assertions — a wrong read here is as likely to answer `""` as to fault, so "did not
+crash" is not the bar — plus the forwarded-buffer control that says the fix did not
+simply delete the wrap everywhere.
+
+### A method's return was adopted by one half of the compiler and freed by the other (loft#810) (2026-08-08)
+
+Filed as a SIGSEGV needing a library, a `vector` local, a foreign package's record type
+and a loop-body local — six ingredients, drop any one and it ran. None of them is the
+defect. It is **one word in a predicate**, it needs no library at all, and its ordinary
+outcome is a WRONG VALUE rather than a crash.
+
+Binding a call's result to a heap local asks one question: may the caller ADOPT the
+returned store, or must it COPY into a store the binding owns? Cluster A already collapsed
+the ANSWER into one carried fact (`Def::return_adopts_fresh_store`). What had drifted was
+the GATE on it — which callees the question is even asked about:
+
+| site | decides | accepted |
+|---|---|---|
+| `scopes.rs` (`scan_set`) | strip the binding's deps → emit its scope-exit `OpFreeRef` | `n_` **and** `t_` |
+| `state/codegen.rs` (first-Set) | deep-copy, or adopt | `n_` only |
+| `state/codegen.rs` (reassign) | deep-copy, or adopt | `n_` only |
+
+So a `t_` METHOD returning through the caller's hidden `__ref_N` buffer — the shape every
+`q: Acc = Acc { }; …; return q` compiles to, dep `["q"]` — fell past both copy arms to the
+plain-adopt fallthrough, and was then freed at scope exit as if the binding owned it. The
+buffer's store went back to the pool while the caller still named it. Next iteration the
+callee's own work-ref drew that slot, the retbuf `OpDatabase` re-`claim`ed it at the
+original name, and one record had two owners.
+
+`Def::is_loft_defined()` is now the single home for that gate, next to the two facts it
+guards, and the six spelled-out copies of it (scopes ×3, codegen ×2, parser ×1) read it.
+
+**What the boundary actually is**, measured one axis at a time
+(`tests/scripts/810-method-return-buffer.loft`):
+
+- No library, no foreign package, no vector: a single file reproduces it.
+- The callee needs ONE competing allocation between the free and the next iteration's
+  re-adoption — otherwise the freed slot is handed straight back and nothing shows.
+- Whether it crashes at all depends on what lands in the recycled slot. The reported case
+  hit a record header and died in `memcpy`; the plain shape silently loses a vector and
+  answers a plausible count. **The value cells are the test**, not "did not crash".
+- Three cells, not one: first-Set in a loop body, reassignment of an outer local, and
+  assignment inside a nested block — the last two go through the OTHER codegen site, so
+  fixing only the first leaves two thirds of the defect standing.
+
+`--native` was never affected and needs no change, for a reason worth writing down rather
+than trusting: its Reference-typed `__ref_N` is a `DbRef::NULL` sentinel passed BY VALUE,
+so the callee always allocates fresh and the caller's copy stays null. The alias the
+interpreter formed cannot form there. Its vector retbuf (`__vdb_N`) IS caller-allocated,
+and that path was already right — pinned as a control.
+
+The store guards that came out of the first pass at this stay, and earn their keep: a
+non-positive size word makes every whole-payload walk compute `size * 8 - 4`, which wraps
+to ~18 exabytes and dies inside `memcpy`, naming the copy — which is innocent. `assert!`
+and not `debug_assert!` on purpose: a debug build already catches the underflow, and it is
+the RELEASE build, where the wrap is silent, that needed one. `Store::copy` /
+`Store::zero_fill` route through one `payload_bytes` helper; `vector_append` asks first
+whether the field is inside its own record at all, and now says what that means — a slot
+with two owners, with `LOFT_NO_SLOT_REUSE=1` as the one-run test — rather than the layout
+fault it first read as. `Store::valid` bounds a field with `fld <= size * 8`, admitting a
+read that starts exactly AT the record's end, and is a `debug_assert!` compiled out of the
+profile the loft library builds under; that is why nothing caught this earlier.
+
+`LOFT_TRACE_DB` now prints from the native runtime too. It had existed only in the
+bytecode VM, so it went silent exactly where a call crossed into a package's shared
+library — which is where the slot adoption it exists to show was happening. Both backends
+read one cached key.
+
+### A persisted trie is laid out so it can be paged (@PLN134) (2026-08-08)
+
+`trie<T[k]>` ships whole-image only: a prefix query over `routing`'s 220 032-word
+vocabulary is 5.9 MB gzipped, downloaded once. @PLN134 asked whether a paged reader could
+answer it in a few range reads instead, and opened on the measurement that decides it —
+**pages touched, not nodes**.
+
+The first answer killed the cheap design. A PATRICIA descent reads ~330 bytes of nodes and
+spreads them over **27 pages of 64 KB**, because node ids are handed out in INSERTION
+order and a root→leaf path visits nodes created at wildly different times. Renumbering
+breadth-first halves it and stops there. 1.7 MB to answer a keystroke is worse than the
+download by the fourth one.
+
+The second answer is the plan's own declined branch, reached on evidence: it is not "page
+a trie", it is **lay a trie out so it can be paged**. Same tree, same walk, same touch
+sets, five numberings:
+
+| node order | pages @ 64 KB | @ 4 KB |
+|---|---|---|
+| as built | 27.1 | 36.4 |
+| breadth-first | 15.4 | 26.0 |
+| key order | 8.7 | 14.5 |
+| depth-first pre-order | 4.2 | 7.2 |
+| **van Emde Boas** | **2.8** | **3.8** |
+
+The 4 KB column identifies the mechanism rather than the number: vEB barely moves where
+every other order inflates by half. That is what cache-*oblivious* means, and it matters
+here because the page size is not ours to pick — a local file, an HTTP range read and a
+browser cache disagree about it.
+
+The records matter more than the nodes, and step 1 had not measured them at all: the 20
+records a query RETURNS sit on ~20 distinct pages when claimed in insertion order, and on
+**1** when written in trie key order. Together a cold query is ~3.8 pages / 250 KB against
+the 5.9 MB image, and the second keystroke of a session costs ONE page.
+
+- **`radix_tree::rtree_relayout`** renumbers a tree van Emde Boas and compacts the free
+  list. Node ids are internal, so nothing observable moves — `r11` holds it to the same
+  walk and the same record for every key, which is the gate that matters: rewriting the
+  array in place produces a structurally valid PATRICIA tree holding the wrong records,
+  and `rtree_validate` alone passes that. Idempotent, and it refuses a tree whose walk
+  does not account for `n-1` nodes over `n` records.
+- **`store_persist_bind` runs it before writing the image** (`Stores::relayout_tries`),
+  because that image is what a reader pages. Stores whose SCHEMA cannot hold a trie skip
+  the data walk entirely, so no other kind pays for it.
+- The measurement lives on as `trie_db::pages` (`#[ignore]`, three tests: the layouts, the
+  record placement, the warm session) and `r10` asserts every candidate order is a
+  permutation of the live nodes — not decoration, since a duplicate-emitting order reports
+  a BETTER page count.
+
+Paging a trie is still unwired: `store_bind_lazy` refuses one, and `store_load_key_text`
+reads a `hash`. The layout is the prerequisite that made those worth building.
+
+### sqlite down the loft path, measured against the Rust one (@PLN133 S9, 2026-08-08)
+
+Core drives sqlite in Rust (913 lines across `sql_source.rs` and `sql_query.rs`)
+and the loft library drives four backends behind one `SqlDb` interface. The step
+is *"switch sqlite to the loft path"*, and taken literally it cannot preserve what
+it must: every @PLN129 test binds `sqlite:` with NO user code, and
+`store_bind_lazy(persons, "sqlite:people.db")` needing no loading step is a
+shipped promise.
+
+So it is an opt-in with a measurement:
+
+- **A declared driver WINS**, including over a source core drives in Rust. A
+  program moves its sqlite reads onto loft one element type at a time; every type
+  with no driver keeps the Rust source. `Stores::lazy_loft_source` now takes the
+  caller's answer to *"is there a driver for this element type"*, because the two
+  backends learn it differently — the interpreter asks `Data`, `--native` asks the
+  table generated `init()` filled — and neither is reachable from `Stores`.
+- **The two paths are proven indistinguishable.**
+  `tests/fixtures/sqldb/s9_two_paths.loft` puts two element types of one shape
+  over two identical tables in ONE program bound to ONE connection string. Same
+  values, same float, same identity, same residency counts, same absence handling
+  — and the trip count, which is the only thing a value check cannot see: three
+  lookups reach the driver and the repeat of a resident key reaches none. Both
+  backends, byte-identical.
+- **`select_by_key`** — the `select(TableDef, key)` the design table always listed
+  — derives the statement from the same `TableDef` a writer would `render` into
+  `CREATE TABLE`, wrapping a float column in the dialect's read expression. The
+  driver names no column.
+- **`Data::lazy_fetch_drivers` is cached** per definition count. It walks every
+  definition and sits on the MISS path, which is the one place @PLN129 measures in
+  queries per lookup. Keyed on the count rather than answered once, because the
+  REPL parses fresh sources into a live `Data` and a driver can appear after a
+  lookup has already asked.
+
+**The cost, attributed rather than assumed.** A loft driver has nowhere to keep a
+connection — loft has no process-level state a library can hold — so it connects
+per missed row where core caches a handle per target. Release build, 400 fetches
+each: **67 µs** per fetch through Rust, **140 µs** through loft. ~2.1×, because a
+local sqlite file reopens cheaply. What that does NOT cover is the case that
+matters most: for a client-server backend the same shape is a TCP connect and an
+auth per row, and those are precisely the backends core has no Rust driver for.
+
+**S10 is not unblocked by this.** Deleting the Rust path makes a driver
+mandatory, and a driver names a concrete element type so it cannot come from a
+library — a program binding `sqlite:` with no user code would stop working. That
+needs a generated driver (making the sqldb library a dependency of core) or a
+demotion rather than a deletion, and it is a decision about what loft's
+distribution contains.
+
+**Filed on the way past:** [loft#810](https://github.com/loft-lang/loft/issues/810)
+— a library function that both holds a `vector` local and returns a record of
+another package's type SIGSEGVs on the second call when the caller binds the
+result to a loop-body local. `Store::copy` computes `size * 8 - 4` from a record
+whose size word reads `0`. Six axes were moved one at a time to find the
+boundary; the driver takes the passing cell (a fresh `derive` per fetch).
+
+### A lazy driver serves ONE element type (@PLN133 S9 prerequisite, 2026-08-08)
+
+S8 let a program declare one `lazy_fetch`, which reads as a limit on how many
+collections may be lazily bound. It was not only that: **nothing checked that the
+driver a miss reached was declared for THAT collection.** S8's shape check was
+about the driver's signature and never about its subject, so a program with two
+lazily-bound element types ran the first type's driver against the second
+collection — measured on both backends, inserting a `TdcPerson` into a
+`hash<TdcOrder[id]>` and reading `.what` back as `person-9-postgres://db/people`.
+One type's field through another type's offset: a plausible value, which is the
+class @PLN129 arc C exists to keep out.
+
+One mechanism does both jobs — the driver is looked up by the collection's
+ELEMENT TYPE, so several drivers become possible and reaching the wrong one
+becomes impossible.
+
+- **`Data::lazy_fetch_drivers`** answers `(element type name, def_nr)` per driver
+  and is the single home both backends ask. What a driver serves is read off its
+  declared collection parameter, never guessed from its name.
+- **The key is a NAME**, because the two sides count types in different spaces (a
+  parse-time `Definition`, a runtime `Stores::types` entry) and a name is the one
+  key both hold without a mapping to keep in step — `LOFT_STRICT_SCHEMA_IDS`
+  exists because that kind of mapping drifts.
+- **Membership needs more than the name.** `lazy_fetch` exactly is THE driver
+  name, so a wrong shape there is named; `lazy_fetch_<anything>` additionally
+  requires a keyed collection as its first parameter. The first version of this
+  rule keyed on the name alone, and a plausible helper (`lazy_fetch_row`) was then
+  read as a malformed driver and poisoned every lookup in the program, including
+  the working driver beside it.
+- **Two drivers for one element type are refused, naming both.**
+- **`--native` installs one pointer per driver** under the same key, and every
+  driver is a reachability ROOT — a driver left out of the walk is S8's quiet
+  failure arriving once per type instead of once per program.
+
+**A backend divergence had to be closed to gate the refusals, and it was S8's.**
+The interpreter asks `Data` at every miss and reports the sentence it wrote;
+`--native` cannot ask, registered nothing, and said *"needs a loft driver"* — the
+same program naming a different mistake depending on which backend ran it, and
+the one naming the real mistake was the one you did not get if you compiled. The
+refusal now travels as data (`register_lazy_fetch_refusal`) and the no-driver
+sentence has one home (`database::lazy::no_lazy_driver`).
+
+**The emission diff is one line.** `loft introspect` over the two-driver corpus
+before and after differs only in the registration — one
+`register_lazy_fetch(n_lazy_fetch)` becoming two keyed calls — with nothing else
+in the IR, the bytecode or the generated Rust moved. Corpus and both captures:
+`doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-*`.
+
+Gated by `tests/fixtures/133-lazy-driver-dispatch.loft` (three element types over
+`hash` and `index`, a fourth bound with no driver, a prefix-sharing helper,
+absent-vs-unreachable) plus two refusal programs, through
+`tests/lazy_sql_source.rs`, both backends with the whole output compared. The
+`orphan` cell asserts a driver-call COUNT rather than a value: a collection whose
+type no driver serves must reach none, and a value check alone would pass on a
+driver that happened to answer nothing.
+
+### One connection string, four C libraries (@PLN133 S7, 2026-08-08)
+
+Requirement 1 is *one configuration string switches every SQL consumer in the
+process*. S5 delivered the parser; this is the half that hands back a connection,
+and it had no obvious spelling because **loft interfaces are static dispatch** —
+`SqlDb` is satisfied by four unrelated types and no function can return "one of
+them".
+
+- **`tests/fixtures/sqldb/registry/`** — `AnyDb`, a struct-enum over the four
+  backends plus a refusal variant, satisfying `SqlDb` itself. `connect(spec)`
+  parses the string, asks whether that backend's library is on this machine,
+  opens it, and runs the dialect's session setup. Shape (1) of the three the plan
+  named; the decision and the two it was chosen over are recorded in the file's
+  header, because (2) is cheaper and the difference is visible to every consumer.
+- **The method must be on the ENUM, not the variant.** A per-variant method
+  dispatches correctly and does not satisfy an interface for the enum — the
+  compiler says so: *"'AnyDb' does not satisfy interface 'SqlDb': missing
+  db_exec"*. Fifteen `match self` forwarders, none of which decides anything.
+- **A refusal is the fifth variant, not a null** — every operation false, every
+  column null (not `""`, which is a value), `db_last_error` saying why. The idiom
+  `TableDef`, `Binding`, `Conn` and `SqlText` already use in that package.
+- **The connection string is not one string.** What a driver's own `db_open`
+  wants is a fact about the driver: sqlite and duckdb take a path, libpq reads a
+  URI itself (so it must arrive WITH its scheme), and mariadb's client takes
+  keywords, so a `mysql://…` URL is translated. A PORT in that URL is **refused
+  rather than dropped** — the driver connects on 3306 and reads no port, so
+  honouring the string would reach a different server than it names.
+- **The session setup finally has somewhere to run.** `Dialect.setup` has carried
+  PostgreSQL's `SET extra_float_digits = 3` since S3 with no caller. @PLN133 P3
+  measured 1887 of 2000 random doubles inexact without it and 0 of 2000 with it,
+  and it is a SESSION setting — so the connect is the only place that can make a
+  float read back exactly, and nothing downstream can see that it did not.
+
+Gated by `tests/fixtures/sqldb/registry_pure.loft` (unconditional — it opens no
+library, so it cannot skip into a green that asserted nothing) and
+`registry_live.loft`, through `tests/native.rs`, both loft backends with the whole
+output compared.
+
+### `τ?` is one type however it was handed back (2026-08-08)
+
+`Type::is_same` compared `Optional(τ)` with derived `==`, which reaches the inner
+`Deps`. Every dep-ignoring rule below that comparison — a text's deps, an
+integer's range, a vector's element buffer — was therefore unreachable for a
+nullable, so two `text?` differing only in which local they came through read as
+different types. It presents as a refusal quoting the same name twice:
+
+```
+error: cannot unify: text? and text?
+```
+
+Peeled on BOTH sides only, so a `τ?` and a bare `τ` stay different kinds — that
+distinction is the whole of DN1. Found by @PLN133 S7, where a `match` forwards
+`db_col` to four backends and one of them returns through a local; the same
+comparison also gates interface satisfaction and the @P344 loop-variable reuse
+check, both of which wanted the dep-insensitive answer all along. Guarded by
+`tests/scripts/pln133-optional-unify.loft`.
+
+### A returned text is owned by the return, not borrowed from a buffer (2026-08-08)
+
+A branch in tail position delivers each arm into the return accumulator. An arm
+whose text is not a bare variable is first built into a work buffer and handed
+back as `OpCreateStack(buf)` — a REFERENCE — and `push_text_arms_into` wrapped
+that reference in the delivery, while the enclosing scope frees the buffer on the
+next statement.
+
+- **The interpreter answered `""`** — a wrong value, silently, exit 0.
+- **`--native` emitted `*var_acc = ().to_string()`**, which is not Rust.
+
+The shape is ordinary: `return x ?? "fallback"`. Binding to a local first
+(`y = x ?? "fallback"; return y`) avoided it, which is what made the failure look
+like it was about `??` rather than about delivery. The leaf rewrite now delivers
+the BUFFER, so the accumulator copies the bytes it is about to own. Guarded by
+`tests/scripts/pln133-text-tail-delivery.loft`, whose every cell has a
+deliver-through-a-local twin.
+
+Found not by the registry — which does not contain that shape — but by the
+regression test written for the `Optional` fix above, whose helper happened to
+spell `return got ?? "<null>"`.
+
+**Still open:** [loft#806](https://github.com/loft-lang/loft/issues/806) — a
+METHOD call coalesced in return position (`return t.m(i) ?? "x"`) SIGSEGVs the
+interpreter while `--native` is correct. The caller-retbuf promotion makes the
+callee's work buffer a `&text` PARAMETER and the `#default ref` site then wraps an
+already-borrowed variable in `OpCreateStack`, building a reference to a reference.
+Workaround: one intermediate local.
+
+### `#c` on a wasm target, and under the sandbox (@PLN24 arcs E–F, 2026-08-08)
+
+Closes @PLN24. Both remaining arcs plus the plan's last open design question.
+
+**Arc E — the two wasm targets get a defined answer, and it is a refusal.** The
+plan had recorded wasm as having "no C ABI to bind to at all". It has one:
+`wasm32-wasip2` links a libc, so a `#c` binding to `strlen` resolved, LINKED with
+a `rust-lld` warning, and then TRAPPED at the call — `signature_mismatch: strlen`,
+`(i32) -> i64` against the sysroot's `(i32) -> i32`, because wasm32 is a third
+data model (ILP32) while the extern carried the host's widths from
+`CTarget::host()`. That is this plan's counted `N × silence` risk arriving at a
+re-assertion site nobody listed: one of the targets is not the host.
+
+Two further cells, both measured on one tree: a symbol the sysroot does NOT export
+gave a raw `rust-lld: undefined symbol` naming neither package nor library, and a
+package declaring `[c] optional-libs` gave `E0433: cannot find c_call in loft`
+once per symbol — **for bindings the program never called**, because the lazy
+resolver is emitted per declaration rather than per call.
+
+- **Nothing `#c` is emitted on a wasm target** — no `extern "C"` block, no lazy
+  resolver. `Output::no_c_abi()` is the single reader of the two target flags, so
+  the three sites that consult it cannot drift into different answers.
+- **The refusal sits at the CALL** (`output_c_direct_call`), which scopes it to
+  reachability for free: an unused `#c` declaration still builds for wasm, the
+  rule `#native` already follows for a routeless browser symbol (@PLN26 / P269).
+  It names the loft function, the C symbol, the declaring package and the target.
+  The PACKAGE, not the library: a `#c` annotation never names the library it came
+  from (arc G), and one of a package's `[c]` entries is the shim loft built itself.
+- **`__C_LIBS` / `__C_LIB_SYMS` moved OUT of the target gate.** They were emitted
+  only on non-browser targets, so `c_library_available` — the query a library is
+  told to ask before calling into an optional backend — failed to compile under
+  `--html` with `E0425`. A refusal that names a cure has to leave the cure
+  reachable. It now compiles on both wasm shapes and answers `false`, which is the
+  true answer rather than a stub.
+- The static-`clang --target=wasm32-wasi` route stays unbuilt and is recorded as
+  such: no C cross-compiler was available to prove one cell, and it reaches only a
+  pure-computation shim. `@PLN119` (out-of-process) is the route the message names.
+
+**Arc F** was already closed by @PLN23 S1 (`libmariadb.so.3` through a versioned
+soname, both backends identical, zero rustc); the plan's status table said
+otherwise.
+
+**Open question 3 — a `#c` binding is gated by `native_ffi`, not by `#cap`.** The
+question asked whether an effect declaration could make `#c` admissible under the
+sandbox. Measured first: a sandboxed script reaching a `#c` binding tagged
+`db#read`, under a profile granting `db#read` with `native_ffi` at its default
+false, was **admitted and ran the C**. Both the external-FFI ban and
+`reachable_ffi_bridges` key on `def.native()`, which arc A leaves EMPTY on a `#c`
+definition on purpose so the Rust dispatch path cannot claim one — the inverse of
+arc D's three defects, where paths matching on *body-less* wrongly CLAIMED a `#c`
+def. `CapViolation::CBinding` is the new arm; `allow_libs` still admits it, which
+is the host vetting the library as a unit exactly as for `#native`.
+
+Guards: `a_c_binding_is_refused_by_name_on_a_wasm_target` (emission-level, so it
+runs without a wasm toolchain, and it calibrates against the host emission so a
+refusal that fired everywhere could not read as a pass),
+`pln24_a_reachable_c_binding_is_refused_end_to_end_on_wasm` (both shapes, asserts
+exactly ONE message and that loft's own feature gates never reach the author),
+`pln24_html_c_library_available_compiles_and_answers_false`, and
+`a_c_binding_is_gated_by_native_ffi_not_by_a_capability_grant` (three cells:
+granted cap rejects, `native_ffi = true` admits and calls, `allow_libs` admits).
+
 ### A module may name the entry's type in an EXPRESSION (loft#801) (2026-08-07)
 
 Companion to loft#797, which fixed the LAYOUT half of the same load-order story. This is

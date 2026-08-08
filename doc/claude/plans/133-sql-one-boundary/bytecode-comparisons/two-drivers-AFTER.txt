@@ -1,0 +1,3385 @@
+warning[never-read]: Parameter key_text is never read
+  --> /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:24:102
+   |
+24 | fn lazy_fetch(coll: hash<TdcPerson[id]>, source: text, key_int: integer, key_text: text) -> integer {
+   |                                                                                                      ^
+
+warning[never-read]: Parameter source is never read
+  --> /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:32:108
+   |
+32 | fn lazy_fetch_orders(coll: hash<TdcOrder[id]>, source: text, key_int: integer, key_text: text) -> integer {
+   |                                                                                                            ^
+
+warning[never-read]: Parameter key_text is never read
+  --> /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:32:108
+   |
+32 | fn lazy_fetch_orders(coll: hash<TdcOrder[id]>, source: text, key_int: integer, key_text: text) -> integer {
+   |                                                                                                            ^
+
+warning[redundant-coalesce]: Redundant null coalescing — 'nm' is 'not null', default is never used
+  --> /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:44:36
+   |
+44 |   println("person {p.nm ?? "<none>"}");
+   |                                    ^
+
+warning[redundant-coalesce]: Redundant null coalescing — 'what' is 'not null', default is never used
+  --> /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:46:37
+   |
+46 |   println("order {o.what ?? "<none>"}");
+   |                                     ^
+
+warning[redundant-coalesce]: Redundant null coalescing — 'nm' is 'not null', default is never used
+  --> /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:50:36
+   |
+50 |   println("again {p2.nm ?? "<none>"}");
+   |                                    ^
+
+warning[redundant-coalesce]: Redundant null coalescing — 'what' is 'not null', default is never used
+  --> /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:54:41
+   |
+54 |   println("absent {gone.what ?? "<none>"} err={store_lazy_error(w.orders) ?? "-"}");
+   |                                         ^
+
+note: 7 diagnostics above suggest what to write instead — re-run with `--explain`
+=== bytecode ===
+fn n_lazy_fetch(coll:hash<TdcPerson,["id"]>, source:text, key_int:integer, key_text:text) -> integer {#block(1):integer
+  __work_1(1):text = "";
+  [25] if OpLtInt(100i32, key_int(0)) {#block(2):never
+    __ret_1(2):integer = 0i32;
+    OpFreeText(__work_1(1));
+    return __ret_1(2);
+  }#block(2):never else null;
+  [26] _elm_1(1):ref(TdcPerson)["coll"] = OpNewRecord(coll(0), 80i32, 65535i32);
+  OpSetInt(_elm_1(1), 0i32, key_int(0));
+  OpSetText(_elm_1(1), 8i32, {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "person-";
+    OpFormatInt(__work_1(1), key_int(0), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(1), "-");
+    OpFormatText(__work_1(1), source(0), 0i32, 2i32, 32i32);
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"]);
+  OpFinishRecord(coll(0), _elm_1(1), 80i32, 65535i32);
+  [27] __ret_2(1):integer = 1i32;
+  OpFreeText(__work_1(1));
+  return __ret_2(1);
+}#block(1):integer
+
+byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:n_lazy_fetch(coll: hash<TdcPerson,["id"]>[0], source: text[12], key_int: integer[28], key_text: text[36]) -> integer
+   0[52]: return-address  @abs=8011
+   0[64]: ReserveFrame(size=48)
+   3[112]: InitText(var[64]) var=__work_1[64]:text
+   6[112]: [25] ConstInt(val=100) -> integer
+  15[120]: VarInt(var[32]) -> integer var=key_int[32]:integer
+  18[128]: LtInt(v1: integer, v2: integer) -> boolean
+  19[120]: GotoFalseWord(jump=:POS52, if_false: boolean)
+  24[112]: ConstInt(val=0) -> integer var=__ret_1[88]:integer
+  33[120]: PutInt(var[88], value: integer)
+  36[112]: FreeText(var[64])
+  39[112]: VarInt(var[88]) -> integer var=__ret_1[88]:integer
+  42[120]: Return(ret=56, value=8, discard=120)
+  48[120]: FreeStack(value=0, discard=8)
+:POS52
+  52[112]: [26] VarVector(var[0]) -> vector type=vector 82 var=coll[0]:hash<TdcPerson,["id"]>
+  55[128]: NewRecord(data: ref(reference), parent_tp=80, fld=65535) -> ref(reference)
+  60[128]: PutRef(var[96], value: ref(reference))
+  63[112]: VarRef(var[96]) -> ref(reference) type=TdcPerson 77 var=_elm_1[96]:ref(TdcPerson)["coll"]
+  66[128]: VarInt(var[32]) -> integer var=key_int[32]:integer
+  69[136]: SetInt(v1: ref(reference), fld=0, val: integer)
+  72[112]: VarRef(var[96]) -> ref(reference) type=TdcPerson 77 var=_elm_1[96]:ref(TdcPerson)["coll"]
+  75[128]: ClearText(var[64]) var=__work_1[64]:text
+  78[128]: ConstText(_value="person-") -> text
+  87[144]: AppendText(var[64], v1: text)
+  90[128]: VarInt(var[32]) -> integer var=key_int[32]:integer
+  93[136]: ConstInt(val=0) -> integer
+ 102[144]: FormatInt(var[64], val: integer, radix=10, width: integer, token=32, plus=false, note=false, dir=2)
+ 110[128]: ConstText(_value="-") -> text
+ 113[144]: AppendText(var[64], v1: text)
+ 116[128]: ArgText(var[16]) -> text var=source[16]:text
+ 119[144]: ConstInt(val=0) -> integer
+ 128[152]: FormatText(var[64], val: text, width: integer, dir=2, token=32)
+ 133[128]: VarText(var[64]) -> text var=__work_1[64]:text
+ 136[144]: SetText(v1: ref(reference), fld=8, val: text)
+ 139[112]: VarVector(var[0]) -> vector type=vector 82 var=coll[0]:hash<TdcPerson,["id"]>
+ 142[128]: VarRef(var[96]) -> ref(reference) type=TdcPerson 77 var=_elm_1[96]:ref(TdcPerson)["coll"]
+ 145[144]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=80, fld=65535)
+ 150[112]: [27] ConstInt(val=1) -> integer var=__ret_2[88]:integer
+ 159[120]: PutInt(var[88], value: integer)
+ 162[112]: FreeText(var[64])
+ 165[112]: VarInt(var[88]) -> integer var=__ret_2[88]:integer
+ 168[120]: Return(ret=56, value=8, discard=120)
+
+fn n_lazy_fetch_orders(coll:hash<TdcOrder,["id"]>, source:text, key_int:integer, key_text:text) -> integer {#block(1):integer
+  __work_1(1):text = "";
+  [33] if OpLtInt(100i32, key_int(0)) {#block(2):never
+    __ret_1(2):integer = 0i32;
+    OpFreeText(__work_1(1));
+    return __ret_1(2);
+  }#block(2):never else null;
+  [34] _elm_1(1):ref(TdcOrder)["coll"] = OpNewRecord(coll(0), 81i32, 65535i32);
+  OpSetInt(_elm_1(1), 0i32, key_int(0));
+  OpSetText(_elm_1(1), 8i32, {#Formatted string(3):text["__work_1"]
+    __work_1(1):text = "order-";
+    OpFormatInt(__work_1(1), key_int(0), 10i32, 0i32, 32i32, false, false, 2i32);
+    __work_1(1);
+  }#Formatted string(3):text["__work_1"]);
+  OpFinishRecord(coll(0), _elm_1(1), 81i32, 65535i32);
+  [35] __ret_2(1):integer = 1i32;
+  OpFreeText(__work_1(1));
+  return __ret_2(1);
+}#block(1):integer
+
+byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:n_lazy_fetch_orders(coll: hash<TdcOrder,["id"]>[0], source: text[12], key_int: integer[28], key_text: text[36]) -> integer
+   0[52]: return-address  @abs=8185
+   0[64]: ReserveFrame(size=48)
+   3[112]: InitText(var[64]) var=__work_1[64]:text
+   6[112]: [33] ConstInt(val=100) -> integer
+  15[120]: VarInt(var[32]) -> integer var=key_int[32]:integer
+  18[128]: LtInt(v1: integer, v2: integer) -> boolean
+  19[120]: GotoFalseWord(jump=:POS52, if_false: boolean)
+  24[112]: ConstInt(val=0) -> integer var=__ret_1[88]:integer
+  33[120]: PutInt(var[88], value: integer)
+  36[112]: FreeText(var[64])
+  39[112]: VarInt(var[88]) -> integer var=__ret_1[88]:integer
+  42[120]: Return(ret=56, value=8, discard=120)
+  48[120]: FreeStack(value=0, discard=8)
+:POS52
+  52[112]: [34] VarVector(var[0]) -> vector type=vector 82 var=coll[0]:hash<TdcOrder,["id"]>
+  55[128]: NewRecord(data: ref(reference), parent_tp=81, fld=65535) -> ref(reference)
+  60[128]: PutRef(var[96], value: ref(reference))
+  63[112]: VarRef(var[96]) -> ref(reference) type=TdcOrder 78 var=_elm_1[96]:ref(TdcOrder)["coll"]
+  66[128]: VarInt(var[32]) -> integer var=key_int[32]:integer
+  69[136]: SetInt(v1: ref(reference), fld=0, val: integer)
+  72[112]: VarRef(var[96]) -> ref(reference) type=TdcOrder 78 var=_elm_1[96]:ref(TdcOrder)["coll"]
+  75[128]: ClearText(var[64]) var=__work_1[64]:text
+  78[128]: ConstText(_value="order-") -> text
+  86[144]: AppendText(var[64], v1: text)
+  89[128]: VarInt(var[32]) -> integer var=key_int[32]:integer
+  92[136]: ConstInt(val=0) -> integer
+ 101[144]: FormatInt(var[64], val: integer, radix=10, width: integer, token=32, plus=false, note=false, dir=2)
+ 109[128]: VarText(var[64]) -> text var=__work_1[64]:text
+ 112[144]: SetText(v1: ref(reference), fld=8, val: text)
+ 115[112]: VarVector(var[0]) -> vector type=vector 82 var=coll[0]:hash<TdcOrder,["id"]>
+ 118[128]: VarRef(var[96]) -> ref(reference) type=TdcOrder 78 var=_elm_1[96]:ref(TdcOrder)["coll"]
+ 121[144]: FinishRecord(data: ref(reference), rec: ref(reference), parent_tp=81, fld=65535)
+ 126[112]: [35] ConstInt(val=1) -> integer var=__ret_2[88]:integer
+ 135[120]: PutInt(var[88], value: integer)
+ 138[112]: FreeText(var[64])
+ 141[112]: VarInt(var[88]) -> integer var=__ret_2[88]:integer
+ 144[120]: Return(ret=56, value=8, discard=120)
+
+fn n_main() {#block(1):void
+  __work_4(1):text = "";
+  __work_3(1):text = "";
+  __work_2(1):text = "";
+  __work_1(1):text = "";
+  [39] w(1):ref(TdcWorld) = null;
+  OpDatabase(w(1), 79i32);
+  OpSetInt4(w(1), 0i32, 0i32);
+  OpSetInt4(w(1), 4i32, 0i32);
+  [40] drop n_store_bind_lazy(OpGetField(w(1), 0i32, 80i32), "postgres://db/people");
+  [41] drop n_store_bind_lazy(OpGetField(w(1), 4i32, 81i32), "duckdb:orders.db");
+  [43] p(1):ref(TdcPerson)["w"] = OpGetRecord(OpGetField(w(1), 0i32, 80i32), 80i32, 1i32, 7i32);
+  [44] n_println({#Formatted string(2):text["__work_1"]
+    __work_1(1):text = "person ";
+    OpFormatText(__work_1(1), {#ncc(3):text["p"]
+      __ncc_1(3):text["p"] = OpGetText(p(1), 8i32);
+      if OpConvBoolFromText(__ncc_1(3)) __ncc_1(3) else "<none>";
+    }#ncc(3):text["p"], 0i32, 2i32, 32i32);
+    OpFreeText(__ncc_1(3));
+    __work_1(1);
+  }#Formatted string(2):text["__work_1"]);
+  [45] o(1):ref(TdcOrder)["w"] = OpGetRecord(OpGetField(w(1), 4i32, 81i32), 81i32, 1i32, 9i32);
+  [46] n_println({#Formatted string(4):text["__work_2"]
+    __work_2(1):text = "order ";
+    OpFormatText(__work_2(1), {#ncc(5):text["o"]
+      __ncc_2(5):text["o"] = OpGetText(o(1), 8i32);
+      if OpConvBoolFromText(__ncc_2(5)) __ncc_2(5) else "<none>";
+    }#ncc(5):text["o"], 0i32, 2i32, 32i32);
+    OpFreeText(__ncc_2(5));
+    __work_2(1);
+  }#Formatted string(4):text["__work_2"]);
+  [49] p2(1):ref(TdcPerson)["w"] = OpGetRecord(OpGetField(w(1), 0i32, 80i32), 80i32, 1i32, 7i32);
+  [50] n_println({#Formatted string(6):text["__work_3"]
+    __work_3(1):text = "again ";
+    OpFormatText(__work_3(1), {#ncc(7):text["p2"]
+      __ncc_3(7):text["p2"] = OpGetText(p2(1), 8i32);
+      if OpConvBoolFromText(__ncc_3(7)) __ncc_3(7) else "<none>";
+    }#ncc(7):text["p2"], 0i32, 2i32, 32i32);
+    OpFreeText(__ncc_3(7));
+    __work_3(1);
+  }#Formatted string(6):text["__work_3"]);
+  [53] gone(1):ref(TdcOrder)["w"] = OpGetRecord(OpGetField(w(1), 4i32, 81i32), 81i32, 1i32, 999i32);
+  [54] n_println({#Formatted string(8):text["__work_4"]
+    __work_4(1):text = "absent ";
+    OpFormatText(__work_4(1), {#ncc(9):text["gone"]
+      __ncc_4(9):text["gone"] = OpGetText(gone(1), 8i32);
+      if OpConvBoolFromText(__ncc_4(9)) __ncc_4(9) else "<none>";
+    }#ncc(9):text["gone"], 0i32, 2i32, 32i32);
+    OpFreeText(__ncc_4(9));
+    OpAppendText(__work_4(1), " err=");
+    OpFormatText(__work_4(1), {#ncc(10):text
+      __ncc_5(10):text = n_store_lazy_error(OpGetField(w(1), 4i32, 81i32));
+      if OpConvBoolFromText(__ncc_5(10)) __ncc_5(10) else "-";
+    }#ncc(10):text, 0i32, 2i32, 32i32);
+    OpFreeText(__ncc_5(10));
+    __work_4(1);
+  }#Formatted string(8):text["__work_4"]);
+  OpFreeRef(w(1));
+  OpFreeText(__work_1(1));
+  OpFreeText(__work_2(1));
+  OpFreeText(__work_3(1));
+  OpFreeText(__work_4(1));
+}#block(1):void
+
+byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:n_main()
+   0[0]: return-address  @abs=8335
+   0[8]: ReserveFrame(size=144)
+   3[152]: InitText(var[8]) var=__work_4[8]:text
+   6[152]: InitText(var[32]) var=__work_3[32]:text
+   9[152]: InitText(var[56]) var=__work_2[56]:text
+  12[152]: InitText(var[80]) var=__work_1[80]:text
+  15[152]: [39] InitRef(var[104]) var=w[104]:ref(TdcWorld)
+  18[152]: Database(var[104], db_tp=79) type=TdcWorld 79
+  23[152]: VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+  26[168]: ConstInt(val=0) -> integer
+  35[176]: SetInt4(v1: ref(reference), fld=0, val: integer)
+  38[152]: VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+  41[168]: ConstInt(val=0) -> integer
+  50[176]: SetInt4(v1: ref(reference), fld=4, val: integer)
+  53[152]: [40] VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+  56[168]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=hash<TdcPerson[id]> 80
+  59[168]: ConstText(_value="postgres://db/people") -> text
+  81[184]: StaticCall(n_store_bind_lazy)
+  84[160]: FreeStack(value=0, discard=8)
+  88[152]: [41] VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+  91[168]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=hash<TdcOrder[id]> 81
+  94[168]: ConstText(_value="duckdb:orders.db") -> text
+ 112[184]: StaticCall(n_store_bind_lazy)
+ 115[160]: FreeStack(value=0, discard=8)
+ 119[152]: [43] VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+ 122[168]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=hash<TdcPerson[id]> 80
+ 125[168]: ConstInt(val=7) -> integer
+ 134[176]: GetRecord(data: ref(reference), db_tp=80, no_keys=1) -> ref(reference)
+ 138[168]: PutRef(var[116], value: ref(reference))
+ 141[152]: [44] ClearText(var[80]) var=__work_1[80]:text
+ 144[152]: ConstText(_value="person ") -> text
+ 153[168]: AppendText(var[80], v1: text)
+ 156[152]: InitText(var[128]) var=__ncc_1[128]:text["p"]
+ 159[152]: VarRef(var[116]) -> ref(reference) type=TdcPerson 77 var=p[116]:ref(TdcPerson)["w"]
+ 162[168]: GetText(v1: ref(reference), fld=8) -> text["w"]
+ 165[168]: AppendText(var[128], v1: text)
+ 168[152]: VarText(var[128]) -> text var=__ncc_1[128]:text["p"]
+ 171[168]: ConvBoolFromText(v1: text) -> boolean
+ 172[160]: GotoFalseWord(jump=:POS185, if_false: boolean)
+ 177[152]: VarText(var[128]) -> text var=__ncc_1[128]:text["p"]
+ 180[168]: GotoWord(jump=:POS193)
+:POS185
+ 185[152]: ConstText(_value="<none>") -> text
+:POS193
+ 193[168]: ConstInt(val=0) -> integer
+ 202[176]: FormatText(var[80], val: text, width: integer, dir=2, token=32)
+ 207[152]: FreeText(var[128])
+ 210[152]: VarText(var[80]) -> text var=__work_1[80]:text
+ 213[168]: Call(d_nr=361, args_size=16, fn=n_println)
+ 232[152]: [45] VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+ 235[168]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=hash<TdcOrder[id]> 81
+ 238[168]: ConstInt(val=9) -> integer
+ 247[176]: GetRecord(data: ref(reference), db_tp=81, no_keys=1) -> ref(reference)
+ 251[168]: PutRef(var[116], value: ref(reference))
+ 254[152]: [46] ClearText(var[56]) var=__work_2[56]:text
+ 257[152]: ConstText(_value="order ") -> text
+ 265[168]: AppendText(var[56], v1: text)
+ 268[152]: InitText(var[128]) var=__ncc_2[128]:text["o"]
+ 271[152]: VarRef(var[116]) -> ref(reference) type=TdcOrder 78 var=o[116]:ref(TdcOrder)["w"]
+ 274[168]: GetText(v1: ref(reference), fld=8) -> text["w"]
+ 277[168]: AppendText(var[128], v1: text)
+ 280[152]: VarText(var[128]) -> text var=__ncc_2[128]:text["o"]
+ 283[168]: ConvBoolFromText(v1: text) -> boolean
+ 284[160]: GotoFalseWord(jump=:POS297, if_false: boolean)
+ 289[152]: VarText(var[128]) -> text var=__ncc_2[128]:text["o"]
+ 292[168]: GotoWord(jump=:POS305)
+:POS297
+ 297[152]: ConstText(_value="<none>") -> text
+:POS305
+ 305[168]: ConstInt(val=0) -> integer
+ 314[176]: FormatText(var[56], val: text, width: integer, dir=2, token=32)
+ 319[152]: FreeText(var[128])
+ 322[152]: VarText(var[56]) -> text var=__work_2[56]:text
+ 325[168]: Call(d_nr=361, args_size=16, fn=n_println)
+ 344[152]: [49] VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+ 347[168]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=hash<TdcPerson[id]> 80
+ 350[168]: ConstInt(val=7) -> integer
+ 359[176]: GetRecord(data: ref(reference), db_tp=80, no_keys=1) -> ref(reference)
+ 363[168]: PutRef(var[116], value: ref(reference))
+ 366[152]: [50] ClearText(var[32]) var=__work_3[32]:text
+ 369[152]: ConstText(_value="again ") -> text
+ 377[168]: AppendText(var[32], v1: text)
+ 380[152]: InitText(var[128]) var=__ncc_3[128]:text["p2"]
+ 383[152]: VarRef(var[116]) -> ref(reference) type=TdcPerson 77 var=p2[116]:ref(TdcPerson)["w"]
+ 386[168]: GetText(v1: ref(reference), fld=8) -> text["w"]
+ 389[168]: AppendText(var[128], v1: text)
+ 392[152]: VarText(var[128]) -> text var=__ncc_3[128]:text["p2"]
+ 395[168]: ConvBoolFromText(v1: text) -> boolean
+ 396[160]: GotoFalseWord(jump=:POS409, if_false: boolean)
+ 401[152]: VarText(var[128]) -> text var=__ncc_3[128]:text["p2"]
+ 404[168]: GotoWord(jump=:POS417)
+:POS409
+ 409[152]: ConstText(_value="<none>") -> text
+:POS417
+ 417[168]: ConstInt(val=0) -> integer
+ 426[176]: FormatText(var[32], val: text, width: integer, dir=2, token=32)
+ 431[152]: FreeText(var[128])
+ 434[152]: VarText(var[32]) -> text var=__work_3[32]:text
+ 437[168]: Call(d_nr=361, args_size=16, fn=n_println)
+ 456[152]: [53] VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+ 459[168]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=hash<TdcOrder[id]> 81
+ 462[168]: ConstInt(val=999) -> integer
+ 471[176]: GetRecord(data: ref(reference), db_tp=81, no_keys=1) -> ref(reference)
+ 475[168]: PutRef(var[116], value: ref(reference))
+ 478[152]: [54] ClearText(var[8]) var=__work_4[8]:text
+ 481[152]: ConstText(_value="absent ") -> text
+ 490[168]: AppendText(var[8], v1: text)
+ 493[152]: InitText(var[128]) var=__ncc_4[128]:text["gone"]
+ 496[152]: VarRef(var[116]) -> ref(reference) type=TdcOrder 78 var=gone[116]:ref(TdcOrder)["w"]
+ 499[168]: GetText(v1: ref(reference), fld=8) -> text["w"]
+ 502[168]: AppendText(var[128], v1: text)
+ 505[152]: VarText(var[128]) -> text var=__ncc_4[128]:text["gone"]
+ 508[168]: ConvBoolFromText(v1: text) -> boolean
+ 509[160]: GotoFalseWord(jump=:POS522, if_false: boolean)
+ 514[152]: VarText(var[128]) -> text var=__ncc_4[128]:text["gone"]
+ 517[168]: GotoWord(jump=:POS530)
+:POS522
+ 522[152]: ConstText(_value="<none>") -> text
+:POS530
+ 530[168]: ConstInt(val=0) -> integer
+ 539[176]: FormatText(var[8], val: text, width: integer, dir=2, token=32)
+ 544[152]: FreeText(var[128])
+ 547[152]: ConstText(_value=" err=") -> text
+ 554[168]: AppendText(var[8], v1: text)
+ 557[152]: InitText(var[128]) var=__ncc_5[128]:text
+ 560[152]: VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+ 563[168]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=hash<TdcOrder[id]> 81
+ 566[168]: ReserveFrame(size=16)
+ 569[184]: InitCreateStack(var[168], dep_pos=56)
+ 574[184]: StaticCall(n_store_lazy_error_dest)
+ 577[152]: VarText(var[128]) -> text var=__ncc_5[128]:text
+ 580[168]: ConvBoolFromText(v1: text) -> boolean
+ 581[160]: GotoFalseWord(jump=:POS594, if_false: boolean)
+ 586[152]: VarText(var[128]) -> text var=__ncc_5[128]:text
+ 589[168]: GotoWord(jump=:POS597)
+:POS594
+ 594[152]: ConstText(_value="-") -> text
+:POS597
+ 597[168]: ConstInt(val=0) -> integer
+ 606[176]: FormatText(var[8], val: text, width: integer, dir=2, token=32)
+ 611[152]: FreeText(var[128])
+ 614[152]: VarText(var[8]) -> text var=__work_4[8]:text
+ 617[168]: Call(d_nr=361, args_size=16, fn=n_println)
+ 636[152]: VarRef(var[104]) -> ref(reference) type=TdcWorld 79 var=w[104]:ref(TdcWorld)
+ 639[168]: FreeRef(v1: ref(reference)) ; [store-free]
+ 640[152]: FreeText(var[80])
+ 643[152]: FreeText(var[56])
+ 646[152]: FreeText(var[32])
+ 649[152]: FreeText(var[8])
+ 652[152]: Return(ret=0, value=0, discard=152)
+
+
+=== rust ===
+#![allow(unused_imports)]
+#![allow(unused_parens)]
+#![allow(unused_variables)]
+#![allow(unreachable_code)]
+#![allow(unused_mut)]
+#![allow(non_snake_case)]
+#![allow(dead_code)]
+#![allow(redundant_semicolons)]
+#![allow(unused_assignments)]
+#![allow(unused_labels)]
+#![allow(unused_braces)]
+#![allow(clippy::double_parens)]
+#![allow(clippy::unused_unit)]
+#![allow(unused_unsafe)]
+
+extern crate loft;
+use loft::database::Stores;
+use loft::keys::{DbRef, Str, Key, Content};
+use loft::ops;
+use loft::vector;
+use loft::hash;
+use loft::tree;
+use loft::codegen_runtime;
+use loft::codegen_runtime::*;
+static __C_LIBS: &[(&str, &str)] = &[
+];
+static __C_LIB_SYMS: &[(&str, &[&str])] = &[
+];
+fn init(cell: &std::cell::UnsafeCell<Stores>) {
+    let db: &mut Stores = unsafe { &mut *cell.get() };
+    let t0: u16 = 0;
+    let t1: u16 = 1;
+    let t2: u16 = 2;
+    let t3: u16 = 3;
+    let t4: u16 = 4;
+    let t5: u16 = 5;
+    let t6: u16 = 6;
+    let _ = (t0, t1, t2, t3, t4, t5, t6); // suppress unused-let warnings for unreferenced base types
+    let t7 = db.enumerate("FieldValue");
+    let t8 = db.structure("__typevar_Self", 0);
+    let t9 = db.structure("__typevar_T", 0);
+    let t10 = db.structure("main_vector<T>", 0);
+    let vec_vector = db.vector(t9);
+    db.field(t10, "vector", vec_vector);
+    db.set_field_nullable(t10, "vector", true);
+    let t11 = db.vector(t9);
+    let _ = t11; // may be unused
+    let t12 = db.structure("FvBool", 1);
+    let byte_enum = db.byte(0, false);
+    db.field(t12, "enum", byte_enum);
+    db.set_field_nullable(t12, "enum", true);
+    db.field(t12, "v", t4);
+    let t13 = db.byte(0, false);
+    let _ = t13; // may be unused
+    let t14 = db.structure("FvInt", 2);
+    let byte_enum = db.byte(0, false);
+    db.field(t14, "enum", byte_enum);
+    db.set_field_nullable(t14, "enum", true);
+    db.field(t14, "v", 0);
+    let t15 = db.structure("FvLong", 3);
+    let byte_enum = db.byte(0, false);
+    db.field(t15, "enum", byte_enum);
+    db.set_field_nullable(t15, "enum", true);
+    db.field(t15, "v", 0);
+    let t16 = db.structure("FvFloat", 4);
+    let byte_enum = db.byte(0, false);
+    db.field(t16, "enum", byte_enum);
+    db.set_field_nullable(t16, "enum", true);
+    db.field(t16, "v", t3);
+    let t17 = db.structure("FvSingle", 5);
+    let byte_enum = db.byte(0, false);
+    db.field(t17, "enum", byte_enum);
+    db.set_field_nullable(t17, "enum", true);
+    db.field(t17, "v", t2);
+    let t18 = db.structure("FvChar", 6);
+    let byte_enum = db.byte(0, false);
+    db.field(t18, "enum", byte_enum);
+    db.set_field_nullable(t18, "enum", true);
+    db.field(t18, "v", t6);
+    let t19 = db.structure("FvText", 7);
+    let byte_enum = db.byte(0, false);
+    db.field(t19, "enum", byte_enum);
+    db.set_field_nullable(t19, "enum", true);
+    db.field(t19, "v", t5);
+    let t20 = db.structure("StructField", 0);
+    db.field(t20, "name", t5);
+    db.field(t20, "value", t7);
+    db.set_field_nullable(t20, "value", true);
+    let t21 = db.vector(t0);
+    let _ = t21; // may be unused
+    let t22 = db.structure("main_vector<integer>", 0);
+    let vec_vector = db.vector(t0);
+    db.field(t22, "vector", vec_vector);
+    db.set_field_nullable(t22, "vector", true);
+    let t23 = db.vector(t5);
+    let _ = t23; // may be unused
+    let t24 = db.enumerate("Format");
+    let t25 = db.enumerate("FileResult");
+    let t26 = db.structure("EnvVariable", 0);
+    db.field(t26, "name", t5);
+    db.field(t26, "value", t5);
+    let t27 = db.structure("File", 0);
+    db.field(t27, "path", t5);
+    db.field(t27, "size", 0);
+    db.field(t27, "format", t24);
+    db.set_field_nullable(t27, "format", true);
+    let int_ref = db.int(-2147483647, true);
+    db.field(t27, "ref", int_ref);
+    db.set_field_nullable(t27, "ref", true);
+    db.field(t27, "current", 0);
+    db.field(t27, "next", 0);
+    db.set_field_nullable(t27, "content", true);
+    db.set_field_nullable(t27, "lines", true);
+    db.set_field_nullable(t27, "exists", true);
+    db.set_field_nullable(t27, "set_file_size", true);
+    db.set_field_nullable(t27, "seek", true);
+    db.set_field_nullable(t27, "position", true);
+    db.set_field_nullable(t27, "sync", true);
+    db.set_field_nullable(t27, "files", true);
+    db.set_field_nullable(t27, "write", true);
+    let t28 = db.int(-2147483647, true);
+    let _ = t28; // may be unused
+    let t29 = db.structure("main_vector<text>", 0);
+    let vec_vector = db.vector(t5);
+    db.field(t29, "vector", vec_vector);
+    db.set_field_nullable(t29, "vector", true);
+    let t30 = db.structure("main_vector<File>", 0);
+    let vec_vector = db.vector(t27);
+    db.field(t30, "vector", vec_vector);
+    db.set_field_nullable(t30, "vector", true);
+    let t31 = db.vector(t27);
+    let _ = t31; // may be unused
+    let t32 = db.enumerate("ArgValue");
+    let t33 = db.structure("NullVal", 1);
+    let byte_enum = db.byte(0, false);
+    db.field(t33, "enum", byte_enum);
+    db.set_field_nullable(t33, "enum", true);
+    let t34 = db.structure("BoolVal", 2);
+    let byte_enum = db.byte(0, false);
+    db.field(t34, "enum", byte_enum);
+    db.set_field_nullable(t34, "enum", true);
+    db.field(t34, "b", t4);
+    let t35 = db.structure("IntVal", 3);
+    let byte_enum = db.byte(0, false);
+    db.field(t35, "enum", byte_enum);
+    db.set_field_nullable(t35, "enum", true);
+    db.field(t35, "n", 0);
+    let t36 = db.structure("LongVal", 4);
+    let byte_enum = db.byte(0, false);
+    db.field(t36, "enum", byte_enum);
+    db.set_field_nullable(t36, "enum", true);
+    db.field(t36, "n", 0);
+    let t37 = db.structure("FloatVal", 5);
+    let byte_enum = db.byte(0, false);
+    db.field(t37, "enum", byte_enum);
+    db.set_field_nullable(t37, "enum", true);
+    db.field(t37, "f", t3);
+    let t38 = db.structure("SingleVal", 6);
+    let byte_enum = db.byte(0, false);
+    db.field(t38, "enum", byte_enum);
+    db.set_field_nullable(t38, "enum", true);
+    db.field(t38, "f", t2);
+    let t39 = db.structure("CharVal", 7);
+    let byte_enum = db.byte(0, false);
+    db.field(t39, "enum", byte_enum);
+    db.set_field_nullable(t39, "enum", true);
+    db.field(t39, "c", t6);
+    let t40 = db.structure("TextVal", 8);
+    let byte_enum = db.byte(0, false);
+    db.field(t40, "enum", byte_enum);
+    db.set_field_nullable(t40, "enum", true);
+    db.field(t40, "t", t5);
+    let t41 = db.structure("RefVal", 9);
+    let byte_enum = db.byte(0, false);
+    db.field(t41, "enum", byte_enum);
+    db.set_field_nullable(t41, "enum", true);
+    db.field(t41, "store", 0);
+    db.field(t41, "rec", 0);
+    db.field(t41, "pos", 0);
+    let t42 = db.structure("FnVal", 10);
+    let byte_enum = db.byte(0, false);
+    db.field(t42, "enum", byte_enum);
+    db.set_field_nullable(t42, "enum", true);
+    db.field(t42, "d_nr", 0);
+    let t43 = db.structure("OtherVal", 11);
+    let byte_enum = db.byte(0, false);
+    db.field(t43, "enum", byte_enum);
+    db.set_field_nullable(t43, "enum", true);
+    db.field(t43, "description", t5);
+    let t44 = db.structure("ArgInfo", 0);
+    db.field(t44, "name", t5);
+    db.field(t44, "type_name", t5);
+    db.field(t44, "value", t32);
+    db.set_field_nullable(t44, "value", true);
+    let t45 = db.structure("VarInfo", 0);
+    db.field(t45, "name", t5);
+    db.field(t45, "type_name", t5);
+    db.field(t45, "value", t32);
+    db.set_field_nullable(t45, "value", true);
+    let t46 = db.structure("StackFrame", 0);
+    db.field(t46, "function", t5);
+    db.field(t46, "file", t5);
+    db.field(t46, "line", 0);
+    let vec_arguments = db.vector(t44);
+    db.field(t46, "arguments", vec_arguments);
+    db.set_field_nullable(t46, "arguments", true);
+    let vec_variables = db.vector(t45);
+    db.field(t46, "variables", vec_variables);
+    db.set_field_nullable(t46, "variables", true);
+    let t47 = db.vector(t44);
+    let _ = t47; // may be unused
+    let t48 = db.vector(t45);
+    let _ = t48; // may be unused
+    let t49 = db.structure("main_vector<ArgInfo>", 0);
+    let vec_vector = db.vector(t44);
+    db.field(t49, "vector", vec_vector);
+    db.set_field_nullable(t49, "vector", true);
+    let t50 = db.structure("main_vector<VarInfo>", 0);
+    let vec_vector = db.vector(t45);
+    db.field(t50, "vector", vec_vector);
+    db.set_field_nullable(t50, "vector", true);
+    let t51 = db.enumerate("CoroutineStatus");
+    let t52 = db.enumerate("JsonValue");
+    let t53 = db.structure("JNull", 1);
+    let byte_enum = db.byte(0, false);
+    db.field(t53, "enum", byte_enum);
+    db.set_field_nullable(t53, "enum", true);
+    let t54 = db.structure("JBool", 2);
+    let byte_enum = db.byte(0, false);
+    db.field(t54, "enum", byte_enum);
+    db.set_field_nullable(t54, "enum", true);
+    db.field(t54, "value", t4);
+    let t55 = db.structure("JNumber", 3);
+    let byte_enum = db.byte(0, false);
+    db.field(t55, "enum", byte_enum);
+    db.set_field_nullable(t55, "enum", true);
+    db.field(t55, "value", t3);
+    let t56 = db.structure("JString", 4);
+    let byte_enum = db.byte(0, false);
+    db.field(t56, "enum", byte_enum);
+    db.set_field_nullable(t56, "enum", true);
+    db.field(t56, "value", t5);
+    let t57 = db.structure("JArray", 5);
+    let byte_enum = db.byte(0, false);
+    db.field(t57, "enum", byte_enum);
+    db.set_field_nullable(t57, "enum", true);
+    let vec_items = db.vector(t52);
+    db.field(t57, "items", vec_items);
+    db.set_field_nullable(t57, "items", true);
+    let t58 = db.vector(t52);
+    let _ = t58; // may be unused
+    let t59 = db.structure("JObject", 6);
+    let byte_enum = db.byte(0, false);
+    db.field(t59, "enum", byte_enum);
+    db.set_field_nullable(t59, "enum", true);
+    let t60 = db.structure("JsonField", 0);
+    db.field(t60, "name", t5);
+    db.field(t60, "value", t52);
+    db.set_field_nullable(t60, "value", true);
+    let vec_fields = db.vector(t60);
+    db.field(t59, "fields", vec_fields);
+    db.set_field_nullable(t59, "fields", true);
+    let t61 = db.vector(t60);
+    let _ = t61; // may be unused
+    let t62 = db.structure("JInteger", 7);
+    let byte_enum = db.byte(0, false);
+    db.field(t62, "enum", byte_enum);
+    db.set_field_nullable(t62, "enum", true);
+    db.field(t62, "value", 0);
+    let t63 = db.structure("main_vector<JsonValue>", 0);
+    let vec_vector = db.vector(t52);
+    db.field(t63, "vector", vec_vector);
+    db.set_field_nullable(t63, "vector", true);
+    let t64 = db.structure("main_vector<JsonField>", 0);
+    let vec_vector = db.vector(t60);
+    db.field(t64, "vector", vec_vector);
+    db.set_field_nullable(t64, "vector", true);
+    let t65 = db.enumerate("TypeKind");
+    let t66 = db.enumerate("CollectionKind");
+    let t67 = db.structure("FieldInfo", 0);
+    db.field(t67, "name", t5);
+    db.field(t67, "type_name", t5);
+    db.field(t67, "position", 0);
+    db.field(t67, "kind", t65);
+    db.set_field_nullable(t67, "kind", true);
+    db.field(t67, "nullable", t4);
+    let t68 = db.structure("KeyInfo", 0);
+    db.field(t68, "name", t5);
+    db.field(t68, "position", 0);
+    db.field(t68, "ascending", t4);
+    let t69 = db.structure("VariantInfo", 0);
+    db.field(t69, "name", t5);
+    db.field(t69, "tag", 0);
+    let t70 = db.structure("TypeInfo", 0);
+    db.field(t70, "name", t5);
+    db.field(t70, "kind", t65);
+    db.set_field_nullable(t70, "kind", true);
+    db.field(t70, "size", 0);
+    let vec_fields = db.vector(t67);
+    db.field(t70, "fields", vec_fields);
+    db.set_field_nullable(t70, "fields", true);
+    let vec_variants = db.vector(t69);
+    db.field(t70, "variants", vec_variants);
+    db.set_field_nullable(t70, "variants", true);
+    db.field(t70, "element", t5);
+    db.field(t70, "collection", t66);
+    db.set_field_nullable(t70, "collection", true);
+    let vec_keys = db.vector(t68);
+    db.field(t70, "keys", vec_keys);
+    db.set_field_nullable(t70, "keys", true);
+    let t71 = db.vector(t67);
+    let _ = t71; // may be unused
+    let t72 = db.vector(t69);
+    let _ = t72; // may be unused
+    let t73 = db.vector(t68);
+    let _ = t73; // may be unused
+    let t74 = db.structure("main_vector<FieldInfo>", 0);
+    let vec_vector = db.vector(t67);
+    db.field(t74, "vector", vec_vector);
+    db.set_field_nullable(t74, "vector", true);
+    let t75 = db.structure("main_vector<VariantInfo>", 0);
+    let vec_vector = db.vector(t69);
+    db.field(t75, "vector", vec_vector);
+    db.set_field_nullable(t75, "vector", true);
+    let t76 = db.structure("main_vector<KeyInfo>", 0);
+    let vec_vector = db.vector(t68);
+    db.field(t76, "vector", vec_vector);
+    db.set_field_nullable(t76, "vector", true);
+    let t77 = db.structure("TdcPerson", 0);
+    db.field(t77, "id", 0);
+    db.field(t77, "nm", t5);
+    let t78 = db.structure("TdcOrder", 0);
+    db.field(t78, "id", 0);
+    db.field(t78, "what", t5);
+    let t79 = db.structure("TdcWorld", 0);
+    let hash_people = db.hash(t77, &["id".to_string()]);
+    db.field(t79, "people", hash_people);
+    db.set_field_nullable(t79, "people", true);
+    let hash_orders = db.hash(t78, &["id".to_string()]);
+    db.field(t79, "orders", hash_orders);
+    db.set_field_nullable(t79, "orders", true);
+    let t82 = db.vector(u16::MAX);
+    let _ = t82; // may be unused
+    db.value(t7, "FvBool", t12);
+    db.value(t7, "FvInt", t14);
+    db.value(t7, "FvLong", t15);
+    db.value(t7, "FvFloat", t16);
+    db.value(t7, "FvSingle", t17);
+    db.value(t7, "FvChar", t18);
+    db.value(t7, "FvText", t19);
+    db.value(t24, "TextFile", u16::MAX);
+    db.value(t24, "LittleEndian", u16::MAX);
+    db.value(t24, "BigEndian", u16::MAX);
+    db.value(t24, "Directory", u16::MAX);
+    db.value(t24, "NotExists", u16::MAX);
+    db.value(t25, "Ok", u16::MAX);
+    db.value(t25, "NotFound", u16::MAX);
+    db.value(t25, "PermissionDenied", u16::MAX);
+    db.value(t25, "IsDirectory", u16::MAX);
+    db.value(t25, "Other", u16::MAX);
+    db.value(t25, "ok", u16::MAX);
+    db.value(t32, "NullVal", t33);
+    db.value(t32, "BoolVal", t34);
+    db.value(t32, "IntVal", t35);
+    db.value(t32, "LongVal", t36);
+    db.value(t32, "FloatVal", t37);
+    db.value(t32, "SingleVal", t38);
+    db.value(t32, "CharVal", t39);
+    db.value(t32, "TextVal", t40);
+    db.value(t32, "RefVal", t41);
+    db.value(t32, "FnVal", t42);
+    db.value(t32, "OtherVal", t43);
+    db.value(t51, "Created", u16::MAX);
+    db.value(t51, "Suspended", u16::MAX);
+    db.value(t51, "Running", u16::MAX);
+    db.value(t51, "Exhausted", u16::MAX);
+    db.value(t52, "JNull", t53);
+    db.value(t52, "JBool", t54);
+    db.value(t52, "JNumber", t55);
+    db.value(t52, "JString", t56);
+    db.value(t52, "JArray", t57);
+    db.value(t52, "JObject", t59);
+    db.value(t52, "JInteger", t62);
+    db.value(t52, "field", u16::MAX);
+    db.value(t52, "item", u16::MAX);
+    db.value(t52, "len", u16::MAX);
+    db.value(t52, "as_text", u16::MAX);
+    db.value(t52, "as_number", u16::MAX);
+    db.value(t52, "as_long", u16::MAX);
+    db.value(t52, "as_bool", u16::MAX);
+    db.value(t52, "kind", u16::MAX);
+    db.value(t52, "keys", u16::MAX);
+    db.value(t52, "fields", u16::MAX);
+    db.value(t52, "has_field", u16::MAX);
+    db.value(t52, "to_json", u16::MAX);
+    db.value(t52, "to_json_pretty", u16::MAX);
+    db.value(t65, "IntegerKind", u16::MAX);
+    db.value(t65, "LongKind", u16::MAX);
+    db.value(t65, "SingleKind", u16::MAX);
+    db.value(t65, "FloatKind", u16::MAX);
+    db.value(t65, "BooleanKind", u16::MAX);
+    db.value(t65, "TextKind", u16::MAX);
+    db.value(t65, "CharacterKind", u16::MAX);
+    db.value(t65, "RecordKind", u16::MAX);
+    db.value(t65, "EnumKind", u16::MAX);
+    db.value(t65, "VariantKind", u16::MAX);
+    db.value(t65, "VectorKind", u16::MAX);
+    db.value(t65, "KeyedKind", u16::MAX);
+    db.value(t65, "RefKind", u16::MAX);
+    db.value(t65, "OtherKind", u16::MAX);
+    db.value(t66, "NotKeyed", u16::MAX);
+    db.value(t66, "KeyedHash", u16::MAX);
+    db.value(t66, "KeyedIndex", u16::MAX);
+    db.value(t66, "KeyedSorted", u16::MAX);
+    db.value(t66, "KeyedOrdered", u16::MAX);
+    db.value(t66, "KeyedRadix", u16::MAX);
+    db.value(t66, "KeyedTrie", u16::MAX);
+    db.verify_schema_ids(&[
+        "integer",
+        "long",
+        "single",
+        "float",
+        "boolean",
+        "text",
+        "character",
+        "FieldValue",
+        "__typevar_Self",
+        "__typevar_T",
+        "main_vector<T>",
+        "vector<__typevar_T>",
+        "FvBool",
+        "byte",
+        "FvInt",
+        "FvLong",
+        "FvFloat",
+        "FvSingle",
+        "FvChar",
+        "FvText",
+        "StructField",
+        "vector<integer>",
+        "main_vector<integer>",
+        "vector<text>",
+        "Format",
+        "FileResult",
+        "EnvVariable",
+        "File",
+        "int<-2147483647,true>",
+        "main_vector<text>",
+        "main_vector<File>",
+        "vector<File>",
+        "ArgValue",
+        "NullVal",
+        "BoolVal",
+        "IntVal",
+        "LongVal",
+        "FloatVal",
+        "SingleVal",
+        "CharVal",
+        "TextVal",
+        "RefVal",
+        "FnVal",
+        "OtherVal",
+        "ArgInfo",
+        "VarInfo",
+        "StackFrame",
+        "vector<ArgInfo>",
+        "vector<VarInfo>",
+        "main_vector<ArgInfo>",
+        "main_vector<VarInfo>",
+        "CoroutineStatus",
+        "JsonValue",
+        "JNull",
+        "JBool",
+        "JNumber",
+        "JString",
+        "JArray",
+        "vector<JsonValue>",
+        "JObject",
+        "JsonField",
+        "vector<JsonField>",
+        "JInteger",
+        "main_vector<JsonValue>",
+        "main_vector<JsonField>",
+        "TypeKind",
+        "CollectionKind",
+        "FieldInfo",
+        "KeyInfo",
+        "VariantInfo",
+        "TypeInfo",
+        "vector<FieldInfo>",
+        "vector<VariantInfo>",
+        "vector<KeyInfo>",
+        "main_vector<FieldInfo>",
+        "main_vector<VariantInfo>",
+        "main_vector<KeyInfo>",
+        "TdcPerson",
+        "TdcOrder",
+        "TdcWorld",
+        "hash<TdcPerson[id]>",
+        "hash<TdcOrder[id]>",
+        "vector",
+    ]);
+    db.finish();
+    codegen_runtime::register_lazy_fetch("TdcPerson", n_lazy_fetch);
+    codegen_runtime::register_lazy_fetch("TdcOrder", n_lazy_fetch_orders);
+}
+
+fn i_parse_errors(cell: &std::cell::UnsafeCell<Stores>) -> String {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  loft::codegen_runtime::i_parse_errors(stores)
+}
+
+
+fn i_parse_error_push(cell: &std::cell::UnsafeCell<Stores>, mut var_msg: &str) {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  loft::codegen_runtime::i_parse_error_push(stores, var_msg)
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:47
+fn __iface_14_OpLt(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> u8 {
+  todo!("native function __iface_14_OpLt")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:53
+fn __iface_17_OpEq(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> u8 {
+  todo!("native function __iface_17_OpEq")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:59
+fn __iface_19_OpAdd(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> DbRef {
+  todo!("native function __iface_19_OpAdd")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:66
+fn __iface_21_OpMul(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> DbRef {
+  todo!("native function __iface_21_OpMul")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:67
+fn __iface_21_OpMin(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> DbRef {
+  todo!("native function __iface_21_OpMin")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:74
+fn __iface_24_scale(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_factor: i64) -> i64 {
+  todo!("native function __iface_24_scale")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:80
+fn __iface_26_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> Str {
+  todo!("native function __iface_26_to_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:158
+fn t_7integer_abs(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:159
+  return ops::op_abs_int((var_both))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:243
+fn t_7integer_floor_mod(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_divisor: i64) -> i64 { //block_1: optional(integer(-2147483647, 2147483647, false))
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:244
+  return {{ let _v_v2 = (var_divisor); if _v_v2 == 0 { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN } else { ops::op_rem_int(({ops::op_add_int(({{ let _v_v2 = (var_divisor); if _v_v2 == 0 { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN } else { ops::op_rem_int((var_both), _v_v2) } }}), (var_divisor))}), _v_v2) } }}
+  } /*block_1: optional(integer(-2147483647, 2147483647, false))*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:260
+fn t_6single_abs(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:261
+  return (var_both).abs()
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:298
+fn t_6single_cos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:299
+  return {{ let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:304
+fn t_6single_sin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:305
+  return {{ let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:310
+fn t_6single_tan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:311
+  return {{ let _v_v1 = (var_both); match (2_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:316
+fn t_6single_acos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:317
+  return {{ let _v_v1 = (var_both); match (3_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:322
+fn t_6single_asin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:323
+  return {{ let _v_v1 = (var_both); match (4_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:328
+fn t_6single_atan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:329
+  return {{ let _v_v1 = (var_both); match (5_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:335
+fn t_6single_ceil(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:336
+  return {{ let _v_v1 = (var_both); match (6_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:342
+fn t_6single_floor(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:343
+  return {{ let _v_v1 = (var_both); match (7_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:348
+fn t_6single_round(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:349
+  return {{ let _v_v1 = (var_both); match (8_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:354
+fn t_6single_sqrt(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:355
+  return {{ let _v_v1 = (var_both); match (9_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:363
+fn t_6single_atan2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_v2: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:364
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f32::NAN } } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:370
+fn t_6single_log(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_v2: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:371
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f32::NAN } } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:379
+fn t_6single_pow(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_v2: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:380
+  return (var_both).powf((var_v2))
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:413
+fn t_5float_abs(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:414
+  return (var_both).abs()
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:429
+fn t_5float_cos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:430
+  return {{ let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:435
+fn t_5float_sin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:436
+  return {{ let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:441
+fn t_5float_tan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:442
+  return {{ let _v_v1 = (var_both); match (2_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:447
+fn t_5float_acos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:448
+  return {{ let _v_v1 = (var_both); match (3_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:453
+fn t_5float_asin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:454
+  return {{ let _v_v1 = (var_both); match (4_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:459
+fn t_5float_atan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:460
+  return {{ let _v_v1 = (var_both); match (5_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:466
+fn t_5float_ceil(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:467
+  return {{ let _v_v1 = (var_both); match (6_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:473
+fn t_5float_floor(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:474
+  return {{ let _v_v1 = (var_both); match (7_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:479
+fn t_5float_round(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:480
+  return {{ let _v_v1 = (var_both); match (8_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:485
+fn t_5float_sqrt(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:486
+  return {{ let _v_v1 = (var_both); match (9_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:494
+fn t_5float_atan2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_v2: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:495
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f64::NAN } } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:501
+fn t_5float_log(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_v2: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:502
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f64::NAN } } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:510
+fn t_5float_pow(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_v2: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:511
+  return (var_both).powf((var_v2))
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:517
+fn t_6single_exp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:518
+  return ((std::f64::consts::E) as f32).powf((var_both))
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:523
+fn t_5float_exp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:524
+  return (std::f64::consts::E).powf((var_both))
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:529
+fn t_6single_ln(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:530
+  return t_6single_log(cell, var_both, (std::f64::consts::E) as f32)
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:535
+fn t_5float_ln(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:536
+  return t_5float_log(cell, var_both, std::f64::consts::E)
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:541
+fn t_6single_log2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:542
+  return t_6single_log(cell, var_both, 2_f32)
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:547
+fn t_5float_log2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:548
+  return t_5float_log(cell, var_both, 2_f64)
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:553
+fn t_6single_log10(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:554
+  return t_6single_log(cell, var_both, 10_f32)
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:559
+fn t_5float_log10(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:560
+  return t_5float_log(cell, var_both, 10_f64)
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:613
+fn t_7integer_min(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_b: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:614
+  return if ((((var_both) as i64) <= ((var_b) as i64)) as u8) == 1 { //block_2: integer
+    var_both
+    } /*block_2: integer*/ else { //block_3: integer
+    var_b
+    } /*block_3: integer*/
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:618
+fn t_7integer_max(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_b: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:619
+  return if ((((var_b) as i64) <= ((var_both) as i64)) as u8) == 1 { //block_2: integer
+    var_both
+    } /*block_2: integer*/ else { //block_3: integer
+    var_b
+    } /*block_3: integer*/
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:623
+fn t_7integer_clamp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_lo: i64, mut var_hi: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:624
+  return t_7integer_min(cell, t_7integer_max(cell, var_both, var_lo), var_hi)
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:629
+fn t_6single_min(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_b: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:630
+  return if (({{ let _v_v2 = (var_b); { let _v_v1 = (var_both); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: single
+    var_both
+    } /*block_2: single*/ else { //block_3: single
+    var_b
+    } /*block_3: single*/
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:634
+fn t_6single_max(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_b: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:635
+  return if (({{ let _v_v2 = (var_both); { let _v_v1 = (var_b); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: single
+    var_both
+    } /*block_2: single*/ else { //block_3: single
+    var_b
+    } /*block_3: single*/
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:639
+fn t_6single_clamp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_lo: f32, mut var_hi: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:640
+  return t_6single_min(cell, t_6single_max(cell, var_both, var_lo), var_hi)
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:644
+fn t_5float_min(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_b: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:645
+  return if (({{ let _v_v2 = (var_b); { let _v_v1 = (var_both); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: float
+    var_both
+    } /*block_2: float*/ else { //block_3: float
+    var_b
+    } /*block_3: float*/
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:649
+fn t_5float_max(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_b: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:650
+  return if (({{ let _v_v2 = (var_both); { let _v_v1 = (var_b); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: float
+    var_both
+    } /*block_2: float*/ else { //block_3: float
+    var_b
+    } /*block_3: float*/
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:654
+fn t_5float_clamp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_lo: f64, mut var_hi: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:655
+  return t_5float_min(cell, t_5float_max(cell, var_both, var_lo), var_hi)
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:662
+fn t_5float_approx(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_b: f64, mut var_eps: f64) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:663
+  return (if ((if ((((!(var_both).is_nan()) as u8) != 1) as u8) == 1 {({true} as u8)} else {({((!(var_b).is_nan()) as u8) != 1} as u8)}) as u8) == 1 {({{ //block_2: boolean
+      (false) as u8
+      } /*block_2: boolean*/} as u8)} else {({{ //block_3: boolean
+      ({{ let _v_v2 = (var_eps); { let _v_v1 = (t_5float_abs(cell, (var_both) - (var_b))); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8
+      } /*block_3: boolean*/} as u8)}) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:667
+fn t_6single_approx(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_b: f32, mut var_eps: f32) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:668
+  return (if ((if ((((!(var_both).is_nan()) as u8) != 1) as u8) == 1 {({true} as u8)} else {({((!(var_b).is_nan()) as u8) != 1} as u8)}) as u8) == 1 {({{ //block_2: boolean
+      (false) as u8
+      } /*block_2: boolean*/} as u8)} else {({{ //block_3: boolean
+      ({{ let _v_v2 = (var_eps); { let _v_v1 = (t_6single_abs(cell, (var_both) - (var_b))); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8
+      } /*block_3: boolean*/} as u8)}) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:687
+fn t_4text_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: &str) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:688
+  return (var_both).chars().count() as i64
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:697
+fn t_4text_size(cell: &std::cell::UnsafeCell<Stores>, mut var_both: &str) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:698
+  return (var_both).len() as i64
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:704
+fn t_9character_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i32) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:705
+  return OpLengthCharacter(cell, var_both)
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:987
+fn t_6vector_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:988
+  return i64::from(vector::length_vector(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1025
+fn t_6sorted_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1026
+  return i64::from(vector::length_vector(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1033
+fn t_6vector_clear(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1034
+  if var_both.rec != 0 { vector::clear_vector(&var_both, &mut stores.allocations); };
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1196
+fn t_4hash_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1197
+  return i64::from(hash::count(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1209
+fn t_4hash_size(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1210
+  return i64::from(hash::table_bytes(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: u8, msg: M, file: F, line: i64) {
+  if test != 1 { panic!("{}:{} {}", file, line, msg); }
+}
+
+fn n_panic<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {
+  loft::runtime_error::RuntimeError::user_panic(msg.to_string(), file.to_string(), line as u32).report_and_exit();
+}
+
+fn n_log_info<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  if let Some(ref logger) = stores.logger && let Ok(mut lg) = logger.lock() { lg.log(loft::logger::Severity::Info, &file.to_string(), line as u32, &msg.to_string()); }
+}
+
+fn n_log_warn<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  if let Some(ref logger) = stores.logger && let Ok(mut lg) = logger.lock() { lg.log(loft::logger::Severity::Warn, &file.to_string(), line as u32, &msg.to_string()); }
+}
+
+fn n_log_error<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  if let Some(ref logger) = stores.logger && let Ok(mut lg) = logger.lock() { lg.log(loft::logger::Severity::Error, &file.to_string(), line as u32, &msg.to_string()); }
+}
+
+fn n_log_fatal<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  if let Some(ref logger) = stores.logger && let Ok(mut lg) = logger.lock() { lg.log(loft::logger::Severity::Fatal, &file.to_string(), line as u32, &msg.to_string()); }
+}
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1258
+fn n_print(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("print", "/home/jurjens/workspace/loft2/default/01_code.loft", 1258);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1259
+  {{ let _v_v1 = (var_v1); #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+crate::loft_host_print(_v_v1.as_ptr(), _v_v1.len());
+#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
+if !loft::rpc::print_or_capture(_v_v1) { print!("{}", _v_v1); }
+#[cfg(all(not(feature = "wasm"), target_arch = "wasm32", target_os = "wasi"))]
+print!("{}", _v_v1);
+#[cfg(feature = "wasm")]
+crate::wasm::output_push(_v_v1); }};
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1264
+fn n_println(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("println", "/home/jurjens/workspace/loft2/default/01_code.loft", 1264);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1265
+  let _pre_0 = &*({ //Formatted string_2: text["__work_1"]
+    var___work_1 = String::with_capacity(16_usize);
+    ops::format_text(&mut var___work_1, var_v1, 0_i64, 2, 32);
+    var___work_1 += &*("\n");
+    &var___work_1
+    } /*Formatted string_2: text["__work_1"]*/);
+  {{ let _v_v1 = (_pre_0); #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+crate::loft_host_print(_v_v1.as_ptr(), _v_v1.len());
+#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
+if !loft::rpc::print_or_capture(_v_v1) { print!("{}", _v_v1); }
+#[cfg(all(not(feature = "wasm"), target_arch = "wasm32", target_os = "wasi"))]
+print!("{}", _v_v1);
+#[cfg(feature = "wasm")]
+crate::wasm::output_push(_v_v1); }};
+  ;
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1273
+fn n_eprint(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1278
+fn n_eprintln(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("eprintln", "/home/jurjens/workspace/loft2/default/01_code.loft", 1278);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1279
+  let _pre_1 = &*({ //Formatted string_2: text["__work_1"]
+    var___work_1 = String::with_capacity(16_usize);
+    ops::format_text(&mut var___work_1, var_v1, 0_i64, 2, 32);
+    var___work_1 += &*("\n");
+    &var___work_1
+    } /*Formatted string_2: text["__work_1"]*/);
+  eprint!("{}", (_pre_1));
+  ;
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1339
+fn t_7spatial_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1340
+  return i64::from(codegen_runtime::spatial_len(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1347
+fn t_4trie_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1348
+  return i64::from(codegen_runtime::trie_len(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1431
+fn n_yield_frame(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1442
+fn n_parallel_for(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> DbRef {
+  todo!("native function n_parallel_for")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1466
+fn n_parallel_discard(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1484
+fn n_parallel_queue(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1489
+fn n_parallel_buf_get(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> i64 {
+  todo!("native function n_parallel_buf_get")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1492
+fn n_parallel_buf_drop(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1507
+fn n_parallel_queue_text(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1511
+fn n_parallel_buf_get_text(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> String {
+  todo!("native function n_parallel_buf_get_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1513
+fn n_parallel_buf_drop_text(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1529
+fn n_parallel_queue_ref(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_ref")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1531
+fn n_parallel_buf_get_ref(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> DbRef {
+  todo!("native function n_parallel_buf_get_ref")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1534
+fn n_parallel_buf_drop_ref(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1549
+fn n_parallel_queue_narrow(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_narrow")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1554
+fn n_parallel_buf_get_narrow(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64, mut var_return_size: i64, mut var_signed: i64) -> i64 {
+  todo!("native function n_parallel_buf_get_narrow")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1556
+fn n_parallel_buf_drop_narrow(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1563
+fn n_parallel_buf_get_single(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> f32 {
+  todo!("native function n_parallel_buf_get_single")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1569
+fn n_parallel_buf_get_float(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> f64 {
+  todo!("native function n_parallel_buf_get_float")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1586
+fn n_parallel_fold(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_init: i64, mut var_fold: i64, mut var_threads: i64) -> i64 {
+  todo!("native function n_parallel_fold")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1602
+fn n_parallel_queue_fn(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_fn")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1615
+fn n_parallel_buf_get_fn(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> (u32, DbRef) {
+  todo!("native function n_parallel_buf_get_fn")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1617
+fn n_parallel_buf_drop_fn(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1633
+fn t_1T_OpLt(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> u8 {
+  todo!("native function t_1T_OpLt")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1653
+fn t_1T_OpAdd(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef, mut var___retbuf: DbRef) -> DbRef {
+  todo!("native function t_1T_OpAdd")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1663
+fn n_sum_of(cell: &std::cell::UnsafeCell<Stores>, mut var_v: DbRef) -> i64 { //block_1: integer
+  if loft::live_dispatch::live_flipped(0) { return loft::live_dispatch::live_call_i64(cell, 0, |st| { st.put_stack(var_v); }); }
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("sum_of", "/home/jurjens/workspace/loft2/default/01_code.loft", 1663);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1664
+  return t_7integer_sum(cell, var_v, 0_i64)
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1671
+fn __iface_430_children(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> DbRef {
+  todo!("native function __iface_430_children")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1673
+fn t_1T_children(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var___retbuf: DbRef) -> DbRef {
+  todo!("native function t_1T_children")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1711
+fn t_7integer_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i64, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1712
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_long_with_tag(var___work_1, var_self, stores.take_format_fault(), 10 as u8, 0_i64, 32 as u8, false, false, 2 as i8);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1715
+fn t_5float_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: f64, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1716
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_float(var___work_1, var_self, 0_i64, -1_i64, 2_i64 as i8);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1719
+fn t_6single_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: f32, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1720
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_single(var___work_1, var_self, 0_i64, -1_i64, 2_i64 as i8);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1723
+fn t_7boolean_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: u8, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1724
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_text(&mut var___work_1, &*({{ let _v_v1 = ((var_self) as u8); if _v_v1 == 1 {"true"} else if _v_v1 == 255 {"null"} else {"false"} }}), 0_i64, 2, 32);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1727
+fn t_9character_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1728
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    {let c = var_self; if c != 0 { var___work_1.push(ops::to_char(c)); } };
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1731
+fn t_4text_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> String { //block_1: text["self"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1732
+  return (var_self).to_string()
+  } /*block_1: text["self"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1653
+fn t_7integer_sum(cell: &std::cell::UnsafeCell<Stores>, mut var_v: DbRef, mut var_init: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___ref_1: i64 = 0;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1654
+  let mut var_result: i64 = var_init;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1655
+  { //For block_2: void
+    let mut var_i__index: i64 = i64::MIN;
+    'l3: loop { //For loop_3
+      let mut var_i: i64 = { //Iter range_4: integer
+        var_i__index = if ((((ops::op_conv_bool_from_int((var_i__index))) as u8) != 1) as u8) == 1 {0_i64} else {ops::op_add_int((var_i__index), (1_i64))};
+        if ((((t_6vector_len(cell, var_v)) as i64) <= ((var_i__index) as i64)) as u8) == 1 {break} else {()};
+        var_i__index
+        } /*Iter range_4: integer*/;
+      { //block_5: void
+        let _pre_2 = {{let __vr = (var_v); let __vi = (var_i); stores.vec_get_or_raise_runtime(&__vr, (8_i64) as u32, __vi)}};
+        var_result = {ops::op_add_int((var_result), ({{let db = (_pre_2); if db.rec == 0 { i64::MIN } else { stores.store(&db).get_int(db.rec, db.pos + (0_i64) as u32)} }}))};
+        } /*block_5: void*/;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1656
+  return var_result
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:48
+fn t_10FileResult_ok(cell: &std::cell::UnsafeCell<Stores>, mut var_self: u8) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:49
+  return ((({{ let _v_v1 = ((var_self) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((1_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:55
+fn n_fs_result(cell: &std::cell::UnsafeCell<Stores>, mut var_code: i64) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("fs_result", "/home/jurjens/workspace/loft2/default/02_files.loft", 55);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:56
+  return { { //scalar_match_2: FileResult
+    let mut var__match_subj_1: i64 = var_code;
+    if ((((var__match_subj_1) as i64) == ((0_i64) as i64)) as u8) == 1 {1_u8} else {if ((((var__match_subj_1) as i64) == ((1_i64) as i64)) as u8) == 1 {2_u8} else {if ((((var__match_subj_1) as i64) == ((2_i64) as i64)) as u8) == 1 {3_u8} else {if ((((var__match_subj_1) as i64) == ((3_i64) as i64)) as u8) == 1 {4_u8} else {5_u8}}}}
+    } /*scalar_match_2: FileResult*/ }
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:135
+fn t_4File_content(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_result: &mut String) -> Str { //block_1: optional(text(deps { items: [1] }))
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:138
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: never
+    return Str::new(loft::state::STRING_NULL)
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:139
+  *var_result = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:140
+  let mut var_txt: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:141
+  OpGetFileText(cell, var_self, &mut var_txt);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:142
+  *var_result += &*(&var_txt);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:143
+  ;
+  return Str::new(&*var_result)
+  } /*block_1: optional(text(deps { items: [1] }))*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:152
+fn t_4File_lines(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var___retbuf: DbRef) -> DbRef { //block_1: vector<text>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___vdb_1: DbRef = DbRef::NULL;
+  var___vdb_1 = DbRef::NULL;
+  let mut var___work_c1: String = "".to_string();
+  if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:153
+  var___vdb_1 = OpDatabase(cell,var___vdb_1, 29_i32);
+  let mut var_result: DbRef = {{ let _v_v1 = (var___vdb_1); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+  {{ let _v_val = (0_i64); {let db = (var___vdb_1); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v); }} }};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:155
+  let mut var_c: String = "".to_string();
+  { //ncc_2: void
+    let _pre_2 = { //default ref_3: ref(reference)["__work_c1"]
+      var___work_c1 = "".to_string();
+      &mut var___work_c1
+      } /*default ref_3: ref(reference)["__work_c1"]*/;
+    let mut var___ncc_1: String = t_4File_content(cell, var_self, _pre_2).to_string();
+    if (((&var___ncc_1) != loft::state::STRING_NULL) as u8) == 1 {var_c = var___ncc_1.clone()} else {var_c = "".to_string()};
+    } /*ncc_2: void*/;
+  ;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:156
+  let mut var_p: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:157
+  let mut var_prev_cr: u8 = (false) as u8;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:158
+  { //For block_4: void
+    let mut var_ch__index: i64 = 0_i64;
+    let mut var_ch__next: i64 = 0_i64;
+    'l5: loop { //For loop_5
+      let mut var_ch: i32 = { //for text next_6: character
+        var_ch__index = var_ch__next;
+        let mut var__for_result_1: i32 = (ops::text_character((&var_c), (var_ch__next))) as u32 as i32;
+        var_ch__next = ops::op_add_int((var_ch__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_ch__next) as i64) <= ((var_ch__index) as i64)) as u8) == 1 {var_ch__next = ops::op_add_int((var_ch__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_6: character*/;
+      if (((((&var_c) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      if (((((&var_c).len() as i64) as i64) <= ((var_ch__index) as i64)) as u8) == 1 { //break_8: void
+        break;
+        } /*break_8: void*/ else {()};
+      { //block_9: void
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:159
+        let mut var__elm_1: DbRef = DbRef::NULL;
+        let mut var__elm_2: DbRef = DbRef::NULL;
+        if (((({{ let _v_v1 = (ops::to_char(var_ch)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (10_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_10: void
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:160
+          let mut var_e: i64 = var_ch__index;
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:161
+          if ((var_prev_cr) as u8) == 1 { //block_11: void
+            {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+            var__elm_1 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+            {{let db = (var__elm_1); let s_val = (&*(OpGetTextSub(&var_c, var_p, ops::op_min_int((var_e), (1_i64))))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+            OpFinishRecord(cell, var_result, var__elm_1, 23_i32, 65535_i32);
+            } /*block_11: void*/ else { //block_12: void
+            {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+            var__elm_2 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+            {{let db = (var__elm_2); let s_val = (&*(OpGetTextSub(&var_c, var_p, var_e))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+            OpFinishRecord(cell, var_result, var__elm_2, 23_i32, 65535_i32);
+            } /*block_12: void*/;
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:162
+          var_p = var_ch__next;
+          } /*block_10: void*/ else {()};
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:164
+        var_prev_cr = ((({{ let _v_v1 = (ops::to_char(var_ch)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (13_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8;
+        } /*block_9: void*/;
+      } /*For loop_5*/;
+    } /*For block_4: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:166
+  let mut var__elm_3: DbRef = DbRef::NULL;
+  if ((((var_p) as i64) < ((t_4text_size(cell, &var_c)) as i64)) as u8) == 1 { //block_13: void
+    {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+    var__elm_3 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+    {{let db = (var__elm_3); let s_val = (&*(OpGetTextSub(&var_c, var_p, t_4text_size(cell, &var_c)))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+    OpFinishRecord(cell, var_result, var__elm_3, 23_i32, 65535_i32);
+    } /*block_13: void*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:167
+  { //one_buffer_vec_copy_14: vector<text>["__retbuf"]
+    if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+    { let _av_t = var___retbuf; let _av_s = var_result; stores.vector_add(&_av_t, &_av_s, (5_i64) as u16); };
+    ;
+    ;
+    OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+    return var___retbuf
+    } /*one_buffer_vec_copy_14: vector<text>["__retbuf"]*/
+  } /*block_1: vector<text>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:175
+fn t_4text_split(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_separator: i32, mut var___retbuf: DbRef) -> DbRef { //block_1: vector<text>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___vdb_1: DbRef = DbRef::NULL;
+  var___vdb_1 = DbRef::NULL;
+  if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:176
+  var___vdb_1 = OpDatabase(cell,var___vdb_1, 29_i32);
+  let mut var_result: DbRef = {{ let _v_v1 = (var___vdb_1); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+  {{ let _v_val = (0_i64); {let db = (var___vdb_1); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v); }} }};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:177
+  let mut var_p: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:178
+  { //For block_2: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l3: loop { //For loop_3
+      let mut var_c: i32 = { //for text next_4: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_4: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_5: void
+        break;
+        } /*break_5: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:179
+        let mut var__elm_1: DbRef = DbRef::NULL;
+        if (((({{ let _v_v1 = (ops::to_char(var_c)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(var_separator)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_8: void
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:180
+          {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+          var__elm_1 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+          {{let db = (var__elm_1); let s_val = (&*(OpGetTextSub(var_self, var_p, var_c__index))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+          OpFinishRecord(cell, var_result, var__elm_1, 23_i32, 65535_i32);
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:181
+          var_p = var_c__next;
+          } /*block_8: void*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:187
+  let mut var__elm_2: DbRef = DbRef::NULL;
+  if ((((0_i64) as i64) < ((t_4text_len(cell, var_self)) as i64)) as u8) == 1 { //block_9: void
+    {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+    var__elm_2 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+    {{let db = (var__elm_2); let s_val = (&*(OpGetTextSub(var_self, var_p, t_4text_size(cell, var_self)))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+    OpFinishRecord(cell, var_result, var__elm_2, 23_i32, 65535_i32);
+    } /*block_9: void*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:188
+  { //one_buffer_vec_copy_10: vector<text>["__retbuf"]
+    if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+    { let _av_t = var___retbuf; let _av_s = var_result; stores.vector_add(&_av_t, &_av_s, (5_i64) as u16); };
+    OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+    return var___retbuf
+    } /*one_buffer_vec_copy_10: vector<text>["__retbuf"]*/
+  } /*block_1: vector<text>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:201
+fn t_4text_split_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_separator: &str, mut var___retbuf: DbRef) -> DbRef { //block_1: vector<text>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___vdb_1: DbRef = DbRef::NULL;
+  var___vdb_1 = DbRef::NULL;
+  if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:202
+  var___vdb_1 = OpDatabase(cell,var___vdb_1, 29_i32);
+  let mut var_out: DbRef = {{ let _v_v1 = (var___vdb_1); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+  {{ let _v_val = (0_i64); {let db = (var___vdb_1); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v); }} }};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:203
+  let mut var_n: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:204
+  if ((((var_n) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    {stores.vector_replace(&(var___retbuf), &(var_out), (5_u16));};
+          OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+      return var___retbuf
+
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:205
+  let mut var_sl: i64 = t_4text_size(cell, var_separator);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:206
+  let mut var__elm_1: DbRef = DbRef::NULL;
+  if ((((var_sl) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_3: never
+    // loft:/home/jurjens/workspace/loft2/default/02_files.loft:207
+    {vector::pre_alloc_vector(&(var_out), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+    var__elm_1 = OpNewRecord(cell, var_out, 23_i32, 65535_i32);
+    {{let db = (var__elm_1); let s_val = (var_self).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+    OpFinishRecord(cell, var_out, var__elm_1, 23_i32, 65535_i32);
+    {stores.vector_replace(&(var___retbuf), &(var_out), (5_u16));};
+          OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+      return var___retbuf
+
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:209
+  let mut var_p: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:210
+  let mut var_i: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:211
+  'l4: loop { //while_4
+    if ((((((ops::op_add_int((var_i), (var_sl))) as i64) <= ((var_n) as i64)) as u8) != 1) as u8) == 1 { //break_5: void
+      break;
+      } /*break_5: void*/ else {()};
+    { //block_6: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:212
+      let mut var__elm_2: DbRef = DbRef::NULL;
+      if ((ops::op_eq_text((&*(OpGetTextSub(var_self, var_i, ops::op_add_int((var_i), (var_sl))))), (var_separator))) as u8) == 1 { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:213
+        {vector::pre_alloc_vector(&(var_out), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+        var__elm_2 = OpNewRecord(cell, var_out, 23_i32, 65535_i32);
+        {{let db = (var__elm_2); let s_val = (&*(OpGetTextSub(var_self, var_p, var_i))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+        OpFinishRecord(cell, var_out, var__elm_2, 23_i32, 65535_i32);
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:214
+        var_p = ops::op_add_int((var_i), (var_sl));
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:215
+        var_i = var_p;
+        } /*block_7: void*/ else { //block_8: void
+        var_i = ops::op_add_int((var_i), (1_i64));
+        } /*block_8: void*/;
+      } /*block_6: void*/;
+    } /*while_4*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:218
+  {vector::pre_alloc_vector(&(var_out), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+  let mut var__elm_3: DbRef = OpNewRecord(cell, var_out, 23_i32, 65535_i32);
+  {{let db = (var__elm_3); let s_val = (&*(OpGetTextSub(var_self, var_p, var_n))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+  OpFinishRecord(cell, var_out, var__elm_3, 23_i32, 65535_i32);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:219
+  { //one_buffer_vec_copy_9: vector<text>["__retbuf"]
+    if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+    { let _av_t = var___retbuf; let _av_s = var_out; stores.vector_add(&_av_t, &_av_s, (5_i64) as u16); };
+    OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+    return var___retbuf
+    } /*one_buffer_vec_copy_9: vector<text>["__retbuf"]*/
+  } /*block_1: vector<text>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:237
+fn n_file(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str, mut var_result: DbRef) -> DbRef { //block_1: ref(File)["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("file", "/home/jurjens/workspace/loft2/default/02_files.loft", 237);
+  let _call_guard = codegen_runtime::CallGuard;
+  let _rb_w_result: DbRef = var_result;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:238
+  var_result = OpDatabase(cell,var_result, 27_i32);
+  {{let db = (var_result); let s_val = (var_path).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (24_i64) as u32, s_pos); }}};
+  {{ let _v_val = (i64::MIN); {let db = (var_result); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (28_i64) as u32, v); }} }};
+  {{let db = (var_result); let v = (0_i64); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v); }}};
+  {{let db = (var_result); let v = ((5_u8) as u8); if db.rec != 0 { stores.store_mut(&db).set_byte(db.rec, db.pos + (32_i64) as u32, 0, i32::from(v)); }}};
+  {{let db = (var_result); let v = (0_i64); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (8_i64) as u32, v); }}};
+  {{let db = (var_result); let v = (0_i64); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (16_i64) as u32, v); }}};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:239
+  stores.get_file(&(var_result));
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:240
+  return var_result
+  } /*block_1: ref(File)["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:247
+fn n_exists(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("exists", "/home/jurjens/workspace/loft2/default/02_files.loft", 247);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___lift_1: DbRef = DbRef::NULL;
+  let mut var___ref_1: DbRef = DbRef::NULL;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:248
+  { let _old___lift_1: DbRef = var___lift_1; { let _dst = var___lift_1; let _src = n_file(cell, var_path, var___ref_1); if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr { if _dst.store_nr != u16::MAX && _dst.store_nr != _src.store_nr { OpFreeRef(cell, _dst, "__lift_1(displaced)"); } var___lift_1 = _src; } else { var___lift_1 = OpDatabase(cell, _dst, 27_i32); OpCopyRecord(cell,_src, var___lift_1, 32795_i32); } }; if _old___lift_1.store_nr != var___lift_1.store_nr { OpFreeRef(cell, _old___lift_1, "var___lift_1(prev)"); } };
+  let _pre_2 = {{let db = (var___lift_1); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}};
+  let mut var___ret_1: u8 = ((({{ let _v_v1 = ((_pre_2) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) != (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8;
+  OpFreeRef(cell,var___lift_1, "var___lift_1"); var___lift_1.store_nr = u16::MAX;
+  OpFreeRef(cell,var___ref_1, "var___ref_1"); var___ref_1.store_nr = u16::MAX;
+  return (var___ret_1) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:254
+fn t_4File_exists(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:255
+  return ((({{ let _v_v1 = (({{let db = (var_both); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) != (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:262
+fn n_delete(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("delete", "/home/jurjens/workspace/loft2/default/02_files.loft", 262);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:263
+  if ((((n_exists(cell, var_path)) as u8) != 1) as u8) == 1 { //block_2: never
+    return 2_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:264
+  return n_fs_result(cell, codegen_runtime::fs_delete(&stores.resolve_path((var_path))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:272
+fn n_move(cell: &std::cell::UnsafeCell<Stores>, mut var_from: &str, mut var_to: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("move", "/home/jurjens/workspace/loft2/default/02_files.loft", 272);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:273
+  if ((((n_exists(cell, var_from)) as u8) != 1) as u8) == 1 { //block_2: never
+    return 2_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:274
+  if ((n_exists(cell, var_to)) as u8) == 1 { //block_3: never
+    return 5_u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:275
+  return n_fs_result(cell, codegen_runtime::fs_move(&stores.resolve_path((var_from)), &stores.resolve_path((var_to))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:281
+fn n_mkdir(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("mkdir", "/home/jurjens/workspace/loft2/default/02_files.loft", 281);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:282
+  return n_fs_result(cell, codegen_runtime::fs_mkdir(&stores.resolve_path((var_path))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:288
+fn n_mkdir_all(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("mkdir_all", "/home/jurjens/workspace/loft2/default/02_files.loft", 288);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:289
+  return n_fs_result(cell, codegen_runtime::fs_mkdir_all(&stores.resolve_path((var_path))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:294
+fn n_is_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_is_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:299
+fn n_is_file(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_is_file")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:306
+fn n_list_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> DbRef {
+  todo!("native function n_list_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:313
+fn n_read_bytes(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> DbRef {
+  todo!("native function n_read_bytes")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:319
+fn n_write_bytes(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str, mut var_bytes: DbRef) -> u8 {
+  todo!("native function n_write_bytes")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:335
+fn n_mtime(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> i64 {
+  todo!("native function n_mtime")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:345
+fn n_store_durable_check(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_store_durable_check")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:355
+fn n_store_durable_seal(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_store_durable_seal")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:403
+fn n_store_persist_bind(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_path: &str) -> u8 {
+  todo!("native function n_store_persist_bind")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:420
+fn n_store_load(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_path: &str) -> u8 {
+  todo!("native function n_store_load")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:434
+fn n_store_load_url(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_url: &str, mut var_sha256: &str) -> u8 {
+  todo!("native function n_store_load_url")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:445
+fn n_store_load_url_trusted(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_url: &str) -> u8 {
+  todo!("native function n_store_load_url_trusted")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:457
+fn n_store_load_untrusted(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_path: &str) -> u8 {
+  todo!("native function n_store_load_untrusted")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:470
+fn n_store_verify(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef) -> u8 {
+  todo!("native function n_store_verify")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:499
+fn n_store_reclaim(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef) -> i64 {
+  todo!("native function n_store_reclaim")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:561
+fn n_store_bind_lazy(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_source: &str) -> u8 {
+  todo!("native function n_store_bind_lazy")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:584
+fn n_store_lazy_query(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_condition: &str) -> i64 {
+  todo!("native function n_store_lazy_query")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:603
+fn n_store_lazy_range(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_lo: i64, mut var_hi: i64) -> i64 {
+  todo!("native function n_store_lazy_range")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:622
+fn n_store_lazy_error(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef) -> Str {
+  todo!("native function n_store_lazy_error")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:628
+fn n_store_lazy_faults(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef) -> i64 {
+  todo!("native function n_store_lazy_faults")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:639
+fn n_store_lazy_clear(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef) -> u8 {
+  todo!("native function n_store_lazy_clear")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:662
+fn n_store_lazy_fail(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_why: &str) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:665
+fn n_store_load_key(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_key: i64) -> u8 {
+  todo!("native function n_store_load_key")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:675
+fn n_store_load_key_text(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_key: &str) -> u8 {
+  todo!("native function n_store_load_key_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:685
+fn n_store_load_keys(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_keys: DbRef) -> i64 {
+  todo!("native function n_store_load_keys")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:696
+fn n_store_load_range(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_lo: i64, mut var_hi: i64) -> i64 {
+  todo!("native function n_store_load_range")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:702
+fn t_4File_set_file_size(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_size: i64) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:703
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((4_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: never
+    return 4_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:704
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_3: never
+    return 2_u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:705
+  if ((((var_size) as i64) < ((0_i64) as i64)) as u8) == 1 { //block_4: never
+    return 5_u8
+    } /*block_4: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:706
+  if ((OpTruncateFile(cell, var_self, var_size)) as u8) == 1 { //block_5: never
+    return 1_u8
+    } /*block_5: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:707
+  return 5_u8
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:724
+fn t_4File_seek(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_pos: i64) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:725
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((4_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:726
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_3: never
+    return (false) as u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:727
+  if ((((var_pos) as i64) < ((0_i64) as i64)) as u8) == 1 { //block_4: never
+    return (false) as u8
+    } /*block_4: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:728
+  OpSeekFile(cell, var_self, var_pos);
+  {{let db = (var_self); let v = (var_pos); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (16_i64) as u32, v); }}};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:729
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:742
+fn t_4File_position(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:743
+  return {{let db = (var_self); if db.rec == 0 { i64::MIN } else { stores.store(&db).get_int(db.rec, db.pos + (16_i64) as u32)} }}
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:750
+fn t_4File_sync(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:751
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((4_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:752
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_3: never
+    return (false) as u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:753
+  return (OpSyncFile(cell, var_self)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:760
+fn t_4File_files(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_result: DbRef) -> DbRef { //block_1: vector<ref(File)>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  if var_result.rec != 0 { vector::clear_vector(&var_result, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:761
+  if var_result.rec != 0 { vector::clear_vector(&var_result, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:762
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((4_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: void
+    {stores.get_dir((&*({{let db = (var_self); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (24_i64) as u32)) } }})), &(var_result))};
+    } /*block_2: void*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:763
+  return var_result
+  } /*block_1: vector<ref(File)>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:768
+fn n_write_text_raw(cell: &std::cell::UnsafeCell<Stores>, mut var_file: DbRef, mut var_v: &str) -> u8 {
+  todo!("native function n_write_text_raw")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:776
+fn t_4File_write(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_v: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:777
+  return if (({{ let __wf_v = (var_v); stores.write_file(&(var_self), __wf_v) }}) as u8) == 1 { //block_2: FileResult
+    1_u8
+    } /*block_2: FileResult*/ else { //block_3: FileResult
+    5_u8
+    } /*block_3: FileResult*/
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:784
+fn n_env_variables(cell: &std::cell::UnsafeCell<Stores>) -> DbRef {
+  todo!("native function n_env_variables")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:789
+fn n_env_variable(cell: &std::cell::UnsafeCell<Stores>, mut var_name: &str) -> Str {
+  todo!("native function n_env_variable")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:803
+fn n_c_library_available(cell: &std::cell::UnsafeCell<Stores>, mut var_soname: &str) -> u8 {
+  todo!("native function n_c_library_available")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:808
+fn n_os_temp_dir(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_os_temp_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:815
+fn n_temp_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_d: &mut String) -> Str { //block_1: optional(text(deps { items: [0] }))
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("temp_dir", "/home/jurjens/workspace/loft2/default/02_files.loft", 815);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:816
+  *var_d = (Stores::os_temp_dir_native()).to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:817
+  if ((ops::op_eq_text((&*var_d), (""))) as u8) == 1 { //block_2: never
+    return Str::new(loft::state::STRING_NULL)
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:818
+  return Str::new(&*var_d)
+  } /*block_1: optional(text(deps { items: [0] }))*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:821
+fn n_os_cache_dir(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_os_cache_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:827
+fn n_cache_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_d: &mut String) -> Str { //block_1: optional(text(deps { items: [0] }))
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("cache_dir", "/home/jurjens/workspace/loft2/default/02_files.loft", 827);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:828
+  *var_d = (Stores::os_cache_dir_native()).to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:829
+  if ((ops::op_eq_text((&*var_d), (""))) as u8) == 1 { //block_2: never
+    return Str::new(loft::state::STRING_NULL)
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:830
+  return Str::new(&*var_d)
+  } /*block_1: optional(text(deps { items: [0] }))*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:839
+fn n_host_input(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_host_input")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:849
+fn n_host_output(cell: &std::cell::UnsafeCell<Stores>, mut var_msg: &str) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:869
+fn n_store_memory(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_store_memory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:935
+fn t_4text_starts_with(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> u8 {
+  todo!("native function t_4text_starts_with")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:939
+fn t_4text_ends_with(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> u8 {
+  todo!("native function t_4text_ends_with")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:948
+fn t_4text_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> String { //block_1: text["self"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:949
+  let mut var_n: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:950
+  let mut var_i: i64 = var_n;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:951
+  'l2: loop { //while_2
+    if ((((((0_i64) as i64) < ((var_i) as i64)) as u8) != 1) as u8) == 1 { //break_3: void
+      break;
+      } /*break_3: void*/ else {()};
+    { //block_4: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:952
+      if (((({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((var_self), (ops::op_min_int((var_i), (1_i64))))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_5: never
+        return (OpGetTextSub(var_self, 0_i64, ops::op_min_int((var_i), (1_i64)))).to_string()
+        } /*block_5: never*/ else {()};
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:953
+      var_i = ops::op_min_int((var_i), (1_i64));
+      } /*block_4: void*/;
+    } /*while_2*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:955
+  return ("").to_string()
+  } /*block_1: text["self"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:963
+fn t_4text_basename(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> String { //block_1: text["self"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:964
+  let mut var_n: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:965
+  let mut var_i: i64 = var_n;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:966
+  'l2: loop { //while_2
+    if ((((((0_i64) as i64) < ((var_i) as i64)) as u8) != 1) as u8) == 1 { //break_3: void
+      break;
+      } /*break_3: void*/ else {()};
+    { //block_4: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:967
+      if (((({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((var_self), (ops::op_min_int((var_i), (1_i64))))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_5: never
+        return (OpGetTextSub(var_self, var_i, var_n)).to_string()
+        } /*block_5: never*/ else {()};
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:968
+      var_i = ops::op_min_int((var_i), (1_i64));
+      } /*block_4: void*/;
+    } /*while_2*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:970
+  return (var_self).to_string()
+  } /*block_1: text["self"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:978
+fn t_4text_join(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_other: &str, mut var___work_1: &mut String, mut var___work_2: &mut String) -> Str { //block_1: text["__work_1", "__work_2", "other"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_2 = ("").to_string();
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:979
+  if (((var_other).starts_with(("/"))) as u8) == 1 { //block_2: never
+    return Str::new(var_other)
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:980
+  if ((ops::op_eq_text((var_self), (""))) as u8) == 1 { //block_3: never
+    return Str::new(var_other)
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:981
+  if (((var_self).ends_with(("/"))) as u8) == 1 { //block_4: never
+    return Str::new({ { //Formatted string_5: text["__work_1"]
+      *var___work_1 = ("").to_string();
+      ops::format_text(&mut var___work_1, var_self, 0_i64, 2, 32);
+      ops::format_text(&mut var___work_1, var_other, 0_i64, 2, 32);
+      &*var___work_1
+      } /*Formatted string_5: text["__work_1"]*/ })
+    } /*block_4: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:982
+  return Str::new({ { //Formatted string_6: text["__work_2"]
+    *var___work_2 = ("").to_string();
+    ops::format_text(&mut var___work_2, var_self, 0_i64, 2, 32);
+    *var___work_2 += &*("/");
+    ops::format_text(&mut var___work_2, var_other, 0_i64, 2, 32);
+    &*var___work_2
+    } /*Formatted string_6: text["__work_2"]*/ })
+  } /*block_1: text["__work_1", "__work_2", "other"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:992
+fn t_4text_resolve(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_target: &str, mut var_t: &mut String, mut var___work_4: &mut String, mut var___work_2: &mut String) -> Str { //block_1: text["base", "t"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___work_p2_2: String = "".to_string();
+  let mut var___work_p2_1: String = "".to_string();
+  *var___work_2 = ("").to_string();
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:993
+  let mut var_base: String = var_self.to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:994
+  *var_t = (var_target).to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:996
+  'l2: loop { //while_2
+    if (({((if ((if ((((2_i64) as i64) <= ((t_4text_size(cell, &*var_t)) as i64)) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (0_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (46_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (1_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) != 1}) as u8) == 1 { //break_3: void
+      break;
+      } /*break_3: void*/ else {()};
+    { //block_4: void
+      var___work_p2_1.clear();
+      var___work_p2_1 += &*(OpGetTextSub(&*var_t, 2_i64, t_4text_size(cell, &*var_t)));
+      *var_t = (&var___work_p2_1).to_string();
+      } /*block_4: void*/;
+    } /*while_2*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:998
+  'l5: loop { //while_5
+    if (({((if ((if ((if ((((3_i64) as i64) <= ((t_4text_size(cell, &*var_t)) as i64)) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (0_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (46_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (1_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (46_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (2_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) != 1}) as u8) == 1 { //break_6: void
+      break;
+      } /*break_6: void*/ else {()};
+    { //block_7: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:999
+      let mut var_bn: i64 = t_4text_size(cell, &var_base);
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1000
+      let mut var_cut: i64 = var_bn;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1001
+      let mut var_walked: u8 = (false) as u8;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1002
+      'l8: loop { //while_8
+        if ((((((0_i64) as i64) < ((var_cut) as i64)) as u8) != 1) as u8) == 1 { //break_9: void
+          break;
+          } /*break_9: void*/ else {()};
+        { //block_10: void
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1003
+          if (((({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&var_base), (ops::op_min_int((var_cut), (1_i64))))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_11: never
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1004
+            var_cut = ops::op_min_int((var_cut), (1_i64));
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1005
+            var_walked = (true) as u8;
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1006
+            break
+            } /*block_11: never*/ else {()};
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1008
+          var_cut = ops::op_min_int((var_cut), (1_i64));
+          } /*block_10: void*/;
+        } /*while_8*/;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1010
+      if ((var_walked) as u8) == 1 { //block_12: void
+        var___work_1.clear();
+        var___work_1 += &*(OpGetTextSub(&var_base, 0_i64, var_cut));
+        var_base = var___work_1.clone();
+        } /*block_12: void*/ else { //block_13: void
+        var_base = "".to_string();
+        } /*block_13: void*/;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1011
+      var___work_p2_2.clear();
+      var___work_p2_2 += &*(OpGetTextSub(&*var_t, 3_i64, t_4text_size(cell, &*var_t)));
+      *var_t = (&var___work_p2_2).to_string();
+      } /*block_7: void*/;
+    } /*while_5*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1013
+  if ((ops::op_eq_text((&var_base), (""))) as u8) == 1 { //block_14: never
+    ;
+    ;
+    ;
+    ;
+    return Str::new(&*var_t)
+    } /*block_14: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:1014
+  { //Formatted string_15: text["__work_2"]
+    *var___work_2 = ("").to_string();
+    ops::format_text(&mut var___work_2, &var_base, 0_i64, 2, 32);
+    *var___work_2 += &*("/");
+    ops::format_text(&mut var___work_2, &*var_t, 0_i64, 2, 32);
+    ;
+    ;
+    ;
+    ;
+    return Str::new(&*var___work_2)
+    } /*Formatted string_15: text["__work_2"]*/
+  } /*block_1: text["base", "t"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:19
+fn t_4text_starts_with_at(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_pos: i64, mut var_prefix: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:20
+  let mut var_pl: i64 = t_4text_size(cell, var_prefix);
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:21
+  let mut var_sl: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:22
+  if ((((var_pos) as i64) < ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:23
+  if ((((var_sl) as i64) < ((ops::op_add_int((var_pos), (var_pl))) as i64)) as u8) == 1 { //block_3: never
+    return (false) as u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:24
+  return (ops::op_eq_text((&*(OpGetTextSub(var_self, var_pos, ops::op_add_int((var_pos), (var_pl))))), (var_prefix))) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:31
+fn t_4text_trim(cell: &std::cell::UnsafeCell<Stores>, mut var_both: &str) -> Str {
+  todo!("native function t_4text_trim")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:35
+fn t_4text_trim_start(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_trim_start")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:39
+fn t_4text_trim_end(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_trim_end")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:45
+fn t_4text_find(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> i64 {
+  todo!("native function t_4text_find")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:51
+fn t_4text_rfind(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> i64 {
+  todo!("native function t_4text_rfind")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:59
+fn t_4text_contains(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:60
+  return (((if let Some(v) = (var_self).find((var_value)) { v as i64 } else { i64::MIN }) as i64) != ((i64::MIN) as i64)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:64
+fn t_4text_replace(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str, mut var_with: &str) -> Str {
+  todo!("native function t_4text_replace")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:68
+fn t_4text_to_lowercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_to_lowercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:72
+fn t_4text_to_uppercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_to_uppercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:76
+fn t_4text_is_lowercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:77
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:78
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:79
+        if (((((ops::to_char(var_c)).is_lowercase()) as u8) != 1) as u8) == 1 { //block_9: never
+          return (false) as u8
+          } /*block_9: never*/ else {()};
+        } /*block_8: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:81
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:85
+fn t_9character_is_lowercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_lowercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:90
+fn t_4text_is_uppercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:91
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:92
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:93
+        if (((((ops::to_char(var_c)).is_uppercase()) as u8) != 1) as u8) == 1 { //block_9: never
+          return (false) as u8
+          } /*block_9: never*/ else {()};
+        } /*block_8: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:95
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:99
+fn t_9character_is_uppercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_uppercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:104
+fn t_4text_is_numeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:105
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:106
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:107
+        if (((((ops::to_char(var_c)).is_numeric()) as u8) != 1) as u8) == 1 { //block_9: never
+          return (false) as u8
+          } /*block_9: never*/ else {()};
+        } /*block_8: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:109
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:113
+fn t_9character_is_numeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_numeric")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:118
+fn t_4text_is_alphanumeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:119
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:120
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:121
+        if (((((ops::to_char(var_c)).is_alphanumeric()) as u8) != 1) as u8) == 1 { //block_9: never
+          return (false) as u8
+          } /*block_9: never*/ else {()};
+        } /*block_8: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:123
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:127
+fn t_9character_is_alphanumeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_alphanumeric")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:132
+fn t_4text_is_alphabetic(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:133
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:134
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:135
+        if (((((ops::to_char(var_c)).is_alphabetic()) as u8) != 1) as u8) == 1 { //block_9: never
+          return (false) as u8
+          } /*block_9: never*/ else {()};
+        } /*block_8: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:137
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:141
+fn t_9character_is_alphabetic(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_alphabetic")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:146
+fn t_4text_is_whitespace(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:147
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:148
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:149
+        if (((((ops::to_char(var_c)).is_whitespace()) as u8) != 1) as u8) == 1 { //block_9: never
+          return (false) as u8
+          } /*block_9: never*/ else {()};
+        } /*block_8: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:151
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:155
+fn t_9character_is_whitespace(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_whitespace")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:160
+fn t_4text_is_control(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:161
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:162
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        if ((((var_c__next) as i64) <= ((var_c__index) as i64)) as u8) == 1 {var_c__next = ops::op_add_int((var_c__index), (1_i64))} else {()};
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if (((((var_self) != loft::state::STRING_NULL) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      if (((((var_self).len() as i64) as i64) <= ((var_c__index) as i64)) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:163
+        if (((((ops::to_char(var_c)).is_control()) as u8) != 1) as u8) == 1 { //block_9: never
+          return (false) as u8
+          } /*block_9: never*/ else {()};
+        } /*block_8: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:165
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:169
+fn t_9character_is_control(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_control")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:175
+fn t_6vector_join(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_sep: &str, mut var_result: &mut String) -> Str { //block_1: text["result"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:176
+  *var_result = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:177
+  { //For block_2: void
+    let mut var_p__count: i64 = 0_i64;
+    let mut var__vector_1: DbRef = var_self;
+    let mut var_p__index: i64 = -1_i64;
+    'l3: loop { //For loop_3
+      let mut var_p = { //iter next_4: text
+        var_p__index = ops::op_add_int((var_p__index), (1_i64));
+        let _pre_3 = vector::get_vector(&(var__vector_1), (4_i64) as u32, (var_p__index), &stores.allocations);
+        {{let db = (_pre_3); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (0_i64) as u32)) } }}
+        } /*iter next_4: text*/.to_string();
+      if ((((i64::from(vector::length_vector(&(var__vector_1), &stores.allocations))) as i64) <= ((var_p__index) as i64)) as u8) == 1 { //break_5: void
+        ;
+        break;
+        } /*break_5: void*/ else {()};
+      if ((((var_p__index) as i64) < ((0_i64) as i64)) as u8) == 1 { //break_6: void
+        ;
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:178
+        if ((((((var_p__count) as i64) == ((0_i64) as i64)) as u8) != 1) as u8) == 1 { //block_8: void
+          *var_result += &*(var_sep);
+          } /*block_8: void*/ else {()};
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:179
+        *var_result += &*(&var_p);
+        } /*block_7: void*/;
+      var_p__count = ops::op_add_int((var_p__count), (1_i64));
+      ;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:181
+  return Str::new(&*var_result)
+  } /*block_1: text["result"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:189
+fn n_arguments(cell: &std::cell::UnsafeCell<Stores>) -> DbRef {
+  todo!("native function n_arguments")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:210
+fn t_4text_byte_at(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_i: i64) -> i64 {
+  todo!("native function t_4text_byte_at")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:218
+fn n_text_from_bytes(cell: &std::cell::UnsafeCell<Stores>, mut var_bytes: DbRef) -> Str {
+  todo!("native function n_text_from_bytes")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:233
+fn n_chr(cell: &std::cell::UnsafeCell<Stores>, mut var_cp: i64, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("chr", "/home/jurjens/workspace/loft2/default/03_text.loft", 233);
+  let _call_guard = codegen_runtime::CallGuard;
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:234
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    {let c = ({ let _v_v1 = (var_cp); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32; if c != 0 { var___work_1.push(ops::to_char(c)); } };
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:241
+fn n_ymd_days_ago(cell: &std::cell::UnsafeCell<Stores>, mut var_days: i64) -> Str {
+  todo!("native function n_ymd_days_ago")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:246
+fn n_directory(cell: &std::cell::UnsafeCell<Stores>, mut var_v: &mut String) -> Str {
+  todo!("native function n_directory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:251
+fn n_user_directory(cell: &std::cell::UnsafeCell<Stores>, mut var_v: &mut String) -> Str {
+  todo!("native function n_user_directory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:256
+fn n_program_directory(cell: &std::cell::UnsafeCell<Stores>, mut var_v: &mut String) -> Str {
+  todo!("native function n_program_directory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:261
+fn n_source_dir(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_source_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/05_coroutine.loft:17
+fn n_exhausted(cell: &std::cell::UnsafeCell<Stores>, mut var_gen: DbRef) -> u8 { //block_1: boolean
+  if loft::live_dispatch::live_flipped(1) { return loft::live_dispatch::live_call_u8(cell, 1, |st| { st.put_stack(var_gen); }); }
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("exhausted", "/home/jurjens/workspace/loft2/default/05_coroutine.loft", 17);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/05_coroutine.loft:18
+  return (loft::codegen_runtime::coroutine_is_exhausted(var_gen)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/06_json.loft:67
+fn n_json_errors(cell: &std::cell::UnsafeCell<Stores>) -> String {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  loft::codegen_runtime::i_json_errors(stores)
+}
+
+
+// loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:24
+fn n_lazy_fetch(cell: &std::cell::UnsafeCell<Stores>, mut var_coll: DbRef, mut var_source: &str, mut var_key_int: i64, mut var_key_text: &str) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("lazy_fetch", "/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft", 24);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:25
+  if ((((100_i64) as i64) < ((var_key_int) as i64)) as u8) == 1 { //block_2: never
+    let mut var___ret_1: i64 = 0_i64;
+    ;
+    return var___ret_1
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:26
+  let mut var__elm_1: DbRef = OpNewRecord(cell, var_coll, 80_i32, 65535_i32);
+  {{let db = (var__elm_1); let v = (var_key_int); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v); }}};
+  let _pre_3 = &*({ //Formatted string_3: text["__work_1"]
+    var___work_1 = { let mut _s = String::with_capacity(31_usize); _s.push_str("person-"); _s };
+    ops::format_long_with_tag(&mut var___work_1, var_key_int, stores.take_format_fault(), 10 as u8, 0_i64, 32 as u8, false, false, 2 as i8);
+    var___work_1 += &*("-");
+    ops::format_text(&mut var___work_1, var_source, 0_i64, 2, 32);
+    &var___work_1
+    } /*Formatted string_3: text["__work_1"]*/);
+  {{let db = (var__elm_1); let s_val = (_pre_3).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (8_i64) as u32, s_pos); }}};
+  OpFinishRecord(cell, var_coll, var__elm_1, 80_i32, 65535_i32);
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:27
+  let mut var___ret_2: i64 = 1_i64;
+  ;
+  return var___ret_2
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:32
+fn n_lazy_fetch_orders(cell: &std::cell::UnsafeCell<Stores>, mut var_coll: DbRef, mut var_source: &str, mut var_key_int: i64, mut var_key_text: &str) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("lazy_fetch_orders", "/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft", 32);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:33
+  if ((((100_i64) as i64) < ((var_key_int) as i64)) as u8) == 1 { //block_2: never
+    let mut var___ret_1: i64 = 0_i64;
+    ;
+    return var___ret_1
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:34
+  let mut var__elm_1: DbRef = OpNewRecord(cell, var_coll, 81_i32, 65535_i32);
+  {{let db = (var__elm_1); let v = (var_key_int); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v); }}};
+  let _pre_4 = &*({ //Formatted string_3: text["__work_1"]
+    var___work_1 = "order-".to_string();
+    ops::format_long_with_tag(&mut var___work_1, var_key_int, stores.take_format_fault(), 10 as u8, 0_i64, 32 as u8, false, false, 2 as i8);
+    &var___work_1
+    } /*Formatted string_3: text["__work_1"]*/);
+  {{let db = (var__elm_1); let s_val = (_pre_4).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (8_i64) as u32, s_pos); }}};
+  OpFinishRecord(cell, var_coll, var__elm_1, 81_i32, 65535_i32);
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:35
+  let mut var___ret_2: i64 = 1_i64;
+  ;
+  return var___ret_2
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:38
+fn n_main(cell: &std::cell::UnsafeCell<Stores>) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("main", "/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft", 38);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_4: String = "".to_string();
+  let mut var___work_3: String = "".to_string();
+  let mut var___work_2: String = "".to_string();
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:39
+  let mut var_w: DbRef = DbRef::NULL;
+  var_w = OpDatabase(cell,var_w, 79_i32);
+  {{ let _v_val = (0_i64); {let db = (var_w); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v); }} }};
+  {{ let _v_val = (0_i64); {let db = (var_w); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (4_i64) as u32, v); }} }};
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:40
+  {{ let r = ({{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }}); r.rec != 0 && stores.bind_lazy(&r, ("postgres://db/people")) }};
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:41
+  {{ let r = ({{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (4_i64) as u32} }}); r.rec != 0 && stores.bind_lazy(&r, ("duckdb:orders.db")) }};
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:43
+  let mut var_p: DbRef = OpGetRecord(cell,{{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }}, 80_i32, &[Content::Long(7_i64 as i64)]);
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:44
+  let _pre_5 = &*({ //Formatted string_2: text["__work_1"]
+    var___work_1 = "person ".to_string();
+    let _pre_6 = &*({ //ncc_3: text["p"]
+      let mut var___ncc_1: String = {{let db = (var_p); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (8_i64) as u32)) } }}.to_string();
+      let _ret = if (((&var___ncc_1) != loft::state::STRING_NULL) as u8) == 1 {&*(&var___ncc_1)} else {&*("<none>")};
+      _ret.to_string()
+      } /*ncc_3: text["p"]*/);
+    ops::format_text(&mut var___work_1, &*(_pre_6), 0_i64, 2, 32);
+    ;
+    &var___work_1
+    } /*Formatted string_2: text["__work_1"]*/);
+  n_println(cell, &*(_pre_5));
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:45
+  let mut var_o: DbRef = OpGetRecord(cell,{{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (4_i64) as u32} }}, 81_i32, &[Content::Long(9_i64 as i64)]);
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:46
+  let _pre_7 = &*({ //Formatted string_4: text["__work_2"]
+    var___work_2 = "order ".to_string();
+    let _pre_8 = &*({ //ncc_5: text["o"]
+      let mut var___ncc_2: String = {{let db = (var_o); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (8_i64) as u32)) } }}.to_string();
+      let _ret = if (((&var___ncc_2) != loft::state::STRING_NULL) as u8) == 1 {&*(&var___ncc_2)} else {&*("<none>")};
+      _ret.to_string()
+      } /*ncc_5: text["o"]*/);
+    ops::format_text(&mut var___work_2, &*(_pre_8), 0_i64, 2, 32);
+    ;
+    &var___work_2
+    } /*Formatted string_4: text["__work_2"]*/);
+  n_println(cell, &*(_pre_7));
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:49
+  let mut var_p2: DbRef = OpGetRecord(cell,{{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }}, 80_i32, &[Content::Long(7_i64 as i64)]);
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:50
+  let _pre_9 = &*({ //Formatted string_6: text["__work_3"]
+    var___work_3 = "again ".to_string();
+    let _pre_10 = &*({ //ncc_7: text["p2"]
+      let mut var___ncc_3: String = {{let db = (var_p2); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (8_i64) as u32)) } }}.to_string();
+      let _ret = if (((&var___ncc_3) != loft::state::STRING_NULL) as u8) == 1 {&*(&var___ncc_3)} else {&*("<none>")};
+      _ret.to_string()
+      } /*ncc_7: text["p2"]*/);
+    ops::format_text(&mut var___work_3, &*(_pre_10), 0_i64, 2, 32);
+    ;
+    &var___work_3
+    } /*Formatted string_6: text["__work_3"]*/);
+  n_println(cell, &*(_pre_9));
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:53
+  let mut var_gone: DbRef = OpGetRecord(cell,{{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (4_i64) as u32} }}, 81_i32, &[Content::Long(999_i64 as i64)]);
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft:54
+  let _pre_11 = &*({ //Formatted string_8: text["__work_4"]
+    var___work_4 = "absent ".to_string();
+    let _pre_12 = &*({ //ncc_9: text["gone"]
+      let mut var___ncc_4: String = {{let db = (var_gone); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (8_i64) as u32)) } }}.to_string();
+      let _ret = if (((&var___ncc_4) != loft::state::STRING_NULL) as u8) == 1 {&*(&var___ncc_4)} else {&*("<none>")};
+      _ret.to_string()
+      } /*ncc_9: text["gone"]*/);
+    ops::format_text(&mut var___work_4, &*(_pre_12), 0_i64, 2, 32);
+    ;
+    var___work_4 += &*(" err=");
+    let _pre_13 = &*({ //ncc_10: text
+      let mut var___ncc_5: String = {stores.lazy_error(&(({{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (4_i64) as u32} }})))}.to_string();
+      let _ret = if (((&var___ncc_5) != loft::state::STRING_NULL) as u8) == 1 {&*(&var___ncc_5)} else {&*("-")};
+      _ret.to_string()
+      } /*ncc_10: text*/);
+    ops::format_text(&mut var___work_4, &*(_pre_13), 0_i64, 2, 32);
+    ;
+    &var___work_4
+    } /*Formatted string_8: text["__work_4"]*/);
+  n_println(cell, &*(_pre_11));
+  OpFreeRef(cell,var_w, "var_w"); var_w.store_nr = u16::MAX;
+  ;
+  ;
+  ;
+  ;
+  } /*block_1: void*/
+
+const LOFT_PROGRAM_RELATIVE: bool = true;
+static LOFT_MAIN_FILE: &str = "/home/jurjens/workspace/loft2/doc/claude/plans/133-sql-one-boundary/bytecode-comparisons/two-drivers-corpus.loft";
+static LOFT_LIVE_FNS: &[&str] = &["n_sum_of", "n_exhausted", ];
+static LOFT_SRC: Option<&str> = None;
+
+fn main() {
+    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());
+    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);
+    let __run = || {
+    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));
+    { let stores: &mut Stores = unsafe { &mut *cell.get() }; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var("LOFT_PATHS") { stores.program_relative = m.eq_ignore_ascii_case("program"); } }
+    { let stores: &mut Stores = unsafe { &mut *cell.get() }; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var("LOFT_LOG_CONF").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }
+    if !loft::live_dispatch::live_enabled() { init(&cell); }
+    n_main(&cell);
+    { let stores: &Stores = unsafe { &*cell.get() }; if stores.had_fatal { std::process::exit(1); } }
+    if !loft::live_dispatch::live_enabled() {
+    if std::env::var("LOFT_NATIVE_LEAK_CHECK").is_ok() {
+        let stores: &Stores = unsafe { &*cell.get() };
+        let leaks = stores.collect_store_leaks();
+        if !leaks.is_empty() {
+            let count = leaks.len();
+            let preview = if count <= 5 { leaks.join(", ") } else { format!("{} ... and {} more", leaks[..5].join(", "), count - 5) };
+            eprintln!("Warning: {count} stores not freed at program exit: {preview}");
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var("LOFT_STRICT_STORES").is_ok() {
+        let stores: &Stores = unsafe { &*cell.get() };
+        let leaks = stores.collect_store_leaks();
+        if !leaks.is_empty() {
+            eprintln!("[strict-store] NEVER FREED: {} stores not freed at program exit: {}", leaks.len(), leaks.join(", "));
+            loft::keys::strict_store_leaks(leaks.len());
+        }
+        let n = loft::keys::strict_store_violations();
+        if n > 0 {
+            eprintln!("[strict-store] FAILED: {n} store-lifetime violation(s)");
+            std::process::exit(1);
+        }
+    }
+    }
+    #[cfg(not(target_arch = "wasm32"))] if std::env::var("LOFT_STORES").as_deref() == Ok("timeline") { let stores: &Stores = unsafe { &*cell.get() }; loft::database::timeline_summary(stores.collect_store_leaks().len()); }
+    };
+    // @PLN98 — the large-stack thread (@PLN28) is a NATIVE affordance;
+    // wasm32 (wasip2 / browser) has no thread support, and Android must run
+    // on its `android_main` thread (the ALooper owner — a spawned thread
+    // would panic in the graphics event pump), so both run `__run` inline.
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect("failed to spawn main-stack thread").join().expect("main thread panicked");
+    #[cfg(any(target_arch = "wasm32", target_os = "android"))]
+    __run();
+}
+
+=== slots ===
+fn n_lazy_fetch:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  coll                 hash(699)      0      [0, 12)      -
+  1    arg  source               text           0      [16, 40)     -
+  2    arg  key_int              int            0      [32, 40)     -
+  3    arg  key_text             text           0      [40, 64)     -
+  4         _elm_1               ref(699)       1      [96, 108)    [10, 45]
+  5         __work_1             text           1      [64, 88)     [0, 51]
+  6         __ret_1              int            2      [88, 96)     [7, 9]
+  7         __ret_2              int            1      [88, 96)     [50, 52]
+
+
+fn n_lazy_fetch_orders:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  coll                 hash(700)      0      [0, 12)      -
+  1    arg  source               text           0      [16, 40)     -
+  2    arg  key_int              int            0      [32, 40)     -
+  3    arg  key_text             text           0      [40, 64)     -
+  4         _elm_1               ref(700)       1      [96, 108)    [10, 36]
+  5         __work_1             text           1      [64, 88)     [0, 42]
+  6         __ret_1              int            2      [88, 96)     [7, 9]
+  7         __ret_2              int            1      [88, 96)     [41, 43]
+
+
+fn n_main:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0         w                    ref(701)       1      [104, 116)   [12, 173]
+  1         p                    ref(699)       1      [116, 128)   [37, 51]
+  2         __work_1             text           1      [80, 104)    [9, 174]
+  3         __ncc_1              text           3      [128, 152)   [50, 63]
+  4         o                    ref(700)       1      [116, 128)   [66, 80]
+  5         __work_2             text           1      [56, 80)     [6, 175]
+  6         __ncc_2              text           5      [128, 152)   [79, 92]
+  7         p2                   ref(699)       1      [116, 128)   [95, 109]
+  8         __work_3             text           1      [32, 56)     [3, 176]
+  9         __ncc_3              text           7      [128, 152)   [108, 121]
+  10        gone                 ref(700)       1      [116, 128)   [124, 138]
+  11        __work_4             text           1      [8, 32)      [0, 177]
+  12        __ncc_4              text           9      [128, 152)   [137, 150]
+  13        __ncc_5              text           10     [128, 152)   [155, 170]
+
+
+
+=== types ===
+fn n_lazy_fetch -> integer:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  coll                     hash<TdcPerson,["id"]>
+  1    arg  source                   text
+  2    arg  key_int                  integer
+  3    arg  key_text                 text
+  4         _elm_1                   ref(TdcPerson)["coll"]
+  5         __work_1                 text
+  6         __ret_1                  integer
+  7         __ret_2                  integer
+
+fn n_lazy_fetch_orders -> integer:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  coll                     hash<TdcOrder,["id"]>
+  1    arg  source                   text
+  2    arg  key_int                  integer
+  3    arg  key_text                 text
+  4         _elm_1                   ref(TdcOrder)["coll"]
+  5         __work_1                 text
+  6         __ret_1                  integer
+  7         __ret_2                  integer
+
+fn n_main -> void:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0         w                        ref(TdcWorld)
+  1         p                        ref(TdcPerson)["w"]
+  2         __work_1                 text
+  3         __ncc_1                  text["p"]
+  4         o                        ref(TdcOrder)["w"]
+  5         __work_2                 text
+  6         __ncc_2                  text["o"]
+  7         p2                       ref(TdcPerson)["w"]
+  8         __work_3                 text
+  9         __ncc_3                  text["p2"]
+  10        gone                     ref(TdcOrder)["w"]
+  11        __work_4                 text
+  12        __ncc_4                  text["gone"]
+  13        __ncc_5                  text
+

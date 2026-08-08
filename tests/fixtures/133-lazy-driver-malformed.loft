@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S9 — a function claiming THE driver name, with the wrong shape.
+//
+// `lazy_fetch` exactly is the documented driver name, so a function called that
+// is claiming to be one: a wrong shape is a mistake worth naming rather than a
+// function to walk past. That is the opposite rule from `lazy_fetch_<anything>`,
+// where the suffix is free and a helper plausibly lives — membership there needs
+// a keyed collection as the first parameter, which the dispatch matrix covers.
+//
+// The refusal must say what is wrong with THIS function rather than "there is no
+// driver", because the difference is what a reader has to act on.
+
+struct LdmThing { id: integer, nm: text }
+struct LdmWorld { things: hash<LdmThing[id]> = [] }
+
+// The collection is there, and everything after it is wrong.
+fn lazy_fetch(coll: hash<LdmThing[id]>, source: text, key: integer) -> integer {
+  coll += [LdmThing { id: key, nm: "never" }];
+  return 1;
+}
+
+fn main() {
+  w = LdmWorld { };
+  store_bind_lazy(w.things, "postgres://db/things");
+  r = w.things[1];
+  println("value {r.nm ?? "<none>"}");
+  println("why {store_lazy_error(w.things) ?? "<no error>"}");
+  println("malformed ok");
+}

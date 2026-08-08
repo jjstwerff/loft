@@ -1332,6 +1332,19 @@ Soundness: the mixed interp+native boundary is parity-checked (`tests/n3_parity.
 interp≡mixed≡native) and arms the Goal-E store guard; the one open soundness leg
 (ASan on the cdylib) is tracked in the sanitizer plan, not here.
 
+**macOS `dlopen`-cache trap (loft#777).** macOS dyld caches a loaded image BY PATH
+for the process lifetime, and its `dlclose` is a no-op — so a second `dlopen` of the
+same path returns the FIRST image even after the file was rebuilt underneath it.
+`cached_or_build_shared_cdylib` therefore must never `dlopen` an auto-native artifact
+for INSPECTION when a rebuild-and-load will follow at the same path: the settling run
+would execute the stale pre-edit copy while writing the fresh one for next time (a
+`base` edit reaching the interpret run but not the native run — dependent kept serving
+its inlined pre-edit copy). The layout-adoption probe (`artifact_matches_layout`, which
+opens the artifact to read its `LAYOUT_FP_SYMBOL`) runs ONLY on the fresh fast path,
+where the same file is then loaded — never on the stale path that rebuilds. Linux keys
+`dlopen` on (dev,inode) and loads the new file, so only macOS was affected; the guard
+is `tests/n3_parity.rs::a_dependency_edit_invalidates_its_dependents_cdylib`.
+
 ### Open completeness items
 
 All are *enhancements* on a complete, graceful core: a construct the dispatch can't

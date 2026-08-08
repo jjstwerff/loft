@@ -1918,6 +1918,374 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
     Ok(())
 }
 
+/// @PLN133 S7 — one connection string, and the registry that turns it into a
+/// connection every consumer can use.
+///
+/// `SqlDb` is satisfied by four unrelated types and loft interfaces are STATIC
+/// dispatch, so no function can return "one of them". The registry is a
+/// struct-enum that satisfies the interface itself — and the strongest claim in
+/// the fixture is one nothing asserts: `uniform` there is generic over `SqlDb`
+/// and is handed an `AnyDb`. If the enum did not satisfy the interface the
+/// program would not compile, which is the entire question S7 had to answer.
+///
+/// **Unconditional**, like the pure schema gate beside it: this half opens no
+/// library, so it cannot skip into a green that asserted nothing. The cells that
+/// need a database live in the live gate below.
+#[test]
+fn one_connection_string_reaches_its_driver_and_a_refusal_behaves_like_one() -> std::io::Result<()>
+{
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        // The registry holds no `#c` itself, but it names all four backends in
+        // one type, so their shims are compiled with it.
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("registry_pure.loft");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success() && stdout.contains("registry ok"),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !stdout.contains("not freed"),
+            "{backend}: a refused connection must leave nothing behind:\n{stdout}"
+        );
+    }
+    Ok(())
+}
+
+/// @PLN133 S7 — the schema round trip, over a connection ONE STRING opened.
+///
+/// The pure gate above proves a string reaches its driver. This proves the
+/// connection it produced is a connection: `introspect` — generic over `SqlDb`
+/// and written before the registry existed — takes the enum unchanged, a cursor
+/// walks rows through it, and a transaction lands on the same connection the
+/// insert did.
+///
+/// **The cursor cell is the one that could quietly fail.** A variant holds a
+/// COPY of the backend struct, so the handle `db_select` writes and `db_next`
+/// reads has to live INSIDE the enum. A copy that came apart reads as an empty
+/// result set — which looks exactly like an empty table.
+#[test]
+fn a_connection_the_registry_opened_is_a_connection() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("registry_live.loft");
+
+    // Each token is a separate claim, and they fail in different directions:
+    //
+    //   connected backend=sqlite quote="   the STRING chose the driver, and the
+    //           dialect came with it rather than being asked for separately.
+    //   round trip cols=4 ix=1 bound=true   `derive` → `render` → `introspect` →
+    //           `reconcile`, all over the enum. @PLN129 refuses a bind whose
+    //           lookup no index serves, so `ix=1` is what makes the table usable.
+    //   cursor names=ada grace alan   bound INSERTs and a walked cursor, so the
+    //           mutation reached inside the variant. An enum holding a stale copy
+    //           answers "" here, which is what an empty table also answers.
+    //   float naive=false dialect=true   sqlite renders a REAL as %!.15g, so the
+    //           portable `SELECT score` loses the low bits of a full-mantissa
+    //           double. The PAIR is the claim: `dialect=true` alone could mean the
+    //           naive read was fine too, `naive=false` alone that the write failed.
+    //   tx … rows=3/4   rollback discarded, commit kept. A db_begin that quietly
+    //           did nothing answers 4/4 and one that discarded everything 3/3.
+    let expect = [
+        "connected backend=sqlite quote=\"",
+        "round trip cols=4 ix=1 bound=true",
+        "cursor names=ada grace alan",
+        "float naive=false dialect=true",
+        "tx begin=true/true rollback=true commit=true rows=3/4",
+        "registry_live ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            assert!(
+                stdout.contains("not installed"),
+                "an absent library must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one registry"),
+        }
+    }
+    Ok(())
+}
+
+/// @PLN133 S9 — the same lazy read, down core's Rust source and down a LOFT
+/// driver, over one database.
+///
+/// Core drives sqlite in Rust (`sql_source.rs` + `sql_query.rs`, 913 lines) and
+/// the loft library drives four backends behind one `SqlDb` interface. S10
+/// deletes the Rust; this is the measurement that would let it. The claim is not
+/// "the loft driver works" — it is that **the two paths are indistinguishable to
+/// the program above them**.
+///
+/// Two element types of the same shape over two identical tables, in ONE program
+/// bound to ONE connection string: `S9Rust` has no driver so core serves it,
+/// `S9Loft` has one and S9's precedence rule sends it to loft. Every assertion is
+/// made twice, once per path.
+///
+/// **The counts are the oracle, not the values.** A lazy read that fetched the
+/// whole table would return exactly these values; only the trip count separates
+/// it from an eager load, which is why @PLN129 asserts it. Here it is visible
+/// from outside because the driver prints: three lookups reach the source and the
+/// repeat of a resident key reaches none.
+///
+/// Nothing in the driver names a column. The table, the columns and the `WHERE`
+/// all come from `derive(type_of(coll))` — the same `TableDef` a writer would
+/// `render` into `CREATE TABLE` — which is requirement 2's one derivation doing
+/// both jobs.
+#[test]
+fn a_lazy_read_gives_one_answer_down_rust_and_down_loft() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("s9_two_paths.loft");
+
+    // Each token is a claim about BOTH paths at once, so a difference between
+    // them shows up as an asymmetric line rather than as an absent one:
+    //
+    //   value rust=grace loft=grace   the derived SELECT found the same row.
+    //   float rust=0.25 loft=0.25     sqlite renders a REAL as %!.15g, so a
+    //           SELECT that did not wrap the column comes back almost right.
+    //           `select_by_key` applies the dialect's read expression; core's
+    //           Rust source does its own equivalent, and they must agree.
+    //   identity rust=true loft=true  one record however it is reached — which is
+    //           what makes the collection, not an identity map, the authority.
+    //   resident 1/1 then touched 2/2  `len` counts what was TOUCHED, so an
+    //           eager load would read 3 here on either path.
+    //   absent true/true + clean [] [] a genuine absence is not a failure, and
+    //           reporting it as one is the mirror of the bug arc C exists for.
+    let expect = [
+        "value rust=grace loft=grace",
+        "float rust=0.25 loft=0.25",
+        "identity rust=true loft=true",
+        "resident rust=1 loft=1",
+        "second rust=alan loft=alan",
+        "touched rust=2 loft=2",
+        "absent rust=true loft=true",
+        "clean rust=[] loft=[]",
+        "s9 ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            assert!(
+                stdout.contains("not installed"),
+                "an absent library must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        // THE oracle. Three lookups reach the loft driver — 42, 7 and the absent
+        // 999 — and the repeat of 42 does not, because it hit the working set.
+        // Every value above would be identical under an eager load; only this
+        // would not.
+        assert_eq!(
+            stdout.matches("loft-driver key=").count(),
+            3,
+            "{backend}: 3 lookups reach the driver and a resident hit reaches \
+             none:\n{stdout}"
+        );
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one answer per path"),
+        }
+    }
+    Ok(())
+}
+
+/// @PLN133 S14 — THE GATE. Write rows, bind lazily to the SAME connection
+/// string, traverse, and get back what was written.
+///
+/// The plan's three requirements as one program: one string switches every
+/// consumer; a structure written is immediately readable through lazy loading;
+/// and a loft type has ONE table definition — created where the database has
+/// nothing, FOLLOWED where it already holds a table.
+///
+/// **It runs TWICE, and the second run is the one that matters.** Run 1 goes
+/// into an empty database, where loft writes the schema. Run 2 goes into a table
+/// made by hand — different column ORDER, the float kept in a `VARCHAR`, and an
+/// extra column loft knows nothing about — where loft must follow it. Run 1
+/// passes even if `reconcile` is a stub that always agrees; only run 2 proves
+/// requirement 3.
+///
+/// **The trip count is the oracle the values cannot be.** A reader that fetched
+/// the whole table would return exactly these rows. Only the number of trips
+/// separates a lazy read from an eager one, so the driver prints one line per
+/// trip: 42 reaches the database, the repeat of 42 does not, 7 does, and the
+/// absent 999 does — three per run, six in all.
+///
+/// CI reaches sqlite only. `LOFT_SQLDB_MODE` selects the other three, and the
+/// local four-backend run is written into the plan where it was measured
+/// (doc/claude/TESTING.md § Database backends).
+#[test]
+fn a_structure_written_is_immediately_readable_through_one_connection_string() -> std::io::Result<()>
+{
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("round_trip.loft");
+
+    // Each token is one claim, and the `created`/`followed` prefix says which of
+    // the two runs made it — so a design that only works on a table loft wrote
+    // itself shows up as HALF the lines rather than as none.
+    //
+    //   value=grace float=0.25 flag=false  the row came back through a SELECT
+    //           built from the same TableDef the INSERT was built from.
+    //   identity=true                      one record however it is reached: a
+    //           write through the second handle is visible through the first.
+    //   resident=1 then touched=2          `len` counts what was TOUCHED, so an
+    //           eager load would read 3.
+    //   absent=true clean=[]               a genuine absence is not a failure —
+    //           the mirror of the bug @PLN129 arc C exists for.
+    let expect = [
+        "created value=grace float=0.25 flag=false",
+        "created identity=true resident=1",
+        "created second=alan touched=2",
+        "created absent=true clean=[]",
+        "followed value=grace float=0.25 flag=false",
+        "followed identity=true resident=1",
+        "followed second=alan touched=2",
+        "followed absent=true clean=[]",
+        "round_trip ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            assert!(
+                stdout.contains("not installed") || stdout.contains("cannot"),
+                "an unreachable backend must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        assert_eq!(
+            stdout.matches("  trip key=").count(),
+            6,
+            "{backend}: three trips per run and none for a resident hit:\n{stdout}"
+        );
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one round trip"),
+        }
+    }
+    Ok(())
+}
+
 /// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
 /// compiled itself, with SQL NULL kept distinct from the empty string.
 ///
@@ -2193,6 +2561,97 @@ fn a_c_binding_reaches_a_versioned_system_library_on_both_backends() -> std::io:
         "both backends, one system library"
     );
     Ok(())
+}
+
+/// @PLN24 arc E — a wasm target gets a NAMED refusal, and only where a `#c`
+/// binding is actually called.
+///
+/// This is an EMISSION test on purpose: it needs no wasm toolchain, so the
+/// guarantee is checked on every machine that runs the suite rather than only on
+/// one that can cross-compile. The end-to-end halves live in `html_wasm.rs`.
+///
+/// Three separate failures used to come out of here, and a reader could not tell
+/// any of them from a bug in their own program:
+///
+/// * a symbol the wasm sysroot happens to export (`strlen`) LINKED — with a
+///   warning — and trapped at the call (`signature_mismatch: strlen`), because
+///   wasm32 is a third data model (ILP32) and the extern carried the host's
+///   widths;
+/// * one it does not export gave a raw `rust-lld: undefined symbol`;
+/// * a package declaring `[c] optional-libs` gave `E0433: cannot find c_call in
+///   loft` once per symbol — for bindings the program never called.
+///
+/// So the assertions are in three parts: the reachable call is refused by name,
+/// nothing in the file reaches for `c_call` or declares a C extern, and the
+/// availability tables survive (they are what makes `c_library_available`
+/// compile, and asking it is the idiom the refusal points an author towards).
+#[test]
+fn a_c_binding_is_refused_by_name_on_a_wasm_target() {
+    let dir = std::env::temp_dir().join(format!("loft_pln24_arce_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src_path = dir.join("arce.loft");
+    std::fs::write(
+        &src_path,
+        // `used` is called; `unused` is only declared.  Both are `#c`.
+        "fn used(s: text) -> integer;    #c \"strlen\" \"size_t(const char*)\"\n\
+         fn unused(v: integer) -> integer; #c \"abs\" \"int(int)\"\n\
+         fn main() { println(\"{used(\\\"hello\\\")}\") }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "the declaration itself must stay legal on every target: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let main_nr = p.data.def_nr("n_main");
+    let till = p.data.definitions();
+
+    let emit = |wasm: bool| -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut out = Output::new(&p.data, &state.database);
+        out.wasm_wasi = wasm;
+        out.output_native_reachable(&mut buf, 0, till, &[main_nr])
+            .expect("emit");
+        String::from_utf8(buf).expect("utf8")
+    };
+
+    // The calibration half: on the HOST target the same program emits the real
+    // binding.  Without this a refusal that fired everywhere would read as a pass.
+    let host = emit(false);
+    assert!(
+        host.contains("#[link_name = \"strlen\"]") && !host.contains("@PLN24 arc E"),
+        "the host target must still emit the typed extern and no refusal"
+    );
+
+    let wasm = emit(true);
+    assert!(
+        wasm.contains("`used` is bound to the C symbol 'strlen' with #c")
+            && wasm.contains("wasm (wasip2)")
+            && wasm.contains("--native-wasm")
+            && wasm.contains("@PLN24 arc E"),
+        "the reachable call must be refused by name: {wasm}"
+    );
+    assert!(
+        !wasm.contains("loft::c_call"),
+        "nothing may reach for `c_call` — it is not in a wasm build, and this is \
+         what broke a program for merely DECLARING an optional-library binding"
+    );
+    assert!(
+        !wasm.contains("#[link_name = \"strlen\"]") && !wasm.contains("#[link_name = \"abs\"]"),
+        "no C extern may be declared: one the sysroot satisfies links and then traps"
+    );
+    assert!(
+        wasm.contains("static __C_LIBS") && wasm.contains("static __C_LIB_SYMS"),
+        "the availability tables stay on every target — `c_library_available` \
+         reads them, and it used to fail to compile under --html for want of them"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// @PLN24 arc D — loft compiles the ANSI-C shim itself, with `cc` and no rustc.
