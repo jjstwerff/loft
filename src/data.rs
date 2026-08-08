@@ -3560,11 +3560,46 @@ pub struct CLibrary {
     pub optional: bool,
 }
 
+/// The answer to [`Data::lazy_fetch_drivers`], kept beside the definition count
+/// that produced it.
+///
+/// **Clones EMPTY, on purpose.** `Data` is `Clone` and the REPL clones it to take
+/// a savepoint; the copy's definitions then diverge from the original's, so
+/// carrying an answer across would key it to a program it was not computed from.
+/// An empty cache costs one walk and cannot be wrong.
+#[derive(Default)]
+struct LazyDriverCache(
+    #[allow(clippy::type_complexity)]
+    std::sync::Mutex<Option<(usize, std::result::Result<Vec<(String, u32)>, String>)>>,
+);
+
+impl Clone for LazyDriverCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 /// The immutable data of a parsed loft program
 pub struct Data {
     pub definitions: Vec<Definition>,
+    /// @PLN133 S9 — the lazy drivers, answered once per definition set.
+    ///
+    /// [`Data::lazy_fetch_drivers`] walks every definition, and it is asked on
+    /// the MISS path — the one place @PLN129 measures in queries per lookup, so
+    /// a per-miss scan of the whole program is exactly the cost that feature
+    /// exists not to pay.
+    ///
+    /// Keyed on the definition COUNT rather than answered once and for all: the
+    /// REPL and the debugger parse fresh sources into a live `Data`, so a driver
+    /// can appear after a lookup has already asked. Parsing only appends, so the
+    /// count is a sufficient witness — and getting this wrong would cache
+    /// "no driver" past the point where one exists.
+    ///
+    /// A `Mutex` rather than a `Cell` because a `par` worker taking its own
+    /// fault reads the same `Data` through a shared pointer.
+    lazy_drivers: LazyDriverCache,
     /// Index on definitions on name
     def_names: HashMap<(String, u16), u32>,
     use_names: HashMap<String, u16>,
@@ -3891,6 +3926,7 @@ impl Data {
     pub fn new() -> Data {
         Data {
             definitions: Vec::new(),
+            lazy_drivers: LazyDriverCache::default(),
             def_names: HashMap::new(),
             use_names: HashMap::new(),
             applied: Vec::new(),
@@ -5474,6 +5510,23 @@ impl Data {
     /// are pushed positionally, so a driver whose shape or subject is wrong reads
     /// someone else's bytes as its own.
     pub fn lazy_fetch_drivers(&self) -> std::result::Result<Vec<(String, u32)>, String> {
+        let n = self.definitions.len();
+        let mut slot = self
+            .lazy_drivers
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, cached)) = slot.as_ref()
+            && *at == n
+        {
+            return cached.clone();
+        }
+        let answer = self.scan_lazy_fetch_drivers();
+        *slot = Some((n, answer.clone()));
+        answer
+    }
+
+    fn scan_lazy_fetch_drivers(&self) -> std::result::Result<Vec<(String, u32)>, String> {
         let mut found: Vec<(String, u32)> = Vec::new();
         for d_nr in 0..self.definitions() {
             if !self.is_lazy_driver_candidate(d_nr) {

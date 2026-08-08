@@ -160,16 +160,34 @@ impl Stores {
         }
     }
 
-    /// @PLN133 S8 — the binding's source, when it is one a LOFT driver serves.
+    /// @PLN133 S8/S9 — the binding's source, when a LOFT driver is what serves it.
     ///
     /// Asked before the fetch rather than inside it, because the answer decides
     /// WHO fetches: `Stores` cannot run a loft function and `State` can, so the
     /// two callers of the miss path make this call while they still hold both.
+    ///
+    /// **S9 — a declared driver WINS, including over a source core drives in
+    /// Rust.** Core binds sqlite and the loft library binds four behind one
+    /// interface; this is how a program moves its sqlite reads onto the loft
+    /// driver, one element type at a time, with the Rust source still serving
+    /// every type that has none. That is what makes the swap measurable rather
+    /// than a flag day: the same program, the same database, one collection on
+    /// each path, and @PLN129's count assertions comparing them.
+    ///
+    /// `have_driver` is the caller's answer to *"is there a driver for this
+    /// collection's element type"*, because the two backends learn it
+    /// differently — the interpreter asks `Data`, `--native` asks the table
+    /// generated `init()` filled — and neither of those is reachable from here.
     #[must_use]
-    pub fn lazy_loft_source(&self, coll: &DbRef) -> Option<String> {
+    pub fn lazy_loft_source(&self, coll: &DbRef, have_driver: bool) -> Option<String> {
         let source = self.lazy_source(coll)?;
         match LazySource::of(&source) {
+            // No Rust driver exists for it, so loft is the only answer — and when
+            // the program has none either, the refusal is what the caller reports.
             LazySource::Loft(s) => Some(s),
+            // A source core CAN drive. The program's own driver takes it only if
+            // it declared one for this type; otherwise nothing changes.
+            _ if have_driver => Some(source),
             _ => None,
         }
     }

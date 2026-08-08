@@ -24,8 +24,9 @@ writes on sqlite**, which is a bounded, documented limit rather than a blocker.
 | S7 the backend registry | **done** — `tests/fixtures/sqldb/registry/`, shape (1) |
 | S8 core's lazy fault calls loft | **done, both backends** |
 | S9 prerequisite: per-type driver dispatch | **done** — and it closed a wrong-value hole S8 had left (below) |
-| S9 switch sqlite to the loft path | not started — unblocked |
-| S10–S14 | not started |
+| S9 sqlite down the loft path | **done** — a declared driver WINS, and the two paths are proven indistinguishable |
+| S10 delete core's Rust sqlite source | not started — see § what S10 still needs |
+| S11–S14 | not started |
 
 Every measurement below is from the current tree and is cited so it can be
 re-checked rather than believed.
@@ -1039,6 +1040,94 @@ cell that matters is `orphan`**, and its assertion is a driver-call COUNT rather
 than a value: a collection whose type no driver serves must reach none, and a
 value check alone would pass on a driver that happened to answer nothing.
 
+### S9 — sqlite down the loft path, and the two paths measured against each other
+
+**Done 2026-08-08.** The step is *"switch sqlite to the loft path"*, and taken
+literally it cannot preserve what it must: every @PLN129 test binds `sqlite:` with
+NO user code, so routing sqlite to loft wholesale leaves them with no driver.
+`store_bind_lazy(persons, "sqlite:people.db")` needing no loading step is the
+promise CHANGELOG.md already ships.
+
+So S9 is an OPT-IN with a measurement, and the two halves are separable on
+purpose:
+
+- **A declared driver WINS, including over a source core drives in Rust.** A
+  program moves its sqlite reads onto loft one element type at a time; every type
+  with no driver stays on the Rust source, unchanged. That is what makes the swap
+  measurable rather than a flag day — and the whole @PLN129 suite is the control,
+  because nothing in it declares a driver.
+- **The two paths are proven indistinguishable.**
+  `tests/fixtures/sqldb/s9_two_paths.loft` puts two element types of one shape
+  over two identical tables in ONE program bound to ONE connection string:
+  `S9Rust` has no driver, `S9Loft` has one. Same values, same float, same
+  identity, same residency counts, same absence handling — and the trip count,
+  which is the only thing a value check cannot see. Both backends, byte-identical.
+
+**Nothing in the driver names a column.** The table, the columns and the `WHERE`
+come from `derive(type_of(coll))` — the same `TableDef` a writer would `render`
+into `CREATE TABLE`. That is requirement 2's one derivation serving both
+directions, and it is what `select_by_key` (new here, the `select(TableDef, key)`
+the design table always listed) exists to do. It wraps a float column in the
+dialect's read expression, because a portable `SELECT score` is lossy on two
+engines of four and silent about it (P3).
+
+#### The cost, attributed rather than assumed
+
+A loft driver has **nowhere to keep a connection**: loft has no process-level
+state a library can hold, so the driver connects, queries and disconnects per
+missed row, where core's Rust source caches a handle per target. Measured on a
+release build, 400 single-key fetches each:
+
+| | per fetch |
+|---|---|
+| core's Rust source | **67 µs** |
+| the loft driver (connect + derive + query + close) | **140 µs** |
+
+**~2.1×, not the order of magnitude the shape suggests** — a local sqlite file
+reopens cheaply. The number is worth keeping for what it does NOT cover: for a
+client-server backend the same shape is a TCP connect and an auth per row, and
+those are exactly the backends core has no Rust driver for, so it is the case
+that matters most and the one no measurement here reaches. Connection reuse is
+therefore a real requirement of the write side (S13) rather than a nicety, and it
+needs somewhere for a library to keep state.
+
+#### What S10 still needs, and it is not code
+
+S10 deletes core's 15 typed externs and `sql_query.rs`. S9 does not enable that
+yet, and the reason is worth stating rather than discovering later: **deleting the
+Rust path makes a driver mandatory**, and a driver names a concrete element type,
+so it cannot come from a library. A program binding `sqlite:` with no user code
+would stop working — a breaking change to a shipped promise.
+
+So S10 additionally needs one of:
+
+1. **A generated driver** — core synthesises a per-type driver whose body calls
+   the loft sqldb library. That makes the library a DEPENDENCY of core, which is
+   the bar-raising this plan already names under @PLN23: `tests/fixtures/sqldb`
+   is a fixture, and core cannot require a fixture.
+2. **Keeping the Rust path as the fallback**, which is what S9 shipped — and then
+   S10 is not a deletion but a demotion.
+
+Whichever wins is a decision about what loft's distribution contains, not about
+this code.
+
+#### A store-lifetime crash the probes found — [loft#810](https://github.com/loft-lang/loft/issues/810)
+
+Attributing the cost above walked into a SIGSEGV that has nothing to do with lazy
+loading: a function **in a library** that both holds a `vector` local and
+builds+returns a record of ANOTHER package's type crashes on the second call, when
+the caller binds the result to a loop-body local. `Store::copy` computes
+`size * 8 - 4` from a record whose size word reads `0`; in release that wraps
+rather than panicking, so it arrives as a segfault.
+
+Six axes were moved one at a time to find the boundary — unroll the loop, drop
+the local, drop the vector, return the own package's record, move the function
+into the program — and each one alone makes it run. It does not block S9: the
+driver derives its `TableDef` per fetch, which is the fresh-argument cell that
+passes. Filed rather than fixed because the question is why `record_new` reaches
+a zero-size record, which is store/vector work, and the six-way boundary is what
+a fix has to keep green.
+
 ### Five language defects the build surfaced, all pre-existing on `main`
 
 None of them is in this plan's code, all three reproduce on the released binary,
@@ -1122,8 +1211,8 @@ must agree on is the last thing that should have a gate that evaporates.
 | **S7** | ~~The backend registry, used by the LIBRARY's own connect. No core change.~~ **DONE 2026-08-08** — `AnyDb`, a struct-enum satisfying `SqlDb` itself; `connect(spec)` parses, checks availability, opens and runs the dialect's session setup. Two core defects had to be fixed to write it; a third is filed. | the library's four backends already pass their tests, and the registry did not move them |
 | **S8** | ~~Core's lazy fault calls loft **for non-sqlite backends only**. Core's sqlite path is untouched.~~ **DONE 2026-08-07, both backends.** | every existing @PLN129 test still runs the old path — the suite is the control while the new path is proven beside it |
 | **S9a** | ~~Per-type driver dispatch, the prerequisite S9 turned out to need.~~ **DONE 2026-08-08** — a driver is found by the collection's element type, read off its own parameter; several drivers per program, and reaching the wrong one is impossible. It closed a wrong-value hole S8 had left. | the emission diff is one registration line; every existing @PLN129 and S8 test is the control |
-| **S9** | Switch sqlite to the loft path too. | the count assertions are the oracle: same counts, same identity, both backends, or the step is wrong |
-| **S10** | Delete core's 15 typed externs and `sql_query.rs`. | a deletion whose proof is the suite that was green in S9 |
+| **S9** | ~~Switch sqlite to the loft path too.~~ **DONE 2026-08-08** — a declared driver WINS over the Rust source, per element type, and the two paths are proven indistinguishable on one database in one program. | the count assertions are the oracle, and they held: same values, same identity, three trips and no fourth, both backends |
+| **S10** | Delete core's 15 typed externs and `sql_query.rs`. **Needs a decision first, not code** — see § what S10 still needs: deleting the Rust path makes a driver mandatory, and a driver names a concrete element type, so it cannot come from a library. | a deletion whose proof is the suite that was green in S9 |
 
 ### Create-or-follow, then the write side
 

@@ -250,6 +250,25 @@ than an error:
   collection first. Anyone writing a driver names its helpers after it, and
   treating those as malformed drivers would refuse the working driver beside them.
 
+### A driver WINS over the source core drives itself (@PLN133 S9)
+
+Core drives `sqlite:` in Rust. Declaring a driver for an element type moves THAT
+type's reads onto loft; every type with no driver keeps the Rust source. So a
+program adopts the loft path one collection at a time rather than all at once,
+and a program that declares nothing is unchanged.
+
+The two are meant to be indistinguishable, and that is measured rather than
+asserted: the same lookups down each path give the same values, the same
+identity, the same residency counts and the same number of trips to the source
+(`tests/fixtures/sqldb/s9_two_paths.loft`, both backends).
+
+**One cost to know before reaching for it.** A driver has nowhere to keep a
+connection — loft has no process-level state a library can hold — so it connects
+per missed row where core caches a handle per target. On a local sqlite file that
+is ~2× per fetch (67 µs → 140 µs, measured). On a client-server backend it is a
+connect and an auth per row, which is a different order of problem, and those are
+exactly the backends core has no Rust driver for.
+
 **A fault inside the driver is CONTAINED.** For an ordinary call, propagating a
 fault is right; for a fetch it is not, because C80 says a failed fetch reports
 through `store_lazy_error` and the lookup answers null. So a buggy driver leaves

@@ -142,6 +142,62 @@ the 5.9 MB image, and the second keystroke of a session costs ONE page.
 Paging a trie is still unwired: `store_bind_lazy` refuses one, and `store_load_key_text`
 reads a `hash`. The layout is the prerequisite that made those worth building.
 
+### sqlite down the loft path, measured against the Rust one (@PLN133 S9, 2026-08-08)
+
+Core drives sqlite in Rust (913 lines across `sql_source.rs` and `sql_query.rs`)
+and the loft library drives four backends behind one `SqlDb` interface. The step
+is *"switch sqlite to the loft path"*, and taken literally it cannot preserve what
+it must: every @PLN129 test binds `sqlite:` with NO user code, and
+`store_bind_lazy(persons, "sqlite:people.db")` needing no loading step is a
+shipped promise.
+
+So it is an opt-in with a measurement:
+
+- **A declared driver WINS**, including over a source core drives in Rust. A
+  program moves its sqlite reads onto loft one element type at a time; every type
+  with no driver keeps the Rust source. `Stores::lazy_loft_source` now takes the
+  caller's answer to *"is there a driver for this element type"*, because the two
+  backends learn it differently — the interpreter asks `Data`, `--native` asks the
+  table generated `init()` filled — and neither is reachable from `Stores`.
+- **The two paths are proven indistinguishable.**
+  `tests/fixtures/sqldb/s9_two_paths.loft` puts two element types of one shape
+  over two identical tables in ONE program bound to ONE connection string. Same
+  values, same float, same identity, same residency counts, same absence handling
+  — and the trip count, which is the only thing a value check cannot see: three
+  lookups reach the driver and the repeat of a resident key reaches none. Both
+  backends, byte-identical.
+- **`select_by_key`** — the `select(TableDef, key)` the design table always listed
+  — derives the statement from the same `TableDef` a writer would `render` into
+  `CREATE TABLE`, wrapping a float column in the dialect's read expression. The
+  driver names no column.
+- **`Data::lazy_fetch_drivers` is cached** per definition count. It walks every
+  definition and sits on the MISS path, which is the one place @PLN129 measures in
+  queries per lookup. Keyed on the count rather than answered once, because the
+  REPL parses fresh sources into a live `Data` and a driver can appear after a
+  lookup has already asked.
+
+**The cost, attributed rather than assumed.** A loft driver has nowhere to keep a
+connection — loft has no process-level state a library can hold — so it connects
+per missed row where core caches a handle per target. Release build, 400 fetches
+each: **67 µs** per fetch through Rust, **140 µs** through loft. ~2.1×, because a
+local sqlite file reopens cheaply. What that does NOT cover is the case that
+matters most: for a client-server backend the same shape is a TCP connect and an
+auth per row, and those are precisely the backends core has no Rust driver for.
+
+**S10 is not unblocked by this.** Deleting the Rust path makes a driver
+mandatory, and a driver names a concrete element type so it cannot come from a
+library — a program binding `sqlite:` with no user code would stop working. That
+needs a generated driver (making the sqldb library a dependency of core) or a
+demotion rather than a deletion, and it is a decision about what loft's
+distribution contains.
+
+**Filed on the way past:** [loft#810](https://github.com/loft-lang/loft/issues/810)
+— a library function that both holds a `vector` local and returns a record of
+another package's type SIGSEGVs on the second call when the caller binds the
+result to a loop-body local. `Store::copy` computes `size * 8 - 4` from a record
+whose size word reads `0`. Six axes were moved one at a time to find the
+boundary; the driver takes the passing cell (a fresh `derive` per fetch).
+
 ### A lazy driver serves ONE element type (@PLN133 S9 prerequisite, 2026-08-08)
 
 S8 let a program declare one `lazy_fetch`, which reads as a limit on how many

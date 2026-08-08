@@ -624,13 +624,19 @@ pub fn OpGetRecord(
         // The driver arrives as a POINTER generated `init()` installed, because
         // this helper is compiled into libloft and cannot see a function the
         // generator wrote. Two mechanisms, one answer.
-        if let Some(source) = stores.lazy_loft_source(&data) {
-            // @PLN133 S9 — the driver is chosen by the collection's ELEMENT TYPE,
-            // the same key the interpreter looks up by, so a program with several
-            // lazily-bound types reaches the right one on both backends. The one
-            // installed pointer this replaced was called for every collection
-            // whatever it was declared for.
-            let element = stores.element_type_name(db_tp as u16).to_string();
+        // @PLN133 S9 — the driver is chosen by the collection's ELEMENT TYPE, the
+        // same key the interpreter looks up by, so a program with several
+        // lazily-bound types reaches the right one on both backends. The one
+        // installed pointer this replaced was called for every collection
+        // whatever it was declared for.
+        //
+        // It is also what decides whether a source core CAN drive goes to loft
+        // instead: a declared driver wins. A refused driver SET answers `true`
+        // here for the same reason it does on the interpreter — the refusal must
+        // be reported, not swallowed by a silent fall back to Rust.
+        let element = stores.element_type_name(db_tp as u16).to_string();
+        let have_driver = lazy_fetch_refusal().is_some() || lazy_fetch_fn(&element).is_some();
+        if let Some(source) = stores.lazy_loft_source(&data, have_driver) {
             // A refused driver set poisons every lookup, exactly as it does on the
             // interpreter — which re-asks `Data` at each miss and gets the same
             // `Err` back. Reporting the symptom here instead would mean the

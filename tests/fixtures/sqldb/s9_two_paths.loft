@@ -1,0 +1,162 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN133 S9 — the same lazy read, down core's Rust source and down a LOFT
+// driver, over the same database.
+//
+// Core drives sqlite in Rust (`src/database/sql_source.rs` + `sql_query.rs`, 913
+// lines) and the loft library drives four backends behind one `SqlDb` interface.
+// S10 deletes the Rust; this is the measurement that would let it. The claim is
+// not "the loft driver works" — it is **the two paths are indistinguishable to
+// the program above them**: same values, same identity, same number of trips to
+// the source.
+//
+// Two element types of the same shape over two identical tables, in one file,
+// bound to one connection string. `S9Rust` has no driver so core serves it;
+// `S9Loft` has one, and @PLN133 S9's precedence rule sends it to loft. Every
+// assertion below is made twice, once per path, and the driver PRINTS so its
+// trips are countable from outside.
+//
+// **What this measures that a value check cannot.** A lazy read that fetched the
+// whole table would return exactly these values. Only the counts separate it
+// from an eager load, which is why @PLN129 asserts them and why they are the
+// oracle here.
+
+use registry;
+use schema;
+use sql;
+use sqlite;
+
+struct S9Rust { id: integer, nm: text, score: float }
+struct S9Loft { id: integer, nm: text, score: float }
+
+struct S9World {
+  by_rust: hash<S9Rust[id]> = [],
+  by_loft: hash<S9Loft[id]> = [],
+}
+
+// The driver, and it is a driver for ONE element type — `S9Rust` beside it has
+// none and stays on core's Rust source, which is what makes this one program a
+// comparison rather than two.
+//
+// **Everything in it is derived.** The table, the columns and the `WHERE` come
+// from `derive(type_of(coll))` — the same `TableDef` a writer would `render`
+// into `CREATE TABLE` — so the reader and the writer cannot drift. Nothing here
+// names a column.
+fn lazy_fetch(coll: hash<S9Loft[id]>, source: text, key_int: integer, key_text: text) -> integer {
+  println("  loft-driver key={key_int}");
+  d = connect(source);
+  if !d.db_ok() {
+    store_lazy_fail(coll, d.db_last_error());
+    return 0;
+  }
+  dial = d.db_dialect();
+  if dial == null {
+    d.db_shut();
+    store_lazy_fail(coll, "no dialect for {source}");
+    return 0;
+  }
+  ti = type_of(coll);
+  want = derive(ti);
+  if !want.table_ok() {
+    d.db_shut();
+    store_lazy_fail(coll, want.refusal);
+    return 0;
+  }
+  q = select_by_key(want, dial, key_int, key_text, false);
+  if !d.db_rows(q) {
+    why = d.db_last_error();
+    d.db_shut();
+    store_lazy_fail(coll, "query failed: {why}");
+    return 0;
+  }
+  if !d.db_next() {
+    // Reached, and no such row. `0`, not a failure — the distinction @PLN129 arc
+    // C exists for.
+    d.db_shut();
+    return 0;
+  }
+  got_id = ((d.db_col(0) ?? "") as integer?) ?? 0;
+  got_nm = d.db_col(1) ?? "";
+  got_score = ((d.db_col(2) ?? "") as float?) ?? 0.0;
+  d.db_shut();
+  coll += [S9Loft { id: got_id, nm: got_nm, score: got_score }];
+  return 1;
+}
+
+// The database both paths read, built here so this program needs no fixture
+// around it. Two tables of the same shape, and `INTEGER PRIMARY KEY` because
+// @PLN129 refuses a bind whose lookup no index serves.
+fn seed(path: text) -> boolean {
+  d = sqlite();
+  if !d.db_open(path) { return false }
+  ok = true;
+  for ddl in [
+    "DROP TABLE IF EXISTS s9rust",
+    "DROP TABLE IF EXISTS s9loft",
+    "CREATE TABLE s9rust (id INTEGER PRIMARY KEY, nm TEXT NOT NULL, score REAL NOT NULL)",
+    "CREATE TABLE s9loft (id INTEGER PRIMARY KEY, nm TEXT NOT NULL, score REAL NOT NULL)",
+    "INSERT INTO s9rust VALUES (1,'ada',0.5),(42,'grace',0.25),(7,'alan',0.125)",
+    "INSERT INTO s9loft VALUES (1,'ada',0.5),(42,'grace',0.25),(7,'alan',0.125)",
+  ] {
+    if !d.db_exec(ddl) { println("FAIL ddl [{ddl}]: {d.db_last_error()}"); ok = false }
+  }
+  d.db_shut();
+  return ok;
+}
+
+fn main() {
+  if !sqlite_available() {
+    println("SKIP s9_two_paths — libsqlite3 is not installed here");
+    return;
+  }
+  path = "{directory()}/.loft/pln133_s9.db";
+  fresh = delete(path);
+  if !seed(path) { return }
+  conn = "sqlite:{path}";
+
+  w = S9World { };
+  if !store_bind_lazy(w.by_rust, conn) { println("FAIL bind rust"); return }
+  if !store_bind_lazy(w.by_loft, conn) { println("FAIL bind loft"); return }
+
+  // --- the same lookups, one path each --------------------------------------
+  r1 = w.by_rust[42];
+  l1 = w.by_loft[42];
+  println("value rust={r1.nm ?? "<none>"} loft={l1.nm ?? "<none>"}");
+  // The float is the cell that separates a derived read from a plausible one:
+  // sqlite renders a REAL as %!.15g, so a SELECT that did not wrap the column
+  // comes back almost right. `derive` → `select_by_key` applies the dialect's
+  // read expression, and core's Rust source does its own equivalent.
+  println("float rust={r1.score ?? 0.0} loft={l1.score ?? 0.0}");
+
+  // --- identity: one record however it is reached ---------------------------
+  r2 = w.by_rust[42];
+  l2 = w.by_loft[42];
+  println("identity rust={r1 == r2} loft={l1 == l2}");
+
+  // --- the counts, which is what a value check cannot see -------------------
+  //
+  // A second lookup of a resident key must not reach the source at all. On the
+  // loft path that is visible from outside — one `loft-driver key=42` line, not
+  // two — and on both paths `len` is the count of what was TOUCHED.
+  println("resident rust={len(w.by_rust)} loft={len(w.by_loft)}");
+
+  r3 = w.by_rust[7];
+  l3 = w.by_loft[7];
+  println("second rust={r3.nm ?? "<none>"} loft={l3.nm ?? "<none>"}");
+  println("touched rust={len(w.by_rust)} loft={len(w.by_loft)}");
+
+  // --- absent, reached ------------------------------------------------------
+  //
+  // Both paths must answer null AND leave the failure channel empty: an absence
+  // is stable and true, and reporting it as a failure is the mirror of the bug
+  // arc C exists for.
+  rn = w.by_rust[999];
+  ln = w.by_loft[999];
+  println("absent rust={rn == null} loft={ln == null}");
+  println("clean rust=[{store_lazy_error(w.by_rust) ?? ""}] loft=[{store_lazy_error(w.by_loft) ?? ""}]");
+
+  gone = delete(path);
+  if !fresh.ok() && !gone.ok() { println("note: the temp database was not removable") }
+  println("s9 ok");
+}

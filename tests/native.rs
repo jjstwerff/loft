@@ -2064,6 +2064,120 @@ fn a_connection_the_registry_opened_is_a_connection() -> std::io::Result<()> {
     Ok(())
 }
 
+/// @PLN133 S9 — the same lazy read, down core's Rust source and down a LOFT
+/// driver, over one database.
+///
+/// Core drives sqlite in Rust (`sql_source.rs` + `sql_query.rs`, 913 lines) and
+/// the loft library drives four backends behind one `SqlDb` interface. S10
+/// deletes the Rust; this is the measurement that would let it. The claim is not
+/// "the loft driver works" — it is that **the two paths are indistinguishable to
+/// the program above them**.
+///
+/// Two element types of the same shape over two identical tables, in ONE program
+/// bound to ONE connection string: `S9Rust` has no driver so core serves it,
+/// `S9Loft` has one and S9's precedence rule sends it to loft. Every assertion is
+/// made twice, once per path.
+///
+/// **The counts are the oracle, not the values.** A lazy read that fetched the
+/// whole table would return exactly these values; only the trip count separates
+/// it from an eager load, which is why @PLN129 asserts it. Here it is visible
+/// from outside because the driver prints: three lookups reach the source and the
+/// repeat of a resident key reaches none.
+///
+/// Nothing in the driver names a column. The table, the columns and the `WHERE`
+/// all come from `derive(type_of(coll))` — the same `TableDef` a writer would
+/// `render` into `CREATE TABLE` — which is requirement 2's one derivation doing
+/// both jobs.
+#[test]
+fn a_lazy_read_gives_one_answer_down_rust_and_down_loft() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("s9_two_paths.loft");
+
+    // Each token is a claim about BOTH paths at once, so a difference between
+    // them shows up as an asymmetric line rather than as an absent one:
+    //
+    //   value rust=grace loft=grace   the derived SELECT found the same row.
+    //   float rust=0.25 loft=0.25     sqlite renders a REAL as %!.15g, so a
+    //           SELECT that did not wrap the column comes back almost right.
+    //           `select_by_key` applies the dialect's read expression; core's
+    //           Rust source does its own equivalent, and they must agree.
+    //   identity rust=true loft=true  one record however it is reached — which is
+    //           what makes the collection, not an identity map, the authority.
+    //   resident 1/1 then touched 2/2  `len` counts what was TOUCHED, so an
+    //           eager load would read 3 here on either path.
+    //   absent true/true + clean [] [] a genuine absence is not a failure, and
+    //           reporting it as one is the mirror of the bug arc C exists for.
+    let expect = [
+        "value rust=grace loft=grace",
+        "float rust=0.25 loft=0.25",
+        "identity rust=true loft=true",
+        "resident rust=1 loft=1",
+        "second rust=alan loft=alan",
+        "touched rust=2 loft=2",
+        "absent rust=true loft=true",
+        "clean rust=[] loft=[]",
+        "s9 ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            assert!(
+                stdout.contains("not installed"),
+                "an absent library must be REPORTED:\n{stdout}"
+            );
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        // THE oracle. Three lookups reach the loft driver — 42, 7 and the absent
+        // 999 — and the repeat of 42 does not, because it hit the working set.
+        // Every value above would be identical under an eager load; only this
+        // would not.
+        assert_eq!(
+            stdout.matches("loft-driver key=").count(),
+            3,
+            "{backend}: 3 lookups reach the driver and a resident hit reaches \
+             none:\n{stdout}"
+        );
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(f, &stdout, "both backends, one answer per path"),
+        }
+    }
+    Ok(())
+}
+
 /// @PLN23 S3 — the cursor model: a real result set, walked through a shim loft
 /// compiled itself, with SQL NULL kept distinct from the empty string.
 ///

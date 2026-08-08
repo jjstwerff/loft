@@ -486,6 +486,64 @@ pub fn render_index(ix: IndexDef, quoted_table: text, d: Dialect) -> text {
   return "CREATE INDEX {d.quote_ident(ix.nm)} ON {quoted_table} ({cols_sql})";
 }
 
+// --- the SELECT one key implies ----------------------------------------------
+//
+// The other direction of the same derivation. `render` says what to CREATE;
+// this says what to READ, and requirement 2 is that the two agree — a writer
+// that creates `person(id, nm)` and a reader that selects different columns work
+// only until they do not, and nothing else checks it.
+
+/// The columns of the index a keyed lookup uses — the key, as columns.
+///
+/// From the DERIVED definition, so the column a query filters on and the column
+/// the writer indexed are the same fact rather than two that happen to agree.
+pub fn key_columns(self: TableDef) -> vector<text> {
+  out: vector<text> = [];
+  for ix in self.indexes {
+    if ix#count == 0 {
+      for c in ix.columns { out += [c.nm] }
+    }
+  }
+  return out;
+}
+
+/// `SELECT "id", printf('%!.17g',"score") FROM "person" WHERE "id" = ?`
+///
+/// **A float column is wrapped in the dialect's read expression**, and that is
+/// not decoration: sqlite renders a `REAL` as `%!.15g`, so a portable `SELECT
+/// score` loses the low bits of most doubles — silently, as a number that is
+/// almost right (@PLN133 P3). The one place that fact is written down is the
+/// `Dialect`, so the one place it can be applied is here.
+///
+/// The key is BOUND, never interpolated: the only bytes in the statement are
+/// literals this function wrote plus quoted identifiers, which is the property
+/// the whole `SqlText` type exists to keep.
+///
+/// `key_is_text` rather than one function per key type, because a lazy driver
+/// receives the key in whichever of two spellings it arrived in and has to hand
+/// on what it got.
+pub fn select_by_key(self: TableDef, d: Dialect, key_int: integer, key_text: text,
+                     key_is_text: boolean) -> SqlText {
+  q: SqlText = SqlText { };
+  if self.refusal != "" { q.refused = true; return q }
+  cols = key_columns(self);
+  if len(cols) != 1 {
+    // One key, whichever spelling — the same limit the fetch has, and for the
+    // same reason: reading the WRONG row is worse than answering absent.
+    q.refused = true;
+    return q;
+  }
+  q.lit("SELECT ");
+  for c in self.columns {
+    if c#count > 0 { q.lit(", ") }
+    quoted = d.quote_ident(c.nm);
+    if c.kind == ColFloat { q.lit(d.float_read(quoted)) } else { q.lit(quoted) }
+  }
+  q.lit(" FROM {d.quote_ident(self.nm)} WHERE {d.quote_ident(cols[0] ?? "")} = ");
+  if key_is_text { q.hole_text(key_text) } else { q.hole_int(key_int) }
+  return q;
+}
+
 // --- S4: reconcile — the table loft found, against the type it wants ----------
 //
 // This is where requirement 3 is paid for. `derive` says what loft WANTS;

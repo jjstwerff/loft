@@ -968,7 +968,10 @@ impl State {
             let found = self.database.find(&data, db_tp, &key);
             if found.rec != 0 {
                 found // resident: no query, no source, ordinary loft speed
-            } else if let Some(source) = self.database.lazy_loft_source(&data) {
+            } else if let Some(source) = self
+                .database
+                .lazy_loft_source(&data, self.has_lazy_driver(db_tp))
+            {
                 // @PLN133 S8 — a backend core has no Rust driver for. The fetch
                 // is loft code, and the retry after it is arc A's rule
                 // unchanged: the collection stays the only authority on what is
@@ -980,6 +983,30 @@ impl State {
             }
         };
         self.put_stack(res);
+    }
+
+    /// @PLN133 S9 — does this program declare a driver for what this collection
+    /// holds?
+    ///
+    /// The question that decides whether a source core CAN drive is nonetheless
+    /// served by loft. Answered here rather than in `Stores`, because only
+    /// `State` reaches `Data`; `--native` answers the same question off the table
+    /// generated `init()` filled, and the two must agree or one backend quietly
+    /// takes a different path through the same program.
+    ///
+    /// A malformed driver set answers `true`: the refusal then travels down the
+    /// loft path and is REPORTED, where answering `false` would silently fall
+    /// back to Rust and swallow the mistake.
+    fn has_lazy_driver(&self, db_tp: u16) -> bool {
+        if self.data_ptr.is_null() {
+            return false;
+        }
+        let data: &crate::data::Data = unsafe { &*self.data_ptr };
+        let element = self.database.element_type_name(db_tp);
+        match data.lazy_fetch_driver_for(element) {
+            Ok(found) => found.is_some(),
+            Err(_) => true,
+        }
     }
 
     /// @PLN133 S8 — run the program's own lazy driver for one missing key.
