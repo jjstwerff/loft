@@ -294,6 +294,15 @@ pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i3
     // variant, and `Stores::claim` takes WORDS — word 0 holds the size header
     // + type tag, the payload's `size` BYTES start at byte 8.
     let size = stores.enum_parent_size(db_tp);
+    // The native twin of the bytecode VM's `LOFT_TRACE_DB` line (`state/io.rs`).
+    // Without it the switch went quiet the moment a call crossed into a package's
+    // shared library — which is where the slot-adoption it exists to show lives.
+    if crate::keys::trace_db() {
+        eprintln!(
+            "[db] native OpDatabase db_tp={db_tp} ({}) db=#{}@{},{} size={size}",
+            stores.types[db_tp as usize].name, db.store_nr, db.rec, db.pos,
+        );
+    }
     if db.store_nr == u16::MAX {
         // Null sentinel (no real store yet) — allocate a fresh one.
         db = stores.null();

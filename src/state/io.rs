@@ -855,7 +855,7 @@ impl State {
         // all variants; the variant's own size may be smaller (unit variants).
         let size = self.database.enum_parent_size(db_tp);
         let mut db = *self.get_var::<DbRef>(var);
-        if std::env::var("LOFT_TRACE_DB").is_ok() {
+        if crate::keys::trace_db() {
             eprintln!(
                 "[db] OpDatabase var={var} db_tp={db_tp} db=#{}@{},{} size={size}",
                 db.store_nr, db.rec, db.pos,

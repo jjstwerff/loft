@@ -3338,6 +3338,34 @@ impl Definition {
         })
     }
 
+    /// Is this a LOFT-DEFINED function — one written in loft, with a body the
+    /// compiler lowered itself?  That is a global (`n_<name>`) or a method /
+    /// generic monomorph (`t_<len><Type>_<name>`) that carries loft IR; a native
+    /// stub (`#rust` body, a shared-library symbol, an `Op*` lowering helper)
+    /// has no `code` and answers `false`.
+    ///
+    /// **Ask this before reading any of the carried return-ownership facts**
+    /// ([`Self::return_adopts_fresh_store`], [`Self::returns_borrowed_view`]):
+    /// only a loft-defined callee takes a caller-allocated buffer, so only for
+    /// one of those does the adopt-vs-copy question mean anything.
+    ///
+    /// It lives here because it is the GATE on those facts and had drifted apart
+    /// from them.  `scopes.rs` accepted `n_` and `t_` alike — and on that basis
+    /// stripped the binding's deps, which is what makes the scope-exit
+    /// `OpFreeRef` fire — while the two interpreter sites that decide whether to
+    /// deep-COPY accepted only `n_`.  So a `t_` METHOD returning through the
+    /// caller's `__ref_N` buffer was adopted (aliasing the buffer) and then
+    /// freed as if it were owned: the buffer's store went back to the pool while
+    /// the caller still named it, and the next iteration handed that slot to
+    /// someone else.  Two owners, one record — a wrong value where the recycled
+    /// slot merely overlapped, a SIGSEGV where a record header did (loft#810).
+    /// Cluster A collapsed the ANSWERS into one fact each; this collapses the
+    /// question that reaches them.
+    #[must_use]
+    pub fn is_loft_defined(&self) -> bool {
+        (self.name.starts_with("n_") || self.name.starts_with("t_")) && self.code != Value::Null
+    }
+
     /// Cluster-A.3 (OWNERSHIP_MODEL row 102) — THE adopt-vs-copy answer for a
     /// heap binding from a struct/Reference-returning call: *may the caller
     /// ADOPT the callee's returned store directly (no deep copy), or must it

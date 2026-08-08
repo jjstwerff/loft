@@ -807,6 +807,22 @@ pub fn no_slot_reuse() -> bool {
     *NR.get_or_init(|| std::env::var_os("LOFT_NO_SLOT_REUSE").is_some() || strict_stores())
 }
 
+/// `LOFT_TRACE_DB=1` — print every record allocation (`OpDatabase`) with the type it
+/// allocates and the `DbRef` the target slot held on entry.  Reach for it when a store
+/// slot looks like it has two owners: the entry `DbRef` is what says whether an
+/// allocation ADOPTED a slot some other variable still names.
+///
+/// Read once because both backends call it on every struct-typed local's
+/// initialisation.  Answered in ONE place so the two backends cannot disagree about
+/// what the switch means — the interpreter had it and the native runtime did not,
+/// which made the trace silent for exactly the calls that go through a package's
+/// shared library (loft#810).
+#[must_use]
+pub fn trace_db() -> bool {
+    static TD: OnceLock<bool> = OnceLock::new();
+    *TD.get_or_init(|| std::env::var_os("LOFT_TRACE_DB").is_some())
+}
+
 /// `LOFT_STRICT_STORES=1` (@PLN130 F8) — strict store lifetime, for PROBES.
 ///
 /// Turns the two store-lifetime faults from silent-or-advisory into hard errors:

@@ -816,7 +816,7 @@ impl Parser {
         };
         // A loft-defined callee: only those take a caller-allocated buffer.
         let def = self.data.def(*fn_nr);
-        if !(def.name.starts_with("n_") || def.name.starts_with("t_")) || def.code == Value::Null {
+        if !def.is_loft_defined() {
             return None;
         }
         let buf = args.iter().rev().find_map(|a| match a.unspan() {

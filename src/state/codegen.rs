@@ -2020,8 +2020,12 @@ impl State {
                     stack.function.tp(v).clone()
                     && !stack.function.is_argument(v)
                     && let Value::Call(fn_nr, _) = value.unspan()
-                    && stack.data.def(*fn_nr).name().starts_with("n_")
-                    && *stack.data.def(*fn_nr).code() != Value::Null
+                    // The shared gate on the carried ownership facts — a METHOD
+                    // (`t_`) takes a caller-allocated buffer exactly like a global
+                    // (`n_`) does, and reading the fact for only one of them is what
+                    // made a method's return adopt the buffer and then free it
+                    // (loft#810).  See `Def::is_loft_defined`.
+                    && stack.data.def(*fn_nr).is_loft_defined()
                     && (if crate::keys::reassign_copy_enabled() {
                         // The carried A.3 fact (see the comment above).
                         !stack.data.def(*fn_nr).return_adopts_fresh_store()
@@ -2470,8 +2474,12 @@ impl State {
         } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
             stack.function.tp(v).clone()
             && let Value::Call(fn_nr, _) = value.unspan()
-            && stack.data.def(*fn_nr).name().starts_with("n_")
-            && *stack.data.def(*fn_nr).code() != Value::Null
+            // The shared gate on the carried ownership facts (`Def::is_loft_defined`) —
+            // methods and generic monomorphs (`t_`) reach this arm too.  While it read
+            // `n_` alone, a method returning through the caller's `__ref_N` fell to the
+            // plain-adopt fallthrough at the bottom of this dispatch and was then freed
+            // as an owner, taking the caller's buffer with it (loft#810).
+            && stack.data.def(*fn_nr).is_loft_defined()
         {
             // Cluster A.3 (OWNERSHIP_MODEL row 102): read the carried
             // adopt-vs-copy fact.  When the callee returns a genuinely FRESH

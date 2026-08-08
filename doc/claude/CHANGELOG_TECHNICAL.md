@@ -61,34 +61,69 @@ assertions — a wrong read here is as likely to answer `""` as to fault, so "di
 crash" is not the bar — plus the forwarded-buffer control that says the fix did not
 simply delete the wrap everywhere.
 
-### A record that claims size zero is refused, not wrapped (loft#810) (2026-08-08)
+### A method's return was adopted by one half of the compiler and freed by the other (loft#810) (2026-08-08)
 
-Diagnosability only — this does not fix loft#810, which stays open.
+Filed as a SIGSEGV needing a library, a `vector` local, a foreign package's record type
+and a loop-body local — six ingredients, drop any one and it ran. None of them is the
+defect. It is **one word in a predicate**, it needs no library at all, and its ordinary
+outcome is a WRONG VALUE rather than a crash.
 
-Every whole-payload walk in the store derives its length from the record's size word as
-`size * 8 - 4`. A size of `0` is already a corrupted record, and the subtraction WRAPS:
-release builds read ~18 exabytes and die inside `memcpy`, so the report names the copy —
-which is innocent — and says nothing about the corruption that reached it. A debug build
-is no better placed, pointing `attempt to subtract with overflow` at the same line.
+Binding a call's result to a heap local asks one question: may the caller ADOPT the
+returned store, or must it COPY into a store the binding owns? Cluster A already collapsed
+the ANSWER into one carried fact (`Def::return_adopts_fresh_store`). What had drifted was
+the GATE on it — which callees the question is even asked about:
 
-Two guards, both `assert!` rather than `debug_assert!` on purpose: a debug build already
-catches the underflow, and it is the RELEASE build, where the wrap is silent, that needed
-one.
+| site | decides | accepted |
+|---|---|---|
+| `scopes.rs` (`scan_set`) | strip the binding's deps → emit its scope-exit `OpFreeRef` | `n_` **and** `t_` |
+| `state/codegen.rs` (first-Set) | deep-copy, or adopt | `n_` only |
+| `state/codegen.rs` (reassign) | deep-copy, or adopt | `n_` only |
 
-- **`Store::copy` / `Store::zero_fill`** derive the length through one `payload_bytes`
-  helper that refuses a non-positive size word, naming the record.
-- **`vector::vector_append`** refuses a non-zero vector handle whose target has a
-  non-positive size word, naming the OWNER slot (`rec.pos`) as well. This is the better
-  attribution of the two — a zeroed header there means the handle outlived what it
-  pointed at — and it is free, because the append already loads that word to compute
-  capacity.
+So a `t_` METHOD returning through the caller's hidden `__ref_N` buffer — the shape every
+`q: Acc = Acc { }; …; return q` compiles to, dep `["q"]` — fell past both copy arms to the
+plain-adopt fallthrough, and was then freed at scope exit as if the binding owned it. The
+buffer's store went back to the pool while the caller still named it. Next iteration the
+callee's own work-ref drew that slot, the retbuf `OpDatabase` re-`claim`ed it at the
+original name, and one record had two owners.
 
-loft#810's own repro cannot be run on this tree: it calls `select_by_key`, a @PLN133 S9
-schema-package method that was never committed. Reconstructions against the real `sql` /
-`schema` fixtures — the library, the `vector` local, the returned foreign-package record
-and the loop-body local, on both backends — all came out clean, so the fourth ingredient
-is inside that function. The store guards are what the report asked for on the way past;
-the store-lifetime cause is still open.
+`Def::is_loft_defined()` is now the single home for that gate, next to the two facts it
+guards, and the six spelled-out copies of it (scopes ×3, codegen ×2, parser ×1) read it.
+
+**What the boundary actually is**, measured one axis at a time
+(`tests/scripts/810-method-return-buffer.loft`):
+
+- No library, no foreign package, no vector: a single file reproduces it.
+- The callee needs ONE competing allocation between the free and the next iteration's
+  re-adoption — otherwise the freed slot is handed straight back and nothing shows.
+- Whether it crashes at all depends on what lands in the recycled slot. The reported case
+  hit a record header and died in `memcpy`; the plain shape silently loses a vector and
+  answers a plausible count. **The value cells are the test**, not "did not crash".
+- Three cells, not one: first-Set in a loop body, reassignment of an outer local, and
+  assignment inside a nested block — the last two go through the OTHER codegen site, so
+  fixing only the first leaves two thirds of the defect standing.
+
+`--native` was never affected and needs no change, for a reason worth writing down rather
+than trusting: its Reference-typed `__ref_N` is a `DbRef::NULL` sentinel passed BY VALUE,
+so the callee always allocates fresh and the caller's copy stays null. The alias the
+interpreter formed cannot form there. Its vector retbuf (`__vdb_N`) IS caller-allocated,
+and that path was already right — pinned as a control.
+
+The store guards that came out of the first pass at this stay, and earn their keep: a
+non-positive size word makes every whole-payload walk compute `size * 8 - 4`, which wraps
+to ~18 exabytes and dies inside `memcpy`, naming the copy — which is innocent. `assert!`
+and not `debug_assert!` on purpose: a debug build already catches the underflow, and it is
+the RELEASE build, where the wrap is silent, that needed one. `Store::copy` /
+`Store::zero_fill` route through one `payload_bytes` helper; `vector_append` asks first
+whether the field is inside its own record at all, and now says what that means — a slot
+with two owners, with `LOFT_NO_SLOT_REUSE=1` as the one-run test — rather than the layout
+fault it first read as. `Store::valid` bounds a field with `fld <= size * 8`, admitting a
+read that starts exactly AT the record's end, and is a `debug_assert!` compiled out of the
+profile the loft library builds under; that is why nothing caught this earlier.
+
+`LOFT_TRACE_DB` now prints from the native runtime too. It had existed only in the
+bytecode VM, so it went silent exactly where a call crossed into a package's shared
+library — which is where the slot adoption it exists to show was happening. Both backends
+read one cached key.
 
 ### A persisted trie is laid out so it can be paged (@PLN134) (2026-08-08)
 
