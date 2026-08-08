@@ -693,9 +693,34 @@ file it wrote, on a line after the diagnostic — so if you see the report but n
 such line, the write failed and stderr is all there is.
 
 Reading it back: the `pc:` value is a bytecode position, which
-`LOFT_LOG=static` maps to source; `fn:` and `at:` are usually enough on their
-own. If the report says `(none — crash outside interpreter)`, the fault was not
-in an opcode — look at `--native` code or a library call instead.
+`LOFT_LOG=static` maps to source. If the report says `(none — crash outside
+interpreter)`, the fault was not in an opcode — look at `--native` code or a
+library call instead.
+
+**`at:` is a lower bound, not an answer — read the `pc+` suffix.** The span table
+holds one entry per statement and none at all for regions no statement produced,
+and the lookup takes the last entry at or before the crashing pc. When something
+is recorded nearby, that IS the site and the line prints bare. When nothing is,
+the lookup reaches arbitrarily far back, so the report says how far:
+
+```
+  at:      /…/default/05_coroutine.loft:18:27  (nearest span, pc+280 — NOT necessarily this line)
+  at:      (no source span covers this pc)
+```
+
+Unqualified, that first line sent loft#806's reader into coroutine code the
+program never calls. A confident wrong location is worse than none: silence makes
+you look, an answer sends you away. So treat any non-zero `pc+` as "the nearest
+thing recorded", and `fn:`/`op:` as the reliable pair.
+
+**`last op:` names the opcode**, resolved through a table the interpreter
+publishes once per process (`crash_report::set_op_names`) — a signal handler
+cannot borrow the definitions table, so the names are made `'static` up front.
+The number alone (`op=249`) identifies nothing; the name is what points at a
+subsystem, and on loft#806 `OpAppendStackText` did in one line what a matrix of
+19 probes had not. Cross-check it against `LOFT_LOG=minimal`, whose trace ends at
+the same op by an independent path — that agreement is what calibrates the
+reading.
 
 ### An unexplained SIGSEGV in a package: suspect the auto-built cdylib
 

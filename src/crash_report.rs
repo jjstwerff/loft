@@ -81,6 +81,31 @@ impl Ctx {
     };
 }
 
+/// Opcode number → name, published once per process by [`set_op_names`].
+///
+/// The report used to print a bare `op=249`, which names nothing a reader can act
+/// on — the whole point of a crash report is to say WHAT was running.  The name is
+/// known (`Data::operator_name`), it was simply never on the path a signal handler
+/// can reach: a handler cannot allocate, cannot lock, and cannot borrow anything
+/// the crashing thread might hold.  A `OnceLock` of leaked strings can be read from
+/// one (a relaxed atomic load and an index — the same shape as `PROGRAM` above),
+/// and it is built once, off the signal path, from the definitions table.
+static OP_NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+/// Publish the opcode-name table.  Idempotent; the first call wins, which is what
+/// makes it safe to call from every execute entry rather than one blessed site.
+pub fn set_op_names(names: Vec<&'static str>) {
+    let _ = OP_NAMES.set(names);
+}
+
+/// The name of opcode `op`, or `""` when no table was published.
+fn op_name_of(op: u8) -> &'static str {
+    OP_NAMES
+        .get()
+        .and_then(|v| v.get(op as usize).copied())
+        .unwrap_or("")
+}
+
 /// Used by the installer to ensure we only install once per process.
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -393,11 +418,20 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
     // (we then skip the source-loc print) instead of panicking on
     // a conflict.  Worst case: the crash report omits the source
     // line, which is the same as the pre-phase-3 behaviour.
+    // The span AND the pc it was recorded at.  The lookup is "the last span at or
+    // before pc", which is only the crash site when a span actually covers that pc
+    // — and the table is sparse (one entry per statement, and none at all for
+    // regions no statement produced).  Unqualified, it reported loft#806's fault
+    // at `default/05_coroutine.loft:18:27`, a stdlib line the program never calls,
+    // and sent the reader there.  Carrying the DISTANCE turns a confident wrong
+    // answer into a reading that says how much to trust it: `+0` is the statement,
+    // `+3121` is "the nearest thing recorded, three thousand bytes back".
     let source_loc = SOURCE_SPANS.with(|s| {
         s.try_borrow().ok().and_then(|borrow| {
             borrow
                 .as_ref()
-                .and_then(|m| m.range(..=ctx.pc).next_back().map(|(_, p)| p.clone()))
+                .and_then(|m| m.range(..=ctx.pc).next_back())
+                .map(|(at, p)| (*at, p.clone()))
         })
     });
     let sig_name = match sig {
@@ -418,7 +452,10 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
     if ctx.op_name.is_empty() {
         let _ = w.str("(none — crash outside interpreter)\n");
     } else {
-        let _ = w.str(ctx.op_name);
+        // The opcode's own name when the table reached us, else the dispatch
+        // label — never just the number, which names nothing.
+        let named = op_name_of(ctx.op_code);
+        let _ = w.str(if named.is_empty() { ctx.op_name } else { named });
         let _ = w.str(" (op=");
         let _ = w.u32(u32::from(ctx.op_code));
         let _ = w.str(")\n  pc:       ");
@@ -435,14 +472,26 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
         // Plan-07 phase 3 — emit `at file:line:col` when the source
         // span lookup succeeded.  Truncate file path to fit; the
         // user can still grep for it.
-        if let Some(pos) = source_loc.as_ref() {
+        if let Some((span_pc, pos)) = source_loc.as_ref() {
             let _ = w.str("  at:      ");
             let _ = w.str(&pos.file);
             let _ = w.str(":");
             let _ = w.u32(pos.line);
             let _ = w.str(":");
             let _ = w.u32(pos.pos);
-            let _ = w.str("\n");
+            // How far the crashing pc is PAST the statement this line describes.
+            // Zero means the line is the site; anything large means the table had
+            // nothing nearer and the line is a lower bound, not an answer.
+            let gap = ctx.pc.saturating_sub(*span_pc);
+            if gap == 0 {
+                let _ = w.str("\n");
+            } else {
+                let _ = w.str("  (nearest span, pc+");
+                let _ = w.u32(gap);
+                let _ = w.str(" — NOT necessarily this line)\n");
+            }
+        } else {
+            let _ = w.str("  at:      (no source span covers this pc)\n");
         }
     }
     let _ = w.str("===\n");
