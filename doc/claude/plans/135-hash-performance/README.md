@@ -479,6 +479,71 @@ it is a cell in the script test.
   order understates this path by ~2.5x, and every figure in this plan predating today
   was taken that way.
 
+## How to build H — the surface, read off the code (2026-08-09)
+
+Scoping pass before writing any of it. Three findings change the size of the job.
+
+**1. `--native` shares this runtime, so H needs NO separate codegen.** `OpGetRecord` in
+`codegen_runtime.rs` calls `stores.find(&data, db_tp, key)` — the same
+`database/search.rs` → `hash::find` the interpreter uses, and `OpNewRecord` /
+`OpFinishRecord` delegate the same way. Fix the runtime and both backends move together.
+This was the main reason H looked MH-shaped; it is smaller than it reads.
+
+**2. The per-entry overhead is one word, and it is not spare.** `record_new`'s keyed arm
+claims `1 + ceil(size/8)` words per entry. Word 0 holds the size header in bytes 0–3 and a
+**back-pointer to the owning collection in bytes 4–7**; the payload starts at offset 8,
+which is why an entry `DbRef` carries `pos: 8`. So `{integer,integer}` costs 24 B where a
+dense `vector<Entry>` costs 16, and `claim_block` takes a whole free block rather than
+split when the remainder is under a third — that is the measured 27.67 B/entry.
+
+**The back-pointer is READ, not just written**: `database/search.rs:116` and `:146` test it
+to decide whether a record is live, and `state/io.rs:750` reads the same offset as a stored
+TYPE for a different record kind. An arena has no per-entry word to put it in, so H must
+give it a home — per CHUNK is the obvious one, since every entry in a chunk shares an
+owner — and must keep `search.rs`'s liveness test answering the same question.
+
+**3. Entry creation and entry freeing must land in the SAME commit.** `record_new` claims
+the entry; `allocation.rs`'s `Parts::Hash` arm enumerates `hash::records()` and frees each
+entry as an `OwnedChild`. Redirect creation into an arena without changing the free path
+and the collector frees interior arena bytes as if they were records — silent heap
+corruption, the failure this subsystem is ranked weakness #1 for. They are one change.
+
+### Layout
+
+The bucket slot stays **4 bytes**. It holds a 1-based ENTRY INDEX, not a record number;
+`(chunk, offset)` is arithmetic (`chunk = (idx-1) >> SHIFT`, `off = ((idx-1) & MASK) *
+stride`) against a chunk directory that is a handful of `u32`s and therefore always cache-
+resident. That is not a shortcut around the Q5 measurement — it is what the Q5 probe
+measured: `vector<vector<Entry>>` pays exactly this directory hop, so the 86 ns figure
+already includes it. Widening the slot to 8 bytes to hold `(chunk_rec, offset)` directly
+would remove a hop that costs nothing and double the bucket table, which is the trade arc D
+already lost.
+
+Table record: `LEN` and `SEED` keep their offsets; add `DIR` (the chunk-directory record)
+and `NEXT` (the append cursor) before `BUCKET0`, and bump `BUCKET0`. The directory is its
+own record so it can grow without moving entries — **growth appends a chunk and never
+reallocates a filled one, which is the whole of Q5's answer.**
+
+### Touch points
+
+| file | what changes |
+|---|---|
+| `hash.rs` | arena alloc + index decode; `add`/`find`/`remove`/`records`/`count`/`table_bytes`/`rehash_into` |
+| `database/structures.rs` | `record_new` keyed arm → arena slot for `Parts::Hash`; `finish_record` |
+| `database/allocation.rs` | the `Parts::Hash` owned-child arm, and `copy_claims` (@P318) |
+| `database/search.rs` | the liveness test that reads offset 4 |
+| `paged_reader.rs` | its read-only port of `find` |
+| `placement.rs` | bump `placement::HASH` — the mechanism Q2 shipped for exactly this |
+| `fill.rs` | nothing, if `count`/`table_bytes` keep their contracts |
+
+### Gates
+
+`loft introspect` on BOTH backends before and after (CODEGEN_METHOD.md); the boundary
+matrix on `--interpret` first, then both; `placement_contract_is_pinned` MUST fail and be
+re-blessed with the new constants — a token nobody bumps is a comment; and
+`a_changed_placement_token_refuses_the_store` must still refuse a pre-H store rather than
+misread it. Re-measure against **34 MB**, not 49.
+
 ## Open design questions
 
 1. **(blocks D, E, H) Approach `Dictionary` or match it?** — **measured 2026-08-09; the
