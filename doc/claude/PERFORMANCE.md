@@ -50,10 +50,21 @@ Wall-clock milliseconds, **best of 3 warm runs**, single core, Linux x86-64, **r
 | 05 | Mandelbrot                       |  141 |   13 |   9 |  10 | **0.09×** | **0.9×** |
 | 06 | Newton sqrt                      | 1216 |  657 | 196 | 115 | **0.54×** | 1.7× |
 | 07 | string build                     |   51 |   47 |  25 |  20 | **0.92×** | 1.25× |
-| 08 | word frequency (hash map)        |   50 |   59 |  41 |   2 | 1.18× | **20.5×** |
+| 08 | word frequency (hash map)        |   50 |   59 |  41 |   2 | 1.18× | ~~20.5×~~ ⚠ see note |
 | 09 | matrix mul (float)               |  131 |  104 |  49 |   2 | **0.79×** | **24.5×** |
 | 10 | insertion sort                   |   97 |   73 |  37 |   2 | **0.75×** | **18.5×** |
 | 11 | parallel-for                     |   65 |   40 |  17 |   5 | **0.62×** | 3.4× |
+
+> ⚠ **Row 08's `native/Rust` ratio was never like-for-like** (found 2026-08-09). `bench.loft`
+> ran `n = 600000` while `bench.rs` ran `n = 100_000` — both added that way in the same commit
+> (`df9cb269`), so every published 08 ratio compared loft against a Rust baseline doing one
+> sixth of the work. `bench.rs` now uses `600_000` and carries a comment saying the two must
+> match. Re-measured like-for-like on one dev machine: Rust `-O` 9 ms, `loft --native-release`
+> 50–58 ms — about **6×**, not 20.5×. The absolute numbers are not comparable to this table
+> (different hardware), so 08 needs a full `bench/run_bench.sh` re-run before it is quoted
+> again. The hash rows are doubly out of date: they also predate **@PLN135**, which measured
+> integer-key insert 933 → 505 ms (350 ms with `reserve`) and lookup ~95 → ~75 ms — see
+> [plans/135-hash-performance/README.md](plans/135-hash-performance/README.md).
 
 **What changed since the old table (and what it means):**
 - **The interpreter now beats CPython on 8 of 11** (interp/Py 0.09–1.22, median ~0.6) — the
