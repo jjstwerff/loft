@@ -1730,6 +1730,16 @@ impl Parser {
                     );
                     return;
                 }
+                // loft#826 — a file-scope constant declared by the file that
+                // `use`d this one reaches here as an unknown VARIABLE, because
+                // that is all a name with no definition behind it can be.  Same
+                // boundary as the unknown-function and undefined-type cases, and
+                // the same cure; without it the reader is told `TOP` is a typo
+                // while looking straight at `TOP` in the importing file.
+                if let Some(note) = self.importer_boundary_note(&name) {
+                    diagnostic_at!(self.lexer, pos, Level::Error, "{note}");
+                    return;
+                }
                 let candidates: Vec<&str> = (0..self.vars.count())
                     .filter(|&v| {
                         v != *nr && self.vars.is_defined(v) && !self.vars.tp(v).is_unknown()

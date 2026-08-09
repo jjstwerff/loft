@@ -5955,6 +5955,62 @@ impl Data {
             .map_or(&[][..], Vec::as_slice)
     }
 
+    /// loft#826 — the file that `use`d THIS one and declares `name` itself.
+    ///
+    /// Imports flow one way: `use helper;` puts helper's public names into the
+    /// importer, never the importer's names into helper.  A `use`d file is also
+    /// parsed BEFORE the file that used it reaches its own definitions, so a
+    /// name the importer declares is not merely out of scope — it does not
+    /// exist yet when the used file asks for it.
+    ///
+    /// Both facts are invisible in the resulting message: `make` is right there
+    /// in a sibling file, and "Unknown function make — did you mean 'move'?"
+    /// points away from the reason.  This answers the question a diagnostic
+    /// needs in order to name the boundary instead: *is the name declared by
+    /// someone who imported me?*
+    ///
+    /// Returns that definition, so the caller can cite the file and line the
+    /// author is looking for.  Only a DECLARATION counts, because an importer
+    /// that merely re-exports a third package's name is not where the author
+    /// should look — the cure there is a `use` of that third package, not the
+    /// one this message gives.
+    ///
+    /// The test is the definition's `position`, not its `source`.  A `source`
+    /// says which file first NAMED a type, which is not the same question: the
+    /// three `DefType::Unknown` arms in `definitions.rs` let a declaration ADOPT
+    /// a stub some other file left behind, upgrading it in place and re-pointing
+    /// its `position` while its `source` keeps naming that other file.  That
+    /// adoption is what makes a cross-file forward reference resolve at all, so
+    /// it is the common case here rather than a corner — and it is why an
+    /// importer's own `struct Thing` can be sitting under a used file's source
+    /// number.  `position` is re-pointed by each of those arms, so it names the
+    /// declaring file in both the adopted and the ordinary case.
+    ///
+    /// Unresolved stubs are skipped for the same reason they are skipped in
+    /// [`refuse_ambiguous_import`](crate::parser::Parser::refuse_ambiguous_import):
+    /// a stub is a placeholder for the very question being asked.
+    #[must_use]
+    pub fn declared_by_importer(&self, name: &str) -> Option<u32> {
+        let me = self.source;
+        self.applied
+            .iter()
+            .filter(|imp| imp.lib_source == me && imp.into_source != me)
+            .find_map(|imp| {
+                let d_nr = *self.def_names.get(&(name.to_string(), imp.into_source))?;
+                let def = &self.definitions[d_nr as usize];
+                if matches!(def.def_type(), DefType::Unknown) {
+                    return None;
+                }
+                // Is that definition written in the importer's own file?  A file
+                // is what the author sees, and it stays the right question even
+                // when adoption has moved the `source` underneath it.
+                self.definitions
+                    .iter()
+                    .any(|d| d.source == imp.into_source && d.position.file == def.position.file)
+                    .then_some(d_nr)
+            })
+    }
+
     /// Import a single name from `lib_source` into `into_source`, BINDING it
     /// under `bind` (= `name` for a plain `use lib::name`, or the alias for
     /// `use lib::name as bind` — @PLN22 Phase 3).  Returns `false` if neither the

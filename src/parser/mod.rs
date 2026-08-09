@@ -2110,7 +2110,23 @@ impl Parser {
             // here (and in `typedef.rs`); it is now one row of the cross-language
             // alias table `suggest_type_name` consults, so both deferred and direct
             // sites word it identically from one home.
-            let msg = if let Some(s) = self.data.suggest_type_name(&stub_name) {
+            // loft#826 — same boundary as the unknown-function case, reached the
+            // other way.  A type the importer declares resolves here only for
+            // whichever used file's stub the importer's declaration happened to
+            // adopt; a second used file naming the same type is left with a stub
+            // nothing upgrades, and "Undefined type Thing" about a type declared
+            // one file away reads as a compiler fault rather than a scope rule.
+            //
+            // `self.data.source` drives `declared_by_importer`, and the stub's
+            // own source is the file that asked — not necessarily the one the
+            // parser rests on once every file has drained.
+            let saved_source = self.data.source;
+            self.data.source = source;
+            let boundary = self.importer_boundary_note(&stub_name);
+            self.data.source = saved_source;
+            let msg = if let Some(note) = boundary {
+                note
+            } else if let Some(s) = self.data.suggest_type_name(&stub_name) {
                 format!("Undefined type {stub_name} — did you mean '{s}'?")
             } else {
                 format!("Undefined type {stub_name}")
@@ -4193,7 +4209,17 @@ impl Parser {
                     // `random` — so this is offered first.  Bare calls still do
                     // not resolve; this only replaces a dead end with the two
                     // ways to say what was meant.
-                    if let Some(hint) = registry_fn_hint(name, &self.data.resolved_libraries()) {
+                    // loft#826 — a name declared by the file that `use`d this one
+                    // is not a misspelling of anything, and it outranks both the
+                    // registry hint and the fuzzy guess: those answer "where else
+                    // could this live?", and here we already know exactly where it
+                    // lives and why it does not reach.  The fuzzy guess is what
+                    // turned this into "did you mean 'move'?".
+                    if let Some(note) = self.importer_boundary_note(&format!("n_{name}")) {
+                        diagnostic_at!(self.lexer, name_pos, Level::Error, "{note}");
+                    } else if let Some(hint) =
+                        registry_fn_hint(name, &self.data.resolved_libraries())
+                    {
                         diagnostic_at!(self.lexer, name_pos, Level::Error, "{hint}");
                     } else if let Some(s) = self.suggest_function_name(name) {
                         diagnostic_at!(
@@ -10803,7 +10829,29 @@ impl Parser {
         if winner == u32::MAX || self.ambiguity_reported.contains(name) {
             return;
         }
-        let others = self.data.ambiguous_with(name);
+        // loft#826 — an unresolved forward-reference stub is not a declaration.
+        //
+        // A file that names a type its importer declares registers a `Unknown`
+        // stub in its OWN source, and that stub is pub-visible, so it imports
+        // back into the importer like any other public name.  With two such
+        // files the second stub lands on the first and is recorded here as a
+        // rival — and the message then told the author to write `helper::Thing`
+        // or `second::Thing` when neither file declares `Thing` at all and the
+        // one that does was the line above.  A qualification naming a package
+        // that has no such type cannot resolve, so following the advice was a
+        // dead end in both directions.
+        //
+        // Reported at USE (see above), so by the time this runs every stub that
+        // was going to resolve has: one still `Unknown` here declares nothing
+        // and never will.  Dropping them can only remove a claim that was
+        // false; a genuine two-package collision has real defs on both sides.
+        let others: Vec<u32> = self
+            .data
+            .ambiguous_with(name)
+            .iter()
+            .copied()
+            .filter(|&d| !matches!(self.data.def(d).def_type(), DefType::Unknown))
+            .collect();
         if others.is_empty() {
             return;
         }
@@ -10824,6 +10872,35 @@ impl Parser {
             "`{bare}` is declared by more than one package here — write {} to say which",
             spellings.join(" or ")
         );
+    }
+
+    /// loft#826 — the message for a name that is declared, but by the file that
+    /// `use`d this one.
+    ///
+    /// `use helper;` imports helper's public names into the importer.  It does
+    /// not import the importer's names into helper, and helper is parsed BEFORE
+    /// the importer reaches its own definitions — so the name genuinely is not
+    /// there.  Nothing in "Unknown function make — did you mean 'move'?" says
+    /// so, and the author is looking straight at `make` two files away.
+    ///
+    /// Returns `None` when no importer declares it, so every caller keeps its
+    /// existing message for the ordinary case.  The cure is the one that
+    /// actually compiles: a third file both `use`, verified end to end by
+    /// `tests/package_layout.rs::shared_sibling_carries_types_and_functions`.
+    pub(crate) fn importer_boundary_note(&self, storage_name: &str) -> Option<String> {
+        let d_nr = self.data.declared_by_importer(storage_name)?;
+        let bare = storage_name.strip_prefix("n_").unwrap_or(storage_name);
+        let pos = self.data.def(d_nr).position();
+        let file = std::path::Path::new(&pos.file)
+            .file_name()
+            .map_or_else(|| pos.file.clone(), |f| f.to_string_lossy().into_owned());
+        Some(format!(
+            "`{bare}` is declared in {file}:{}, which `use`s this file — a `use` \
+             imports the used file's names into the file that used it, never the \
+             other way round.  Move `{bare}` into a file that BOTH `use`, and \
+             `use` it here.",
+            pos.line
+        ))
     }
 
     /// Plan-07 phase 5 suggestions.  Find a similar field name on
