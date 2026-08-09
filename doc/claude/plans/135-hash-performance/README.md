@@ -15,7 +15,10 @@ left is **H**. **Q1 is answered H, not D**; **Q2's refusal mechanism is in the t
 layout.** H makes an entry a position inside one contiguous array, so growing that array
 moves every entry and invalidates every outstanding reference into it — a stability
 callers have today and would lose (**Q5**, new). That is an ownership question in the area
-ranked weakness #1, not plumbing. **Q4** (load factor) is settled inside H.
+ranked weakness #1, not plumbing. Q5 has a leading candidate — a **chunked arena**, which
+keeps every live entry at the address it was given while still dropping the per-record
+header that is most of the gap — and a probe that measures it without building H. **Q4**
+(load factor) is settled inside H.
 
 **Q1 — answered: H, not D.** See
 [§ The Q1 measurement (2026-08-09)](#the-q1-measurement-2026-08-09--it-is-one-access-and-it-is-a-byte-problem).
@@ -478,11 +481,26 @@ it is a cell in the script test.
 
    So H is not only a format break, it is an OWNERSHIP change, and it lands in the area
    [`OWNERSHIP_MODEL.md`](../../OWNERSHIP_MODEL.md) and CLAUDE.md rank as weakness #1.
-   Decide before building: does an entry reference borrow (and H must make growth
-   invalidate it the way a vector's does), or must H keep entries stable — which costs
-   either an indirection back to the 82% term it exists to remove, or a stable-slot
-   scheme with tombstones that never moves a live entry? **This question, not the byte
-   layout, is the expensive half of H.**
+   **This question, not the byte layout, is the expensive half of H.**
+
+   **Leading candidate — a CHUNKED arena, not one array.** Making the entry reference
+   borrow (growth invalidates it, as a vector's does) is the obvious answer and the wrong
+   one: it silently breaks programs that work today, which
+   [`COMPATIBILITY.md`](../../COMPATIBILITY.md) forbids, and it breaks them into a *wrong
+   read* rather than an error. But the dilemma is false. H needs entries DENSE; it does
+   not need them in ONE allocation. An arena that grows by appending a new chunk — never
+   reallocating a chunk that already holds entries — keeps every live entry at the address
+   it was given, so a `DbRef{rec: <chunk claim>, pos: <offset>}` stays valid for the
+   entry's whole life, exactly as today's per-entry claim does. The bucket table keeps
+   doubling and rehashing; bucket slots are indices and cost nothing to move.
+
+   That buys most of what H is for. The measured gap is ~27.7 B/entry against a dense
+   vector's 16 (33 total − 5.33 of buckets), and the difference is per-record header — the
+   thing chunking removes. What it gives up is cross-chunk contiguity, so the chunk size
+   sets how close H gets to the 93 ns `vector<Entry>` ceiling. **Probe before building:**
+   a `vector<Entry>` read in shuffled order, chunked at several sizes, measures the whole
+   candidate without writing any of H (the same trick § What arc H can buy already used —
+   the layout it proposes IS a shape the language can already build).
 
 ## Cross-arc dependencies
 
