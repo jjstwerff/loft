@@ -1,0 +1,59 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN135 Q1 — how many bytes does a hash actually spend per entry?
+//
+// The Q1 ablation puts 82% of a 1M random lookup in ONE place: the read of the entry
+// record. That is a working-set cost, so the deciding number is not a time at all — it is
+// bytes per entry. `store_persist_bind` snapshots the store's live bytes verbatim (see
+// `Stores::bind_path` — it sizes the image from the high-water mark, it does not compact),
+// so the file IS the store image, every claimed block in it, reachable or not. That makes
+// bytes-per-entry exact rather than an RSS guess: peak RSS cannot tell a live table from
+// the second copy a rehash transiently holds.
+//
+// ONE CONFIGURATION PER PROCESS, and this is not a style preference. An earlier cut ran
+// every shape and size from one `main`, and its grown-1M row was WRONG: a collection's
+// store slot is reused between iterations, so the second fill started in a buffer the
+// first had already grown and inherited its growth ladder. That version read 49.26 MB
+// both before and after the abandoned-table fix, while a single-shot run reads 49.26 MB
+// before and 34.02 MB after — the harness was measuring itself. Hence the argument.
+//
+//   loft --native-release q1-store-footprint.loft vec      1000000
+//   loft --native-release q1-store-footprint.loft reserved 1000000
+//   loft --native-release q1-store-footprint.loft grown    1000000
+//
+//   vec       — `vector<Entry>`, elements inline: the dense floor, and arc H's shape
+//   reserved  — a hash pre-sized once, so the bucket table is built exactly once
+//   grown     — the same hash filled without `reserve`, so the table is rebuilt at every
+//               doubling. Before @PLN135's table-free fix this stranded each old table as
+//               a claimed, unreachable block; the gap to `reserved` is what that cost.
+
+struct Entry { key: integer, val: integer }
+
+fn main() {
+  a = arguments();
+  // `arguments()` excludes the program name: [0] is the first user argument.
+  shape = a[0] ?? "grown";
+  n: integer = ((a[1] ?? "1000000") as integer?) ?? 1000000;
+  p = "/tmp/loft-pln135-{shape}-{n}.store";
+
+  if shape == "vec" {
+    // `store_persist_bind` takes a keyed collection, not a vector, so this row is read
+    // from `size(v)` — exact for an inline element type: count x in-buffer stride.
+    v: vector<Entry> = [];
+    reserve(v, n);
+    for i in 0..n { v += [Entry { key: i, val: i * 2 }]; }
+    per: integer = (size(v) / n) ?? 0;
+    println("vec      n={n:>7} store={size(v):>10}B {per:>4} B/entry buckets=0B len={v.len()}");
+  } else {
+    h: hash<Entry[key]> = [];
+    if shape == "reserved" { reserve(h, n); }
+    for i in 0..n { h += Entry { key: i, val: i * 2 }; }
+    if store_persist_bind(h, p) {
+      bytes = file(p).size;
+      per: integer = (bytes / n) ?? 0;
+      println("{shape:<8} n={n:>7} store={bytes:>10}B {per:>4} B/entry buckets={size(h)}B len={h.len()}");
+    } else {
+      println("{shape} n={n} persist REFUSED");
+    }
+  }
+}

@@ -16410,8 +16410,16 @@ fn pln87_l7_heap_reference_live_across_reassign() {
 /// ("Need an iterable expression") used to `return` WITHOUT `finish_loop`-ing the
 /// loop scope it had already opened, so the ENCLOSING loop's `finish_loop` tripped
 /// the `assert_eq!(current_loop, loop_nr)` "Incorrect loop finish" panic — masking
-/// the real diagnostic.  The parse must now diagnose cleanly (the field error)
-/// instead of panicking; this test would panic inside `parse_str` before the fix.
+/// the real diagnostic.  The parse must now diagnose cleanly instead of panicking;
+/// this test would panic inside `parse_str` before the fix.
+///
+/// loft#825 — what it diagnoses CLEANLY has since moved one step upstream, and this
+/// test is where the move is visible.  It used to answer "Unknown field Pt.roads",
+/// which is the stale binding's CONSEQUENCE: the field is missing only because `t`
+/// still carries the first loop's type, and no amount of work on `Rt` fixes it.  The
+/// loop-variable conflict now runs on both passes, so the diagnostic names `t` and
+/// the rename that resolves it.  The field error never happens — the parse stops at
+/// the conflict, one pass earlier than the field access it would have caused.
 #[test]
 fn loop_var_reuse_different_type_diagnoses_not_panics() {
     let mut p = Parser::new();
@@ -16437,8 +16445,11 @@ fn main() {
         p.diagnostics.lines()
     );
     assert!(
-        p.diagnostics.lines().iter().any(|l| l.contains("Pt.roads")),
-        "expected an 'Unknown field Pt.roads' diagnostic, got: {:?}",
+        p.diagnostics
+            .lines()
+            .iter()
+            .any(|l| { l.contains("loop variable 't'") && l.contains("Rt") && l.contains("Pt") }),
+        "expected the loop-variable conflict to name 't' and both element types, got: {:?}",
         p.diagnostics.lines()
     );
 }

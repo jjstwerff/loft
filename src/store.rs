@@ -3425,13 +3425,21 @@ mod tests {
     /// shape that produces a size-`0` record needs a whole consumer package to arise
     /// (the report's own reduction, and the reconstructions here, all came out clean),
     /// while the invariant being asserted is one bit.
+    /// The corruption is written through `addr_mut`, NOT `set_i32_raw`, and that is
+    /// the point rather than a detail. `set_i32_raw` routes through
+    /// [`valid`](Store::valid), which debug-asserts `fld >= 4` — the size word is a
+    /// header, not a field — so with debug assertions ON this test used to die at the
+    /// SETUP line with "Fld 0 is outside of record 1 size 24", and `should_panic`
+    /// accepted it: a test that never reached its subject read as a passing one
+    /// everywhere except the debug-assertions gate. A real corruption does not arrive
+    /// through the field API either.
     #[test]
     #[should_panic(expected = "claims size 0")]
     fn a_record_claiming_size_zero_is_refused_not_wrapped() {
         let mut store = Store::new(8);
         store.free = false;
         let rec = store.claim(3);
-        store.set_i32_raw(rec, 0, 0); // the corruption the report observed
+        *store.addr_mut::<i32>(rec, 0) = 0; // the corruption the report observed
         store.zero_fill(rec);
     }
 

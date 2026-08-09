@@ -1832,7 +1832,14 @@ impl State {
         let pos = self.code::<u16>();
         let raw_tp = self.code::<u16>();
         let src = *self.get_stack::<DbRef>();
-        if src.store_nr == u16::MAX {
+        // `rec == 0` is the absence test, not `store_nr == u16::MAX` — the doc above already
+        // says so ("`v == null` … tests `rec == 0`") while the guard asked the narrower
+        // question.  Absence has two spellings: the null sentinel carries `store_nr ==
+        // u16::MAX`, and an index past the end of a LIVE container carries the container's
+        // real `store_nr` with `rec == 0` (`vector::get_vector`).  Reading only the first
+        // left `k = v[oob]` deep-copying from a record that is not there, so `k` came back
+        // holding the pre-allocated record's uninitialised bytes instead of null (loft#823).
+        if src.rec == 0 {
             // Null return: reclaim the pre-allocated destination record and bind
             // the null sentinel so `v == null` holds.
             let dst = *self.get_var::<DbRef>(pos);

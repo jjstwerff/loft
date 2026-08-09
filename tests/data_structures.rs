@@ -791,3 +791,66 @@ fn find_rec(key: u8, before: bool, s: u16, v: u16, data: &DbRef, stores: &Stores
     };
     stores.rec(&rec, s)
 }
+
+/// @PLN135 — a bucket table that is no longer the hash's table is given back.
+///
+/// `add`'s growth path and `reserve` on a non-empty hash both claim a new table, rehash
+/// into it and repoint the field. Neither returned the old claim — `hash.rs` never called
+/// `Store::delete` at all — so every doubling stranded its predecessor as a block that is
+/// CLAIMED and unreachable. `store_reclaim` cannot recover such a block (it is not free),
+/// and `store_persist_bind` snapshots the store verbatim, so the dead tables went to disk:
+/// a grown 1M-entry hash persisted 49.3 MB where the identical content pre-sized persisted
+/// 33.0 MB.
+///
+/// The assertion is a COUNT, not a size, because a count cannot be argued with: the store's
+/// claimed-record total must not depend on how many times the table was rebuilt. Comparing
+/// two fills cancels the fixed overhead (the root record, the one live table), so what is
+/// left is exactly one claim per entry. Before the fix the larger fill carried one extra
+/// claim per doubling it had been through.
+#[test]
+pub fn hash_growth_frees_the_table_it_replaces() {
+    fn claims_for(n: u32) -> (u32, u32) {
+        let mut stores = Stores::new();
+        let s = stores.structure("Elm", 0);
+        stores.field(s, "key", stores.name("integer"));
+        let m = stores.structure("Main", 0);
+        let v = stores.hash(s, &["key".to_string()]);
+        stores.field(m, "data", v);
+        stores.finish();
+        let db = stores.database(8);
+        let into = DbRef {
+            store_nr: db.store_nr,
+            rec: db.rec,
+            pos: 4,
+        };
+        stores.set_default_value(v, &into);
+        let body: Vec<String> = (0..n).map(|i| format!("{{key:{i}}}")).collect();
+        stores.parse(&format!("[{}]", body.join(",")), v, &into);
+        // Every key must still resolve — freeing a block someone reaches is worse than
+        // leaking it, so the count below only means something beside a correctness check.
+        for i in 0..n {
+            let key = [Content::Long(i64::from(i))];
+            let rec = hash::find(&into, &stores.allocations, stores.keys(v), &key);
+            assert_ne!(rec.rec, 0, "key {i} of {n} lost across the rebuilds");
+        }
+        let u = stores.allocations[db.store_nr as usize].usage();
+        (u.claimed_count, n)
+    }
+
+    // 8 entries stay inside the first table (16 slots, resize at 12): zero rebuilds.
+    let (small, small_n) = claims_for(8);
+    // 2000 entries cross ~8 doublings, so pre-fix this carried ~8 stranded tables.
+    let (large, large_n) = claims_for(2000);
+
+    let small_fixed = small - small_n;
+    let large_fixed = large - large_n;
+    assert_eq!(
+        large_fixed,
+        small_fixed,
+        "a rebuilt hash carries {} extra claimed record(s) that {} entries do not explain \
+         — the tables it replaced were never given back (claims: {large} for {large_n}, \
+         {small} for {small_n})",
+        large_fixed as i64 - small_fixed as i64,
+        large_n
+    );
+}

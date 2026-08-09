@@ -92,10 +92,19 @@ impl Ctx {
 /// and it is built once, off the signal path, from the definitions table.
 static OP_NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
 
-/// Publish the opcode-name table.  Idempotent; the first call wins, which is what
-/// makes it safe to call from every execute entry rather than one blessed site.
-pub fn set_op_names(names: Vec<&'static str>) {
-    let _ = OP_NAMES.set(names);
+/// Publish the opcode-name table, BUILDING it only when nothing has published one
+/// yet.  Idempotent; the first call wins, which is what makes it safe to call from
+/// every execute entry rather than one blessed site.
+///
+/// `build` is a closure rather than a ready-made table because building one costs
+/// 256 `Box::leak`s, and a leak is only acceptable as a ONE-OFF.  Taking the table
+/// by value let every caller pay that price and then hand it to a `OnceLock` that
+/// dropped all but the first: `execute_argv` runs once per program, so a test binary
+/// running a hundred of them leaked a hundred tables — 386 612 bytes in the nightly
+/// fuzz sweep, and a red ASan leak gate (loft#820).  The invariant was written down
+/// here ("published once per process") while the caller re-derived it every run.
+pub fn set_op_names(build: impl FnOnce() -> Vec<&'static str>) {
+    let _ = OP_NAMES.get_or_init(build);
 }
 
 /// The name of opcode `op`, or `""` when no table was published.
@@ -782,6 +791,31 @@ mod tests {
         assert!(
             compile_pos().is_none(),
             "cleared at the compile/run boundary"
+        );
+    }
+
+    /// loft#820 — the op-name table costs 256 `Box::leak`s, so it may be built
+    /// ONCE per process.  `execute_argv` publishes it once per PROGRAM, and a
+    /// table taken by value was therefore built (and leaked) on every run, with
+    /// only the first reaching the `OnceLock`.
+    ///
+    /// The assertion is on the SECOND call rather than on a build count, because
+    /// this runs in a shared test binary where another test may already have
+    /// published one — "a published table is never rebuilt" holds either way.
+    #[test]
+    fn a_published_op_name_table_is_never_rebuilt() {
+        // Whether this publishes or finds one already published, a table exists
+        // from here on.
+        set_op_names(|| vec![""; 256]);
+
+        let mut rebuilt = false;
+        set_op_names(|| {
+            rebuilt = true;
+            vec![""; 256]
+        });
+        assert!(
+            !rebuilt,
+            "the table was rebuilt over a published one — every rebuild leaks 256 strings"
         );
     }
 }

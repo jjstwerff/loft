@@ -1,0 +1,94 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN135 Q1 — the control that decides whether arc H can buy anything.
+//
+// `h-locality.loft` attributes a 1M shuffled lookup as 22 ns fixed + 18 ns bucket +
+// **185 ns record**. Arc H's claim is that a contiguous inline entry array fixes that.
+// It only can if the 185 ns is loft's LAYOUT and not the machine: one random read into
+// a working set that size has a floor, and if today's record read is already at it,
+// then no rearrangement of the same bytes helps and H is the wrong thing to buy.
+//
+// So: the same 1M elements, the same shuffled order, the same one-random-read shape —
+// but out of a dense contiguous vector instead of a hash's claimed records. A
+// `vector<Entry>` IS arc H's proposed layout (elements inline, insertion-ordered,
+// word-addressed), so this measures H's ceiling directly, without building it.
+//
+//   vec<Entry>   16 B/elem — H's shape: key and value inline and adjacent
+//   vec<integer>  8 B/elem — the densest possible read, the pure machine floor
+//   hash         the same payload behind `find`, quoted from h-locality for comparison
+//
+// The ascending rows are the prefetch control: if the shuffled figure is a genuine
+// random-access cost then ascending must be several times cheaper on the SAME data.
+
+struct Entry { key: integer, val: integer }
+
+fn order_of(n: integer, shuffled: boolean) -> vector<integer> {
+  ord: vector<integer> = [];
+  reserve(ord, n);
+  for i in 0..n {
+    if shuffled { ord += [(i * 748451) % n]; } else { ord += [i]; }
+  }
+  ord
+}
+
+fn lbl(n: integer, shuffled: boolean) -> text {
+  o = if shuffled { "shuffled " } else { "ascending" };
+  "n={n:>7} order={o}"
+}
+
+/// One random read into a dense `vector<Entry>` — arc H's layout, 16 B per element.
+fn probe_vec_struct(n: integer, shuffled: boolean) {
+  v: vector<Entry> = [];
+  reserve(v, n);
+  for i in 0..n { v += [Entry { key: i, val: i * 2 }]; }
+  ord = order_of(n, shuffled);
+  sum = 0;
+  t0 = ticks();
+  for k in ord { e = v[k]; if e != null { sum = sum + e.val; } }
+  t1 = ticks();
+  ns = ((t1 - t0) * 1000) / n;
+  ok = if sum == n * (n - 1) { "ok" } else { "WRONG" };
+  println("vec<Entry>   {lbl(n, shuffled)} ns={ns:>4} bytes={size(v)} {ok}");
+}
+
+/// One random read into a dense `vector<integer>` — 8 B per element, the machine floor.
+fn probe_vec_int(n: integer, shuffled: boolean) {
+  v: vector<integer> = [];
+  reserve(v, n);
+  for i in 0..n { v += [i * 2]; }
+  ord = order_of(n, shuffled);
+  sum = 0;
+  t0 = ticks();
+  for k in ord { sum = sum + (v[k] ?? 0); }
+  t1 = ticks();
+  ns = ((t1 - t0) * 1000) / n;
+  ok = if sum == n * (n - 1) { "ok" } else { "WRONG" };
+  println("vec<integer> {lbl(n, shuffled)} ns={ns:>4} bytes={size(v)} {ok}");
+}
+
+/// The same payload behind `find`, so the three sit in one table on one run.
+fn probe_hash(n: integer, shuffled: boolean) {
+  h: hash<Entry[key]> = [];
+  reserve(h, n);
+  for i in 0..n { h += Entry { key: i, val: i * 2 }; }
+  ord = order_of(n, shuffled);
+  sum = 0;
+  t0 = ticks();
+  for k in ord { e = h[k]; if e != null { sum = sum + e.val; } }
+  t1 = ticks();
+  ns = ((t1 - t0) * 1000) / n;
+  ok = if sum == n * (n - 1) { "ok" } else { "WRONG" };
+  println("hash<Entry>  {lbl(n, shuffled)} ns={ns:>4} buckets={size(h)} {ok}");
+}
+
+fn main() {
+  sizes: vector<integer> = [100000, 1000000];
+  for n in sizes {
+    probe_vec_int(n, false);
+    probe_vec_int(n, true);
+    probe_vec_struct(n, false);
+    probe_vec_struct(n, true);
+    probe_hash(n, false);
+    probe_hash(n, true);
+  }
+}

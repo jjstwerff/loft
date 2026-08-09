@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN135 Q1 — where does a 1M lookup's extra time actually go?
+//
+// After arcs A/B/C a cache-resident lookup is ~36 ns and a 1M one ~83 ns. The plan
+// attributes the gap to "two random accesses — the bucket slot and then the record",
+// and Q1 (arc D vs arc H) is chosen on which of the two carries it. That attribution
+// had never been measured, and it decides a persisted-store format break, so it is
+// measured here rather than reasoned about.
+//
+// Run under `LOFT_PROBE_HASH` (see `hash::find`):
+//   unset      — the real lookup: bucket slot read, then record read to compare the key
+//   skiprec    — bucket slot read, no record read
+//   floor      — bucket 0 (one cache line for every key), no record read
+// Subtracting the three splits the cost into record access, bucket access, and the
+// per-call work that cannot miss. `floor` and `skiprec` answer WRONG values on purpose
+// — a mode that still had to be correct could not drop the access being measured — so
+// the `field` variant's checksum is the liveness proof, not a result.
+//
+// TWO LOOKUP ORDERS, because this is the axis that makes the answer wrong. Keys go in
+// as 0..n and the entry records are claimed in that order, so looking them up as 0..n
+// walks the records ASCENDING — prefetchable, and nothing like a real workload (the
+// icosahedron edge-midpoint cache that raised #809 looks up in mesh order, not
+// insertion order). `step` is coprime to every n here (odd, not a multiple of 5, and
+// each n is 2^a·5^b), so `(i * step) % n` is a permutation over exactly the same keys.
+//
+// BOTH ORDERS ARE PRECOMPUTED INTO A VECTOR and the timed loop walks that vector. The
+// first cut of this probe computed the permutation inside the timed loop and charged
+// its 64-bit modulo — ~35 ns, comparable to the whole lookup — to the shuffled row.
+// Reading a sequential vector costs the same in both rows, so what is left between them
+// is the access pattern and nothing else.
+//
+// The lookup body deliberately does NOT read a field: `h[k] != null` tests the DbRef
+// (verified in the IR — `OpNeRef(OpGetRecord(…), OpNullRefSentinel())`, no field read),
+// so the only record access left is the one inside `find` that the ablation removes.
+
+struct Entry { key: integer, val: integer }
+
+/// The lookup order, precomputed so the timed loop pays the same for either.
+fn order_of(n: integer, shuffled: boolean) -> vector<integer> {
+  ord: vector<integer> = [];
+  reserve(ord, n);
+  for i in 0..n {
+    if shuffled { ord += [(i * 748451) % n]; } else { ord += [i]; }
+  }
+  ord
+}
+
+fn build(n: integer, presize: boolean) -> hash<Entry[key]> {
+  h: hash<Entry[key]> = [];
+  if presize { reserve(h, n); }
+  for i in 0..n { h += Entry { key: i, val: i * 2 }; }
+  h
+}
+
+fn label(n: integer, shuffled: boolean, presize: boolean) -> text {
+  ord = if shuffled { "shuffled " } else { "ascending" };
+  tbl = if presize { "reserved" } else { "grown   " };
+  "n={n:>7} order={ord} table={tbl}"
+}
+
+// Lookups that never touch a record in the PROGRAM — the timing shape.
+fn probe_nofield(n: integer, shuffled: boolean, presize: boolean) {
+  h = build(n, presize);
+  ord = order_of(n, shuffled);
+  hits = 0;
+  t0 = ticks();
+  for k in ord { if h[k] != null { hits = hits + 1; } }
+  t1 = ticks();
+  ns = ((t1 - t0) * 1000) / n;
+  println("nofield {label(n, shuffled, presize)} ns={ns:>4} hits={hits}");
+}
+
+// The same lookups, reading one field — the real-program number, and the control that
+// proves the ablation is live: `sum` is n*(n-1) when every lookup found its own record,
+// and anything else when it did not.
+fn probe_field(n: integer, shuffled: boolean, presize: boolean) {
+  h = build(n, presize);
+  ord = order_of(n, shuffled);
+  sum = 0;
+  t0 = ticks();
+  for k in ord { e = h[k]; if e != null { sum = sum + e.val; } }
+  t1 = ticks();
+  ns = ((t1 - t0) * 1000) / n;
+  expect = n * (n - 1);
+  ok = if sum == expect { "ok" } else { "WRONG (expected under an ablation)" };
+  println("field   {label(n, shuffled, presize)} ns={ns:>4} sum={sum} {ok}");
+}
+
+// The driver's own cost: the same walk over the same vector, with no lookup at all.
+// Whatever this costs is in every row above and is not the hash's.
+fn probe_walk(n: integer, shuffled: boolean) {
+  ord = order_of(n, shuffled);
+  acc = 0;
+  t0 = ticks();
+  for k in ord { acc = acc + k; }
+  t1 = ticks();
+  ns = ((t1 - t0) * 1000) / n;
+  println("walk    {label(n, shuffled, true)} ns={ns:>4} acc={acc}");
+}
+
+fn main() {
+  sizes: vector<integer> = [10000, 100000, 1000000];
+  for n in sizes { probe_walk(n, true); }
+  for n in sizes {
+    probe_nofield(n, false, true);
+    probe_nofield(n, true, true);
+  }
+  // The growth ladder settles at load 0.42 and a reserved table at 0.75, so the 1M
+  // bucket array is 10.2 MB against 5.3 MB — a difference big enough to move a cache
+  // answer, and therefore its own row rather than an assumption.
+  probe_nofield(1000000, true, false);
+
+  // The field-reading twin: the real-program cost, and the checksum control.
+  for n in sizes {
+    probe_field(n, false, true);
+    probe_field(n, true, true);
+  }
+}

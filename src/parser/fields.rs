@@ -1280,6 +1280,52 @@ impl Parser {
         )
     }
 
+    /// loft#821 — the DbRef a [`Parser::unbox_tuple_from_dbref`] block reads FROM, if
+    /// `code` is such a block.
+    ///
+    /// `v[i]` on a `vector<(…)>` parses as a READ: the element's DbRef is unboxed into a
+    /// stack tuple.  As the left-hand side of `v[i] = t` that read is the wrong shape —
+    /// the write needs the DbRef the elements live at.  Peel the unbox to recover it
+    /// rather than re-deriving the element address, so the write can never address a
+    /// different slot than the read.
+    pub(crate) fn stored_tuple_dest(code: &Value) -> Option<Value> {
+        let Value::Block(b) = code.unspan() else {
+            return None;
+        };
+        if b.name != "tuple_unbox" {
+            return None;
+        }
+        match b.operators.first()?.unspan() {
+            Value::Set(_, dbref) => Some((**dbref).clone()),
+            _ => None,
+        }
+    }
+
+    /// Bind an element accessor's INDEX to a local, so a destination that is written
+    /// through more than once evaluates it exactly once.
+    ///
+    /// Returns the accessor with its index replaced by that local, plus the statement that
+    /// binds it — prepend those to the writes.  An index that is already a variable or a
+    /// constant is returned untouched (nothing to save), and so is any shape that is not an
+    /// element accessor.
+    pub(crate) fn hoist_index_arg(&mut self, dest: Value) -> (Value, Vec<Value>) {
+        let Value::Call(d_nr, args) = dest.unspan() else {
+            return (dest, Vec::new());
+        };
+        let Some(index) = args.last() else {
+            return (dest, Vec::new());
+        };
+        if matches!(index.unspan(), Value::Var(_) | Value::Int(_)) {
+            return (dest, Vec::new());
+        }
+        let (d_nr, mut args) = (*d_nr, args.clone());
+        let tmp = self.create_unique("__elm_idx", &crate::data::I32);
+        self.vars.defined(tmp);
+        let bind = crate::data::v_set(tmp, args.pop().unwrap_or(Value::Null));
+        args.push(Value::Var(tmp));
+        (Value::Call(d_nr, args), vec![bind])
+    }
+
     /// @PLN110 3a / loft#749 — warn when a text slice ENDS at `len()` of the same text.
     ///
     /// `end` is the range end as written (before `convert` wraps it) and `subject` is the
@@ -1603,6 +1649,66 @@ impl Parser {
     /// check with the full type picture, so a genuinely wrong key is still rejected —
     /// just once, and pointing at a real mismatch.
     #[allow(clippy::too_many_lines)]
+    /// Expand a TUPLE key value into one value per element, so a lookup supplies exactly the
+    /// key contents the collection's descriptors expect.
+    ///
+    /// A tuple key field is a compound key spelled as one field: `hash<Cell[pos]>` with
+    /// `pos: (integer, integer)` registers TWO descriptors (`determine_keys_for`), so
+    /// `h[(3, 4)]` has to hand over two contents.  Handing over the tuple whole left the
+    /// runtime reading one content against two descriptors and indexing off the end of the
+    /// collection reference — a panic inside `hash::find`, not a diagnostic.
+    ///
+    /// An operand that is not already a tuple local is bound to one first (its elements are
+    /// read one by one, so an expression that does work must not be re-evaluated per
+    /// element); the binding lands in `prelude` for the caller to run before the lookup.
+    /// Nested tuples expand recursively, matching the descriptor side's flat element order.
+    fn expand_tuple_key_values(
+        &mut self,
+        key: Vec<Value>,
+        key_types: &[Type],
+        prelude: &mut Vec<Value>,
+    ) -> Vec<Value> {
+        let mut out = Vec::with_capacity(key.len());
+        for (i, val) in key.into_iter().enumerate() {
+            let Some(tp) = key_types.get(i) else {
+                out.push(val);
+                continue;
+            };
+            self.expand_one_tuple_key(val, tp, prelude, &mut out);
+        }
+        out
+    }
+
+    fn expand_one_tuple_key(
+        &mut self,
+        val: Value,
+        tp: &Type,
+        prelude: &mut Vec<Value>,
+        out: &mut Vec<Value>,
+    ) {
+        let Some(elems) = self.tuple_elements(tp) else {
+            out.push(val);
+            return;
+        };
+        // A tuple written AT the lookup — `h[(3, 4)]` — already has its elements as separate
+        // expressions; take them directly rather than building a local to read them back
+        // out of.
+        if let Value::Tuple(written) = val.unspan()
+            && written.len() == elems.len()
+        {
+            let written = written.clone();
+            for (v, elem_tp) in written.into_iter().zip(elems.iter()) {
+                self.expand_one_tuple_key(v, elem_tp, prelude, out);
+            }
+            return;
+        }
+        let holder = self.bind_tuple_operand(&val, tp, &elems, "__key_t", prelude);
+        for (i, elem_tp) in elems.iter().enumerate() {
+            let read = Value::TupleGet(holder, i as u16);
+            self.expand_one_tuple_key(read, elem_tp, prelude, out);
+        }
+    }
+
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
         // detect open-start `col[..hi]` or `col[..]` before parsing expression.
         let open_start = self.lexer.peek_token("..") || self.lexer.peek_token("..=");
@@ -1612,7 +1718,24 @@ impl Parser {
         } else {
             let t = self.expression(&mut p);
             if !self.convert(&mut p, &t, &key_types[0]) && !self.first_pass {
-                diagnostic!(self.lexer, Level::Error, "Invalid index key");
+                // A tuple key is the one place the arity is worth naming: `h[(1, 2, 3)]` on
+                // a `(integer, integer)` key is a plain miscount, and "Invalid index key"
+                // leaves the reader comparing the two spellings by eye.
+                if let (Some(given), Some(want)) =
+                    (self.tuple_elements(&t), self.tuple_elements(&key_types[0]))
+                    && given.len() != want.len()
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "this collection keys on {} — a {}-element tuple, but {} were given",
+                        key_types[0].name(&self.data),
+                        want.len(),
+                        given.len()
+                    );
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "Invalid index key");
+                }
             }
             t
         };
@@ -1805,9 +1928,30 @@ impl Parser {
                 Box::new(Value::Null),
             );
         } else {
-            let mut ls = vec![code.clone(), known.clone(), Value::Int(nr as i32)];
-            ls.append(&mut key);
-            *code = self.cl("OpGetRecord", &ls);
+            // A tuple key field carries several key contents; `nr` counts the FIELDS the
+            // caller supplied, which is what the too-few check below is about.
+            let mut prelude = Vec::new();
+            let mut vals = self.expand_tuple_key_values(key, key_types, &mut prelude);
+            let mut ls = vec![code.clone(), known.clone(), Value::Int(vals.len() as i32)];
+            ls.append(&mut vals);
+            let lookup = self.cl("OpGetRecord", &ls);
+            *code = if prelude.is_empty() {
+                lookup
+            } else {
+                // The block DELIVERS the looked-up element, so it carries the element's
+                // reference type.  Typed `Void` it type-checks and then hands the caller
+                // nothing — the assigned variable read a garbage DbRef.
+                let elem_type = match typedef {
+                    Type::Sorted(el, _, dep)
+                    | Type::Index(el, _, dep)
+                    | Type::Hash(el, _, dep)
+                    | Type::Radix(el, _, dep)
+                    | Type::Trie(el, _, dep) => Type::Reference(*el, dep.clone()),
+                    other => other.clone(),
+                };
+                prelude.push(lookup);
+                v_block(prelude, elem_type, "keyed_tuple_lookup")
+            };
             if matches!(typedef, Type::Hash(_, _, _)) && nr < key_types.len() {
                 diagnostic!(self.lexer, Level::Error, "Too few key fields");
             }

@@ -2110,7 +2110,23 @@ impl Parser {
             // here (and in `typedef.rs`); it is now one row of the cross-language
             // alias table `suggest_type_name` consults, so both deferred and direct
             // sites word it identically from one home.
-            let msg = if let Some(s) = self.data.suggest_type_name(&stub_name) {
+            // loft#826 — same boundary as the unknown-function case, reached the
+            // other way.  A type the importer declares resolves here only for
+            // whichever used file's stub the importer's declaration happened to
+            // adopt; a second used file naming the same type is left with a stub
+            // nothing upgrades, and "Undefined type Thing" about a type declared
+            // one file away reads as a compiler fault rather than a scope rule.
+            //
+            // `self.data.source` drives `declared_by_importer`, and the stub's
+            // own source is the file that asked — not necessarily the one the
+            // parser rests on once every file has drained.
+            let saved_source = self.data.source;
+            self.data.source = source;
+            let boundary = self.importer_boundary_note(&stub_name);
+            self.data.source = saved_source;
+            let msg = if let Some(note) = boundary {
+                note
+            } else if let Some(s) = self.data.suggest_type_name(&stub_name) {
                 format!("Undefined type {stub_name} — did you mean '{s}'?")
             } else {
                 format!("Undefined type {stub_name}")
@@ -3005,6 +3021,42 @@ impl Parser {
         )
     }
 
+    /// loft#822 — is `from` the STORED spelling of the STACK tuple type `to`?
+    ///
+    /// A tuple is one loft type written two ways: `Type::Tuple(…)` holds its elements on
+    /// contiguous stack slots, `Reference(__tuple<…>)` is a DbRef at the same elements'
+    /// stored bytes.  [`Parser::convert`] answers such a pair by UNBOXING the value, so a
+    /// caller that keeps classifying on `from` afterwards is reading a type the value no
+    /// longer has — ask this instead of comparing the two spellings by hand.
+    pub(crate) fn unboxes_stored_tuple(&self, from: &Type, to: &Type) -> bool {
+        let (Type::Reference(d_nr, _), Type::Tuple(dst_elems)) = (from, to) else {
+            return false;
+        };
+        if !self.data.def(*d_nr).name().starts_with("__tuple<") {
+            return false;
+        }
+        let attrs = self.data.def(*d_nr).attributes();
+        attrs.len() == dst_elems.len()
+            && attrs
+                .iter()
+                .zip(dst_elems)
+                .all(|(a, d)| a.typedef.is_equal(d))
+    }
+
+    /// Element types of a stored tuple (`Reference(__tuple<…>)`), in order — the argument
+    /// [`Parser::unbox_tuple_from_dbref`] needs.  Empty for any other type.
+    pub(crate) fn stored_tuple_elements(&self, stored: &Type) -> Vec<Type> {
+        let Type::Reference(d_nr, _) = stored else {
+            return Vec::new();
+        };
+        self.data
+            .def(*d_nr)
+            .attributes()
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect()
+    }
+
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
@@ -3116,6 +3168,30 @@ impl Parser {
             if all_compatible {
                 return true;
             }
+        }
+        // loft#822 — the STORED spelling of a tuple reaching a STACK-tuple slot.
+        //
+        // A tuple is one loft type written two ways: `Type::Tuple(…)` (its elements on
+        // contiguous stack slots) and `Reference(__tuple<…>)` (a DbRef at the element's
+        // inline bytes).  The stored spelling is what a `vector<(…)>` loop variable
+        // carries (`for_type`, P189b) and what a HEAP-carrying tuple return carries
+        // (`tuple_return_rewrite`), so it arrives wherever such a value is used as the
+        // plain type: a call argument, a `return`, a declared local, a vector append.
+        // Every one of those answered "expected (float, float, float), got
+        // __tuple<float,float,float>" — a type error between a type and itself.
+        //
+        // Accepting the pair as EQUAL would be worse than the error: the slot would take
+        // 12 bytes of DbRef where the reader expects the elements.  So the conversion is
+        // a real one — `unbox_tuple_from_dbref` reads each element at its stored offset
+        // and rebuilds the stack tuple, exactly as `v[i]` already does.
+        if self.unboxes_stored_tuple(is_type, should) {
+            // A `Value::Null` here is the shape-only probe the Tuple→Tuple arm above
+            // runs for a non-literal source; there is no expression to unbox.
+            if !self.first_pass && !matches!(code.unspan(), Value::Null) {
+                let src_elems = self.stored_tuple_elements(is_type);
+                *code = self.unbox_tuple_from_dbref(code.clone(), &src_elems);
+            }
+            return true;
         }
         if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should) {
             for a in self.data.def(*enum_tp).attributes() {
@@ -3539,6 +3615,19 @@ impl Parser {
             {
                 return true;
             }
+            // loft#824 — the mirror of that arm, on the argument side.  `convert` peels a
+            // `RefVar` SOURCE before deciding (a `&τ` value satisfies whatever `τ` does),
+            // and this predicate has to answer the same question or the two disagree.  They
+            // did: `len(h)` on `h: &hash<Row[id]>` needs no conversion op — a bare
+            // `hash` parameter takes any parameterised hash — so `convert` emitted nothing
+            // and `validate_convert` then read the UNPEELED `&hash<Row[id]>` against the
+            // bare-collection arm below, which matches only `Type::Hash`, and refused the
+            // call.  The plain `hash<Row[id]>` spelling took that arm and compiled.
+            if let Type::RefVar(inner) = test_type
+                && self.can_convert(inner, should)
+            {
+                return true;
+            }
             if let (Type::Enum(_e, _, _), Type::Enum(o, _, _)) = (test_type, should)
                 && self.data.def(*o).name() == "enumerate"
             {
@@ -3809,6 +3898,21 @@ impl Parser {
                 d_nr = self.try_generic_instantiation(name, types);
             }
         }
+        // loft#824 — the receiver the type-directed builtins below dispatch on, read
+        // THROUGH a `&`.  `len` / `size` are not stdlib overloads: each arm matches
+        // `types[0]` against one concrete type kind and derives its constant (a stride, a
+        // width, a bookkeeping offset) from it, so a `RefVar(τ)` argument matched no arm and
+        // fell out as "Unknown function" — while the same helper taking `τ` by value
+        // compiled.  `&τ` is a passing MODE, not a type the user wrote: `size(v)` inside
+        // `fn f(v: &vector<integer>)` asks for the vector's footprint, the same as it does
+        // one signature over.  The emitted ops are unchanged — they take the argument var,
+        // which carries the reference exactly as `v += [9]` in the same body already does.
+        let recv_unknown = Type::Unknown(0);
+        let recv: &Type = match types.first() {
+            Some(Type::RefVar(inner)) => inner,
+            Some(t) => t,
+            None => &recv_unknown,
+        };
         if d_nr != u32::MAX {
             let ret = self.call_with_named(
                 code,
@@ -3854,7 +3958,7 @@ impl Parser {
         } else if name == "len"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Index(_, _, _))
+            && matches!(*recv, Type::Index(_, _, _))
         {
             // P192: `len(ix)` for `ix: index<T[key]>`.  Dispatched
             // here (not via stdlib overload) because the runtime
@@ -3867,7 +3971,7 @@ impl Parser {
             // fall through standard dispatch to the existing
             // `Unknown function len` error message which lists the
             // method-style alternative.
-            let known = self.get_type(&types[0]);
+            let known = self.get_type(recv);
             let op_d_nr = self.data.def_nr("OpLengthIndex");
             if known != u16::MAX && op_d_nr != u32::MAX {
                 let fields = self.database.fields(known);
@@ -3915,7 +4019,7 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Vector(_, _))
+            && matches!(*recv, Type::Vector(_, _))
         {
             // @PLN110 1a: `size(v)` for `v: vector<T>` = element count × the
             // element's in-buffer stride (a heap element — text, nested
@@ -3926,7 +4030,7 @@ impl Parser {
             // only known at parse time.  Strict arity / named-arg gates mirror
             // `len(ix)` above; `size(v, x)` falls through to the standard error.
             let op_d_nr = self.data.def_nr("OpSizeVector");
-            if let Type::Vector(inner, _) = &types[0]
+            if let Type::Vector(inner, _) = recv
                 && op_d_nr != u32::MAX
             {
                 let elem = (**inner).clone();
@@ -3940,7 +4044,7 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Reference(_, _))
+            && matches!(*recv, Type::Reference(_, _))
         {
             // @PLN110 1b: `size(s)` for a struct `s` = its packed record size — a
             // compile-time constant (all instances of a struct type share one
@@ -3954,7 +4058,7 @@ impl Parser {
             // `Type::Reference` that is NEITHER a struct NOR a variant record is not
             // a valid `size` target: emit the standard error (never a silent
             // `Unknown`, which would leave the call unresolved).
-            let known = self.get_type(&types[0]);
+            let known = self.get_type(recv);
             let op_d_nr = self.data.def_nr("OpSizeStruct");
             if known != u16::MAX
                 && op_d_nr != u32::MAX
@@ -3977,7 +4081,7 @@ impl Parser {
             && types.len() == 1
             && named_args.is_empty()
             && matches!(
-                types[0],
+                *recv,
                 Type::Integer(_) | Type::Float | Type::Boolean | Type::Character | Type::Single
             )
         {
@@ -3990,11 +4094,11 @@ impl Parser {
             // `Type::size` reads the value range only and would over-report i32 as
             // 8.  The other scalars have a fixed width via `element_size`
             // (boolean 1, character / single 4, float 8).
-            let known = self.get_type(&types[0]);
-            let sz: u16 = if matches!(types[0], Type::Integer(_)) && known != u16::MAX {
+            let known = self.get_type(recv);
+            let sz: u16 = if matches!(*recv, Type::Integer(_)) && known != u16::MAX {
                 self.database.size(known)
             } else {
-                crate::data::element_stack_size(&types[0]) as u16
+                crate::data::element_stack_size(recv) as u16
             };
             let op_d_nr = self.data.def_nr("OpSizeScalar");
             if op_d_nr != u32::MAX {
@@ -4007,12 +4111,12 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Sorted(_, _, _))
+            && matches!(*recv, Type::Sorted(_, _, _))
         {
             // @PLN110 1d: a `sorted` shares vector's length-prefixed buffer, so its
             // size is that buffer = element count × the element's in-buffer stride
             // (identical to `size(vector)` — reuse `OpSizeVector`).
-            let elem = types[0].content();
+            let elem = recv.content();
             let stride = self.vector_elem_iter_stride(&elem);
             let op_d_nr = self.data.def_nr("OpSizeVector");
             if op_d_nr != u32::MAX {
@@ -4026,7 +4130,7 @@ impl Parser {
             && types.len() == 1
             && named_args.is_empty()
             && matches!(
-                types[0],
+                *recv,
                 Type::Index(_, _, _) | Type::Radix(_, _, _) | Type::Trie(_, _, _)
             )
         {
@@ -4036,7 +4140,7 @@ impl Parser {
             // SINGLE node record's size (a compile-time constant), reusing the
             // struct-record path.  The arg is evaluated; only its element type feeds
             // the const record size.
-            let elem_kt = match &types[0] {
+            let elem_kt = match recv {
                 Type::Index(tp, _, _) | Type::Radix(tp, _, _) | Type::Trie(tp, _, _) => {
                     self.data.def(*tp).known_type()
                 }
@@ -4054,7 +4158,7 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Enum(_, _, _))
+            && matches!(*recv, Type::Enum(_, _, _))
         {
             // @PLN110 enums: a SIMPLE enum (no data-carrying variant) is a 1-byte
             // inline discriminant — scalar-like, reuse `OpSizeScalar` (an 8-byte eval
@@ -4063,10 +4167,10 @@ impl Parser {
             // `database.size` gives the right width either way (1 vs the record size);
             // only the op differs, because the two are delivered differently (inline
             // value vs reference). The arg is evaluated; only its type feeds the const.
-            let known = self.get_type(&types[0]);
+            let known = self.get_type(recv);
             if known != u16::MAX {
                 let sz = self.database.size(known);
-                let op_name = if matches!(types[0], Type::Enum(_, true, _)) {
+                let op_name = if matches!(*recv, Type::Enum(_, true, _)) {
                     "OpSizeStruct"
                 } else {
                     "OpSizeScalar"
@@ -4105,7 +4209,17 @@ impl Parser {
                     // `random` — so this is offered first.  Bare calls still do
                     // not resolve; this only replaces a dead end with the two
                     // ways to say what was meant.
-                    if let Some(hint) = registry_fn_hint(name, &self.data.resolved_libraries()) {
+                    // loft#826 — a name declared by the file that `use`d this one
+                    // is not a misspelling of anything, and it outranks both the
+                    // registry hint and the fuzzy guess: those answer "where else
+                    // could this live?", and here we already know exactly where it
+                    // lives and why it does not reach.  The fuzzy guess is what
+                    // turned this into "did you mean 'move'?".
+                    if let Some(note) = self.importer_boundary_note(&format!("n_{name}")) {
+                        diagnostic_at!(self.lexer, name_pos, Level::Error, "{note}");
+                    } else if let Some(hint) =
+                        registry_fn_hint(name, &self.data.resolved_libraries())
+                    {
                         diagnostic_at!(self.lexer, name_pos, Level::Error, "{hint}");
                     } else if let Some(s) = self.suggest_function_name(name) {
                         diagnostic_at!(
@@ -7304,6 +7418,36 @@ impl Parser {
             }
             Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
             Type::Reference(inner_tp, deps) => {
+                // loft#821 — a `vector<(…)>` element slot arrives here typed
+                // `Reference(__tuple<…>)`, the STORED spelling of a tuple, while the
+                // value being written is a stack tuple.  `OpCopyRecord` below would
+                // then read that tuple's own bytes as a `DbRef`: SIGSEGV on the
+                // interpreter, `E0308: expected DbRef, found (f64, f64, f64)` on
+                // `--native`.  A tuple LITERAL never showed it, because a literal is
+                // typed `Type::Tuple` and takes the arm above.
+                //
+                // The two spellings are one loft type, so the arm is chosen by the
+                // SOURCE's representation rather than by which spelling the slot
+                // happened to carry — and `emit_tuple_set_ops` already makes exactly
+                // that choice: per-element writes for a stack tuple, one
+                // `OpCopyRecord` when the source is itself a promoted
+                // `Reference(__tuple<…>)` (PLAN51 V-b).
+                if !self.first_pass && self.data.def(inner_tp).name().starts_with("__tuple<") {
+                    let elems: Vec<Type> = self
+                        .data
+                        .def(inner_tp)
+                        .attributes()
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect();
+                    let base_pos = if let Value::Int(p) = pos_val {
+                        p as u16
+                    } else {
+                        0
+                    };
+                    let ops = self.emit_tuple_set_ops(&ref_code, base_pos, &elems, val_code);
+                    return v_block(ops, Type::Void, "tuple_elem_set");
+                }
                 if deps.is_empty() {
                     // The value is a 12-byte DbRef; OpSetInt would only read 4 bytes of it.
                     // Copy the struct bytes into the embedded field instead.
@@ -7440,6 +7584,154 @@ impl Parser {
         }
     }
 
+    /// Compare two tuples, element by element — `==`, `!=`, `<`, `<=`, `>`, `>=`.
+    ///
+    /// Ordering is LEXICOGRAPHIC, the rule the written form already suggests: the first
+    /// element decides, and later elements are consulted only while the earlier ones are
+    /// equal, so `(1, 9) < (2, 0)`.  Equality is all elements equal.
+    ///
+    /// Lowered to the element types' OWN operators rather than to a tuple opcode, so every
+    /// element type that can already be compared can be compared inside a tuple — text by
+    /// value, a scalar enum by discriminant, a nested tuple by recursion into this same
+    /// function — and both backends inherit it with nothing to add.  An element type with
+    /// no such operator reports itself (`No matching operator '<' on 'Point' and 'Point'`),
+    /// which names the element rather than the tuple around it.
+    ///
+    /// Returns `None` when this is not a tuple comparison, leaving `call_op`'s own
+    /// resolution and diagnostics untouched.
+    fn tuple_compare(
+        &mut self,
+        code: &mut Value,
+        op: &str,
+        list: &[Value],
+        types: &[Type],
+    ) -> Option<Type> {
+        if !matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=") || types.len() != 2 {
+            return None;
+        }
+        let (left_elems, right_elems) = (
+            self.tuple_elements(&types[0])?,
+            self.tuple_elements(&types[1])?,
+        );
+        // Different arities are not a tuple comparison at all — fall through so the error
+        // names both types, which says more than "arity 2 vs 3" would.
+        if left_elems.len() != right_elems.len() || left_elems.is_empty() {
+            return None;
+        }
+        if self.first_pass {
+            return Some(Type::Boolean);
+        }
+        // Each element read names its side again, so an operand that DOES work — a call, an
+        // index read — would be evaluated once per element.  Bind each to a local first; a
+        // side that is already a tuple local is used as it stands.
+        let mut prelude = Vec::new();
+        let left =
+            self.bind_tuple_operand(&list[0], &types[0], &left_elems, "__cmp_l", &mut prelude);
+        let right =
+            self.bind_tuple_operand(&list[1], &types[1], &right_elems, "__cmp_r", &mut prelude);
+        let cmp = self.lex_compare(op, 0, left, right, &left_elems, &right_elems);
+        *code = if prelude.is_empty() {
+            cmp
+        } else {
+            prelude.push(cmp);
+            v_block(prelude, Type::Boolean, "tuple_compare")
+        };
+        Some(Type::Boolean)
+    }
+
+    /// The element types of either spelling of a tuple — `None` for any other type.
+    pub(crate) fn tuple_elements(&self, tp: &Type) -> Option<Vec<Type>> {
+        match tp.base() {
+            Type::Tuple(elems) => Some(elems.clone()),
+            Type::Reference(d_nr, _) if self.data.def(*d_nr).name().starts_with("__tuple<") => {
+                Some(self.stored_tuple_elements(tp.base()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Give a comparison operand a name its elements can be read from repeatedly, unboxing
+    /// the STORED spelling on the way.  Appends the binding statement to `prelude`.
+    pub(crate) fn bind_tuple_operand(
+        &mut self,
+        value: &Value,
+        tp: &Type,
+        elems: &[Type],
+        name: &str,
+        prelude: &mut Vec<Value>,
+    ) -> u16 {
+        if let Value::Var(v) = value.unspan()
+            && matches!(self.vars.tp(*v), Type::Tuple(_))
+        {
+            return *v;
+        }
+        let tuple_tp = Type::Tuple(elems.to_vec());
+        let mut val = value.clone();
+        if self.unboxes_stored_tuple(tp.base(), &tuple_tp) {
+            val = self.unbox_tuple_from_dbref(val, elems);
+        }
+        let tmp = self.create_unique(name, &tuple_tp);
+        self.vars.defined(tmp);
+        self.change_var_type(tmp, &tuple_tp);
+        prelude.push(v_set(tmp, val));
+        tmp
+    }
+
+    /// The lexicographic chain from element `i` onwards.
+    ///
+    /// The LAST element carries the operator as written, which is what separates `<` from
+    /// `<=`: every earlier element only asks "strictly before?" and, failing that, "equal,
+    /// so keep looking?".  `==` / `!=` have no chain — they are the same question asked of
+    /// every element and folded with `&&` / `||`.
+    fn lex_compare(
+        &mut self,
+        op: &str,
+        i: usize,
+        left: u16,
+        right: u16,
+        left_elems: &[Type],
+        right_elems: &[Type],
+    ) -> Value {
+        let last = left_elems.len() - 1;
+        let elem = |s: &mut Self, o: &str, i: usize| -> Value {
+            let mut c = Value::Null;
+            s.call_op(
+                &mut c,
+                o,
+                &[
+                    Value::TupleGet(left, i as u16),
+                    Value::TupleGet(right, i as u16),
+                ],
+                &[left_elems[i].clone(), right_elems[i].clone()],
+            );
+            c
+        };
+        if op == "==" || op == "!=" {
+            let mut acc = elem(self, op, last);
+            for i in (0..last).rev() {
+                let head = elem(self, op, i);
+                acc = if op == "==" {
+                    v_if(head, acc, Value::Boolean(false))
+                } else {
+                    v_if(head, Value::Boolean(true), acc)
+                };
+            }
+            return acc;
+        }
+        if i == last {
+            return elem(self, op, i);
+        }
+        let strict = if op.starts_with('<') { "<" } else { ">" };
+        let before = elem(self, strict, i);
+        let same = elem(self, "==", i);
+        let rest = self.lex_compare(op, i + 1, left, right, left_elems, right_elems);
+        v_if(
+            before,
+            Value::Boolean(true),
+            v_if(same, rest, Value::Boolean(false)),
+        )
+    }
+
     /// Try to find a matching defined operator. There can be multiple possible definitions for each operator.
     fn call_op(&mut self, code: &mut Value, op: &str, list: &[Value], types: &[Type]) -> Type {
         // A first-pass UNARY op on an operand whose type is still UNRESOLVED — an
@@ -7466,6 +7758,12 @@ impl Parser {
         // to steer resolution, so only the no-information case defers to pass 2.
         if self.first_pass && !types.is_empty() && types.iter().all(Type::is_unknown) {
             return Type::Unknown(0);
+        }
+        // Comparing two tuples is decided element by element, BEFORE the `possible` loop —
+        // which would otherwise match `OpEqRef` for two STORED tuples and answer whether
+        // they are the same record, not whether they hold the same values.
+        if let Some(tp) = self.tuple_compare(code, op, list, types) {
+            return tp;
         }
         // I8.1: if any operand is a generic type variable, skip the main operator loop
         // and go straight to the T-stub lookup.  The main loop would otherwise false-match
@@ -10531,7 +10829,29 @@ impl Parser {
         if winner == u32::MAX || self.ambiguity_reported.contains(name) {
             return;
         }
-        let others = self.data.ambiguous_with(name);
+        // loft#826 — an unresolved forward-reference stub is not a declaration.
+        //
+        // A file that names a type its importer declares registers a `Unknown`
+        // stub in its OWN source, and that stub is pub-visible, so it imports
+        // back into the importer like any other public name.  With two such
+        // files the second stub lands on the first and is recorded here as a
+        // rival — and the message then told the author to write `helper::Thing`
+        // or `second::Thing` when neither file declares `Thing` at all and the
+        // one that does was the line above.  A qualification naming a package
+        // that has no such type cannot resolve, so following the advice was a
+        // dead end in both directions.
+        //
+        // Reported at USE (see above), so by the time this runs every stub that
+        // was going to resolve has: one still `Unknown` here declares nothing
+        // and never will.  Dropping them can only remove a claim that was
+        // false; a genuine two-package collision has real defs on both sides.
+        let others: Vec<u32> = self
+            .data
+            .ambiguous_with(name)
+            .iter()
+            .copied()
+            .filter(|&d| !matches!(self.data.def(d).def_type(), DefType::Unknown))
+            .collect();
         if others.is_empty() {
             return;
         }
@@ -10552,6 +10872,35 @@ impl Parser {
             "`{bare}` is declared by more than one package here — write {} to say which",
             spellings.join(" or ")
         );
+    }
+
+    /// loft#826 — the message for a name that is declared, but by the file that
+    /// `use`d this one.
+    ///
+    /// `use helper;` imports helper's public names into the importer.  It does
+    /// not import the importer's names into helper, and helper is parsed BEFORE
+    /// the importer reaches its own definitions — so the name genuinely is not
+    /// there.  Nothing in "Unknown function make — did you mean 'move'?" says
+    /// so, and the author is looking straight at `make` two files away.
+    ///
+    /// Returns `None` when no importer declares it, so every caller keeps its
+    /// existing message for the ordinary case.  The cure is the one that
+    /// actually compiles: a third file both `use`, verified end to end by
+    /// `tests/package_layout.rs::shared_sibling_carries_types_and_functions`.
+    pub(crate) fn importer_boundary_note(&self, storage_name: &str) -> Option<String> {
+        let d_nr = self.data.declared_by_importer(storage_name)?;
+        let bare = storage_name.strip_prefix("n_").unwrap_or(storage_name);
+        let pos = self.data.def(d_nr).position();
+        let file = std::path::Path::new(&pos.file)
+            .file_name()
+            .map_or_else(|| pos.file.clone(), |f| f.to_string_lossy().into_owned());
+        Some(format!(
+            "`{bare}` is declared in {file}:{}, which `use`s this file — a `use` \
+             imports the used file's names into the file that used it, never the \
+             other way round.  Move `{bare}` into a file that BOTH `use`, and \
+             `use` it here.",
+            pos.line
+        ))
     }
 
     /// Plan-07 phase 5 suggestions.  Find a similar field name on

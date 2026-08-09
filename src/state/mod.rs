@@ -4669,14 +4669,16 @@ impl State {
         // dispatching instead of a bare `op=249`.  Leaked once per process: a
         // signal handler cannot borrow the definitions table (the crashing thread
         // may hold it), so the names have to already be `'static` when it runs.
-        crate::crash_report::set_op_names(
+        // Handed over as a CLOSURE, because "once per process" is the whole licence
+        // for the leak and this runs once per PROGRAM (loft#820).
+        crate::crash_report::set_op_names(|| {
             (0..=u16::from(u8::MAX))
                 .map(|op| {
                     data.operator_name(op)
                         .map_or("", |n| &*Box::leak(n.to_owned().into_boxed_str()))
                 })
-                .collect(),
-        );
+                .collect()
+        });
         // Fix #88: push a synthetic CallFrame for the entry function so it
         // appears in stack_trace() output.
         self.call_stack.push(CallFrame {

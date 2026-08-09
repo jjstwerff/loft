@@ -42,6 +42,120 @@ a bare tuple while the value has become a reference.
 
 ---
 
+## The two spellings of one tuple type
+
+Those two ways of travelling are two **spellings of the same loft type**, and both are
+reachable from ordinary source:
+
+| | `Type::Tuple(elems)` — STACK | `Reference(__tuple<…>)` — STORED |
+|---|---|---|
+| runtime | elements on contiguous stack slots | a 12-byte DbRef at the elements' bytes |
+| `.0` | `OpTupleGet` / Rust `.0` | `OpGetFloat(ref, 8)` — read at the offset |
+| native | `(f64, f64, f64)` | `DbRef` |
+| ownership | none — copied by value | a store, with deps and frees |
+| written by | a literal, a value-tuple return | a `vector<(…)>` element, a boxed return |
+
+A `vector<(…)>` loop variable carries the stored spelling (`for_type`, P189b) so element
+access reads at offsets instead of decoding DbRef bytes as values. So does a
+heap-carrying tuple return. Both then arrive wherever such a value is *used* as the plain
+type — a call argument, a `return`, a declared local, a vector append.
+
+**`Parser::convert` is where the two meet.** It answers such a pair by UNBOXING the value:
+`unbox_tuple_from_dbref` reads each element at its stored offset and rebuilds the stack
+tuple, exactly as `v[i]` already does. Ask `Parser::unboxes_stored_tuple` rather than
+comparing the two spellings by hand.
+
+Accepting the pair as merely EQUAL would be worse than rejecting it — the slot would take
+12 bytes of DbRef where the reader expects the elements, so the conversion has to be a
+real one. That is also why a caller must not keep classifying on the pre-`convert` type:
+`parse_return`'s delivery classifier did, saw a `Reference` where the value had become a
+stack tuple, and materialised it with `OpCopyRecord`, which read the tuple's own float
+bytes as a DbRef (loft#822).
+
+A `vector<(…)>` element is written the same way it is read — per element, at the
+synthetic struct's own offsets (`emit_tuple_set_ops`), for both `v += [t]` and `v[i] = t`.
+The write picks its arm from the SOURCE's representation, never from the spelling the slot
+happens to carry: a stack tuple writes element by element, a source that is already a
+promoted `Reference(__tuple<…>)` copies the record in one op.
+
+Note that `v[i] = t` evaluates its index ONCE even though the three element writes each
+carry the address expression — `hoist_index_arg` binds it to a local first, so
+`v[bump(c)] = (1.0, 2.0, 3.0)` calls `bump` once, as the same write to a `vector<integer>`
+does.
+
+---
+
+## Comparison
+
+`==`, `!=`, `<`, `<=`, `>`, `>=` all work between two tuples of the same arity. Ordering is
+**lexicographic**: the first element decides, and later elements are consulted only while
+the earlier ones are equal.
+
+```loft
+(1, 9) < (2, 0)      // true  — the first element decides
+(1, 9) < (1, 10)     // true  — it ties, so the second decides
+(1, 9) < (1, 9)      // false — identical is not strictly less
+(1, 9) <= (1, 9)     // true
+(1, "abc") == (1, "abc")   // true — text compares by VALUE, not by identity
+```
+
+The comparison lowers to the ELEMENT types' own operators (`Parser::tuple_compare`), not to
+a tuple opcode. Three things follow, and they are the reason it is built that way:
+
+- Every element type that can already be compared can be compared inside a tuple — text by
+  value, a scalar enum by discriminant, a nested tuple by recursing into the same rule.
+- An element type with no such operator reports **itself**: `(false, 1) < (true, 0)` says
+  *"No matching operator `<` on `boolean` and `boolean`"*, naming the element the author has
+  to change rather than the tuple around it. A tuple never invents an ordering its elements
+  do not have.
+- Both backends inherit it with nothing to add.
+
+Each operand is evaluated **once**. Every element read names its side again, so a side that
+does work — a call, an index read — is bound to a local first; a side that is already a
+tuple local is used as it stands.
+
+Both spellings compare the same way: a `vector<(…)>` element is unboxed to its stack form
+first, so a loop variable compares against a literal, a local, or another element. This is
+also why the lowering runs BEFORE `call_op`'s operator loop — that loop would match
+`OpEqRef` for two stored tuples and answer whether they are the same record, not whether
+they hold the same values.
+
+Comparing tuples of different arity is not a tuple comparison at all: it falls through to
+`No matching operator '==' on '(integer, integer)' and '(integer, integer, integer)'`,
+which says more than an arity count would.
+
+---
+
+## As a collection key
+
+A tuple key field in `hash<T[k]>`, `sorted<T[k]>` or `index<T[k]>` is a **compound key
+spelled as one field**: it behaves exactly as its elements spelled out as separate key
+fields, in order. `sorted<Cell[pos]>` with `pos: (integer, integer)` orders on element 0 and
+breaks ties on element 1, the same as `sorted<Cell[x, y]>`; a nested tuple flattens the same
+way, so the flat element order is the comparison order all the way down. `-` reverses the
+whole tuple. Look one up by writing the tuple — `h[(3, 4)]` — from a literal, a local, or a
+`vector<(…)>` element.
+
+`Stores::key_contents_for_field` is the one place a key field's arity is decided, and it has
+to stay that way. **Both** the comparison descriptors (`determine_keys_for`) and the lookup's
+stack arity (`get_keys`) read it, and `read_key` pops one stack value per entry — so a list
+one short leaves a key value on the stack and the very next `get_stack::<DbRef>()` reads it
+as the collection. That is loft#720 (`spatial<T[x,y]>`, whose arity list had gone missing),
+and a tuple key reproduced it exactly: `h[(3, 4)]` looked up in store #4. Deriving the arity
+twice is what let the two disagree.
+
+Not expanding it was worse than the panic, because it was quiet: the whole tuple took the
+catch-all descriptor, so only element 0 was ever compared, and a `sorted` holding three cells
+at `(1,9)`, `(2,0)` and `(1,2)` reported `len == 3`… after silently dropping one of the two
+that shared an element 0.
+
+`trie<T[field]>` is the exception, and refuses a tuple key. It keys on the BYTES of one text
+field, and an order-preserving byte encoding of a tuple is a format decision (it would reach
+the stored/paged trie image), not a descriptor change — so the refusal names `sorted` /
+`index` / `hash` instead.
+
+---
+
 ## Syntax
 
 ```loft
@@ -130,6 +244,23 @@ goes through the same `Type::Tuple` arm of `set_field_check` /
 - **`&tuple` with owned elements** — per-element DbRef expansion is
   still pending; tuple values are passed by value or via the
   synthetic `__tuple<…>` struct's DbRef.
+- **The `vector<(…)>` read cursor still materialises a copy** — the work-ref
+  `unbox_tuple_from_dbref` reads through is born with `Deps::none()`, which both backends
+  read as "owner", so every `vector<(…)>` element read allocates and frees a record where
+  three loads would do. This is a PERFORMANCE residue: the two *correctness* failures filed
+  with it (loft#823) are closed, and neither was a tuple defect.
+
+  Their root causes are worth keeping straight, because the filed scope named neither.
+  `v[oob] ?? d` answered uninitialised bytes on `--native` because the materialise arm
+  allocated before asking whether the element was there, and absence has two spellings —
+  see [DATABASE.md § DbRef](DATABASE.md). `g = p` inside `for p in v` SIGSEGV'd because the
+  O-B1 last-use move transferred a store the loop variable never owned; that one is not
+  tuple-specific at all — a `vector<struct>` loop does the same, see
+  [PERFORMANCE.md § Status after O-B1](PERFORMANCE.md).
+
+  Making the cursor a real BORROW would retire the remaining allocation, and still needs the
+  dep to survive `scopes.rs` — a design pass rather than a patch. `Deps::none()` conflating
+  *owns* with *nobody said* is the fact underneath it.
 
 T1.4 (tuple-returning functions), tuple LHS destructuring, and
 tuple patterns in match all shipped in 0.8.3 (T1.9) and were

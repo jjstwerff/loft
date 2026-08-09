@@ -215,6 +215,72 @@ When the compiler encounters `use math;` it searches:
 The first match wins.  If the dependency has its own `loft.toml`, its
 version is checked against the requirement.
 
+### A `use` carries names ONE way
+
+Step 1 above means a sibling file in your own `src/` is loaded exactly like any
+other package — and that has a consequence worth stating plainly, because it
+decides how a package can be split:
+
+> `use helper;` imports **helper's** public names into the file that wrote the
+> `use`.  It does **not** import that file's names into `helper`.
+
+A used file is also parsed *before* the file that used it reaches its own
+definitions (`switch_to_dep` suspends the importer — see the transitive section
+below), so a name the importer declares is not merely out of scope in the used
+file: it does not exist yet when the used file asks for it.
+
+```loft
+// src/pkg.loft — the entry
+use helper;
+pub struct Thing { t_n: integer }
+pub fn make() -> Thing { Thing { t_n: 1 } }
+```
+```loft
+// src/helper.loft
+pub fn via_fn() -> integer { make().t_n }   // refused — `make` belongs to pkg.loft
+```
+
+**The cure** is a third file both `use`:
+
+```loft
+// src/shared.loft         — declarations both need
+pub struct Thing { t_n: integer }
+pub fn make() -> Thing { Thing { t_n: 1 } }
+
+// src/helper.loft
+use shared;
+pub fn via_fn() -> integer { make().t_n }   // ok
+
+// src/pkg.loft
+use shared;
+use helper;
+```
+
+Guard: `tests/package_layout.rs::shared_sibling_carries_types_and_functions`.
+
+**Types and methods appear to cross; that is adoption, not a second rule.** A
+used file naming a type its importer declares registers a `DefType::Unknown`
+forward-reference stub, and the importer's later declaration ADOPTS that stub in
+place (the three `Unknown` arms in `parser/definitions.rs`) — which is also what
+makes a genuine cyclic `use` resolve.  Adoption reaches whichever used file's
+stub the declaration lands on, so it is **not** a namespace: with two used files
+naming the same type, one resolves and the other does not.  Do not build on it;
+put the declaration in a shared file.
+
+Two diagnostics exist because none of this is visible in the failure (loft#826):
+
+- A name declared by the importer is refused with **where it is declared, which
+  way a `use` carries names, and the cure** — for a function, a file-scope
+  constant, or a type.  Without it the fuzzy same-name guess answered a call to
+  `make()` with *"Unknown function make — did you mean 'move'?"*, pointing away
+  from the cause while `make` sat one file away.
+- An unresolved stub is **never reported as a rival declaration**.  Those stubs
+  are pub-visible and import back into the entry like any other public name, so
+  a second one landing on the first was recorded as an ambiguity — and a type
+  declared *once* in the entry was reported as `declared by more than one
+  package`, advising `helper::Thing` or `second::Thing` when neither file
+  declares `Thing` and neither qualification can resolve.
+
 ### Transitive dependencies
 
 If `graphics` depends on `math`, and `math` depends on `utils`, then

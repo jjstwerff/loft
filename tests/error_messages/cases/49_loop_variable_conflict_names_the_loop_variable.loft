@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// loft#825 — reusing a `for` variable over a second vector with a different element type
+// has a diagnostic that names the loop variable and prescribes a cure that works. It has to
+// arrive FIRST, ahead of whatever the body then fails on.
+//
+// The body error below is a CONSEQUENCE of the conflict: in the second loop `p` still
+// carries the first loop's element type, so `p.0` is a float and the integer accumulator is
+// what trips. Reported alone it names `hs`, a variable that is not the problem, and tells
+// the reader to rename it — which reproduces the same error under the new name, forever.
+// Renaming `p` is the only fix, and the first line is where it is said.
+//
+// A `for` variable can only conflict where the body USES it, so a body error is the common
+// case, not the exotic one; the print-only shape that already reported this correctly is
+// the rarer one. Both orderings are pinned here.
+
+fn main() {
+  a: vector<(float, float, float)> = [(1.0, 2.0, 3.0)];
+  s = 0.0;
+  for p in a { s = s + p.0; }
+
+  hb: vector<(integer, text)> = [(11, "x"), (44, "y")];
+  hs = 0;
+  for p in hb { hs = hs + p.0; }
+
+  println("s={s} hs={hs}");
+}

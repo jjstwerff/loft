@@ -67,7 +67,7 @@ fn the_report_names_the_opcode_and_states_a_missing_source_span() {
     // rest are the empty names an opcode number nothing uses would have.
     let mut names = vec![""; 256];
     names[249] = "OpAppendStackText";
-    loft::crash_report::set_op_names(names);
+    loft::crash_report::set_op_names(|| names);
     // The LABEL here is the generic one the interpreter actually passes, so a
     // report naming the op proves the name came from the TABLE, not the caller.
     loft::crash_report::set_context(8121, 249, "(opcode dispatch)", 700, "");

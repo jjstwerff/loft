@@ -85,6 +85,18 @@ const TYPES: &[&str] = &[
 /// only the added row moves the hash — see doc/claude/plans/nested-narrow-width/.)
 const LAYOUT_ALGO_HASH: u64 = 10_683_398_740_164_760_276;
 
+/// @PLN135 Q2 — `keys::key_hash` for a fixed seed over a fixed key set: the function a
+/// reader must reproduce to find an entry a writer placed. Pinned by
+/// `placement_contract_is_pinned`, which explains the two ways it can move. Re-bless only
+/// after deciding WHICH of the two happened — they need opposite responses.
+const PLACEMENT_KEY_HASHES: [u64; 5] = [
+    17_666_971_441_118_593_204,
+    1_462_129_204_271_929_792,
+    16_094_394_784_318_215_136,
+    3_950_772_723_845_657_195,
+    1_729_413_894_695_066_270,
+];
+
 /// @PLN102 arc-E flip-gate (Gate 1 step 3) — the `contract` version at which the
 /// CURRENT layout was frozen. The store layout IS the persistence contract, so
 /// POST-FLIP a change to `LAYOUT_ALGO_HASH` / the golden may land only alongside a
@@ -406,5 +418,121 @@ fn program_roots_are_the_user_types() {
         roots, expected,
         "program_roots must be exactly the corpus's user struct/enum types.\n  \
          extra: {extra:?}\n  missing: {missing:?}"
+    );
+}
+
+/// @PLN135 Q2 — the on-disk PLACEMENT contract is pinned, so it cannot change quietly.
+///
+/// The @PLN97 layout identity commits to how a store's bytes are SHAPED. It says nothing
+/// about where a keyed collection puts an entry, and `loft::placement` closes that gap by
+/// carrying a per-kind token into the same identity. A token only helps if somebody
+/// remembers to bump it, which is what this pins: every fact below is one a reader has to
+/// reproduce to find an entry a writer placed, so changing one without bumping the token
+/// would let an older store pass the gate and then be MISREAD — the silent wrong answer
+/// the compatibility doctrine rules out.
+///
+/// What it covers, against the arcs actually in flight: arc D widens a bucket slot, arc H
+/// replaces the bucket record outright — both move the constants. Arc E changes the hash
+/// function and the index derivation — that moves the digest. What it does NOT cover is
+/// the probe ORDER (linear, forward) and the `elms = (room - 2) * 2` slot-count rule;
+/// those live in the module doc of `loft::placement` as things to bump for, and a change
+/// to either would need this test extended rather than merely re-blessed.
+///
+/// It also catches something the placement token CANNOT (loft#827). `key_hash` runs on
+/// `std::hash::DefaultHasher`, whose algorithm std explicitly does not guarantee across
+/// releases, so a Rust upgrade can move bucket placement with no loft change at all — and
+/// a token nobody bumped cannot refuse the resulting store. This pin is the only thing
+/// that would notice, which is why its failure message asks WHICH cause it is before
+/// anyone re-blesses it.
+#[test]
+fn placement_contract_is_pinned() {
+    use loft::keys::{Content, Str};
+
+    const BUMP: &str = "the on-disk bucket placement changed. If loft changed: bump \
+                        `placement::HASH` in src/placement.rs so a store written by an \
+                        older binary is REFUSED instead of misread, then re-bless this \
+                        pin. If ONLY the Rust toolchain changed: this is loft#827 — \
+                        `keys::key_hash` runs on `std::hash::DefaultHasher`, whose \
+                        algorithm std does not guarantee across releases, so bucket \
+                        placement moved with no loft change and nothing can refuse the \
+                        old store. Do NOT simply re-bless that; see the issue";
+
+    // The bucket record's shape: a size header word, a live-count field, a 64-bit seed,
+    // then `u32` record numbers. A reader derives every slot address from these.
+    assert_eq!(loft::hash::LEN_FLD, 4, "{BUMP}");
+    assert_eq!(loft::hash::SEED_FLD, 8, "{BUMP}");
+    assert_eq!(loft::hash::BUCKET0, 16, "{BUMP}");
+    assert_eq!(loft::hash::SLOT_BYTES, 4, "{BUMP}");
+
+    // The hash function and the `Content` encoding that feeds it. A fixed seed makes this
+    // a pure function of the key, so any change to either — a different construction, a
+    // different byte order, a different widening — moves the digest.
+    let seed: u64 = 0x0123_4567_89ab_cdef;
+    let digest: Vec<u64> = [
+        Content::Long(0),
+        Content::Long(1),
+        Content::Long(-1),
+        Content::Long(i64::from(i32::MAX)),
+        Content::Str(Str::new("loft")),
+    ]
+    .iter()
+    .map(|c| loft::keys::key_hash(std::slice::from_ref(c), seed))
+    .collect();
+    assert_eq!(digest, PLACEMENT_KEY_HASHES.to_vec(), "{BUMP}");
+
+    // A multi-field key hashes as the whole key, not as its first element — the property
+    // a compound-keyed store depends on for placement.
+    let compound = loft::keys::key_hash(&[Content::Long(7), Content::Str(Str::new("x"))], seed);
+    assert_ne!(
+        compound,
+        loft::keys::key_hash(&[Content::Long(7)], seed),
+        "{BUMP}"
+    );
+}
+
+/// A placement bump must actually REFUSE an older store, not merely differ.
+///
+/// This is the other half of the mechanism: `placement::tag` feeds `layout_dump`, which
+/// feeds `layout_algo_hash`, which is what the `.dschema` sidecar records and
+/// `Stores::schema_gate_ok` compares on every `store_load`. Here the sidecar of a store
+/// containing a hash is edited to carry a different placement token — exactly what a
+/// pre-arc-H store would look like to a post-arc-H binary — and the verdict must be a
+/// refusal that routes to `SchemaMismatch`, never a raw handoff.
+#[test]
+fn a_changed_placement_token_refuses_the_store() {
+    use loft::schema_sidecar::{LayoutIdentity, SchemaVerdict, verdict_for_sidecar_text};
+
+    let (data, db) = cached_default();
+    let mut p = Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(CORPUS, "layout_corpus", false);
+    let roots = corpus_roots(&p.data);
+    let current = LayoutIdentity::of(&p.database, &roots);
+
+    let text = current.to_sidecar();
+    assert!(
+        text.contains("hash<"),
+        "the corpus must contain a hash for this test to mean anything"
+    );
+    assert!(
+        matches!(
+            verdict_for_sidecar_text(&text, &current),
+            SchemaVerdict::Match
+        ),
+        "an untouched sidecar hands over raw"
+    );
+
+    // What a store written before a placement bump looks like to a binary after one.
+    let older = text.replace("hash<", "hash|PLACEMENT|<");
+    let verdict = verdict_for_sidecar_text(&older, &current);
+    assert!(
+        !verdict.is_raw_safe(),
+        "a store whose hash placement this binary would compute differently must not be \
+         read raw — it would be misread, not merely mismatched"
+    );
+    assert!(
+        verdict.as_corrupt_reason().is_some(),
+        "the refusal must route through the store's corruption path so the reader is told"
     );
 }

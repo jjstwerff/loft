@@ -216,6 +216,23 @@ index<Elm[nr, -key]>        // two keys: nr ascending, key descending
 hash<Count[c, t]>           // compound hash key
 ```
 
+**A key field may be a TUPLE**, which is a compound key spelled as one field. It behaves
+exactly as its elements spelled out would: element 0 orders, element 1 breaks its ties, and
+so on, nested tuples included. Look it up by writing the tuple.
+
+```loft
+struct Cell { pos: (integer, integer), name: text }
+
+h: hash<Cell[pos]> = [Cell { pos: (1, 2), name: "a" }];
+c = h[(1, 2)];              // a literal, a local, or a vector<(…)> element all work
+
+s: sorted<Cell[pos]> = [];  // (1,2) before (1,9) before (2,0)
+d: sorted<Cell[-pos]> = []; // `-` reverses the WHOLE tuple
+```
+
+A `trie<T[field]>` is the exception: it keys on the BYTES of ONE text field, so a tuple key
+is refused with a message pointing at `sorted` / `index` / `hash`.
+
 **Gotcha — iteration direction is declared on the struct, not on the query.**
 A `-` prefix on a key field in `sorted<T[-key]>` or `index<T[-key]>` flips
 the iteration direction of *every* query against that collection — plain
@@ -631,6 +648,16 @@ footgun). Parenthesise if you truly mean the boolean compare (`(a == b) == c`), 
 **compile error** — a `boolean` is `true`/`false`/`null`, not `0`/`1`, so the two are different
 types (consistent with `bool < int`, which was always rejected). Convert explicitly if you
 really mean it. (`b == null` on a `boolean?` is fine — `null` is not an integer.)
+
+**Tuples compare lexicographically.** All six operators work between two tuples of the same
+arity: the first element decides, and later elements are consulted only while the earlier
+ones are equal — so `(1, 9) < (2, 0)` and `(1, 9) < (1, 10)`, while `(1, 9) < (1, 9)` is
+false and `(1, 9) <= (1, 9)` is true. Elements are compared with their OWN operators, so
+text compares by value (`(1, "abc") == (1, "abc")`) and a nested tuple recurses. An element
+type with no such operator says so about the element — `(false, 1) < (true, 0)` reports
+*"No matching operator `<` on `boolean` and `boolean`"*, because a tuple never invents an
+ordering its elements do not have. Different arities are not comparable.
+See [TUPLES.md § Comparison](TUPLES.md).
 
 Unary operators: `!` (logical not), `-` (negation / sign), `~` (bitwise NOT). A unary prefix
 binds **tighter than every binary operator** — the `-` is the **sign of its operand**, part of
@@ -1924,6 +1951,23 @@ are both-forms (`both: …`); `sum_of(v)` and `print(s)` are free-only.  A user
 cannot predict the call form without looking it up.  When in doubt, try
 free-function form first — the compiler's "Unknown field" vs. "method not
 found" error makes the available form obvious.
+
+**A `&` parameter calls like the value it references.**  `&` is how an argument is
+PASSED, not a different type, so inside `fn f(v: &vector<integer>)` the name `v` is
+the vector and every call form it supports works on it — `len(v)`, `v.len()`,
+`size(v)`.  The same holds for `&text`, the keyed collections, a `&Struct` and a
+`&integer`.  There is nothing to unwrap first (loft#824):
+
+```loft
+fn total(v: &vector<integer>) -> integer {
+  v += [9];        // the append reaches the caller's vector
+  len(v)           // …and the length is the vector's, not a reference's
+}
+```
+
+Note the trade the `&` asks for: it earns its place only when the function writes
+through it.  A helper that just reads is told *"Parameter 'v' has & but is never
+modified; remove the &"* — drop the `&` and the by-value signature reads the same.
 
 ### The `both` parameter name
 

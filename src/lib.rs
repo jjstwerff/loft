@@ -183,9 +183,11 @@ pub(crate) mod net;
 pub mod ownership_cfg;
 #[cfg(paged_store)]
 pub mod paged_reader;
+pub mod placement;
 pub mod portable_path;
 pub mod resolution;
 pub mod scopes;
+pub mod siphash;
 pub mod use_analysis;
 mod variables;
 pub mod vector;

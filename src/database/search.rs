@@ -286,9 +286,13 @@ impl Stores {
             Parts::Sorted(c, key) | Parts::Ordered(c, key) | Parts::Index(c, key, _) => {
                 // Key content TYPES (for `read_key` to pop the right widths).  Route through
                 // the `key_field` chokepoint so a synth `__nullable<S>` element resolves the
-                // key inside the `Some` payload, matching what `determine_keys` baked.
+                // key inside the `Some` payload, and through `key_contents_for_field` so a
+                // TUPLE field contributes one entry per element — the same arity
+                // `determine_keys` baked.
                 key.iter()
-                    .filter_map(|(k, _)| self.key_field(*c, *k).map(|(content, _)| content))
+                    .filter_map(|(k, _)| self.key_field(*c, *k))
+                    .flat_map(|(content, position)| self.key_contents_for_field(content, position))
+                    .map(|(content, _)| content)
                     .collect()
             }
             // `Radix` (a `spatial<T[x,y]>`) carries the same `(element, key fields)` shape as
@@ -303,7 +307,9 @@ impl Stores {
                 .unwrap_or_default(),
             Parts::Hash(c, key) | Parts::Radix(c, key) => key
                 .iter()
-                .filter_map(|k| self.key_field(*c, *k).map(|(content, _)| content))
+                .filter_map(|k| self.key_field(*c, *k))
+                .flat_map(|(content, position)| self.key_contents_for_field(content, position))
+                .map(|(content, _)| content)
                 .collect(),
             // Not a keyed collection — nothing to pop.  Listed out rather than
             // caught by `_`, the way `Stores::remove` lists them: this answer

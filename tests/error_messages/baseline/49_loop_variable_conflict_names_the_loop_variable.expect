@@ -1,0 +1,16 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: loop variable 'p' has type __tuple<integer,text> but was previously used as __tuple<float,float,float>
+  --> <cases>/49_loop_variable_conflict_names_the_loop_variable.loft:24:16
+   |
+24 |   for p in hb { hs = hs + p.0; }
+   |                ^
+
+error: Variable 'hs' cannot change type from integer to float; use a new variable name or cast with 'as'
+  --> <cases>/49_loop_variable_conflict_names_the_loop_variable.loft:24:31
+   |
+24 |   for p in hb { hs = hs + p.0; }
+   |                               ^
+
+error: aborting due to 2 previous errors

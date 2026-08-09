@@ -124,11 +124,35 @@ impl Output<'_> {
         // First-decl.  `collect_witness_vars` requires ≥1 owned assign, and the
         // init is owned (a `first = v[i] ?? d` borrow-only local is borrow-TYPED,
         // never a candidate), so this is the owned init — a fresh store, no prior.
+        //
+        // `owned` is the ORACLE's verdict, and the oracle reports an element read as
+        // Borrowed because `c = v[i]` normally IS a view.  When `output_set_body` takes the
+        // F1/F2 arm it MINTS an owner the oracle never saw — a copy created after the
+        // analysis — so the tracker has to learn about it here or nothing ever frees it:
+        // the first tracked reassignment does `var_k.store_nr = u16::MAX` and drops the
+        // materialised store on the floor (one leaked record per `k = v[i]` that is later
+        // rebound).  Asking `materialises_element` rather than widening the oracle keeps
+        // this to the store that was actually allocated.
+        let materialised = self.materialises_element(var, to);
         self.output_set_body(w, var, to)?;
-        if owned {
+        if owned || materialised {
             write!(w, "; _own_store_{name} = var_{name}")?;
         }
         Ok(())
+    }
+
+    /// Does a bind of `to` into `var` take the @PLN130 F1/F2 arm — the one that allocates a
+    /// record for `var` and deep-copies a container element into it?
+    ///
+    /// The single home for that question.  `output_set_body` asks it to choose the arm, and
+    /// `output_set_witnessed` asks it to decide whether the owned-store tracker must be
+    /// pointed at what the arm allocated; two spellings of the condition would drift, and a
+    /// tracker that disagreed with the emitter is exactly how the store leaked (loft#823).
+    fn materialises_element(&self, var: u16, to: &Value) -> bool {
+        let variables = self.data.def(self.def_nr).variables();
+        variables.tp(var).heap_def_nr().is_some()
+            && variables.tp(var).depend().is_empty()
+            && crate::generation::container_element_base(self.data, to.unspan()).is_some()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -625,11 +649,11 @@ impl Output<'_> {
         // wrong element (probe 05: `c.n 44 want 33`) while the interpreter was already
         // correct.  One fact, and until this both backends did not act on it.
         if let Some(d_nr) = variables.tp(var).heap_def_nr()
-            && variables.tp(var).depend().is_empty()
-            && crate::generation::container_element_base(self.data, to_unspanned).is_some()
+            && self.materialises_element(var, to)
         {
             let tp_nr = self.data.def(d_nr).known_type();
-            if !self.declared.contains(&var) {
+            let first_bind = !self.declared.contains(&var);
+            if first_bind {
                 self.declared.insert(var);
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
                 writeln!(
@@ -642,10 +666,35 @@ impl Output<'_> {
             self.output_code_inner(w, to)?;
             writeln!(w, ";")?;
             self.indent(w)?;
+            // A copy of an ABSENT element is absent — so ask before allocating (loft#823).
+            //
+            // Absence has two spellings and this arm knew only one.  `OpCopyRecord` guards
+            // the true null sentinel (`store_nr == u16::MAX`); an index past the end is the
+            // OTHER one — `vector::get_vector` answers `{store_nr: <the real store>, rec: 0}`,
+            // and its own doc says the two "read as the same absent value".  Allocating first
+            // and copying second turned that absent element into a live empty record, so
+            // `v[oob] ?? d` saw a PRESENT value and answered with the record's uninitialised
+            // bytes.  `rec == 0` is the predicate every store accessor already uses for
+            // absence (`if db.rec == 0 { f64::NAN }`), not a new one invented here.
+            //
+            // On the absent arm the placeholder must go back: at a FIRST bind that is the
+            // `null_named` store allocated just above (the same orphan the call-return arm
+            // frees as `(displaced)`), while a REASSIGNMENT is already wrapped by
+            // `output_set`'s `_old_*` stash, which frees the displaced store itself — freeing
+            // here too would free it twice.
+            let release = if first_bind {
+                format!(
+                    "if var_{name}.store_nr != u16::MAX \
+                     {{ OpFreeRef(cell, var_{name}, \"{name}(absent)\"); }} "
+                )
+            } else {
+                String::new()
+            };
             write!(
                 w,
-                "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
-                 OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}"
+                "if _src.rec == 0 {{ {release}var_{name} = DbRef::NULL; }} \
+                 else {{ var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
+                 OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }} }}"
             )?;
             crate::copy_manifest::record(
                 self.def_nr,

@@ -307,3 +307,142 @@ fn pkg_deps_resolve_before_the_dependent_is_parsed() {
         p.diagnostics.lines()
     );
 }
+
+/// loft#826 — build a package whose entry `use`s one or more sibling files in
+/// the same `src/`, and return the entry path.  Each `(name, body)` in
+/// `siblings` becomes `src/<name>.loft`; the entry `use`s them in order.
+fn i826_pkg(tag: &str, entry_body: &str, siblings: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("loft_i826_{tag}"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("loft.toml"),
+        "[package]\nname = \"pkg\"\nversion = \"0.0.1\"\n[library]\nentry = \"src/pkg.loft\"\n",
+    )
+    .unwrap();
+    let uses: String = siblings
+        .iter()
+        .map(|(n, _)| format!("use {n};\n"))
+        .collect();
+    std::fs::write(
+        root.join("src").join("pkg.loft"),
+        format!("{uses}{entry_body}"),
+    )
+    .unwrap();
+    for (n, body) in siblings {
+        std::fs::write(root.join("src").join(format!("{n}.loft")), body).unwrap();
+    }
+    root.join("src").join("pkg.loft")
+}
+
+fn i826_parse(entry: &std::path::Path) -> Vec<String> {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&entry.to_string_lossy(), false);
+    scopes::check(&mut p.data);
+    p.diagnostics.lines()
+}
+
+/// loft#826 (1) — a `use`d file that CALLS a function its importer declares is
+/// refused, and the refusal must name the boundary.
+///
+/// The rule is real: `use helper;` imports helper's names into the entry, never
+/// the entry's into helper, and helper is parsed BEFORE the entry reaches its
+/// own definitions.  What made it cost minutes was the message — the fuzzy
+/// same-name guess turned "`make` is out of scope here" into *"Unknown function
+/// make — did you mean 'move'?"*, which points away from the cause while `make`
+/// sits in the sibling file the author is looking at.
+#[test]
+fn i826_call_into_importer_names_the_boundary() {
+    let entry = i826_pkg(
+        "fn",
+        "pub struct Thing { t_n: integer }\npub fn make() -> Thing { Thing { t_n: 1 } }\n",
+        &[("helper", "pub fn via_fn() -> integer { make().t_n }\n")],
+    );
+    let d = i826_parse(&entry);
+    let joined = d.join("\n");
+    assert!(
+        joined.contains("`make` is declared in pkg.loft:"),
+        "the refusal must cite where `make` IS declared; got {d:?}"
+    );
+    assert!(
+        joined.contains("never the other way round"),
+        "the refusal must state which way a `use` carries names; got {d:?}"
+    );
+    assert!(
+        !joined.contains("did you mean 'move'"),
+        "a name declared by the importer is not a misspelling of an unrelated \
+         keyword — the fuzzy guess must not outrank the boundary; got {d:?}"
+    );
+}
+
+/// loft#826 (2) — TWO used files that each name a type their importer declares
+/// must not be reported as two packages declaring it.
+///
+/// Each used file leaves a pub-visible `Unknown` forward-reference stub in its
+/// own source, and those stubs import back into the entry like any other public
+/// name.  The second landing on the first was recorded as a rival declaration,
+/// so the entry's own `struct Thing` — declared once, on the line above — was
+/// reported as `declared by more than one package`, advising a qualification
+/// (`helper::Thing` or `second::Thing`) that names two files which declare no
+/// such type and therefore cannot resolve either way.
+#[test]
+fn i826_two_used_files_are_not_a_multi_package_collision() {
+    let entry = i826_pkg(
+        "ambig",
+        "pub struct Thing { t_n: integer }\npub fn make() -> Thing { Thing { t_n: 1 } }\n",
+        &[
+            ("helper", "pub fn bump(x: Thing) -> integer { x.t_n + 1 }\n"),
+            (
+                "second",
+                "pub fn twice(x: Thing) -> integer { x.t_n * 2 }\n",
+            ),
+        ],
+    );
+    let d = i826_parse(&entry);
+    let joined = d.join("\n");
+    assert!(
+        !joined.contains("declared by more than one package"),
+        "a forward-reference stub declares nothing and must not count as a \
+         rival declaration; got {d:?}"
+    );
+    assert!(
+        !joined.contains("helper::Thing") && !joined.contains("second::Thing"),
+        "no message may prescribe a qualification that cannot resolve; got {d:?}"
+    );
+    assert!(
+        joined.contains("`Thing` is declared in pkg.loft:"),
+        "the surviving refusal must cite the file that really declares it; got {d:?}"
+    );
+}
+
+/// loft#826 — the cure the two messages above prescribe has to COMPILE, or they
+/// prescribe an impossible fix.  Declarations both files need move into a third
+/// file that each of them `use`s; types AND functions then cross, for two used
+/// files at once.
+#[test]
+fn shared_sibling_carries_types_and_functions() {
+    let entry = i826_pkg(
+        "cure",
+        "pub fn top() -> integer { bump(make()) + twice(make()) }\n",
+        &[
+            (
+                "shared",
+                "pub struct Thing { t_n: integer }\npub fn make() -> Thing { Thing { t_n: 1 } }\n",
+            ),
+            (
+                "helper",
+                "use shared;\npub fn bump(x: Thing) -> integer { x.t_n + 1 }\n",
+            ),
+            (
+                "second",
+                "use shared;\npub fn twice(x: Thing) -> integer { x.t_n * 2 }\n",
+            ),
+        ],
+    );
+    let d = i826_parse(&entry);
+    assert!(
+        !d.iter().any(|l| l.contains("rror")),
+        "the prescribed cure must compile; diagnostics: {d:?}"
+    );
+}
