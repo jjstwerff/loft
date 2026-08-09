@@ -5029,6 +5029,20 @@ impl Data {
         if matches!(tp, Type::Unknown(_)) {
             return self.source_nr(source, &format!("n_{fn_name}"));
         }
+        // loft#824 — dispatch on the REFERENT of a `&τ` parameter, not on the reference.
+        // `type_def_nr` answers `reference` for `RefVar(τ)`, which is right for LAYOUT (the
+        // slot holds a pointer) and wrong for the receiver a method hangs off: `len(v)`
+        // resolved `t_6vector_len` for `v: vector<T>` and NOTHING for `v: &vector<T>`, while
+        // the method spelling `v.len()` worked on both because `parse_field` peels the
+        // wrapper before it looks. Peeling here gives the two spellings one answer. It can
+        // only ADD resolutions: no type named `reference` declares a method, so every name
+        // this now resolves used to fall through to the `n_` global lookup below unchanged.
+        // (`type_def_nr` already peels `RefVar(Reference(_))`, so `&Struct` receivers have
+        // always dispatched this way — this is the same rule for the other referents.)
+        let tp = match tp {
+            Type::RefVar(inner) => inner.as_ref(),
+            other => other,
+        };
         let type_nr = self.type_def_nr(tp);
         if type_nr == u32::MAX {
             // No method dispatch for types like Function; fall back to n_ global.

@@ -3599,6 +3599,19 @@ impl Parser {
             {
                 return true;
             }
+            // loft#824 — the mirror of that arm, on the argument side.  `convert` peels a
+            // `RefVar` SOURCE before deciding (a `&τ` value satisfies whatever `τ` does),
+            // and this predicate has to answer the same question or the two disagree.  They
+            // did: `len(h)` on `h: &hash<Row[id]>` needs no conversion op — a bare
+            // `hash` parameter takes any parameterised hash — so `convert` emitted nothing
+            // and `validate_convert` then read the UNPEELED `&hash<Row[id]>` against the
+            // bare-collection arm below, which matches only `Type::Hash`, and refused the
+            // call.  The plain `hash<Row[id]>` spelling took that arm and compiled.
+            if let Type::RefVar(inner) = test_type
+                && self.can_convert(inner, should)
+            {
+                return true;
+            }
             if let (Type::Enum(_e, _, _), Type::Enum(o, _, _)) = (test_type, should)
                 && self.data.def(*o).name() == "enumerate"
             {
@@ -3869,6 +3882,21 @@ impl Parser {
                 d_nr = self.try_generic_instantiation(name, types);
             }
         }
+        // loft#824 — the receiver the type-directed builtins below dispatch on, read
+        // THROUGH a `&`.  `len` / `size` are not stdlib overloads: each arm matches
+        // `types[0]` against one concrete type kind and derives its constant (a stride, a
+        // width, a bookkeeping offset) from it, so a `RefVar(τ)` argument matched no arm and
+        // fell out as "Unknown function" — while the same helper taking `τ` by value
+        // compiled.  `&τ` is a passing MODE, not a type the user wrote: `size(v)` inside
+        // `fn f(v: &vector<integer>)` asks for the vector's footprint, the same as it does
+        // one signature over.  The emitted ops are unchanged — they take the argument var,
+        // which carries the reference exactly as `v += [9]` in the same body already does.
+        let recv_unknown = Type::Unknown(0);
+        let recv: &Type = match types.first() {
+            Some(Type::RefVar(inner)) => inner,
+            Some(t) => t,
+            None => &recv_unknown,
+        };
         if d_nr != u32::MAX {
             let ret = self.call_with_named(
                 code,
@@ -3914,7 +3942,7 @@ impl Parser {
         } else if name == "len"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Index(_, _, _))
+            && matches!(*recv, Type::Index(_, _, _))
         {
             // P192: `len(ix)` for `ix: index<T[key]>`.  Dispatched
             // here (not via stdlib overload) because the runtime
@@ -3927,7 +3955,7 @@ impl Parser {
             // fall through standard dispatch to the existing
             // `Unknown function len` error message which lists the
             // method-style alternative.
-            let known = self.get_type(&types[0]);
+            let known = self.get_type(recv);
             let op_d_nr = self.data.def_nr("OpLengthIndex");
             if known != u16::MAX && op_d_nr != u32::MAX {
                 let fields = self.database.fields(known);
@@ -3975,7 +4003,7 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Vector(_, _))
+            && matches!(*recv, Type::Vector(_, _))
         {
             // @PLN110 1a: `size(v)` for `v: vector<T>` = element count × the
             // element's in-buffer stride (a heap element — text, nested
@@ -3986,7 +4014,7 @@ impl Parser {
             // only known at parse time.  Strict arity / named-arg gates mirror
             // `len(ix)` above; `size(v, x)` falls through to the standard error.
             let op_d_nr = self.data.def_nr("OpSizeVector");
-            if let Type::Vector(inner, _) = &types[0]
+            if let Type::Vector(inner, _) = recv
                 && op_d_nr != u32::MAX
             {
                 let elem = (**inner).clone();
@@ -4000,7 +4028,7 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Reference(_, _))
+            && matches!(*recv, Type::Reference(_, _))
         {
             // @PLN110 1b: `size(s)` for a struct `s` = its packed record size — a
             // compile-time constant (all instances of a struct type share one
@@ -4014,7 +4042,7 @@ impl Parser {
             // `Type::Reference` that is NEITHER a struct NOR a variant record is not
             // a valid `size` target: emit the standard error (never a silent
             // `Unknown`, which would leave the call unresolved).
-            let known = self.get_type(&types[0]);
+            let known = self.get_type(recv);
             let op_d_nr = self.data.def_nr("OpSizeStruct");
             if known != u16::MAX
                 && op_d_nr != u32::MAX
@@ -4037,7 +4065,7 @@ impl Parser {
             && types.len() == 1
             && named_args.is_empty()
             && matches!(
-                types[0],
+                *recv,
                 Type::Integer(_) | Type::Float | Type::Boolean | Type::Character | Type::Single
             )
         {
@@ -4050,11 +4078,11 @@ impl Parser {
             // `Type::size` reads the value range only and would over-report i32 as
             // 8.  The other scalars have a fixed width via `element_size`
             // (boolean 1, character / single 4, float 8).
-            let known = self.get_type(&types[0]);
-            let sz: u16 = if matches!(types[0], Type::Integer(_)) && known != u16::MAX {
+            let known = self.get_type(recv);
+            let sz: u16 = if matches!(*recv, Type::Integer(_)) && known != u16::MAX {
                 self.database.size(known)
             } else {
-                crate::data::element_stack_size(&types[0]) as u16
+                crate::data::element_stack_size(recv) as u16
             };
             let op_d_nr = self.data.def_nr("OpSizeScalar");
             if op_d_nr != u32::MAX {
@@ -4067,12 +4095,12 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Sorted(_, _, _))
+            && matches!(*recv, Type::Sorted(_, _, _))
         {
             // @PLN110 1d: a `sorted` shares vector's length-prefixed buffer, so its
             // size is that buffer = element count × the element's in-buffer stride
             // (identical to `size(vector)` — reuse `OpSizeVector`).
-            let elem = types[0].content();
+            let elem = recv.content();
             let stride = self.vector_elem_iter_stride(&elem);
             let op_d_nr = self.data.def_nr("OpSizeVector");
             if op_d_nr != u32::MAX {
@@ -4086,7 +4114,7 @@ impl Parser {
             && types.len() == 1
             && named_args.is_empty()
             && matches!(
-                types[0],
+                *recv,
                 Type::Index(_, _, _) | Type::Radix(_, _, _) | Type::Trie(_, _, _)
             )
         {
@@ -4096,7 +4124,7 @@ impl Parser {
             // SINGLE node record's size (a compile-time constant), reusing the
             // struct-record path.  The arg is evaluated; only its element type feeds
             // the const record size.
-            let elem_kt = match &types[0] {
+            let elem_kt = match recv {
                 Type::Index(tp, _, _) | Type::Radix(tp, _, _) | Type::Trie(tp, _, _) => {
                     self.data.def(*tp).known_type()
                 }
@@ -4114,7 +4142,7 @@ impl Parser {
         } else if name == "size"
             && types.len() == 1
             && named_args.is_empty()
-            && matches!(types[0], Type::Enum(_, _, _))
+            && matches!(*recv, Type::Enum(_, _, _))
         {
             // @PLN110 enums: a SIMPLE enum (no data-carrying variant) is a 1-byte
             // inline discriminant — scalar-like, reuse `OpSizeScalar` (an 8-byte eval
@@ -4123,10 +4151,10 @@ impl Parser {
             // `database.size` gives the right width either way (1 vs the record size);
             // only the op differs, because the two are delivered differently (inline
             // value vs reference). The arg is evaluated; only its type feeds the const.
-            let known = self.get_type(&types[0]);
+            let known = self.get_type(recv);
             if known != u16::MAX {
                 let sz = self.database.size(known);
-                let op_name = if matches!(types[0], Type::Enum(_, true, _)) {
+                let op_name = if matches!(*recv, Type::Enum(_, true, _)) {
                     "OpSizeStruct"
                 } else {
                     "OpSizeScalar"

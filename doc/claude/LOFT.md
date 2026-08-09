@@ -1952,6 +1952,23 @@ cannot predict the call form without looking it up.  When in doubt, try
 free-function form first — the compiler's "Unknown field" vs. "method not
 found" error makes the available form obvious.
 
+**A `&` parameter calls like the value it references.**  `&` is how an argument is
+PASSED, not a different type, so inside `fn f(v: &vector<integer>)` the name `v` is
+the vector and every call form it supports works on it — `len(v)`, `v.len()`,
+`size(v)`.  The same holds for `&text`, the keyed collections, a `&Struct` and a
+`&integer`.  There is nothing to unwrap first (loft#824):
+
+```loft
+fn total(v: &vector<integer>) -> integer {
+  v += [9];        // the append reaches the caller's vector
+  len(v)           // …and the length is the vector's, not a reference's
+}
+```
+
+Note the trade the `&` asks for: it earns its place only when the function writes
+through it.  A helper that just reads is told *"Parameter 'v' has & but is never
+modified; remove the &"* — drop the `&` and the by-value signature reads the same.
+
 ### The `both` parameter name
 
 When the first parameter is named `both` instead of `self`, the function is
