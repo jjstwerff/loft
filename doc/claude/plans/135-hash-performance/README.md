@@ -13,12 +13,15 @@ The record read is **82%** of a 1M random lookup and the bucket read is 8%, so D
 the one format break available on the small term; H's ceiling (measured against a dense
 `vector<Entry>`, which IS its layout) is roughly half of today's cost.
 
-**Do the layout-neutral work first.** The same probes found that growing a hash
-**abandons every previous bucket table** — `hash.rs` never returns the old claim, so a
-grown 1M hash is 49.3 MB where the identical content pre-sized is 33.0 MB, and
-`store_reclaim` recovers 0 of it. That is a leak, it is free to fix, and it shrinks the
-exact working set the 82% term is paying for. Measure it out of the way before spending
-the break, or H gets credited with a win a `Store::delete` would have given away.
+**The layout-neutral half is DONE (2026-08-09).** The same probes found that growing a
+hash **abandoned every previous bucket table** — neither replacement site returned the old
+claim, and `hash.rs` never called `Store::delete` at all. Fixed: `install_table` repoints
+the field and frees the predecessor in one step. A grown 1M hash went **49.26 MB → 34.02
+MB (−31%)**, within 3% of the 33.00 MB the same content costs pre-sized, with **no lookup
+regression** (244 ns vs 252 ns min, 1M shuffled — the denser table offsets the longer
+probe chains). Guard: `data_structures.rs::hash_growth_frees_the_table_it_replaces` counts
+claimed records; `tests/scripts/135-hash-table-rebuild-frees-the-old-table.loft` is the
+both-backend correctness half. **So arc H must now be measured against 34 MB, not 49.**
 
 **Also measured:** arc E's lookup win is 1 ns of 36 (step 4), so **Q3 dissolves** — the
 hash-DoS argument only ever existed to license E. **Q4 is NOT settled** by these probes.
@@ -327,7 +330,14 @@ copy a rehash transiently holds).
 |---|---|---|---|
 | `vector<Entry>` (dense) | 16.00 MB | 16 | — |
 | `hash`, `reserve`d | 33.00 MB | 33 | 5.33 MB |
-| `hash`, grown | 49.26 MB | 49 | 10.24 MB |
+| `hash`, grown — **before** the table-free fix | 49.26 MB | 49 | 10.24 MB |
+| `hash`, grown — **after** | 34.02 MB | 34 | 6.24 MB |
+
+Run one configuration per process. An earlier cut of `q1-store-footprint.loft` ran every
+shape from one `main` and its grown row was WRONG — a collection's store SLOT is reused
+between iterations, so the second fill inherited the first's buffer and growth ladder. It
+read 49.26 MB both before and after the fix while a single-shot run read 49.26 → 34.02.
+The harness was measuring itself; the probe now takes its shape and size as arguments.
 
 That is the mechanism behind the 185 ns. It is a working-set problem, and **arc D does
 not shrink the working set** — it adds 4 bytes per bucket slot. H is the only arc that
@@ -345,11 +355,24 @@ Two independent confirmations: the code has no `delete`, and `store_reclaim` on 
 freshly grown, never-bound 1M hash recovers **0 bytes** — the space is not free, it is
 claimed. A persisted grown hash carries its dead tables to disk forever.
 
-**This is layout-neutral to fix and worth ~33% of a grown hash's footprint** — the same
-footprint the dominant 82% term is paying for. It has to be measured out of the way
-BEFORE a format break is spent, or H gets credited with a win that a `delete` would have
-given for free. Not fixed here (this session was scoped to the probes); it needs its own
-regression guard and a check of whether any reader depends on the old table surviving.
+**FIXED (2026-08-09).** `install_table` repoints the hash's field and frees the
+predecessor as one step — the order is load-bearing, because `Store::delete` repurposes
+the block's body as a free-tree node, so a free before the repoint would leave the field
+naming bytes that are already something else. Both replacement sites route through it.
+
+Measured: a grown 1M hash 49.26 MB → **34.02 MB**, and the freed space is reused rather
+than returned, so the final table also lands smaller (10.24 → 6.24 MB) and the load factor
+rises 0.39 → 0.64. That last part is a real behaviour change and was checked rather than
+assumed: 1M shuffled lookup 244 ns after vs 252 ns before (min of 3) — the denser table
+pays for the longer probe chains. `reserve`d fills are byte-identical before and after,
+which is the control: `reserve` on an EMPTY hash has no predecessor, so the fix must not
+move it.
+
+The other half of the question — freeing a block someone still reaches is worse than
+leaking it — is what the guards are for. Iteration snapshots record numbers up front
+(`build_hash_sorted_vec`), so `for x in h { h += … }` rebuilds the table under a running
+loop; `check_iter_safety` does not list `Type::Hash`, so that is reachable user code and
+it is a cell in the script test.
 
 ### What this settles
 

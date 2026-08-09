@@ -64,8 +64,8 @@ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
         let new_claim = keys::mut_store(hash, stores).claim(room * 2 - 1);
         keys::mut_store(hash, stores).zero_fill(new_claim);
         rehash_into(hash, claim, new_claim, stores, keys);
+        install_table(hash, claim, new_claim, stores);
         claim = new_claim;
-        keys::mut_store(hash, stores).set_u32_raw(hash.rec, hash.pos, claim);
     }
     hash_set(claim, rec, stores, keys);
     keys::mut_store(rec, stores).set_u32_raw(claim, LEN_FLD, length + 1);
@@ -107,7 +107,29 @@ pub fn reserve(hash: &DbRef, count: i64, stores: &mut [Store], keys: &[Key]) {
     } else {
         rehash_into(hash, claim, new_claim, stores, keys);
     }
+    install_table(hash, claim, new_claim, stores);
+}
+
+/// Point `hash` at `new_claim` and give `old_claim` back to the store.
+///
+/// The two are one step: a bucket table that is no longer the hash's table is
+/// unreachable, and a claim nothing can reach is a leak. Both replacement sites — `add`'s
+/// growth and [`reserve`] on a non-empty hash — used to do only the first half, so every
+/// doubling stranded its predecessor. A grown 1M-entry hash carried 49.3 MB where the
+/// identical content pre-sized carried 33.0, `store_reclaim` recovered none of it (the
+/// blocks are CLAIMED, not free), and `store_persist_bind` wrote the dead tables to disk.
+///
+/// The order is load-bearing and is why this is one function rather than a line at each
+/// site: repoint FIRST, free second. `Store::delete` repurposes the block's body as a
+/// free-tree node and may coalesce it with its neighbours, so between the free and the
+/// repoint the hash's field would name bytes that are already something else.
+///
+/// `old_claim == 0` is the first-allocation case — there is no predecessor to release.
+fn install_table(hash: &DbRef, old_claim: u32, new_claim: u32, stores: &mut [Store]) {
     keys::mut_store(hash, stores).set_u32_raw(hash.rec, hash.pos, new_claim);
+    if old_claim != 0 {
+        keys::mut_store(hash, stores).delete(old_claim);
+    }
 }
 
 /// Move every entry of bucket table `from` into the freshly zeroed table `into`,
