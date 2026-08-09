@@ -7304,6 +7304,36 @@ impl Parser {
             }
             Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
             Type::Reference(inner_tp, deps) => {
+                // loft#821 — a `vector<(…)>` element slot arrives here typed
+                // `Reference(__tuple<…>)`, the STORED spelling of a tuple, while the
+                // value being written is a stack tuple.  `OpCopyRecord` below would
+                // then read that tuple's own bytes as a `DbRef`: SIGSEGV on the
+                // interpreter, `E0308: expected DbRef, found (f64, f64, f64)` on
+                // `--native`.  A tuple LITERAL never showed it, because a literal is
+                // typed `Type::Tuple` and takes the arm above.
+                //
+                // The two spellings are one loft type, so the arm is chosen by the
+                // SOURCE's representation rather than by which spelling the slot
+                // happened to carry — and `emit_tuple_set_ops` already makes exactly
+                // that choice: per-element writes for a stack tuple, one
+                // `OpCopyRecord` when the source is itself a promoted
+                // `Reference(__tuple<…>)` (PLAN51 V-b).
+                if !self.first_pass && self.data.def(inner_tp).name().starts_with("__tuple<") {
+                    let elems: Vec<Type> = self
+                        .data
+                        .def(inner_tp)
+                        .attributes()
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect();
+                    let base_pos = if let Value::Int(p) = pos_val {
+                        p as u16
+                    } else {
+                        0
+                    };
+                    let ops = self.emit_tuple_set_ops(&ref_code, base_pos, &elems, val_code);
+                    return v_block(ops, Type::Void, "tuple_elem_set");
+                }
                 if deps.is_empty() {
                     // The value is a 12-byte DbRef; OpSetInt would only read 4 bytes of it.
                     // Copy the struct bytes into the embedded field instead.
