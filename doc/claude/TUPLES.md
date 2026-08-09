@@ -409,8 +409,12 @@ match t {
 ### Element patterns that are DESIGNED but do not parse yet (verified 2026-08-09)
 
 Both forms below are shown as working in the examples above; neither is implemented.
-No test in `tests/scripts/` or `tests/docs/` exercises a tuple element pattern, which is
-how the gap stayed invisible — the pair below is the coverage that would have caught it.
+
+The gap stayed invisible because tuple patterns fall through the seam between the two
+doc-tests that should cover them: `tests/docs/29-match.loft` has 33 `match` expressions
+and **no tuple arm** (and no range arm either), while `tests/docs/28-tuples.loft` has
+**no `match` at all**. Nothing in `tests/scripts/` covers a tuple element pattern either.
+The pair below is the coverage that would have caught it.
 
 | written | today |
 |---|---|
