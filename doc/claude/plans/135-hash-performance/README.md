@@ -7,15 +7,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arcs A, B and C shipped** (all layout-neutral); **one fork undecided**
-(Q1: arc D vs arc H), and it is now the ONLY thing left, because the re-measurement
-puts the whole remaining lookup gap inside D / E / H. Those three each cost a
-persisted-store format break and must not be taken twice.
+Open — **arcs A, B and C shipped** (all layout-neutral). **Q1 is measured and answered:
+H, not D** — see [§ The Q1 measurement (2026-08-09)](#the-q1-measurement-2026-08-09--it-is-one-access-and-it-is-a-byte-problem).
+The record read is **82%** of a 1M random lookup and the bucket read is 8%, so D spends
+the one format break available on the small term; H's ceiling (measured against a dense
+`vector<Entry>`, which IS its layout) is roughly half of today's cost.
 
-**Q1 got cheaper to decide (2026-08-09):** arc E's lookup win was re-measured *in situ*
-at **1 ns of 36**, not the ~26 ns the isolation figure implied — so E is an insert arc,
-and arc D takes most of even that. The fork is now closer to "D or H", with E's format
-break hard to justify on its own. See [step 4](#phase-ordering).
+**Do the layout-neutral work first.** The same probes found that growing a hash
+**abandons every previous bucket table** — `hash.rs` never returns the old claim, so a
+grown 1M hash is 49.3 MB where the identical content pre-sized is 33.0 MB, and
+`store_reclaim` recovers 0 of it. That is a leak, it is free to fix, and it shrinks the
+exact working set the 82% term is paying for. Measure it out of the way before spending
+the break, or H gets credited with a win a `Store::delete` would have given away.
+
+**Also measured:** arc E's lookup win is 1 ns of 36 (step 4), so **Q3 dissolves** — the
+hash-DoS argument only ever existed to license E. **Q4 is NOT settled** by these probes.
+And **lookup ORDER outweighs every arc**: 87 ns ascending vs 225 ns shuffled at 1M, and
+every figure in this plan before 2026-08-09 was taken in insertion order.
 
 Measured on `--native-release`, 1M `integer` keys, before → after A + B + C:
 
@@ -42,9 +50,9 @@ Close the integer-key `hash<T[key]>` gap to `Dictionary<long,long>`, starting wi
 ## Effort + design
 
 - **Effort:** MH (A: S · B: S · C: S · D: M · E: S · H: MH)
-- **Design:** ~ (partial — Q1 open)
+- **Design:** ~ (Q1 answered 2026-08-09 → H; Q2 open, Q4 open, Q3 dissolved)
 - **Value category:** Q (internal quality — performance with a clear payoff)
-- **Last touched:** 2026-08-08
+- **Last touched:** 2026-08-09
 
 ## The measurement (2026-08-08)
 
@@ -252,9 +260,117 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
 5. **Q1, then one of D+E or H.** Whichever is chosen also extends the @PLN97 layout
    identity so an old store refuses rather than misreads.
 
+## The Q1 measurement (2026-08-09) — it is ONE access, and it is a byte problem
+
+Step 4 left Q1 resting on "two random accesses — the bucket slot and then the record".
+That split had never been measured, and it is what chooses between D and H. Measured, it
+is not a split: **the record read is 82% of a 1M random lookup and the bucket read is
+8%.** Probes: `probes/h-locality.loft` (the ablation), `probes/h-random-access-floor.loft`
+(what the same payload costs read densely), `probes/q1-store-footprint.loft` (bytes per
+entry, read off a persisted image). Ablation patch: `probes/q1-ablation.patch`.
+
+Machine: AMD Ryzen AI 9 HX 370, 24 threads, 61 GB · `--native-release` · min of 5.
+**Not the box the 2026-08-08 table was taken on** — read the deltas, not the absolutes.
+
+### Where a lookup's time goes
+
+`LOFT_PROBE_HASH` drops one memory access at a time (`skiprec` = no record read,
+`floor` = bucket 0 and no record read, so neither can miss). Subtracting gives the split.
+The rows below are the `nofield` shape — the loft program tests the `DbRef` and never
+reads a field, so the only record access left is the one inside `find`.
+
+| n, order | total | fixed | bucket read | **record read** |
+|---|---|---|---|---|
+| 10k ascending | 35 | 22 | 10 | 3 |
+| 10k shuffled | 37 | 22 | 11 | 4 |
+| 100k shuffled | 61 | 22 | 12 | 27 |
+| 1M ascending | 87 | 23 | 18 | 46 |
+| **1M shuffled** | **225** | 22 | 18 | **185 (82%)** |
+
+The `field` variant's subtraction is NOT valid — its program-level `e.val` survives
+`skiprec`, so `off − skiprec` there measures a second, already-cached read. Use `nofield`.
+
+**Lookup ORDER is the axis that was missing, and it is worth more than every arc.**
+Keys go in as 0..n and records are claimed in that order, so looking them up as 0..n
+walks memory ascending and prefetches. Every figure in this plan before today was taken
+that way. A real consumer does not: the icosahedron edge-midpoint cache behind #809 looks
+up in mesh order. 1M ascending 87 ns, 1M shuffled 225 ns. (The first cut of the probe
+computed the permutation INSIDE the timed loop and charged its 64-bit modulo — ~35 ns —
+to the shuffled row; both orders now walk a precomputed vector, so what is left between
+them is the access pattern alone.)
+
+### What arc H can buy, measured without building it
+
+A `vector<Entry>` IS arc H's layout — elements inline, insertion-ordered, word-addressed
+— so the same 1M elements read in the same shuffled order out of a dense vector is H's
+ceiling. (`e = v[k]` emits `OpGetVectorNullable`, a cursor: no copy, confirmed with
+`LOFT_REPORT_COPIES`.)
+
+| 1M, shuffled | ns |
+|---|---|
+| `vector<integer>` (8 MB) | 26 |
+| **`vector<Entry>` (16 MB) — H's ceiling** | **93** |
+| `hash<Entry[key]>` | 204 |
+
+So H's ceiling is roughly half of today, and the floor it stops at is the machine: a
+dense 16 MB array still costs 93 ns to read randomly, four times C#'s reported 22 ns for
+the whole lookup. Whatever remains after H is not addressable by layout.
+
+### Why: a hash spends 2–3x the bytes its payload needs
+
+`store_persist_bind` writes the collection's store, so the file is the store image —
+every claimed block, reachable or not. That makes bytes-per-entry an exact, external
+measurement rather than an RSS guess (peak RSS cannot tell a live table from the second
+copy a rehash transiently holds).
+
+| 1M entries of `{integer, integer}` | store | B/entry | of which buckets |
+|---|---|---|---|
+| `vector<Entry>` (dense) | 16.00 MB | 16 | — |
+| `hash`, `reserve`d | 33.00 MB | 33 | 5.33 MB |
+| `hash`, grown | 49.26 MB | 49 | 10.24 MB |
+
+That is the mechanism behind the 185 ns. It is a working-set problem, and **arc D does
+not shrink the working set** — it adds 4 bytes per bucket slot. H is the only arc that
+touches the term that carries the cost.
+
+### Found while measuring: growing a hash ABANDONS every previous bucket table
+
+`add`'s growth path and `reserve` both `claim` a new table, `rehash_into` it, and
+repoint the field — and neither returns the old claim. `hash.rs` never calls
+`Store::delete` (`radix_tree.rs` does, so the convention exists; this is an omission).
+The blocks stay CLAIMED and unreachable, which is why the grown row above costs 16.26 MB
+more than the identical content pre-sized while its bucket table is only 4.9 MB bigger.
+
+Two independent confirmations: the code has no `delete`, and `store_reclaim` on a
+freshly grown, never-bound 1M hash recovers **0 bytes** — the space is not free, it is
+claimed. A persisted grown hash carries its dead tables to disk forever.
+
+**This is layout-neutral to fix and worth ~33% of a grown hash's footprint** — the same
+footprint the dominant 82% term is paying for. It has to be measured out of the way
+BEFORE a format break is spent, or H gets credited with a win that a `delete` would have
+given for free. Not fixed here (this session was scoped to the probes); it needs its own
+regression guard and a check of whether any reader depends on the old table surviving.
+
+### What this settles
+
+- **Q1 → H, and D is not worth a format break.** D attacks 8% and adds bytes to the term
+  that carries 82%. H's measured ceiling is ~2x on random lookup and it subsumes A/B/D.
+- **Q3 dissolves.** It only existed to license arc E, which step 4 already measured at
+  1 ns of 36 on lookup; nothing here revives it. No security argument needs writing.
+- **Q4 is not resolvable from this data.** Reserved-vs-grown at 1M shuffled came out 225
+  vs 200 on the instrumented binary and 213 vs 226 on the clean one — both orderings
+  observed, so the load-factor question stays open and needs its own probe.
+- **Order belongs in every future measurement.** A benchmark that looks up in insertion
+  order understates this path by ~2.5x, and every figure in this plan predating today
+  was taken that way.
+
 ## Open design questions
 
-1. **(blocks D, E, H) Approach `Dictionary` or match it?** D+E keeps per-entry records
+1. **(blocks D, E, H) Approach `Dictionary` or match it?** — **measured 2026-08-09; the
+   answer is H.** See § The Q1 measurement above: the record read is 82% of a random 1M
+   lookup, D does not shrink it, and H's ceiling is roughly half of today's cost. Retire
+   D unless the abandoned-table fix plus H still leave a gap D would close.
+   Original framing follows. D+E keeps per-entry records
    and buys back the resize and hash terms. H restructures `Parts::Hash` onto an inline
    contiguous entry array — C#'s shape, still word-addressed and pointer-free, so still
    mmap-able and range-fetchable — and subsumes A/B/D while fixing the locality that
@@ -265,12 +381,17 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
    would be *misread*, not rejected. Options: add a bucket-algorithm token to the layout
    dump (rejects only stores that use a hash), or bump `SIGNATURE` "Sto1" → "Sto2"
    (rejects every store, including ones with no hash). Prefer the former.
-3. **Does arc E's seeded integer hash preserve the P253 property?** The seed is mixed in
+3. **~~Does arc E's seeded integer hash preserve the P253 property?~~ — DISSOLVED
+   (2026-08-09).** The question exists only to license arc E, whose lookup win is 1 ns of
+   36 (step 4) and whose insert win arc D/H takes anyway. Nothing needs to be argued
+   unless E is revived. Original framing: The seed is mixed in
    before a full murmur3 finalizer, so bucket collisions still depend on a seed the
    program never reveals. Distribution was measured equivalent to SipHash. What is NOT
    yet argued: whether xor-then-mix resists a differential attack as well as SipHash's
    keyed construction. Needs a written argument before it ships, not just a histogram.
-4. **Should the load factor move?** 0.42 wastes ~2.4x the bucket memory it needs. Raising
+4. **Should the load factor move? — still open, and the 2026-08-09 probe did NOT settle
+   it** (reserved-vs-grown flipped between the instrumented and clean binaries; needs a
+   probe that varies load factor directly rather than via `reserve`). 0.42 wastes ~2.4x the bucket memory it needs. Raising
    it costs probe length (currently 1.37) and buys cache locality. Only worth touching
    inside D or H, since it is a layout change either way.
 

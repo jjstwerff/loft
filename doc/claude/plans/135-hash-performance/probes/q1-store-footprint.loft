@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN135 Q1 — how many bytes does a hash actually spend per entry?
+//
+// The Q1 ablation puts 82% of a 1M random lookup in ONE place: the read of the entry
+// record. That is a working-set cost, so the deciding number is not a time at all —
+// it is bytes per entry. Arc H (inline contiguous entries) is worth its format break
+// only if the hash is spending materially more than the payload needs; if it is
+// already dense, H rearranges bytes that were never the problem.
+//
+// `store_persist_bind` writes the collection's store to a file, so the file IS the
+// store image — every claimed block in it, reachable or not. Comparing that against
+// `vector<Entry>`, whose elements are inline and dense, gives bytes-per-entry for both
+// layouts without trusting peak RSS (which cannot tell a live table from the transient
+// second copy a rehash holds).
+//
+// THREE SHAPES, because two of them separate the two candidate explanations:
+//   vec       — `vector<Entry>`, elements inline: the dense floor, and arc H's shape
+//   reserved  — a hash pre-sized once, so the bucket table is built exactly once
+//   grown     — the same hash filled without `reserve`, so the table is rebuilt at
+//               every doubling. If a rebuilt table's OLD claim is never returned, the
+//               difference between these two rows is the abandoned tables, and that is
+//               a layout-NEUTRAL fix that must be measured before a format break is
+//               spent to work around it.
+
+struct Entry { key: integer, val: integer }
+
+fn report(name: text, path: text, n: integer, buckets: integer) {
+  bytes = file(path).size;
+  per: integer = (bytes / n) ?? 0;
+  println("{name:<9} n={n:>7} store={bytes:>10}B  {per:>4} B/entry  buckets={buckets:>9}B");
+}
+
+// The dense floor. `store_persist_bind` takes a keyed collection, not a vector, so
+// this row is read from `size(v)` — which is exact for an inline element type: element
+// count x in-buffer stride, the whole buffer and nothing else.
+fn probe_vec(n: integer) {
+  v: vector<Entry> = [];
+  reserve(v, n);
+  for i in 0..n { v += [Entry { key: i, val: i * 2 }]; }
+  bytes = size(v);
+  per: integer = (bytes / n) ?? 0;
+  println("vec       n={n:>7} store={bytes:>10}B  {per:>4} B/entry  buckets={0:>9}B");
+}
+
+fn probe_hash(name: text, n: integer, dir: text, presize: boolean) {
+  h: hash<Entry[key]> = [];
+  if presize { reserve(h, n); }
+  for i in 0..n { h += Entry { key: i, val: i * 2 }; }
+  p = "{dir}/loft-pln135-{name}-{n}.store";
+  if store_persist_bind(h, p) { report(name, p, n, size(h)); }
+  else { println("{name} n={n} persist REFUSED"); }
+}
+
+fn main() {
+  dir = "/tmp";
+  sizes: vector<integer> = [100000, 1000000];
+  for n in sizes {
+    probe_vec(n);
+    probe_hash("reserved", n, dir, true);
+    probe_hash("grown", n, dir, false);
+  }
+}

@@ -1,0 +1,66 @@
+diff --git a/src/hash.rs b/src/hash.rs
+index 4fbfd14e..c4aa6de4 100644
+--- a/src/hash.rs
++++ b/src/hash.rs
+@@ -25,6 +25,34 @@ const LEN_FLD: u32 = 4;
+ const SEED_FLD: u32 = 8;
+ const BUCKET0: u32 = 16;
+ 
++/// Which random access a `LOFT_PROBE_HASH` run is measuring the ABSENCE of (@PLN135 Q1).
++///
++/// A cache-resident lookup costs ~36 ns and a 1M one ~83 ns; the ~50 ns between them is
++/// two random accesses, and which of the two carries it decides arc D against arc H —
++/// a persisted-store format break that can only be spent once.  Subtracting the modes
++/// gives the split: `Off − SkipRecord` is the record read, `SkipRecord − Floor` is the
++/// bucket read, and `Floor` is what is left when neither can miss.
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum ProbeMode {
++    /// Normal lookup.
++    Off,
++    /// Read the bucket slot, then answer it WITHOUT reading the record to compare keys.
++    SkipRecord,
++    /// Read bucket 0 — the same cache line for every key — and skip the record too, so
++    /// what remains is the per-call work that cannot miss: the header, seed and hash.
++    Floor,
++}
++
++/// `LOFT_PROBE_HASH` = `skiprec` | `floor`; anything else (and unset) is [`ProbeMode::Off`].
++fn probe_mode() -> ProbeMode {
++    static MODE: std::sync::OnceLock<ProbeMode> = std::sync::OnceLock::new();
++    *MODE.get_or_init(|| match std::env::var("LOFT_PROBE_HASH").as_deref() {
++        Ok("skiprec") => ProbeMode::SkipRecord,
++        Ok("floor") => ProbeMode::Floor,
++        _ => ProbeMode::Off,
++    })
++}
++
+ /// Read the per-hash seed stored in bucket record `claim`.
+ fn read_seed(store: &Store, claim: u32) -> u64 {
+     let lo = u64::from(store.get_u32_raw(claim, SEED_FLD));
+@@ -200,6 +228,26 @@ pub fn find(hash_ref: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -
+     let seed = read_seed(store, claim);
+     let hash_val = keys::key_hash(key, seed);
+     let mut index = (hash_val % u64::from(elms)) as u32;
++    // @PLN135 Q1 — the ablation that ATTRIBUTES a lookup's cost to its two random
++    // accesses (the bucket slot, then the record).  Default off, one cached bool, and
++    // it answers WRONG values by construction: `Floor` reads bucket 0 whatever the key
++    // hashes to, and neither mode compares the key, so both report a hit for a record
++    // that may not carry it.  That is the point — the question is which memory access
++    // costs what, and a mode that still had to be correct could not drop one.  Read
++    // only by `probes/h-locality.loft`; see the plan's § Q1 measurement.
++    match probe_mode() {
++        ProbeMode::Off => {}
++        ProbeMode::SkipRecord => {
++            record.rec = store.get_u32_raw(claim, BUCKET0 + index * 4);
++            record.pos = 8;
++            return record;
++        }
++        ProbeMode::Floor => {
++            record.rec = store.get_u32_raw(claim, BUCKET0);
++            record.pos = 8;
++            return record;
++        }
++    }
+     let mut rec_pos = store.get_u32_raw(claim, BUCKET0 + index * 4);
+     // @PLN135 arc B — a probe asks only *is this the key*, about the SAME key every
+     // time, so the `(Content, type_nr)` match belongs outside the loop.  `fast_key`
