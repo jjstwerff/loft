@@ -12,6 +12,11 @@ Open — **arcs A, B and C shipped** (all layout-neutral); **one fork undecided*
 puts the whole remaining lookup gap inside D / E / H. Those three each cost a
 persisted-store format break and must not be taken twice.
 
+**Q1 got cheaper to decide (2026-08-09):** arc E's lookup win was re-measured *in situ*
+at **1 ns of 36**, not the ~26 ns the isolation figure implied — so E is an insert arc,
+and arc D takes most of even that. The fork is now closer to "D or H", with E's format
+break hard to justify on its own. See [step 4](#phase-ordering).
+
 Measured on `--native-release`, 1M `integer` keys, before → after A + B + C:
 
 | | before | after | C# |
@@ -77,6 +82,20 @@ Supporting figures:
 - Arc E prototyped end-to-end behind an env flag: `hash::add` 215 → 121 ms, insert
   954 → 840 ms, lookup 88 → 67 ms, combined bench 982–1011 → 849–872 ms (~13%).
   Patch kept out of the tree; it moves bucket placement (see Q1).
+
+**Candidates measured and REJECTED** — recorded so they are not re-proposed:
+
+- *Drop the per-insert `keys.clone()`.* `structures.rs`'s `Parts::Hash` arm clones the
+  `Vec<Key>` on every insert to dodge a borrow conflict, which reads like one heap
+  allocation per insert. Replacing it with a split field borrow is a three-line change
+  and measures **no effect** (insert ~583–600 ms vs a ~540–623 ms baseline — inside the
+  noise). A one-element `Vec` clone is not what this path is spending on.
+- *Give insert one hash instead of two.* Each insert hashes the same logical key twice
+  through two derivations — `dedup_keyed` → `find` → `key_hash` (Content side), then
+  `hash::add` → `hash_set` → `keys::hash` (record side). Collapsing them is layout-neutral
+  and sound, but it is worth ~4%: per-insert hash work is ~44 ms of the 215 ms, the
+  rest being resize. Fold it into arc D — which will already have the hash in hand — and
+  do not spend a standalone arc on it.
 
 **What the generated code actually does per `cache += Entry { key: i, val: i*2 }`:**
 
@@ -161,7 +180,7 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
 | **B** — hoist the key dispatch out of the probe loop (no new opcode; see below) | measured **~10 ns of a ~33 ns** cache-resident lookup (−20…25%) | no | **Done** |
 | **C** — capacity hint: `reserve(h, n)` pre-sizes the bucket table | measured **618 → 352 ms** on 1M inserts, and half the table memory | no (additive) | **Done** |
 | **D** — cache the hash in the bucket slot (`(u32 rec, u32 hash)`) | 171 ms + most per-probe cost | **yes** | Blocked on Q1 |
-| **E** — seeded integer hash + division-free bucket index | ~13% combined (measured) | **yes** | Blocked on Q1 |
+| **E** — seeded integer hash + division-free bucket index | ~13% combined (measured); **insert-only — the lookup half is 1 ns of 36**, and arc D removes most of the insert half too | **yes** | Blocked on Q1 — and see the re-measurement in step 4 before spending a format break on it |
 | **H** — inline contiguous entry array behind `Parts::Hash` | subsumes A/B/D + locality | **yes** | Blocked on Q1 |
 
 ## Phase ordering
@@ -208,8 +227,24 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
    The ~50 ns a 1M table adds over a cache-resident one is **cache misses** — the bucket
    slot and then the record, two random accesses over ~24 MB. No layout-neutral arc
    touches that: it is exactly what arc D (cache the hash in the bucket slot, so a probe
-   rejects without reading the record) and arc H (contiguous entries) are for. The
-   remaining fixed ~26 ns is mostly SipHash, which is arc E.
+   rejects without reading the record) and arc H (contiguous entries) are for.
+
+   **The fixed ~26 ns is NOT mostly SipHash — measured in situ, and this line used to say
+   it was.** Swapping SipHash for a seeded 2-multiply splitmix at BOTH hash sites moves a
+   cache-resident lookup by **1 ns of 36** (36 → 35, reproduced exactly across runs), and
+   nothing resolvable at 1M. The 26.5 ns/op figure above is `key_hash` timed *in
+   isolation*; it does not survive being measured where it actually runs.
+
+   The instrument was falsified before the number was believed: with the same probe made
+   degenerate (every key to bucket 0) the same benchmark goes 37 ns → 16,244 ns, so the
+   fast path is unquestionably live. Do not re-derive this from the isolation figure — an
+   isolated hash microbenchmark overstates this path by more than an order of magnitude.
+
+   **Consequence for Q1:** arc E is an INSERT optimisation, not a lookup one. Its measured
+   value is ~24% of insert, and ~80% of *that* is the resize re-hash — which arc D removes
+   anyway by caching the hash. So D largely subsumes E's real win, while E alone carries
+   the P253 security question (Q3). Rank accordingly: E is not the cheap lookup win the
+   ordering above implied, and shipping D may leave E not worth its format break at all.
 
    So the lookup gap is now **measured to live entirely in D / E / H**, all three of
    which cost a persisted-store format break. That makes Q1 the next thing, not an
