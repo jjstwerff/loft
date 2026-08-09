@@ -428,10 +428,12 @@ the element position inside a tuple pattern.
   requires restructuring the arm-building loop (deferred to T1.10 if needed).
 - **Rest patterns**: `(first, ..)` — tuple arity is fixed and known at compile time;
   no `..` rest needed (unlike vector/slice match).
-  ⚠ **A `..` in a tuple pattern HANGS THE PARSER** rather than being rejected — verified
-  2026-08-09 on `(first, ..)`, `(.., last)`, `(a, b, ..)` and `(first, ...)`, each killed by
-  the watchdog in `phase=parse`. Unsupported syntax must be refused with a diagnostic, so
-  this is a bug, not the "not needed" above.
+  ⚠ **A `..` in a tuple pattern HANGS THE PARSER** rather than being rejected —
+  [loft#832](https://github.com/loft-lang/loft/issues/832). Verified on `(first, ..)`,
+  `(.., last)`, `(a, b, ..)` and `(first, ...)`, each killed by the watchdog in
+  `phase=parse`, on both backends. Unsupported syntax must be refused with a diagnostic,
+  so this is a bug, not the "not needed" above. Workaround: write the arity out with `_`
+  for unbound positions.
 - **Match on tuple-returning function calls**: `match foo() { ... }` — requires T1.8a
   (tuple function return convention). The subject must be a tuple variable or parameter.
 
