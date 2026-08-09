@@ -1680,13 +1680,24 @@ use #count instead"
         // `Reference` names while keeping the looseness that matters here — differing
         // integer ranges, text deps, and fn-ref capture lists still count as the same
         // type, so same-struct reuse stays idiomatic.
+        //
+        // loft#825 — this runs on BOTH passes, and that is what makes it reach the reader.
+        // Pass 2 alone was too late: the stale binding this names is the reason the BODY
+        // stops type-checking, and the body's own complaint fires on pass 1, where an Error
+        // ends the parse before pass 2 begins.  `for p in floats { s = s + p.0 }  for p in
+        // pairs { n = n + p.0 }` reported *"Variable 'n' cannot change type from integer to
+        // float"* — the wrong variable, on a cure (rename `n`) that renames the symptom and
+        // reproduces the error under the new name, while the fix the reader needs (rename
+        // `p`) was never mentioned.  The verdict is pass-stable by construction: both types
+        // must be resolved for it to fire, so pass 1 can only stay silent where pass 2 still
+        // speaks, never contradict it.  A pass-1 Error skips pass 2, so it cannot double up.
         let existing_var = self.vars.var(id);
-        if !self.first_pass
-            && id != "_"
+        if id != "_"
             && existing_var != u16::MAX
             && self.vars.is_defined(existing_var)
             && !self.vars.var_type(existing_var).is_equal(&var_tp)
             && !self.vars.var_type(existing_var).is_unknown()
+            && !var_tp.is_unknown()
             // text_return converts text variables to RefVar(Text) work buffers
             // for the return path.  When a for-loop variable was converted this
             // way, the iterator still writes into it as text — this is correct
