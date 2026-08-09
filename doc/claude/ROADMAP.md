@@ -82,10 +82,12 @@ The methodology behind this file (categories, no-time-projections, features-need
 > `status:future` — it is a migration stub pointing at `lib_plans/future/25-ffi-dispatch/`.  Either
 > close `@PLN74` or stop calling the work complete; do not read the two numbers as the same plan.
 
-The 2026-07 cycle shipped as `2026.7.1` (stability + type safety).  The **H-register is drained**
+The 2026-07 cycle shipped as `2026.7.1` (stability + type safety); the current release is
+`2026.8.0`.  The **H-register is drained**
 ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the **GitHub issue
-tracker is empty — which under fix-don't-file means "no deferrals", not "no bugs"** (the ledger is in
-the docs; see the digest above).  The stability roadmap itself is **not** drained either: gate 1's
+tracker holds 4 open bugs** (2026-08-09) — under fix-don't-file a low count means "few
+deferrals", not "no bugs"; the ledger is in the docs, see the digest above.  Three of the four
+came from the crawler consumer, which is where most bug flow now originates.  The stability roadmap itself is **not** drained either: gate 1's
 Cluster C fold remains, and gate 5 is now [@PLN102](https://github.com/loft-lang/plans/issues/102).
 Under the warm feature freeze
 (below), **in-scope** = library enablement + optimisations + stabilisation;

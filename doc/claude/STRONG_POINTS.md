@@ -331,7 +331,7 @@ not touch the host or other sessions.
 
 ## 10. It ships, and the value is legible on contact
 
-**Strength.** loft releases on a monthly cadence (current `2026.6.0`),
+**Strength.** loft releases on a monthly cadence (current `2026.8.0`),
 `loft install <name>` fetches published libraries end to end, and a newcomer meets
 the value in a browser — [playground](https://loft-lang.org/loft/playground.html),
 [gallery](https://loft-lang.org/loft/gallery.html), a playable game — with no
