@@ -187,6 +187,7 @@ pub mod placement;
 pub mod portable_path;
 pub mod resolution;
 pub mod scopes;
+pub mod siphash;
 pub mod use_analysis;
 mod variables;
 pub mod vector;

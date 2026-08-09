@@ -60,16 +60,20 @@
 //! to any of them fails with the instruction to bump the token rather than trusting
 //! whoever makes the change to remember this file.
 //!
-//! # What a token cannot cover (loft#827)
+//! # What a token cannot cover, and why it no longer has to (loft#827)
 //!
 //! This mechanism refuses a store whose placement LOFT computes differently. It is blind
-//! to a store whose placement changed without loft changing — and that is reachable
-//! today: `keys::key_hash` runs on `std::hash::DefaultHasher`, whose algorithm std does
-//! not guarantee across Rust releases, while the seed in the store makes every reader
-//! re-derive buckets from it. A toolchain upgrade can therefore move placement with no
-//! token to bump and nothing to refuse on. The pin test is the only tripwire for it; the
-//! fix is to own the hash construction rather than borrow std's, which is a placement
-//! change in its own right and would ship with a bump of [`HASH`].
+//! by construction to a store whose placement changed without loft changing — and that
+//! WAS reachable: `keys::key_hash` ran on `std::hash::DefaultHasher`, whose algorithm std
+//! does not guarantee across Rust releases, while the seed in the store makes every
+//! reader re-derive buckets from it. A toolchain upgrade could therefore move placement
+//! with no token to bump and nothing to refuse on.
+//!
+//! Closed by owning the hash: [`crate::siphash::SipHasher13`] is a byte-identical copy of
+//! what `DefaultHasher` computes, proven against it in `tests/siphash_std_parity.rs`. It
+//! was NOT a placement change — [`HASH`] did not bump and no store was invalidated — and
+//! that is the point: the format now depends on loft alone, so a future std change is a
+//! red test rather than a silent misread of somebody's data.
 
 /// The placement every kind shipped with when the layout identity gained this field.
 /// A token equal to this renders as nothing, so stores written before it are unaffected.

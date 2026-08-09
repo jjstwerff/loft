@@ -14,19 +14,28 @@
 
 #![allow(dead_code)]
 
+use crate::siphash::SipHasher13;
 use crate::store::Store;
 use std::cmp::Ordering;
 use std::collections::hash_map::RandomState;
 use std::fmt::Formatter;
-use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
+use std::hash::{BuildHasher, Hasher};
 use std::sync::OnceLock;
 
 /// Build a deterministic hasher whose bucket distribution depends only on
-/// `seed`.  `DefaultHasher::new()` fixes the SipHash-1-3 keys (k0=k1=0), so
-/// the SAME `seed` maps a key to the SAME bucket in EVERY process.  That is
-/// what makes a persisted hash portable: a reader restores the seed stored
-/// in the hash's own bucket record (`hash.rs`) and re-derives identical
-/// buckets, so a cross-process / remote lookup lands in the right bucket.
+/// `seed`.  [`SipHasher13::new`] fixes the keys (k0=k1=0), so the SAME `seed`
+/// maps a key to the SAME bucket in EVERY process.  That is what makes a
+/// persisted hash portable: a reader restores the seed stored in the hash's
+/// own bucket record (`hash.rs`) and re-derives identical buckets, so a
+/// cross-process / remote lookup lands in the right bucket.
+///
+/// loft#827 — this used to be `std::hash::DefaultHasher`, whose algorithm std
+/// does NOT guarantee across releases.  Since the seed travels with the store,
+/// that made bucket placement a property of whichever rustc built the binary:
+/// a toolchain upgrade could move it with no loft change, so no layout identity
+/// and no `crate::placement` token could refuse the older store.  [`SipHasher13`]
+/// is a byte-identical copy of what `DefaultHasher` computes today — the format
+/// does not move — so the only thing that changed is who owns the definition.
 ///
 /// The per-hash random `seed` (drawn by [`fresh_seed`] when a hash is first
 /// populated) preserves the P253 hash-DoS defense (2026-05-11): without a
@@ -36,8 +45,8 @@ use std::sync::OnceLock;
 /// Java / Node hash-DoS, CVE-2011-4815 et al.).  An attacker cannot
 /// pre-compute collisions without knowing the hash's seed.
 #[must_use]
-fn seeded_hasher(seed: u64) -> DefaultHasher {
-    let mut hasher = DefaultHasher::new();
+fn seeded_hasher(seed: u64) -> SipHasher13 {
+    let mut hasher = SipHasher13::new();
     hasher.write_u64(seed);
     hasher
 }
@@ -1402,32 +1411,32 @@ pub fn key_hash(key: &[Content], seed: u64) -> u64 {
     let mut hasher = seeded_hasher(seed);
     for k in key {
         match k {
-            Content::Long(l) => l.hash(&mut hasher),
-            Content::Str(s) => s.str().hash(&mut hasher),
+            Content::Long(l) => hasher.write_i64(*l),
+            Content::Str(s) => hasher.write_str(s.str()),
             _ => (),
         }
     }
     hasher.finish()
 }
 
-fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut DefaultHasher) {
+fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut SipHasher13) {
     let s = store(r, stores);
     match key.type_nr.abs() {
-        1 => s.get_int(r.rec, p).hash(hasher),
-        2 => s.get_long(r.rec, p).hash(hasher),
+        1 => hasher.write_i64(s.get_int(r.rec, p)),
+        2 => hasher.write_i64(s.get_long(r.rec, p)),
         3 | 4 => (),
-        6 => s.get_str(s.get_u32_raw(r.rec, p)).hash(hasher),
+        6 => hasher.write_str(s.get_str(s.get_u32_raw(r.rec, p))),
         // Narrow-integer key storage (Parts::Int / Short / ShortRaw / Byte).
         // Each yields an i64 view so the hash matches `get_key`'s
         // Content::Long(i64) reconstruction at the lookup site.
-        8 => i64::from(s.get_i32_raw(r.rec, p)).hash(hasher),
-        9 => i64::from(s.get_short(r.rec, p, key.start)).hash(hasher),
-        10 => i64::from(s.get_byte(r.rec, p, key.start)).hash(hasher),
+        8 => hasher.write_i64(i64::from(s.get_i32_raw(r.rec, p))),
+        9 => hasher.write_i64(i64::from(s.get_short(r.rec, p, key.start))),
+        10 => hasher.write_i64(i64::from(s.get_byte(r.rec, p, key.start))),
         // `Parts::ShortRaw` stores `(val - min) as u16` with no null sentinel, so it
         // decodes as `read + min` — the `get_short_full` its own writer is paired with
         // (loft#812).
-        11 => i64::from(s.get_short_full(r.rec, p, key.start)).hash(hasher),
-        _ => i64::from(s.get_byte(r.rec, p, key.start)).hash(hasher),
+        11 => hasher.write_i64(i64::from(s.get_short_full(r.rec, p, key.start))),
+        _ => hasher.write_i64(i64::from(s.get_byte(r.rec, p, key.start))),
     }
 }
 
