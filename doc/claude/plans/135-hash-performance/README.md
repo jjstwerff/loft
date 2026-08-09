@@ -7,11 +7,40 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arcs A, B and C shipped** (all layout-neutral). **Q1 is measured and answered:
-H, not D** — see [§ The Q1 measurement (2026-08-09)](#the-q1-measurement-2026-08-09--it-is-one-access-and-it-is-a-byte-problem).
+Open — **arcs A, B and C shipped** (all layout-neutral), **Q2 shipped**, and the only arc
+left is **H**. Every design question that gated a format break is now closed: **Q1 is
+answered H, not D**; **Q2's refusal mechanism is in the tree**; **Q3 dissolved**. **Q4 is
+the one still open**, and it belongs inside H.
+
+**Q1 — answered: H, not D.** See
+[§ The Q1 measurement (2026-08-09)](#the-q1-measurement-2026-08-09--it-is-one-access-and-it-is-a-byte-problem).
 The record read is **82%** of a 1M random lookup and the bucket read is 8%, so D spends
 the one format break available on the small term; H's ceiling (measured against a dense
-`vector<Entry>`, which IS its layout) is roughly half of today's cost.
+`vector<Entry>`, which IS its layout) is roughly half of today's cost. **Retire D** unless
+H plus the abandoned-table fix still leave a gap D would close.
+
+**Q2 — shipped: a store written before a placement change now REFUSES instead of
+misreading.** The @PLN97 layout identity commits to how bytes are shaped, not to where a
+keyed collection puts an entry — so before this, a store written pre-H and read post-H
+passed the gate and was then misread, with lookups finding nothing or a neighbour and no
+error anywhere. `src/placement.rs` carries a token per collection KIND into that same
+identity: `placement::tag` → `layout_dump` → `layout_algo_hash` → the `.dschema` sidecar →
+`schema_gate_ok` on every `store_load`, with the paged and remote loaders gating on the
+same value before range-reading foreign bytes. **Absence means the baseline**, so the dump
+is byte-identical, no recorded layout hash moves, and not one store already on disk is
+invalidated — which is why it could ship before H rather than with it. Per KIND, so
+bumping the hash token leaves plain structs and vectors loading exactly as before.
+`sorted` / `ordered` deliberately get no token: their placement is key order, which a
+reader re-derives by comparing keys it can already read. Guards:
+`placement_contract_is_pinned` (arc D and H move the bucket constants; arc E moves the
+`key_hash` digests) and `a_changed_placement_token_refuses_the_store`.
+
+Filed and fixed while pinning that contract: [loft#827](https://github.com/loft-lang/loft/issues/827)
+— `key_hash` ran on `std::hash::DefaultHasher`, whose algorithm std does not promise across
+releases, while the seed stored in the file makes every reader re-derive buckets from it.
+So a toolchain upgrade alone could move placement, with no loft change and no token to
+bump. `keys.rs` now owns a byte-identical `SipHasher13`, so `placement::HASH` does not bump
+and no store is invalidated.
 
 **The layout-neutral half is DONE (2026-08-09).** The same probes found that growing a
 hash **abandoned every previous bucket table** — neither replacement site returned the old
@@ -52,8 +81,8 @@ Close the integer-key `hash<T[key]>` gap to `Dictionary<long,long>`, starting wi
 
 ## Effort + design
 
-- **Effort:** MH (A: S · B: S · C: S · D: M · E: S · H: MH)
-- **Design:** ~ (Q1 answered 2026-08-09 → H; Q2 open, Q4 open, Q3 dissolved)
+- **Effort:** MH (A: S · B: S · C: S · D: M · E: S · H: MH) — **only H remains**
+- **Design:** ~ (Q1 answered 2026-08-09 → H; Q2 shipped 2026-08-09; Q3 dissolved; **Q4 open**, settle it inside H)
 - **Value category:** Q (internal quality — performance with a clear payoff)
 - **Last touched:** 2026-08-09
 
@@ -190,9 +219,10 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
 | **A** — build the entry in place (retarget the struct literal at the entry record; drop the scratch + `OpCopyRecord`) | measured **933 → 536 ms** on 1M inserts (−43%) | no | **Done** |
 | **B** — hoist the key dispatch out of the probe loop (no new opcode; see below) | measured **~10 ns of a ~33 ns** cache-resident lookup (−20…25%) | no | **Done** |
 | **C** — capacity hint: `reserve(h, n)` pre-sizes the bucket table | measured **618 → 352 ms** on 1M inserts, and half the table memory | no (additive) | **Done** |
-| **D** — cache the hash in the bucket slot (`(u32 rec, u32 hash)`) | 171 ms + most per-probe cost | **yes** | Blocked on Q1 |
-| **E** — seeded integer hash + division-free bucket index | ~13% combined (measured); **insert-only — the lookup half is 1 ns of 36**, and arc D removes most of the insert half too | **yes** | Blocked on Q1 — and see the re-measurement in step 4 before spending a format break on it |
-| **H** — inline contiguous entry array behind `Parts::Hash` | subsumes A/B/D + locality | **yes** | Blocked on Q1 |
+| **Q2** — placement token in the @PLN97 layout identity, so an old store refuses instead of misreading | nothing on its own; it is what lets H spend a format break safely | no (absence = baseline) | **Done** |
+| **D** — cache the hash in the bucket slot (`(u32 rec, u32 hash)`) | 171 ms + most per-probe cost | **yes** | **Retired by Q1** — attacks the 8% term and adds bytes to the 82% one |
+| **E** — seeded integer hash + division-free bucket index | ~13% combined (measured); **insert-only — the lookup half is 1 ns of 36**, and arc D removes most of the insert half too | **yes** | **Retired by Q1** — revive only with a written P253 argument (Q3) |
+| **H** — inline contiguous entry array behind `Parts::Hash` | subsumes A/B/D + locality; ceiling ~2x on random lookup | **yes** | **Ready — the only arc left.** Measure against 34 MB, not 49; settle Q4 inside it |
 
 ## Phase ordering
 
@@ -260,8 +290,12 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
    So the lookup gap is now **measured to live entirely in D / E / H**, all three of
    which cost a persisted-store format break. That makes Q1 the next thing, not an
    optional one.
-5. **Q1, then one of D+E or H.** Whichever is chosen also extends the @PLN97 layout
-   identity so an old store refuses rather than misreads.
+5. **Q1 and Q2 — both done (2026-08-09).** Q1 chose H over D+E. Q2 extended the @PLN97
+   layout identity with a per-kind `placement` token, so an old store refuses rather than
+   misreads; it shipped ahead of H because absence means the baseline, which invalidates
+   nothing already on disk.
+6. **H — next, and the only arc left.** Settle Q4 (load factor) inside it: it is a layout
+   change either way, so it costs nothing extra there and cannot be spent separately.
 
 ## The Q1 measurement (2026-08-09) — it is ONE access, and it is a byte problem
 
@@ -399,7 +433,11 @@ it is a cell in the script test.
    mmap-able and range-fetchable — and subsumes A/B/D while fixing the locality that
    none of the others touch. **They conflict:** a bucket-slot change spent on D is
    thrown away by H, and each costs one persisted-store break. Decide before spending it.
-2. **How does an old store refuse?** The @PLN97 layout identity covers storage layout
+2. **~~How does an old store refuse?~~ — SHIPPED (2026-08-09).** Resolved as the first of
+   the two options below: a per-kind `placement` token in the layout dump, not a
+   `SIGNATURE` bump, which would have refused every store ever written including ones
+   with no hash. See § Status for the mechanism and its guards. Original framing: The
+   @PLN97 layout identity covers storage layout
    (field positions, sizes, endianness), not bucket placement — so today a changed hash
    would be *misread*, not rejected. Options: add a bucket-algorithm token to the layout
    dump (rejects only stores that use a hash), or bump `SIGNATURE` "Sto1" → "Sto2"
@@ -420,8 +458,9 @@ it is a cell in the script test.
 
 ## Cross-arc dependencies
 
-- **@PLN97** (layout contract) — Q2 extends the layout identity; D/E/H cannot ship
-  without it.
+- **@PLN97** (layout contract) — Q2 extended the layout identity with a per-kind
+  `placement` token (`src/placement.rs`, shipped). H cannot ship without it; it is now
+  there, so H is free to move the bucket constants and bump `placement::HASH`.
 - **loft#808** (shipped) — arc A is the same defect class at a third boundary. Compound
   values materialise into heap records at the local (free for tuples), at the **return**
   (#808, fixed), and at the **collection insert** (arc A). Reuse its technique.
