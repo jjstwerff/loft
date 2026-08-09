@@ -216,6 +216,23 @@ index<Elm[nr, -key]>        // two keys: nr ascending, key descending
 hash<Count[c, t]>           // compound hash key
 ```
 
+**A key field may be a TUPLE**, which is a compound key spelled as one field. It behaves
+exactly as its elements spelled out would: element 0 orders, element 1 breaks its ties, and
+so on, nested tuples included. Look it up by writing the tuple.
+
+```loft
+struct Cell { pos: (integer, integer), name: text }
+
+h: hash<Cell[pos]> = [Cell { pos: (1, 2), name: "a" }];
+c = h[(1, 2)];              // a literal, a local, or a vector<(…)> element all work
+
+s: sorted<Cell[pos]> = [];  // (1,2) before (1,9) before (2,0)
+d: sorted<Cell[-pos]> = []; // `-` reverses the WHOLE tuple
+```
+
+A `trie<T[field]>` is the exception: it keys on the BYTES of ONE text field, so a tuple key
+is refused with a message pointing at `sorted` / `index` / `hash`.
+
 **Gotcha — iteration direction is declared on the struct, not on the query.**
 A `-` prefix on a key field in `sorted<T[-key]>` or `index<T[-key]>` flips
 the iteration direction of *every* query against that collection — plain

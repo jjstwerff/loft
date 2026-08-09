@@ -727,6 +727,69 @@ impl Stores {
         None
     }
 
+    /// THE key-arity chokepoint: every `(content type, absolute position)` ONE key field
+    /// contributes, in comparison order.
+    ///
+    /// Normally exactly one.  A TUPLE field contributes one per element, at the element's
+    /// own offset inside the field: a tuple key is a compound key that happens to be
+    /// spelled as a single field, so `sorted<Cell[pos]>` with `pos: (integer, integer)` has
+    /// to behave as `sorted<Cell[x, y]>` does — element 0 first, element 1 breaking its
+    /// ties.  Without the expansion the whole tuple took the catch-all descriptor and every
+    /// element after the first was invisible to the comparison: three cells inserted at
+    /// `(1,9)`, `(2,0)` and `(1,2)` left TWO in the collection, the two sharing an element 0
+    /// having collapsed into one.  Nested tuples expand the same way, so the flat element
+    /// order is the comparison order all the way down.
+    ///
+    /// Both readers of key arity go through here — [`Stores::determine_keys_for`], which
+    /// bakes the comparison descriptors, and [`Stores::get_keys`], which tells `read_key`
+    /// how many stack values a lookup pushed.  They MUST agree: `read_key` pops one value
+    /// per entry, so a list one short leaves a key value on the stack and the very next
+    /// `get_stack::<DbRef>()` reads it as the collection (loft#720 is the same failure for
+    /// `spatial<T[x,y]>`, and a tuple key reproduced it exactly — `h[(3, 4)]` looked up in
+    /// store #4).  Deriving the arity twice is what let them disagree, so there is one
+    /// derivation and two consumers.
+    pub(crate) fn key_contents_for_field(&self, content: u16, position: u16) -> Vec<(u16, u16)> {
+        if (content as usize) < self.types.len()
+            && self.types[content as usize].name.starts_with("__tuple<")
+            && let Parts::Struct(fields) = &self.types[content as usize].parts
+        {
+            let out: Vec<(u16, u16)> = fields
+                .iter()
+                .flat_map(|f| self.key_contents_for_field(f.content, position + f.position))
+                .collect();
+            if !out.is_empty() {
+                return out;
+            }
+        }
+        vec![(content, position)]
+    }
+
+    /// The comparison descriptors one key field contributes — [`Stores::key_contents_for_field`]
+    /// resolved to key type codes.  `asc` applies to every descriptor the field produces: a
+    /// descending tuple key reverses the whole tuple, which is what `sorted<Cell[-pos]>`
+    /// reads as.
+    fn key_descriptors_for_field(
+        &self,
+        content: u16,
+        position: u16,
+        asc: bool,
+    ) -> Vec<crate::keys::Key> {
+        self.key_contents_for_field(content, position)
+            .into_iter()
+            .map(|(c, pos)| {
+                let (mut type_nr, start) = key_descriptor_for_content(c, &self.types);
+                if !asc {
+                    type_nr = -type_nr;
+                }
+                crate::keys::Key {
+                    type_nr,
+                    position: pos,
+                    start,
+                }
+            })
+            .collect()
+    }
+
     pub(super) fn determine_keys(&mut self) {
         for t_nr in 0..self.types.len() {
             self.determine_keys_for(t_nr);
@@ -769,12 +832,8 @@ impl Stores {
                 self.types[t_nr].keys.clear();
                 for key_field in key_fields {
                     if let Some((content, position)) = self.key_field(c, key_field) {
-                        let (tp, start) = key_descriptor_for_content(content, &self.types);
-                        self.types[t_nr].keys.push(crate::keys::Key {
-                            type_nr: tp,
-                            position,
-                            start,
-                        });
+                        let ks = self.key_descriptors_for_field(content, position, true);
+                        self.types[t_nr].keys.extend(ks);
                     }
                 }
             }
@@ -784,19 +843,27 @@ impl Stores {
                 self.types[t_nr].keys.clear();
                 for (key_field, asc) in &key_fields {
                     if let Some((content, position)) = self.key_field(c, *key_field) {
-                        let (mut tp, start) = key_descriptor_for_content(content, &self.types);
-                        if !asc {
-                            tp = -tp;
-                        }
-                        self.types[t_nr].keys.push(crate::keys::Key {
-                            type_nr: tp,
-                            position,
-                            start,
-                        });
+                        let ks = self.key_descriptors_for_field(content, position, *asc);
+                        self.types[t_nr].keys.extend(ks);
                     }
                 }
             }
             _ => (),
+        }
+        // `LOFT_TRACE_KEYS=1` prints the baked comparison descriptors per collection.  Worth
+        // its ten lines: key ARITY has desynchronised from the lookup twice now (loft#720's
+        // `spatial<T[x,y]>`, and a tuple key field), and both times the symptom was a
+        // collection read from the wrong store rather than anything naming the keys.
+        if std::env::var_os("LOFT_TRACE_KEYS").is_some() && !self.types[t_nr].keys.is_empty() {
+            eprintln!(
+                "[keys] t_nr={t_nr} {} -> {:?}",
+                self.types[t_nr].name,
+                self.types[t_nr]
+                    .keys
+                    .iter()
+                    .map(|k| (k.type_nr, k.position))
+                    .collect::<Vec<_>>()
+            );
         }
     }
 

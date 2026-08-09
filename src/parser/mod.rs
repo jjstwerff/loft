@@ -7586,7 +7586,7 @@ impl Parser {
     }
 
     /// The element types of either spelling of a tuple — `None` for any other type.
-    fn tuple_elements(&self, tp: &Type) -> Option<Vec<Type>> {
+    pub(crate) fn tuple_elements(&self, tp: &Type) -> Option<Vec<Type>> {
         match tp.base() {
             Type::Tuple(elems) => Some(elems.clone()),
             Type::Reference(d_nr, _) if self.data.def(*d_nr).name().starts_with("__tuple<") => {
@@ -7598,7 +7598,7 @@ impl Parser {
 
     /// Give a comparison operand a name its elements can be read from repeatedly, unboxing
     /// the STORED spelling on the way.  Appends the binding statement to `prelude`.
-    fn bind_tuple_operand(
+    pub(crate) fn bind_tuple_operand(
         &mut self,
         value: &Value,
         tp: &Type,

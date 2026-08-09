@@ -126,6 +126,36 @@ which says more than an arity count would.
 
 ---
 
+## As a collection key
+
+A tuple key field in `hash<T[k]>`, `sorted<T[k]>` or `index<T[k]>` is a **compound key
+spelled as one field**: it behaves exactly as its elements spelled out as separate key
+fields, in order. `sorted<Cell[pos]>` with `pos: (integer, integer)` orders on element 0 and
+breaks ties on element 1, the same as `sorted<Cell[x, y]>`; a nested tuple flattens the same
+way, so the flat element order is the comparison order all the way down. `-` reverses the
+whole tuple. Look one up by writing the tuple — `h[(3, 4)]` — from a literal, a local, or a
+`vector<(…)>` element.
+
+`Stores::key_contents_for_field` is the one place a key field's arity is decided, and it has
+to stay that way. **Both** the comparison descriptors (`determine_keys_for`) and the lookup's
+stack arity (`get_keys`) read it, and `read_key` pops one stack value per entry — so a list
+one short leaves a key value on the stack and the very next `get_stack::<DbRef>()` reads it
+as the collection. That is loft#720 (`spatial<T[x,y]>`, whose arity list had gone missing),
+and a tuple key reproduced it exactly: `h[(3, 4)]` looked up in store #4. Deriving the arity
+twice is what let the two disagree.
+
+Not expanding it was worse than the panic, because it was quiet: the whole tuple took the
+catch-all descriptor, so only element 0 was ever compared, and a `sorted` holding three cells
+at `(1,9)`, `(2,0)` and `(1,2)` reported `len == 3`… after silently dropping one of the two
+that shared an element 0.
+
+`trie<T[field]>` is the exception, and refuses a tuple key. It keys on the BYTES of one text
+field, and an order-preserving byte encoding of a tuple is a format decision (it would reach
+the stored/paged trie image), not a descriptor change — so the refusal names `sorted` /
+`index` / `hash` instead.
+
+---
+
 ## Syntax
 
 ```loft

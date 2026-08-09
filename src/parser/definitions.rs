@@ -36,6 +36,21 @@ impl Parser {
             return;
         }
         if want_text {
+            // A TUPLE key gets its own advice: `sorted` / `index` / `hash` take one, so the
+            // fix is the collection kind, not the field.  The generic line would send the
+            // author to `spatial<…>` "for coordinates" or to "order on a number", neither of
+            // which describes a `(text, text)`.
+            if matches!(tp, Type::Tuple(_)) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a trie keys on the BYTES of ONE text field, and `{field}` is {} — a \
+                     tuple key needs `sorted<…>` / `index<…>` (ordered lexicographically, \
+                     element by element) or `hash<…>` (exact lookup)",
+                    tp.name(&self.data)
+                );
+                return;
+            }
             diagnostic!(
                 self.lexer,
                 Level::Error,
