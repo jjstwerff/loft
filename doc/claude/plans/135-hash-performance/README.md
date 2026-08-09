@@ -8,9 +8,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 Open — **arcs A, B and C shipped** (all layout-neutral), **Q2 shipped**, and the only arc
-left is **H**. Every design question that gated a format break is now closed: **Q1 is
-answered H, not D**; **Q2's refusal mechanism is in the tree**; **Q3 dissolved**. **Q4 is
-the one still open**, and it belongs inside H.
+left is **H**. **Q1 is answered H, not D**; **Q2's refusal mechanism is in the tree**;
+**Q3 dissolved**.
+
+**H still needs a design cycle before it is built, and the reason is not the byte
+layout.** H makes an entry a position inside one contiguous array, so growing that array
+moves every entry and invalidates every outstanding reference into it — a stability
+callers have today and would lose (**Q5**, new). That is an ownership question in the area
+ranked weakness #1, not plumbing. **Q4** (load factor) is settled inside H.
 
 **Q1 — answered: H, not D.** See
 [§ The Q1 measurement (2026-08-09)](#the-q1-measurement-2026-08-09--it-is-one-access-and-it-is-a-byte-problem).
@@ -82,7 +87,7 @@ Close the integer-key `hash<T[key]>` gap to `Dictionary<long,long>`, starting wi
 ## Effort + design
 
 - **Effort:** MH (A: S · B: S · C: S · D: M · E: S · H: MH) — **only H remains**
-- **Design:** ~ (Q1 answered 2026-08-09 → H; Q2 shipped 2026-08-09; Q3 dissolved; **Q4 open**, settle it inside H)
+- **Design:** ~ (Q1 answered 2026-08-09 → H; Q2 shipped 2026-08-09; Q3 dissolved; **Q5 open and blocks H** — entry-reference stability is an ownership question; **Q4 open**, settle it inside H)
 - **Value category:** Q (internal quality — performance with a clear payoff)
 - **Last touched:** 2026-08-09
 
@@ -222,7 +227,7 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
 | **Q2** — placement token in the @PLN97 layout identity, so an old store refuses instead of misreading | nothing on its own; it is what lets H spend a format break safely | no (absence = baseline) | **Done** |
 | **D** — cache the hash in the bucket slot (`(u32 rec, u32 hash)`) | 171 ms + most per-probe cost | **yes** | **Retired by Q1** — attacks the 8% term and adds bytes to the 82% one |
 | **E** — seeded integer hash + division-free bucket index | ~13% combined (measured); **insert-only — the lookup half is 1 ns of 36**, and arc D removes most of the insert half too | **yes** | **Retired by Q1** — revive only with a written P253 argument (Q3) |
-| **H** — inline contiguous entry array behind `Parts::Hash` | subsumes A/B/D + locality; ceiling ~2x on random lookup | **yes** | **Ready — the only arc left.** Measure against 34 MB, not 49; settle Q4 inside it |
+| **H** — inline contiguous entry array behind `Parts::Hash` | subsumes A/B/D + locality; ceiling ~2x on random lookup | **yes** | **The only arc left, and it needs a design cycle** — Q5 (entry-reference stability, an OWNERSHIP question) blocks it; settle Q4 inside it; measure against 34 MB, not 49 |
 
 ## Phase ordering
 
@@ -294,8 +299,10 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
    layout identity with a per-kind `placement` token, so an old store refuses rather than
    misreads; it shipped ahead of H because absence means the baseline, which invalidates
    nothing already on disk.
-6. **H — next, and the only arc left.** Settle Q4 (load factor) inside it: it is a layout
-   change either way, so it costs nothing extra there and cannot be spent separately.
+6. **H — next, and it needs a design cycle.** Q5 (entry-reference stability) blocks it:
+   it is an ownership question, not a layout one. Settle Q4 (load factor) inside it — a
+   load-factor change is a layout change either way, so it costs nothing extra there and
+   cannot be spent separately.
 
 ## The Q1 measurement (2026-08-09) — it is ONE access, and it is a byte problem
 
@@ -455,6 +462,27 @@ it is a cell in the script test.
    probe that varies load factor directly rather than via `reserve`). 0.42 wastes ~2.4x the bucket memory it needs. Raising
    it costs probe length (currently 1.37) and buys cache locality. Only worth touching
    inside D or H, since it is a layout change either way.
+5. **(blocks H) Do entry references survive growth?** — **new, 2026-08-09.** Today they
+   do, and H removes that. Growth reallocates only the BUCKET table: `rehash_into` moves
+   `u32` record numbers between tables and never touches an entry's bytes, so an entry
+   keeps its own claim and its `DbRef{rec, pos: 8}` stays valid for as long as the entry
+   lives. Verified: `e = h[1]` read back correctly after ~2000 further inserts (many
+   doublings).
+
+   H makes an entry a POSITION inside one contiguous array — `DbRef{rec: <array claim>,
+   pos: <slot offset>}`, the shape a vector element already uses — so growing the array
+   moves every entry, and every outstanding reference into it goes stale. `e = h[k];
+   h += [other]; e.val` then reads moved-or-freed bytes. That is the vector-reallocation
+   hazard, which the deps/lifetime system already governs for vectors, arriving somewhere
+   it has never applied.
+
+   So H is not only a format break, it is an OWNERSHIP change, and it lands in the area
+   [`OWNERSHIP_MODEL.md`](../../OWNERSHIP_MODEL.md) and CLAUDE.md rank as weakness #1.
+   Decide before building: does an entry reference borrow (and H must make growth
+   invalidate it the way a vector's does), or must H keep entries stable — which costs
+   either an indirection back to the 82% term it exists to remove, or a stable-slot
+   scheme with tombstones that never moves a live entry? **This question, not the byte
+   layout, is the expensive half of H.**
 
 ## Cross-arc dependencies
 
