@@ -1170,11 +1170,15 @@ Full record: the @PLAN16 closure doc at
 Native coroutine lowering (`generation/coroutine.rs`) scans a generator body into **segments**
 (`Simple`, `YieldFrom`, `ForLoopBody`) and emits a state machine (`LoftCoroutine::next_i64`).
 `Simple` (a straight-line `yield`) is a real **lazy state-machine step** — control returns to the
-consumer at the yield and resumes after it. `ForLoopBody` is the shortcut: it **runs the loop
-eagerly and buffers every yield into a `Vec<i64>`**, then serves the buffer — chosen (the code
-comment) to avoid "a full state-machine decomposition of the range-iteration IR." The interpreter,
-by contrast, serialises the whole frame at each yield and is lazy everywhere. CL-9 is exactly this
-gap.
+consumer at the yield and resumes after it. `YieldFrom` is lazy too, and it covers more than its
+name suggests: `detect_yield_from` matches a loop that does nothing but yield its own loop
+variable, so `for x in <iterable> { yield x }` delegates lazily and never reaches the eager path.
+`ForLoopBody` catches everything else — any `Block`/`Loop`/`If` containing a yield — and is the
+shortcut: it **runs the loop eagerly and buffers every yield into a `Vec<i64>`**, then serves the
+buffer, chosen (the code comment) to avoid "a full state-machine decomposition of the
+range-iteration IR." The interpreter, by contrast, serialises the whole frame at each yield and is
+lazy everywhere. CL-9 is exactly this gap — and its real edge is one statement wide, not one
+construct wide.
 
 ### The invariant (the hypothesis to build against)
 
@@ -1209,8 +1213,15 @@ The two halves are already in the tree:
 The single-yield range/vector loop is easy; the transform's cost is dominated by these axes, each
 a state the decomposition must model:
 
-- **A1 — single `yield` in a `for i in 0..n` / `for x in vec`** — one header + one body state,
-  persist the index. The 80% case; do this first.
+- **A1 — a loop whose body is a single `yield` PLUS at least one other statement** — one header +
+  one body state, persist the index. Do this first.
+  **Not** the bare `for x in <iterable> { yield x }` shape: `detect_yield_from` matches that
+  exactly (a 2-op block whose loop's third op is `Yield(Var(item_var))`) and lowers it to the
+  lazy `YieldFrom` segment, so it is already `next()`-driven on native and needs no work here.
+  The eager path starts the moment the body holds anything else — `{ print(…); yield i; }` is
+  `ForLoopBody`. Verified 2026-08-09: a `for i in 0..1000000000 { yield i; }` generator
+  consumed three values and stopped, while `{ print("p{i} "); yield i; }` over `0..1000` ran all
+  1000 iterations before the consumer's first advance.
 - **A2 — multiple yields per iteration** (`for … { yield a; yield b }`) — each yield is its own
   state; the back-edge targets the header, but re-entry lands at the *next* yield-state.
 - **A3 — a `yield` inside an `if`/`match` inside the loop** — conditional states; the resume point
