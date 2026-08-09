@@ -350,11 +350,17 @@ fn is_mutating_op(name: &str) -> bool {
 /// should fire.  Mirrors the recursion shape of
 /// `rewrite_tail_tuple_with_work_ref` so the gate and the rewrite stay
 /// in sync.
-fn tail_has_tuple_leaf(value: &Value) -> bool {
+fn tail_has_tuple_leaf(value: &Value, vars: &crate::variables::Function) -> bool {
     match value.tail() {
         Value::Tuple(_) => true,
+        // loft#821 — the same stack tuple after something stashed it in a local: the `??`
+        // lowering binds its subject to `__ncc_N`, so `v[i] ?? (0, "none")` reaches here as
+        // a Var on one arm and a literal on the other.  Both are elements on the stack and
+        // both need boxing; recognising only the literal left the two arms disagreeing at
+        // the join — a DbRef on one side, three floats on the other.
+        Value::Var(v) => matches!(vars.tp(*v).base(), Type::Tuple(_)),
         Value::If(_, then_branch, else_branch) => {
-            tail_has_tuple_leaf(then_branch) || tail_has_tuple_leaf(else_branch)
+            tail_has_tuple_leaf(then_branch, vars) || tail_has_tuple_leaf(else_branch, vars)
         }
         _ => false,
     }
@@ -1212,7 +1218,7 @@ impl Parser {
             let tuple_rewritten = !self.first_pass
                 && context == "return from block"
                 && matches!(t, Type::Tuple(_))
-                && tail_has_tuple_leaf(l[last].unspan())
+                && tail_has_tuple_leaf(l[last].unspan(), &self.vars)
                 && matches!(result, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
                 && {
                     let synthetic_d_nr = if let Type::Reference(d, _) = result {
@@ -2493,6 +2499,30 @@ impl Parser {
                 return;
             }
             _ => {}
+        }
+        // loft#821 — a leaf that IS a stack tuple but is not written as one.  Reading it
+        // element-by-element is what the literal path does too; `emit_tuple_set_ops`
+        // stashes the source once and writes each element at the record's own offset.
+        if let Value::Var(v) = tail.unspan()
+            && let Type::Tuple(elems) = self.vars.tp(*v).base()
+        {
+            let elems = elems.clone();
+            let src = tail.clone();
+            let mut ops = vec![
+                crate::data::v_set(w, Value::Null),
+                self.cl(
+                    "OpDatabase",
+                    &[Value::Var(w), Value::Int(i32::from(known_type))],
+                ),
+            ];
+            ops.extend(self.emit_tuple_set_ops(&Value::Var(w), 0, &elems, src));
+            ops.push(Value::Var(w));
+            *tail = crate::data::v_block(
+                ops,
+                Type::Reference(synthetic_d_nr, Deps::frame1(w)),
+                "synthetic_tuple_return",
+            );
+            return;
         }
         let elements = match std::mem::replace(tail, Value::Null) {
             Value::Tuple(elems) => elems,
@@ -11161,7 +11191,7 @@ impl Parser {
             // path; block_result is the tail path — they must agree.
             let tuple_rewritten = !self.first_pass
                 && matches!(t, Type::Tuple(_))
-                && tail_has_tuple_leaf(v.unspan())
+                && tail_has_tuple_leaf(v.unspan(), &self.vars)
                 && matches!(&r_type, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
                 && {
                     let synthetic_d_nr = if let Type::Reference(d, _) = &r_type {
@@ -11183,6 +11213,22 @@ impl Parser {
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
                 self.validate_convert("return", &t, &r_type, &expr_start.position);
             }
+            // loft#822 — `convert` can UNBOX a stored tuple into its stack spelling, and
+            // `t` still names the spelling the value had BEFORE that.  The delivery
+            // classification below branches on `t`'s kind: left stale it sees a
+            // `Reference` where the value is now a stack tuple, decides the return views
+            // a local, and materialises it with `OpCopyRecord` — which reads the tuple's
+            // own float bytes as a DbRef (`return p` from `for p in v` SIGSEGV'd).
+            // The unbox already IS the copy the materialisation wanted: it loads each
+            // element by value.  Only a tuple whose declared return stayed the STACK
+            // spelling reaches here — a heap-carrying tuple is `Reference(__tuple<…>)` on
+            // both sides (`tuple_return_rewrite`), so no conversion happens and its
+            // owned-copy delivery is untouched.
+            let t = if self.unboxes_stored_tuple(&t, &r_type) {
+                r_type.clone()
+            } else {
+                t
+            };
             // Phase 1b (inline-lift-safety): mirror block_result's ref/enum
             // merge for mid-body `return` statements.  Without this, a function
             // like `fn f(c) -> Inner { if ... return c.items[i]; Inner{} }` loses

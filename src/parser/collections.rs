@@ -893,6 +893,29 @@ impl Parser {
         {
             return self.copy_ref(to, val, f_type.base());
         }
+        // loft#821 — `v[i] = t` on a `vector<(…)>`.  A tuple element is stored INLINE, so
+        // the write is per-element at the element's own offsets, the same way a
+        // tuple-typed struct field is written.  No arm matched it before: the LHS parsed
+        // to the `tuple_unbox` read block (neither a `Call` nor a `Var`), so the dispatch
+        // at the bottom of this function answered "Not implemented operation = for type
+        // (float, float, float)" — for the one element type a vector could hold but not
+        // have written into it.
+        if op == "="
+            && !self.first_pass
+            && let Type::Tuple(elems) = f_type.base()
+            && let Some(dest) = Self::stored_tuple_dest(to)
+        {
+            let elems = elems.clone();
+            // Each element writes through its own copy of the address expression, so an
+            // INDEX that does work would do it once per element — `v[bump(c)] = (1.0, 2.0,
+            // 3.0)` called `bump` three times where `v[bump(c)] = 5` calls it once.  Hoist
+            // it to a local so the three writes address one evaluation.  The container half
+            // is left alone: it is a place read (a var or a field chain), pure address
+            // arithmetic that costs nothing to repeat.
+            let (dest, mut ops) = self.hoist_index_arg(dest);
+            ops.extend(self.emit_tuple_set_ops(&dest, 0, &elems, val.clone()));
+            return v_block(ops, Type::Void, "tuple_elem_index_set");
+        }
         if matches!(
             *f_type,
             Type::Vector(_, _)

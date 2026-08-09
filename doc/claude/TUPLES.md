@@ -42,6 +42,49 @@ a bare tuple while the value has become a reference.
 
 ---
 
+## The two spellings of one tuple type
+
+Those two ways of travelling are two **spellings of the same loft type**, and both are
+reachable from ordinary source:
+
+| | `Type::Tuple(elems)` — STACK | `Reference(__tuple<…>)` — STORED |
+|---|---|---|
+| runtime | elements on contiguous stack slots | a 12-byte DbRef at the elements' bytes |
+| `.0` | `OpTupleGet` / Rust `.0` | `OpGetFloat(ref, 8)` — read at the offset |
+| native | `(f64, f64, f64)` | `DbRef` |
+| ownership | none — copied by value | a store, with deps and frees |
+| written by | a literal, a value-tuple return | a `vector<(…)>` element, a boxed return |
+
+A `vector<(…)>` loop variable carries the stored spelling (`for_type`, P189b) so element
+access reads at offsets instead of decoding DbRef bytes as values. So does a
+heap-carrying tuple return. Both then arrive wherever such a value is *used* as the plain
+type — a call argument, a `return`, a declared local, a vector append.
+
+**`Parser::convert` is where the two meet.** It answers such a pair by UNBOXING the value:
+`unbox_tuple_from_dbref` reads each element at its stored offset and rebuilds the stack
+tuple, exactly as `v[i]` already does. Ask `Parser::unboxes_stored_tuple` rather than
+comparing the two spellings by hand.
+
+Accepting the pair as merely EQUAL would be worse than rejecting it — the slot would take
+12 bytes of DbRef where the reader expects the elements, so the conversion has to be a
+real one. That is also why a caller must not keep classifying on the pre-`convert` type:
+`parse_return`'s delivery classifier did, saw a `Reference` where the value had become a
+stack tuple, and materialised it with `OpCopyRecord`, which read the tuple's own float
+bytes as a DbRef (loft#822).
+
+A `vector<(…)>` element is written the same way it is read — per element, at the
+synthetic struct's own offsets (`emit_tuple_set_ops`), for both `v += [t]` and `v[i] = t`.
+The write picks its arm from the SOURCE's representation, never from the spelling the slot
+happens to carry: a stack tuple writes element by element, a source that is already a
+promoted `Reference(__tuple<…>)` copies the record in one op.
+
+Note that `v[i] = t` evaluates its index ONCE even though the three element writes each
+carry the address expression — `hoist_index_arg` binds it to a local first, so
+`v[bump(c)] = (1.0, 2.0, 3.0)` calls `bump` once, as the same write to a `vector<integer>`
+does.
+
+---
+
 ## Syntax
 
 ```loft
@@ -130,6 +173,18 @@ goes through the same `Type::Tuple` arm of `set_field_check` /
 - **`&tuple` with owned elements** — per-element DbRef expansion is
   still pending; tuple values are passed by value or via the
   synthetic `__tuple<…>` struct's DbRef.
+- **`==` between tuples** — unsupported, and not a spelling gap: two plain stack tuples
+  compare no better than a stored one against a literal (`No matching operator '=='`).
+  Structural equality would have to decide element-wise comparison for heap elements and
+  nesting, so it is a language decision, not a missing arm.
+- **The `vector<(…)>` read cursor owns a store it should borrow** (loft#823) — the work-ref
+  `unbox_tuple_from_dbref` reads through is born with empty deps, which both backends read
+  as "owner" and answer by materialising a copy at the bind. Two silent failures follow:
+  `v[oob] ?? d` returns the copy's uninitialised bytes on `--native` (the interpreter
+  answers `d`), and `g = p` inside `for p in v` SIGSEGVs once an earlier `vector<(…)>` loop
+  has run. `Deps::none()` conflates *owns* with *nobody said*; giving the cursor a real
+  borrow needs the dep to survive `scopes.rs`, which is what makes it a design pass rather
+  than a patch.
 
 T1.4 (tuple-returning functions), tuple LHS destructuring, and
 tuple patterns in match all shipped in 0.8.3 (T1.9) and were

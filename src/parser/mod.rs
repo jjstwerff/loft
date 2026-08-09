@@ -3005,6 +3005,42 @@ impl Parser {
         )
     }
 
+    /// loft#822 — is `from` the STORED spelling of the STACK tuple type `to`?
+    ///
+    /// A tuple is one loft type written two ways: `Type::Tuple(…)` holds its elements on
+    /// contiguous stack slots, `Reference(__tuple<…>)` is a DbRef at the same elements'
+    /// stored bytes.  [`Parser::convert`] answers such a pair by UNBOXING the value, so a
+    /// caller that keeps classifying on `from` afterwards is reading a type the value no
+    /// longer has — ask this instead of comparing the two spellings by hand.
+    pub(crate) fn unboxes_stored_tuple(&self, from: &Type, to: &Type) -> bool {
+        let (Type::Reference(d_nr, _), Type::Tuple(dst_elems)) = (from, to) else {
+            return false;
+        };
+        if !self.data.def(*d_nr).name().starts_with("__tuple<") {
+            return false;
+        }
+        let attrs = self.data.def(*d_nr).attributes();
+        attrs.len() == dst_elems.len()
+            && attrs
+                .iter()
+                .zip(dst_elems)
+                .all(|(a, d)| a.typedef.is_equal(d))
+    }
+
+    /// Element types of a stored tuple (`Reference(__tuple<…>)`), in order — the argument
+    /// [`Parser::unbox_tuple_from_dbref`] needs.  Empty for any other type.
+    pub(crate) fn stored_tuple_elements(&self, stored: &Type) -> Vec<Type> {
+        let Type::Reference(d_nr, _) = stored else {
+            return Vec::new();
+        };
+        self.data
+            .def(*d_nr)
+            .attributes()
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect()
+    }
+
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
@@ -3116,6 +3152,30 @@ impl Parser {
             if all_compatible {
                 return true;
             }
+        }
+        // loft#822 — the STORED spelling of a tuple reaching a STACK-tuple slot.
+        //
+        // A tuple is one loft type written two ways: `Type::Tuple(…)` (its elements on
+        // contiguous stack slots) and `Reference(__tuple<…>)` (a DbRef at the element's
+        // inline bytes).  The stored spelling is what a `vector<(…)>` loop variable
+        // carries (`for_type`, P189b) and what a HEAP-carrying tuple return carries
+        // (`tuple_return_rewrite`), so it arrives wherever such a value is used as the
+        // plain type: a call argument, a `return`, a declared local, a vector append.
+        // Every one of those answered "expected (float, float, float), got
+        // __tuple<float,float,float>" — a type error between a type and itself.
+        //
+        // Accepting the pair as EQUAL would be worse than the error: the slot would take
+        // 12 bytes of DbRef where the reader expects the elements.  So the conversion is
+        // a real one — `unbox_tuple_from_dbref` reads each element at its stored offset
+        // and rebuilds the stack tuple, exactly as `v[i]` already does.
+        if self.unboxes_stored_tuple(is_type, should) {
+            // A `Value::Null` here is the shape-only probe the Tuple→Tuple arm above
+            // runs for a non-literal source; there is no expression to unbox.
+            if !self.first_pass && !matches!(code.unspan(), Value::Null) {
+                let src_elems = self.stored_tuple_elements(is_type);
+                *code = self.unbox_tuple_from_dbref(code.clone(), &src_elems);
+            }
+            return true;
         }
         if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should) {
             for a in self.data.def(*enum_tp).attributes() {

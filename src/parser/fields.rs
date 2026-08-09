@@ -1280,6 +1280,52 @@ impl Parser {
         )
     }
 
+    /// loft#821 — the DbRef a [`Parser::unbox_tuple_from_dbref`] block reads FROM, if
+    /// `code` is such a block.
+    ///
+    /// `v[i]` on a `vector<(…)>` parses as a READ: the element's DbRef is unboxed into a
+    /// stack tuple.  As the left-hand side of `v[i] = t` that read is the wrong shape —
+    /// the write needs the DbRef the elements live at.  Peel the unbox to recover it
+    /// rather than re-deriving the element address, so the write can never address a
+    /// different slot than the read.
+    pub(crate) fn stored_tuple_dest(code: &Value) -> Option<Value> {
+        let Value::Block(b) = code.unspan() else {
+            return None;
+        };
+        if b.name != "tuple_unbox" {
+            return None;
+        }
+        match b.operators.first()?.unspan() {
+            Value::Set(_, dbref) => Some((**dbref).clone()),
+            _ => None,
+        }
+    }
+
+    /// Bind an element accessor's INDEX to a local, so a destination that is written
+    /// through more than once evaluates it exactly once.
+    ///
+    /// Returns the accessor with its index replaced by that local, plus the statement that
+    /// binds it — prepend those to the writes.  An index that is already a variable or a
+    /// constant is returned untouched (nothing to save), and so is any shape that is not an
+    /// element accessor.
+    pub(crate) fn hoist_index_arg(&mut self, dest: Value) -> (Value, Vec<Value>) {
+        let Value::Call(d_nr, args) = dest.unspan() else {
+            return (dest, Vec::new());
+        };
+        let Some(index) = args.last() else {
+            return (dest, Vec::new());
+        };
+        if matches!(index.unspan(), Value::Var(_) | Value::Int(_)) {
+            return (dest, Vec::new());
+        }
+        let (d_nr, mut args) = (*d_nr, args.clone());
+        let tmp = self.create_unique("__elm_idx", &crate::data::I32);
+        self.vars.defined(tmp);
+        let bind = crate::data::v_set(tmp, args.pop().unwrap_or(Value::Null));
+        args.push(Value::Var(tmp));
+        (Value::Call(d_nr, args), vec![bind])
+    }
+
     /// @PLN110 3a / loft#749 — warn when a text slice ENDS at `len()` of the same text.
     ///
     /// `end` is the range end as written (before `convert` wraps it) and `subject` is the

@@ -2062,6 +2062,18 @@ use a separate collection or add after the loop"
                 }
             }
         }
+        // loft#822 — a declared STACK-tuple target assigned the STORED spelling of the
+        // same tuple: `t: (integer, text) = make_pair(3)`, where the heap-carrying return
+        // is a `Reference(__tuple<…>)`.  Unbox through `convert` BEFORE `change_var`, then
+        // retype so the var-type-change check compares the tuple with itself instead of
+        // erroring "cannot change type from (integer, text) to __tuple<integer,text>".
+        // Same early-convert shape as the nullable-to-dense assign above.
+        if op == "="
+            && self.unboxes_stored_tuple(&s_type, f_type)
+            && self.convert(code, &s_type, f_type)
+        {
+            s_type = f_type.clone();
+        }
         // @PLN85 cluster V — a vector `+=` is an IN-PLACE append: `buf` keeps its OWN
         // backing store; the appended source is COPIED in and consumed.  `change_var`
         // below copies the RHS type's deps onto `buf`, so for `+=` it re-points `buf`
