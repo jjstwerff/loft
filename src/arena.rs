@@ -144,6 +144,151 @@ pub fn dir_capacity(store: &Store, dir: u32) -> u32 {
     (store.record_words(dir) - 1) * 2
 }
 
+// The arena's own bookkeeping, kept in the collection's table record so the arena owns
+// the fields it maintains and the collection owns the rest (`LEN`, `SEED`, the buckets).
+/// Byte 16 of the table record: the directory record, or 0 before the first slot.
+pub const DIR_FLD: u32 = 16;
+/// Byte 20: the append cursor — the next never-used index, 1-based, so it starts at 1.
+pub const NEXT_FLD: u32 = 20;
+/// Byte 24: head of the free list, or 0 when empty.  A freed slot holds the next free
+/// index in its own first 4 bytes, so reuse costs no extra storage.
+pub const FREE_FLD: u32 = 24;
+
+/// Point the directory at chunk `k`, growing (and if needed creating) the directory
+/// record so it reaches that far.
+///
+/// The directory may move; entries never do.  That is the whole point — it holds record
+/// NUMBERS, so relocating it leaves every slot exactly where it was handed out.
+fn set_chunk_rec(store: &mut Store, table: u32, k: u32, rec: u32) {
+    let dir = store.get_u32_raw(table, DIR_FLD);
+    if k >= dir_capacity(store, dir) {
+        // Round up to a whole word of entries and keep doubling headroom.
+        let want = 1 + u32::max(k + 1, 4).div_ceil(2);
+        let fresh = store.claim(want);
+        store.zero_fill(fresh);
+        if dir != 0 {
+            let old = dir_capacity(store, dir);
+            for i in 0..old {
+                let v = store.get_u32_raw(dir, DIR0 + 4 * i);
+                store.set_u32_raw(fresh, DIR0 + 4 * i, v);
+            }
+            store.delete(dir);
+        }
+        store.set_u32_raw(table, DIR_FLD, fresh);
+    }
+    let dir = store.get_u32_raw(table, DIR_FLD);
+    store.set_u32_raw(dir, DIR0 + 4 * k, rec);
+}
+
+/// The record backing chunk `k`, claiming and registering it on first use.
+///
+/// `owner` is written once per CHUNK at [`OWNER_FLD`] rather than once per entry — every
+/// slot in a chunk belongs to the same collection, and `database::search` reads that
+/// offset to decide whether a record is live.
+fn ensure_chunk(store: &mut Store, table: u32, k: u32, stride: u32, owner: u32) -> u32 {
+    let existing = chunk_rec(store, store.get_u32_raw(table, DIR_FLD), k);
+    if existing != 0 {
+        return existing;
+    }
+    let rec = store.claim(chunk_words(k, stride));
+    store.zero_fill(rec);
+    store.set_u32_raw(rec, OWNER_FLD, owner);
+    set_chunk_rec(store, table, k, rec);
+    rec
+}
+
+/// Reserve a slot and return its 1-based index, reusing a freed one when there is one.
+///
+/// The returned slot is ZEROED, matching what a freshly claimed record gave the caller
+/// before: a reused slot still carries the bytes of whatever last lived there, and a
+/// constructor that writes only some fields would otherwise inherit the rest.
+pub fn alloc(store: &mut Store, table: u32, stride: u32, owner: u32) -> u32 {
+    let free = store.get_u32_raw(table, FREE_FLD);
+    let index = if free != 0 {
+        let (k, off) = locate(free, stride);
+        let rec = chunk_rec(store, store.get_u32_raw(table, DIR_FLD), k);
+        let next = store.get_u32_raw(rec, off);
+        store.set_u32_raw(table, FREE_FLD, next);
+        free
+    } else {
+        let next = u32::max(store.get_u32_raw(table, NEXT_FLD), 1);
+        store.set_u32_raw(table, NEXT_FLD, next + 1);
+        next
+    };
+    let (k, off) = locate(index, stride);
+    let rec = ensure_chunk(store, table, k, stride, owner);
+    for w in 0..stride / 4 {
+        store.set_u32_raw(rec, off + 4 * w, 0);
+    }
+    index
+}
+
+/// Return slot `index` to the arena.
+///
+/// The slot keeps its bytes and its address; only its membership changes.  Nothing that
+/// still holds a `DbRef` to it is made to read someone else's data by this call alone —
+/// that only happens once the slot is handed out again, which is the same contract a
+/// freed record has always had.
+pub fn free(store: &mut Store, table: u32, index: u32, stride: u32) {
+    if index == 0 {
+        return;
+    }
+    let (k, off) = locate(index, stride);
+    let rec = chunk_rec(store, store.get_u32_raw(table, DIR_FLD), k);
+    if rec == 0 {
+        return;
+    }
+    let head = store.get_u32_raw(table, FREE_FLD);
+    store.set_u32_raw(rec, off, head);
+    store.set_u32_raw(table, FREE_FLD, index);
+}
+
+/// `(record, byte offset)` of slot `index`, or `None` when it has no chunk yet.
+#[must_use]
+pub fn slot(store: &Store, table: u32, index: u32, stride: u32) -> Option<(u32, u32)> {
+    if index == 0 {
+        return None;
+    }
+    let (k, off) = locate(index, stride);
+    let rec = chunk_rec(store, store.get_u32_raw(table, DIR_FLD), k);
+    (rec != 0).then_some((rec, off))
+}
+
+/// The 1-based index of the slot at `(rec, off)`, or 0 when `rec` is not a chunk of this
+/// arena.
+///
+/// The reverse of [`locate`], for the one caller that has a `DbRef` and needs the index a
+/// bucket stores: the entry is BUILT through a `DbRef` and only afterwards inserted. The
+/// directory scan is bounded by the chunk count (32 for any arena that fits a `u32`) and
+/// runs on insert only, never on lookup.
+#[must_use]
+pub fn index_of(store: &Store, table: u32, rec: u32, off: u32, stride: u32) -> u32 {
+    let dir = store.get_u32_raw(table, DIR_FLD);
+    let cap = dir_capacity(store, dir);
+    for k in 0..cap {
+        if store.get_u32_raw(dir, DIR0 + 4 * k) == rec {
+            return first_index_of(k) + (off - SLOT0) / stride + 1;
+        }
+    }
+    0
+}
+
+/// Every chunk record plus the directory — what a teardown must free after the entries'
+/// own children are gone.
+#[must_use]
+pub fn all_records(store: &Store, table: u32) -> Vec<u32> {
+    let dir = store.get_u32_raw(table, DIR_FLD);
+    if dir == 0 {
+        return Vec::new();
+    }
+    let mut out: Vec<u32> = (0..dir_capacity(store, dir))
+        .map(|k| store.get_u32_raw(dir, DIR0 + 4 * k))
+        .filter(|&r| r != 0)
+        .collect();
+    out.push(dir);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +355,148 @@ mod tests {
                     off + stride,
                     words * 8
                 );
+            }
+        }
+    }
+
+    /// A table record big enough to hold the arena's bookkeeping fields.
+    fn table(store: &mut Store) -> u32 {
+        let t = store.claim(8);
+        store.zero_fill(t);
+        t
+    }
+
+    /// Slots must be distinct, addressable, and hold what was written to them — across
+    /// enough allocations to cross several chunk boundaries.  Writing a distinctive value
+    /// per slot and reading them ALL back afterwards is what catches an overlap: a
+    /// per-slot write-then-read would pass even if two indices shared bytes.
+    #[test]
+    fn allocated_slots_do_not_overlap() {
+        let mut s = Store::new_in_use(64);
+        let t = table(&mut s);
+        let stride = 16;
+        let mut placed = Vec::new();
+        for i in 0..1000_u32 {
+            let idx = alloc(&mut s, t, stride, 7);
+            let (rec, off) = slot(&s, t, idx, stride).expect("just allocated");
+            s.set_u32_raw(rec, off, 0xD000_0000 + i);
+            s.set_u32_raw(rec, off + 4, i);
+            placed.push((idx, i));
+        }
+        for (idx, i) in placed {
+            let (rec, off) = slot(&s, t, idx, stride).expect("still there");
+            assert_eq!(
+                s.get_u32_raw(rec, off),
+                0xD000_0000 + i,
+                "slot {idx} clobbered"
+            );
+            assert_eq!(
+                s.get_u32_raw(rec, off + 4),
+                i,
+                "slot {idx} second word clobbered"
+            );
+        }
+    }
+
+    /// The owner back-pointer `database::search` reads for liveness must be set on every
+    /// chunk, not just the first — it moved from per-entry to per-chunk, and a chunk that
+    /// missed it would make every entry in it read as absent.
+    #[test]
+    fn every_chunk_carries_the_owner() {
+        let mut s = Store::new_in_use(64);
+        let t = table(&mut s);
+        let stride = 16;
+        for _ in 0..500 {
+            alloc(&mut s, t, stride, 42);
+        }
+        let dir = s.get_u32_raw(t, DIR_FLD);
+        let mut chunks = 0;
+        for k in 0..dir_capacity(&s, dir) {
+            let rec = s.get_u32_raw(dir, DIR0 + 4 * k);
+            if rec != 0 {
+                assert_eq!(
+                    s.get_u32_raw(rec, OWNER_FLD),
+                    42,
+                    "chunk {k} lost its owner"
+                );
+                chunks += 1;
+            }
+        }
+        assert!(
+            chunks >= 3,
+            "500 slots should span several chunks, spanned {chunks}"
+        );
+    }
+
+    /// A freed slot must come back, and must come back ZEROED — a reused slot still holds
+    /// the previous tenant's bytes, and a constructor writing only some fields would
+    /// otherwise inherit the rest.
+    #[test]
+    fn a_freed_slot_is_reused_and_cleared() {
+        let mut s = Store::new_in_use(64);
+        let t = table(&mut s);
+        let stride = 16;
+        let a = alloc(&mut s, t, stride, 1);
+        let b = alloc(&mut s, t, stride, 1);
+        let (rec, off) = slot(&s, t, b, stride).unwrap();
+        s.set_u32_raw(rec, off, 0xBEEF);
+        s.set_u32_raw(rec, off + 4, 0xCAFE);
+        free(&mut s, t, b, stride);
+        let again = alloc(&mut s, t, stride, 1);
+        assert_eq!(
+            again, b,
+            "the freed slot should be handed out before a fresh one"
+        );
+        assert_ne!(again, a, "the live slot must not be reused");
+        let (rec, off) = slot(&s, t, again, stride).unwrap();
+        assert_eq!(s.get_u32_raw(rec, off), 0, "reused slot kept the old bytes");
+        assert_eq!(
+            s.get_u32_raw(rec, off + 4),
+            0,
+            "reused slot kept the old bytes"
+        );
+    }
+
+    /// `index_of` is what an insert uses to turn the `DbRef` an entry was BUILT through
+    /// back into the index a bucket stores.  It must round-trip for every index, or an
+    /// entry is filed under the wrong bucket and a lookup answers a miss or a neighbour.
+    #[test]
+    fn index_of_inverts_locate() {
+        let mut s = Store::new_in_use(64);
+        let t = table(&mut s);
+        let stride = 24;
+        let mut all = Vec::new();
+        for _ in 0..800 {
+            all.push(alloc(&mut s, t, stride, 3));
+        }
+        for idx in all {
+            let (rec, off) = slot(&s, t, idx, stride).unwrap();
+            assert_eq!(
+                index_of(&s, t, rec, off, stride),
+                idx,
+                "index {idx} did not round-trip"
+            );
+        }
+    }
+
+    /// Teardown must name every chunk AND the directory — a missed chunk is a leak of the
+    /// entries it holds, which is exactly the class @PLN135 already fixed once for the
+    /// abandoned bucket tables.
+    #[test]
+    fn all_records_names_every_chunk_and_the_directory() {
+        let mut s = Store::new_in_use(64);
+        let t = table(&mut s);
+        let stride = 16;
+        for _ in 0..500 {
+            alloc(&mut s, t, stride, 1);
+        }
+        let recs = all_records(&s, t);
+        let dir = s.get_u32_raw(t, DIR_FLD);
+        assert!(recs.contains(&dir), "the directory itself must be freed");
+        for k in 0..dir_capacity(&s, dir) {
+            let rec = s.get_u32_raw(dir, DIR0 + 4 * k);
+            if rec != 0 {
+                assert!(recs.contains(&rec), "chunk {k} would leak");
             }
         }
     }
