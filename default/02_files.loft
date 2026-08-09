@@ -136,10 +136,17 @@ pub fn content(self: File) -> text?fs#read {
   // @PLN102 H4 — a MISSING file reads as null, distinct from an EMPTY file (""),
   // so a missing config is not silently indistinguishable from an empty one.
   if self.format == Format.NotExists { return null }
+  // loft#829 — a directory holds no text; "" would claim it is an empty file.
+  if self.format == Format.Directory { return null }
   result = "";
   txt = "";
   OpGetFileText(self, txt);
   result += txt;
+  // loft#829 — no text came back from a file that HAS bytes: those bytes are not
+  // valid UTF-8 (or the read failed).  "" is a lie there, and one no caller can
+  // tell from a genuinely empty file, so answer null.  `read_bytes(path)` reads
+  // such a file exactly; `f#format = LittleEndian; f#read(n)` reads it field by field.
+  if size(result) == 0 && self.size > 0 { return null }
   result
 }
 // Par-safe: reads the file into a worker-local store; the host bridge

@@ -1278,6 +1278,34 @@ pub fn OpStep(
     result
 }
 
+/// Read `path` as UTF-8 text into `buf` — the single home for the read behind
+/// `file(p).content()`, called by the interpreter (`State::get_file_text`) and
+/// by native codegen (`OpGetFileText`) alike, so the two cannot drift.
+///
+/// Leaves `buf` EMPTY when the file cannot be opened or its bytes are not valid
+/// UTF-8, and warns on the latter.  Emptiness alone does not tell the caller
+/// which happened; the loft-level `content()` reads the file's byte size beside
+/// it and answers null when a file that HAS bytes yielded no text (loft#829).
+#[cfg(not(feature = "wasm"))]
+pub fn read_file_text_into(path: &str, buf: &mut String) {
+    buf.clear();
+    let Ok(mut f) = File::open(path) else { return };
+    match f.read_to_string(buf) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            buf.clear();
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
+            eprintln!(
+                "warning: file({path:?}).content() got non-UTF-8 bytes ({size} bytes in \
+                 file) — returning null. Read the bytes exactly with `read_bytes(path)`, \
+                 or a field at a time with `f#format = LittleEndian; f#read(n)` (or \
+                 `BigEndian`); see the loft-write skill § File I/O."
+            );
+        }
+        Err(_) => buf.clear(),
+    }
+}
+
 /// Read the entire contents of a file into `content`, replacing its previous value.
 /// If the file cannot be opened or read, `content` is cleared.
 /// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
@@ -1295,13 +1323,8 @@ pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content:
     };
     // #255 / @PLN9: re-home against the program anchor (native parity with
     // the interpreter's `State::get_file_text`).
-    content.clear();
     let file_path = stores.resolve_path(&file_path);
-    if let Ok(mut f) = File::open(&file_path)
-        && f.read_to_string(content).is_err()
-    {
-        content.clear();
-    }
+    read_file_text_into(&file_path, content);
 }
 
 /// WASM stub: file I/O not available; clears content.

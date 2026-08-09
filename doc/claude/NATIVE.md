@@ -1394,6 +1394,59 @@ where the same file is then loaded — never on the stale path that rebuilds. Li
 `dlopen` on (dev,inode) and loads the new file, so only macOS was affected; the guard
 is `tests/n3_parity.rs::a_dependency_edit_invalidates_its_dependents_cdylib`.
 
+**Probe before marking (loft#831).**  Marking a function for cdylib dispatch is a
+commitment: `byte_code` emits `OpStaticCall` to its bridge symbol, and if nothing
+wires that symbol the call reaches the `compile.rs` panic stub and takes the
+program down.  The commitment used to be made on the strength of the **build**
+succeeding, which is a proxy — a cdylib can build cleanly and still be one this
+process cannot dispatch through: linked against a different `libloft.rlib`,
+missing a system library at load, or replaced by a concurrent `loft` between the
+freshness check and the load.  Every freshness test in
+`cached_or_build_shared_cdylib` (exists, newer than sources, declares this type
+layout) can be true of such an artifact; an artifact that declares no layout at
+all is adopted outright, since that is what a hand-written cdylib looks like.
+
+`probe_and_mark_exports` therefore asks the question whose answer actually
+matters, while the answer is still actionable: `dlopen` the artifact, `dlsym`
+each bridge, and mark only what resolves.  A symbol that does not resolve leaves
+its function **interpreting** — which was always the documented fallback for a
+library that cannot compile native, now reached by the path that needed it most.
+The marking can come out partial, and that is correct: the exports that resolve
+dispatch native in the same run as the ones that do not.
+
+Loading there is also what makes the decision STAY true.  The handle is kept for
+the process, so `prune_artifacts` deleting the file or another process rebuilding
+it afterwards cannot change what this one dispatches to — the earlier
+open-and-close layout probe left a window in which exactly that could happen.
+This is why crawler's 88-test suite lost a *different* test on each parallel run
+while passing serially: independent `loft` processes share
+`<pkg>/native-auto/`, and the loser of the race got the panic stub instead of the
+interpreter.  A fallback is reported once per library with a count, not once per
+function — the program's results are unchanged, only slower.  Under
+`LOFT_REQUIRE_NATIVE=1` it is a hard error naming itself, like every other
+native→interpreter degrade.  Guards:
+`tests/n3_use_native.rs::an_unwirable_cdylib_interprets_instead_of_panicking`
+and `::a_partially_exporting_cdylib_marks_only_what_resolves`.
+
+**The artifact sweep owns one family, not the directory (loft#831, residual).**
+`prune_artifacts` bounds `native-auto/` at `KEEP_ARTIFACTS` by mtime, and it used
+to consider every `.so` there.  The directory is not exclusively the auto-native
+builder's: a package with a `[c] shim` builds `<pkg>_shim_<key>.so` into it, and
+that library is content-keyed and built exactly ONCE — so it is permanently the
+oldest file, and an age-ordered sweep takes it first.  Pruning an auto-native
+artifact costs a rebuild; pruning the shim removes the only definition of the
+package's `#c` symbols, and the next run dies with *"`#c` symbol 'x' not found …
+or check the spelling"*, naming neither the library nor the sweep.  There is no
+fallback available for that one — a `#c` binding IS the implementation, so
+nothing can interpret in its place.  The sweep now takes only the
+`loft_auto_<pkg>_` family it built.  Reproduced deterministically against
+`tests/fixtures/sqldb/sqlite` (saturate the directory, run once, shim gone, exit
+101) and guarded by
+`tests/n3_use_native.rs::a_foreign_library_in_native_auto_survives_pruning`.
+Parallel runs are what saturate the directory, since each distinct type-layout
+context mints an artifact of its own — this is the other half of why a suite
+loses a *different* test on each parallel run while passing serially.
+
 ### Open completeness items
 
 All are *enhancements* on a complete, graceful core: a construct the dispatch can't

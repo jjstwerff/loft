@@ -167,7 +167,11 @@ fn print_help() {
         "  --generate-log-config [path]  write a documented config file with defaults and exit"
     );
     println!(
-        "  --interpret                   run in interpreter/bytecode mode (native is default)"
+        "  --interpret                   run in interpreter/bytecode mode (native is default)\n\
+         \x20                               LOFT_NO_NATIVE_LIBS=1 additionally makes every `use`d\n\
+         \x20                               library interpret (skips its auto-native cdylib);\n\
+         \x20                               LOFT_REQUIRE_NATIVE=1 is the inverse — refuse to run\n\
+         \x20                               anything that would fall back to the interpreter"
     );
     println!(
         "  --script                      force beginner-script mode (loose top-level\n\
@@ -1570,19 +1574,24 @@ struct UpdateOpts {
 
 /// @PLAN12 Phase 6.8 — `loft update` driver.
 ///
-/// Walks the project's (or cwd's) `loft.lock`, looks up each
-/// package in the registry index, picks the highest active
-/// non-yanked version that satisfies the corresponding range
-/// from `loft.toml` (if present; otherwise the lockfile-pinned
-/// version is treated as exact and never updated), and — unless
-/// in dry-run/check mode — calls `install_one` to fetch + extract
-/// + merge into the lockfile.
+/// Resolves every package the project depends on — the union of `loft.lock`'s
+/// entries and `loft.toml`'s declared (non-path) dependencies — looks each up
+/// in the registry index, picks the highest active non-yanked version that
+/// satisfies the declared range (a lock entry with no matching declaration is
+/// treated as exact and never updated), and — unless in dry-run/check mode —
+/// calls `install_one` to fetch + extract + merge into the lockfile.
+///
+/// The union is the point (loft#830): starting from the lock alone made a
+/// dependency added to `loft.toml` invisible to the one command whose job is
+/// to make the lock describe the manifest, and the summary counted lock
+/// entries, so the omission reported itself as `all N packages up-to-date`.
 ///
 /// Exit codes:
 /// - 0  → up-to-date (no updates needed or all updates applied
 ///   successfully).
-/// - 1  → updates available (`--check`) OR install failure.
-/// - 2  → no lockfile to update.
+/// - 1  → updates available (`--check`) OR a declared dependency that cannot
+///   be resolved (`--check`) OR install failure.
+/// - 2  → nothing to update: no lockfile AND no declared dependencies.
 #[cfg(feature = "registry")]
 fn update_packages(opts: &UpdateOpts) -> i32 {
     use loft::install::{InstallOptions, install_one};
@@ -1603,36 +1612,12 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
     let project_root = find_project_root_from(&cwd);
     let lock_dir = project_root.as_ref().unwrap_or(&cwd);
     let lock_path = lock_dir.join("loft.lock");
-    if !lock_path.exists() {
-        eprintln!(
-            "loft update: no loft.lock at {} — nothing to update.",
-            lock_path.display()
-        );
-        eprintln!(
-            "  Run `loft install <pkg>` first (or `loft pin <script>` for one-file scripts)."
-        );
-        return 2;
-    }
-    let lock = match lockfile::read_lockfile(&lock_path) {
-        Ok(Some(l)) => l,
-        Ok(None) => {
-            eprintln!("loft update: lockfile empty");
-            return 2;
-        }
-        Err(e) => {
-            eprintln!("loft update: cannot read {}: {e}", lock_path.display());
-            return 1;
-        }
-    };
-    if lock.packages.is_empty() {
-        eprintln!("loft update: lockfile has no packages.");
-        return 0;
-    }
 
-    // Read project loft.toml deps so we know the version range for
-    // each entry.  Transitive deps (in lockfile but not in toml)
-    // default to "*" (any non-yanked).
-    let toml_deps: std::collections::HashMap<String, String> = project_root
+    // Read project loft.toml deps: they give the version range for each entry,
+    // AND they are half the work list.  Path dependencies are resolved from
+    // disk and never carry a lock entry, so they are filtered out here.
+    // A lock entry with no declaration (a transitive dep) defaults to "*".
+    let declared: Vec<(String, String)> = project_root
         .as_ref()
         .and_then(|root| manifest::read_manifest(root.join("loft.toml").to_str().unwrap_or("")))
         .map(|m| {
@@ -1642,6 +1627,46 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
                 .collect()
         })
         .unwrap_or_default();
+    let toml_deps: std::collections::HashMap<String, String> = declared.iter().cloned().collect();
+
+    // A missing lock is not "nothing to update" when the manifest declares
+    // dependencies — that is exactly the state `loft update` should resolve.
+    let lock = match lockfile::read_lockfile(&lock_path) {
+        Ok(Some(l)) => l,
+        Ok(None) => lockfile::LockFile {
+            schema_version: lockfile::SCHEMA_VERSION,
+            packages: Vec::new(),
+        },
+        Err(e) => {
+            eprintln!("loft update: cannot read {}: {e}", lock_path.display());
+            return 1;
+        }
+    };
+    let worklist = lockfile::update_worklist(&lock.packages, &declared);
+    if worklist.is_empty() {
+        if lock_path.exists() {
+            eprintln!("loft update: lockfile has no packages, and loft.toml declares none.");
+            return 0;
+        }
+        eprintln!(
+            "loft update: no loft.lock at {} and no dependencies in loft.toml — nothing to update.",
+            lock_path.display()
+        );
+        eprintln!(
+            "  Run `loft install <pkg>` first (or `loft pin <script>` for one-file scripts)."
+        );
+        return 2;
+    }
+    if let Some(t) = &opts.target
+        && !worklist.iter().any(|w| &w.name == t)
+    {
+        eprintln!(
+            "loft update {t}: not a dependency of this project — \
+             it is in neither loft.toml nor loft.lock."
+        );
+        eprintln!("  Add it to [dependencies] first, or run `loft install {t}`.");
+        return 1;
+    }
 
     // Load index (offline-respecting, allow_unsigned for the
     // bootstrap window).
@@ -1663,44 +1688,61 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
 
     let dry = opts.dry_run || opts.check_only;
     let mut updates_available = false;
+    // A dependency the manifest declares that the lock cannot be made to
+    // describe.  Not an "update", but it means the lock does NOT match the
+    // manifest — which is what `--check` exists to catch.
+    let mut manifest_gap = false;
     let mut install_failures: Vec<String> = Vec::new();
     let mut diff: Vec<String> = Vec::new();
 
-    for entry in &lock.packages {
+    for target in &worklist {
         if let Some(t) = &opts.target {
-            if t != &entry.name {
+            if t != &target.name {
                 continue;
             }
         }
-        let pkg = match index.packages.get(&entry.name) {
+        // What the lock says today, and how to name it in a report line.
+        let held = target.locked.as_deref();
+        let at = held.map_or_else(|| "(not locked)".to_string(), ToString::to_string);
+        let pkg = match index.packages.get(&target.name) {
             Some(p) => p,
             None => {
-                diff.push(format!(
-                    "  {pkg} {ver} — not in current index (orphan; skipped)",
-                    pkg = entry.name,
-                    ver = entry.version
-                ));
+                if held.is_none() {
+                    // Declared in loft.toml, absent from the index: the lock
+                    // cannot be completed.  Skipping this silently is the
+                    // failure loft#830 reported, so it is always named.
+                    manifest_gap = true;
+                    diff.push(format!(
+                        "  {pkg} — declared in loft.toml but not in the registry index; \
+                         cannot be added to loft.lock",
+                        pkg = target.name
+                    ));
+                } else {
+                    diff.push(format!(
+                        "  {pkg} {at} — not in current index (orphan; skipped)",
+                        pkg = target.name
+                    ));
+                }
                 continue;
             }
         };
         let constraint = toml_deps
-            .get(&entry.name)
+            .get(&target.name)
             .cloned()
             .unwrap_or_else(|| "*".to_string());
         // Step 6: an upgrade must not hand the consumer a release that has
-        // DECLARED it breaks them.  `entry.version` is what they hold, so a
-        // candidate whose `api_compatible_with` is above it is passed over —
-        // and named, because a resolver that silently stops at an older release
-        // teaches its consumer that no upgrade exists.
-        let resolved =
-            registry_index::find_compatible_version(pkg, &constraint, false, Some(&entry.version));
+        // DECLARED it breaks them.  `held` is what they hold, so a candidate
+        // whose `api_compatible_with` is above it is passed over — and named,
+        // because a resolver that silently stops at an older release teaches
+        // its consumer that no upgrade exists.  A package with no lock entry
+        // holds nothing, so nothing can be held back from it.
+        let resolved = registry_index::find_compatible_version(pkg, &constraint, false, held);
         for held_back in &resolved.withheld {
             let floor = held_back.api_compatible_with.as_deref().unwrap_or("?");
             diff.push(format!(
-                "  {pkg} {ver} — {new} held back: declares a break past {ver} \
+                "  {pkg} {at} — {new} held back: declares a break past {at} \
                  (api_compatible_with = {floor}). Upgrade deliberately, or stay.",
-                pkg = entry.name,
-                ver = entry.version,
+                pkg = target.name,
                 new = held_back.semver
             ));
         }
@@ -1712,32 +1754,38 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
             } else {
                 format!("every version satisfying `{constraint}` declares a break past it")
             };
-            diff.push(format!(
-                "  {pkg} {ver} — {why}",
-                pkg = entry.name,
-                ver = entry.version
-            ));
+            if held.is_none() {
+                manifest_gap = true;
+            }
+            diff.push(format!("  {pkg} {at} — {why}", pkg = target.name));
             continue;
         };
-        if best.semver == entry.version {
+        if held == Some(best.semver.as_str()) {
             // Already on the highest satisfying version this consumer can take.
             continue;
         }
         // Higher OR lower (e.g. rollback after yank) — both are
         // "updates" in the sense of "lockfile would change."
         updates_available = true;
-        diff.push(format!(
-            "  {pkg} {old} → {new}",
-            pkg = entry.name,
-            old = entry.version,
-            new = best.semver
-        ));
+        if held.is_none() {
+            diff.push(format!(
+                "  {pkg} → {new} (declared in loft.toml, missing from loft.lock)",
+                pkg = target.name,
+                new = best.semver
+            ));
+        } else {
+            diff.push(format!(
+                "  {pkg} {at} → {new}",
+                pkg = target.name,
+                new = best.semver
+            ));
+        }
         if !dry {
-            match install_one(&entry.name, Some(&best.semver), &install_opts) {
+            match install_one(&target.name, Some(&best.semver), &install_opts) {
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("  FAILED {} {}: {e}", entry.name, best.semver);
-                    install_failures.push(entry.name.clone());
+                    eprintln!("  FAILED {} {}: {e}", target.name, best.semver);
+                    install_failures.push(target.name.clone());
                 }
             }
         }
@@ -1747,17 +1795,17 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
         if let Some(t) = &opts.target {
             println!("loft update {t}: already on the highest satisfying version.");
         } else {
-            println!(
-                "loft update: all {} packages up-to-date.",
-                lock.packages.len()
-            );
+            // Count what was actually resolved — declarations included.  Counting
+            // `lock.packages` reported success for a lock that was missing one of
+            // them (loft#830).
+            println!("loft update: all {} packages up-to-date.", worklist.len());
         }
         return 0;
     }
 
     if opts.check_only {
-        if updates_available {
-            println!("loft update --check: updates available:");
+        if updates_available || manifest_gap {
+            println!("loft update --check: the lockfile does not match loft.toml:");
         } else {
             // Reachable when the only lines are held-back or skipped notes.  A
             // consumer correctly staying put must not turn a CI check red —
@@ -1767,7 +1815,7 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
         for line in &diff {
             println!("{line}");
         }
-        return i32::from(updates_available);
+        return i32::from(updates_available || manifest_gap);
     }
     if opts.dry_run {
         println!("loft update --dry-run: would update:");
@@ -7853,8 +7901,58 @@ fn main() {
         };
         match built {
             Ok(Some(so)) => {
-                loft::native_lib::mark_exports(&mut p.data, &export);
-                auto_native_libs.push(so.to_string_lossy().into_owned());
+                // loft#831 — the build succeeding does not mean this process can
+                // dispatch through the artifact.  Load it and dlsym each bridge
+                // BEFORE marking, so a symbol that will not resolve leaves its
+                // function interpreting instead of compiling into an
+                // `OpStaticCall` that panics at the first call.
+                let probe = loft::native_lib::probe_and_mark_exports(&mut p.data, &export, &so);
+                if probe.marked > 0 {
+                    auto_native_libs.push(so.to_string_lossy().into_owned());
+                }
+                if !probe.complete() {
+                    if native_required {
+                        eprintln!(
+                            "loft: LOFT_REQUIRE_NATIVE is set, but library '{pkg_dir}' built a \
+                             cdylib this process cannot dispatch through ({}), so {} of its \
+                             function(s) would run interpreted. Rebuild it with \
+                             `make rebuild-native-cdylibs`, or unset LOFT_REQUIRE_NATIVE.",
+                            if probe.not_loaded {
+                                "it does not load"
+                            } else {
+                                "some bridge symbols are missing"
+                            },
+                            probe.unresolved.len(),
+                        );
+                        std::process::exit(1);
+                    }
+                    // One line for the library, not one per function: the program
+                    // is CORRECT either way — this only costs speed.
+                    let shown: Vec<&str> = probe
+                        .unresolved
+                        .iter()
+                        .take(4)
+                        .map(String::as_str)
+                        .collect();
+                    let more = probe.unresolved.len().saturating_sub(shown.len());
+                    let more_txt = if more > 0 {
+                        format!(", +{more} more")
+                    } else {
+                        String::new()
+                    };
+                    eprintln!(
+                        "loft: library '{pkg_dir}' runs {n} function(s) interpreted this run — \
+                         its cdylib built but {why} ({}{more_txt}). Results are unchanged, only \
+                         slower; `make rebuild-native-cdylibs` restores native dispatch.",
+                        shown.join(", "),
+                        n = probe.unresolved.len(),
+                        why = if probe.not_loaded {
+                            "does not load"
+                        } else {
+                            "does not export their bridge symbols"
+                        },
+                    );
+                }
             }
             Ok(None) => {
                 // Dev-interpret-on-edit (Step 4): the library is being actively

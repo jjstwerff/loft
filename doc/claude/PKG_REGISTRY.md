@@ -445,6 +445,22 @@ required.  Reproducible across machines / CI / collaborators.
 the lock file.  CI uses `loft install --frozen` which refuses to
 rewrite the lock and fails if it would.
 
+Its work list is the **union of `loft.toml`'s declared (non-path)
+dependencies and `loft.lock`'s entries** — never the lock alone.  The lock is
+meant to describe the manifest, so a dependency the manifest gained since the
+lock was written is the main thing this command exists to fix; resolving only
+what the lock already names made such a package invisible, and the summary
+counted lock entries, so the omission reported itself as `all N packages
+up-to-date` (loft#830).  A declared package with no lock entry is resolved and
+added; one that no index can resolve is **named**, never silently skipped, and
+turns `loft update --check` red — that check asks whether the lock matches the
+manifest, and there the answer is no.  With no lockfile at all but declared
+dependencies, `loft update` builds the lock rather than reporting nothing to do.
+
+The decision itself is `lockfile::update_worklist` — one pure function, so the
+"which packages" question has one home and is unit-testable apart from the
+network.
+
 `source = "registry"` is recorded so future sources
 (`source = "git"`, `source = "path"` for local overrides) can
 coexist.

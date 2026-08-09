@@ -137,6 +137,82 @@ pub fn mark_exports(data: &mut Data, export: &HashSet<u32>) {
     }
 }
 
+/// What proving a built cdylib against the process turned up.
+#[derive(Debug, Default, Clone)]
+pub struct BridgeProbe {
+    /// Functions whose bridge symbol resolved — the ones actually marked.
+    pub marked: usize,
+    /// Original names of the functions left interpreting, sorted.  Empty when
+    /// every export resolved.
+    pub unresolved: Vec<String>,
+    /// True when the artifact itself could not be `dlopen`ed, so none of its
+    /// exports resolve.
+    pub not_loaded: bool,
+}
+
+impl BridgeProbe {
+    /// True when the whole export set is dispatching natively — nothing fell
+    /// back to the interpreter.
+    #[must_use]
+    pub fn complete(&self) -> bool {
+        !self.not_loaded && self.unresolved.is_empty()
+    }
+}
+
+/// Load the cdylib at `so`, and mark for native dispatch exactly those functions
+/// of `export` whose bridge symbol it really exports.
+///
+/// [`mark_exports`] marks the whole set on the strength of the BUILD having
+/// succeeded.  That is a proxy, and it fails in both directions (loft#831): a
+/// cdylib can build cleanly and still not load — linked against a different
+/// `libloft.rlib`, missing a system library, or replaced by a concurrent build
+/// between the freshness check and the load.  `byte_code` has by then emitted
+/// `OpStaticCall` to a symbol that will never be wired, and the panic stub in
+/// `compile.rs` takes the program down at the first call — even though the loft
+/// body it was compiled from is sitting right there in the same process.
+///
+/// So ask the question whose answer is the one that matters, at the moment the
+/// answer is still actionable: load the artifact and `dlsym` each bridge.  A
+/// symbol that does not resolve leaves its function unmarked, which is precisely
+/// the documented fallback for a library that cannot compile native — it
+/// interprets, byte-identically.  Loading here also PINS the image for the
+/// process, so pruning or rebuilding by a concurrent `loft` cannot invalidate
+/// the decision after it is made.
+pub fn probe_and_mark_exports(
+    data: &mut Data,
+    export: &HashSet<u32>,
+    so: &std::path::Path,
+) -> BridgeProbe {
+    let mut probe = BridgeProbe::default();
+    if !crate::extensions::load_cdylib(&so.to_string_lossy()) {
+        // `load_cdylib` has already printed the classified dlopen diagnostic.
+        probe.not_loaded = true;
+        probe.unresolved = export
+            .iter()
+            .map(|&d| data.def(d).original_name().clone())
+            .collect();
+        probe.unresolved.sort_unstable();
+        return probe;
+    }
+    let dups = crate::generation::duplicate_fn_names(data);
+    let mut resolvable: HashSet<u32> = HashSet::new();
+    for &d in export {
+        let sym = format!(
+            "loft_shared_{}",
+            crate::generation::disambiguated_fn_ident(&dups, data.def(d))
+        );
+        if crate::extensions::bridge_symbol_resolves(&sym) {
+            resolvable.insert(d);
+        } else {
+            probe.unresolved.push(data.def(d).original_name().clone());
+        }
+    }
+    probe.unresolved.sort_unstable();
+    probe.marked = resolvable.len();
+    mark_exports(data, &resolvable);
+    probe
+}
+
 /// @PLN11 Arc N / N3 (Step 2) — the cdylib **export set** for the library at
 /// `pkg_dir`, computed **without marking** (`&Data`, not `&mut`): the library's
 /// top-level, user-named, `pub` functions (the dispatch-target invariant — see
@@ -1490,11 +1566,24 @@ const KEEP_ARTIFACTS: usize = 8;
 /// is by mtime, so the survivors are the most recently BUILT — including the one
 /// that just finished.
 ///
+/// `family` is the artifact-name prefix this sweep OWNS
+/// ([`auto_cdylib_stem`]) — and passing it is load-bearing, not tidiness.  The
+/// sweep used to take every `.so` in the directory, and `native-auto/` is not
+/// exclusively ours: a package with a `[c] shim` builds its shim cdylib
+/// (`<pkg>_shim_<key>.so`) right there.  That library is content-keyed and built
+/// ONCE, so it is always the OLDEST file in the directory — the first thing an
+/// age-ordered sweep deletes the moment the directory saturates.  Deleting it
+/// does not cost a rebuild, it removes the only definition of the package's `#c`
+/// symbols, and the next run dies with *"`#c` symbol 'x' not found — check the
+/// spelling"*, naming neither the library nor the sweep that ate it.  That is the
+/// residual half of loft#831: parallel runs are what saturate the directory,
+/// because each distinct type-layout context adds an artifact of its own.
+///
 /// A concurrent process can be adopting one of these without holding the lock (the
 /// fresh fast path takes none).  That is why [`artifact_layout_probe`] refuses to
 /// adopt an artifact it cannot OPEN: the loser of that race rebuilds instead of
 /// dlopening a file that just vanished.
-fn prune_artifacts(dir: &std::path::Path) {
+fn prune_artifacts(dir: &std::path::Path, family: &str) {
     let ext = if cfg!(target_os = "windows") {
         "dll"
     } else if cfg!(target_os = "macos") {
@@ -1508,6 +1597,7 @@ fn prune_artifacts(dir: &std::path::Path) {
     let mut built: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == ext))
+        .filter(|e| artifact_stem(&e.path()).is_some_and(|s| s.starts_with(family)))
         .filter_map(|e| {
             let m = e.metadata().ok()?.modified().ok()?;
             Some((m, e.path()))
@@ -1519,17 +1609,23 @@ fn prune_artifacts(dir: &std::path::Path) {
     // Newest first; everything past the keep window goes.
     built.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
     for (_, so) in built.drain(KEEP_ARTIFACTS..) {
-        // `libfoo_<fp>.so` / `foo_<fp>.dll` → the `foo_<fp>` the generated sources
-        // are named after.  Only the platform prefix differs, and stripping it is
-        // what lets one loop delete all three files.
-        let Some(name) = so.file_stem().and_then(|s| s.to_str()) else {
+        let Some(stem) = artifact_stem(&so) else {
             continue;
         };
-        let stem = name.strip_prefix("lib").unwrap_or(name);
+        let stem = stem.to_string();
         let _ = std::fs::remove_file(&so);
         let _ = std::fs::remove_file(dir.join(format!("{stem}.rs")));
         let _ = std::fs::remove_file(dir.join(format!("{stem}.args")));
     }
+}
+
+/// `libfoo_<fp>.so` / `foo_<fp>.dll` → the `foo_<fp>` the generated sources are
+/// named after.  Only the platform prefix differs, and stripping it is what lets
+/// one loop delete a library and its generated companions together — and what
+/// lets the sweep tell one family of artifacts from another.
+fn artifact_stem(so: &std::path::Path) -> Option<&str> {
+    let name = so.file_stem().and_then(|s| s.to_str())?;
+    Some(name.strip_prefix("lib").unwrap_or(name))
 }
 
 /// The same question as [`artifact_matches_layout`], asked about an artifact that
@@ -1718,7 +1814,9 @@ pub fn cached_or_build_shared_cdylib(
         // Bound the directory, while the build lock is still held.  A new artifact
         // appears per consumer type-layout (#715) and nothing collected the old
         // ones — 25 GB across this repo's fixtures, 532 files in one package.
-        prune_artifacts(out_dir);
+        // Scoped to THIS package's auto-native family: a `[c] shim` cdylib shares
+        // the directory and is never rebuilt, so an unscoped sweep eats it.
+        prune_artifacts(out_dir, &auto_cdylib_stem(pkg_dir));
         Ok(Some(built))
     };
 

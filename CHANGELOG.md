@@ -26,6 +26,62 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Reading a binary file as text says so now
+
+`file(p).content()` returns **null** when there is no text to read — the file is
+missing, the path is a directory, or the bytes are not valid UTF-8:
+
+```loft
+write_bytes("logo.png", bytes);
+c = file("logo.png").content();     // null — those bytes are not text
+d = file("empty.txt").content();    // "" — that file really is empty
+```
+
+It used to answer `""` for all of them, which is the same thing an empty file
+says. That does not just lose information, it inverts tests: a check of the shape
+*"write bytes, read them back, compare"* **passed** on binary data, because both
+sides were `""`. Reading the file was never the problem — asking for it as text
+was. `read_bytes(path)` reads it exactly and round-trips with `write_bytes`.
+
+Add `?? ""` where the distinction does not matter. The stderr warning that names
+both readers now appears under `--native` too; it used to be printed only by the
+interpreter, so the compiled build read binary in silence.
+
+### A library whose native build cannot be used runs interpreted
+
+`use <lib>` compiles a library to a native cdylib behind your back, and the deal
+has always been that anything it cannot compile simply interprets. One case broke
+the deal: a cdylib that **built** but that this run could not dispatch through —
+linked against a different loft build, missing a system library, or replaced by
+another `loft` running at the same moment — took the program down at the first
+call to it, with the loft version of the function sitting right there in memory.
+
+It now checks that it can actually reach each function before routing calls to
+it, so anything it cannot reach interprets, with the same results. Running
+several `loft` programs at once is no longer a way to lose one of them. You get
+one line per library saying what fell back and that it costs only speed;
+`LOFT_REQUIRE_NATIVE=1` turns that into a refusal instead, and
+`LOFT_NO_NATIVE_LIBS=1` (now in `--help`) opts out of the whole mechanism.
+
+The same runs turned up a second way to lose a library: loft keeps only the
+eight most recent build artifacts per package, and it was counting the small
+C shim a `[c] shim = "…"` package builds beside them. That shim is built once
+and never again, so it was always the oldest file — and the first deleted, which
+took every `#c` function in the package with it. Housekeeping now only tidies up
+after itself.
+
+### `loft update` reads loft.toml, not just loft.lock
+
+Adding a dependency to `[dependencies]` and running `loft update` now locks it.
+Before, `update` walked the lockfile alone, so a package the manifest had gained
+was never looked up — and the summary counted lock entries, so it announced `all
+1 packages up-to-date` with two declared. The lock silently kept lagging the
+manifest, which is precisely what a lockfile exists to prevent.
+
+`loft update --check` fails when the lock does not describe the manifest, so CI
+catches the gap; a declared package that cannot be resolved at all is named
+rather than skipped; and with no lockfile yet, `loft update` writes one.
+
 ### Words, and the prefix you actually wanted
 
 `trie<T[k]>` keys a collection on one **text** field and answers what no other

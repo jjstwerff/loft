@@ -547,8 +547,20 @@ call; the stdlib does not, and did not meaningfully do so before.
 
 | Function | Description |
 |----------|-------------|
-| `content(self: File) -> text` | Reads the entire file as a UTF-8 text value. |
+| `content(self: File) -> text?` | Reads the entire file as a UTF-8 text value. **Null** when there is no text to read: the file is missing, the path is a directory, or the bytes are not valid UTF-8. `""` means the file really is empty. |
 | `lines(self: File) -> vector<text>` | Reads the file and splits it into lines. |
+
+`content()` is nullable because `""` cannot carry three different meanings.  A
+non-UTF-8 file used to answer `""`, indistinguishable from an empty one, so a
+gate of the shape *"write bytes, read them back, compare"* passed **vacuously**
+on binary data — both sides were `""` (loft#829).  Discharge with `?? ""` to
+keep the old shape where the distinction does not matter.
+
+Reading such a file is not the failure — asking for it as *text* is.  Use
+[`read_bytes(path) -> vector<u8>?`](#filesystem-operations), which is
+byte-exact and round-trips with `write_bytes`, or open the file in binary mode
+and read it a field at a time (see [Binary Files](#binary-files)).  A non-UTF-8
+`content()` also prints one stderr warning naming both, on **both** backends.
 
 ### Writing Text Files
 

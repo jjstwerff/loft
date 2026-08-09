@@ -9,6 +9,69 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Three answers that were derived from a proxy instead of the fact (#829, #830, #831) (2026-08-09)
+
+Three consumer-filed defects with one shape: a decision read a stand-in for the
+fact it needed, and the stand-in was true when the fact was not.
+
+- **#829 — `content()` answered `""` for bytes it could not decode.** `""` is
+  what an empty file says, so a caller could not tell the two apart, and a
+  round-trip gate over binary data passed vacuously (`0 == 0 * 2`). `content()`
+  is `text?` and already answered null for a missing file (@PLN102 H4); it now
+  does the same for non-UTF-8 bytes and for a directory, with `""` reserved for a
+  file that really is empty. The decision sits in the loft-level `content()` —
+  one home, so both backends get it from the same place. The read beneath it also
+  had two homes (`State::get_file_text` and `codegen_runtime::OpGetFileText`) and
+  the stderr warning lived in only one of them, so `--native` read binary in
+  silence; both now call `read_file_text_into`. Guards:
+  `tests/binary_io_matrix.rs::c829_*` (four `cross_mode!` cells, including the
+  empty-file cell that keeps null and `""` apart) and a both-backend
+  `p166_content_on_binary_file_warns`.
+
+- **#830 — `loft update` resolved the lockfile, not the project.** A dependency
+  declared in `loft.toml` and absent from `loft.lock` was never looked up, and
+  the summary counted lock entries, so the omission printed `all N packages
+  up-to-date`. The work list is now `lockfile::update_worklist(lock, declared)` —
+  the union, as a pure function with unit tests, so "which packages" has one
+  testable home. A declared-but-unresolvable package is named and turns
+  `--check` red (that check asks whether the lock describes the manifest);
+  `loft update <pkg>` on a non-dependency refuses instead of claiming it is
+  up-to-date; a project with declared deps and no lockfile gets one written.
+
+- **#831 — a cdylib that built was assumed to be one this process can use.**
+  Marking a function for cdylib dispatch makes `byte_code` emit `OpStaticCall`,
+  so an unwirable symbol reaches the `compile.rs` panic stub and kills the run.
+  Marking was gated on the BUILD succeeding; an artifact can build and still not
+  load (different `libloft.rlib`, missing system library, replaced by a
+  concurrent `loft`), and an artifact declaring no layout is adopted outright
+  because that is what a hand-written cdylib looks like.
+  `native_lib::probe_and_mark_exports` now `dlopen`s the artifact and `dlsym`s
+  each bridge before marking, marks only what resolves — partial is a valid
+  outcome — and KEEPS the handle, so a later prune or rebuild cannot invalidate
+  the decision. Unresolved functions interpret, which is what the auto-native
+  model always promised. This is why crawler's suite lost a different test on
+  each parallel run: processes share `<pkg>/native-auto/`, and the loser got the
+  panic stub instead of the interpreter. Guards:
+  `tests/n3_use_native.rs::an_unwirable_cdylib_interprets_instead_of_panicking`
+  and `::a_partially_exporting_cdylib_marks_only_what_resolves`, both driven by a
+  real artifact replaced with a cdylib that loads and exports no bridge — the
+  shape every freshness check accepts. `--help` now names `LOFT_NO_NATIVE_LIBS`
+  and `LOFT_REQUIRE_NATIVE`, which the report searched for and could not find.
+
+  **Residual half, found by the same suite:** `prune_artifacts` bounded
+  `native-auto/` by sweeping every `.so` in it by age, and the directory is not
+  exclusively its own — a `[c] shim` cdylib lives there too, content-keyed and
+  built ONCE, hence permanently the oldest file and the sweep's first victim.
+  That does not cost a rebuild, it deletes the only definition of the package's
+  `#c` symbols; the run then dies at `c_call.rs` with *"symbol not found … or
+  check the spelling"*, and nothing can interpret in its place because a `#c`
+  binding IS the implementation. Reproduced deterministically against
+  `tests/fixtures/sqldb/sqlite` (saturate, run once, shim gone, exit 101) — it
+  had been living in the suite as the "known flaky"
+  `native::a_lazy_read_gives_one_answer_down_rust_and_down_loft`. The sweep now
+  takes only the `loft_auto_<pkg>_` family it built; guard
+  `::a_foreign_library_in_native_auto_survives_pruning`.
+
 ### One SQL boundary closes: a table loft made and a table loft found are the same value (@PLN133) (2026-08-08)
 
 @PLN133's gate passes, on **four database backends and both loft backends, with
