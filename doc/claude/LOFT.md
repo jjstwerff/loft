@@ -632,6 +632,16 @@ footgun). Parenthesise if you truly mean the boolean compare (`(a == b) == c`), 
 types (consistent with `bool < int`, which was always rejected). Convert explicitly if you
 really mean it. (`b == null` on a `boolean?` is fine — `null` is not an integer.)
 
+**Tuples compare lexicographically.** All six operators work between two tuples of the same
+arity: the first element decides, and later elements are consulted only while the earlier
+ones are equal — so `(1, 9) < (2, 0)` and `(1, 9) < (1, 10)`, while `(1, 9) < (1, 9)` is
+false and `(1, 9) <= (1, 9)` is true. Elements are compared with their OWN operators, so
+text compares by value (`(1, "abc") == (1, "abc")`) and a nested tuple recurses. An element
+type with no such operator says so about the element — `(false, 1) < (true, 0)` reports
+*"No matching operator `<` on `boolean` and `boolean`"*, because a tuple never invents an
+ordering its elements do not have. Different arities are not comparable.
+See [TUPLES.md § Comparison](TUPLES.md).
+
 Unary operators: `!` (logical not), `-` (negation / sign), `~` (bitwise NOT). A unary prefix
 binds **tighter than every binary operator** — the `-` is the **sign of its operand**, part of
 the primary expression. So `-2 ** 2` is `(-2) ** 2 == 4` (read `-2` as the number

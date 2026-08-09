@@ -7530,6 +7530,154 @@ impl Parser {
         }
     }
 
+    /// Compare two tuples, element by element — `==`, `!=`, `<`, `<=`, `>`, `>=`.
+    ///
+    /// Ordering is LEXICOGRAPHIC, the rule the written form already suggests: the first
+    /// element decides, and later elements are consulted only while the earlier ones are
+    /// equal, so `(1, 9) < (2, 0)`.  Equality is all elements equal.
+    ///
+    /// Lowered to the element types' OWN operators rather than to a tuple opcode, so every
+    /// element type that can already be compared can be compared inside a tuple — text by
+    /// value, a scalar enum by discriminant, a nested tuple by recursion into this same
+    /// function — and both backends inherit it with nothing to add.  An element type with
+    /// no such operator reports itself (`No matching operator '<' on 'Point' and 'Point'`),
+    /// which names the element rather than the tuple around it.
+    ///
+    /// Returns `None` when this is not a tuple comparison, leaving `call_op`'s own
+    /// resolution and diagnostics untouched.
+    fn tuple_compare(
+        &mut self,
+        code: &mut Value,
+        op: &str,
+        list: &[Value],
+        types: &[Type],
+    ) -> Option<Type> {
+        if !matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=") || types.len() != 2 {
+            return None;
+        }
+        let (left_elems, right_elems) = (
+            self.tuple_elements(&types[0])?,
+            self.tuple_elements(&types[1])?,
+        );
+        // Different arities are not a tuple comparison at all — fall through so the error
+        // names both types, which says more than "arity 2 vs 3" would.
+        if left_elems.len() != right_elems.len() || left_elems.is_empty() {
+            return None;
+        }
+        if self.first_pass {
+            return Some(Type::Boolean);
+        }
+        // Each element read names its side again, so an operand that DOES work — a call, an
+        // index read — would be evaluated once per element.  Bind each to a local first; a
+        // side that is already a tuple local is used as it stands.
+        let mut prelude = Vec::new();
+        let left =
+            self.bind_tuple_operand(&list[0], &types[0], &left_elems, "__cmp_l", &mut prelude);
+        let right =
+            self.bind_tuple_operand(&list[1], &types[1], &right_elems, "__cmp_r", &mut prelude);
+        let cmp = self.lex_compare(op, 0, left, right, &left_elems, &right_elems);
+        *code = if prelude.is_empty() {
+            cmp
+        } else {
+            prelude.push(cmp);
+            v_block(prelude, Type::Boolean, "tuple_compare")
+        };
+        Some(Type::Boolean)
+    }
+
+    /// The element types of either spelling of a tuple — `None` for any other type.
+    fn tuple_elements(&self, tp: &Type) -> Option<Vec<Type>> {
+        match tp.base() {
+            Type::Tuple(elems) => Some(elems.clone()),
+            Type::Reference(d_nr, _) if self.data.def(*d_nr).name().starts_with("__tuple<") => {
+                Some(self.stored_tuple_elements(tp.base()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Give a comparison operand a name its elements can be read from repeatedly, unboxing
+    /// the STORED spelling on the way.  Appends the binding statement to `prelude`.
+    fn bind_tuple_operand(
+        &mut self,
+        value: &Value,
+        tp: &Type,
+        elems: &[Type],
+        name: &str,
+        prelude: &mut Vec<Value>,
+    ) -> u16 {
+        if let Value::Var(v) = value.unspan()
+            && matches!(self.vars.tp(*v), Type::Tuple(_))
+        {
+            return *v;
+        }
+        let tuple_tp = Type::Tuple(elems.to_vec());
+        let mut val = value.clone();
+        if self.unboxes_stored_tuple(tp.base(), &tuple_tp) {
+            val = self.unbox_tuple_from_dbref(val, elems);
+        }
+        let tmp = self.create_unique(name, &tuple_tp);
+        self.vars.defined(tmp);
+        self.change_var_type(tmp, &tuple_tp);
+        prelude.push(v_set(tmp, val));
+        tmp
+    }
+
+    /// The lexicographic chain from element `i` onwards.
+    ///
+    /// The LAST element carries the operator as written, which is what separates `<` from
+    /// `<=`: every earlier element only asks "strictly before?" and, failing that, "equal,
+    /// so keep looking?".  `==` / `!=` have no chain — they are the same question asked of
+    /// every element and folded with `&&` / `||`.
+    fn lex_compare(
+        &mut self,
+        op: &str,
+        i: usize,
+        left: u16,
+        right: u16,
+        left_elems: &[Type],
+        right_elems: &[Type],
+    ) -> Value {
+        let last = left_elems.len() - 1;
+        let elem = |s: &mut Self, o: &str, i: usize| -> Value {
+            let mut c = Value::Null;
+            s.call_op(
+                &mut c,
+                o,
+                &[
+                    Value::TupleGet(left, i as u16),
+                    Value::TupleGet(right, i as u16),
+                ],
+                &[left_elems[i].clone(), right_elems[i].clone()],
+            );
+            c
+        };
+        if op == "==" || op == "!=" {
+            let mut acc = elem(self, op, last);
+            for i in (0..last).rev() {
+                let head = elem(self, op, i);
+                acc = if op == "==" {
+                    v_if(head, acc, Value::Boolean(false))
+                } else {
+                    v_if(head, Value::Boolean(true), acc)
+                };
+            }
+            return acc;
+        }
+        if i == last {
+            return elem(self, op, i);
+        }
+        let strict = if op.starts_with('<') { "<" } else { ">" };
+        let before = elem(self, strict, i);
+        let same = elem(self, "==", i);
+        let rest = self.lex_compare(op, i + 1, left, right, left_elems, right_elems);
+        v_if(
+            before,
+            Value::Boolean(true),
+            v_if(same, rest, Value::Boolean(false)),
+        )
+    }
+
     /// Try to find a matching defined operator. There can be multiple possible definitions for each operator.
     fn call_op(&mut self, code: &mut Value, op: &str, list: &[Value], types: &[Type]) -> Type {
         // A first-pass UNARY op on an operand whose type is still UNRESOLVED — an
@@ -7556,6 +7704,12 @@ impl Parser {
         // to steer resolution, so only the no-information case defers to pass 2.
         if self.first_pass && !types.is_empty() && types.iter().all(Type::is_unknown) {
             return Type::Unknown(0);
+        }
+        // Comparing two tuples is decided element by element, BEFORE the `possible` loop —
+        // which would otherwise match `OpEqRef` for two STORED tuples and answer whether
+        // they are the same record, not whether they hold the same values.
+        if let Some(tp) = self.tuple_compare(code, op, list, types) {
+            return tp;
         }
         // I8.1: if any operand is a generic type variable, skip the main operator loop
         // and go straight to the T-stub lookup.  The main loop would otherwise false-match

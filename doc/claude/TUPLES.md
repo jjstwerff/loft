@@ -85,6 +85,47 @@ does.
 
 ---
 
+## Comparison
+
+`==`, `!=`, `<`, `<=`, `>`, `>=` all work between two tuples of the same arity. Ordering is
+**lexicographic**: the first element decides, and later elements are consulted only while
+the earlier ones are equal.
+
+```loft
+(1, 9) < (2, 0)      // true  — the first element decides
+(1, 9) < (1, 10)     // true  — it ties, so the second decides
+(1, 9) < (1, 9)      // false — identical is not strictly less
+(1, 9) <= (1, 9)     // true
+(1, "abc") == (1, "abc")   // true — text compares by VALUE, not by identity
+```
+
+The comparison lowers to the ELEMENT types' own operators (`Parser::tuple_compare`), not to
+a tuple opcode. Three things follow, and they are the reason it is built that way:
+
+- Every element type that can already be compared can be compared inside a tuple — text by
+  value, a scalar enum by discriminant, a nested tuple by recursing into the same rule.
+- An element type with no such operator reports **itself**: `(false, 1) < (true, 0)` says
+  *"No matching operator `<` on `boolean` and `boolean`"*, naming the element the author has
+  to change rather than the tuple around it. A tuple never invents an ordering its elements
+  do not have.
+- Both backends inherit it with nothing to add.
+
+Each operand is evaluated **once**. Every element read names its side again, so a side that
+does work — a call, an index read — is bound to a local first; a side that is already a
+tuple local is used as it stands.
+
+Both spellings compare the same way: a `vector<(…)>` element is unboxed to its stack form
+first, so a loop variable compares against a literal, a local, or another element. This is
+also why the lowering runs BEFORE `call_op`'s operator loop — that loop would match
+`OpEqRef` for two stored tuples and answer whether they are the same record, not whether
+they hold the same values.
+
+Comparing tuples of different arity is not a tuple comparison at all: it falls through to
+`No matching operator '==' on '(integer, integer)' and '(integer, integer, integer)'`,
+which says more than an arity count would.
+
+---
+
 ## Syntax
 
 ```loft
@@ -173,10 +214,6 @@ goes through the same `Type::Tuple` arm of `set_field_check` /
 - **`&tuple` with owned elements** — per-element DbRef expansion is
   still pending; tuple values are passed by value or via the
   synthetic `__tuple<…>` struct's DbRef.
-- **`==` between tuples** — unsupported, and not a spelling gap: two plain stack tuples
-  compare no better than a stored one against a literal (`No matching operator '=='`).
-  Structural equality would have to decide element-wise comparison for heap elements and
-  nesting, so it is a language decision, not a missing arm.
 - **The `vector<(…)>` read cursor owns a store it should borrow** (loft#823) — the work-ref
   `unbox_tuple_from_dbref` reads through is born with empty deps, which both backends read
   as "owner" and answer by materialising a copy at the bind. Two silent failures follow:
