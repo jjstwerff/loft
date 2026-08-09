@@ -100,15 +100,23 @@ still build.  `--interpret` keeps its existing (silent, last-loaded) behavior.
 
 The @PLN28 pc → source-position map (`Definition.source_spans`, populated at
 bytecode codegen) is **interpreter-only**: it keys on the bytecode `pc`, which
-`--native` has no equivalent of.  So an interpreter runtime fault can render
-`--> file:line:col` + caret, but the same fault under `--native` cannot map back
-to a loft source line.  Both backends still honour C66 (the fault yields loft's
-sentinel and the program keeps running) — the gap is the *diagnostic position*,
-not the behaviour, and compile-time diagnostics (parser / type / suggestion) are
-identical on both.
+`--native` has no equivalent of, and the native `raise` helpers pass
+`position: None` (`generation/calls.rs`).  So the *mechanism* gap is real.
 
-- **Workaround:** reproduce the fault under `--interpret` for the source caret;
-  the value/behaviour is identical on both backends by design.
+**But it is mostly not observable today** (verified 2026-08-09, both backends):
+
+- `panic("…")` renders an identical `--> file:line:col` + caret on **both**
+  backends, so the loudest runtime fault a user actually meets is not affected.
+- Faults that C80 degrades — divide-by-zero, out-of-bounds read, out-of-bounds
+  write — print **no** runtime diagnostic on **either** backend. They yield the
+  sentinel and the program continues, so there is no caret to lose.
+
+Compile-time diagnostics (parser / type / suggestion) are identical on both. What
+remains exposed is any future non-recoverable `raise` path that reports a position:
+that one would render on `--interpret` and not on `--native`.
+
+- **Workaround:** none needed for `panic` or for C80-degraded faults. If a
+  reporting `raise` is added, reproduce it under `--interpret` for the caret.
 - **Canonical home:** [NATIVE.md](NATIVE.md); a native source map would need
   codegen to thread `Position` into the generated Rust, out of @PLN28's scope.
 
