@@ -244,14 +244,23 @@ goes through the same `Type::Tuple` arm of `set_field_check` /
 - **`&tuple` with owned elements** — per-element DbRef expansion is
   still pending; tuple values are passed by value or via the
   synthetic `__tuple<…>` struct's DbRef.
-- **The `vector<(…)>` read cursor owns a store it should borrow** (loft#823) — the work-ref
-  `unbox_tuple_from_dbref` reads through is born with empty deps, which both backends read
-  as "owner" and answer by materialising a copy at the bind. Two silent failures follow:
-  `v[oob] ?? d` returns the copy's uninitialised bytes on `--native` (the interpreter
-  answers `d`), and `g = p` inside `for p in v` SIGSEGVs once an earlier `vector<(…)>` loop
-  has run. `Deps::none()` conflates *owns* with *nobody said*; giving the cursor a real
-  borrow needs the dep to survive `scopes.rs`, which is what makes it a design pass rather
-  than a patch.
+- **The `vector<(…)>` read cursor still materialises a copy** — the work-ref
+  `unbox_tuple_from_dbref` reads through is born with `Deps::none()`, which both backends
+  read as "owner", so every `vector<(…)>` element read allocates and frees a record where
+  three loads would do. This is a PERFORMANCE residue: the two *correctness* failures filed
+  with it (loft#823) are closed, and neither was a tuple defect.
+
+  Their root causes are worth keeping straight, because the filed scope named neither.
+  `v[oob] ?? d` answered uninitialised bytes on `--native` because the materialise arm
+  allocated before asking whether the element was there, and absence has two spellings —
+  see [DATABASE.md § DbRef](DATABASE.md). `g = p` inside `for p in v` SIGSEGV'd because the
+  O-B1 last-use move transferred a store the loop variable never owned; that one is not
+  tuple-specific at all — a `vector<struct>` loop does the same, see
+  [PERFORMANCE.md § Status after O-B1](PERFORMANCE.md).
+
+  Making the cursor a real BORROW would retire the remaining allocation, and still needs the
+  dep to survive `scopes.rs` — a design pass rather than a patch. `Deps::none()` conflating
+  *owns* with *nobody said* is the fact underneath it.
 
 T1.4 (tuple-returning functions), tuple LHS destructuring, and
 tuple patterns in match all shipped in 0.8.3 (T1.9) and were

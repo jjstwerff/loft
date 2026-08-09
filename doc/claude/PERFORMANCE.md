@@ -2190,8 +2190,27 @@ variables are immutable.  High complexity for moderate gain.
 ## Status after O-B1
 
 **O-B1 is implemented** (codegen.rs `gen_set_first_ref_var_copy`).
-When `x = y` and y has `uses == 1` (only read here), not an argument,
-not captured: emits OpVarRef + skip_free instead of the full deep copy.
+When `x = y` and y has `uses == 1` (only read here), **owns its store**
+(empty type dep), not an argument, not captured: emits OpVarRef +
+skip_free instead of the full deep copy.
+
+**The ownership precondition is load-bearing, and it was missing until
+loft#823.** A move hands `x` the source's store and suppresses the
+source's free, so it is sound only where the source HAS a store to give.
+`uses == 1` answers *liveness* — nobody reads it after this — which says
+nothing about *ownership*. A non-empty type dep says positively that `y`
+is a VIEW of another variable, and moving from a view handed `x` an
+interior pointer whose scope-exit `OpFreeRef` then released the
+**container's** record: `for p in v { g = p; … }` SIGSEGV'd for every
+heap element type, struct as readily as tuple. The forms that survived
+did so because an earlier loop is what pushes the use count to exactly 1
+— an accident of counting, not an ownership fact.
+
+@PLN90's `use_analysis::move_elidable_source` states the same rule for
+the move plans it builds ("never a view/projection, which owns no store
+to move"); O-B1 is the shortcut that predates it. Any future move
+shortcut needs the same two questions, and *liveness* is only the second
+one.
 
 ### Remaining deep copy sites
 

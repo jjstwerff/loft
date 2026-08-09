@@ -2731,7 +2731,23 @@ impl State {
     fn gen_set_first_ref_var_copy(&mut self, stack: &mut Stack, v: u16, src: u16, d_nr: u32) {
         // O-B1: last-use move — if source is only read once (this assignment),
         // transfer the DbRef instead of deep copying. Skip the source's OpFreeRef.
+        //
+        // A move hands `v` the source's store and suppresses the source's free, so it is
+        // sound only where the source HAS a store to give.  `uses(src) == 1` answers
+        // LIVENESS — nobody reads it after this — which says nothing about ownership; a
+        // non-empty type dep says positively that `src` is a VIEW of another variable
+        // (loft#823).  Moving from a view handed `v` an interior pointer into the
+        // container, and `v`'s scope-exit `OpFreeRef` then released the CONTAINER's
+        // record: `for p in v { g = p; … }` SIGSEGV'd for every heap element type — a
+        // struct as readily as a tuple — whenever an earlier loop had pushed the use
+        // count to exactly 1.  The cells that survived did so on that accident of
+        // counting, not on any ownership fact.
+        //
+        // @PLN90's `use_analysis::move_elidable_source` states the same rule for the
+        // move plans it builds — "never a view/projection, which owns no store to move".
+        // This is the shortcut that predates it.
         if stack.function.uses(src) == 1
+            && stack.function.tp(src).depend().is_empty()
             && !stack.function.is_argument(src)
             && !stack.function.is_captured(src)
         {
@@ -2805,12 +2821,18 @@ impl State {
         stack.add_op("OpDatabase", self);
         self.code_add(slot_offset);
         self.code_add(tp_nr);
-        let copy_nr = stack.data.def_nr("OpCopyRecord");
-        let copy_val = Value::Call(
-            copy_nr,
-            vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
-        );
-        self.generate(&copy_val, stack, false);
+        // `OpCopyRefOrNull`, not `OpCopyRecord` — the element being read may not BE there.
+        // `k = v[oob]` allocated the destination record above and then deep-copied from an
+        // absent source, leaving `k` bound to that live-but-uninitialised record: `k == null`
+        // read false and `k.x` answered its bytes (loft#823).  This opcode is the null-aware
+        // sibling built for exactly that shape — it reclaims the pre-allocated record and
+        // binds the sentinel when the source is absent, and deep-copies otherwise.
+        // `generate(value)` pushes the source and the opcode pops it, so the slot offset
+        // taken above stays valid.
+        self.generate(value, stack, false);
+        stack.add_op("OpCopyRefOrNull", self);
+        self.code_add(slot_offset);
+        self.code_add(tp_nr);
         crate::copy_manifest::record(
             stack.def_nr,
             v,

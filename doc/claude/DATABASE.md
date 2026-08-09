@@ -618,7 +618,23 @@ pub struct DbRef {
 }
 ```
 
-`DbRef` is the universal runtime pointer. It encodes a complete address: which store, which record, and which field offset within that record. A null reference is `store_nr == 0 && rec == 0`.
+`DbRef` is the universal runtime pointer. It encodes a complete address: which store, which record, and which field offset within that record.
+
+**Absence has two spellings, and a site that knows only one is a bug waiting to happen.**
+
+| spelling | produced by | test |
+|---|---|---|
+| `DbRef::NULL` — `store_nr == u16::MAX`, `rec == 0` | an absent heap value: unset struct reference, struct-enum, vector | `DbRef::is_null()` |
+| a real store, `rec == 0` | indexing **past the end** of a live container (`vector::get_vector`), and `from == i64::MIN` | `rec == 0` |
+
+`get_vector`'s own doc says the two "read as the same absent value", and every
+store *accessor* honours that by testing `rec == 0` (`if db.rec == 0 { f64::NAN }`).
+A site that tests only `store_nr == u16::MAX` therefore accepts an out-of-range
+element as PRESENT. That is how loft#823 turned `v[oob] ?? default` into a live
+empty record on `--native`: the materialise arm allocated first and asked the
+narrow question second, so `??` saw a present value and answered with the fresh
+record's uninitialised bytes. **Use `rec == 0` for "is this readable"; reserve
+`is_null()` for "is this the absent-value sentinel" specifically.**
 
 ### Key
 
