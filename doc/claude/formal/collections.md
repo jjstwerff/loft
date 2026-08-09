@@ -7,12 +7,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 > **STATUS: SCOPE (2026-07-10).** This is the *scoping* pass, not the finished rules. It
 > inventories the shipped behavior of loft's collection kinds — `vector`, `hash`, `sorted`,
-> `index`, `spacial` (`Radix`) — and the shared index/slice surface, names each rule with its
+> `index`, `spatial` (`Radix`), `trie` — and the shared index/slice surface, names each rule with its
 > intent + anchor, and lists what must be **both-backends-verified** before the rules graduate to
 > the normal `## Rules` / `## Deviations` form at **0 deviations**. This is **describe-SHIPPED-
 > behavior** mode (the usual `formal/` discipline — the opposite of the spec-first @PLN35 work).
 >
-> **Why this doc exists.** `spacial` shipped (PR #550) into an area the formal spec never covered:
+> **Why this doc exists.** `spatial` shipped (PR #550) into an area the formal spec never covered:
 > the collection **type formers** aren't in [types.md](types.md), and **indexing/slicing** is
 > nowhere. Today the only keyed-collection rule is [concurrency.md](concurrency.md)'s `C-Order`
 > (hash bucket-walk under `par`) plus passing mentions in [calls.md](calls.md) / [capabilities.md](capabilities.md).
@@ -30,11 +30,13 @@ Slicing is **one type-directed mechanism**, not per-structure code. The index/sl
 | family | receiver | form | result | anchor |
 |---|---|---|---|---|
 | **Value slice** | `vector<T>`, `text` | `v[a..b]` `[a..=b]` `[a..]` `[..b]` | a **fresh sub-collection VALUE** (`vector<T>` / `text`); bounds clamp | LOFT.md:1203-1206, :790-813; fields.rs:670-679 |
-| **Keyed range-slice iterator** | `sorted`, `index`, `spacial`(`Radix`) | `c[lo..hi]`; spacial `c[(x,y)..(x,y)]` / `[(x,y)..]` / `[(x,y)..:n]` | a **`for`-only iterator** (`Value::Iter`) over the raw KEY interval — **not a value** | fields.rs:688-717, :1228 (`D-key-1`); STDLIB.md:277-281 |
+| **Keyed range-slice iterator** | `sorted`, `index`, `spatial`(`Radix`), `trie` | `c[lo..hi]`; spatial `c[(x,y)..(x,y)]` / `[(x,y)..]` / `[(x,y)..:n]`; trie `c[pre..]` | a **`for`-only iterator** (`Value::Iter`) over the raw KEY interval — **not a value** | fields.rs:688-717, :1228 (`D-key-1`), :779 (trie); STDLIB.md:277-281 |
 
-`hash` has **point lookup only** (`h[key]`) — no order ⟹ no range slice. `spacial` is the
+`hash` has **point lookup only** (`h[key]`) — no order ⟹ no range slice. `spatial` is the
 **multi-axis (tuple-key, Morton) instance** of the keyed-range-slice family; nothing about slicing
-is spacial-specific except the tuple key and the Morton interval. This split is the doc's spine.
+is spatial-specific except the tuple key and the Morton interval. `trie` is the **single-`text`-key
+instance**, whose range is a PREFIX rather than a scalar interval (`parse_trie_slice`; a trie never
+reaches the generic scalar-range branch). This split is the doc's spine.
 
 ---
 
@@ -48,12 +50,18 @@ is spacial-specific except the tuple key and the Morton interval. This split is 
   (Col-Sorted)  sorted<T[k…]>                 red-black tree; KEY-ORDERED iteration + range slices.
   (Col-Index)   index<T[k…]>                  BOTH — a red-black tree AND a hash table over the same records
                                               (O(1) lookup AND ordered/range).  (DATABASE.md:704)
-  (Col-Spacial) spacial<T[a]> / [a,b] / [a,b,c]   1–3 coordinate axes (MAX_AXES=3), Morton/Z-order radix tree;
+  (Col-Spatial) spatial<T[a]> / [a,b] / [a,b,c]   1–3 coordinate axes (MAX_AXES=3), Morton/Z-order radix tree;
                                               the runtime Parts variant is `Radix`.  integer-not-null coord keys;
                                               negative coords via offset-binary (signed axes order like sorted).
+  (Col-Trie)    trie<T[k]>                    a radix tree over ONE `text` key field: exact lookup, KEY-ORDERED
+                                              iteration, and a PREFIX slice — the operation the kind exists for.
+                                              Shares `radix_tree` with `Radix` and nothing above it: `Radix` is
+                                              GEOMETRIC (Morton interleave, boxes, nearest) and none of that
+                                              means anything for a word, which is why `spatial` is not spelled
+                                              `radix` at the surface.
 ```
-*Anchors:* `Type::{Vector,Hash,Sorted,Index,Radix}` (src/data.rs); DATABASE.md:693,:704; spacial
-surface tests/scripts/48-spacial-construct-free.loft. **To decide when writing:** which formers
+*Anchors:* `Type::{Vector,Hash,Sorted,Index,Radix,Trie}` (src/data.rs); DATABASE.md:693,:704; spatial
+surface tests/scripts/48-spatial-construct-free.loft; trie `Parts::Trie` (database/mod.rs:194) + @PLN134. **To decide when writing:** which formers
 live here vs in types.md's former list (recommend: types.md gains the one-line formers; collections.md
 owns their *operations + order*).
 
@@ -62,9 +70,9 @@ owns their *operations + order*).
 ```
   (Col-Cons)    c: <kind><…> = []             empty-literal construction (all kinds).
   (Col-Insert)  c += [ rec, … ]               append/insert a record; keyed kinds place it by key.
-  (Col-Len)     c.len()                        element count; O(1) (verified O(1) for spacial).
+  (Col-Len)     c.len()                        element count; O(1) (verified O(1) for spatial).
 ```
-*Anchor:* tests/scripts/48-spacial-construct-free.loft (construct/append/len).
+*Anchor:* tests/scripts/48-spatial-construct-free.loft (construct/append/len).
 
 ### 1.2b Removal — `Col-Remove` (a vector RENUMBERS; a keyed kind does not)
 
@@ -74,7 +82,7 @@ owns their *operations + order*).
   (Col-RemoveDense) a VECTOR stays DENSE.  Removing index i shifts every later element down
                     one, so len decreases by 1 and every position after i is RENUMBERED.  There
                     are no holes and no tombstones: index j > i now names what was at j+1.
-  (Col-RemoveKeyed) a KEYED kind (hash / index / sorted / spacial) removes BY KEY, and every
+  (Col-RemoveKeyed) a KEYED kind (hash / index / sorted / spatial / trie) removes BY KEY, and every
                     other key stays reachable and unchanged — keys are not positions, so nothing
                     is renumbered.
 ```
@@ -105,9 +113,10 @@ every read would then pay for the check.
                   hash    → UNSORTED bucket walk (no key order) — the C-Order decided edge
                   sorted  → key order
                   index   → key order (its tree side)
-                  spacial → Morton / Z-order
+                  spatial → Morton / Z-order
+                  trie    → key order (lexicographic over the text key)
 ```
-*Anchor:* concurrency.md `C-Order` (hash); STDLIB.md/DATABASE.md (spacial Morton). **This is the
+*Anchor:* concurrency.md `C-Order` (hash); STDLIB.md/DATABASE.md (spatial Morton). **This is the
 divergence-prone rule** (interp store-walk vs native emitted loop) — the whole reason the area needs
 pinning. `C-Order` already states the hash edge; `Col-Order` generalises it to every kind.
 
@@ -130,12 +139,12 @@ independent of the source — cross-link heap.md H-Alloc / iteration.md I-Comp).
   (Slice-KeyedIter)  a keyed range slice c[lo..hi] is a `for`-ONLY ITERATOR (Value::Iter) over the raw
                      KEY interval, in the collection's key order.  It is NOT a value: `x = idx[lo..hi]`
                      in value position is a STATIC ERROR ("a keyed range slice is a for-loop iterator,
-                     not a value — iterate it").  (Applies to sorted / index / spacial.)
+                     not a value — iterate it").  (Applies to sorted / index / spatial / trie.)
 ```
 *Anchors:* fields.rs:1228,:1237 (`D-key-1`); RELEASE.md (the D-key-1 crash-fix, value-position reject);
 STDLIB.md:281. sorted-slice design: [../plans/38-sorted-slice/](../plans/38-sorted-slice/).
 
-### 1.7 Spacial slices — `Slice-Spacial` (the Morton specialization of `Slice-KeyedIter`)
+### 1.7 Spatial slices — `Slice-Spatial` (the Morton specialization of `Slice-KeyedIter`)
 
 ```
   (Slice-Box)    xs[(x1,y1)..(x2,y2)]   iterate records whose MORTON code is in [code(x1,y1), code(x2,y2)],
@@ -144,16 +153,16 @@ STDLIB.md:281. sorted-slice design: [../plans/38-sorted-slice/](../plans/38-sort
                                         an exact shape.  (INV-Superset — a deliberate contract, not a bug.)
   (Slice-Open)   xs[(x,y)..]            open outward walk from a point; the caller `break`s to stop.
   (Slice-Cap)    xs[(x,y)..:n]          same, capped at n records (k nearest-in-Morton).
-                 1–3 axes; lowers to n_spacial_range(...); the same scratch path as iteration.
+                 1–3 axes; lowers to n_spatial_range(...); the same scratch path as iteration.
 ```
-*Anchors:* fields.rs:688-696,:1098-1245 (parse_spacial_slice); default/01_code.loft:1157
-(`spacial_range`); STDLIB.md:272-281; DATABASE.md:668-674; radix_db.rs:238 (superset comment);
-tests/scripts/48b-spacial-slice.loft (the asserted box/open/cap slices). CAVEATS.md:593 (spacial op set).
+*Anchors:* fields.rs:688-696,:1558 (parse_spatial_slice); default/01_code.loft:1176
+(`spatial_range`); STDLIB.md:272-281; DATABASE.md:668-674; radix_db.rs:238 (superset comment);
+tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS.md:593 (spatial op set).
 
 ### 1.8 Storage & whole-value copy — `Col-Store` / `Col-Copy` (cross-link [heap.md](heap.md))
 
 ```
-  (Col-Store)   a collection is store-backed (Parts::{Vector,Hash,Sorted,Radix}); index = tree+hash over
+  (Col-Store)   a collection is store-backed (Parts::{Vector,Hash,Sorted,Radix,Trie}); index = tree+hash over
                 one record set; addressed by DbRef.  (Layout/format ⟶ layout.md; steps ⟶ heap.md.)
   (Col-Copy)    a keyed whole-value bind COPIES (g = h; g += … leaves len(h)) — heap.md H-Copy for keyed.
 ```
@@ -165,10 +174,10 @@ tests/scripts/48b-spacial-slice.loft (the asserted box/open/cap slices). CAVEATS
 
 - **INV-Order** — per-kind iteration order (`Col-Order`) is IDENTICAL on `--interpret` and `--native`.
   The load-bearing one: interp walks a store index, native emits a Rust loop, so a reordering in
-  either is a definitional error (the `C-Order` precedent, generalised to every kind incl. spacial Morton).
+  either is a definitional error (the `C-Order` precedent, generalised to every kind incl. spatial Morton).
 - **INV-KeyedSlice** — a keyed range slice is a `for`-only iterator, never a value (`D-key-1`); a
   value-position use is rejected identically across `--dump`/`--interpret`/`--native` (driver-agreement).
-- **INV-Superset** — a spacial box slice yields a SUPERSET of the geometric box (caller filters). The
+- **INV-Superset** — a spatial box slice yields a SUPERSET of the geometric box (caller filters). The
   honest contract; both backends return the same superset (same Morton interval), so a divergence in
   membership or order is the error.
 - **INV-LookupNull** — a keyed point lookup is `τ?` (absent ⟹ null); enforced by `(N-Store)` like any
@@ -183,18 +192,18 @@ tests/scripts/48b-spacial-slice.loft (the asserted box/open/cap slices). CAVEATS
   clean diagnostic, RELEASE.md 2026-07-04); formalized as `INV-KeyedSlice`, not an open deviation.
 - **INV-Superset** — a deliberate design decision (raw Morton interval), not a deviation; record as an edge
   with a DESIGN_DECISIONS cross-link.
-- **Candidate OPEN (verify):** the per-query scratch-vector allocation for spacial slices (CAVEATS.md notes
+- **Candidate OPEN (verify):** the per-query scratch-vector allocation for spatial slices (CAVEATS.md notes
   it as the next efficiency lever) — a performance note, likely NOT a formal deviation.
 
 ## 4. Conformance / oracle plan (how each rule gets pinned — [VERIFICATION.md](VERIFICATION.md))
 
 Existing coverage: oracle `16` (keyed copy / hash behaviour). To add, as a `collections.md` block in
 VERIFICATION.md (one ☐ row per rule, both-backends + leak + driver-agreement):
-- `Col-Order` per kind (esp. spacial Morton order + hash unsorted vs sorted key-order).
+- `Col-Order` per kind (esp. spatial Morton order + hash unsorted vs sorted key-order).
 - `Slice-Value` clamp + freshness (vector + text).
 - `Slice-KeyedIter` value-position REJECT (driver-agreement) + iterate-in-key-order.
 - `Slice-Box/Open/Cap` — the superset membership + `:n` cap + open-walk `break` (extend
-  tests/scripts/48b-spacial-slice.loft → an oracle program).
+  tests/scripts/48b-spatial-slice.loft → an oracle program).
 - `Col-Lookup` nullable (absent key ⟹ null, discharge required).
 
 ## 5. Open questions / to-verify when writing the rules
@@ -206,8 +215,8 @@ VERIFICATION.md (one ☐ row per rule, both-backends + leak + driver-agreement):
 3. **sorted vs index slice** — do they differ observably (index has both tree+hash)? Confirm both expose
    the same `Slice-KeyedIter` iterator; is a `hash` range slice a clean reject (no order)?
 4. **`:n` cap semantics** — exact count guarantee for `[(x,y)..:n]` (≤ n? exactly n if available?) and
-   whether the cap interacts with the superset (n *candidates* vs n *in-box*). Read n_spacial_range.
-5. **Both-backends spacial order** — is Morton order proven identical interp-vs-native? (48b runs both +
+   whether the cap interacts with the superset (n *candidates* vs n *in-box*). Read n_spatial_range.
+5. **Both-backends spatial order** — is Morton order proven identical interp-vs-native? (48b runs both +
    leak; confirm it also pins ORDER, not just set membership.)
 6. **Scope boundary** — does this doc also state `for x in c` (iteration.md already owns `I-For`; here just
    the per-kind ORDER as `Col-Order`, cross-linking rather than restating)?
@@ -219,5 +228,5 @@ VERIFICATION.md (one ☐ row per rule, both-backends + leak + driver-agreement):
 - [concurrency.md](concurrency.md) — `C-Order`, the hash edge this generalises.
 - [heap.md](heap.md) — store steps (`H-Alloc` for fresh slices, `H-Copy` keyed), [layout.md](layout.md) — byte layout.
 - [matching.md § PEG patterns](matching.md) — @PLN35 reuses the slice / `⟨i, src⟩` cursor surface.
-- Code: `src/parser/fields.rs` (the shared index/slice dispatch, `parse_spacial_slice`, `D-key-1`);
+- Code: `src/parser/fields.rs` (the shared index/slice dispatch, `parse_spatial_slice`, `D-key-1`);
   DATABASE.md / STDLIB.md (the user-facing surface); [../plans/38-sorted-slice/](../plans/38-sorted-slice/).

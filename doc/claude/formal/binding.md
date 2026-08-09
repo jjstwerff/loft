@@ -71,12 +71,22 @@ perform on a value. There is no `&` operator.
   (B-Ref-AnnotationOnly)  ⚑ VITAL.  `&` occurs ONLY as a reference-type annotation — in a
                      type (`&τ`) or at the bind site that gives a variable that type.  A
                      unary `&` in ANY other position is a PARSE ERROR: an operand
-                     (`x + &y`), a collection element (`[&a]`), a call/format argument
-                     (`f(&a)` passes a value, not a `&`-prefixed expression), a condition
-                     (`if &a > 0`), a bare statement (`&a;`), an assignment TARGET
+                     (`x + &y`, and `1 + &y` — the position does not matter), a collection
+                     element (`[&a]`), a call/format argument (`f(&a)` passes a value, not
+                     a `&`-prefixed expression), a condition (`if &a > 0`), a bare
+                     statement (`&a;`), a `return &a;`, a COMPOUND-assignment right-hand
+                     side (`b += &a` — it mutates `b`, it does not give `b` a reference
+                     type, so there is no binding to annotate), an assignment TARGET
                      (`&x = 3`).  There is NO `&` operator; permitting `&` as a
                      value-level prefix is precisely what lets the reference leak into
                      contexts that then mis-elaborate.
+  (B-Ref-StoredRef)  the ONE position outside a `&τ` binding where a prefix `&` is legal
+                     is a struct-literal field whose declared type is `reference<τ>`:
+                     `Linked { link: &pool[i] }`.  That is a DIFFERENT type former from
+                     `&τ` — `Type::Reference`, a stored cross-store pointer, versus
+                     `Type::RefVar`, the stack link the rest of this doc is about — and
+                     the field's type is what admits the `&`, so a `&` in a field of any
+                     other type is still B-Ref-AnnotationOnly's parse error.
   (B-Ref-NotTarget)  (instance of B-Ref-AnnotationOnly) `&x = 3` is an error — a type
                      annotation lives at a binding, not on an lvalue being written.
 ```
@@ -84,7 +94,9 @@ perform on a value. There is no `&` operator.
 **In words.** You make a reference by writing `&` at a binding — `b = &a`, or a
 `&integer` parameter — which gives `b` a link to `a`; it does *not* read a value out of
 `a`. Because `&` is a type annotation and not an operator, it is allowed *only* there:
-writing `&` anywhere else (`1 + &a`, `[&a]`, `f(&a)`, `&x = 3`, …) is a parse error.
+writing `&` anywhere else (`1 + &a`, `[&a]`, `f(&a)`, `&x = 3`, …) is a parse error. The
+single other place the token is legal is a field declared `reference<τ>`, where it is a
+different type former doing a different job (`B-Ref-StoredRef`).
 
 ### Using a `&τ` variable — the link is carried by the type
 
@@ -243,10 +255,13 @@ exempt by construction, not by a special case: a struct literal writes through a
 different lowering path (`Value::Insert`) that the reassignment guard never sees, so
 "write-once" really means "unchecked during construction, checked on every write after."
 
-### Pattern captures (@PLN35, SPEC-FIRST · planned, NOT yet implemented)
+### Pattern captures (@PLN35, SHIPPED)
 
-> **@PLN35 · SPEC-FIRST** — the target for how PEG match-pattern captures alias the subject
-> ([matching.md § Rules — PEG patterns](matching.md)), written ahead of the code. Design:
+> **@PLN35 · SHIPPED.** These two rules were written spec-first, ahead of the code; the code
+> landed with phases 1–7 + PC1–PC5 ([matching.md § Rules — PEG patterns](matching.md)) and obeys
+> both — verified on both backends: a `[first, ..rest]` capture of a struct element writes
+> THROUGH to the subject (`P-Cap-View`), and mutating the captured `rest` leaves the subject
+> untouched (`P-Cap-Fresh`). Design:
 > [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
 
 ```
@@ -270,7 +285,50 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 ## Deviations
 
 OPEN: **0**. B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
-opened and closed 2026-08-05). The @PLN87 ladder (L1–L6), the model + doc reconciliation (PR#436), the residual
+opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
+only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-10 — CLOSED (2026-08-09) — the ⚑ VITAL rule was enforced for HALF of each
+> expression.** The rule named `x + &y` as a parse error and grammar.md's D-gram-4
+> declared the positional rule "total". Measured, four shapes compiled on both backends:
+>
+> ```loft
+> b = 1 + &a;                         // an operand — the rule's OWN named example
+> b += &a;                            // a compound-assignment RHS: not a bind site
+> fn g(a: integer) -> integer { 1 + &a }   // a block-final tail value
+> s = S { x: &a };                    // a struct-literal field of a NON-reference type
+> ```
+>
+> **The mechanism, and why the sweep had to be over positions.** The guard
+> (`operators.rs::parse_operators`, deepest precedence level) decided by peeking the token
+> AFTER the `&`-operand: a `;` or `}` there meant "the `&` was the whole RHS". That proves
+> nothing FOLLOWS the `&` — never that nothing PRECEDED it — so every shape where the `&`
+> is the LAST operand of a larger expression passed. The one sub-expression test,
+> `pln87_amp_in_subexpr_is_error`, puts the `&` at the HEAD (`b = &a + 1`), which is the
+> single sub-expression position that peek did catch. One cell, one direction.
+>
+> **The fix supplies the other half.** The first primary of a binding RHS consumes an
+> `amp_head` marker; a `&` reached after any operator, or inside a nested construct, sees
+> it gone. The accept condition is now `terminates AND at head` — the pair is total. The
+> head is opened in exactly three places: a plain `=` RHS (`parse_assign_op`), a statement
+> start (so a bare `&a;` still reaches D-bind-7's own message), and a `reference<τ>` field
+> value (`B-Ref-StoredRef`). Emitted IR + native Rust are byte-identical over the
+> eight-shape accept corpus.
+>
+> **What the position sweep still missed, and the axis it held fixed.** The first fix
+> rejected `S { x: &a }` for every field type — and broke `store_compact_b2.loft`, where
+> `Linked { link: &pool[i] }` fills a `reference<Leaf>` field. Legality there is decided by
+> the field's TYPE, not by the `&`'s position, and a sweep that varies position while
+> pinning the type reads as complete and is not. That is `B-Ref-StoredRef`, previously
+> unstated anywhere in this doc.
+>
+> A pre-freeze error-add (`manifest::CONTRACT_VERSION == 0`; [COMPATIBILITY.md § The error
+> surface is one-directional](../COMPATIBILITY.md)) — every program it rejects was already
+> silently dropping the `&` and binding a copy. Lock-ins: `pln87_amp_as_tail_operand_*`,
+> `pln87_amp_as_compound_assign_rhs_*`, `pln87_amp_in_block_final_expression_*`,
+> `pln87_amp_in_struct_literal_field_*`, `pln87_amp_in_return_statement_*` in
+> `tests/parse_errors.rs`, with the ACCEPT half — every legal `&` position, each asserting
+> the write reaches the source — in `tests/scripts/150-amp-head-position.loft`. The @PLN87 ladder (L1–L6), the model + doc reconciliation (PR#436), the residual
 D-bind-7 and D-bind-8 (closed below) are all verified; @PLN40's Const-Bind / Const-Value /
 Const-ScalarCollapse / Const-Compose are shipped and enforced for struct fields, parameters,
 and locals — and, since @PLN102 K1, for **enum-variant fields** too (their one former residual

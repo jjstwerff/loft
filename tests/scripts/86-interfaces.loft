@@ -109,7 +109,7 @@ fn test_bounded_for_loop_struct() {
   ];
   assert(if_count_valid(if_loop_data) == 2, "bounded for-loop count");
 }
-// This crashes with use-after-free (P136). Uncomment when fixed.
+// (P136 — the use-after-free that kept this commented out — is fixed; the test is live.)
 
 // ── Self-returning dispatch on a USER struct (the `__retbuf` stub cells) ──
 // A concrete method returning Reference / Vector / struct-Enum carries the

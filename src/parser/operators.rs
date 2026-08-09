@@ -569,6 +569,12 @@ impl Parser {
     ) -> Type {
         let mut ls = Vec::new();
         if precedence >= OPERATORS.len() {
+            // @PLN87 B-Ref-AnnotationOnly — the FIRST primary of a binding RHS (or of a
+            // statement) consumes the head marker; every operand after it sees `false`.
+            // Taken before the `&` test so a non-`&` head (`1` in `1 + &a`, the `(` in
+            // `(&a)`, a call receiver) consumes it too — that is what makes the `&`
+            // arriving later a sub-expression use rather than the whole RHS.
+            let at_head = std::mem::take(&mut self.amp_head);
             // @PLN87 — a PREFIX `&<lvalue>` is a reference-to, distinct from the binary
             // `&` (bitwise-and "Land"). The binary form only ever sits BETWEEN operands,
             // so a `&` seen here at an operand START is the prefix: it flags the `&`-ness
@@ -610,7 +616,12 @@ impl Parser {
                              not an assignment target; drop the `&` (the binding is already linked)"
                         );
                         self.amp_pending = false;
-                    } else if !next_terminates {
+                    } else if !next_terminates || !at_head {
+                        // `next_terminates` alone accepts the LAST operand of any
+                        // expression (`b = 1 + &a;`, `b += &a;`, `S { x: &a }`, a
+                        // block-final `{ 1 + &a }`) — it only proves nothing FOLLOWS
+                        // the `&`, not that nothing PRECEDED it.  `at_head` supplies
+                        // the other half, so the pair is total.
                         diagnostic!(
                             self.lexer,
                             Level::Error,

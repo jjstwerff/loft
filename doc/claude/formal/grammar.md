@@ -113,9 +113,13 @@ a / b?          // null   ← reading `?` as "loose like ??" predicts 0
   (G-Amp-Prefix)  a PREFIX `&` is the reference-type annotation, parsed in the primary
                   expression — NOT a unary operator.  `&a` at a binding makes the bound
                   variable a link (see [binding.md](binding.md)); a prefix `&` anywhere
-                  else is a parse error (binding.md B-Ref-AnnotationOnly).
+                  else is a parse error (binding.md B-Ref-AnnotationOnly), with the one
+                  exception that a `reference<τ>` FIELD takes it (B-Ref-StoredRef).
   (G-Amp-Disambig) the two are told apart by POSITION: a `&` with a left operand is
-                  infix bitwise-and; a leading `&` is the reference annotation.
+                  infix bitwise-and; a leading `&` is the reference annotation.  "Leading"
+                  means leading the whole BINDING, not merely leading an operand: in
+                  `b = 1 + &a` the `&` leads an operand and is still rejected, because a
+                  prefix `&` is legal only where it annotates a binding.
 ```
 
 **In words.** `&` does double duty. Between two values (`a & b`) it is bitwise-and, an
@@ -123,10 +127,11 @@ ordinary operator at level 6 (looser than `+`, so `1 + 2 & 3` is `(1+2) & 3`). A
 *front* of a binding (`b = &a`) it is the reference annotation from `binding.md`, and it
 is the only place a leading `&` is allowed. The parser disambiguates purely by position.
 
-### Pattern-operator precedence (@PLN35, SPEC-FIRST · planned, NOT yet implemented)
+### Pattern-operator precedence (@PLN35, SHIPPED)
 
-> **@PLN35 · SPEC-FIRST** — the target for the PEG pattern grammar
-> ([matching.md § Rules — PEG patterns](matching.md)), written ahead of the code. The pattern
+> **@PLN35 · SHIPPED.** This ladder was written spec-first, ahead of the code; the code landed
+> with phases 1–7 + PC1–PC5 ([matching.md § Rules — PEG patterns](matching.md)) and parses these
+> groupings — verified both backends. The pattern
 > *productions* live in [LOFT.md § Summary of grammar](../LOFT.md); this pins their operator
 > precedence, the one fact that lives only in the parser. Design:
 > [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
@@ -187,10 +192,17 @@ predicted — they leave formal/ rather than being driven to zero).
 > C82](../DESIGN_DECISIONS.md#c82--lofts-surface-is-deliberately-not-context-free).
 
 > **D-gram-4 (RESOLVED — decided edge) — `&` stays one token, disambiguated by position.**
-> Infix `&` is bitwise-and; a *leading* `&` is the reference annotation. A1 (binding.md
-> D-bind-7) made prefix `&` a parse error in every non-binding position, so the positional rule
-> is now **total** — like Rust, one `&` token is kept. Decided → [DESIGN_DECISIONS.md
+> Infix `&` is bitwise-and; a *leading* `&` is the reference annotation. Prefix `&` is a parse
+> error in every non-binding position, so the positional rule is **total** — like Rust, one `&`
+> token is kept. Decided → [DESIGN_DECISIONS.md
 > C81](../DESIGN_DECISIONS.md#c81---stays-one-token-disambiguated-by-position-bitwise-and-vs-reference).
+>
+> "Total" was claimed here from 2026-07-24 on the strength of A1 (binding.md D-bind-7), which
+> closed the bare-statement position only. It became true on 2026-08-09 with binding.md's
+> **D-bind-10**: until then a `&` that was the LAST operand of an expression (`b = 1 + &a`,
+> `b += &a`, a block-final `1 + &a`, `S { x: &a }`) compiled, because the guard peeked only the
+> token AFTER the operand — which proves nothing precedes the `&`. The claim outran the
+> enforcement by one half of the question.
 
 ---
 
