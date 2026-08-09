@@ -108,6 +108,12 @@ pub fn set_op_names(build: impl FnOnce() -> Vec<&'static str>) {
 }
 
 /// The name of opcode `op`, or `""` when no table was published.
+///
+/// Gated to match its only caller, the `cfg(unix)` signal handler.  The table is still
+/// PUBLISHED on every target — `set_op_names` runs from `execute_argv` unconditionally —
+/// but nothing reads it where there is no handler to read it from, so an ungated
+/// definition is dead code on Windows and warns there while building clean on Linux.
+#[cfg(unix)]
 fn op_name_of(op: u8) -> &'static str {
     OP_NAMES
         .get()
