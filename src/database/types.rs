@@ -2348,7 +2348,11 @@ impl Stores {
     fn render_layout_parts(&self, kt: u16) -> String {
         let name = |k: u16| self.layout_type_name(k);
         match &self.types[kt as usize].parts {
-            Parts::Trie(e, k) => format!("trie<{}[{k}]>", name(*e)),
+            Parts::Trie(e, k) => format!(
+                "trie<{}[{k}]>{}",
+                name(*e),
+                crate::placement::tag(crate::placement::TRIE)
+            ),
             Parts::Base => "base".to_string(),
             Parts::Struct(fields) => {
                 let inner: Vec<String> = fields
@@ -2390,23 +2394,26 @@ impl Stores {
             }
             Parts::Hash(e, keys) => {
                 format!(
-                    "hash<{}>(keys={keys:?},elem_size={})",
+                    "hash<{}>(keys={keys:?},elem_size={}{})",
                     name(*e),
-                    self.size(*e)
+                    self.size(*e),
+                    crate::placement::tag(crate::placement::HASH)
                 )
             }
             Parts::Index(e, keys, left) => {
                 format!(
-                    "index<{}>(keys={keys:?},left={left},elem_size={})",
+                    "index<{}>(keys={keys:?},left={left},elem_size={}{})",
                     name(*e),
-                    self.size(*e)
+                    self.size(*e),
+                    crate::placement::tag(crate::placement::INDEX)
                 )
             }
             Parts::Radix(e, keys) => {
                 format!(
-                    "spatial<{}>(keys={keys:?},elem_size={})",
+                    "spatial<{}>(keys={keys:?},elem_size={}{})",
                     name(*e),
-                    self.size(*e)
+                    self.size(*e),
+                    crate::placement::tag(crate::placement::RADIX)
                 )
             }
             Parts::DbRef => "dbref12".to_string(),

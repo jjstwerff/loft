@@ -21,9 +21,16 @@ use std::cmp::Ordering;
 // so a reader re-derives the same bucket for every key (see
 // `keys::seeded_hasher`).  `elms = (room - 2) * 2` — two words (header +
 // seed) are reserved before the bucket array.
-const LEN_FLD: u32 = 4;
-const SEED_FLD: u32 = 8;
-const BUCKET0: u32 = 16;
+// These four ARE the on-disk bucket contract: a reader that computes any of them
+// differently looks in the wrong place for an entry a writer put somewhere. They are
+// public so `tests/layout_golden.rs::placement_contract_is_pinned` can pin them —
+// changing one without bumping `crate::placement::HASH` would let an older store be
+// misread instead of refused. See [`crate::placement`].
+pub const LEN_FLD: u32 = 4;
+pub const SEED_FLD: u32 = 8;
+pub const BUCKET0: u32 = 16;
+/// Bytes per bucket slot — a `u32` record number, 2 to a word.
+pub const SLOT_BYTES: u32 = 4;
 
 /// Read the per-hash seed stored in bucket record `claim`.
 fn read_seed(store: &Store, claim: u32) -> u64 {
@@ -149,7 +156,7 @@ fn rehash_into(hash: &DbRef, from: u32, into: u32, stores: &mut [Store], keys: &
         pos: 0,
     };
     for i in 0..elms {
-        let v = keys::store(hash, stores).get_u32_raw(from, BUCKET0 + 4 * i);
+        let v = keys::store(hash, stores).get_u32_raw(from, BUCKET0 + SLOT_BYTES * i);
         if v == 0 {
             continue;
         }
@@ -172,7 +179,7 @@ fn hash_free_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32
     let hash_val = keys::hash(rec, stores, keys, seed);
     let mut index = (hash_val % u64::from(elms)) as u32;
     for _ in 0..elms {
-        if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * 4) == 0 {
+        if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES) == 0 {
             break;
         }
         index += 1;
@@ -180,7 +187,7 @@ fn hash_free_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32
             index = 0;
         }
     }
-    BUCKET0 + index * 4
+    BUCKET0 + index * SLOT_BYTES
 }
 
 /// Return the 0-based slot index in `claim` that currently holds `rec.rec`.
@@ -191,7 +198,7 @@ fn hash_rec_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32 
     let hash_val = keys::hash(rec, stores, keys, seed);
     let mut index = (hash_val % u64::from(elms)) as u32;
     for _ in 0..elms {
-        if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * 4) == rec.rec {
+        if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES) == rec.rec {
             break;
         }
         index += 1;
@@ -222,7 +229,7 @@ pub fn find(hash_ref: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -
     let seed = read_seed(store, claim);
     let hash_val = keys::key_hash(key, seed);
     let mut index = (hash_val % u64::from(elms)) as u32;
-    let mut rec_pos = store.get_u32_raw(claim, BUCKET0 + index * 4);
+    let mut rec_pos = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
     // @PLN135 arc B — a probe asks only *is this the key*, about the SAME key every
     // time, so the `(Content, type_nr)` match belongs outside the loop.  `fast_key`
     // resolves the field offset and the value once; the loop then reads the field
@@ -246,7 +253,7 @@ pub fn find(hash_ref: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -
             if index >= elms {
                 index = 0;
             }
-            rec_pos = store.get_u32_raw(claim, BUCKET0 + index * 4);
+            rec_pos = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
         }
         return record;
     }
@@ -263,7 +270,7 @@ pub fn find(hash_ref: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -
             if index >= elms {
                 index = 0;
             }
-            rec_pos = store.get_u32_raw(claim, BUCKET0 + index * 4);
+            rec_pos = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
             continue 'Record;
         }
         break;
@@ -285,13 +292,13 @@ pub fn remove(hash_ref: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key])
     let seed = read_seed(keys::store(hash_ref, stores), claim);
     // Find the slot holding rec and zero it (create the hole).
     let mut hole = hash_rec_pos(claim, rec, stores, keys);
-    keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + hole * 4, 0);
+    keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + hole * SLOT_BYTES, 0);
     // Walk forward from hole+1 and pull each element back if its probe distance
     // to the hole is shorter than its probe distance to its current slot.
     // Stop at the first empty slot (all probe chains end at one).
     let mut idx = (hole + 1) % elms;
     for _ in 0..elms {
-        let val = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + idx * 4);
+        let val = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + idx * SLOT_BYTES);
         if val == 0 {
             break;
         }
@@ -305,8 +312,8 @@ pub fn remove(hash_ref: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key])
         let d_hole = (hole + elms - ideal) % elms;
         let d_idx = (idx + elms - ideal) % elms;
         if d_hole < d_idx {
-            keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + hole * 4, val);
-            keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + idx * 4, 0);
+            keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + hole * SLOT_BYTES, val);
+            keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + idx * SLOT_BYTES, 0);
             hole = idx;
         }
         idx = (idx + 1) % elms;
@@ -337,7 +344,7 @@ pub fn count(hash_ref: &DbRef, stores: &[Store]) -> u32 {
     let elms = (room - 2) * 2;
     let mut total: u32 = 0;
     for i in 0..elms {
-        if keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * 4) != 0 {
+        if keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES) != 0 {
             total += 1;
         }
     }
@@ -385,7 +392,7 @@ pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
     let elms = (room - 2) * 2;
     let mut out = Vec::new();
     for i in 0..elms {
-        let rec = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * 4);
+        let rec = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES);
         if rec != 0 {
             out.push(rec);
         }
@@ -459,7 +466,7 @@ pub fn validate(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) {
     };
     let mut l = 0;
     for i in 0..elms {
-        let rec = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * 4);
+        let rec = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES);
         if rec != 0 {
             record.rec = rec;
             record.pos = 8;
