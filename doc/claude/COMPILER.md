@@ -214,6 +214,23 @@ Every source file is parsed **twice**:
 
 The two-pass approach allows forward references — a struct or function can be used before it is defined.
 
+**Pass 1 erroring means pass 2 never runs, so a `!first_pass` gate is a REACHABILITY
+decision, not just a timing one.**  Every driver (`parse`, `parse_str`, `parse_snippet`)
+returns as soon as pass 1 reaches `Level::Error`; `reached_second_pass()` exists to tell a
+caller that happened.  A check gated to pass 2 is therefore silent for every program whose
+pass 1 fails — and that is exactly the population that most needs it, because a pass-1 error
+is often the CONSEQUENCE of the thing the pass-2 check would have named.  loft#825 is the
+worked example: the loop-variable type conflict ran on pass 2, so a body error caused by the
+stale loop-variable type won on pass 1 and the user was told to rename a variable that was
+not the problem, with a cure that reproduced the error under each new name.
+
+When you gate a diagnostic, ask which pass its TRIGGER can fire on, not only which pass has
+the information.  Where both types (or both facts) it compares are already resolved on pass
+1, run it on both: pass 1 can then only stay silent where pass 2 still speaks — it cannot
+contradict it, and a pass-1 Error cannot double up, because it skips pass 2.  Where the fact
+genuinely does not exist until pass 2 (layouts, `Span`s, monomorphs), keep the gate; see
+[§ Reading a verdict off the IR](#reading-a-verdict-off-the-ir--read-the-type-not-the-shape).
+
 Both of those run **per file**, at the end of each `parse_file`, and each sweeps only the
 definitions that file added.  A `use` suspends the current file to parse the dependency to
 completion, so a module can be laid out while a type it names is still an unresolved stub
@@ -584,6 +601,24 @@ Before emitting a binary operation or assignment, the parser checks if the actua
 1. **`convert`** — implicit, lossless conversion (e.g. widening an integer range, converting null, unwrapping a `RefVar`). Looks for `OpConv*` operators.
 2. **`cast`** — explicit `as` conversion (e.g. text to enum, int to enum). Looks for `OpCast*` operators.
 3. **`can_convert`** — pure check used for error reporting without code modification.
+
+`can_convert` must accept everything `convert` accepts, including the pairs `convert`
+accepts by emitting NOTHING.  It is not `convert`'s subset — it is `validate_convert`'s
+only input, so a pair the two disagree on becomes a refusal with no cause behind it.  A
+bare-collection parameter (`len(both: hash)`) takes any parameterised hash with no
+conversion op at all, so `convert` returning `false` there is normal and `can_convert` is
+what actually decides.  When you add an arm to one, add the mirror to the other: loft#824
+was a `RefVar` argument that `convert` peeled and `can_convert` did not, which turned
+`len(h)` on a `&hash<Row[id]>` into *"expected hash, got &hash<Row,["id"]>"*.
+
+**Dispatch reads THROUGH a `&`; layout reads the `&` itself.**  `Data::type_def_nr`
+answers two different questions and only one answer suits both.  For `RefVar(τ)` it says
+`reference` — correct for storage (the slot holds a pointer) and wrong for the receiver a
+method hangs off, since no type named `reference` declares one.  `Data::find_fn` peels the
+wrapper before it looks, so `&vector<T>` resolves `t_6vector_len` exactly as `vector<T>`
+does; `parse_field` has always peeled it for the method spelling.  The same peel feeds the
+type-directed `len` / `size` builtins in `Parser::call` (one `recv` binding, not one peel
+per arm).  See [LOFT.md § Methods and function calls](LOFT.md).
 
 ### String and format expression parsing — `parse_string`
 
