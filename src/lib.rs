@@ -140,6 +140,7 @@ unsafe extern "C" {
 pub mod diagnostics;
 pub mod api_diff;
 pub mod api_surface;
+pub mod arena;
 pub mod base64;
 pub mod build_phase;
 pub mod c_call;
