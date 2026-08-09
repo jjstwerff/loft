@@ -255,8 +255,9 @@ plan's own open questions had left implicit.
 - **PKG.7 — `loft.lock`** ([PACKAGES.md § Open work](../../PACKAGES.md)) — a lockfile pins a
   working set; complementary to a compat range, not a substitute (a lock protects an
   existing consumer, a range protects a *new* resolve).
-- **`registry-validation` CI** — the enforcement point, and currently the detector: it has
-  never had a green run, and `hex_terrain` is why.  Arc B gives it something to check.
+- **`registry-validation` CI** — the enforcement point, and the detector that motivated this
+  plan: it had never gone green, and `hex_terrain` was why.  It is green now (since
+  2026-07-26), so it enforces rather than accuses.  Arc B gives it something to check.
 - **@PLN78** (loft distribution / self-update) — a self-updating binary needs a stated
   compatibility promise before it can be trusted to update under a user's project.
 - **[Goal B](../../GOALS.md)** (release & legibility) and **[Goal F](../../GOALS.md)**

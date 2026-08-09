@@ -842,8 +842,10 @@ jobs:
       # binary (every `cross_mode!` matrix cell, the mixed-boundary suites) runs
       # the guarded code in a child the sweep can't observe (see
       # `tests/n3_parity.rs` — "the stack_align_guard sweep can't see spawned
-      # binaries").  So the reachable corpus IS the in-process interpreter test
-      # binaries; this sweep now runs all of them.  `expressions` /
+      # binaries").  So the reachable corpus is the in-process interpreter test
+      # binaries.  This sweep runs 16 of them, NOT all: `tests/data_structures.rs`
+      # spawns nothing and is still absent, so the list below is a working set to
+      # extend, not the whole reachable corpus.  `expressions` /
       # `expressions_auto_convert` (expression-eval eval-stack), `slots` /
       # `slot_v2_baseline` / `value_struct_alloc` (slot & value-struct layout),
       # `dispatch_reentry`, and `format` join `issues`/`wrap`/`strings`/

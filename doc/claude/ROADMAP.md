@@ -53,13 +53,17 @@ The methodology behind this file (categories, no-time-projections, features-need
 > 3. **Un-mute the nightlies** (effort S).  `ci.yml` and `registry-validation.yml` have **no failure
 >    notifier at all** — `ci.yml` carries the 3-OS matrix and the differential oracle (Goal D's whole
 >    Check) and went red 6 of 10 scheduled nights with nobody told.  Reuse `miri.yml`'s `notify` job.
->    Then the `graphics` one-liner (`libasound2-dev` + `pkg-config` on the runner).  A gate nobody
->    watches is not a gate — that is how `registry-validation` was mistaken for a DNS flake for days.
+>    (The `graphics` runner one-liner this item also called for is done — `registry-validation.yml`
+>    installs `libasound2-dev`.)  A gate nobody watches is not a gate — that is how
+>    `registry-validation` was mistaken for a DNS flake for days.
 >
-> Two standing gates are RED and neither is a flake: `main` fails the **differential oracle** (a
-> native/wasm accept-reject divergence on a match-arm tail call), and **`registry-validation` has
-> never had a green run** (`graphics` = missing `libasound2-dev` on the runner; `hex_terrain` = stale
-> plain-bind write-through vs C86 H-Copy).
+> **`registry-validation` is green** (since 2026-07-26; all 34 package legs pass, 08-07 through
+> 08-09 consecutively). Both faults that held it red are fixed — the workflow installs
+> `libasound2-dev` for `graphics`, and `hex_terrain` no longer fails on plain-bind write-through
+> vs C86 H-Copy. The **differential oracle is green too** — all 30 corpus programs agree across
+> interpret / native / wasm at `4c80e706` (2026-08-09), with both positive controls passing, so
+> the native/wasm accept-reject divergence on a match-arm tail call is no longer reproducing.
+> It runs `--ignored`, outside the per-PR set, so it needs re-running to stay current.
 >
 > Lower-friction picks that remain valid: **`loft search` CLI** (effort S — the
 > advertised-but-unimplemented registry discovery command; spec:
