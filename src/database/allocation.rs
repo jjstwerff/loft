@@ -3788,7 +3788,10 @@ impl Stores {
                 seen,
             ),
             // `spatial` stays refused: it shares the tree but keys on a bounding
-            // box, and no measurement says its rebuild is sound (@PLN134 item 3).
+            // box, which is a different WALK — a prefix is one contiguous run, a
+            // box over a Morton code is several disjoint ones — and no
+            // measurement says what its rebuild is worth. @PLN136 opens by taking
+            // one; flipping this arm is part of that plan, not ahead of it.
             Parts::Radix(..) => false,
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
                 .clone()
