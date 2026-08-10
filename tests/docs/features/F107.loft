@@ -1,15 +1,18 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @F107 — GENERATED from loft-lang/features#107 by tools/features/gen.loft — DO NOT EDIT.
-struct Row { id: integer, name: text, active: boolean }
+struct Row { id: integer, name: text?, active: boolean }
 
 fn main() {
-    row = Row { id: 7, name: "ada", active: true };
+    row = Row { id: 7, name: null, active: true };
 
     t = type_of(row);                       // the TYPE of row, not its value
     println("{t.name} — {t.size} bytes");
     for f in t.fields {
-        println("  {f.name}: {f.type_name} @{f.position}");
+        // ... and what THIS row holds there. `null` is not `""`.
+        v = field_value(row, f.position);
+        shown = if v.is_null { "null" } else if v.kind == TextKind { v.t } else { "{v.i}" };
+        println("  {f.name}: {f.type_name} @{f.position} = {shown}");
     }
 
     // The name can also arrive at runtime — from a config file or a catalogue.
