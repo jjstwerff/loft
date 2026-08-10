@@ -337,7 +337,8 @@ Tuple match on a local variable, parameter, or literal is independent and can la
   variables, literals, ranges, or-patterns, and `null`.
 - Support nested tuple patterns for tuple-valued elements.
 - Exhaustiveness: a compile error when no arm is total (catches all cases).
-- Guards work the same way as for enum and struct match.
+- Guards work the same way as for enum and struct match: the captures are assigned
+  before the guard runs, so a guard can test them.
 
 ---
 
@@ -431,13 +432,20 @@ the element position inside a tuple pattern.
   position is supported (reuses existing scalar or-pattern). A full arm-level or-pattern
   requires restructuring the arm-building loop (deferred to T1.10 if needed).
 - **Rest patterns**: `(first, ..)` — tuple arity is fixed and known at compile time;
-  no `..` rest needed (unlike vector/slice match).
-  ⚠ **A `..` in a tuple pattern HANGS THE PARSER** rather than being rejected —
-  [loft#832](https://github.com/loft-lang/loft/issues/832). Verified on `(first, ..)`,
-  `(.., last)`, `(a, b, ..)` and `(first, ...)`, each killed by the watchdog in
-  `phase=parse`, on both backends. Unsupported syntax must be refused with a diagnostic,
-  so this is a bug, not the "not needed" above. Workaround: write the arity out with `_`
-  for unbound positions.
+  no `..` rest needed (unlike vector/slice match). A `..` in any position is refused by
+  name, and the message says what to write instead: *"a `..` rest pattern is not
+  supported in a tuple pattern — a tuple's arity is fixed, so write every position, using
+  `_` for the ones you do not bind"*. A pattern listing MORE elements than the subject has
+  is refused the same way, naming the subject's arity.
+  (Until [loft#832](https://github.com/loft-lang/loft/issues/832) both shapes HUNG the
+  parser instead of being rejected.)
+- **Guards**: `(a, _, _) if a > 10 => …` — supported on every tuple and vector/slice arm.
+  The arm's captures are assigned before the guard runs, so the guard can read them; a
+  false guard falls through to the next arm, and a guarded arm never counts toward
+  exhaustiveness. The single exception is a **cursor** arm, where the pattern advances the
+  shared cursor as part of binding: a guard failing after that would leave the cursor
+  consumed and the next arm reading from the wrong position, so the combination is refused
+  and the test belongs in the arm body.
 - **Match on tuple-returning function calls**: `match foo() { ... }` — requires T1.8a
   (tuple function return convention). The subject must be a tuple variable or parameter.
 

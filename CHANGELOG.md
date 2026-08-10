@@ -26,6 +26,91 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A hash costs a third less memory, and fills faster
+
+`hash<T[key]>` used to give every entry a store record of its own — a header word each,
+plus the allocator's rounding. Its entries now sit packed at a fixed stride in an arena
+the collection owns:
+
+| 1M integer keys | before | after |
+|---|---|---|
+| filling it (pre-sized) | 330 ms | **258 ms** |
+| bytes per entry | 27.7 | **18.6** |
+| store records for 2000 entries | ~2000 | **9** |
+
+Lookups are unchanged. That is worth saying plainly, because the change was designed
+expecting them to get faster: a lookup reads two random places — the bucket, then the
+entry — and packing the entries moves where the second one lands without making it any
+less of a cache miss. Density pays when you read things near each other, and a hash
+lookup never does.
+
+Nothing about your code changes. A store file written by an older loft is **refused**
+rather than misread, because entries live somewhere new inside it; re-write it with this
+version to load it again.
+
+Building it also turned up an older bug worth naming, because it could lose data
+silently: after a `for` loop over a keyed collection finished, the little scratch it
+had used could be handed back twice, and the second time it might read whatever had
+since taken its place — occasionally deciding to throw away the whole store the
+collection lived in. A long-running program that iterated a collection and then kept
+using it could find it empty, with nothing reported. That is fixed.
+
+### Reading a binary file as text says so now
+
+`file(p).content()` returns **null** when there is no text to read — the file is
+missing, the path is a directory, or the bytes are not valid UTF-8:
+
+```loft
+write_bytes("logo.png", bytes);
+c = file("logo.png").content();     // null — those bytes are not text
+d = file("empty.txt").content();    // "" — that file really is empty
+```
+
+It used to answer `""` for all of them, which is the same thing an empty file
+says. That does not just lose information, it inverts tests: a check of the shape
+*"write bytes, read them back, compare"* **passed** on binary data, because both
+sides were `""`. Reading the file was never the problem — asking for it as text
+was. `read_bytes(path)` reads it exactly and round-trips with `write_bytes`.
+
+Add `?? ""` where the distinction does not matter. The stderr warning that names
+both readers now appears under `--native` too; it used to be printed only by the
+interpreter, so the compiled build read binary in silence.
+
+### A library whose native build cannot be used runs interpreted
+
+`use <lib>` compiles a library to a native cdylib behind your back, and the deal
+has always been that anything it cannot compile simply interprets. One case broke
+the deal: a cdylib that **built** but that this run could not dispatch through —
+linked against a different loft build, missing a system library, or replaced by
+another `loft` running at the same moment — took the program down at the first
+call to it, with the loft version of the function sitting right there in memory.
+
+It now checks that it can actually reach each function before routing calls to
+it, so anything it cannot reach interprets, with the same results. Running
+several `loft` programs at once is no longer a way to lose one of them. You get
+one line per library saying what fell back and that it costs only speed;
+`LOFT_REQUIRE_NATIVE=1` turns that into a refusal instead, and
+`LOFT_NO_NATIVE_LIBS=1` (now in `--help`) opts out of the whole mechanism.
+
+The same runs turned up a second way to lose a library: loft keeps only the
+eight most recent build artifacts per package, and it was counting the small
+C shim a `[c] shim = "…"` package builds beside them. That shim is built once
+and never again, so it was always the oldest file — and the first deleted, which
+took every `#c` function in the package with it. Housekeeping now only tidies up
+after itself.
+
+### `loft update` reads loft.toml, not just loft.lock
+
+Adding a dependency to `[dependencies]` and running `loft update` now locks it.
+Before, `update` walked the lockfile alone, so a package the manifest had gained
+was never looked up — and the summary counted lock entries, so it announced `all
+1 packages up-to-date` with two declared. The lock silently kept lagging the
+manifest, which is precisely what a lockfile exists to prevent.
+
+`loft update --check` fails when the lock does not describe the manifest, so CI
+catches the gap; a declared package that cannot be resolved at all is named
+rather than skipped; and with no lockfile yet, `loft update` writes one.
+
 ### Words, and the prefix you actually wanted
 
 `trie<T[k]>` keys a collection on one **text** field and answers what no other
@@ -532,6 +617,42 @@ Do keep in mind that a NUL survives a round trip through *bytes*, not through
 *characters*: `character`'s null is code point 0, so the two cannot be told apart.
 To preserve NULs, walk `for i in 0..size(s) { s.byte_at(i) }` and keep the data as
 `vector<u8>`.
+
+### A builder function can return the string it builds
+
+A type that builds itself from a format string could be reached by assigning to it
+or by passing it to a function, but not by returning it — which is the shape such a
+type most wants:
+
+```loft
+fn where_name(name: text) -> Query { "SELECT * FROM t WHERE name = {name}" }
+// was: expected Query, got text on return from block
+```
+
+Every builder had to route through a local first, for no reason an author could
+see. It now works from a block tail, from an explicit `return`, and from an `if`
+tail whose branches each build one. What a value can be built from is unchanged —
+a string written inside a `{…}` hole is still a value handed to the type, not a
+second thing being built.
+
+### A tuple pattern the compiler cannot accept now says so
+
+Writing a `..` rest in a tuple pattern used to stop the compiler dead:
+
+```loft
+match t { (first, ..) => "got {first}", _ => "no" }
+```
+
+No error, no output — the parser looped on that token forever. loft puts no time
+bound on itself by default, so an editor calling the compiler simply stopped
+answering. Tuple arity is fixed by design, so there is nothing a rest could stand
+for; the point is that unsupported syntax has to be *refused*, and this said
+nothing at all.
+
+Both that and a pattern with more elements than the tuple has (`(a, b, c, d)` on a
+three-element tuple) now come back as one error naming what to write instead. The
+arm loop also carries the rule it was missing — every arm must consume something —
+so a shape nobody has thought of yet ends in a message rather than a stuck build.
 
 ### A destructured name may be a stdlib name
 

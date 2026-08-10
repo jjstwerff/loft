@@ -87,6 +87,7 @@ fn spawn_root_server(port: u16) -> Option<Child> {
     None
 }
 
+// @speed 3.8
 #[test]
 fn text_and_texture_bridge_produces_real_pixels() {
     let Some(_chrome) = any_of(&["google-chrome", "chromium", "chromium-browser", "chrome"]) else {

@@ -159,6 +159,7 @@ fn assert_resumes(root: &Path, html: &Path, hidden: bool) {
 /// A `--html` asyncify program must RESUME past its first suspend and run to
 /// completion — both on a visible page (requestAnimationFrame) and on a
 /// hidden/headless page (the MessageChannel pump).  Guards issue #450.
+// @speed 0.8
 #[test]
 fn html_asyncify_program_resumes_to_completion() {
     if !any_chrome() {

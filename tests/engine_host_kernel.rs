@@ -148,6 +148,7 @@ fn s1_native_baseline_matches_interpreted() {
 /// asynchronous (dispatch-path poll vs the interp loop's op counter), so
 /// the legs assert step timelines + reload milestones, not raw vectors;
 /// the stderr file is the synchronization point for the REJECTED edits.
+// @speed 5.2
 #[test]
 fn s3_live_edit_under_native_baseline() {
     let native = run_s3_scenario(common::test_port(18097), false);
@@ -456,6 +457,7 @@ impl Drop for S5Hygiene {
     }
 }
 
+// @speed 1.8
 #[test]
 fn s5_native_swap_under_running_world() {
     if !loft_bin().exists() {
@@ -1046,6 +1048,7 @@ fn main() {{
 /// permanently.  Positive controls per leg: the mixed leg must really
 /// dispatch through the interpreter; the swap leg must really restore the
 /// world across a new process.
+// @speed 1.1
 #[test]
 fn s8_standing_four_state_differential() {
     if !loft_bin().exists() {
@@ -1225,6 +1228,7 @@ fn scopeguard_kill(stem: String) -> impl Drop {
 /// reload (offsets moved, identity did not), rebuild driven over the
 /// channel, swap — and a post-swap breakpoint hitting in the NEW build
 /// over the RESTORED world.
+// @speed 2.4
 #[test]
 fn s7_debugger_loop_end_to_end() {
     if !loft_bin().exists() {
@@ -1405,6 +1409,7 @@ fn main() {{
 /// cache keeps ONE binary per source stem, so the unique-content build
 /// evicts it and the requeued build is a second real rustc — both builds
 /// are measurement windows for (b).
+// @speed 2.3
 #[test]
 fn s4_background_rebuild_under_serving_kernel() {
     if !loft_bin().exists() {
@@ -1810,6 +1815,7 @@ fn main() {
 /// listener loop's per-turn `kernel_frame()` riding every turn (a no-op on
 /// native; exercised by the loop completing).  One self-stopping program per
 /// role, both backends.
+// @speed 1.3
 #[test]
 fn post_and_stop_in_both_roles() {
     if !loft_bin().exists() {
@@ -1886,6 +1892,7 @@ fn main() {{
 /// rebuild → swap_start → the new incarnation restores the world
 /// (`RESUMED`) → the old loop exits with `swap_retired() == true` → the
 /// resumed process runs on and exits by itself.
+// @speed 2.8
 #[test]
 fn s5_local_swap_hands_over() {
     if !loft_bin().exists() {

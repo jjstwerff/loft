@@ -126,3 +126,24 @@ test-group = 'html-wasm-serial'
 [[profile.ci.overrides]]
 filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3) + binary(wasm_debug_relay)'
 test-group = 'heavy-serial'
+
+# @PLN-speed — the profile `scripts/test_speed.py` runs under.
+#
+# It exists for ONE reason: a machine-readable per-test duration.  The human log
+# is a UI, and `find_problems.sh` legitimately runs with `--status-level fail`,
+# which prints no timing at all for a passing test — so the speed report reads
+# the JUnit report instead, where every case carries its `time`.
+#
+# Deliberately NOT the `ci` profile: `retries = 1` would time a flaky test's
+# SECOND attempt, and a retried test is the one case whose duration means
+# nothing.  Same slow-timeout as `default`, because a hung test should be killed
+# on the same terms whichever profile found it.
+[profile.speed]
+status-level       = "fail"
+final-status-level = "slow"
+slow-timeout       = { period = "300s", terminate-after = 1 }
+
+[profile.speed.junit]
+# Relative to `target/nextest/speed/`, like the `ci` profile above — keep it a
+# bare filename so the two cannot drift apart.
+path = "junit.xml"

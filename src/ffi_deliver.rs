@@ -223,12 +223,22 @@ impl Stores {
         use crate::database::{Iterated, LayoutNode};
         for node in desc.nodes.values_mut() {
             let replacement = match node {
+                // A hash's entries are arena SLOTS, so its scratch holds `(record, offset)`
+                // pairs; every other kind still materialises record numbers. The stride
+                // travels with the node so the reader does not have to know which kind it
+                // came from — see `LayoutNode::FlatArray`.
+                LayoutNode::Iterated(Iterated::Hash { elem, .. }) => LayoutNode::FlatArray {
+                    elem: *elem,
+                    stride: 8,
+                },
                 LayoutNode::Iterated(
-                    Iterated::Hash { elem, .. }
-                    | Iterated::Radix { elem, .. }
+                    Iterated::Radix { elem, .. }
                     | Iterated::Trie { elem, .. }
                     | Iterated::Index { elem, .. },
-                ) => LayoutNode::FlatArray { elem: *elem },
+                ) => LayoutNode::FlatArray {
+                    elem: *elem,
+                    stride: 4,
+                },
                 LayoutNode::Iterated(Iterated::Sorted { elem, .. }) => LayoutNode::Vector(*elem),
                 _ => continue,
             };

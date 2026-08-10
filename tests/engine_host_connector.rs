@@ -246,6 +246,7 @@ fn main() {{
 /// sync slots via its reliable `S:`-framed WS carrier, in the same seq
 /// space.  (The positive control — beacons DO arrive without the drop — is
 /// `connector_auto_path_end_to_end` above.)
+// @speed 7.6
 #[test]
 fn keyframes_survive_total_datagram_loss() {
     if !loft_bin().exists() {
@@ -466,6 +467,7 @@ fn s6_fnv64(s: &str) -> String {
 /// artifact of this tier (the interpreter-bundle tier: the script is the
 /// build, the wasm module is the substrate); the compiled-module variant
 /// arrives with the --html/kernel integration.
+// @speed 27.1
 #[test]
 fn s6_browser_swap_under_living_page() {
     if !loft_bin().exists() {
@@ -711,6 +713,7 @@ fn main() {{
 /// (headless chromium over the doc/pkg interpreter bundle); both must print
 /// the identical transcript.  Self-skips without chromium/node (the
 /// html_render harness pattern).
+// @speed 13.4
 #[test]
 fn browser_kernel_one_script_differential() {
     if !loft_bin().exists() {

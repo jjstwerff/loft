@@ -1074,7 +1074,35 @@ impl Output<'_> {
                         let vars = self.data.def(self.def_nr).variables();
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Tuple(_))
                     });
-                if text_local_clone {
+                // loft#840 — the destination is an owned tuple slot holding text
+                // (`(i64, String, u8)`) and the source is a tuple PARAMETER, which
+                // the native backend passes borrowed (`(i64, &str, u8)`).  Nothing
+                // else reconciles the two spellings, so the default emission
+                // `let mut var_x: (i64, String, u8) = var_t;` is rustc E0308 and the
+                // program does not build at all — while the interpreter, which has no
+                // owned/borrowed split, runs it.  Every failing shape funnels through
+                // here: a match temp, `local = t`, a struct field, and the synthetic
+                // return work var all reach `set_var` with this exact pair.
+                let tuple_arg_owned_elems = match variables.tp(var) {
+                    Type::Tuple(elems) if tuple_has_text_leaf(elems) => matches!(
+                        to_inner, Value::Var(v) if {
+                            let vars = self.data.def(self.def_nr).variables();
+                            vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Tuple(_))
+                        }
+                    )
+                    .then(|| elems.clone()),
+                    _ => None,
+                };
+                if let Some(elems) = tuple_arg_owned_elems {
+                    if let Value::Var(v) = to_inner {
+                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
+                        write!(
+                            w,
+                            "{}",
+                            owned_tuple_from_arg(&format!("var_{src_name}"), &elems)
+                        )?;
+                    }
+                } else if text_local_clone {
                     if let Value::Var(v) = to.unspan() {
                         let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
                         write!(w, "var_{src_name}.clone()")?;
@@ -1357,6 +1385,35 @@ fn tuple_has_text_leaf(elems: &[Type]) -> bool {
         }
     }
     false
+}
+
+/// Re-spell a tuple ARGUMENT element-wise so it fits an owned tuple slot.
+///
+/// A tuple's Rust element types depend on the context it sits in: `text` is
+/// `&str` in [`Context::Argument`] and `String` in [`Context::Variable`]
+/// (`rust_type`).  Every other element type spells the same either way, so the
+/// split is invisible until a tuple carrying text crosses from a parameter into
+/// an owned slot — a local, a match temp, a struct field, or a return buffer —
+/// and rustc rejects `(i64, &str, u8)` against `(i64, String, u8)` (loft#840).
+///
+/// `expr` is the Rust place holding the borrowed tuple (`var_t`, or a nested
+/// `var_t.0`); the result borrows each text leaf into a fresh `String` and
+/// passes every other leaf through untouched, so nothing is copied that the
+/// owned slot did not already require.
+fn owned_tuple_from_arg(expr: &str, elems: &[Type]) -> String {
+    let parts: Vec<String> = elems
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let field = format!("{expr}.{i}");
+            match e.base() {
+                Type::Text(_) => format!("{field}.to_string()"),
+                Type::Tuple(inner) => owned_tuple_from_arg(&field, inner),
+                _ => field,
+            }
+        })
+        .collect();
+    format!("({})", parts.join(", "))
 }
 
 /// True iff `elems` contains a leaf type that doesn't impl `Copy` in

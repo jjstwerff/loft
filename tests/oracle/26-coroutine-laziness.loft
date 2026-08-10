@@ -1,7 +1,12 @@
-// coroutines.md G-Call/G-Next — STRAIGHT-LINE yields are LAZY on both backends: the
-// generator's side effects interleave with the consumer's, one value per advance.
-// (Loop-based yields are eager on native — a documented decided edge, NOT tested here.)
-fn steps() -> iterator<integer> {
+// coroutines.md G-Call/G-Next — yields are LAZY on both backends: the generator's side
+// effects interleave with the consumer's, one value per advance.
+//
+// The loop case used to be excluded here as a decided edge — `--native` ran a generator's
+// loop to completion and buffered every yield, so a consumer that stopped after two values
+// still saw every side effect of every iteration (loft#836).  It is tested now, and the
+// interleaving is what proves it: the values alone are identical either way, which is why
+// the value-only oracle could report full agreement while the two backends disagreed.
+fn straight_line() -> iterator<integer> {
     print("a ");
     yield 1;
     print("b ");
@@ -9,7 +14,17 @@ fn steps() -> iterator<integer> {
     print("c ");
     yield 3;
 }
+
+fn in_a_loop() -> iterator<integer> {
+    for i in 0..5 {
+        print("p{i} ");
+        yield i;
+    }
+}
+
 fn main() {
-    for x in steps() { print("g{x} "); }                  // a g1 b g2 c g3
+    for x in straight_line() { print("g{x} "); }          // a g1 b g2 c g3
+    print("\n");
+    for x in in_a_loop() { print("g{x} "); if x >= 1 { break; } }   // p0 g0 p1 g1
     print("\n");
 }

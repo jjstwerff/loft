@@ -6,10 +6,17 @@
 // record-id.  An empty slot is a hole (a zero rec-id) and still counts, because
 // open addressing's spare capacity IS the format — unlike a vector, whose spare
 // capacity is reserve and is excluded.  Allocation-local: the pointed-to entry
-// records live in separate allocations and are NOT counted.  The table grows in
-// steps as it rehashes (load factor 0.75, room → room·2−1); those step sizes
-// encode the resize policy, so a policy change is a conscious layout change that
-// flips this test (that is the intent — @PLN97).
+// entries live in the collection's entry ARENA and are NOT counted.  The table
+// grows in steps as it rehashes (load factor 0.75, room → room·2−1); those step
+// sizes encode the resize policy, so a policy change is a conscious layout change
+// that flips this test (that is the intent — @PLN97).
+//
+// @PLN135 arc H moved these numbers once, deliberately: the table reserves FOUR
+// words before the bucket array (header, seed, and the arena's directory / cursor /
+// free-list / stride) where it used to reserve two, so `elms = (room − 4) · 2`.  The
+// first table still starts at 16 slots and the load factor is unchanged — only the
+// ladder past it shifts, because a bigger reserved prefix leaves more of each
+// doubled record for buckets.
 //
 // Values verified against both backends (interpret + native) during Phase 1.
 
@@ -25,24 +32,24 @@ fn main() {
   h += K { id: 1, v: 10 };
   h += K { id: 2, v: 20 };
   h += K { id: 3, v: 30 };
-  // initial table: room = 10 words, elms = (10 − 2) · 2 = 16 slots × 4 bytes
+  // initial table: room = 12 words, elms = (12 − 4) · 2 = 16 slots × 4 bytes
   assert(size(h) == 64, "initial table = 16 slots × 4 = 64 (13 holes counted): {size(h)}");
   assert(size(h) >= len(h)*4, "table ≥ live entries × 4 (holes make it larger)");
 
   for i in 4..14 {
     h += K { id: i, v: i * 10 };
   }
-  // first rehash (load 0.75): room 10 → 19, elms = 34 slots × 4
-  assert(size(h) == 136, "after 1st rehash = 34 slots × 4 = 136: {size(h)}");
+  // first rehash (load 0.75): room 12 → 23, elms = 38 slots × 4
+  assert(size(h) == 152, "after 1st rehash = 38 slots × 4 = 152: {size(h)}");
 
   for i in 14..40 {
     h += K { id: i, v: i * 10 };
   }
-  // second rehash: room 19 → 37, elms = 70 slots × 4
-  assert(size(h) == 280, "after 2nd rehash = 70 slots × 4 = 280: {size(h)}");
-  // the full table exceeds the live count: 39 live entries in a 70-slot table
+  // second rehash: room 23 → 45, elms = 82 slots × 4
+  assert(size(h) == 328, "after 2nd rehash = 82 slots × 4 = 328: {size(h)}");
+  // the full table exceeds the live count: 39 live entries in an 82-slot table
   assert(
-    len(h) == 39 && size(h) / 4 == 70,
-    "70-slot table holds 39 live: len={len(h)} slots={size(h) / 4}"
+    len(h) == 39 && size(h) / 4 == 82,
+    "82-slot table holds 39 live: len={len(h)} slots={size(h) / 4}"
   );
 }

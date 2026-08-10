@@ -384,6 +384,21 @@ control cell.  With `--baseline`, failing cells are labelled
 `cargo build --release --bin loft` inside it).  Leak detection: interp
 reads the exit warning; native runs under `LOFT_NATIVE_LEAK_CHECK=1`.
 
+**A missing WARNING is not a passing cell.**  The vacuous-cell rule above is about
+empty stdout, but the same trap has a second door: reading a cell through a
+*diagnostic channel* — no leak warning, no error, exit 0 — while never checking the
+value.  Chasing loft#835 (an abandoned generator leaks its vector) the matrix was
+scored on `grep 'stores not freed'`, and `g = steps(); for x in g { … break … }` came
+back clean.  It read as a clean workaround and went into the issue as one.  It is not:
+that form never runs the generator at all, yields `65535` forever, and only stops
+because the probe happened to `break` — one run without the break wrote **1.5 GB** to
+stdout.  A program that does no work leaks nothing, so on a leak-only channel the most
+broken cell in the matrix scores best.
+
+The rule that catches it is the one already written for `@EXPECT`, applied to every
+channel: **the cell asserts its VALUE, and the diagnostic is an extra assertion, never
+the only one.**  `@EXPECT` plus `@EXPECT_LEAK` together, not `@EXPECT_LEAK` alone.
+
 **The INSTALLED `loft` is a free before/after oracle.**  `$(which loft)` is
 whatever `make install` last put there, so during a fix it is a ready-built
 binary from before your edits — no worktree, no second build, and none of the

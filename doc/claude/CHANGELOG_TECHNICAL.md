@@ -9,6 +9,226 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A hash's entries move into a chunked arena, and the lookup win it was built for does not exist (@PLN135 arc H, #809) (2026-08-10)
+
+`hash<T[k]>` stops claiming one store record per entry. Entries are slots at a fixed
+stride in a chunked arena (`src/arena.rs`) whose bookkeeping lives in the bucket table,
+and a bucket slot holds a 1-based arena INDEX rather than a record number.
+`placement::HASH` bumps 1 → 2, so a store written before this REFUSES instead of being
+misread — the reason Q2 shipped ahead of H.
+
+Measured against the installed `v2026.8.0` as before-oracle, alternating A/B on a quiet
+box, 1M `integer` keys, `--native-release`:
+
+| | before | after | |
+|---|---|---|---|
+| insert (reserved) | 330 ms | **258 ms** | **1.28x** |
+| store bytes / entry | 27.67 B | **18.6 B** | **−33%** |
+| claimed records, 2000 entries | ~2000 | **9** | table + directory + 6 chunks |
+| random lookup | 184 ns | 183 ns | **unchanged** |
+
+**@PLN135 predicted 2.3x on lookup and that is wrong, from correct measurements.** Q1's
+ablation (the record read is 82% of a random lookup) and Q5's shapes (a dense
+`vector<Entry>` at 80 ns against the hash's 200) are both sound; the inference is not.
+80 ns is ONE random read and a hash lookup makes TWO — bucket, then entry — so packing
+the entries moves where the second miss lands without removing it. Density pays for
+locality and a lookup has none. What the arena removes is the per-entry `Store::claim`,
+which is what #809's title names, and that lands on insert and on bytes.
+
+Three things the build turned up that the design did not:
+
+* **A hash has TWO kinds of entry.** A secondary index (a sibling field's
+  `other_indexes`) reaches records the PRIMARY collection owns and must neither move nor
+  free them. The discriminator is the recorded stride — a table that allocated its
+  entries knows their width, one that borrows records has none — so `stride == 0` means
+  borrowed, and every decode, free and teardown reads it.
+* **Chunk sizes must stop doubling** (`arena::CAP_CHUNK`). Uncapped, the tail waste is
+  proportional and measured 27.33 B/entry — the whole saving — and it made a store's size
+  depend on construction order. Capping bounds it at one partly-filled chunk: the
+  difference between −1% and −33%.
+* **Creation and freeing are one change.** `record_new`'s keyed arm allocates from the
+  arena; `for_each_owned_child` stops returning each entry as an `owning_elem` for
+  `Store::delete` and returns the chunks and directory through a new
+  `OwnedWalk::extra_recs`. Half of that alone hands interior arena bytes to the free tree.
+
+**A latent store-lifetime bug came with it, and it is the sharper half.**
+`free_iteration_scratch` decided what to release by reading its scratch header's
+fields, guarded only by `Store::is_claimed_record` — which says the BLOCK is live, not
+that it is still ours. A released scratch leaves its block on the free list and the
+next claim takes it; every field read after that is somebody else's bytes. One of
+those reads decides *"the elements live in another store, so free the whole store"*,
+and it fired: the arena's first chunk is exactly the claim that lands on a released
+2-word header, so a hash captured by a closure lost the entire store it lived in
+between one invocation and the next — every entry gone, no error anywhere. It surfaced
+as `multiplayer_v2::v2_two_clients_with_spectator_routing` hanging: the tictactoe
+server keeps its client table in a struct its `server::run` closure captures, so every
+lookup after the first iteration missed and `handle_click` returned at its first guard,
+leaving both clients to wait out their budget. The scratch header now carries a marker
+(`vector::scratch_tag`, and the same word holds the element width), and the free path
+refuses a record that does not present it — refusing costs at most the scratch's own
+two blocks once, acting on a foreign record cost the store. Guard:
+`data_structures::a_released_iteration_scratch_is_not_acted_on_twice`, which re-claims
+the released header's block deliberately and asserts on `Store::is_free` rather than on
+a value read back, because a freed store keeps its buffer until the slot is reused.
+
+Four `store_persist_loft` tests changed with it, none by loosening a bound. Two fixtures
+(`store_compact_slack_730`, `store_load_density_729`) were building their vectors in a
+LOCAL and copying the finished thing into the entry, which acquires none of the in-place
+growth slack they are named for — the entry's copy is claimed at its exact length. What
+they actually acquired was the blocks the local abandoned on the way up, i.e. free space
+BETWEEN records, and the arena made the allocator pack those better (same digest, file
+1 729 032 → 1 091 112 B). Both now append through `h[i].data`, which grows the record the
+collection HOLDS. `persisted_size_tracks_content_not_construction` now compares the two
+construction orders AFTER a rebind, which is the comparison loft#710 is about — as built
+they differ by interior free space that only compaction reclaims, as that test's own
+header says. `reclaim_and_compaction_refuse_a_sealed_store…` grows its control 10x
+instead of 2x, because 3000 extra entries are now ~48 KB of slots rather than 3000 claims
+and no longer push the store buffer past its bound size.
+
+### Three answers that were derived from a proxy instead of the fact (#829, #830, #831) (2026-08-09)
+
+Three consumer-filed defects with one shape: a decision read a stand-in for the
+fact it needed, and the stand-in was true when the fact was not.
+
+- **#829 — `content()` answered `""` for bytes it could not decode.** `""` is
+  what an empty file says, so a caller could not tell the two apart, and a
+  round-trip gate over binary data passed vacuously (`0 == 0 * 2`). `content()`
+  is `text?` and already answered null for a missing file (@PLN102 H4); it now
+  does the same for non-UTF-8 bytes and for a directory, with `""` reserved for a
+  file that really is empty. The decision sits in the loft-level `content()` —
+  one home, so both backends get it from the same place. The read beneath it also
+  had two homes (`State::get_file_text` and `codegen_runtime::OpGetFileText`) and
+  the stderr warning lived in only one of them, so `--native` read binary in
+  silence; both now call `read_file_text_into`. Guards:
+  `tests/binary_io_matrix.rs::c829_*` (four `cross_mode!` cells, including the
+  empty-file cell that keeps null and `""` apart) and a both-backend
+  `p166_content_on_binary_file_warns`.
+
+- **#830 — `loft update` resolved the lockfile, not the project.** A dependency
+  declared in `loft.toml` and absent from `loft.lock` was never looked up, and
+  the summary counted lock entries, so the omission printed `all N packages
+  up-to-date`. The work list is now `lockfile::update_worklist(lock, declared)` —
+  the union, as a pure function with unit tests, so "which packages" has one
+  testable home. A declared-but-unresolvable package is named and turns
+  `--check` red (that check asks whether the lock describes the manifest);
+  `loft update <pkg>` on a non-dependency refuses instead of claiming it is
+  up-to-date; a project with declared deps and no lockfile gets one written.
+
+- **#831 — a cdylib that built was assumed to be one this process can use.**
+  Marking a function for cdylib dispatch makes `byte_code` emit `OpStaticCall`,
+  so an unwirable symbol reaches the `compile.rs` panic stub and kills the run.
+  Marking was gated on the BUILD succeeding; an artifact can build and still not
+  load (different `libloft.rlib`, missing system library, replaced by a
+  concurrent `loft`), and an artifact declaring no layout is adopted outright
+  because that is what a hand-written cdylib looks like.
+  `native_lib::probe_and_mark_exports` now `dlopen`s the artifact and `dlsym`s
+  each bridge before marking, marks only what resolves — partial is a valid
+  outcome — and KEEPS the handle, so a later prune or rebuild cannot invalidate
+  the decision. Unresolved functions interpret, which is what the auto-native
+  model always promised. This is why crawler's suite lost a different test on
+  each parallel run: processes share `<pkg>/native-auto/`, and the loser got the
+  panic stub instead of the interpreter. Guards:
+  `tests/n3_use_native.rs::an_unwirable_cdylib_interprets_instead_of_panicking`
+  and `::a_partially_exporting_cdylib_marks_only_what_resolves`, both driven by a
+  real artifact replaced with a cdylib that loads and exports no bridge — the
+  shape every freshness check accepts. `--help` now names `LOFT_NO_NATIVE_LIBS`
+  and `LOFT_REQUIRE_NATIVE`, which the report searched for and could not find.
+
+  **Residual half, found by the same suite:** `prune_artifacts` bounded
+  `native-auto/` by sweeping every `.so` in it by age, and the directory is not
+  exclusively its own — a `[c] shim` cdylib lives there too, content-keyed and
+  built ONCE, hence permanently the oldest file and the sweep's first victim.
+  That does not cost a rebuild, it deletes the only definition of the package's
+  `#c` symbols; the run then dies at `c_call.rs` with *"symbol not found … or
+  check the spelling"*, and nothing can interpret in its place because a `#c`
+  binding IS the implementation. Reproduced deterministically against
+  `tests/fixtures/sqldb/sqlite` (saturate, run once, shim gone, exit 101) — it
+  had been living in the suite as the "known flaky"
+  `native::a_lazy_read_gives_one_answer_down_rust_and_down_loft`. The sweep now
+  takes only the `loft_auto_<pkg>_` family it built; guard
+  `::a_foreign_library_in_native_auto_survives_pruning`.
+### The block-tail `expected` push learns a third shape: the interpolation target (#837) (2026-08-10)
+
+@PLN124's target is read off the one `⇐` channel, and `parse_block` pushed the block's
+result type into that channel only when the result was an **enum** (@PLN22 phase 1) or a
+**collection** (@PLN90 W8). A struct is neither, so `fn q(name: text) -> Query { "hi
+{name}" }` parsed its tail with `expected = Unknown`, took the ordinary text path, and
+failed the tail conversion — *"expected Query, got text on return from block"*. The gate
+now also fires when `interpolation_target(result)` resolves, which is a pure lookup
+(`Type::Reference` → `DefType::Struct` → defines `t_<len><name>_lit`), so the cost is one
+def-table probe on block tails whose result is a struct.
+
+One gate covers all three reported spellings — block tail, explicit `return`, and an `if`
+tail threading into both branches — because they share `parse_block`'s tail.
+
+The issue asked which of doc and code was wrong, on the reading that the **call-argument**
+position had been closed deliberately by #776. It has not: the argument position builds
+correctly on both backends on current `main` (verified `parts == ["hi "]`, `values ==
+["ada"]`, not merely that it type-checks), so the doc's list was accurate except for the
+return. #776's narrowing was of the HOLE channel, not the argument channel, and that gate
+still holds — `q: Query = "{"seed"}"` passes `"seed"` to `hole_text` as a value rather
+than building a second accumulator.
+
+Guards: `tests/scripts/interpolation-hook.loft` grows `built_as_tail` / `built_as_return`
+/ `built_in_branch` beside the existing `seq_of` argument-position case, asserting the
+call SEQUENCE (`lit(t)>int>lit(u)`) rather than the result — a target that only checked
+the final string could not tell the hook from ordinary formatting. Both backends.
+
+### A tuple match arm that consumes nothing is a parse that never ends (#832) (2026-08-10)
+
+`parse_tuple_match`'s arm loop could iterate without consuming a token, and then it
+never stopped. `(first, ..)` reached the element loop's literal branch, where
+`expression` took the `..` and left the `)` unclaimed; `expect_match_arm_arrow` then
+found no `=>` and called `recover_to(&[",", "}", ";"])`, which **resynchronises** and
+returns WITHOUT consuming when the cursor already sits on a stop token or an unmatched
+closer. The arm re-parsed the same token forever — 2.1 million iterations in four
+seconds — and silently, because first-pass diagnostics are suppressed. loft is
+unbounded by default, so nothing bounded it.
+
+The filed scope was `..`; the matrix widened it. **An over-arity pattern hangs
+identically** (`(a, b, c, d)` on a three-element tuple): the element loop stops at the
+subject's arity and leaves the cursor on the surplus `,`. Junk arm heads (`1`, `"x"`,
+`[1,2,3]`, `{ }`) recover fine, because `recover_to` scans forward from them and does
+consume — which is what made the boundary look narrower than it was.
+
+Three changes, one invariant — *every arm-loop iteration consumes at least one token*:
+
+- `..` / `..=` is refused **by name** in an element position, with the supported form in
+  the message, then skipped to the closing `)`. Arity is fixed by design (TUPLES.md
+  § "What is NOT supported"), so a rest has nothing to stand for.
+- A pattern longer than the subject reports the subject's **arity** rather than a bare
+  "expected ')'", and the surplus is skipped so the arm reaches its `=>`.
+- A `bad_pattern` flag keeps a refused arm from being classified as a **wildcard**. A
+  refusal binds nothing and tests nothing, which reads exactly like `(_, _, _)` — and a
+  wildcard arm ends the arm loop, so a rejected FIRST arm swallowed every arm after it
+  and reported a missing `}` instead of the refusal. This is why `(.., last)` and `(..)`
+  behaved differently from `(first, ..)`, which binds and so escaped the misclassification.
+- The element loop's missing-comma `break` is no longer gated on `!first_pass`. Both
+  passes must walk an arm the same way, or the first wanders into positions the second
+  never visits.
+- A backstop compares `lexer.at()` across the whole iteration and breaks if nothing moved,
+  so an unknown shape ends in a diagnostic rather than a stuck build.
+
+Two adjacent defects found by the first tuple-element-pattern coverage the corpus has
+ever had (`28-tuples.loft` carries no `match`, which is why the hang shipped), both
+filed rather than fixed here:
+
+- **#839** — an `if` guard never parses on a vector or tuple arm: those two loops call
+  `has_keyword("if")`, which matches only `LexItem::Identifier`, while `if` lexes as a
+  token; the three working match kinds use `has_token`. Swapping it in was tried and
+  reverted: the guard then parses and the arm silently does not match, because captures
+  are assigned in the arm BODY and the condition runs first, so the guard reads an
+  unassigned variable. A clean refusal beats a silent wrong answer; both call sites
+  record why.
+- **#840** — a tuple **parameter** with a `text` element fails rustc on `--native` when
+  it is the match subject: the `match_tuple` temp is spelled with the owned type
+  (`String`) and initialised from the borrowed parameter (`&str`).
+
+Guards: `tests/scripts/832-tuple-pattern-refused.loft` (every `..` position plus
+over-arity, asserting the REJECTION — a timeout-only test would pass for the wrong
+reason) and `832-tuple-pattern-elements.loft` (the positive twin; a fix that rejected
+every tuple pattern would satisfy the first alone). Both backends.
+
 ### One SQL boundary closes: a table loft made and a table loft found are the same value (@PLN133) (2026-08-08)
 
 @PLN133's gate passes, on **four database backends and both loft backends, with

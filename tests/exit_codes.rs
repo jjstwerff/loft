@@ -482,67 +482,78 @@ fn ijoin_multiply_assigned_widens_native() {
     );
 }
 
-// ── P166: file().content() on a binary file must surface a warning ────────
+// ── P166 / loft#829: .content() on a binary file — warn, and answer null ──
 //
 // Root-cause data-loss bug: prior to the 2026-04-17 fix,
 // `file("x.glb").content()` silently returned "" on any file whose bytes
 // failed UTF-8 decode — `src/state/io.rs::get_file_text`'s `read_to_string`
-// failure path called `buf.clear()` with no log.  Fix: emit an actionable
-// stderr warning on `ErrorKind::InvalidData` so the user sees the misuse
-// the first time it runs, with a pointer at the `#format = LittleEndian;
-// #read(n)` idiom.
+// failure path called `buf.clear()` with no log.  P166 added the stderr
+// warning; loft#829 finished the job, because a warning is not an answer:
+// the call still returned "", which a caller cannot tell from an empty file.
+// It now returns null, and the warning — which lived in the interpreter's
+// read alone — is emitted by the one read both backends share.
 
 /// P166: reading a non-UTF-8 file via .content() must emit a stderr warning
 /// containing the phrase "non-UTF-8 bytes" along with the file size and a
-/// pointer at the binary-read idiom.
+/// pointer at the binary-read idiom — on BOTH backends (loft#829: the warning
+/// was interpreter-only, so `--native` read binary in silence).
 #[test]
 fn p166_content_on_binary_file_warns() {
-    let dir = std::env::temp_dir();
-    let bin_path = dir.join("loft_p166_binary.bin");
-    // Non-UTF-8 bytes: 0xFF and 0xFE are invalid UTF-8 start bytes.
-    std::fs::write(&bin_path, [0xFFu8, 0xFE, 0xFD, 0xFC, 0xFB]).expect("write temp binary file");
+    for backend in ["--interpret", "--native"] {
+        let dir = std::env::temp_dir();
+        let tag = backend.trim_start_matches('-');
+        let bin_path = dir.join(format!("loft_p166_binary_{tag}.bin"));
+        // Non-UTF-8 bytes: 0xFF and 0xFE are invalid UTF-8 start bytes.
+        std::fs::write(&bin_path, [0xFFu8, 0xFE, 0xFD, 0xFC, 0xFB])
+            .expect("write temp binary file");
 
-    let script_path = dir.join("loft_p166_script.loft");
-    // Use forward slashes in the embedded path so the loft lexer doesn't
-    // treat Windows backslashes as escape sequences (`\U`, `\R`, …).
-    let path_in_script = bin_path.display().to_string().replace('\\', "/");
-    let script = format!(
-        "fn main() {{\n  \
-            f = file(\"{path_in_script}\");\n  \
-            c = f.content();\n  \
-            println(\"len={{len(c)}}\");\n  \
-            assert(len(c) == 0, \"content should be empty on binary\");\n\
-         }}\n"
-    );
-    std::fs::write(&script_path, &script).expect("write temp script");
+        let script_path = dir.join(format!("loft_p166_script_{tag}.loft"));
+        // Use forward slashes in the embedded path so the loft lexer doesn't
+        // treat Windows backslashes as escape sequences (`\U`, `\R`, …).
+        let path_in_script = bin_path.display().to_string().replace('\\', "/");
+        let script = format!(
+            "fn main() {{\n  \
+                f = file(\"{path_in_script}\");\n  \
+                c = f.content();\n  \
+                println(\"null={{c == null}}\");\n  \
+                assert(c == null, \"binary content() answers null, not empty text\");\n\
+             }}\n"
+        );
+        std::fs::write(&script_path, &script).expect("write temp script");
 
-    let out = Command::new(loft_bin())
-        .arg("--interpret")
-        .arg(&script_path)
-        .current_dir(workspace_root())
-        .output()
-        .expect("failed to invoke loft binary");
-    let _ = std::fs::remove_file(&bin_path);
-    let _ = std::fs::remove_file(&script_path);
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script_path)
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let _ = std::fs::remove_file(&bin_path);
+        let _ = std::fs::remove_file(&script_path);
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success(),
-        "program should still exit 0 (empty string is valid); stdout={stdout:?} stderr={stderr:?}"
-    );
-    assert!(
-        stderr.contains("non-UTF-8 bytes"),
-        "expected 'non-UTF-8 bytes' warning in stderr; got stderr={stderr:?}"
-    );
-    assert!(
-        stderr.contains("5 bytes in file"),
-        "warning should include the actual file size; got stderr={stderr:?}"
-    );
-    assert!(
-        stderr.contains("#format = LittleEndian"),
-        "warning should name the correct binary-read idiom; got stderr={stderr:?}"
-    );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{backend}: program should exit 0 (null is a valid answer); \
+             stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            stderr.contains("non-UTF-8 bytes"),
+            "{backend}: expected 'non-UTF-8 bytes' warning in stderr; got stderr={stderr:?}"
+        );
+        assert!(
+            stderr.contains("5 bytes in file"),
+            "{backend}: warning should include the actual file size; got stderr={stderr:?}"
+        );
+        assert!(
+            stderr.contains("#format = LittleEndian"),
+            "{backend}: warning should name the binary-read idiom; got stderr={stderr:?}"
+        );
+        assert!(
+            stderr.contains("read_bytes(path)"),
+            "{backend}: warning should name the exact byte reader; got stderr={stderr:?}"
+        );
+    }
 }
 
 // ── P168: arguments() leaked argv when zero script-level args ────────────

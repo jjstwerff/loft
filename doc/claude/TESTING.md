@@ -884,6 +884,84 @@ Subjects are a convenience for tight loops, **not** the safety mechanism. The
 default being subtractive is what makes it safe to leave them approximate: a gap
 in a subject costs seconds, never coverage.
 
+## Test speed — a report, never a gate (`make speed`)
+
+```bash
+make speed             # what drifted, on the tests that carry a number
+make speed-discover    # which tests are slow enough to deserve one
+make speed-bless       # write the measured numbers back into the tests
+```
+
+Every slow test carries its expected cost **in itself**, above its `#[test]`:
+
+```rust
+// @speed 12.4
+#[test]
+fn a_slow_test() { … }
+```
+
+`scripts/test_speed.py` measures, compares, and **prints**. It exits 0 whatever
+it finds. A time assertion fails for reasons the test is not about — a busy
+machine, a different CPU, a change somewhere else in the suite — and a build
+that goes red on those teaches everyone to widen the band until it means
+nothing, so the one real regression arrives inside a band nobody trusts.
+Correctness is what fails a build; speed is what you read.
+
+Timeouts keep their job: they bound what we do **not** control — a socket, a
+process spawn, `rustc`. They are a liveness bound, not a speed measurement, and
+a test that takes its whole timeout tells you nothing about how fast it is.
+
+### The unit, and why it is not seconds
+
+`units = seconds × (CAL_REFERENCE_MS / this machine's calibration)`, where the
+calibration is a fixed integer loop with nothing to do with loft. One unit is
+about one second on the machine the constant was pinned on. The two obvious
+alternatives are both wrong here:
+
+* **Raw seconds** move with the machine and the load.
+* **A share of the suite's total** moves when any OTHER test changes — make the
+  hash faster and every unrelated test's share rises, so the report would accuse
+  a dozen innocent tests of regressing every time something got faster. That is
+  the exact failure this exists to avoid.
+
+The reference constant only sets the scale; it cancels in a comparison, so a
+slow box changes the absolute numbers and not the drift.
+
+### Three things measured, each of which broke a naive version
+
+Each is why the tool works the way it does, with the number that settled it:
+
+1. **One run measures cache warmth.** Blessed from a single run and re-run
+   immediately, **113 of 139 tests moved past ±25%, every one of them faster** —
+   `multiplayer_v2::server_detects_and_retries_a_stolen_port` by 39x. Nothing had
+   changed but the build cache and the page cache. Hence best-of-`--repeat`
+   (default 2): cold caches and load only ever make a run *slower*, so the
+   smallest observation is the least contaminated.
+2. **Parallel wall-clock is mostly contention.** Warm, freshly blessed, and
+   re-run, **48 of 134 still moved**, in both directions. nextest runs 24 tests at
+   once and no serial calibration models that. Hence the measuring pass is
+   `--test-threads=1` over the **annotated tests only** — affordable exactly
+   because the report is about slow tests, a few dozen of them. `discover` is the
+   separate wide parallel pass; it may be noisy, because it only answers "is this
+   over a second", never "did it change".
+3. **A machine that changes mid-run invalidates the scale.** One calibration is
+   applied to the whole run, so the tool calibrates at both ends and says so when
+   they disagree by more than 20%.
+
+Residual noise is load, and the report names it rather than hiding it. Read a
+single report as a hint; read the annotation's own history — `git log -p` on that
+line — as the trend. A steady drift is a series of small diffs and a real
+regression is one large one, both reviewable at the moment they land.
+
+### What it does not measure
+
+It calibrates CPU, so a test dominated by `rustc`, disk or the network normalises
+poorly. And it is wall-clock: where a **deterministic counter** exists — claimed
+records, allocations, bytes — prefer that and assert on it. A counter is
+identical on every machine at any load, which is why
+`data_structures::hash_growth_frees_the_table_it_replaces` can pin "2000 entries
+claim 9 records" as an exact expectation while no timing could.
+
 ## Store-memory ceiling (`LOFT_MEMORY_LIMIT`)
 
 The sibling of the execution timeout, for the failure it cannot catch. A corrupted

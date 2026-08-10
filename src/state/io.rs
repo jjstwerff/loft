@@ -76,29 +76,10 @@ impl State {
             // #255 / @PLN9: re-home a relative path against the program anchor.
             let path_string = self.database.resolve_path(&raw_path);
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
-            if let Ok(mut f) = File::open(&path_string) {
-                match f.read_to_string(buf) {
-                    Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                        // non-UTF-8 bytes.  Silently clearing
-                        // the buffer masks real data — write a loud
-                        // actionable warning to stderr so the user
-                        // sees the misuse the first time the call
-                        // fires.  Return "" for backwards-compat
-                        // (callers that guarded on "" as "could
-                        // not read" still work).
-                        buf.clear();
-                        let size = std::fs::metadata(&path_string).map_or(0, |m| m.len());
-                        eprintln!(
-                            "warning: file({path_string:?}).content() got non-UTF-8 \
-                             bytes ({size} bytes in file) — returning empty text. \
-                             For binary files use `f#format = LittleEndian; f#read(n)` \
-                             (or `BigEndian`); see the loft-write skill § File I/O."
-                        );
-                    }
-                    Err(_) => buf.clear(),
-                }
-            }
+            // One home for the read and its warning, shared with native codegen's
+            // `OpGetFileText` — the warning used to live here only, so `--native`
+            // read a binary file in complete silence (loft#829).
+            crate::codegen_runtime::read_file_text_into(&path_string, buf);
         }
     }
 
@@ -735,7 +716,7 @@ impl State {
         // explicitly so that text_owned, stack_bytes, and call_frames are released
         // when a `for` loop exits early (before the generator exhausts).
         if db.store_nr == super::COROUTINE_STORE {
-            self.free_coroutine(db.rec as usize);
+            self.free_coroutine(&db);
             return;
         }
         // Plan-57 Phase C: single-ownership (ref-count removed) — close the OS file

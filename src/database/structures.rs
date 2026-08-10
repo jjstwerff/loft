@@ -91,9 +91,21 @@ impl Stores {
                 // the special case would re-introduce the very mismatch it fixed.
                 vector::vector_append(&d, u32::from(self.size(c)), &mut self.allocations)
             }
+            // @PLN135 arc H — a hash's entries live packed in a chunked arena instead
+            // of one store record each: no per-entry header word, no `Store::claim`
+            // rounding, and — what the measurement was actually about — entries dense
+            // enough that a random lookup reads one cache line instead of walking a
+            // working set 2–3x the payload.  The owning-collection back-pointer moves
+            // with them, to byte 4 of the CHUNK, because every slot in a chunk shares
+            // an owner and `database::search` reads that offset to decide a record is
+            // live.  Allocation happens here, before the constructor writes any field,
+            // exactly as the per-entry claim did.
+            Parts::Hash(c, _) => {
+                let stride = crate::hash::stride_for(u32::from(self.size(c)));
+                crate::hash::alloc_entry(&d, stride, data.rec, &mut self.allocations)
+            }
             Parts::Array(c)
             | Parts::Ordered(c, _)
-            | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
             | Parts::Radix(c, _)
             | Parts::Trie(c, _) => {
@@ -221,11 +233,12 @@ impl Stores {
     /// (the parser only emits `OpReserveHash` for a hash), so it is a silent no-op
     /// rather than a fault.
     pub fn reserve_hash(&mut self, data: &DbRef, count: i64, tp: u16) {
-        if !matches!(self.types[tp as usize].parts, Parts::Hash(_, _)) {
+        let Parts::Hash(c, _) = self.types[tp as usize].parts else {
             return;
-        }
+        };
         let keys = self.types[tp as usize].keys.clone();
-        crate::hash::reserve(data, count, &mut self.allocations, &keys);
+        let stride = crate::hash::stride_for(u32::from(self.size(c)));
+        crate::hash::reserve(data, count, stride, &mut self.allocations, &keys);
     }
 
     pub(super) fn insert_record(&mut self, data: &DbRef, rec: &DbRef, tp: u16, secondary: bool) {

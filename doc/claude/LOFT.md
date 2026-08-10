@@ -1129,8 +1129,17 @@ q: Query = "SELECT * FROM t WHERE name = {name}";
 // calls q.lit("SELECT * FROM t WHERE name = ") then q.hole_text(name)
 ```
 
-The target comes from the type you assign to, a function parameter, or a return
-type — there is no new syntax, and `text` behaves exactly as before.
+The target comes from the type you assign to, a struct field you initialise, a
+function parameter, or a return type — there is no new syntax, and `text` behaves
+exactly as before. So a builder function needs no local to route through:
+
+```loft
+fn where_name(name: text) -> Query { "SELECT * FROM t WHERE name = {name}" }
+```
+
+A string written inside a **hole** does not inherit the destination's type: a hole
+is not the destination, so `q: Query = "{"seed"}"` passes `"seed"` to `hole_text`
+as a value rather than building a second `Query` from it.
 
 Why this exists: a value that has been rendered into text cannot be told apart
 from text the author wrote. Keeping them separate is what lets a library build a
@@ -1451,8 +1460,11 @@ match score {
 ```
 
 **Guard clauses:** any arm may have an `if` guard after the pattern. The guard is
-evaluated when the pattern matches; if the guard is false, matching falls through to
-the next arm. Guarded arms do **not** count toward exhaustiveness — because the guard
+evaluated when the pattern matches, with the arm's captures already bound, so it can
+test them (`[a, _, _] if a > 10`, `(n, _, true) if n > 10`); if the guard is false,
+matching falls through to the next arm. The one arm that refuses a guard is a **cursor**
+match arm, where the pattern advances the shared cursor before the guard could be tested
+— put the test inside the arm body there. Guarded arms do **not** count toward exhaustiveness — because the guard
 can fail at runtime, the compiler cannot guarantee the arm will handle that variant.
 Even if every variant has a guarded arm, a wildcard `_ =>` or an unguarded arm covering
 each variant is still required:

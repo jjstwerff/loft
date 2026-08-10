@@ -386,6 +386,58 @@ struct EnumArm {
     bindings: Vec<Value>,
 }
 
+/// One arm of a vector or tuple `match`, collected before the if-chain is assembled.
+///
+/// `guard` stays SEPARATE from `cond` instead of being ANDed into it, because the arm's
+/// captures are assigned by `bindings` and a guard that reads a capture has to see it
+/// already assigned.  ANDing the two ran the guard against unassigned variables, so
+/// `(n, _, true) if n > 10` compared `0 > 10` and the arm silently did not match — which
+/// is why enabling the parse alone would have turned a clean compile error into a wrong
+/// answer (loft#839).
+struct PatternArm {
+    /// The pattern test — a length check, element literals, or `None` for a total pattern.
+    cond: Option<Value>,
+    guard: Option<Value>,
+    /// Assignments for this arm's captures.  Non-empty only when `guard` is `Some`;
+    /// without a guard they are already folded into `code`, keeping the emitted IR of
+    /// every existing match byte-identical.
+    bindings: Vec<Value>,
+    code: Value,
+}
+
+/// Assemble collected [`PatternArm`]s into the match's if-chain, last arm first.
+///
+/// A guarded arm lowers to `if <cond> { <bindings>; if <guard> { <body> } else { <rest> } }
+/// else { <rest> }` — captures assigned once, inside the branch their pattern already
+/// selected, before the guard reads them.  The `<rest>` appears twice, as it does in the
+/// enum arm chain this mirrors; only an arm that actually carries a guard pays for it.
+/// Bindings are never duplicated: a slice arm's are a `..name` materialisation and a PEG
+/// cursor advance, neither of which survives being run twice.
+fn chain_pattern_arms(arms: Vec<PatternArm>, fallback: Value, result_type: &Type) -> Value {
+    let mut chain = fallback;
+    for arm in arms.into_iter().rev() {
+        let Some(guard) = arm.guard else {
+            chain = match arm.cond {
+                Some(cond) => v_if(cond, arm.code, chain),
+                None => arm.code,
+            };
+            continue;
+        };
+        let rest = chain.clone();
+        let mut guarded = v_if(guard, arm.code, rest);
+        if !arm.bindings.is_empty() {
+            let mut stmts = arm.bindings;
+            stmts.push(guarded);
+            guarded = v_block(stmts, result_type.clone(), "match_arm");
+        }
+        chain = match arm.cond {
+            Some(cond) => v_if(cond, guarded, chain),
+            None => guarded,
+        };
+    }
+    chain
+}
+
 /// Returns true if the given AST value definitely returns on all code paths.
 /// A block definitely-returns if its last statement is a `return`, or if it is
 /// an `if` with an `else` where both branches definitely-return (recursive).
@@ -684,7 +736,17 @@ impl Parser {
             // loft#703 — a KEYED result threads for the same reason: `[K { … }]` infers
             // `vector<K>` wherever it stands, so a keyed tail has no other way to say
             // which container to build.
-            if self.enum_context(result) || crate::parser::vectors::is_collection(result) {
+            // @PLN124/loft#837 — an INTERPOLATION TARGET threads for the third time for
+            // the same reason: `fn q(name: text) -> Query { "hi {name}" }` has no other
+            // way to say which type the string builds, and LOFT.md § "Building a value
+            // instead of text" lists the return type beside the assignment and the
+            // parameter.  `interpolation_target` is a pure lookup (Reference → struct →
+            // defines `lit`), so widening the gate costs a def-table probe on block tails
+            // whose result is a struct.
+            if self.enum_context(result)
+                || crate::parser::vectors::is_collection(result)
+                || self.interpolation_target(result) != u32::MAX
+            {
                 self.expected = result.clone();
             }
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
@@ -6943,7 +7005,7 @@ impl Parser {
 
         self.lexer.token("{");
         let mut result_type = Type::Void;
-        let mut arms: Vec<(Option<Value>, Value, Type)> = Vec::new();
+        let mut arms: Vec<PatternArm> = Vec::new();
         let mut has_wildcard = false;
         // @PLN35 PC2 — statements hoisted BEFORE the arm if-chain (evaluated once, at match-level
         // scope so a binding is visible to every arm body — native scopes cond sub-blocks away).
@@ -6956,6 +7018,11 @@ impl Parser {
             }
             let mut bindings: Vec<Value> = Vec::new();
             let mut cond: Option<Value> = None;
+            // Set by a `_` or bare-name arm head: this pattern matches every subject.  It only
+            // makes the MATCH exhaustive if no guard follows, so `has_wildcard` is decided after
+            // the guard is parsed — `_ if c` can fail, and counting it as total would let a
+            // subject fall through with no arm selected (loft#839).
+            let mut is_total = false;
             // @PLN35 L2 — conditions from element sub-patterns (`[Variant { f }, ..]`); empty for
             // bare-name / `..` / `_` slice patterns, so those stay byte-identical.
             let mut elem_conds: Vec<Value> = Vec::new();
@@ -7480,13 +7547,13 @@ impl Parser {
                 }
             } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "_" {
-                    has_wildcard = true;
+                    is_total = true;
                 } else {
                     // bare name — wildcard binding
                     let bind_nr = self.vars.add_variable(&id, subject_type, &mut self.lexer);
                     self.vars.defined(bind_nr);
                     bindings.push(v_set(bind_nr, Value::Var(v)));
-                    has_wildcard = true;
+                    is_total = true;
                 }
             } else {
                 // Unrecognized arm head (not `[…]`, `_`, or a binding). No branch above
@@ -7501,8 +7568,9 @@ impl Parser {
                 }
                 break;
             }
-            // Parse guard
-            let guard_opt = if self.lexer.has_keyword("if") {
+            // Parse the optional guard.  Captures bound by the pattern above are in scope
+            // for it, and `chain_pattern_arms` assigns them before the guard runs.
+            let mut guard_opt = if self.lexer.has_token("if") {
                 let mut guard = Value::Null;
                 let gt = self.expression(&mut guard);
                 if !self.first_pass && gt != Type::Boolean {
@@ -7512,6 +7580,24 @@ impl Parser {
             } else {
                 None
             };
+            // @PLN35 — a PEG cursor arm ADVANCES the shared cursor from its `bindings`, which
+            // run before the guard.  A guard that then fails would leave the cursor consumed
+            // while the next arm re-matches from the wrong position, so the whole parse would
+            // silently read the wrong tokens.  Refuse the combination rather than ship that:
+            // the guard's test belongs in the arm body, where the cursor is already committed.
+            if guard_opt.is_some() && self.match_cursor.is_some() {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a guard is not supported on a cursor match arm — it would advance the cursor before the guard is tested; test inside the arm body instead"
+                    );
+                }
+                guard_opt = None;
+            }
+            if is_total && guard_opt.is_none() {
+                has_wildcard = true;
+            }
             self.expect_match_arm_arrow();
             let mut arm_code = Value::Null;
             // #556 — a `{ … }` arm body is a VALUE position (its result is the match value), so
@@ -7528,19 +7614,23 @@ impl Parser {
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
-            // Prepend bindings
-            if !bindings.is_empty() {
-                bindings.push(arm_code);
-                arm_code = v_block(bindings, arm_type.clone(), "slice_binding");
-            }
-            // Combine condition with guard
-            let full_cond = match (cond, guard_opt) {
-                (Some(c), Some(g)) => Some(self.op("&&", c, g, Type::Boolean)),
-                (Some(c), None) => Some(c),
-                (None, Some(g)) => Some(g),
-                (None, None) => None,
+            // Without a guard the bindings fold into the body exactly as before; with one they
+            // stay separate so `chain_pattern_arms` can run them ahead of the guard.
+            let arm_bindings = if guard_opt.is_some() {
+                std::mem::take(&mut bindings)
+            } else {
+                if !bindings.is_empty() {
+                    bindings.push(arm_code);
+                    arm_code = v_block(bindings, arm_type.clone(), "slice_binding");
+                }
+                Vec::new()
             };
-            arms.push((full_cond, arm_code, arm_type));
+            arms.push(PatternArm {
+                cond,
+                guard: guard_opt,
+                bindings: arm_bindings,
+                code: arm_code,
+            });
             if has_wildcard {
                 self.lexer.has_token(",");
                 break;
@@ -7569,19 +7659,11 @@ impl Parser {
 
         // Build if-else chain from arms
         let fallback = if has_wildcard {
-            let (_, arm_code, _) = arms.pop().unwrap();
-            arm_code
+            arms.pop().unwrap().code
         } else {
             self.null(&result_type)
         };
-        let mut chain = fallback;
-        for (cond_opt, arm_code, _) in arms.into_iter().rev() {
-            if let Some(cond) = cond_opt {
-                chain = v_if(cond, arm_code, chain);
-            } else {
-                chain = arm_code;
-            }
-        }
+        let mut chain = chain_pattern_arms(arms, fallback, &result_type);
         // @PLN85 — a bare `[]` arm (`_ => []`) lowers to a `null` of the result type, which the
         // native backend emits as `()` where a vector (`DbRef`) is expected.  In a RETURN context
         // the delivery renames it onto `__retbuf`; but when the match value is BOUND to a local
@@ -7621,8 +7703,7 @@ impl Parser {
 
         self.lexer.token("{");
 
-        // arms: (Option<cond>, arm_body, arm_type, Option<guard>)
-        let mut arms: Vec<(Option<Value>, Value, Type, Option<Value>)> = Vec::new();
+        let mut arms: Vec<PatternArm> = Vec::new();
         let mut has_wildcard = false;
         let mut result_type = Type::Void;
 
@@ -7630,8 +7711,22 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
+            // Every iteration must consume at least one token.  A pattern the element
+            // loop below cannot make sense of leaves the cursor parked mid-arm, and
+            // `expect_match_arm_arrow`'s `recover_to` cannot rescue it: that helper
+            // resynchronises, and returns WITHOUT consuming when the cursor already
+            // sits on one of its stop tokens or on an unmatched closer.  The arm then
+            // re-parses the same token forever — silently, because first-pass
+            // diagnostics are suppressed (loft#832).  Compared against `arm_start` at
+            // the bottom of the loop.
+            let arm_start = self.lexer.at();
 
             let mut is_wildcard = false;
+            // A pattern that was REFUSED binds nothing and tests nothing, which reads
+            // exactly like `(_, _, _)` at the classification below — and a wildcard arm
+            // ends the arm loop, so a rejected first arm would swallow every arm after
+            // it and report a missing `}` instead of the refusal (loft#832).
+            let mut bad_pattern = false;
             let mut bindings: Vec<Value> = Vec::new();
             let mut elem_conds: Vec<Value> = Vec::new();
 
@@ -7648,12 +7743,39 @@ impl Parser {
             } else if self.lexer.has_token("(") {
                 // Element-by-element pattern
                 for (i, elem_type) in elem_types.iter().enumerate().take(arity) {
-                    if i > 0 && !self.lexer.has_token(",") && !self.first_pass {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "expected ',' between tuple pattern elements"
-                        );
+                    // The break is NOT gated on the pass: both passes must walk the
+                    // arm the same way, or the first one wanders into positions the
+                    // second never visits and stops making progress.
+                    if i > 0 && !self.lexer.has_token(",") {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "expected ',' between tuple pattern elements"
+                            );
+                        }
+                        break;
+                    }
+                    // A `..` rest is not part of the tuple design — arity is fixed
+                    // (TUPLES.md § "What is NOT supported"), so there is nothing for a
+                    // rest to stand for.  Refuse it by name and skip to the closing
+                    // `)`, rather than letting it fall through to the literal branch
+                    // below, where `expression` consumes the `..` but leaves the `)`
+                    // unclaimed and the arm loop spinning (loft#832).
+                    if self.lexer.peek_token("..") || self.lexer.peek_token("..=") {
+                        bad_pattern = true;
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a `..` rest pattern is not supported in a tuple pattern — \
+                                 a tuple's arity is fixed, so write every position, \
+                                 using `_` for the ones you do not bind"
+                            );
+                        }
+                        self.lexer.has_token("..=");
+                        self.lexer.has_token("..");
+                        self.lexer.recover_to(&[")"]);
                         break;
                     }
                     let elem_type = elem_type.clone();
@@ -7699,17 +7821,36 @@ impl Parser {
                         elem_conds.push(elem_cond);
                     }
                 }
-                if !self.lexer.has_token(")") && !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "expected ')' to close tuple pattern"
-                    );
+                if !self.lexer.has_token(")") {
+                    bad_pattern = true;
+                    if !self.first_pass {
+                        // A `,` here means the pattern listed MORE elements than the
+                        // subject has; anything else is ordinary junk.  Naming the
+                        // arity is what tells the author which side to change.
+                        if self.lexer.peek_token(",") {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "tuple pattern has more elements than the {}-element subject tuple",
+                                arity
+                            );
+                        } else {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "expected ')' to close tuple pattern"
+                            );
+                        }
+                    }
+                    // Skip the surplus so the arm reaches its `=>` — without this the
+                    // cursor stays parked on the `,` and the arm loop spins (loft#832).
+                    self.lexer.recover_to(&[")"]);
+                    self.lexer.has_token(")");
                 }
                 // All element positions were wildcards/bindings with no literal conditions.
                 // The arm is effectively unconditional (wildcard) when there are no bindings
                 // either; if there are bindings it acts like a wildcard-with-capture.
-                if elem_conds.is_empty() && bindings.is_empty() {
+                if elem_conds.is_empty() && bindings.is_empty() && !bad_pattern {
                     is_wildcard = true;
                 }
             } else if !self.first_pass {
@@ -7720,8 +7861,10 @@ impl Parser {
                 );
             }
 
-            // Optional guard clause
-            let guard_opt = if self.lexer.has_keyword("if") {
+            // Optional guard clause — `tuple-arm ::= tuple-pattern [ guard ] '=>' expression`
+            // (TUPLES.md § Grammar).  Element bindings are in scope for it, and
+            // `chain_pattern_arms` assigns them before the guard runs.
+            let guard_opt = if self.lexer.has_token("if") {
                 let mut g = Value::Null;
                 let gt = self.expression(&mut g);
                 if !self.first_pass && gt != Type::Boolean {
@@ -7764,26 +7907,29 @@ impl Parser {
                 Some(combined)
             };
 
-            // Combine condition with guard
-            let full_cond = match (cond, guard_opt) {
-                (Some(c), Some(g)) => Some(v_if(c, g, Value::Boolean(false))),
-                (Some(c), None) => Some(c),
-                (None, Some(g)) => Some(g),
-                (None, None) => None,
-            };
-
-            // Prepend bindings to arm body
-            let arm_body = if bindings.is_empty() {
-                arm_body
+            // Without a guard the bindings fold into the body exactly as before; with one they
+            // stay separate so `chain_pattern_arms` can run them ahead of the guard.
+            let (arm_body, arm_bindings) = if guard_opt.is_some() {
+                (arm_body, bindings)
+            } else if bindings.is_empty() {
+                (arm_body, Vec::new())
             } else {
                 bindings.push(arm_body);
-                v_block(bindings, arm_type.clone(), "tuple_binding")
+                (
+                    v_block(bindings, arm_type.clone(), "tuple_binding"),
+                    Vec::new(),
+                )
             };
 
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
-            arms.push((full_cond, arm_body, arm_type, None));
+            arms.push(PatternArm {
+                cond,
+                guard: guard_opt,
+                bindings: arm_bindings,
+                code: arm_body,
+            });
 
             if has_wildcard {
                 self.lexer.has_token(",");
@@ -7798,24 +7944,26 @@ impl Parser {
                 self.lexer.has_token(",");
                 self.lexer.has_token(";");
             }
+            // Backstop for the invariant declared at `arm_start`: a whole arm parsed
+            // without consuming a token means no later iteration can consume one
+            // either, so stop instead of spinning.  The shapes known to reach here
+            // are handled above with their own diagnostics; this catches the ones
+            // nobody has written a probe for yet.  `token("}")` below reports the
+            // arm loop's failure to reach a close brace, as the vector arm loop's
+            // own no-progress `break` does.
+            if self.lexer.at() == arm_start {
+                break;
+            }
         }
         self.lexer.token("}");
 
         // Build if-else chain (last arm is fallback / wildcard)
         let fallback = if has_wildcard {
-            let (_, arm_code, _, _) = arms.pop().unwrap();
-            arm_code
+            arms.pop().unwrap().code
         } else {
             self.null(&result_type)
         };
-        let mut chain = fallback;
-        for (cond_opt, arm_code, _, _) in arms.into_iter().rev() {
-            chain = if let Some(cond) = cond_opt {
-                v_if(cond, arm_code, chain)
-            } else {
-                arm_code
-            };
-        }
+        let chain = chain_pattern_arms(arms, fallback, &result_type);
 
         *code = v_block(
             vec![v_set(tmp, subject), chain],

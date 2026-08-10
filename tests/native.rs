@@ -835,6 +835,7 @@ fn native_features() -> std::io::Result<()> {
 ///
 /// Runs concurrently with interpreter-based wrap tests (no WRAP_LOCK).
 /// Skips silently if `rustc` is not in PATH.
+// @speed 6.1
 #[test]
 fn native_scripts() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -1312,6 +1313,7 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
 /// The library is built here rather than mocked, and the control is the call
 /// that WORKS (`sk_present(41)` is 42, by hand): without it a `false` could just
 /// mean nothing loaded, which is the vacuous pass this test exists to refuse.
+// @speed 1.1
 #[test]
 fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -1416,6 +1418,7 @@ fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
 /// running this test fetch it. Declared `[c] optional-libs` it costs nothing —
 /// the fixture builds and runs without it, and says so — which is what makes
 /// keeping a fourth backend in the tree cheap rather than a vendoring decision.
+// @speed 2.1
 #[test]
 fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -1752,6 +1755,28 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
 /// @PLN133 S2–S5 — one table definition, derived and reconciled, with no
 /// database anywhere.
 ///
+/// Drop the sqldb fixtures' `note:` advisories before comparing two backends' stdout.
+///
+/// Each of those fixtures deletes its temp database on the way out and prints
+/// `note: … was not removable` when the file survives.  That reports on the ENVIRONMENT,
+/// not on the answer the oracle is about.  On Windows a database file's handle can outlive
+/// the process that held it for a moment, so the first backend's run reports the note and
+/// the second — run straight after, against the same path — does not; the two stdouts then
+/// differ by a line neither backend computed, and a green leg went red at a commit that had
+/// changed nothing about either path (loft#834).
+///
+/// Only the advisory is dropped.  Every line carrying a value, a count, or a driver hit is
+/// still compared, and each backend is still checked against `expect` with the note in
+/// place — so a fixture that genuinely stopped cleaning up on both backends is still
+/// visible, and the failure this filters is the one that is not a difference in behaviour.
+fn answer_without_housekeeping(stdout: &str) -> String {
+    stdout
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("note: "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The whole point of `TableDef` being a VALUE is that it is built two ways —
 /// derived from a loft type, or read back from a database — and consumed four,
 /// with nothing downstream allowed to ask which. That makes the derivation
@@ -1912,7 +1937,11 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
         // worth comparing rather than each line.
         match &first {
             None => first = Some(stdout),
-            Some(f) => assert_eq!(f, &stdout, "both backends, one table definition"),
+            Some(f) => assert_eq!(
+                answer_without_housekeeping(f),
+                answer_without_housekeeping(&stdout),
+                "both backends, one table definition"
+            ),
         }
     }
     Ok(())
@@ -2058,7 +2087,11 @@ fn a_connection_the_registry_opened_is_a_connection() -> std::io::Result<()> {
         }
         match &first {
             None => first = Some(stdout),
-            Some(f) => assert_eq!(f, &stdout, "both backends, one registry"),
+            Some(f) => assert_eq!(
+                answer_without_housekeeping(f),
+                answer_without_housekeeping(&stdout),
+                "both backends, one registry"
+            ),
         }
     }
     Ok(())
@@ -2172,7 +2205,11 @@ fn a_lazy_read_gives_one_answer_down_rust_and_down_loft() -> std::io::Result<()>
         );
         match &first {
             None => first = Some(stdout),
-            Some(f) => assert_eq!(f, &stdout, "both backends, one answer per path"),
+            Some(f) => assert_eq!(
+                answer_without_housekeeping(f),
+                answer_without_housekeeping(&stdout),
+                "both backends, one answer per path"
+            ),
         }
     }
     Ok(())
@@ -2280,7 +2317,11 @@ fn a_structure_written_is_immediately_readable_through_one_connection_string() -
         );
         match &first {
             None => first = Some(stdout),
-            Some(f) => assert_eq!(f, &stdout, "both backends, one round trip"),
+            Some(f) => assert_eq!(
+                answer_without_housekeeping(f),
+                answer_without_housekeeping(&stdout),
+                "both backends, one round trip"
+            ),
         }
     }
     Ok(())
@@ -3004,6 +3045,7 @@ fn run_lib_test_in_temp_cwd(
 /// Holds `native_suite_lock` so it serialises with the other native suites
 /// (shared `/tmp` rlib + binary cache).  Skips silently when `rustc` / the loft
 /// rlib are unavailable, like `native_scripts`.
+// @speed 2.5
 #[test]
 fn native_library_suite() -> std::io::Result<()> {
     let _guard = native_suite_lock()

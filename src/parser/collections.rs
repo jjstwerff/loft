@@ -328,17 +328,29 @@ impl Parser {
         if matches!(*is_type, Type::Text(_)) {
             return self.iter_text(code, iter_var, pre_var);
         }
-        // CO1.5a: coroutine iterators (from generator function calls) need
-        // a next()-based advance. Detect: the call target returns Iterator.
+        // CO1.5a: a coroutine handle needs a next()-based advance.
+        //
+        // The SUBJECT's own type decides this, not the shape it arrives in.  A collection
+        // loop always arrives with its container type (`Type::Vector`, `Type::Sorted`, a
+        // keyed type, …) — only `should`, the type the loop is being driven TOWARD, is the
+        // generic iterator marker — so a subject that already IS `Type::Iterator` can only
+        // be a generator handle.  Gating on a CALL instead left `g = steps(); for x in g`
+        // falling through to the collection-cursor advance: nothing ran the generator, the
+        // read never terminated, and the loop yielded `u16::MAX` forever (loft#841).
         if let Type::Iterator(inner, _) = is_type
             && !self.first_pass
-            && let Value::Call(d_nr, _) = code.unspan()
-            && matches!(self.data.def(*d_nr).returned(), Type::Iterator(_, _))
         {
-            let gen_var = self.create_unique("__gen", is_type);
-            self.vars.defined(gen_var);
-            let gen_expr = code.clone();
-            *code = v_set(gen_var, gen_expr);
+            // A handle already in a variable is used in place.  Copying it into a `__gen`
+            // temp would hand a second owner to one coroutine's state store, and the loop's
+            // scope would free it out from under the variable the caller still holds.
+            let (gen_var, setup) = if let Value::Var(v) = code.unspan() {
+                (*v, Value::Null)
+            } else {
+                let g = self.create_unique("__gen", is_type);
+                self.vars.defined(g);
+                (g, v_set(g, code.clone()))
+            };
+            *code = setup;
             let op = self.data.def_nr("OpCoroutineNext");
             let yield_tp = (**inner).clone();
             // @P327 / @P328 native — yield-channel dispatch via packed
@@ -372,7 +384,8 @@ impl Parser {
             return Value::Call(op, call_args);
         }
         if is_type == should {
-            // Non-coroutine pre-existing iterator (sorted/hash/index).
+            // Reached only on the FIRST pass, where the coroutine branch above is skipped:
+            // a subject that IS an iterator is a coroutine handle, and pass 1 emits no code.
             let orig = code.clone();
             *code = Value::Null;
             return orig;
@@ -2060,10 +2073,6 @@ use #count instead"
                 );
                 return;
             }
-            // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
-            let is_coroutine_loop = matches!(&in_type, Type::Iterator(_, _))
-                && !self.first_pass
-                && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned(), Type::Iterator(_, _)));
             let (iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
             // loft#762 — `_` names THIS loop's binding while its body is parsed, and
@@ -2226,13 +2235,24 @@ use #count instead"
             // Extract the generator var (first arg of OpCoroutineNext) before
             // `iter_next` is consumed by `for_next` — @P327 needs it for the
             // tuple-yield exhaustion check below.
-            let gen_var = if let Value::Call(_, args) = &iter_next
+            //
+            // This ALSO decides whether the loop is driving a coroutine at all, because the
+            // advance `iterator()` emitted is the only thing that knows.  The subject's type
+            // cannot answer it: a range `1..5` is typed `Type::Iterator` too, but arrives as
+            // an inline `Value::Iter` that carries its own bound test and never reaches the
+            // coroutine path — reading coroutine-ness off the type gave every range loop a
+            // second, redundant exhaustion break.  Matching the op by name rather than any
+            // call-with-a-var keeps that answer exact.
+            let coroutine_next_op = self.data.def_nr("OpCoroutineNext");
+            let gen_var = if let Value::Call(d_nr, args) = &iter_next
+                && *d_nr == coroutine_next_op
                 && let Some(Value::Var(v)) = args.first()
             {
                 *v
             } else {
                 u16::MAX
             };
+            let is_coroutine_loop = gen_var != u16::MAX;
             // #481 (the #306-message half): a heap-ref coroutine yield is a
             // DbRef INTO the generator's state store — both for yielded views
             // of generator locals AND for records constructed in the

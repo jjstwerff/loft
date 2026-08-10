@@ -158,6 +158,7 @@ fn second_run_reuses_safe_cache() {
 }
 
 #[cfg(unix)]
+// @speed 1.0
 #[test]
 fn group_writable_cache_is_recompiled() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -236,6 +237,7 @@ fn group_writable_cache_is_recompiled() {
 }
 
 #[cfg(unix)]
+// @speed 0.9
 #[test]
 fn poisoned_cache_binary_is_not_executed() {
     let dir = tmp_subdir("poisoned");

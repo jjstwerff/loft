@@ -6,8 +6,9 @@
 
 > **Status: completed in 0.8.3.** CO1.1–CO1.6 implemented; `yield from` (CO1.4) deferred to 1.1+.
 > Open enhancement: **native lazy loop yields** ([Design: lazy loop yields (CL-9)](#design-lazy-loop-yields-cl-9))
-> — make a `yield` inside a loop lazy on `--native` (it is eager today), closing the
-> [formal/coroutines.md](formal/coroutines.md) decided edge.
+> — slice 1 has landed (loft#836): a loop body ending in one unconditional `yield` is lazy on
+> `--native`. Slices 2–4 (multiple / conditional yields, nested and `while` loops, text-in-loop
+> interning) are what remains of the [formal/coroutines.md](formal/coroutines.md) decided edge.
 
 Coroutines give loft programs generator functions: functions that can suspend
 execution with `yield`, return a value to the caller, and resume from the same
@@ -831,10 +832,13 @@ code. No optimisation is planned for the initial implementation.
 **Problem:** If an exhausted frame were freed and its slot reused, a subsequent
 `next()` on the old DbRef would access the wrong frame.
 
-**Mitigation:** Exhausted frames are kept alive in `State.coroutines` (status
-set to `Exhausted`, `stack_bytes` and `text_owned` cleared). `OpCoroutineNext`
-on an `Exhausted` frame pushes null immediately without entering the body. The
-slot is not freed until the DbRef goes out of scope (pending GC — see CL-3).
+**Mitigation:** every handle carries a **generation stamp** in `DbRef::pos`, taken
+from the frame it was made for, and each entry point (`coroutine_next`,
+`coroutine_exhausted`, `free_coroutine`) compares it before touching the slot. A
+handle whose frame is gone reads as exhausted and frees nothing, so the slot can
+be recycled the moment its generator finishes — which is what makes the
+scope-exit free of a handle safe (loft#835). `OpCoroutineNext` on an `Exhausted`
+frame pushes null immediately without entering the body.
 
 ---
 
@@ -1133,12 +1137,12 @@ Implement the suspend/resume cycle.
 | CL-2 | DbRef locals held across a yield dangle if the caller frees or reallocates the referenced record | Do not free records that a suspended generator still holds; advance the generator to exhaustion first |
 | CL-2b | A `text` value derived from a store record field (store-backed `Str`) that is live at a `yield` point will dangle if the consumer frees or reuses the backing store record before the next resume | Do not delete the backing record or free the store while the generator is suspended with a store-derived text local; CO1.3d will deep-copy these at yield time once implemented (P2-R3) |
 | CL-7 | A `text` value produced by `yield` is a zero-copy reference into the generator's frame (or into a `text_owned` buffer once CO1.3d lands); it is valid only for the current loop body iteration (or until the next `next()` call for explicit-advance code) | To keep the text beyond one iteration, copy it: `stored = "{value}"` or pass it to a function that calls `set_str` |
-| CL-3 | Exhausted frames are not freed until the `iterator<T>` DbRef goes out of scope; without GC, frames are leaked if the variable is abandoned | Ensure every generator is run to exhaustion, or call `drop(gen)` once implemented |
+| CL-3 | ~~Exhausted frames are not freed until the `iterator<T>` DbRef goes out of scope; without GC, frames are leaked if the variable is abandoned~~ **FIXED (loft#835).** A generator handle is freed at the end of the scope holding it, which releases the frame and every heap local the generator still owned; an exhausted frame is freed where it exhausts, and a generation stamp keeps the later scope-exit free off the slot's next occupant. Abandoning a generator needs no care from the author, on the interpreter. On `--native` the handle's free is still a no-op, so an abandoned native generator's own locals are not yet reclaimed | none needed on the interpreter |
 | CL-4 | Generator `iterator<T>` values must not cross `par(...)` boundaries | Accumulate parallel results in a collection, then iterate the collection outside `par(...)` |
 | CL-5 | Serialisation cost per yield is O(frame depth); deeply recursive `yield from` chains are slow | Flatten recursive generators iteratively using an explicit `vector` stack local |
 | CL-6 | Mutable-reference parameters (`&vector<T>`) in a generator function are not visible to the frame copy | Pass collections by value or use `reference<T>` and write through the reference |
 | CL-8 | On `--native`, a generator yielding a tuple with a **text element** (`iterator<(text, integer)>`) does not yet compile — a yielded `text` is a `&str`, so riding the unified yield codec needs a store intern (`db_from_text`) with a lifetime question still open. Scalar and DbRef-ref tuple elements (`(integer, float)`, `(vector, integer)`, …) work on both backends. | Yield the text from a separate single-`text` generator, or wrap the pair in a record and yield its `reference<S>` |
-| CL-9 | On `--native`, a `yield` **inside a loop** (`for` / `loop` / `while`) is evaluated **EAGERLY** — the `ForLoopBody` segment runs the loop to completion and buffers every yield into a `Vec<i64>` (`generation/coroutine.rs`), then serves them one at a time. Straight-line yields are lazy; the interpreter is fully lazy. So a loop-generator's side effects interleave differently across backends, and an INFINITE or early-`break`-consumed loop-generator runs unboundedly on native. Values agree for a finite, fully-consumed generator. Formal decided edge: [formal/coroutines.md](formal/coroutines.md). | Use **straight-line** yields where laziness matters, or fully drain the loop-generator. The removal design is **[Lazy loop yields (CL-9)](#design-lazy-loop-yields-cl-9)** below. |
+| CL-9 | **Mostly fixed (loft#836, slice 1).** A loop whose body ends in ONE unconditional `yield` is now lazy on `--native` too: one iteration per advance, the cursor persisted in the coroutine struct. An infinite or early-`break`-consumed loop-generator therefore stops when its consumer does. FOUR shapes still take the eager `ForLoopBody` buffer, so their side effects still interleave differently: more than one yield per iteration, a yield inside an `if`/`match`, a nested loop, a `continue`, and a statement AFTER the yield (each needs a resume point one state cannot encode — axes A2–A5). A yield of a tuple / fn-ref (the `next_into` channel) or of a struct / vector (the `__ref_*` work local is not persisted, so it would leak per yield) also stays eager. Values agree throughout. | Put the `yield` last in the loop body and yield a scalar or `text` — that shape is lazy on both backends. Otherwise use **straight-line** yields, or fully drain the generator. Remaining slices: **[Lazy loop yields (CL-9)](#design-lazy-loop-yields-cl-9)** below. |
 
 ### Native yield codec — status (@PLAN16 phase 02)
 
@@ -1159,11 +1163,12 @@ Full record: the @PLAN16 closure doc at
 
 ## Design: lazy loop yields (CL-9)
 
-> **Status: designed, not built (2026-07-04).** The removal path for CL-9 — the native
-> eager-loop-yield limitation and the [formal/coroutines.md](formal/coroutines.md) decided edge.
-> A tracked enhancement, M-sized; no dedicated `loft-lang/plans` issue yet (file one when it is
-> scheduled). Written as a *testable design* (an invariant + its failure axes), per the
-> design-protocol skill.
+> **Status: slice 1 built (loft#836, 2026-08-10); slices 2-4 open.** A loop whose body ends in
+> ONE unconditional `yield` is lowered to a header+body state pair — one iteration per advance,
+> the cursor persisted — and everything else keeps the eager buffer. `tests/scripts/836-lazy-loop-yields.loft`
+> and `tests/oracle/26-coroutine-laziness.loft` assert the interleaving; VALUES cannot, which is
+> why the value-only oracle reported agreement across a difference this wide.
+> The rest below is the original design, kept as the map for slices 2-4.
 
 ### The problem, precisely
 

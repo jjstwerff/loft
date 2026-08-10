@@ -82,6 +82,7 @@ fn cdylib_present(dir: &std::path::Path) -> bool {
     })
 }
 
+// @speed 1.1
 #[test]
 fn use_compile_native_library_dispatches_on_real_binary() {
     // The binary auto-builds the cdylib via rustc; skip where it isn't available.
@@ -161,6 +162,7 @@ fn use_compile_native_library_dispatches_on_real_binary() {
 /// (`__lambda_N`, made `pub_visible` by the enclosing `pub fn`) is NOT a dispatch
 /// target — it is a fn-ref target, not script-callable public API — so no
 /// `loft_shared_n___lambda` symbol appears in the cdylib.
+// @speed 1.2
 #[test]
 fn mixed_library_dispatches_native_and_interprets_rest() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -539,6 +541,7 @@ fn cdylib_type_indices_stay_valid_across_consumer_contexts() {
 /// would pass this test while verifying nothing. So the SAME copy is done with a
 /// MATCHING artifact first, and that one must be adopted. Both arms churn the
 /// mtime identically; only the declared layout differs.
+// @speed 3.3
 #[test]
 fn a_foreign_context_artifact_is_rejected_not_adopted() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -875,6 +878,7 @@ fn inserting_into_a_keyed_collection_over_an_imported_struct_works() {
 /// Builds more distinct contexts than the keep window and requires the directory to
 /// stop growing.  The count is what carries this: a fix that pruned nothing would
 /// still leave every program RUNNING, so no behavioural assertion can see it.
+// @speed 12.8
 #[test]
 fn a_packages_artifact_directory_stays_bounded() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -947,6 +951,354 @@ fn a_packages_artifact_directory_stays_bounded() {
         count <= 8,
         "`native-auto/` grew to {count} artifacts from {built} contexts; it must keep \
          at most the 8 most recent (`KEEP_ARTIFACTS`)"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── loft#831 — a cdylib that cannot be dispatched through must INTERPRET ─────
+//
+// The auto-native model has always promised a fallback: "a library that can't
+// compile native silently interprets, no `exit`, no `OpStaticCall` to an unbuilt
+// symbol."  It was enforced against the wrong fact.  Marking happened because the
+// BUILD succeeded, and a build succeeding does not mean this process can dispatch
+// through the result — the artifact can be linked against a different
+// `libloft.rlib`, be missing a system library, or be replaced by a concurrent
+// build between the freshness check and the load.  `byte_code` had by then emitted
+// `OpStaticCall` to a symbol nothing would wire, and the first call hit the
+// `compile.rs` panic stub (exit 101) with the loft body it was compiled from
+// sitting in the same process, ready to run.
+//
+// crawler measured the consequence: their 88-test gate is green serially and loses
+// a DIFFERENT test on each parallel run, which cost them a 15x speedup because a
+// suite that fails somewhere new each time is worse than a slow one.
+//
+// The fix asks the question whose answer matters — load the artifact and `dlsym`
+// each bridge — before deciding to dispatch, so an unresolvable symbol simply
+// leaves its function interpreting.  Loading also PINS the image for the process,
+// so a concurrent prune or rebuild cannot invalidate the decision afterwards.
+//
+// The fixture is a real artifact replaced by a valid cdylib that exports no
+// `loft_shared_*` symbol.  That shape is adopted by every freshness check there
+// is: the file exists, it is newer than the sources, it opens, and it declares no
+// type layout — which `artifact_matches_layout` reads as "a hand-written cdylib,
+// fine to adopt".  Verified against this exact fixture: with the probe removed,
+// `--interpret` dies at `compile.rs:365` with exit 101.
+
+/// Compile a stand-in cdylib at `at`, exporting exactly `exports` (bare
+/// `extern "C" fn() -> u64` stubs).  With none, it is the artifact that loads and
+/// resolves nothing; with one, it forces the PARTIAL case — some functions
+/// dispatch native and the rest interpret, in the same run.
+fn write_decoy_cdylib(at: &std::path::Path, exports: &[&str], scratch: &std::path::Path) -> bool {
+    let src = scratch.join("decoy.rs");
+    let mut body = String::new();
+    for sym in exports {
+        body.push_str(&format!(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn {sym}() -> u64 {{ 0 }}\n"
+        ));
+    }
+    // A cdylib with no exports at all still links; the marker keeps it non-empty.
+    body.push_str("#[unsafe(no_mangle)] pub extern \"C\" fn loft_decoy_marker() -> u64 { 0 }\n");
+    std::fs::write(&src, body).expect("write the decoy source");
+    Command::new("rustc")
+        .arg("--crate-type=cdylib")
+        .arg("--edition")
+        .arg("2021")
+        .arg(&src)
+        .arg("-o")
+        .arg(at)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// The one auto-built artifact under `dir`.
+fn sole_artifact(dir: &std::path::Path) -> std::path::PathBuf {
+    let ext = if cfg!(target_os = "windows") {
+        "dll"
+    } else if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .expect("read native-auto")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == ext))
+        .collect();
+    assert_eq!(found.len(), 1, "expected exactly one artifact in {dir:?}");
+    found.pop().expect("the artifact")
+}
+
+#[test]
+fn an_unwirable_cdylib_interprets_instead_of_panicking() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_831_unwirable_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prog = tmp.join("main.loft");
+    std::fs::write(
+        &prog,
+        "use mathnative;\n\
+         fn main() {\n\
+         \x20   println(\"{double(21)}\");\n\
+         \x20   println(\"{add(3, 4)}\");\n\
+         \x20   println(\"{factorial(5)}\");\n\
+         }\n",
+    )
+    .unwrap();
+    let lib = private_lib(&tmp, &["mathnative"]);
+    let native_auto = lib.join("mathnative/native-auto");
+
+    let run = |extra: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+        // `--interpret`: under `--native` the library's functions compile into the
+        // whole-program binary and the cdylib is never dispatched to, so the
+        // interpreter is the backend that can reach the stub at all.
+        cmd.arg("--interpret")
+            .arg("--lib")
+            .arg(&lib)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1");
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("run the loft binary")
+    };
+
+    // 1. A real run first — this builds the artifact whose place the decoy takes.
+    let first = run(&[]);
+    assert!(
+        first.status.success(),
+        "the baseline native-dispatch run must pass.\nstderr:\n{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout), "42\n7\n120\n");
+
+    // 2. Replace it with a cdylib that loads and exports no bridge at all.
+    let artifact = sole_artifact(&native_auto);
+    assert!(
+        write_decoy_cdylib(&artifact, &[], &tmp),
+        "rustc could not build the decoy cdylib"
+    );
+
+    let out = run(&[]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The whole point: same answers, from the interpreted bodies.
+    assert!(
+        out.status.success(),
+        "an unwirable cdylib must not take the program down (loft#831).\n\
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "42\n7\n120\n",
+        "the interpreted fallback must produce identical results"
+    );
+    assert!(
+        !stderr.contains("could not be wired"),
+        "nothing may be marked for cdylib dispatch once the probe fails.\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("native function not loaded"),
+        "the compile.rs panic stub must be unreachable.\nstderr:\n{stderr}"
+    );
+    // One line for the library, naming what fell back — not one per function.
+    assert!(
+        stderr.contains("runs 3 function(s) interpreted this run"),
+        "the fallback must be reported once, with a count.\nstderr:\n{stderr}"
+    );
+
+    // 3. `LOFT_REQUIRE_NATIVE` exists so a performance run can never silently
+    //    interpret.  This is a native→interpreter degrade, so it must hard-fail
+    //    and name itself — the same contract the build-failure arm already has.
+    let strict = run(&[("LOFT_REQUIRE_NATIVE", "1")]);
+    let strict_err = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        !strict.status.success(),
+        "LOFT_REQUIRE_NATIVE must refuse a run that would interpret.\nstderr:\n{strict_err}"
+    );
+    assert!(
+        strict_err.contains("LOFT_REQUIRE_NATIVE is set"),
+        "the refusal must name the env var.\nstderr:\n{strict_err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The PARTIAL cell: an artifact exporting SOME of the export set's bridges.
+/// Marking has to split — the resolvable function dispatches native, the rest
+/// interpret — rather than being all-or-nothing in either direction.  The
+/// exported bridge is deliberately one the script never calls, so nothing
+/// dispatches into the stand-in's (deliberately wrong-ABI) body.
+#[test]
+fn a_partially_exporting_cdylib_marks_only_what_resolves() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_831_partial_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prog = tmp.join("main.loft");
+    std::fs::write(
+        &prog,
+        "use mathnative;\n\
+         fn main() {\n\
+         \x20   println(\"{double(21)}\");\n\
+         \x20   println(\"{add(3, 4)}\");\n\
+         }\n",
+    )
+    .unwrap();
+    let lib = private_lib(&tmp, &["mathnative"]);
+    let native_auto = lib.join("mathnative/native-auto");
+
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--interpret")
+            .arg("--lib")
+            .arg(&lib)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary")
+    };
+
+    assert!(run().status.success(), "baseline run");
+    let artifact = sole_artifact(&native_auto);
+    assert!(
+        write_decoy_cdylib(&artifact, &["loft_shared_n_factorial"], &tmp),
+        "rustc could not build the decoy cdylib"
+    );
+
+    let out = run();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "partial resolution must still run.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "42\n7\n");
+    assert!(
+        stderr.contains("runs 2 function(s) interpreted this run"),
+        "exactly the two unresolvable functions fall back — factorial's bridge \
+         resolved, so it stays marked.\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("could not be wired"),
+        "a marked function must be one that wires.\nstderr:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// loft#831, residual half — `native-auto/` is not exclusively the auto-native
+/// builder's, and the sweep that bounds it must only take its OWN artifacts.
+///
+/// A package with a `[c] shim` builds its shim cdylib into the same directory.
+/// That library is content-keyed and built exactly ONCE, so it is permanently the
+/// oldest file there — and an age-ordered sweep over every `.so` deletes the
+/// oldest first.  Deleting an auto-native artifact costs a rebuild; deleting the
+/// shim removes the only definition of the package's `#c` symbols, and the next
+/// run dies with *"`#c` symbol 'ls_slot_a' not found — … or check the spelling"*,
+/// which names neither the library nor the sweep that ate it.
+///
+/// Reproduced deterministically against `tests/fixtures/sqldb/sqlite` before the
+/// fix: saturate the directory, run once, and the shim is gone with exit 101.
+/// Parallel runs are what saturate it — each distinct type-layout context mints
+/// an artifact of its own — which is why this surfaced as a suite that loses a
+/// different test on each parallel run and passes serially.
+///
+/// The decoy stands in for the shim: a loadable `.so` that is not of the
+/// `loft_auto_<pkg>_` family, placed first so it is the oldest.
+// @speed 12.5
+#[test]
+fn a_foreign_library_in_native_auto_survives_pruning() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_831_prune_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let lib = private_lib(&tmp, &["mathnative", "typeshift"]);
+    let native_auto = lib.join("mathnative/native-auto");
+    std::fs::create_dir_all(&native_auto).unwrap();
+
+    // Named the way `c_shim.rs` names a shim: `<pkg>_shim_<key>`, platform prefix
+    // included, so this is the real filename shape and not a lookalike.
+    let ext = if cfg!(target_os = "windows") {
+        "dll"
+    } else if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let prefix = if cfg!(target_os = "windows") {
+        ""
+    } else {
+        "lib"
+    };
+    let shim = native_auto.join(format!("{prefix}mathnative_shim_00000000deadbeef.{ext}"));
+    assert!(
+        write_decoy_cdylib(&shim, &[], &tmp),
+        "rustc could not build the stand-in shim"
+    );
+
+    // Twelve distinct type-layout contexts, each minting its own artifact — past
+    // the eight-artifact keep window, so the sweep definitely runs.
+    for n in 0..12 {
+        let pad: String = (0..n)
+            .map(|i| format!("struct Pad{i} {{ p_a: integer, p_b: text }}\n"))
+            .collect();
+        let prog = tmp.join(format!("ctx{n}.loft"));
+        std::fs::write(
+            &prog,
+            format!("use mathnative;\n{pad}fn main() {{ println(\"{{double(21)}}\"); }}\n"),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--lib")
+            .arg(&lib)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary");
+        assert!(
+            out.status.success(),
+            "context {n} must still run.\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let auto: Vec<String> = std::fs::read_dir(&native_auto)
+        .expect("read native-auto")
+        .flatten()
+        .filter_map(|e| e.path().file_name()?.to_str().map(ToString::to_string))
+        .filter(|n| n.ends_with(ext))
+        .collect();
+    // The CONTROL: the contexts really did mint distinct artifacts, so the bound
+    // below is a bound rather than everything sharing one name.
+    let family = auto.iter().filter(|n| n.contains("loft_auto_")).count();
+    assert!(
+        family > 1,
+        "the contexts shared one artifact, so this proves nothing about pruning: {auto:?}"
+    );
+    assert!(
+        family <= 8,
+        "the auto-native family must stay bounded at KEEP_ARTIFACTS: {auto:?}"
+    );
+    // The point: a library the sweep does not own is still there.
+    assert!(
+        shim.exists(),
+        "the sweep deleted a foreign library from native-auto/ — a `[c]` shim would \
+         take the package's whole `#c` surface with it (loft#831).  Present: {auto:?}"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

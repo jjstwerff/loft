@@ -7,17 +7,32 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arcs A, B and C shipped** (all layout-neutral), **Q2 shipped**, and the only arc
-left is **H**. **Q1 is answered H, not D**; **Q2's refusal mechanism is in the tree**;
-**Q3 dissolved**.
+**CLOSED (2026-08-10) — arcs A, B, C, Q2 and H all shipped.** H is in the tree and
+measured, and the measurement corrects this plan's central prediction: see
+[§ What H actually bought](#what-h-actually-bought-2026-08-10--insert-and-bytes-not-lookup).
+Read that section before re-deriving anything from the Q1 / Q5 numbers below, which are
+correct as measurements and were over-read as a forecast.
 
-**H still needs a design cycle before it is built, and the reason is not the byte
-layout.** H makes an entry a position inside one contiguous array, so growing that array
-moves every entry and invalidates every outstanding reference into it — a stability
-callers have today and would lose (**Q5**, new). That is an ownership question in the area
-ranked weakness #1, not plumbing. **Q4** (load factor) is settled inside H.
+| | before | after | |
+|---|---|---|---|
+| insert 1M, reserved | 330 ms | **258 ms** | **1.28x** |
+| store bytes / entry | 27.67 B | **18.6 B** | **−33%** |
+| claimed records, 2000 entries | ~2000 | **9** | table + directory + 6 chunks |
+| random lookup, 1M | 184 ns | 183 ns | **unchanged** |
 
-**Q1 — answered: H, not D.** See
+**What H must be built as changed on 2026-08-09, and the reason was never the byte
+layout.** Drafted as one contiguous array, H moves every entry when it grows and
+invalidates every outstanding reference into it — a stability callers have today and would
+lose (**Q5**), which is an ownership question in the area ranked weakness #1, not plumbing.
+**Q5 is measured and answered: a CHUNKED arena keeps the win** — 86 ns at 64K entries/chunk against a dense array's 77 and today's 200, and that
+is an upper bound (see [§ The Q5 measurement](#the-q5-measurement-2026-08-09--chunking-keeps-the-win)).
+So H can keep every live entry at the address it was handed out at, which is what makes it
+compatible, without giving up the locality it exists to buy. **Q4** (load factor) is
+settled inside H.
+
+**Q1 — answered: H, not D.** (And the ANSWER was right while the forecast attached to it
+was not — H's win is insert and bytes, not the lookup this paragraph predicted. See
+[§ What H actually bought](#what-h-actually-bought-2026-08-10--insert-and-bytes-not-lookup).) See
 [§ The Q1 measurement (2026-08-09)](#the-q1-measurement-2026-08-09--it-is-one-access-and-it-is-a-byte-problem).
 The record read is **82%** of a 1M random lookup and the bucket read is 8%, so D spends
 the one format break available on the small term; H's ceiling (measured against a dense
@@ -87,7 +102,7 @@ Close the integer-key `hash<T[key]>` gap to `Dictionary<long,long>`, starting wi
 ## Effort + design
 
 - **Effort:** MH (A: S · B: S · C: S · D: M · E: S · H: MH) — **only H remains**
-- **Design:** ~ (Q1 answered 2026-08-09 → H; Q2 shipped 2026-08-09; Q3 dissolved; **Q5 open and blocks H** — entry-reference stability is an ownership question; **Q4 open**, settle it inside H)
+- **Design:** ~ (Q1 answered → H; Q2 shipped; Q3 dissolved; Q5 answered → chunked arena, measured; **Q4 open**, settle it inside H — all 2026-08-09)
 - **Value category:** Q (internal quality — performance with a clear payoff)
 - **Last touched:** 2026-08-09
 
@@ -227,7 +242,7 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
 | **Q2** — placement token in the @PLN97 layout identity, so an old store refuses instead of misreading | nothing on its own; it is what lets H spend a format break safely | no (absence = baseline) | **Done** |
 | **D** — cache the hash in the bucket slot (`(u32 rec, u32 hash)`) | 171 ms + most per-probe cost | **yes** | **Retired by Q1** — attacks the 8% term and adds bytes to the 82% one |
 | **E** — seeded integer hash + division-free bucket index | ~13% combined (measured); **insert-only — the lookup half is 1 ns of 36**, and arc D removes most of the insert half too | **yes** | **Retired by Q1** — revive only with a written P253 argument (Q3) |
-| **H** — inline contiguous entry array behind `Parts::Hash` | subsumes A/B/D + locality; ceiling ~2x on random lookup | **yes** | **The only arc left, and it needs a design cycle** — Q5 (entry-reference stability, an OWNERSHIP question) blocks it; settle Q4 inside it; measure against 34 MB, not 49 |
+| **H** — CHUNKED entry arena behind `Parts::Hash` (not one array — see Q5) | subsumes A/B/D + locality; **measured 2.3x** on random lookup, ceiling 2.6x | **yes** | **The only arc left, and now unblocked** — Q5 answered, Q2's refusal mechanism shipped; settle Q4 inside it; measure against 34 MB, not 49 |
 
 ## Phase ordering
 
@@ -299,10 +314,11 @@ asserted a VALUE and a LENGTH rather than agreement between two runs.
    layout identity with a per-kind `placement` token, so an old store refuses rather than
    misreads; it shipped ahead of H because absence means the baseline, which invalidates
    nothing already on disk.
-6. **H — next, and it needs a design cycle.** Q5 (entry-reference stability) blocks it:
-   it is an ownership question, not a layout one. Settle Q4 (load factor) inside it — a
-   load-factor change is a layout change either way, so it costs nothing extra there and
-   cannot be spent separately.
+6. **H — next, and unblocked.** Build it as a CHUNKED arena, not one array: Q5 measured
+   that chunking keeps the win (86 ns vs a dense 77 and today's 200) while leaving every
+   live entry at the address it was handed out at, which is what keeps it compatible.
+   Settle Q4 (load factor) inside it — a load-factor change is a layout change either way,
+   so it costs nothing extra there and cannot be spent separately.
 
 ## The Q1 measurement (2026-08-09) — it is ONE access, and it is a byte problem
 
@@ -384,6 +400,52 @@ That is the mechanism behind the 185 ns. It is a working-set problem, and **arc 
 not shrink the working set** — it adds 4 bytes per bucket slot. H is the only arc that
 touches the term that carries the cost.
 
+## The Q5 measurement (2026-08-09) — chunking keeps the win
+
+Q5 asks whether H can keep entries STABLE, which today's per-entry claim gives for free
+and a single contiguous array takes away. The candidate is an arena that grows by
+appending a chunk and never reallocates one that already holds entries. It is only worth
+building if chunking does not spend the locality H exists to buy — so measure that first,
+the same way § What arc H can buy measured H's ceiling: the layout is a shape the language
+can already build.
+
+`probes/q5-chunked-arena.loft`, 1M `Entry{integer,integer}`, shuffled order, one
+configuration per PROCESS, min of 3, `--native-release`. Same box as the Q1 table; read
+the deltas, not the absolutes.
+
+| shape | ns | vs today |
+|---|---|---|
+| dense `vector<Entry>` — H's ceiling | **77** | 2.6x |
+| **chunked, 65536/chunk** | **86** | **2.3x** |
+| chunked, 16384/chunk | 93 | 2.2x |
+| chunked, 4096/chunk | 119 | 1.7x |
+| chunked, 1024/chunk | 108 | 1.9x |
+| chunked, 256/chunk | 126 | 1.6x |
+| `hash<Entry[key]>` — today | 200 | — |
+
+**Chunking costs ~12% of the ceiling, not the win.** At 64K entries per chunk the
+candidate lands at 86 ns against a dense array's 77 and today's 200 — so Q5's stability
+requirement is affordable, and the dilemma in Q5 was false: H does not have to choose
+between keeping references valid and being fast.
+
+**The figure is an UPPER BOUND.** The chunked rows pay an outer-vector hop — read the
+chunk reference, then the element — that the real design does not have: there the bucket
+slot holds `(chunk_rec, offset)` and names the chunk record directly, so an entry read is
+still ONE random read. loft cannot express a bare (record, offset) pair, so the hop is
+charged here; the real thing can only be faster than these numbers.
+
+**Chunk size is the dial, and it is monotone-ish, not flat**: 256 → 126 ns, 65536 → 86 ns.
+Bigger chunks buy locality and cost tail waste (a 64K-entry chunk is 1 MB, so a hash with
+one entry rounds up to a chunk). The 4096 row reading above 1024 is inside run-to-run
+noise at this sample size — treat the trend, not the individual cells. Entry bytes are
+identical across every chunked row (16.00 MB, same as dense), so the difference is layout
+alone.
+
+The `bytes` column for the `hash` row is `size(h)` — the bucket table ONLY, per
+`table_bytes`' allocation-local contract — so it is not comparable with the dense and
+chunked totals, which are entry bytes. § Why: a hash spends 2–3x the bytes its payload
+needs has the comparable per-entry figures.
+
 ### Found while measuring: growing a hash ABANDONS every previous bucket table
 
 `add`'s growth path and `reserve` both `claim` a new table, `rehash_into` it, and
@@ -427,6 +489,118 @@ it is a cell in the script test.
 - **Order belongs in every future measurement.** A benchmark that looks up in insertion
   order understates this path by ~2.5x, and every figure in this plan predating today
   was taken that way.
+
+## How to build H — the surface, read off the code (2026-08-09)
+
+Scoping pass before writing any of it. Three findings change the size of the job.
+
+**1. `--native` shares this runtime, so H needs NO separate codegen.** `OpGetRecord` in
+`codegen_runtime.rs` calls `stores.find(&data, db_tp, key)` — the same
+`database/search.rs` → `hash::find` the interpreter uses, and `OpNewRecord` /
+`OpFinishRecord` delegate the same way. Fix the runtime and both backends move together.
+This was the main reason H looked MH-shaped; it is smaller than it reads.
+
+**2. The per-entry overhead is one word, and it is not spare.** `record_new`'s keyed arm
+claims `1 + ceil(size/8)` words per entry. Word 0 holds the size header in bytes 0–3 and a
+**back-pointer to the owning collection in bytes 4–7**; the payload starts at offset 8,
+which is why an entry `DbRef` carries `pos: 8`. So `{integer,integer}` costs 24 B where a
+dense `vector<Entry>` costs 16, and `claim_block` takes a whole free block rather than
+split when the remainder is under a third — that is the measured 27.67 B/entry.
+
+**The back-pointer is READ, not just written**: `database/search.rs:116` and `:146` test it
+to decide whether a record is live, and `state/io.rs:750` reads the same offset as a stored
+TYPE for a different record kind. An arena has no per-entry word to put it in, so H must
+give it a home — per CHUNK is the obvious one, since every entry in a chunk shares an
+owner — and must keep `search.rs`'s liveness test answering the same question.
+
+**3. Entry creation and entry freeing must land in the SAME commit.** `record_new` claims
+the entry; `allocation.rs`'s `Parts::Hash` arm enumerates `hash::records()` and frees each
+entry as an `OwnedChild`. Redirect creation into an arena without changing the free path
+and the collector frees interior arena bytes as if they were records — silent heap
+corruption, the failure this subsystem is ranked weakness #1 for. They are one change.
+
+### Layout
+
+The bucket slot stays **4 bytes**. It holds a 1-based ENTRY INDEX, not a record number;
+`(chunk, offset)` is arithmetic (`chunk = (idx-1) >> SHIFT`, `off = ((idx-1) & MASK) *
+stride`) against a chunk directory that is a handful of `u32`s and therefore always cache-
+resident. That is not a shortcut around the Q5 measurement — it is what the Q5 probe
+measured: `vector<vector<Entry>>` pays exactly this directory hop, so the 86 ns figure
+already includes it. Widening the slot to 8 bytes to hold `(chunk_rec, offset)` directly
+would remove a hop that costs nothing and double the bucket table, which is the trade arc D
+already lost.
+
+Table record: `LEN` and `SEED` keep their offsets; add `DIR` (the chunk-directory record)
+and `NEXT` (the append cursor) before `BUCKET0`, and bump `BUCKET0`. The directory is its
+own record so it can grow without moving entries — **growth appends a chunk and never
+reallocates a filled one, which is the whole of Q5's answer.**
+
+### Touch points
+
+| file | what changes |
+|---|---|
+| `hash.rs` | arena alloc + index decode; `add`/`find`/`remove`/`records`/`count`/`table_bytes`/`rehash_into` |
+| `database/structures.rs` | `record_new` keyed arm → arena slot for `Parts::Hash`; `finish_record` |
+| `database/allocation.rs` | the `Parts::Hash` owned-child arm, and `copy_claims` (@P318) |
+| `database/search.rs` | the liveness test that reads offset 4 |
+| `paged_reader.rs` | its read-only port of `find` |
+| `placement.rs` | bump `placement::HASH` — the mechanism Q2 shipped for exactly this |
+| `fill.rs` | nothing, if `count`/`table_bytes` keep their contracts |
+
+### Gates
+
+`loft introspect` on BOTH backends before and after (CODEGEN_METHOD.md); the boundary
+matrix on `--interpret` first, then both; `placement_contract_is_pinned` MUST fail and be
+re-blessed with the new constants — a token nobody bumps is a comment; and
+`a_changed_placement_token_refuses_the_store` must still refuse a pre-H store rather than
+misread it. Re-measure against **34 MB**, not 49.
+
+## What H actually bought (2026-08-10) — insert and bytes, not lookup
+
+Built, and measured against the installed `v2026.8.0` as a before-oracle, alternating
+A/B on a quiet box (24 cores, load 3.6), 1M `integer` keys, `--native-release`:
+
+| | before | after | |
+|---|---|---|---|
+| insert (reserved) | 330 ms | **258 ms** | **1.28x** |
+| store bytes / entry (slope over 100K→800K) | 27.67 B | **18.6 B** | **−33%** |
+| claimed records, 2000 entries | ~2000 | **9** | table + directory + 6 chunks |
+| random lookup | 184 ns | 183 ns | **unchanged** |
+
+**The predicted 2.3x lookup win did not happen, and the reason is in the reasoning, not
+the build.** This plan inferred it from two measurements that are both correct:
+
+* Q1's ablation — *the record read is 82% of a random 1M lookup*;
+* Q5's shapes — a dense `vector<Entry>` reads in 80 ns where the hash takes 200.
+
+The inference from them is what fails. **80 ns is ONE random read; a hash lookup makes
+TWO** — the bucket slot, then the entry. Packing the entries changes WHERE the second
+read lands; it does not make it stop missing, because a lookup by construction has no
+locality to exploit. Q1's 82% says that read is expensive — never that its being
+scattered is what made it so, and the two are different claims that the ablation cannot
+tell apart. Density pays for SEQUENTIAL or clustered access, which is exactly what the
+`vector<Entry>` probe measured and a hash never does.
+
+What the arena does remove is the per-entry `Store::claim` — a header word, the
+`claim_block` rounding, and one allocator round trip per insert — which is what
+[loft#809](https://github.com/loft-lang/loft/issues/809)'s title names, and it shows up
+on **insert and on bytes**. That is a real win and worth the format break; it is not the
+win this plan advertised, and the two should not be conflated in whatever comes next.
+
+**Chunk sizes double only to `arena::CAP_CHUNK`, then stay fixed.** Uncapped, the tail
+waste is proportional — a collection just into chunk `k` has up to half of it empty — and
+that measured 27.33 B/entry, i.e. it ate the entire per-entry saving, while also making a
+store's SIZE depend on construction order. Capping bounds the waste at one partly-filled
+chunk. It is the difference between −1% and −33%, and it was invisible until the footprint
+was measured against the before-oracle rather than reasoned about.
+
+**A hash has TWO kinds of entry**, which this plan's § How to build H did not name. A
+PRIMARY hash allocates its own entries from the arena. A SECONDARY index — a sibling
+field's `other_indexes` — is a second route to records the PRIMARY owns, and it may
+neither move nor free them. The discriminator is the stride the table records, because
+that IS the distinction: a table that allocated its entries knows their width, a table
+that borrows records has none to know. `stride == 0` means borrowed. Found by an assertion
+in `add`, not by reading the code.
 
 ## Open design questions
 
@@ -478,11 +652,26 @@ it is a cell in the script test.
 
    So H is not only a format break, it is an OWNERSHIP change, and it lands in the area
    [`OWNERSHIP_MODEL.md`](../../OWNERSHIP_MODEL.md) and CLAUDE.md rank as weakness #1.
-   Decide before building: does an entry reference borrow (and H must make growth
-   invalidate it the way a vector's does), or must H keep entries stable — which costs
-   either an indirection back to the 82% term it exists to remove, or a stable-slot
-   scheme with tombstones that never moves a live entry? **This question, not the byte
-   layout, is the expensive half of H.**
+   **This question, not the byte layout, is the expensive half of H.**
+
+   **Leading candidate — a CHUNKED arena, not one array.** Making the entry reference
+   borrow (growth invalidates it, as a vector's does) is the obvious answer and the wrong
+   one: it silently breaks programs that work today, which
+   [`COMPATIBILITY.md`](../../COMPATIBILITY.md) forbids, and it breaks them into a *wrong
+   read* rather than an error. But the dilemma is false. H needs entries DENSE; it does
+   not need them in ONE allocation. An arena that grows by appending a new chunk — never
+   reallocating a chunk that already holds entries — keeps every live entry at the address
+   it was given, so a `DbRef{rec: <chunk claim>, pos: <offset>}` stays valid for the
+   entry's whole life, exactly as today's per-entry claim does. The bucket table keeps
+   doubling and rehashing; bucket slots are indices and cost nothing to move.
+
+   That buys most of what H is for. The measured gap is ~27.7 B/entry against a dense
+   vector's 16 (33 total − 5.33 of buckets), and the difference is per-record header — the
+   thing chunking removes. What it gives up is cross-chunk contiguity, so the chunk size
+   sets how close H gets to the 93 ns `vector<Entry>` ceiling. **Probe before building:**
+   a `vector<Entry>` read in shuffled order, chunked at several sizes, measures the whole
+   candidate without writing any of H (the same trick § What arc H can buy already used —
+   the layout it proposes IS a shape the language can already build).
 
 ## Cross-arc dependencies
 

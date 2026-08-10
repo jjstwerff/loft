@@ -309,6 +309,7 @@ fn run_case(case: &Case) -> String {
     normalise(&raw, &case.name, &case.entry)
 }
 
+// @speed 3.0
 #[test]
 fn baselines_are_locked_in() {
     let update = std::env::var_os("UPDATE_GOLDEN").is_some();
@@ -346,6 +347,7 @@ fn baselines_are_locked_in() {
     }
 }
 
+// @speed 2.5
 #[test]
 fn every_case_terminates_cleanly() {
     let cases = collect_cases();

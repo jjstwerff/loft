@@ -82,8 +82,13 @@ const TYPES: &[&str] = &[
 /// 2026-07-24 — re-blessed after adding `VecNestNarrow`: a nested vector with a NARROW
 /// inner is the shape the #477/#483/#624 class keeps recurring in, and the corpus could
 /// not see it.  `vector<vector<integer>>` alone is layout-UNCHANGED by that fix, so
-/// only the added row moves the hash — see doc/claude/plans/nested-narrow-width/.)
-const LAYOUT_ALGO_HASH: u64 = 10_683_398_740_164_760_276;
+/// only the added row moves the hash — see doc/claude/plans/nested-narrow-width/.
+/// 2026-08-09 — re-blessed for @PLN135 arc H: `hash<Item[ik]>` gained `placement=2`,
+/// which is Q2's mechanism doing exactly what it was built for.  ONE line of the
+/// golden moved and no other type's row changed, because the token renders per KIND —
+/// a store of plain structs and vectors still loads, and a pre-arena store of hashes
+/// is now REFUSED instead of misread.)
+const LAYOUT_ALGO_HASH: u64 = 13_959_439_440_847_630_716;
 
 /// @PLN135 Q2 — `keys::key_hash` for a fixed seed over a fixed key set: the function a
 /// reader must reproduce to find an entry a writer placed. Pinned by
@@ -458,11 +463,34 @@ fn placement_contract_is_pinned() {
                         old store. Do NOT simply re-bless that; see the issue";
 
     // The bucket record's shape: a size header word, a live-count field, a 64-bit seed,
-    // then `u32` record numbers. A reader derives every slot address from these.
+    // the entry arena's four bookkeeping words, then `u32` ENTRY INDICES. A reader
+    // derives every slot address from these, and decodes a slot through the arena.
     assert_eq!(loft::hash::LEN_FLD, 4, "{BUMP}");
     assert_eq!(loft::hash::SEED_FLD, 8, "{BUMP}");
-    assert_eq!(loft::hash::BUCKET0, 16, "{BUMP}");
+    assert_eq!(loft::arena::DIR_FLD, 16, "{BUMP}");
+    assert_eq!(loft::arena::NEXT_FLD, 20, "{BUMP}");
+    assert_eq!(loft::arena::FREE_FLD, 24, "{BUMP}");
+    assert_eq!(loft::hash::STRIDE_FLD, 28, "{BUMP}");
+    assert_eq!(loft::hash::BUCKET0, 32, "{BUMP}");
+    assert_eq!(loft::hash::RESERVED_WORDS, 4, "{BUMP}");
     assert_eq!(loft::hash::SLOT_BYTES, 4, "{BUMP}");
+    // The high bit that says a slot names a RECORD rather than an arena index. THREE
+    // readers decode a bucket slot — `hash::entry_ref`, the bounds-checked walk in
+    // `Stores::validate_claims`, and `paged_reader::entry_at` — and a fourth is a
+    // matter of time. Pinning it here is what makes a decoder that does not know
+    // about it a red test rather than an entry silently read as a chunk that does
+    // not exist.
+    assert_eq!(loft::hash::SLOT_RECORD, 0x8000_0000, "{BUMP}");
+    // The arena's own geometry: a slot's address is a pure function of its index, so
+    // these three ARE where an entry lives.  A reader that tiles the index space
+    // differently finds an entry at a byte offset nothing put one at.
+    assert_eq!(loft::arena::BASE, 64, "{BUMP}");
+    assert_eq!(loft::arena::SLOT0, 8, "{BUMP}");
+    assert_eq!(loft::arena::DIR0, 8, "{BUMP}");
+    assert_eq!(loft::arena::locate(1, 16), (0, 8), "{BUMP}");
+    assert_eq!(loft::arena::locate(64, 16), (0, 8 + 63 * 16), "{BUMP}");
+    assert_eq!(loft::arena::locate(65, 16), (1, 8), "{BUMP}");
+    assert_eq!(loft::arena::locate(193, 16), (2, 8), "{BUMP}");
 
     // The hash function and the `Content` encoding that feeds it. A fixed seed makes this
     // a pure function of the key, so any change to either — a different construction, a

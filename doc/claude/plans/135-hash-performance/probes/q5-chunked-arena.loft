@@ -1,0 +1,137 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN135 Q5 — does a CHUNKED entry arena keep arc H's win?
+//
+// Q5 asks whether an entry reference survives growth. Today it does: growing a hash
+// reallocates only the bucket table, never an entry's bytes. Arc H as first drafted
+// makes an entry a position inside ONE array, so growth moves every entry and every
+// outstanding reference goes stale — a wrong READ, in the subsystem where that is
+// hardest to attribute, and forbidden by COMPATIBILITY.md.
+//
+// The candidate answer is that H needs entries DENSE, not in ONE allocation. An arena
+// that grows by APPENDING a chunk — never reallocating a chunk that already holds
+// entries — leaves every live entry where it was handed out, so a reference stays valid
+// for the entry's whole life exactly as today's per-entry claim does.
+//
+// That is only worth building if chunking keeps the win. This measures it WITHOUT
+// building H, the same way `h-random-access-floor.loft` measured H's ceiling: the layout
+// H proposes is a shape the language can already build.
+//
+//   dense    `vector<Entry>`          — H's ceiling, one allocation
+//   chunked  `vector<vector<Entry>>`  — the candidate, C entries per chunk
+//   hash     `hash<Entry[key]>`       — today
+//
+// UPPER BOUND, deliberately. The chunked row pays an outer-vector hop (read the chunk
+// reference, then the element) that the real design does NOT: there, the bucket slot
+// holds `(chunk_rec, offset)` and names the chunk record directly, so an entry read is
+// still ONE random read. The hop is charged here because loft cannot express a bare
+// (record, offset) pair — so a chunked figure that already beats `hash` is a floor on
+// the verdict, not an estimate of it.
+//
+// ONE CONFIGURATION PER PROCESS. A collection's store slot is reused between iterations,
+// so a second fill inherits the first's buffer and growth ladder — that is how an earlier
+// cut of `q1-store-footprint.loft` read the same number before and after a fix and was
+// measuring itself. Shape and size come from the command line.
+//
+//   loft --native-release q5-chunked-arena.loft dense    1000000
+//   loft --native-release q5-chunked-arena.loft chunked  1000000 4096
+//   loft --native-release q5-chunked-arena.loft hash     1000000
+
+struct Entry { key: integer, val: integer }
+
+/// The read order, built ONCE outside every timed region.
+///
+/// The multiply-modulo permutation is computed here and walked as a plain vector below,
+/// because computing it inside the timed loop charges its 64-bit modulo (~35 ns) to the
+/// shuffled row — which is what the first cut of the Q1 probe did.
+fn order_of(n: integer) -> vector<integer> {
+  ord: vector<integer> = [];
+  reserve(ord, n);
+  for i in 0..n { ord += [(i * 748451) % n]; }
+  ord
+}
+
+/// `sum(i * 2)` for `i` in `0..n` = `n * (n - 1)`.  Hand-computed, asserted on every row:
+/// a probe whose cell can only print a number is one that cannot fail.
+fn expected(n: integer) -> integer { n * (n - 1) }
+
+fn report(what: text, n: integer, ns: integer, sum: integer, bytes: integer) {
+  ok = if sum == expected(n) { "ok" } else { "WRONG" };
+  println("{what:<22} n={n:>7} ns={ns:>4} bytes={bytes:>9} {ok}");
+}
+
+/// One random read into a dense `vector<Entry>` — arc H's ceiling.
+fn probe_dense(n: integer) {
+  v: vector<Entry> = [];
+  reserve(v, n);
+  for i in 0..n { v += [Entry { key: i, val: i * 2 }]; }
+  ord = order_of(n);
+  sum = 0;
+  t0 = ticks();
+  for k in ord { e = v[k]; if e != null { sum = sum + e.val; } }
+  t1 = ticks();
+  report("dense vector<Entry>", n, (((t1 - t0) * 1000) / n) ?? 0, sum, size(v));
+}
+
+/// The candidate: the same entries split across `chunk`-sized chunks that are never
+/// reallocated once filled.  Pays the outer hop the real design does not — see header.
+fn probe_chunked(n: integer, chunk: integer) {
+  chunks: vector<vector<Entry>> = [];
+  nchunks = (n + chunk - 1) / chunk;
+  reserve(chunks, nchunks);
+  for c in 0..nchunks {
+    part: vector<Entry> = [];
+    reserve(part, chunk);
+    lo = c * chunk;
+    hi = if lo + chunk > n { n } else { lo + chunk };
+    for i in lo..hi { part += [Entry { key: i, val: i * 2 }]; }
+    chunks += [part];
+  }
+  ord = order_of(n);
+  sum = 0;
+  t0 = ticks();
+  for k in ord {
+    hit = chunks[k / chunk];
+    if hit != null {
+      e = hit[k % chunk];
+      if e != null { sum = sum + e.val; }
+    }
+  }
+  t1 = ticks();
+  // `size(chunks)` is the OUTER vector alone — the chunk references, not the entries.
+  // Sum the chunks so the column means the same thing it does on the dense row.
+  bytes = size(chunks);
+  for c in 0..nchunks {
+    part2 = chunks[c];
+    if part2 != null { bytes = bytes + size(part2); }
+  }
+  report("chunked c={chunk}", n, (((t1 - t0) * 1000) / n) ?? 0, sum, bytes);
+}
+
+/// Today, for the same payload on the same run.
+fn probe_hash(n: integer) {
+  h: hash<Entry[key]> = [];
+  reserve(h, n);
+  for i in 0..n { h += Entry { key: i, val: i * 2 }; }
+  ord = order_of(n);
+  sum = 0;
+  t0 = ticks();
+  for k in ord { e = h[k]; if e != null { sum = sum + e.val; } }
+  t1 = ticks();
+  report("hash<Entry[key]>", n, (((t1 - t0) * 1000) / n) ?? 0, sum, size(h));
+}
+
+fn main(args: vector<text>) {
+  shape = args[0] ?? "dense";
+  n = ((args[1] ?? "1000000") as integer?) ?? 1000000;
+  chunk = ((args[2] ?? "4096") as integer?) ?? 4096;
+  if shape == "dense" {
+    probe_dense(n);
+  } else if shape == "chunked" {
+    probe_chunked(n, chunk);
+  } else if shape == "hash" {
+    probe_hash(n);
+  } else {
+    println("shape must be dense | chunked | hash");
+  }
+}

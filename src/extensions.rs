@@ -76,6 +76,44 @@ pub fn load_all(_state: &mut crate::state::State, paths: Vec<String>) {
 #[cfg(not(feature = "native-extensions"))]
 pub fn load_all(_state: &mut crate::state::State, _paths: Vec<String>) {}
 
+/// Load ONE cdylib, ahead of the rest, and report whether it is loaded.
+///
+/// Same call `load_all` makes, exposed so a caller can prove an artifact before
+/// committing to dispatch through it (loft#831): the artifact existing, being
+/// fresh and declaring the right layout are all proxies, and each of them can be
+/// true of a library this process cannot `dlopen` — built against a different
+/// `libloft.rlib`, or replaced by a concurrent build between the check and the
+/// load.  Loading is the only question whose answer is the one that matters.
+///
+/// It is also what makes the answer STAY true: the handle is kept for the
+/// process, so an artifact another process prunes or rebuilds afterwards cannot
+/// change what this one dispatches to.  Idempotent — `load_all` calling it again
+/// for the same path is a no-op.
+#[cfg(feature = "native-extensions")]
+pub fn load_cdylib(path: &str) -> bool {
+    load_one(path)
+}
+
+#[cfg(not(feature = "native-extensions"))]
+pub fn load_cdylib(_path: &str) -> bool {
+    false
+}
+
+/// Whether `sym` resolves in a cdylib this process has loaded — the exact
+/// question `wire_shared_native_fns` asks later, asked early enough to still
+/// have a choice (loft#831).
+#[cfg(feature = "native-extensions")]
+#[must_use]
+pub fn bridge_symbol_resolves(sym: &str) -> bool {
+    try_dlsym(sym).is_some()
+}
+
+#[cfg(not(feature = "native-extensions"))]
+#[must_use]
+pub fn bridge_symbol_resolves(_sym: &str) -> bool {
+    false
+}
+
 /// Loaded libraries kept alive for the process lifetime, each paired with
 /// whether it exported `loft_register_v1` (the registration protocol).  Used by
 /// `try_dlsym` to look up symbols from previously loaded cdylibs *and* report

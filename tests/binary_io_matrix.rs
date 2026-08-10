@@ -615,3 +615,82 @@ fn leak_free_vector_roundtrip() {
     "#,
     );
 }
+
+// ── loft#829 — `content()` says null for bytes it cannot read as text ────────
+//
+// `file(p).content()` used to answer `""` for a non-UTF-8 file: the call succeeded,
+// and its answer was indistinguishable from *"the file is empty"*.  That inverts
+// gates rather than breaking them — "write bytes, read them back, compare lengths"
+// passes vacuously on binary data, because both sides are `""`.  The contract is
+// now null for *no text here*, the same answer a MISSING file already gives
+// (@PLN102 H4); `""` is reserved for a file that really is empty.
+//
+// The empty-file cell is what makes this a boundary instead of a blanket: null and
+// `""` have to stay apart, or the fix trades one indistinguishable pair for another.
+// Every cell is `cross_mode!`, because the read had TWO homes — the stderr warning
+// lived in the interpreter's `State::get_file_text` alone, so `--native` read a
+// binary file in complete silence.  One shared `read_file_text_into` now serves both.
+
+cross_mode!(
+    c829_non_utf8_content_is_null,
+    r#"
+    fn test() {
+        delete("biom_829_bad.bin");
+        write_bytes("biom_829_bad.bin", [65 as u8, 255 as u8, 66 as u8]);
+        c = file("biom_829_bad.bin").content();
+        assert(c == null, "non-UTF-8 content() is null, not \"\"");
+        // The file is intact and readable — the null is about text, not about loss.
+        assert(file("biom_829_bad.bin").size == 3, "the 3 bytes are still on disk");
+        b = read_bytes("biom_829_bad.bin") ?? [];
+        assert(len(b) == 3, "read_bytes reads all 3 bytes");
+        assert(b[1] == 255, "read_bytes is byte-exact: {b[1]}");
+        print("c829 non-utf8 null\n");
+        delete("biom_829_bad.bin");
+    }
+    "#
+);
+
+cross_mode!(
+    c829_empty_file_content_is_empty_text,
+    r#"
+    fn test() {
+        delete("biom_829_empty.bin");
+        write_bytes("biom_829_empty.bin", []);
+        c = file("biom_829_empty.bin").content();
+        assert(c != null, "an EMPTY file still reads as text, not null");
+        assert(size(c ?? "x") == 0, "and that text is empty");
+        print("c829 empty is empty text\n");
+        delete("biom_829_empty.bin");
+    }
+    "#
+);
+
+cross_mode!(
+    c829_valid_utf8_still_reads,
+    r#"
+    fn test() {
+        delete("biom_829_ok.bin");
+        // 'h', then the two bytes of 'é' — 3 bytes, 2 characters.  A NUL byte is
+        // valid UTF-8 and must not be mistaken for the unreadable case.
+        write_bytes("biom_829_ok.bin", [104 as u8, 195 as u8, 169 as u8, 0 as u8]);
+        c = file("biom_829_ok.bin").content() ?? "";
+        assert(size(c) == 4, "byte length survives: {size(c)}");
+        assert(len(c) == 3, "character length survives: {len(c)}");
+        print("c829 utf8 reads\n");
+        delete("biom_829_ok.bin");
+    }
+    "#
+);
+
+cross_mode!(
+    c829_directory_content_is_null,
+    r#"
+    fn test() {
+        mkdir("biom_829_dir");
+        c = file("biom_829_dir").content();
+        assert(c == null, "a directory holds no text, so content() is null");
+        print("c829 dir null\n");
+        delete("biom_829_dir");
+    }
+    "#
+);

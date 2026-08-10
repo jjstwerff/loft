@@ -1464,6 +1464,17 @@ impl Store {
         self.free_protected
     }
 
+    /// Has this store been freed?
+    ///
+    /// A freed store keeps its buffer until its slot is reused, so reading a record
+    /// out of one still answers the old bytes — which is why "the data is still
+    /// there" is not evidence that it is alive, and why a test about store lifetime
+    /// has to ask this rather than read a value back.
+    #[must_use]
+    pub fn is_free(&self) -> bool {
+        self.free
+    }
+
     /// Return whether this store is a borrowed view of another store's buffer.
     #[must_use]
     pub fn is_borrowed(&self) -> bool {

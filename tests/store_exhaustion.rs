@@ -5,6 +5,7 @@
 // whole runtime.  The allocator must now refuse loudly instead.
 use loft::database::Stores;
 
+// @speed 1.2
 #[test]
 #[should_panic(expected = "store table exhausted")]
 fn slot_exhaustion_is_loud() {

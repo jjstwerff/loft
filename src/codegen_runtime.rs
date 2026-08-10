@@ -365,6 +365,12 @@ pub fn OpFinishRecord(
 /// `LOFT_STORE_LOG` output for diagnosing LIFO store-free order violations.
 pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
+    // A generator handle addresses no store — free the coroutine, which releases the heap
+    // locals it still owns.  Mirrors the interpreter's `free_ref_db` (loft#835).
+    if db.store_nr == NATIVE_COROUTINE_STORE {
+        free_native_coroutine(db, stores);
+        return;
+    }
     if db.store_nr == u16::MAX {
         return;
     }
@@ -1278,6 +1284,34 @@ pub fn OpStep(
     result
 }
 
+/// Read `path` as UTF-8 text into `buf` — the single home for the read behind
+/// `file(p).content()`, called by the interpreter (`State::get_file_text`) and
+/// by native codegen (`OpGetFileText`) alike, so the two cannot drift.
+///
+/// Leaves `buf` EMPTY when the file cannot be opened or its bytes are not valid
+/// UTF-8, and warns on the latter.  Emptiness alone does not tell the caller
+/// which happened; the loft-level `content()` reads the file's byte size beside
+/// it and answers null when a file that HAS bytes yielded no text (loft#829).
+#[cfg(not(feature = "wasm"))]
+pub fn read_file_text_into(path: &str, buf: &mut String) {
+    buf.clear();
+    let Ok(mut f) = File::open(path) else { return };
+    match f.read_to_string(buf) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            buf.clear();
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
+            eprintln!(
+                "warning: file({path:?}).content() got non-UTF-8 bytes ({size} bytes in \
+                 file) — returning null. Read the bytes exactly with `read_bytes(path)`, \
+                 or a field at a time with `f#format = LittleEndian; f#read(n)` (or \
+                 `BigEndian`); see the loft-write skill § File I/O."
+            );
+        }
+        Err(_) => buf.clear(),
+    }
+}
+
 /// Read the entire contents of a file into `content`, replacing its previous value.
 /// If the file cannot be opened or read, `content` is cleared.
 /// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
@@ -1295,13 +1329,8 @@ pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content:
     };
     // #255 / @PLN9: re-home against the program anchor (native parity with
     // the interpreter's `State::get_file_text`).
-    content.clear();
     let file_path = stores.resolve_path(&file_path);
-    if let Ok(mut f) = File::open(&file_path)
-        && f.read_to_string(content).is_err()
-    {
-        content.clear();
-    }
+    read_file_text_into(&file_path, content);
 }
 
 /// WASM stub: file I/O not available; clears content.
@@ -4242,38 +4271,110 @@ pub trait LoftCoroutine {
     fn next_into(&mut self, _stores: &mut Stores, _dest: &mut [i64]) -> bool {
         false
     }
+
+    /// Release the heap locals this generator still owns.
+    ///
+    /// A generator frees its own locals from the tail of its body, and a consumer that
+    /// stops early never reaches that tail — so an abandoned generator's vector stayed
+    /// allocated for the rest of the program (loft#835).  Called when the handle is freed
+    /// at the end of the scope holding it.  Generated per generator; a generator with no
+    /// owned heap local keeps this no-op default.
+    ///
+    /// Freeing twice is not possible: every scope-exit free the generator DOES run nulls
+    /// its own field, and the generated body only frees fields that are still set.
+    fn drop_stores(&mut self, _stores: &mut Stores) {}
 }
 
 std::thread_local! {
-    /// Per-thread storage for native coroutine instances.
-    /// Slot 0 is always `None` and acts as the null sentinel.
-    static NATIVE_COROUTINES: std::cell::RefCell<Vec<Option<Box<dyn LoftCoroutine>>>> =
+    /// Per-thread storage for native coroutine instances, each tagged with the generation
+    /// that identifies THIS occupant of the slot.  Slot 0 is always `None` (null sentinel).
+    ///
+    /// A slot is freed on exhaustion and handed to the next generator, while the variable
+    /// holding the handle lives to the end of its scope, where its free fires — so the
+    /// index alone does not identify a coroutine for long enough.  Mirrors
+    /// `CoroutineFrame::generation` on the interpreter side.
+    static NATIVE_COROUTINES: std::cell::RefCell<Vec<Option<(u32, Box<dyn LoftCoroutine>)>>> =
         std::cell::RefCell::new(vec![None]);
+    /// Stamp handed to the next coroutine allocated on this thread.
+    static NATIVE_COROUTINE_GENERATION: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+}
+
+/// Does `gen_ref` still name the frame it was made for — right slot AND right occupant?
+fn native_coroutine_live(
+    coroutines: &[Option<(u32, Box<dyn LoftCoroutine>)>],
+    gen_ref: DbRef,
+) -> bool {
+    gen_ref.store_nr == NATIVE_COROUTINE_STORE
+        && gen_ref.rec != 0
+        && coroutines
+            .get(gen_ref.rec as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|(generation, _)| *generation == gen_ref.pos)
 }
 
 /// Store a native coroutine generator and return a `DbRef` that identifies it.
+///
+/// `pos` carries the generation stamp: a coroutine reference addresses no store, so the
+/// field is free, and the handle then names the generator rather than the index it occupies.
 #[must_use]
 pub fn alloc_coroutine(coro: Box<dyn LoftCoroutine>) -> DbRef {
+    let generation = NATIVE_COROUTINE_GENERATION.with(|g| {
+        let cur = g.get();
+        g.set(cur.wrapping_add(1).max(1));
+        cur
+    });
     NATIVE_COROUTINES.with(|c| {
         let mut coroutines = c.borrow_mut();
         for (i, slot) in coroutines.iter_mut().enumerate().skip(1) {
             if slot.is_none() {
-                *slot = Some(coro);
+                *slot = Some((generation, coro));
                 return DbRef {
                     store_nr: NATIVE_COROUTINE_STORE,
                     rec: i as u32,
-                    pos: 0,
+                    pos: generation,
                 };
             }
         }
         let idx = coroutines.len();
-        coroutines.push(Some(coro));
+        coroutines.push(Some((generation, coro)));
         DbRef {
             store_nr: NATIVE_COROUTINE_STORE,
             rec: idx as u32,
-            pos: 0,
+            pos: generation,
         }
     })
+}
+
+/// Free one heap local an abandoned generator still owns (loft#835).
+///
+/// A nested generator handle routes back to the coroutine table so its own locals are
+/// released too; anything else is an ordinary store.  Called only from a generated
+/// `drop_stores`, which has already checked the field is set.
+pub fn coroutine_drop_local(stores: &mut Stores, db: DbRef, name: &str) {
+    if db.store_nr == NATIVE_COROUTINE_STORE {
+        free_native_coroutine(db, stores);
+    } else if db.store_nr != u16::MAX && (db.store_nr as usize) < stores.allocations.len() {
+        stores.free_named(&db, name);
+    }
+}
+
+/// Free a native coroutine handle: release the heap locals the generator still owns, then
+/// its slot.  A handle whose generator already exhausted names a frame that is gone, and
+/// the generation check keeps this off whatever inherited the slot (loft#835).
+pub fn free_native_coroutine(gen_ref: DbRef, stores: &mut Stores) {
+    // Take the generator OUT of the table before running its cleanup: `drop_stores` frees
+    // stores, and a nested generator handle among them re-enters this table.
+    let taken = NATIVE_COROUTINES.with(|c| {
+        let mut coroutines = c.borrow_mut();
+        if native_coroutine_live(&coroutines, gen_ref) {
+            coroutines[gen_ref.rec as usize].take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, mut coro)) = taken {
+        coro.drop_stores(stores);
+    }
 }
 
 /// Advance a native coroutine and return the yielded value as `i64`.
@@ -4282,8 +4383,8 @@ pub fn coroutine_next_i64(gen_ref: DbRef, stores: &mut Stores) -> i64 {
     NATIVE_COROUTINES.with(|c| {
         let mut coroutines = c.borrow_mut();
         let idx = gen_ref.rec as usize;
-        if let Some(slot) = coroutines.get_mut(idx)
-            && let Some(coro) = slot.as_mut()
+        if native_coroutine_live(&coroutines, gen_ref)
+            && let Some((_, coro)) = coroutines[idx].as_mut()
         {
             let val = coro.next_i64(stores);
             if val == COROUTINE_EXHAUSTED {
@@ -4303,8 +4404,8 @@ pub fn coroutine_next_into(gen_ref: DbRef, stores: &mut Stores, dest: &mut [i64]
     NATIVE_COROUTINES.with(|c| {
         let mut coroutines = c.borrow_mut();
         let idx = gen_ref.rec as usize;
-        if let Some(slot) = coroutines.get_mut(idx)
-            && let Some(coro) = slot.as_mut()
+        if native_coroutine_live(&coroutines, gen_ref)
+            && let Some((_, coro)) = coroutines[idx].as_mut()
         {
             let ok = coro.next_into(stores, dest);
             if !ok {
@@ -4325,8 +4426,8 @@ pub fn coroutine_next_dbref(gen_ref: DbRef, stores: &mut Stores) -> DbRef {
     NATIVE_COROUTINES.with(|c| {
         let mut coroutines = c.borrow_mut();
         let idx = gen_ref.rec as usize;
-        if let Some(slot) = coroutines.get_mut(idx)
-            && let Some(coro) = slot.as_mut()
+        if native_coroutine_live(&coroutines, gen_ref)
+            && let Some((_, coro)) = coroutines[idx].as_mut()
         {
             let val = coro.next_dbref(stores);
             // Null sentinel matches `vector::null_ref` and `OpNullRefSentinel`:
@@ -4350,8 +4451,8 @@ pub fn coroutine_next_text(gen_ref: DbRef, stores: &mut Stores) -> String {
     NATIVE_COROUTINES.with(|c| {
         let mut coroutines = c.borrow_mut();
         let idx = gen_ref.rec as usize;
-        if let Some(slot) = coroutines.get_mut(idx)
-            && let Some(coro) = slot.as_mut()
+        if native_coroutine_live(&coroutines, gen_ref)
+            && let Some((_, coro)) = coroutines[idx].as_mut()
         {
             let val = coro.next_text(stores);
             if val == crate::state::STRING_NULL {
@@ -4369,8 +4470,7 @@ pub fn coroutine_next_text(gen_ref: DbRef, stores: &mut Stores) -> String {
 pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
     NATIVE_COROUTINES.with(|c| {
         let coroutines = c.borrow();
-        let idx = gen_ref.rec as usize;
-        coroutines.get(idx).is_none_or(Option::is_none)
+        !native_coroutine_live(&coroutines, gen_ref)
     })
 }
 

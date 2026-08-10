@@ -360,6 +360,7 @@ fn doors(out: &str) -> Vec<u32> {
 /// wrong is half-built.  The exceptions are listed rather than tolerated: `FIX_BLOCKED`
 /// names each one and what blocks it, which is what stops "no fix yet" from quietly
 /// becoming "no fix ever".
+// @speed 2.2
 #[test]
 fn every_pinned_code_offers_a_fix() {
     for (code, prog) in CODES {
@@ -394,6 +395,7 @@ fn every_pinned_code_offers_a_fix() {
 /// reader who wants the *why* has somewhere to go.  Checking every offered door (rather
 /// than one pinned `@F`) means a renumbered or deleted feature breaks the build on the day
 /// it happens, whichever fix pointed at it.
+// @speed 2.2
 #[test]
 fn every_offered_door_resolves_to_a_catalogue_entry() {
     let snapshot =
@@ -427,6 +429,7 @@ fn every_offered_door_resolves_to_a_catalogue_entry() {
 }
 
 /// Tooth 1 — every pinned code renders its `[slug]` tag.
+// @speed 2.5
 #[test]
 fn every_e1_code_renders_its_slug() {
     for (code, prog) in CODES {

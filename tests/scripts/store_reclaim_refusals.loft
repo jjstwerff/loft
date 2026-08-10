@@ -54,11 +54,18 @@ fn main() {
     // back — the image is written at the mark plus an eighth, and that eighth is
     // exactly what a right-sized store keeps — so `freed 0` there is the correct
     // answer, not a refusal.  A tail only appears when the store GROWS while
-    // bound: the arena over-allocates by 7/3, and dropping the records again
-    // leaves that over-allocation above the mark.  (Unsealed only: growing the
-    // file after a seal invalidates it, which is what the F4 case is about.)
-    for g in n..(n * 2) { h += [Rec { id: g, label: "label-{g}" }] }
-    for g in n..(n * 2) { h[g] = null }
+    // bound: the store buffer over-allocates by 7/3, and dropping the records
+    // again leaves that over-allocation above the mark.  (Unsealed only: growing
+    // the file after a seal invalidates it, which is what the F4 case is about.)
+    //
+    // TEN times, not twice.  The growth has to push the store buffer past the size
+    // it was bound at, and doubling the RECORD count stopped doing that once
+    // @PLN135 arc H packed a hash's entries into a chunked arena: 3000 more entries
+    // are ~48 KB of slots instead of ~3000 claims, which fits inside what the bind
+    // already left.  Measured: `freed 0` at 2x, a real tail at 10x.  The control
+    // asserts reclaim DOES something, so it has to leave something to do.
+    for g in n..(n * 10) { h += [Rec { id: g, label: "label-{g}" }] }
+    for g in n..(n * 10) { h[g] = null }
   }
   before = file(path).size;
   check_before = store_durable_check(path);

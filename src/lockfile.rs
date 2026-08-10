@@ -94,6 +94,55 @@ pub struct LockedPackage {
     pub deps: Vec<String>,
 }
 
+/// One package `loft update` has to resolve, and what the lock currently
+/// says about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateTarget {
+    /// Package name.
+    pub name: String,
+    /// The version pinned in `loft.lock`, or `None` when `loft.toml` declares
+    /// the dependency and the lock has no entry for it yet.  `None` is the
+    /// case loft#830 was about: such a package needs ADDING, and a resolver
+    /// that starts from the lock never sees it.
+    pub locked: Option<String>,
+}
+
+/// The packages `loft update` must consider: every entry in `lock`, plus every
+/// dependency `manifest_deps` DECLARES that the lock does not name.
+///
+/// Walking the lock alone is what made `loft update` skip a freshly declared
+/// dependency and then report `all N packages up-to-date`, counting the lock
+/// while the manifest asked for more (loft#830).  The lockfile is meant to
+/// describe the manifest, so the manifest is half of the question.
+///
+/// `manifest_deps` should already have path dependencies filtered out — those
+/// are resolved from disk and never carry a lock entry.  Lock entries come
+/// first, in lock order; declared-but-unlocked packages follow in manifest
+/// order, so the output is deterministic and reads as "what you had, then what
+/// you asked for".
+#[must_use]
+pub fn update_worklist(
+    lock: &[LockedPackage],
+    manifest_deps: &[(String, String)],
+) -> Vec<UpdateTarget> {
+    let mut out: Vec<UpdateTarget> = lock
+        .iter()
+        .map(|p| UpdateTarget {
+            name: p.name.clone(),
+            locked: Some(p.version.clone()),
+        })
+        .collect();
+    for (name, _) in manifest_deps {
+        if !out.iter().any(|t| &t.name == name) {
+            out.push(UpdateTarget {
+                name: name.clone(),
+                locked: None,
+            });
+        }
+    }
+    out
+}
+
 /// Read `loft.lock` from `path`.  Returns:
 /// - `Ok(Some(lockfile))` on a parse hit.
 /// - `Ok(None)` when the file doesn't exist (no lock yet — first run).
@@ -439,5 +488,71 @@ source = "registry"
         let lock = parse(content).expect("parse");
         assert_eq!(lock.packages.len(), 1);
         assert_eq!(lock.packages[0].name, "x");
+    }
+
+    // ── loft#830 — the work list is the manifest ∪ the lock ──────────────
+    //
+    // `loft update` resolved the lock's entries and nothing else, so a
+    // dependency added to `loft.toml` was never looked up, never written, and
+    // — because the summary counted lock entries — reported as
+    // `all N packages up-to-date`.  These cells pin the decision itself: a
+    // declared package with no lock entry MUST appear, carrying `locked: None`
+    // so the caller can tell "add this" from "consider upgrading this".
+
+    fn deps(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn worklist_includes_declared_package_missing_from_the_lock() {
+        let lock = sample_lock();
+        let declared = deps(&[("crypto", ">=0.1"), ("hex_grid", ">=0.1")]);
+        let work = update_worklist(&lock.packages, &declared);
+        let names: Vec<&str> = work.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["crypto", "web", "hex_grid"],
+            "lock entries first, then declarations the lock does not name"
+        );
+        assert_eq!(work[0].locked.as_deref(), Some("0.1.0"), "crypto is locked");
+        assert_eq!(
+            work[2].locked, None,
+            "hex_grid is declared but unlocked — the case that was skipped"
+        );
+    }
+
+    #[test]
+    fn worklist_does_not_duplicate_a_declared_package_already_locked() {
+        let lock = sample_lock();
+        let work = update_worklist(&lock.packages, &deps(&[("web", ">=0.1")]));
+        assert_eq!(
+            work.len(),
+            2,
+            "web is declared AND locked — one entry: {work:?}"
+        );
+        assert!(work.iter().all(|w| w.locked.is_some()));
+    }
+
+    #[test]
+    fn worklist_keeps_transitive_lock_entries_with_no_declaration() {
+        // `crypto` is only in the lock (pulled in by `web`).  It must still be
+        // resolved — this is the behaviour that existed before #830 and the fix
+        // extends it rather than replacing it.
+        let lock = sample_lock();
+        let work = update_worklist(&lock.packages, &deps(&[]));
+        assert_eq!(work.len(), 2);
+        assert!(work.iter().all(|w| w.locked.is_some()));
+    }
+
+    #[test]
+    fn worklist_from_an_empty_lock_is_the_whole_manifest() {
+        // A project with no lockfile yet: `loft update` has to build one, so
+        // every declared package is work.
+        let work = update_worklist(&[], &deps(&[("a", "*"), ("b", ">=2")]));
+        assert_eq!(work.len(), 2);
+        assert!(work.iter().all(|w| w.locked.is_none()));
     }
 }

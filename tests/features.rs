@@ -28,6 +28,7 @@ fn feature_examples() -> Vec<PathBuf> {
     files
 }
 
+// @speed 3.5
 #[test]
 fn features_examples_interpret() {
     let files = feature_examples();

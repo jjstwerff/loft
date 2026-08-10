@@ -5291,6 +5291,23 @@ impl Scopes {
                     }
                 }
             }
+            // A generator HANDLE owns its coroutine frame, and through it every heap local
+            // the generator body allocated.  `Type::Iterator` was absent from the heap block
+            // above, so no scope carried a free for one: a generator whose consumer stopped
+            // early never reached the tail where its own `OpFreeRef`s live, and the vector it
+            // was walking stayed allocated for the rest of the program (loft#835).  Stopping
+            // early is ordinary code — iterating until a match is found and breaking is the
+            // main reason to reach for a generator at all.
+            //
+            // Ownership is unconditional here because a handle is never a view of somebody
+            // else's store, so `Type::Iterator` carries no dep list to consult.  A handle
+            // being RETURNED is already skipped by the `v == ret_var` test at the top of the
+            // loop, and a parameter never enters this sweep, so the caller keeps its own.
+            // Freeing an already-exhausted handle is safe: the frame carries a generation
+            // stamp the free checks, so a stale handle cannot reach a recycled slot.
+            if matches!(function.tp(v).base(), Type::Iterator(_, _)) && !function.is_skip_free(v) {
+                ls.push(call("OpFreeRef", v, data));
+            }
             // free the closure DbRef embedded at offset+4 in a fn-ref slot.
             // The 16-byte fn-ref stack slot is reclaimed by FreeStack, but the closure
             // store record at offset+4 must be explicitly freed via OpFreeRef.
