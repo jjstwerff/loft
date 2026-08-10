@@ -260,9 +260,13 @@ pub struct ValueInfo {
 /// an `integer` field does not make the reading an integer, it makes it whatever
 /// that field is. That is why the kind is reported rather than requested.
 ///
-/// **Not inside a generic**, the same limit `type_of` has and for the same
-/// reason: the body is parsed once against its type variable, so the type is not
-/// known there. Call it where the concrete type is.
+/// **REFUSED inside a generic**, and refused rather than merely unsupported. A
+/// generic body is parsed once against its type variable, so there is no
+/// concrete type to read positions out of — the same limit `type_of` has. Left
+/// to answer, every call there reports `OtherKind`, which for an ORM's write
+/// half is an EMPTY ROW rather than an error: the write succeeds and the columns
+/// are missing. So it is a compile error naming the type variable. Call it one
+/// frame out, where the type is known, and pass the values in.
 //
 // `field_value(x, position)` is intercepted in `src/parser/control.rs` and
 // lowered to `reflect_field(x, position, <type-id>)`, so the id is a parse-time

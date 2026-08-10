@@ -12250,16 +12250,37 @@ impl Parser {
             // read.
             "field_value" if types.len() == 2 => {
                 let fv = self.data.def_nr("ValueInfo");
+                // Every refusal below still answers `ValueInfo`. The error is
+                // already reported, and handing back `Unknown` would cascade a
+                // second, misleading complaint about the enclosing variable
+                // changing type — which buries the one that says what to fix.
+                let answer = if fv == u32::MAX {
+                    Type::Unknown(0)
+                } else {
+                    Type::Reference(fv, crate::data::Deps::none())
+                };
                 if self.first_pass {
                     // First pass needs the RESULT type so an enclosing
-                    // `v = field_value(row, p)` infers `FieldValue` on both
+                    // `v = field_value(row, p)` infers `ValueInfo` on both
                     // passes and the name-keyed variable tables do not shift
                     // underneath — the same reason `type_of` does this.
-                    return if fv == u32::MAX {
-                        Type::Unknown(0)
-                    } else {
-                        Type::Reference(fv, crate::data::Deps::none())
-                    };
+                    return answer;
+                }
+                // Inside a generic the body is parsed ONCE against its type
+                // variable, so there is no concrete type to read positions out
+                // of and every call would answer `OtherKind` — an empty row
+                // rather than an error, which is the silent under-delivery this
+                // API exists to avoid. Say so where the author can see it.
+                if let Some(tv) = self.generic_type_name(&types[0]) {
+                    let tv = tv.to_string();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field_value cannot read a value of the type variable `{tv}` — a generic \
+                         body is parsed once, so the concrete type is not known here. Call it \
+                         where the type is known, and pass the values in."
+                    );
+                    return answer;
                 }
                 // Only a record has fields to read. Refusing here beats
                 // answering `OtherKind` at run time: the author wrote a type
@@ -12272,7 +12293,7 @@ impl Parser {
                         "field_value needs a record — {} has no fields to read",
                         types[0].name(&self.data)
                     );
-                    return Type::Unknown(0);
+                    return answer;
                 }
                 let kt = self.get_type(&types[0].clone());
                 let d_nr = self.data.def_nr("n_reflect_field");
@@ -12282,7 +12303,7 @@ impl Parser {
                         Level::Error,
                         "field_value is unavailable — default/07_reflect.loft did not load"
                     );
-                    return Type::Unknown(0);
+                    return answer;
                 }
                 *val = Value::Call(
                     d_nr,
