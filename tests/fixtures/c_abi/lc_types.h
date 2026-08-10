@@ -142,6 +142,31 @@ LC_API int64_t lc_arity12(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e,
                           int64_t f, int64_t g, int64_t h, int64_t i, int64_t j,
                           int64_t k, int64_t l);
 
+/* ---- NUMERIC: the shapes BLAS/LAPACK/FFTW are made of (@PLN128) ----------
+ * loft expands a `vector<T>` into pointer-then-count, so each of these takes
+ * the count C would otherwise have no way to know.  The load-bearing cell is
+ * `lc_daxpy`: every BLAS and LAPACK routine returns its result by WRITING
+ * THROUGH a caller-supplied pointer, so if loft could not see those writes the
+ * numeric stack would not be bindable at all.
+ *
+ * Values are scaled to integers on return because a `double` return would trip
+ * the very refusal this fixture documents — the point is the array crossing,
+ * not the return convention. */
+LC_API int64_t lc_dsum_scaled(const double *p, int64_t n);
+LC_API void lc_daxpy(double *y, int64_t ny, const double *x, int64_t nx,
+                     int64_t a_milli);
+
+/* A Fortran-style scalar-by-reference: loft has no address-of, so a scalar
+ * reaches C as a 1-ELEMENT vector — and therefore costs TWO C slots, which is
+ * why `dgemm_`'s 13 by-reference arguments need a collapsing shim. */
+LC_API int64_t lc_scalar_ref(const int64_t *p, int64_t n);
+
+/* The idiom the float refusal prescribes: a scalar double in and out, entirely
+ * by pointer, so no float→bits conversion (which loft does not have) is
+ * needed anywhere. */
+LC_API void lc_shim_scale(double *out, int64_t n_out, const double *v,
+                          int64_t n_v);
+
 /* ---- BOUNDARY: what a trampoline cannot call --------------------------- */
 
 /* Floating point travels in SSE registers, not the integer registers a

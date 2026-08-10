@@ -153,6 +153,31 @@ int main(void) {
   eq("varargs", lc_var_sum(3, (int64_t)1, (int64_t)2, (int64_t)3), 6);
   eq("varargs shim", lc_shim_sum3(1, 2, 3), 6);
 
+  /* @PLN128 — the numeric shapes.  Expected values computed here, in C, so the
+   * loft test compares against an oracle rather than against itself. */
+  {
+    double v[3];
+    double y[3];
+    double x[3];
+    double out[1];
+    double sv[1];
+    int64_t one;
+    v[0] = 1.5; v[1] = 2.25; v[2] = 4.0;
+    eq("dsum scaled", lc_dsum_scaled(v, 3), 7750);
+    y[0] = 1.0; y[1] = 2.0; y[2] = 3.0;
+    x[0] = 10.0; x[1] = 20.0; x[2] = 30.0;
+    lc_daxpy(y, 3, x, 3, 1200);
+    eq("daxpy y0", (int64_t)(y[0] * 1000.0), 13000);
+    eq("daxpy y1", (int64_t)(y[1] * 1000.0), 26000);
+    eq("daxpy y2", (int64_t)(y[2] * 1000.0), 39000);
+    one = 6;
+    eq("scalar by reference", lc_scalar_ref(&one, 1), 42);
+    eq("scalar ref rejects a non-scalar", lc_scalar_ref(&one, 2), -1);
+    sv[0] = 2.5; out[0] = 0.0;
+    lc_shim_scale(out, 1, sv, 1);
+    eq("pointer shim scales a scalar double", (int64_t)(out[0] * 1000.0), 5000);
+  }
+
   if (failures != 0) {
     printf("%d failure(s)\n", failures);
     return 1;

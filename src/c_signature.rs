@@ -252,11 +252,25 @@ impl CSignature {
     #[must_use]
     pub fn boundary_refusals(&self) -> Vec<String> {
         let mut out = Vec::new();
+        // @PLN128 arc B — these used to prescribe "a shim taking the bit
+        // pattern as an integer", which loft CANNOT EXPRESS: there is no
+        // float→bits conversion, and `x as integer` is a VALUE cast (2.5 → 2,
+        // measured). The advice was reachable only for a literal an author had
+        // converted by hand offline, so a real program holding a computed
+        // double was told to do something impossible.
+        //
+        // The cure prescribed instead is one that works TODAY on both backends
+        // and needs no new builtin: a loft `vector<float>` already crosses as
+        // pointer-plus-count, so a 1-element vector carries a scalar double in,
+        // and C's writes through a `double*` are visible to loft on return
+        // (the write-back property the numeric stack is built on). Verified end
+        // to end before this text was written.
         if let CType::Float { bits } = self.ret {
             out.push(format!(
                 "returns a {bits}-bit float, which comes back in an SSE register the caller does \
-                 not read. Wrap `{}` in an ANSI-C shim that returns the bit pattern as an \
-                 integer, and bind that",
+                 not read. Wrap `{}` in an ANSI-C shim that writes the result through a `double*` \
+                 out-parameter instead, and bind that — a loft `vector<float>` crosses as a \
+                 pointer plus a count, so a 1-element vector carries the value back",
                 self.symbol
             ));
         }
@@ -264,8 +278,9 @@ impl CSignature {
             if let CType::Float { bits } = p {
                 out.push(format!(
                     "parameter {} is a {bits}-bit float, which travels in an SSE register the \
-                     caller does not write. Wrap `{}` in an ANSI-C shim taking the bit pattern as \
-                     an integer, and bind that",
+                     caller does not write. Wrap `{}` in an ANSI-C shim that takes it by POINTER \
+                     instead, and bind that — a loft `vector<float>` crosses as a pointer plus a \
+                     count, so a 1-element vector carries a scalar",
                     i + 1,
                     self.symbol
                 ));
@@ -459,9 +474,16 @@ pub fn shape_of(t: &Type) -> LoftCShape {
              arrive as an ordinary number or a fault. Discharge it first (`?? 0`, `x?`, or a \
              `match`) and declare the parameter non-null",
         ),
+        // @PLN128 arc B — by POINTER, not by bit pattern. loft has no
+        // float→bits conversion, so the bit-pattern advice this used to give
+        // named a cure no program could write; the pointer form is the one the
+        // numeric stack already uses (`daxpy` writes its result through
+        // `double*`) and it works on both backends today.
         Type::Float | Type::Single => LoftCShape::Refused(
             "a float cannot cross directly — it travels in an SSE register the caller does not \
-             touch. Pass the bit pattern as an `integer` through an ANSI-C shim",
+             touch. Pass it by POINTER through an ANSI-C shim: a 1-element `vector<float>` \
+             crosses as `(const double*, int64_t)`, and C's writes through a `double*` are \
+             visible to loft",
         ),
         // A loft record is a position inside a store that the allocator may
         // RELOCATE (`resize_store` reallocs the arena). Handing C an interior

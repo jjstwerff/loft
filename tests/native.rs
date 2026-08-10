@@ -1247,6 +1247,109 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
     Ok(())
 }
 
+/// @PLN128 — the three shapes every numeric library (BLAS, LAPACK, FFTW, HDF5)
+/// is actually made of, bound through `#c` and checked on both backends.
+///
+/// The load-bearing cell is `lc_daxpy`: **C writes its result THROUGH a
+/// caller-supplied pointer**, which is how every BLAS and LAPACK routine
+/// returns anything at all. If loft could not see those writes the numeric
+/// stack would not be bindable, so this is the property the whole plan rests
+/// on and it gets a guarantee probe rather than a one-off measurement.
+///
+/// The expected values are the ones `lc_selftest.c` computes in C (`make
+/// check`), not numbers copied from a loft run — agreement between two loft
+/// backends is not evidence that either matches C.
+///
+/// Skips when `cc` is absent, like its sibling above; a failed BUILD is a real
+/// failure, not a skip.
+#[test]
+fn numeric_array_shapes_cross_identically_on_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let built = std::process::Command::new("make")
+        .arg("-C")
+        .arg(&root)
+        .output()?;
+    assert!(
+        built.status.success(),
+        "the fixture library must build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let prog = std::env::temp_dir().join("loft_pln128_numeric.loft");
+    std::fs::write(
+        &prog,
+        "use lcabi;\n\
+         fn main() {\n\
+         \x20 a: vector<float> = [1.5, 2.25, 4.0];\n\
+         \x20 println(\"dsum {lc_dsum_scaled(a)}\");\n\
+         // C writes back through `y`. `y` is READ AFTERWARDS, which is also what\n\
+         // keeps it alive across the call — a vector whose last use is the `#c`\n\
+         // call itself is freed at that point and C's pointer dangles.\n\
+         \x20 y: vector<float> = [1.0, 2.0, 3.0];\n\
+         \x20 x: vector<float> = [10.0, 20.0, 30.0];\n\
+         \x20 lc_daxpy(y, x, 1200);\n\
+         \x20 println(\"daxpy {y[0]*1000.0} {y[1]*1000.0} {y[2]*1000.0}\");\n\
+         // A Fortran scalar-by-reference: no address-of in loft, so a scalar is a\n\
+         // 1-element vector and costs TWO C slots.\n\
+         \x20 s: vector<integer> = [6];\n\
+         \x20 println(\"scalar {lc_scalar_ref(s)}\");\n\
+         // The idiom the float refusal prescribes, on a COMPUTED double rather\n\
+         // than a literal an author converted by hand.\n\
+         \x20 v: vector<float> = [2.5];\n\
+         \x20 out: vector<float> = [0.0];\n\
+         \x20 lc_shim_scale(out, v);\n\
+         \x20 println(\"shim {out[0]*1000.0}\");\n\
+         }\n",
+    )?;
+    let libdir = root.join("pkg");
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        // 1.5 + 2.25 + 4.0 = 7.75, scaled by 1000.
+        "dsum 7750",
+        // a = 1.2; y[i] += a * x[i] over [1,2,3] and [10,20,30].
+        "daxpy 13000 26000 39000",
+        "scalar 42",
+        "shim 5000",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "the two backends must agree on every numeric shape"
+    );
+    Ok(())
+}
+
 /// @PLN24 arc D — a C `char *` comes back as loft `text`, identically on both
 /// backends, from libc alone (no fixture, no library to install).
 ///

@@ -537,9 +537,10 @@ correct everywhere.  An unknown type is refused, never guessed.
 | `integer`, narrow ints, `boolean`, `character` | one C integer | any width; the value is passed full-width |
 | `text` argument | one `const char*` | **NUL-terminated**, unlike the `#native` path's `ptr, len` |
 | `text` / `text?` RETURN | `char*` | the bytes are **copied** up to the first NUL; loft never frees the pointer |
-| `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* |
+| `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* — see the retention hazard below |
+| `vector<float>` | `double*` + count | C may **write through it**; the writes are visible to loft |
 | C-owned handle (`PGconn *`) | `void*` ↔ loft `integer` | the pointer value crosses as an integer |
-| `float` / `single` | — | **refused**: floats travel in SSE registers a fixed caller does not touch — shim it |
+| `float` / `single` SCALAR | — | **refused**: floats travel in SSE registers a fixed caller does not touch — pass it by pointer as a 1-element `vector<float>` |
 | a loft record | — | **refused**: records live in a store that may move them |
 | a nullable `τ?` ARGUMENT | — | **refused at compile time**: C has no null model |
 
@@ -556,8 +557,88 @@ becomes an element pointer **immediately followed by** its count, so `write(fd,
 ptr, n)` binds directly while `memchr(ptr, ch, n)` and `fwrite(ptr, size, n, f)`
 — which separate the pair — need a shim.  And a binding may declare at most **12**
 C parameters: the interpreter calls through a fixed ladder of per-arity
-trampolines, and the ceiling is a fact about the contract, checked on every build
-whether or not a C caller is compiled in.
+trampolines, and that ladder is where the ceiling comes from.
+
+**The ceiling is the INTERPRETER's, and the two backends do not agree** (@PLN128,
+measured both ways).  `--native` emits a typed `extern "C"` call and has no
+ladder, so it binds and correctly calls a 14-slot C function; the interpreter
+refuses the same declaration with `error[c-binding-not-interpretable]` naming
+`0..=12`.  The refusal fires where the binding is USED, not where it is declared,
+so a library can ship a 13+-slot binding that every `--native` consumer builds
+and every interpreted one — including `loft debug`, which is the interpreter —
+cannot call.  Treat 12 as the portable ceiling regardless of which backend you
+develop on.
+
+#### Numeric libraries — what the boundary already does (@PLN128)
+
+BLAS/LAPACK, FFTW, HDF5 and GSL are the same three shapes over and over: an array
+in, an array written back, and a scalar passed by reference.  Every cell below was
+measured on **both backends** against a C oracle that computed the expected value
+itself:
+
+| shape | `--interpret` | `--native` |
+|---|---|---|
+| read a `double` array — `vector<float>` → `(const double*, int64_t)` | ✅ | ✅ |
+| **C writes back through `double*`** (the `daxpy` shape) | ✅ | ✅ |
+| 1-element `vector<integer>` as a Fortran scalar `const int64_t*` | ✅ | ✅ |
+| a scalar `double` in and out through a pointer shim | ✅ | ✅ |
+| 14 C argument slots | ❌ refused, `0..=12` | ✅ |
+| a `double` **by value** | ❌ refused | ❌ refused |
+
+**The write-back cell is the one that matters.**  Every BLAS and LAPACK routine
+returns its result by writing through a caller-supplied pointer, so a boundary
+that could not carry those writes could not bind the numeric stack at all.  It
+carries them.
+
+**A scalar float crosses as a 1-element `vector<float>`** — this is the answer to
+the most common question, and the cure the float refusal now names:
+
+```loft
+// C:  void shim_scale(double *out, int64_t n_out, const double *v, int64_t n_v)
+pub fn shim_scale(out: vector<float>, v: vector<float>);
+#c "shim_scale" "void(double*, int64_t, const double*, int64_t)"
+
+v: vector<float> = [2.5];        // a COMPUTED double, not a hand-converted literal
+out: vector<float> = [0.0];
+shim_scale(out, v);              // out[0] == 5.0
+```
+
+There is deliberately no float→bits builtin, so a shim taking "the bit pattern as
+an integer" is **not** a route a real program can take: `x as integer` is a value
+cast (`2.5` → `2`).  Pointers are the whole answer.
+
+**A Fortran argument list costs two C slots per scalar.**  loft has no address-of,
+so each by-reference scalar becomes a 1-element vector — pointer *and* count.
+`dgemm_` takes 13 by-reference arguments, so it needs ~26 slots against a ceiling
+of 12: **Fortran BLAS/LAPACK needs a shim that collapses the argument list**, and
+"Fortran passes everything by reference, so it binds unmodified" is false.
+Pointer-and-integer APIs (HDF5, GSL) have no such problem — though see the
+retention hazard below before reaching for one that keeps your buffers.
+
+##### The retention hazard — a pointer C keeps is a use-after-free
+
+`vector<T>` hands C a pointer **valid for the duration of the call**.  loft cannot
+see that C stored it, so the vector's lifetime still ends at its last *loft-visible*
+use — and a later C read then hits memory loft has reused, silently:
+
+```loft
+a: vector<float> = [1.5, 2.25, 4.0];
+retain(a);                       // C keeps the pointer; `a` has no later use
+b: vector<float> = [100.0, 200.0, 400.0];
+reread();                        // reads `b`, not `a` — measured, both backends
+```
+
+That reads another variable's data with no fault and no diagnostic.  Adding any
+later use of `a` keeps it alive and the read is correct — which is precisely what
+makes the bug dangerous: it appears and disappears with edits that look unrelated.
+
+This is the FFTW plan API's exact shape (`fftw_plan_dft` retains the buffers,
+`fftw_execute` reads them later), so **a retaining C API cannot be bound directly
+today**.  Give the buffer to C instead — allocate it on the C side and hold it as
+an opaque handle — or keep the call and every use of the buffer in one expression.
+There is no annotation for "C keeps this pointer"; until there is, the rule is the
+one at the top of this paragraph, and it is a rule about *your* code, not a
+guarantee loft enforces.
 
 **The `char *` return — three answers C's type system cannot give**, so the
 binding gives them, the same way on every backend:

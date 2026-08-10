@@ -324,3 +324,28 @@ int64_t lc_shim_mod(int64_t a, int64_t b) {
 int64_t lc_shim_sum3(int64_t a, int64_t b, int64_t c) {
   return lc_var_sum(3, a, b, c);
 }
+
+/* ---- NUMERIC (@PLN128) -------------------------------------------------- */
+
+int64_t lc_dsum_scaled(const double *p, int64_t n) {
+  double s = 0.0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += p[i];
+  return (int64_t)(s * 1000.0);
+}
+
+void lc_daxpy(double *y, int64_t ny, const double *x, int64_t nx,
+              int64_t a_milli) {
+  double a = (double)a_milli / 1000.0;
+  int64_t n = ny < nx ? ny : nx;
+  int64_t i;
+  for (i = 0; i < n; i++) y[i] = y[i] + a * x[i];
+}
+
+int64_t lc_scalar_ref(const int64_t *p, int64_t n) {
+  return (n == 1) ? *p * 7 : -1;
+}
+
+void lc_shim_scale(double *out, int64_t n_out, const double *v, int64_t n_v) {
+  if (n_out >= 1 && n_v >= 1) out[0] = v[0] * 2.0;
+}
