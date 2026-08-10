@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// loft#843 — a keyed collection's records became unaddressable to the sibling
-// that views them.
+// loft#843 — two keyed collections over ONE element type are two views of one
+// set, and both halves of that were broken.
 //
-// A `sorted<T[k]>` beside a `hash<T[k2]>`
+// **1. The records were unaddressable.** A `sorted<T[k]>` beside a `hash<T[k2]>`
 // becomes an `ordered` array whose slots hold a 4-byte record id, read back at a
 // hard-coded `pos = 8` (`vector::ordered_find`) — an address that only names an
 // element OWNING its record. @PLN135 arc H moved hash entries into a packed
@@ -13,12 +13,11 @@
 // FIRST. The length stayed right, which is what made it dangerous: a caller that
 // checks `len` before iterating sees a healthy collection.
 //
-// The sibling link is one-directional by design — the first-declared field owns
-// the records, later ones are views that maintain nothing — so inserting through
-// a VIEW reaches only that view. That is a separate question from this fix and is
-// left as it was: `85-store-lifetime-claims-keystone.loft` builds an `index` and
-// a `sorted` over one element type with DIFFERENT contents and asserts they stay
-// different, so making the link mutual is a semantic change rather than a repair.
+// **2. Only one spelling of the insert worked.** The sibling link ran
+// earlier-declared → later-declared only, so which collection maintained the
+// others depended on DECLARATION ORDER: adding through the second field left the
+// first empty and said nothing. Two views of one set have no privileged
+// spelling, so the link is mutual now.
 //
 // The cells below are the boundary, not a demonstration: `index + sorted` was
 // always CORRECT (a tree allocates one record per element), and keeping it here
@@ -52,17 +51,23 @@ fn main() {
   assert(len(a.rank) == 2, "D1 rank len {len(a.rank)}");
   assert(r1 == "b3 a5 ", "D1 rank [{r1}]");
 
-  // --- 2: the OWNER is the first-declared field, whichever kind it is --------
-  // Here the `sorted` is declared first, so it owns and the hash is the view.
-  // Inserting through the owner must reach the view — this is the cell that
-  // proves the addressing fix is not specific to a hash being the owner.
+  // --- 2: either spelling maintains both views, whatever the order ----------
+  // `sorted` is declared FIRST here, and the insert goes through the hash — the
+  // combination that used to leave `rank` empty.
   b = D2 { id: 2 };
-  b.rank += [T2 { name: "a", weight: 5 }];
-  b.rank += [T2 { name: "b", weight: 3 }];
+  b.seen += [T2 { name: "a", weight: 5 }];
+  b.seen += [T2 { name: "b", weight: 3 }];
   r2 = ""; for y in b.rank { r2 += "{y.name}{y.weight} " }
-  assert(len(b.rank) == 2, "D2 rank len {len(b.rank)}");
+  assert(len(b.rank) == 2, "D2 rank len {len(b.rank)} (sorted declared first)");
   assert(r2 == "b3 a5 ", "D2 rank [{r2}]");
-  assert(len(b.seen) == 2, "D2 seen len {len(b.seen)}");
+
+  // ...and through the VIEW, reading the owner — the mirror case.
+  c = D1 { id: 3 };
+  c.rank += [T1 { name: "a", weight: 5 }];
+  c.rank += [T1 { name: "b", weight: 3 }];
+  assert(len(c.seen) == 2, "insert via rank left seen at {len(c.seen)}");
+  assert(len(c.rank) == 2, "insert via rank left rank at {len(c.rank)}");
+  assert(c.seen["a"].weight == 5, "seen['a'] after insert via rank");
 
   // --- 3: past one chunk, every element is its own ---------------------------
   // 40 elements is the cell that made the fault unmistakable: they all read back

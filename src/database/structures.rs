@@ -175,14 +175,18 @@ impl Stores {
         {
             let f = &fields[field as usize];
             let o = &f.other_indexes;
-            // A leading `u16::MAX` marks this field as a VIEW of records another
-            // field owns; such a field maintains nothing, which is why the walk
-            // stops rather than starts here. Making it mutual is a semantic
-            // change, not a repair — `85-store-lifetime-claims-keystone.loft`
-            // builds an `index` and a `sorted` over one element type with
-            // DIFFERENT contents and asserts they stay different (loft#843).
-            if !o.is_empty() && o[0] != u16::MAX {
+            {
                 for fld_nr in o {
+                    // A leading `u16::MAX` marks this field as a VIEW of records
+                    // another field also holds — read by the JSON walk to skip
+                    // default-initialising it. It is a marker, not a field
+                    // number, so it is SKIPPED rather than treated as the end of
+                    // the list: that is what lets a view maintain its siblings
+                    // too, and an insert then means the same thing whichever of
+                    // the collections it is spelled through (loft#843).
+                    if *fld_nr == u16::MAX {
+                        continue;
+                    }
                     let sibling_content = fields[*fld_nr as usize].content;
                     // @PLN25 Scope B — a keyed index over a shared NULLABLE array indexes only
                     // the non-null records: when the sibling keyed element is `__nullable<S>`

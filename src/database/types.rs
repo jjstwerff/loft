@@ -282,6 +282,14 @@ impl Stores {
                             // this list skips it.
                             others.push(u16::MAX);
                         }
+                        // Link BOTH ways. Only the earlier-declared field used to
+                        // point at the later one, so which collection maintained
+                        // the others depended on DECLARATION ORDER: an insert
+                        // spelled through the second field reached only that
+                        // field, and said nothing. Two keyed collections over one
+                        // element type are two VIEWS of one set — neither
+                        // spelling is the privileged one (loft#843).
+                        others.push(f_nr as u16);
                         linked.insert(f_nr as u16, fld.len() as u16);
                     }
                 }

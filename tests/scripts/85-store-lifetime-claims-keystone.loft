@@ -145,6 +145,18 @@ fn sorted_kind() {
 fn index_kind() {
   // index + sibling sorted of same element type — sorted is stored as ordered
   // (array-rep): the @P309 axis through the Array/Ordered keystone arm.
+  //
+  // Both fields key on `k`, so since loft#843 they are two VIEWS of ONE set: an
+  // insert through either maintains the other, whichever was declared first.
+  // Both literals therefore describe the SAME three records: a repeated key
+  // replaces rather than accumulating, so the two views end up holding one set
+  // of three. (`s: []` would not do — an empty literal CLEARS what the link put
+  // there, which is a different thing from leaving it alone.)
+  //
+  // It used to read `s: [GG, AA, BB]` — three DIFFERENT names under the same
+  // three keys — and assert the two fields kept their own contents. That worked
+  // only because the link was one-directional, and it is exactly the behaviour
+  // loft#843 changed.
   b = IBox {
     i: [
       EntK { k: 3, name: "gamma" },
@@ -152,24 +164,24 @@ fn index_kind() {
       EntK { k: 2, name: "beta" },
     ],
     s: [
-      EntK { k: 3, name: "GG" },
-      EntK { k: 1, name: "AA" },
-      EntK { k: 2, name: "BB" },
+      EntK { k: 3, name: "gamma" },
+      EntK { k: 1, name: "alpha" },
+      EntK { k: 2, name: "beta" },
     ],
   };
   c = id_i(b);
   assert(c.i[1].name == "alpha" && c.i[2].name == "beta" && c.i[3].name == "gamma", "index copy");
   assert(
-    c.s.len() == 3 && sorted_names(c.s) == "AA,BB,GG,",
+    c.s.len() == 3 && sorted_names(c.s) == "alpha,beta,gamma,",
     "ordered sibling '{sorted_names(c.s)}'"
   );
   c = IBox { i: [
     EntK { k: 9, name: "delta" },
   ], s: [
-    EntK { k: 9, name: "DD" },
+    EntK { k: 9, name: "delta" },
   ] };
-  assert(c.i[9].name == "delta" && c.s.len() == 1 && c.s[9].name == "DD", "index after-reassign");
-  assert(b.i[2].name == "beta" && b.s[1].name == "AA", "index orig intact");
+  assert(c.i[9].name == "delta" && c.s.len() == 1 && c.s[9].name == "delta", "index after-reassign");
+  assert(b.i[2].name == "beta" && b.s[1].name == "alpha", "index orig intact");
 }
 
 fn struct_multi_heap_kind() {
