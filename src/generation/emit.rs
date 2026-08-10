@@ -138,7 +138,14 @@ impl Output<'_> {
             }
             // @PLN11 G2/M4.5 — self-contained arms (no &Value-helper delegation).
             ValueType::Yield => {
-                if self.yield_collect {
+                if let Some((open, close)) = self.yield_lazy_wrap.clone() {
+                    // CL-9 — the SUSPEND of a lazily-lowered loop: hand the value to the
+                    // enclosing single-iteration wrapper and leave it, so control reaches the
+                    // consumer before the loop's next iteration runs (loft#836).
+                    write!(w, "{{ __y = {open}")?;
+                    self.output_code_node(w, node.yield_inner())?;
+                    write!(w, "{close}; __exhausted = false; break 'iter; }}")?;
+                } else if self.yield_collect {
                     // Inside a ForLoopBody factory: push to the collector.
                     write!(w, "__values.push((")?;
                     self.output_code_node(w, node.yield_inner())?;

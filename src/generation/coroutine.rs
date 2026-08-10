@@ -108,6 +108,121 @@ enum YieldSegment {
     /// `for i in range { yield expr; }` pattern without requiring a full
     /// state-machine decomposition of the range-iteration IR.
     ForLoopBody { pre: Vec<Value>, body: Value },
+    /// A loop whose body ends in a single unconditional `yield`, lowered LAZILY (CL-9).
+    ///
+    /// One advance runs one iteration: the loop's cursor and loop-carried locals already
+    /// persist in the coroutine struct, so re-entering the state resumes where the last
+    /// `yield` left off — which is what `ForLoopBody`'s eager buffer cannot do.  Takes TWO
+    /// states: the first runs `setup` once, the second is the iteration.
+    ///
+    /// - `pre`: statements before the loop's block, at the generator's top level
+    /// - `whole`: the unsplit block, kept so a downgrade to `ForLoopBody` is exact
+    /// - `setup`: the block's statements BEFORE the loop (the cursor initialisation)
+    /// - `body`: the loop's own operators — the header (advance + bound test) and the body,
+    ///   with the trailing `yield` still in place; the emitter rewrites that one node
+    /// - `post`: the block's statements AFTER the loop (scope-exit frees, implicit return)
+    ForLoopLazy {
+        pre: Vec<Value>,
+        whole: Value,
+        setup: Vec<Value>,
+        body: Vec<Value>,
+        post: Vec<Value>,
+    },
+}
+
+/// Does this statement END in a `yield`, looking through trailing blocks?
+///
+/// The test is for an UNCONDITIONAL trailing yield: an `if`-wrapped one resumes at a point
+/// that depends on which branch ran, which is axis A3 and stays eager.
+fn tail_is_yield(v: &Value) -> bool {
+    match v.unspan() {
+        Value::Yield(_) => true,
+        Value::Block(bl) => bl.operators.last().is_some_and(tail_is_yield),
+        _ => false,
+    }
+}
+
+/// The placeholder a lazily-lowered loop's iteration state gives `__y` before running the
+/// body.  The `yield` always overwrites it before it is read, so it only has to type-check
+/// against the channel this generator answers on.
+fn lazy_yield_init(yield_tp: &Type) -> &'static str {
+    match yield_tp {
+        Type::Text(_) => "String::new()",
+        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => "DbRef::NULL",
+        _ => "0i64",
+    }
+}
+
+/// Recognise the loop shape a single advance can run one iteration of (CL-9 slice 1).
+///
+/// Returns `(setup, loop_ops, post)` — the statements before the loop, the loop's own
+/// operators, and the statements after it.  Everything this REJECTS keeps the eager buffer,
+/// so no generator regresses while the remaining axes are still to come:
+///
+/// * more than one loop, or a yield outside the loop — the state graph is not one cursor;
+/// * more than one yield, or one that is not the loop body's last statement (axes A2/A3) —
+///   re-entry would have to land at the yield that suspended, which one state cannot encode;
+/// * a nested loop (A4) — its `break` would be caught by the single-iteration wrapper this
+///   lowering runs the body in, ending the OUTER loop instead of the inner one;
+/// * a `continue` — it would leave the iteration without yielding, which the wrapper reads
+///   as "the loop ended";
+/// * a `return` — it would return from `next()` rather than from the generator.
+fn detect_lazy_for(val: &Value) -> Option<(Vec<Value>, Vec<Value>, Vec<Value>)> {
+    let Value::Block(bl) = val.unspan() else {
+        return None;
+    };
+    let mut loop_at = None;
+    for (i, op) in bl.operators.iter().enumerate() {
+        if matches!(op.unspan(), Value::Loop(_)) {
+            if loop_at.is_some() {
+                return None;
+            }
+            loop_at = Some(i);
+        } else if contains_yield(op) {
+            return None;
+        }
+    }
+    let at = loop_at?;
+    let Value::Loop(lp) = bl.operators[at].unspan() else {
+        return None;
+    };
+    let mut yields = 0usize;
+    let mut disqualified = false;
+    for op in &lp.operators {
+        op.walk(&mut |n| match n {
+            Value::Yield(_) => yields += 1,
+            Value::Loop(_) | Value::Continue(_) | Value::Return(_) => disqualified = true,
+            _ => {}
+        });
+    }
+    if yields != 1 || disqualified {
+        return None;
+    }
+    if !lp.operators.last().is_some_and(tail_is_yield) {
+        return None;
+    }
+    // The block's trailing `return` is the generator's implicit end, which the state machine
+    // expresses with its exhausted sentinel — emitting a Rust `return` of the loft value
+    // answers the wrong type from `next()`.  Unwrap it the way `collect_segments` unwraps the
+    // tail, keeping any real expression it wrapped so its side effect still happens.
+    let mut post = bl.operators[at + 1..].to_vec();
+    while let Some(last) = post.last().map(|v| v.unspan().clone()) {
+        match last {
+            Value::Null => {
+                post.pop();
+            }
+            Value::Return(inner) if matches!(inner.unspan(), Value::Null) => {
+                post.pop();
+            }
+            Value::Return(inner) => {
+                post.pop();
+                post.push(*inner);
+                break;
+            }
+            _ => break,
+        }
+    }
+    Some((bl.operators[..at].to_vec(), lp.operators.clone(), post))
 }
 
 /// Try to recognise a `yield from` desugared block.
@@ -126,7 +241,13 @@ fn detect_yield_from(val: &Value) -> Option<Value> {
     let Value::Block(bl) = val.unspan() else {
         return None;
     };
-    if bl.operators.len() != 2 {
+    // Anything after the loop is the scope exit the handle now carries — `OpFreeRef(sub_var)`,
+    // added when a generator handle became a freed heap value (loft#835).  The native lowering
+    // owns the sub-generator through `self.sub_N` and never gives it a table entry, so that
+    // free has nothing to do here and is dropped; `self.sub_N`'s own cleanup releases it.
+    // Matching the op count exactly instead is what silently pushed every `yield from` onto
+    // the eager path the moment that free appeared.
+    if bl.operators.len() < 2 || bl.operators[2..].iter().any(contains_yield) {
         return None;
     }
     let Value::Set(sub_var, init_expr) = bl.operators[0].unspan() else {
@@ -218,10 +339,24 @@ fn collect_segments(ops: &[Value]) -> (Vec<YieldSegment>, Vec<Value>) {
             // factory uses the `yield_collect` mode that emits
             // `__values.push(...)` instead of `yield ...`, mirroring
             // how Block-with-yield was already handled.
-            segments.push(YieldSegment::ForLoopBody {
-                pre: std::mem::take(&mut pre),
-                body: inner_op.clone(),
-            });
+            // CL-9 (loft#836): a loop whose body ends in one unconditional `yield` is
+            // lowered lazily — one iteration per advance — so its side effects interleave
+            // with the consumer's exactly as they do on the interpreter.  Everything else
+            // keeps the eager buffer.
+            if let Some((setup, body, post)) = detect_lazy_for(inner_op) {
+                segments.push(YieldSegment::ForLoopLazy {
+                    pre: std::mem::take(&mut pre),
+                    whole: inner_op.clone(),
+                    setup,
+                    body,
+                    post,
+                });
+            } else {
+                segments.push(YieldSegment::ForLoopBody {
+                    pre: std::mem::take(&mut pre),
+                    body: inner_op.clone(),
+                });
+            }
         } else {
             pre.push(op.clone());
         }
@@ -245,6 +380,23 @@ fn collect_segments(ops: &[Value]) -> (Vec<YieldSegment>, Vec<Value>) {
                 break;
             }
             _ => break,
+        }
+    }
+    // Laziness is decided for the WHOLE generator, not per loop.  An eager segment makes the
+    // factory collect EVERY yield up front and `next()` collapse to a pop-from-buffer arm
+    // (P225), which a lazy segment's own states would then run a second time.  So one loop
+    // that has to stay eager pulls the rest back with it.
+    if segments
+        .iter()
+        .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
+    {
+        for seg in &mut segments {
+            if let YieldSegment::ForLoopLazy { pre, whole, .. } = seg {
+                *seg = YieldSegment::ForLoopBody {
+                    pre: std::mem::take(pre),
+                    body: whole.clone(),
+                };
+            }
         }
     }
     (segments, pre)
@@ -770,7 +922,21 @@ impl Output<'_> {
             writeln!(w, "        loop {{")?;
         }
         writeln!(w, "        match self.state {{")?;
-        for (state_idx, segment) in segments.iter().enumerate() {
+        // A lazily-lowered loop takes TWO states — its setup, then its iteration — so state
+        // numbers are handed out per segment rather than read off the index.
+        let mut state_of: Vec<usize> = Vec::with_capacity(segments.len());
+        let mut next_state = 0usize;
+        for segment in segments {
+            state_of.push(next_state);
+            next_state += if matches!(segment, YieldSegment::ForLoopLazy { .. }) {
+                2
+            } else {
+                1
+            };
+        }
+        let after_segments = next_state;
+        for (seg_idx, segment) in segments.iter().enumerate() {
+            let state_idx = state_of[seg_idx];
             writeln!(w, "            {state_idx} => {{")?;
             // Shadow-bind parameters.
             for attr in attrs {
@@ -874,11 +1040,82 @@ impl Output<'_> {
                         "                let val = self.sub_{state_idx}.as_mut().unwrap().{advance}(stores);"
                     )?;
                     writeln!(w, "                if val == {exhaust} {{")?;
-                    writeln!(w, "                    self.sub_{state_idx} = None;")?;
+                    // Release the sub-generator's own heap locals on the way out, the same
+                    // cleanup a handle's scope-exit free performs (loft#835) — this path owns
+                    // the sub-generator directly, so nothing else would.
+                    writeln!(
+                        w,
+                        "                    if let Some(mut _s) = self.sub_{state_idx}.take() {{ _s.drop_stores(stores); }}"
+                    )?;
                     writeln!(w, "                    self.state = {};", state_idx + 1)?;
                     writeln!(w, "                    continue;")?;
                     writeln!(w, "                }}")?;
                     writeln!(w, "                return val;")?;
+                }
+                YieldSegment::ForLoopLazy {
+                    pre,
+                    setup,
+                    body,
+                    post,
+                    ..
+                } => {
+                    // State 1 of 2 — run the loop's setup ONCE, then hand over to the
+                    // iteration state.  The cursor it initialises is a struct field, so it
+                    // survives every advance from here on.
+                    for stmt in pre.iter().chain(setup.iter()) {
+                        let stmt_code = self.generate_expr_buf(stmt)?;
+                        writeln!(w, "                {stmt_code};")?;
+                    }
+                    writeln!(w, "                self.state = {};", state_idx + 1)?;
+                    writeln!(w, "                continue;")?;
+                    writeln!(w, "            }}")?;
+                    // State 2 of 2 — ONE iteration per advance.  The loop's operators run
+                    // inside a wrapper that is left two ways: the header's bound test
+                    // `break`s it with `__exhausted` still set (the loop is over), and the
+                    // trailing `yield` breaks it after capturing the value (`yield_lazy_wrap`
+                    // in emit.rs).  That is the whole of the laziness: the next iteration
+                    // does not run until the consumer asks for it.
+                    writeln!(w, "            {} => {{", state_idx + 1)?;
+                    for attr in attrs {
+                        let aname = sanitize(&attr.name);
+                        match &attr.typedef {
+                            Type::Text(_) => writeln!(
+                                w,
+                                "                let var_{aname}: &str = &self.var_{aname};"
+                            )?,
+                            _ => {
+                                writeln!(w, "                let var_{aname} = self.var_{aname};")?;
+                            }
+                        }
+                    }
+                    writeln!(w, "                let mut __exhausted = true;")?;
+                    writeln!(
+                        w,
+                        "                let mut __y = {};",
+                        lazy_yield_init(yield_tp)
+                    )?;
+                    writeln!(w, "                'iter: loop {{")?;
+                    let prev_wrap = self.yield_lazy_wrap.take();
+                    self.yield_lazy_wrap = Some((wrap_open.to_string(), wrap_close.to_string()));
+                    for stmt in body {
+                        let stmt_code = self.generate_expr_buf(stmt)?;
+                        writeln!(w, "                    {stmt_code};")?;
+                    }
+                    self.yield_lazy_wrap = prev_wrap;
+                    // Falling off the end means an iteration ran without reaching the yield,
+                    // which `detect_lazy_for` has already ruled out — the trailing `yield` is
+                    // unconditional.  Leaving the wrapper is the safe reading if it ever did.
+                    writeln!(w, "                    break 'iter;")?;
+                    writeln!(w, "                }}")?;
+                    writeln!(w, "                if __exhausted {{")?;
+                    for stmt in post {
+                        let stmt_code = self.generate_expr_buf(stmt)?;
+                        writeln!(w, "                    {stmt_code};")?;
+                    }
+                    writeln!(w, "                    self.state = {};", state_idx + 2)?;
+                    writeln!(w, "                    continue;")?;
+                    writeln!(w, "                }}")?;
+                    writeln!(w, "                return __y;")?;
                 }
                 YieldSegment::ForLoopBody { .. } => {
                     // Values were collected eagerly in the factory. Just pop from the buffer.
@@ -925,7 +1162,7 @@ impl Output<'_> {
         };
         let tail: Vec<&Value> = tail.iter().filter(|op| reachable(self, op)).collect();
         if !tail.is_empty() {
-            let tail_state = segments.len();
+            let tail_state = after_segments;
             writeln!(w, "            {tail_state} => {{")?;
             for op in tail {
                 write!(w, "                ")?;
@@ -985,10 +1222,7 @@ impl Output<'_> {
             return Ok(());
         };
 
-        let (segments, tail) = collect_segments(&body_block.operators);
-        let has_yf = segments
-            .iter()
-            .any(|s| matches!(s, YieldSegment::YieldFrom { .. }));
+        let (mut segments, tail) = collect_segments(&body_block.operators);
         let attrs: Vec<_> = def.attributes().to_vec();
         let yield_tp = match def.returned() {
             Type::Iterator(inner, _) => (**inner).clone(),
@@ -997,6 +1231,82 @@ impl Output<'_> {
 
         // P224: compute persistent locals once, share across struct + impl + factory.
         let persistent = coroutine_persistent_locals(self.data, def_nr);
+
+        // Two reasons a loop that `detect_lazy_for` accepted still cannot be lowered lazily.
+        //
+        // The unified `next_into` channel (a tuple or fn-ref yield) writes its value into the
+        // caller's transport buffer and answers a bool, so a lazy loop — which hands back ONE
+        // value through the channel's wrap — has nothing to return.
+        //
+        // A DbRef yield (struct / vector / struct-enum) is held back for a different reason.
+        // Lowering it lazily makes the VALUES right — the eager collector's aliasing, which
+        // the loud `compile_error!` in the yield-collect path names, cannot happen when each
+        // yield returns immediately — but the record is built into a `__ref_*` work local that
+        // is re-declared on every advance and is not a struct field, so nothing frees it: a
+        // three-yield generator run to exhaustion leaked all three records.  Persisting the
+        // work-ref is what unlocks this, and it is its own change; refusing to compile is
+        // better than building and leaking.
+        //
+        // And a lazy loop runs its setup in one state and its body in the next, so anything
+        // the setup binds has to outlive the advance that bound it, which only a struct FIELD
+        // does; a local the setup declares is scoped to its own match arm and the iteration
+        // state cannot name it (E0425 — the `yield from` desugaring's sub-generator handle is
+        // exactly this).  Rather than widen what counts as persistent, keep the eager buffer.
+        //
+        // The verdict is all-or-nothing across the generator, for the same reason
+        // `collect_segments` decides it that way: one eager segment makes the factory collect
+        // EVERY yield and `next()` collapse to a pop-from-buffer arm, which would run a
+        // surviving lazy segment's states a second time.
+        let persistent_vars: std::collections::HashSet<u16> =
+            persistent.iter().map(|(v, _)| *v).collect();
+        let channel_can_suspend = tuple_kinds(&yield_tp).is_none()
+            && !matches!(
+                yield_tp,
+                Type::Function(_, _, _)
+                    | Type::Reference(_, _)
+                    | Type::Vector(_, _)
+                    | Type::Enum(_, true, _)
+            );
+        let setup_is_carried = |setup: &[Value]| {
+            let mut carried = true;
+            for stmt in setup {
+                stmt.walk(&mut |n| {
+                    if let Value::Set(v, _) = n
+                        && !persistent_vars.contains(v)
+                    {
+                        carried = false;
+                    }
+                });
+            }
+            carried
+        };
+        let keep_lazy = channel_can_suspend
+            && segments.iter().all(|s| match s {
+                YieldSegment::ForLoopLazy { setup, .. } => setup_is_carried(setup),
+                _ => true,
+            });
+        if !keep_lazy {
+            for seg in &mut segments {
+                if let YieldSegment::ForLoopLazy { pre, whole, .. } = seg {
+                    *seg = YieldSegment::ForLoopBody {
+                        pre: std::mem::take(pre),
+                        body: whole.clone(),
+                    };
+                }
+            }
+        }
+        let segments = segments;
+
+        // The outer `loop {}` in `next_*` is what lets a state hand over to the next one
+        // without returning a value.  A lazily-lowered loop needs it for the same reason a
+        // `yield from` does: when the loop ends, control must fall through to the states
+        // after it rather than answer the consumer.
+        let has_yf = segments.iter().any(|s| {
+            matches!(
+                s,
+                YieldSegment::YieldFrom { .. } | YieldSegment::ForLoopLazy { .. }
+            )
+        });
 
         // ── 1. Struct definition ─────────────────────────────────────────────
         emit_struct_def(
@@ -1236,6 +1546,11 @@ impl Output<'_> {
                     writeln!(w, "        }}")?;
                     writeln!(w, "    }}")?;
                 }
+                // Unreachable by construction: this factory is only emitted when some segment
+                // stayed eager, and `collect_segments` pulls every lazy segment back to eager
+                // in that case (the buffer must hold ALL yields or the state machine runs the
+                // lazy ones twice).
+                YieldSegment::ForLoopLazy { .. } => {}
             }
         }
         self.yield_collect = false;

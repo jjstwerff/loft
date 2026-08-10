@@ -491,6 +491,12 @@ pub struct Output<'a> {
     /// inside a ForLoopBody pushes the DbRef as-is — `as i64` there was
     /// the #481 native E0308/E0605.
     pub yield_collect_dbref: bool,
+    /// CL-9 (loft#836) — emit a `yield` as the SUSPEND of a lazily-lowered loop: capture the
+    /// value into `__y` and leave the single-iteration wrapper, so control returns to the
+    /// consumer before the next iteration runs.  Holds the channel's wrap
+    /// (`("(", ") as i64")`, `("(", ").to_string()")`, …), the same pair the straight-line
+    /// yield arm returns through, so both ends of one generator agree.
+    pub yield_lazy_wrap: Option<(String, String)>,
     /// P224: when emitting a coroutine state-machine method body
     /// (`emit_next_i64` / `emit_next_text`), each `var_nr` listed here
     /// is a function-local that lives as a struct field on the
@@ -1115,6 +1121,7 @@ impl<'a> Output<'a> {
             yield_collect: false,
             yield_collect_text: false,
             yield_collect_dbref: false,
+            yield_lazy_wrap: None,
             coroutine_persistent_vars: HashSet::new(),
             coroutine_allocated_vars: HashSet::new(),
             fn_ref_context: false,

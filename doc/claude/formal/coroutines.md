@@ -111,35 +111,35 @@ computed lazily, on demand, rather than read from a store.
 OPEN: **0**. One thing the VERIFICATION worklist surfaced (2026-07-04) is a **decided edge**, not
 a deviation — recorded here so it is not mistaken for a bug:
 
-> **DECIDED EDGE — native is EAGER for a loop body that does MORE than yield (a rustc
-> restriction).** Laziness (G-Call / G-Next) holds fully for **straight-line** yields on BOTH
-> backends (`print("a"); yield 1; print("b"); yield 2` interleaves as `a g1 b g2` on native too —
-> verified). The edge is **one statement wide, not one construct wide**: a loop whose body is
-> nothing but `yield <loop var>` is ALSO lazy on native — `detect_yield_from` matches it and lowers
-> it to the lazy `YieldFrom` segment, so `for x in 0..1000000000 { yield x }` consumed three values
-> and stopped (eager buffering would have needed ~8 GB; verified both backends). Eagerness begins
-> the moment the body holds a **second statement**: `--native` then runs the loop eagerly, buffering
-> all its yields, because a fully-lazy resumable state machine across a Rust loop body is not
-> expressible under rustc's restrictions. So `for i in 0..2 { print("y{i} "); yield i }`
-> consumed by `for x in gen() { print("g{x} ") }` is `y0 g0 y1 g1` (interp, lazy) vs `y0 y1 g0 g1`
-> (native, eager). **Values agree** for a finite, fully-consumed generator; the observable
-> difference is (a) side-effect interleaving, and (b) an INFINITE or early-`break`-consumed
-> loop-generator runs unboundedly on native. This is the maker's accepted trade-off for now —
-> **aspiration: make loop-yields lazy too** (it would remove the divergence). Until then, a
-> loop-generator meant for lazy/early-terminated consumption should be written straight-line, or
-> the consumer must fully drain it. (This is a candidate for a DESIGN_DECISIONS catalogue entry.)
-> **Removal design written** — [COROUTINE.md § Design: lazy loop yields (CL-9)](../COROUTINE.md#design-lazy-loop-yields-cl-9):
-> persist the loop cursor in the coroutine frame (the existing `coroutine_persistent_*` machinery)
-> and decompose `ForLoopBody` from the eager `Vec` buffer into resumable header/body states. When
-> that lands, this edge closes. Tracked as
-> [loft#836](https://github.com/loft-lang/loft/issues/836).
+> **DECIDED EDGE — NARROWED (loft#836, slice 1, 2026-08-10): native is eager only for a loop body
+> whose resume point one state cannot encode.** Laziness (G-Call / G-Next) holds for
+> **straight-line** yields on both backends, and now for a loop whose body ends in ONE
+> unconditional `yield`: the loop is lowered to a header+body state pair, the cursor persists in
+> the coroutine struct, and one advance runs one iteration. So
+> `for i in 0..2 { print("y{i} "); yield i }` consumed by `for x in gen() { print("g{x} ") }` is
+> `y0 g0 y1 g1` on BOTH backends, and an early-`break`-consumed billion-iteration loop-generator
+> stops when its consumer does — it no longer runs unboundedly on native. Eagerness was never a
+> rustc restriction; it was the absence of a loop-to-state-machine transform, which is the same
+> shape `async`/`await` uses and compiles on stable Rust.
+>
+> What REMAINS eager, and why each needs a resume point a single state cannot express: more than
+> one yield per iteration (re-entry must land at the yield that suspended), a yield inside an
+> `if`/`match` (the resume point depends on the branch), a nested loop (a cursor per level), a
+> `continue`, and a statement AFTER the yield (the iteration would have to resume mid-body).
+> A yield of a tuple / fn-ref rides the `next_into` channel, which has no suspend point of its
+> own; a yield of a struct / vector builds its record into a work local that is not persisted, so
+> lowering it lazily would leak one record per yield. Those keep the eager buffer, and their
+> **values agree**; the observable difference stays side-effect interleaving.
+> Slices 2-4 of [COROUTINE.md § Design: lazy loop yields (CL-9)](../COROUTINE.md#design-lazy-loop-yields-cl-9)
+> close the rest. Tracked as [loft#836](https://github.com/loft-lang/loft/issues/836).
 
 - **Conformance is otherwise differential, and this is the hardest case** — the two backends
   implement suspension by the most different mechanisms (interp: serialise the frame to a heap
-  store; native: a compiled resumable state machine, eager across loop bodies per the edge above).
+  store; native: a compiled resumable state machine, still eager for the shapes named above).
   The @PLN89 differential oracle (D-op-1) carries `12-coroutine-generator`, but it checks VALUES
-  only; a straight-line **laziness/interleaving** oracle case should be added (it passes both
-  backends and pins the lazy contract for the non-loop case).
+  only — which is exactly why it reported full agreement across the eager/lazy difference.
+  `tests/oracle/26-coroutine-laziness.loft` pins the **interleaving** for both the straight-line
+  and the lazy-loop shapes.
 - **`yield from` is out of scope** — delegation (CO1.4) is deferred to 1.1+; when it lands it
   extends `G-Yield` (a delegated yield forwards the sub-generator's values) and gets its own
   rule + oracle case. Until then a `yield from` is a parse-level unsupported form, not an
