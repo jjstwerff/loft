@@ -1204,6 +1204,23 @@ needs — neither half is enough alone.
 | Function | Description |
 |----------|-------------|
 | `field_value(x, position: integer) -> ValueInfo` | What `x` holds at that byte position, tagged with the kind the type's own descriptor gives it. |
+| `field_value(x, path: vector<integer>) -> ValueInfo` | The same, reached through a chain of INLINE record fields — `field_value(doc, [8, 0])` is `doc.origin.x`. A one-element path answers exactly what the bare position does. |
+
+**A nested record needs the path form, and the offsets must not be added up.**
+`type_of` reports a nested record's fields at positions relative to THAT record,
+and a `ValueInfo` for a record field carries no handle to call `field_value` on
+again — so one number cannot name `origin.x`. Summing them does not work either,
+and that is the point rather than a limitation: the check that makes this
+ordinary loft rather than a pointer is that a position must **begin a field of
+the type it is read against**, and `origin`'s offset plus `x`'s begins nothing in
+the owner. The walk therefore happens inside, one descriptor step per element,
+each checked the same way.
+
+Every step but the last must land on an inline record. A step onto a scalar, a
+vector, a keyed collection or a stored reference answers `OtherKind` and reads
+nothing — a stored reference names a record with its own identity, and following
+it would be a pointer chase rather than a field read. An empty path answers
+`OtherKind` for the same reason a bad position does.
 
 `ValueInfo` carries `kind`, `is_null`, and three payloads — `i` (integer, long,
 boolean as 1/0, character as its code point), `f` (float, single) and `t` (text).

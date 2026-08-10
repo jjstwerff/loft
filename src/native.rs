@@ -444,6 +444,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_reflect_type", n_reflect_type),
     ("n_type_named", n_type_named),
     ("n_reflect_field", n_reflect_field),
+    ("n_reflect_field_path", n_reflect_field_path),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("n_hash_sorted", n_hash_sorted),
@@ -2617,6 +2618,16 @@ fn n_reflect_field(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
+/// @PLN23 S7b: `field_value(x, path)` — the VALUE at the end of a chain of
+/// inline record fields.
+fn n_reflect_field_path(stores: &mut Stores, stack: &mut DbRef) {
+    let kt = *stores.get::<i64>(stack) as u16;
+    let path = *stores.get::<DbRef>(stack);
+    let value = *stores.get::<DbRef>(stack);
+    let result = reflect_field_path_into(stores, &value, &path, kt);
+    stores.put(stack, result);
+}
+
 /// Shared by both backends: the named type's shape, or a null `DbRef`.
 pub fn type_named_in(stores: &mut Stores, name: &str) -> DbRef {
     let kt = stores.name(name);
@@ -2648,6 +2659,88 @@ pub fn type_named_in(stores: &mut Stores, name: &str) -> DbRef {
 /// When `default/07_reflect.loft` has drifted from the field names read here —
 /// deliberately loud, exactly as [`reflect_type_into`] is.
 pub fn reflect_field_into(stores: &mut Stores, value: &DbRef, position: i64, kt: u16) -> DbRef {
+    reflect_field_at(stores, value, value.pos, kt, position)
+}
+
+/// @PLN23 S7b — `field_value(x, path)`: the same read, reached through a chain
+/// of INLINE record fields.
+///
+/// `type_of` reports a nested record's fields at positions relative to THAT
+/// record, so a single number cannot name `origin.x`; and the offsets must not
+/// simply be added by the caller, because the check that makes this ordinary
+/// loft rather than a pointer is *"a field the descriptor says BEGINS at
+/// `position`"* — and `8 + 0` begins nothing in `Doc`.  So the walk happens
+/// here, one descriptor step per element, and each step is checked exactly as
+/// the single-position read is.
+///
+/// Every step but the last must land on an INLINE record — `Record` or an
+/// `EnumValue` variant — whose bytes sit inside the owner at `pos + position`
+/// (the layout `ffi_deliver` walks the same way).  A step onto a scalar, a
+/// vector, a keyed collection or a stored `DbRef` answers `OtherKind` with no
+/// read: a `Ref` is a record with its own identity, and following it would make
+/// this a pointer chase rather than a field read.
+///
+/// An EMPTY path answers `OtherKind` too — there is no field named by nothing,
+/// and answering the record itself would be a different operation wearing this
+/// one's name.
+pub fn reflect_field_path_into(stores: &mut Stores, value: &DbRef, path: &DbRef, kt: u16) -> DbRef {
+    use crate::database::LayoutNode;
+
+    let length = crate::vector::length_vector(path, &stores.allocations);
+    if length == 0 {
+        return reflect_field_at(stores, value, value.pos, kt, -1);
+    }
+    let inner = stores.store(path).get_u32_raw(path.rec, path.pos);
+    let steps: Vec<i64> = (0..length)
+        .map(|i| stores.store(path).get_int(inner, 8 + i * 8))
+        .collect();
+
+    // Walk every step but the last, descending into inline records. `cur_kt`
+    // and `cur_pos` move together, because a position only means anything
+    // against the descriptor node it was reported from.
+    let mut cur_kt = kt;
+    let mut cur_pos = value.pos;
+    for step in &steps[..steps.len() - 1] {
+        let desc = stores.layout_descriptor(&[cur_kt]);
+        let found = u16::try_from(*step)
+            .ok()
+            .and_then(|p| match desc.nodes.get(&cur_kt) {
+                Some(LayoutNode::Record(fields) | LayoutNode::EnumValue(_, fields)) => fields
+                    .iter()
+                    .find(|f| f.is_data() && f.position == p)
+                    .cloned(),
+                _ => None,
+            });
+        let Some(field) = found else {
+            return reflect_field_at(stores, value, cur_pos, cur_kt, -1);
+        };
+        // Only an INLINE record can be descended into. Anything else answers
+        // `OtherKind` through the ordinary path, so the refusal is the same
+        // answer a bad position gives and there is no second way to say no.
+        match desc.nodes.get(&field.content) {
+            Some(LayoutNode::Record(_) | LayoutNode::EnumValue(_, _)) => {}
+            _ => return reflect_field_at(stores, value, cur_pos, cur_kt, -1),
+        }
+        cur_pos += u32::from(field.position);
+        cur_kt = field.content;
+    }
+    reflect_field_at(stores, value, cur_pos, cur_kt, steps[steps.len() - 1])
+}
+
+/// The one reading, against the record that begins at `base_pos` and is
+/// described by `kt`.
+///
+/// Split out of [`reflect_field_into`] so the PATH form reaches the identical
+/// scalar reading rather than a copy of it: every kind's null sentinel is
+/// spelled once here, and a second account of them is exactly the drift
+/// reflection exists to prevent.
+fn reflect_field_at(
+    stores: &mut Stores,
+    value: &DbRef,
+    base_pos: u32,
+    kt: u16,
+    position: i64,
+) -> DbRef {
     use crate::database::{BaseKind, LayoutNode};
 
     let fv_tp = stores.name("ValueInfo");
@@ -2721,7 +2814,7 @@ pub fn reflect_field_into(stores: &mut Stores, value: &DbRef, position: i64, kt:
     // null one.
     let mut is_null = false;
     if kind != 14 {
-        let at = value.pos + u32::from(found.map_or(0, |f| f.position));
+        let at = base_pos + u32::from(found.map_or(0, |f| f.position));
         let store = stores.store(value);
         // Each arm reads exactly the way `read_via_descriptor` reads that kind,
         // and spells null with that kind's OWN sentinel — a narrow integer's is

@@ -2380,7 +2380,7 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
 /// @PLN23 S7 recurses: a collection inside a record ELEMENT is a table of its
 /// own, addressed by (the root's key, the parent element's address, its own).
 ///
-///   pieces 1|0|0|10;1|0|1|11;1|1|0|12;1|1|1|13;2|0|0|10;2|0|1|11;2|1|0|14
+///   pieces 1|0|0|10|1|2;1|0|1|11|3|4;…;2|1|0|14|9|0
 ///           Two ledgers, two marks each, two pieces each — the smallest shape
 ///           where each of the THREE address levels is separately load-bearing.
 ///           Both ledgers have a mark `A` and both `A`s hold pieces 10 and 11,
@@ -2389,7 +2389,12 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
 ///           within one mark. Three different wrong answers, and none of them is
 ///           "fewer rows than expected".
 ///   marks 1|0|A;1|1|B;2|0|A;2|1|C   the repeated label, one level up.
-///   permute pid=11,ord_2=1,ord=0,ledger_id=1,   ONE row built from a REVERSED
+///   …|10|1|2   the last two columns are `at_row` / `at_col`: an INLINE struct
+///           inside the grandchild's element, flattened (@PLN23 S7b). It has no
+///           identity, so it has no table — and the write reads it through the
+///           column's PATH, which is what `field_value(x, [outer, inner])` was
+///           added to loft for.
+///   permute at_col=4,at_row=3,pid=11,ord_2=1,ord=0,ledger_id=1,   ONE row built from a REVERSED
 ///           definition. The address columns come out outer→inner, so the two
 ///           ordinals are always in depth order and a writer counting them in
 ///           ROW order agrees on every other line here. Reversing the columns is
@@ -2426,8 +2431,8 @@ fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::
         "depth  tables=3 grandchild=ledger_marks_pieces",
         "ledger 1|one;2|two",
         "marks  1|0|A;1|1|B;2|0|A;2|1|C",
-        "pieces 1|0|0|10;1|0|1|11;1|1|0|12;1|1|1|13;2|0|0|10;2|0|1|11;2|1|0|14",
-        "permute pid=11,ord_2=1,ord=0,ledger_id=1,",
+        "pieces 1|0|0|10|1|2;1|0|1|11|3|4;1|1|0|12|5|6;1|1|1|13|7|8;2|0|0|10|1|2;2|0|1|11|3|4;2|1|0|14|9|0",
+        "permute at_col=4,at_row=3,pid=11,ord_2=1,ord=0,ledger_id=1,",
         "children_live ok",
     ];
 

@@ -98,6 +98,18 @@ pub struct ColumnDef {
   /// record `src` names. Everything but a child table answers `SrcField`, which
   /// is why it defaults to that.
   src: ColumnSource = SrcField,
+  /// The chain of byte offsets that reaches this column's field, ending at
+  /// `position` — @PLN23 S7b.
+  ///
+  /// One element for a direct field, more for one inside an INLINE struct:
+  /// `origin_x` is `[origin's offset, x's offset]`. `field_value` takes the
+  /// whole chain rather than a sum, because a position has to BEGIN a field of
+  /// the record it is read against, and `origin`'s offset plus `x`'s begins
+  /// nothing in the owner.
+  ///
+  /// Empty on a definition read back from a database, which has no loft field
+  /// behind it at all.
+  path: vector<integer> = [],
   /// How far down the collection path the record this column reads from sits:
   /// `0` is the owner the whole graph hangs from, `1` an element of one of its
   /// collections, `2` an element of one of THOSE.
@@ -245,21 +257,95 @@ fn derive_columns(elem: TypeInfo, type_name: text) -> TableDef {
   cols: vector<ColumnDef> = [];
   for f in elem.fields {
     if !is_data(f) { continue }
-    ct = column_type(f.kind);
-    if ct == ColOther {
-      return no_table("{type_name}.{f.name} is a {f.type_name}, which is not one column");
-    }
-    cols += [ColumnDef {
-      nm: f.name,
-      kind: ct,
-      nullable: f.nullable,
-      position: f.position,
-    }];
+    empty_path: vector<integer> = [];
+    one = expand_field(type_name, "", empty_path, f, 0);
+    if one.refusal != "" { return one }
+    for oc in one.columns { cols += [oc] }
   }
   if len(cols) == 0 {
     return no_table("{type_name} has no stored columns");
   }
+  dup = duplicate_column(cols);
+  if dup != "" {
+    return no_table("{type_name} would have two columns called {dup}");
+  }
   return TableDef { nm: table_name_for(type_name), columns: cols };
+}
+
+/// @PLN23 S7b — the columns ONE field contributes.
+///
+/// A scalar contributes itself. An INLINE STRUCT contributes one column per
+/// stored field it holds, recursively: *an inline struct has no identity, so it
+/// has no table*, and `origin` becomes `origin_x` / `origin_y`. Identity is what
+/// earns a row, and `origin` has none — there is nothing to look one up by.
+///
+/// The name carries the field path (`origin_x`), and the PATH carries the byte
+/// offsets that reach it. Both are needed and neither derives the other: the
+/// name is what SQL sees, and the offsets are what `field_value` walks.
+///
+/// A `RefKind` field is NOT flattened — a stored reference names a record with
+/// its own identity, so copying its fields in here would inline something the
+/// mapping says is a foreign key or a copy, and that is § Open question 2.
+fn expand_field(owner_label: text, nm_prefix: text, path_prefix: vector<integer>,
+                f: FieldInfo, depth: integer) -> TableDef {
+  out: vector<ColumnDef> = [];
+  nm = "{nm_prefix}{f.name}";
+  p = path_prefix;
+  p += [f.position];
+  if f.kind == RecordKind || f.kind == VariantKind {
+    st = type_named(f.type_name);
+    if st == null {
+      return no_table("{owner_label}.{nm}: {f.type_name} is not a type in this program");
+    }
+    sub = st ?? no_type();
+    for sf in sub.fields {
+      if !is_data(sf) { continue }
+      if is_child_collection(sf) {
+        // A collection inside an inline struct is a child table of the OWNER —
+        // `Doc.origin.marks` needs no extra key, because `origin` adds no
+        // identity. The derivation does not reach through an inline struct for
+        // collection fields yet, so it says so rather than dropping it.
+        return no_table("{owner_label}.{nm}.{sf.name} is a collection inside an inline struct — @PLN23 S7b-ii");
+      }
+      one = expand_field(owner_label, "{nm}_", p, sf, depth);
+      if one.refusal != "" { return one }
+      for oc in one.columns { out += [oc] }
+    }
+    if len(out) == 0 {
+      return no_table("{owner_label}.{nm} is a {f.type_name} with no stored fields");
+    }
+    return TableDef { nm: "", columns: out };
+  }
+  ct = column_type(f.kind);
+  if ct == ColOther {
+    return no_table("{owner_label}.{nm} is a {f.type_name}, which is not one column");
+  }
+  out += [ColumnDef {
+    nm: nm,
+    kind: ct,
+    nullable: f.nullable,
+    position: f.position,
+    src: SrcField,
+    depth: depth,
+    path: p,
+  }];
+  return TableDef { nm: "", columns: out };
+}
+
+/// The first column name that appears twice, or `""`.
+///
+/// A flattened struct names its columns, and so does the author: a `Doc` with an
+/// `origin: Point` AND a field called `origin_x` produces two columns of one
+/// name. The engine is the only thing that would notice, and only the engines
+/// that reject it — the same class as the child table's address collision, so
+/// it is checked the same way.
+fn duplicate_column(cols: vector<ColumnDef>) -> text {
+  for a in cols {
+    for b in cols {
+      if b#count > a#count && a.nm == b.nm { return a.nm }
+    }
+  }
+  return "";
 }
 
 /// The index a collection kind implies, or one with an empty name when a key
@@ -288,7 +374,12 @@ fn derive_index(t: TypeInfo, base: TableDef) -> IndexDef {
 /// guessable derivation of a fact the descriptor already holds.
 fn column_at(self: TableDef, position: integer) -> text {
   for c in self.columns {
-    if c.position == position { return c.nm }
+    // `len(path) == 1` is what says this column is a DIRECT field of the record
+    // the key is a key of. A flattened `origin_x` carries `x`'s offset within
+    // `Point`, which can equal a top-level field's offset — 0 is where a
+    // struct's first stored field lives, in every struct — so matching on the
+    // number alone would name a nested column as the key (@PLN23 S7b).
+    if len(c.path) == 1 && c.position == position { return c.nm }
   }
   return "";
 }
@@ -1385,19 +1476,17 @@ fn derive_owner_columns(elem: TypeInfo) -> TableDef {
   for f in elem.fields {
     if !is_data(f) { continue }
     if is_child_collection(f) { continue }
-    ct = column_type(f.kind);
-    if ct == ColOther {
-      return no_table("{elem.name}.{f.name} is a {f.type_name}, which is not one column");
-    }
-    cols += [ColumnDef {
-      nm: f.name,
-      kind: ct,
-      nullable: f.nullable,
-      position: f.position,
-    }];
+    empty_path: vector<integer> = [];
+    one = expand_field(elem.name, "", empty_path, f, 0);
+    if one.refusal != "" { return one }
+    for oc in one.columns { cols += [oc] }
   }
   if len(cols) == 0 {
     return no_table("{elem.name} has no stored columns");
+  }
+  dup = duplicate_column(cols);
+  if dup != "" {
+    return no_table("{elem.name} would have two columns called {dup}");
   }
   return TableDef { nm: table_name_for(elem.name), columns: cols };
 }
@@ -1544,7 +1633,8 @@ fn inherited_address(addr: vector<ColumnDef>, parent_depth: integer) -> vector<C
   for c in addr {
     if c.src == SrcField {
       out += [ColumnDef { nm: c.nm, kind: c.kind, nullable: c.nullable,
-                          position: c.position, src: SrcOwnerKey, depth: parent_depth }];
+                          position: c.position, src: SrcOwnerKey,
+                          depth: parent_depth, path: c.path }];
     } else {
       out += [c];
     }
@@ -1607,7 +1697,12 @@ fn derive_branch(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
 /// than a corner.
 fn element_column_at(cols: vector<ColumnDef>, position: integer, depth: integer) -> text {
   for c in cols {
-    if c.src == SrcField && c.depth == depth && c.position == position { return c.nm }
+    // A DIRECT field of the element, for the reason `column_at` gives: a
+    // flattened column's position is an offset in a struct the key knows
+    // nothing about.
+    if c.src == SrcField && c.depth == depth && len(c.path) == 1 && c.position == position {
+      return c.nm;
+    }
   }
   return "";
 }
@@ -1678,17 +1773,21 @@ fn child_body(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
   for ef in elem.fields {
     if !is_data(ef) { continue }
     if is_child_collection(ef) { continue }
-    ek = column_type(ef.kind);
-    if ek == ColOther {
-      return no_table("{owner_table}.{f.name}: {elem.name}.{ef.name} is a {ef.type_name}, which is not one column");
-    }
-    for an in addr_names {
-      if an == ef.name {
-        return no_table("{owner_table}.{f.name}: {elem.name}.{ef.name} collides with {an}, the column this table addresses its rows by");
+    empty_path: vector<integer> = [];
+    one = expand_field("{owner_table}.{f.name}: {elem.name}", "", empty_path, ef, depth);
+    if one.refusal != "" { return one }
+    for oc in one.columns {
+      for an in addr_names {
+        if an == oc.nm {
+          return no_table("{owner_table}.{f.name}: {elem.name}.{oc.nm} collides with {an}, the column this table addresses its rows by");
+        }
       }
+      cols += [oc];
     }
-    cols += [ColumnDef { nm: ef.name, kind: ek, nullable: ef.nullable,
-                         position: ef.position, src: SrcField, depth: depth }];
+  }
+  dup = duplicate_column(cols);
+  if dup != "" {
+    return no_table("{owner_table}.{f.name}: {elem.name} would give two columns called {dup}");
   }
   // No refusal when the element contributes no column of its own. Once a
   // collection field becomes a table rather than a column, an element whose only
@@ -1755,7 +1854,11 @@ pub fn derive_tables(t: TypeInfo) -> vector<TableDef> {
   key_cols: vector<ColumnDef> = [];
   for k in t.keys {
     for c in parent.columns {
-      if c.position == k.position { key_cols += [c] }
+      // A DIRECT field only, for the reason `column_at` gives: a flattened
+      // `origin_x` carries `x`'s offset within `Point`, which can equal a
+      // top-level field's — so matching on the number alone would make a nested
+      // column the owner's key.
+      if len(c.path) == 1 && c.position == k.position { key_cols += [c] }
     }
   }
   if len(key_cols) != len(t.keys) {
@@ -1771,7 +1874,7 @@ pub fn derive_tables(t: TypeInfo) -> vector<TableDef> {
   for kc in key_cols {
     root_addr += [ColumnDef { nm: owner_column(parent.nm, kc.nm), kind: kc.kind,
                               nullable: false, position: kc.position,
-                              src: SrcOwnerKey, depth: 0 }];
+                              src: SrcOwnerKey, depth: 0, path: kc.path }];
   }
 
   out += [parent];

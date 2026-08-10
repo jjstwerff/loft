@@ -12295,8 +12295,29 @@ impl Parser {
                     );
                     return answer;
                 }
+                // @PLN23 S7b — a PATH reads through inline records, and it is
+                // the same operation at a greater depth rather than a second
+                // one: a one-element path answers what the bare position does.
+                // So the two share a name and the argument's type picks the
+                // lowering, which is the same decision `types.len()` already
+                // makes one line up.
+                let path_form = matches!(&types[1], Type::Vector(_, _));
+                if !path_form && !matches!(types[1], Type::Integer(_)) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field_value takes a position or a path of positions — {} is neither",
+                        types[1].name(&self.data)
+                    );
+                    return answer;
+                }
                 let kt = self.get_type(&types[0].clone());
-                let d_nr = self.data.def_nr("n_reflect_field");
+                let fname = if path_form {
+                    "n_reflect_field_path"
+                } else {
+                    "n_reflect_field"
+                };
+                let d_nr = self.data.def_nr(fname);
                 if d_nr == u32::MAX || fv == u32::MAX {
                     diagnostic!(
                         self.lexer,

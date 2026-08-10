@@ -105,6 +105,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_reflect_type",               abi: Abi::Cell },
     RuntimeFn { name: "n_type_named",                 abi: Abi::Cell },
     RuntimeFn { name: "n_reflect_field",              abi: Abi::Cell },
+    RuntimeFn { name: "n_reflect_field_path",         abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
     RuntimeFn { name: "n_radix_sorted",               abi: Abi::Cell },
@@ -2519,6 +2520,18 @@ pub fn n_reflect_field(
 ) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     crate::native::reflect_field_into(stores, &value, position, kt as u16)
+}
+
+/// @PLN23 S7b — `field_value(x, path)` on the native backend, onto the same
+/// descriptor walk the interpreter uses.
+pub fn n_reflect_field_path(
+    cell: &std::cell::UnsafeCell<Stores>,
+    value: DbRef,
+    path: DbRef,
+    kt: i64,
+) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    crate::native::reflect_field_path_into(stores, &value, &path, kt as u16)
 }
 
 /// interp `n_json_parse` body) so `--native`-compiled programs can

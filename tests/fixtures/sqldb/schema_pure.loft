@@ -127,6 +127,21 @@ struct S7Bare { pieces: vector<integer> = [] }
 struct S7BareDoc { const id: integer, bares: vector<S7Bare> = [] }
 struct S7BareWorld { docs: hash<S7BareDoc[id]> = [] }
 
+// @PLN23 S7b failure paths. A flattened struct NAMES its columns and so does
+// the author, so the two can collide; and a collection inside an inline struct
+// belongs to the OWNER's table, which the derivation does not reach yet.
+struct S7bPt { px: integer, py: integer }
+struct S7bClash { const id: integer, origin: S7bPt, origin_px: integer }
+struct S7bWorldClash { docs: hash<S7bClash[id]> = [] }
+struct S7bHolder { hx: integer, marks: vector<integer> = [] }
+struct S7bDeep { const id: integer, held: S7bHolder }
+struct S7bWorldDeep { docs: hash<S7bDeep[id]> = [] }
+// An inline struct inside a CHILD element flattens exactly as it does in an
+// owner: one rule, applied wherever a record's columns are derived.
+struct S7bNote { const label: text, at: S7bPt }
+struct S7bDocN { const id: integer, notes: vector<S7bNote> = [] }
+struct S7bWorldN { docs: hash<S7bDocN[id]> = [] }
+
 // A nullable element field, and a composite owner key: two facts the child
 // table must carry through from a place other than its own element.
 struct S6Note { const label: text, body: text? }
@@ -214,11 +229,37 @@ fn main() {
   assert(cols(tl) == "lk payload", "linked columns: {cols(tl)}");
 
   // --- refusals name what is wrong ------------------------------------------
+  // --- @PLN23 S7b: an inline struct has no identity, so it has no table -----
+  //
+  // It FLATTENS into the record that holds it. Identity is what earns a row and
+  // `inner` has none — there is nothing to look one up by — so its fields become
+  // columns of `nested`, named for the path that reaches them.
   nested = Nested { id: 1, inner: Person { } };
   ti_nested = type_of(nested);
   tn = derive(ti_nested);
-  assert(!tn.table_ok(), "a nested record is not one column");
-  assert(tn.refusal.find("inner") != null, "refusal names the field: {tn.refusal}");
+  assert(tn.table_ok(), "an inline struct must flatten: {tn.refusal}");
+  assert(cols(tn) == "id inner_id inner_nm inner_score inner_flag inner_initial",
+    "S7b flattened columns: {cols(tn)}");
+
+  // The PATH is what reads it: `field_value` walks the chain rather than adding
+  // it up, because `inner`'s offset plus `score`'s begins no field of `Nested`.
+  // The name is what SQL sees and the path is what the walk uses — neither
+  // derives the other.
+  isc = tn.column_named("inner_score") ?? no_col();
+  assert(len(isc.path) == 2, "S7b path length {len(isc.path)}");
+  assert(isc.kind == ColFloat, "S7b nested kind {isc.kind}");
+  ti_inner = type_named("Person") ?? no_ti();
+  inner_pos = -1;
+  for pf in ti_nested.fields { if pf.name == "inner" { inner_pos = pf.position } }
+  score_pos = -1;
+  for pf2 in ti_inner.fields { if pf2.name == "score" { score_pos = pf2.position } }
+  assert((isc.path[0] ?? -9) == inner_pos && (isc.path[1] ?? -9) == score_pos,
+    "S7b path [{isc.path[0] ?? -9},{isc.path[1] ?? -9}] vs field {inner_pos}/{score_pos}");
+  // A DIRECT field still carries a one-element path, so there is one shape for
+  // a walk to read rather than a special case per depth.
+  idc = tn.column_named("id") ?? no_col();
+  assert(len(idc.path) == 1 && (idc.path[0] ?? -9) == idc.position,
+    "S7b direct path [{len(idc.path)}]");
 
   spots: spatial<Person[id, score]> = [];
   ti_spots = type_of(spots);
@@ -837,6 +878,38 @@ fn main() {
   nb2 = "";
   for barec in bare.columns { nb2 += "{barec.nm}," }
   assert(nb2 == "s7baredoc_id,ord,", "S7 bare element columns [{nb2}]");
+
+  // An inline struct inside a CHILD element flattens the same way — one rule,
+  // wherever a record's columns are derived.
+  w7n = S7bWorldN { };
+  ti_7n = type_of(w7n.docs);
+  dn = derive_tables(ti_7n);
+  nkid = dn[1] ?? no_def();
+  nn = "";
+  for nc in nkid.columns { nn += "{nc.nm}," }
+  assert(nn == "s7bdocn_id,ord,label,at_px,at_py,", "S7b child flatten [{nn}]");
+  atx = nkid.column_named("at_px") ?? no_col();
+  assert(len(atx.path) == 2 && atx.src == SrcField && atx.depth == 1,
+    "S7b child nested column path={len(atx.path)} {atx.src}@{atx.depth}");
+
+  // A flattened struct names its columns and so does the author: `origin: Point`
+  // beside a field called `origin_px` gives two columns of one name, which only
+  // the engine would notice and only the engines that reject it.
+  w7bc = S7bWorldClash { };
+  ti_7bc = type_of(w7bc.docs);
+  d7bc = derive_tables(ti_7bc);
+  r7bc = (d7bc[0] ?? no_def()).refusal;
+  assert(r7bc.find("origin_px") != null, "S7b: a flattened name collision must refuse: {r7bc}");
+
+  // A collection inside an inline struct belongs to the OWNER's table —
+  // `origin` adds no identity, so it needs no extra key. Not reached yet, and
+  // named rather than dropped.
+  w7bd = S7bWorldDeep { };
+  ti_7bd = type_of(w7bd.docs);
+  d7bd = derive_tables(ti_7bd);
+  r7bd = (d7bd[0] ?? no_def()).refusal;
+  assert(r7bd.find("marks") != null && r7bd.find("S7b-ii") != null,
+    "S7b: a collection inside an inline struct must refuse naming it: {r7bd}");
 
   // The collision one level down. The address columns are named by this
   // derivation and the element's by its author, so `ord_2` can be both.

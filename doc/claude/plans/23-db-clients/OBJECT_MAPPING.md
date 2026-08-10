@@ -194,7 +194,7 @@ alongside one.
 | **S6b** | a `vector<record>` field | **done** — the same address columns, and one column per stored field of the element. Written to sqlite and read back on both loft backends: § S6b below |
 | **S6c** | a keyed sub-collection | **done** — `hash` addresses by its declared key and carries no ordinal; `sorted` / `index` / `trie` take the ordinal and their key gets its own index; `spatial` refuses. § S6c below |
 | **S7a** | the derivation RECURSES | **done** — a collection inside a record element is a grandchild table, addressed by (root key, the parent element's address, its own), to any depth. § S7a below |
-| **S7b** | inline structs flatten | BLOCKED on a reflection gap, § S7b below — not started |
+| **S7b** | inline structs flatten | **done** — `origin` becomes `origin_x` / `origin_y`; it needed a language change first, § S7b below |
 | **S7c** | migration on a changed struct | not designed, § S7c below |
 
 S1–S3 are worth doing even if the mapping is never built: they are the proof
@@ -432,28 +432,68 @@ row is its ADDRESS, which is what says the element exists and is what its own
 children hang from. Before S7a that refused as "has no stored columns", which was
 right only while a collection field could not become a table.
 
-## S7b — inline structs, and the reflection gap that blocks them
+## S7b — inline structs flatten, and the language change that let them
 
 The design's first stated fact is that *an inline struct has no identity, so it
-has no table*: `origin` flattens to `origin_x` / `origin_y`. That is **not
-built**, and the reason is worth recording because it is not about the mapping.
+has no table*. It now holds:
 
-Measured: `field_value(doc, <origin's position>)` answers `kind = RecordKind`
-with **no payload**. Value reflection SEES a nested record and hands back no way
-to descend into it, so there is no reflective route from a `Doc` to `origin.x`.
+```sql
+CREATE TABLE "nested" ("id" ..., "inner_id" ..., "inner_nm" ..., "inner_score" ...)
+```
 
-A concrete walk can still read it by naming the field — `field_value(d.origin,
-x_position)` works — but then the row walk names a FIELD, and *"it names no
-column and no field"* is the property S5 and S6 exist to keep. Shipping the DDL
-half alone would be worse: a table whose columns the generic write path cannot
-fill, which is the reader-disagrees-with-writer failure this whole derivation
-refuses elsewhere.
+Identity is what earns a row, and `inner` has none — there is nothing to look one
+up by — so its fields become columns of the record that holds it, named for the
+path that reaches them.
 
-So S7b waits on value reflection gaining a handle to a nested record — the same
-shape of gap as the three @PLN23 already recorded in
-[INTERFACES.md](../../INTERFACES.md), and a @PLN127 question rather than a
-@PLN23 one. Until then a nested record refuses, naming the field, exactly as it
-did before.
+**It needed a language change first, and that is the fifth gap this plan has
+surfaced.** Measured before anything was built: `field_value(doc, <origin's
+position>)` answered `kind = RecordKind` with **no payload**. Value reflection
+SAW a nested record and handed back no way to descend into it, so there was no
+reflective route from a `Doc` to `origin.x`. A concrete walk could read it by
+naming `d.origin` in source — but then the row walk names a FIELD, and *"it names
+no column and no field"* is the property S5 and S6 exist to keep.
+
+So `field_value` gained a PATH form — `field_value(doc, [8, 0])` — and the
+mapping is its first consumer ([STDLIB.md § Reading a value](../../STDLIB.md)).
+
+**The offsets are not added up, and that is the design rather than a
+limitation.** The check that makes this reflection and not a pointer is that a
+position must BEGIN a field of the type it is read against; `origin`'s offset
+plus `x`'s begins nothing in `Doc`. So the walk happens inside the runtime, one
+descriptor step per element, each checked the same way — and the matrix cell that
+proves it is `[16, 0]` on a `Doc` whose `origin` spans bytes 8–24: byte 16 is
+`origin.y`'s address, and it answers `OtherKind` because 16 begins no field of
+`Doc`. Summing would have read it.
+
+### What the column carries
+
+`ColumnDef.path` is the chain of offsets, ending at `position`. Both the name and
+the path are needed and neither derives the other: **the name is what SQL sees,
+the path is what `field_value` walks**. A DIRECT field carries a one-element
+path, so a write walk has ONE shape to read at any depth rather than a special
+case per level.
+
+That has a consequence worth naming, because it is silent: a nested column's
+`position` is an offset in a struct the owner's key knows nothing about, and 0 is
+where a struct's first stored field lives — in every struct. So every place that
+matches a KEY to a column now requires `len(path) == 1`, the same restriction
+`src` already imposed for the owner-versus-element split. Without it a flattened
+`origin_x` can be named as the owner's key.
+
+### Two failure paths, both silent
+
+- **A name collision.** A flattened struct names its columns and so does the
+  author: `origin: Point` beside a field called `origin_px` gives two columns of
+  one name, which only the engine notices and only the engines that reject it.
+  Refused, naming the column.
+- **A collection inside an inline struct** — `Doc.origin.marks` — is a child
+  table of the OWNER, needing no extra key, because `origin` adds no identity.
+  The derivation does not reach through an inline struct for collection fields
+  yet; it refuses and names **S7b-ii** rather than dropping the field.
+
+A `RefKind` field is deliberately NOT flattened: a stored reference names a
+record with its own identity, so inlining its fields would decide § Open
+question 2 by accident.
 
 ## S7c — migration, and why "the address function drives it" is not an answer
 

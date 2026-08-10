@@ -89,7 +89,11 @@ struct Band { rows: hash<Sheet[id]> = [] }
 
 /// @PLN23 S7 — a collection inside a record ELEMENT, which is a table of its
 /// own addressed by (the root's key, the parent element's address, its own).
-struct Piece { const pid: integer }
+/// @PLN23 S7b — an INLINE struct inside the grandchild's element. It has no
+/// identity, so it has no table: `at` flattens to `at_row` / `at_col`, and the
+/// write reads them through the column's PATH.
+struct Spot { row: integer, col: integer }
+struct Piece { const pid: integer, at: Spot }
 struct Mark2 { const label: text, pieces: vector<Piece> = [] }
 struct Ledger { const id: integer, title: text, marks: vector<Mark2> = [] }
 struct Books { rows: hash<Ledger[id]> = [] }
@@ -165,12 +169,15 @@ fn band() -> Band {
 fn books() -> Books {
   b = Books { };
   b.rows += [Ledger { id: 1, title: "one", marks: [
-    Mark2 { label: "A", pieces: [Piece { pid: 10 }, Piece { pid: 11 }] },
-    Mark2 { label: "B", pieces: [Piece { pid: 12 }, Piece { pid: 13 }] },
+    Mark2 { label: "A", pieces: [Piece { pid: 10, at: Spot { row: 1, col: 2 } },
+                                 Piece { pid: 11, at: Spot { row: 3, col: 4 } }] },
+    Mark2 { label: "B", pieces: [Piece { pid: 12, at: Spot { row: 5, col: 6 } },
+                                 Piece { pid: 13, at: Spot { row: 7, col: 8 } }] },
   ] }];
   b.rows += [Ledger { id: 2, title: "two", marks: [
-    Mark2 { label: "A", pieces: [Piece { pid: 10 }, Piece { pid: 11 }] },
-    Mark2 { label: "C", pieces: [Piece { pid: 14 }] },
+    Mark2 { label: "A", pieces: [Piece { pid: 10, at: Spot { row: 1, col: 2 } },
+                                 Piece { pid: 11, at: Spot { row: 3, col: 4 } }] },
+    Mark2 { label: "C", pieces: [Piece { pid: 14, at: Spot { row: 9, col: 0 } }] },
   ] }];
   return b;
 }
@@ -207,7 +214,7 @@ fn table_named(ts: vector<TableDef>, nm: text) -> TableDef {
 /// `SrcField` covers and the only one a table with no owner has.
 fn parent_row(t: TableDef, d: Doc) -> vector<Bound> {
   vals: vector<Bound> = [];
-  for c in t.columns { vals += [bound_of(c, field_value(d, c.position))] }
+  for c in t.columns { vals += [bound_of(c, field_value(d, c.path))] }
   return vals;
 }
 
@@ -220,9 +227,9 @@ fn parent_row(t: TableDef, d: Doc) -> vector<Bound> {
 fn tag_row(t: TableDef, owner: Doc, e: Tag, ord: integer) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns {
-    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ord)] }
-    else { vals += [bound_of(c, field_value(e, c.position))] }
+    else { vals += [bound_of(c, field_value(e, c.path))] }
   }
   return vals;
 }
@@ -235,7 +242,7 @@ fn tag_row(t: TableDef, owner: Doc, e: Tag, ord: integer) -> vector<Bound> {
 fn score_row(t: TableDef, owner: Doc, v: integer, ord: integer) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns {
-    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ord)] }
     else { vals += [val_int(v)] }
   }
@@ -251,9 +258,9 @@ fn score_row(t: TableDef, owner: Doc, v: integer, ord: integer) -> vector<Bound>
 fn mark_row(t: TableDef, owner: Doc, e: Mark, ord: integer) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns {
-    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ord)] }
-    else { vals += [bound_of(c, field_value(e, c.position))] }
+    else { vals += [bound_of(c, field_value(e, c.path))] }
   }
   return vals;
 }
@@ -266,9 +273,9 @@ fn mark_row(t: TableDef, owner: Doc, e: Mark, ord: integer) -> vector<Bound> {
 fn step_row(t: TableDef, owner: Doc, e: Step, ord: integer) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns {
-    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ord)] }
-    else { vals += [bound_of(c, field_value(e, c.position))] }
+    else { vals += [bound_of(c, field_value(e, c.path))] }
   }
   return vals;
 }
@@ -278,9 +285,9 @@ fn step_row(t: TableDef, owner: Doc, e: Step, ord: integer) -> vector<Bound> {
 fn beat_row(t: TableDef, owner: Sheet, e: Beat, ord: integer) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns {
-    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ord)] }
-    else { vals += [bound_of(c, field_value(e, c.position))] }
+    else { vals += [bound_of(c, field_value(e, c.path))] }
   }
   return vals;
 }
@@ -288,22 +295,22 @@ fn beat_row(t: TableDef, owner: Sheet, e: Beat, ord: integer) -> vector<Bound> {
 /// The sheet's parent row.
 fn sheet_row(t: TableDef, s: Sheet) -> vector<Bound> {
   vals: vector<Bound> = [];
-  for c in t.columns { vals += [bound_of(c, field_value(s, c.position))] }
+  for c in t.columns { vals += [bound_of(c, field_value(s, c.path))] }
   return vals;
 }
 
 fn ledger_row(t: TableDef, l: Ledger) -> vector<Bound> {
   vals: vector<Bound> = [];
-  for c in t.columns { vals += [bound_of(c, field_value(l, c.position))] }
+  for c in t.columns { vals += [bound_of(c, field_value(l, c.path))] }
   return vals;
 }
 
 fn mark2_row(t: TableDef, owner: Ledger, e: Mark2, ords: vector<integer>) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns {
-    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ords[c.depth] ?? -1)] }
-    else { vals += [bound_of(c, field_value(e, c.position))] }
+    else { vals += [bound_of(c, field_value(e, c.path))] }
   }
   return vals;
 }
@@ -321,9 +328,9 @@ fn mark2_row(t: TableDef, owner: Ledger, e: Mark2, ords: vector<integer>) -> vec
 fn piece_row(t: TableDef, root: Ledger, e: Piece, ords: vector<integer>) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns {
-    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(root, c.position))] }
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(root, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ords[c.depth] ?? -1)] }
-    else { vals += [bound_of(c, field_value(e, c.position))] }
+    else { vals += [bound_of(c, field_value(e, c.path))] }
   }
   return vals;
 }

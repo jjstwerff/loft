@@ -1796,7 +1796,7 @@ impl Stores {
         if self.types[t_nr as usize].name == name {
             return;
         }
-        self.types[t_nr as usize].name = name.clone();
+        self.types[t_nr as usize].name.clone_from(&name);
         self.names.insert(name, t_nr);
     }
 
