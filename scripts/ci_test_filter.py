@@ -31,6 +31,30 @@ NEXTEST_TOML = Path(__file__).resolve().parent.parent / ".config" / "nextest.tom
 # where it's reliable.
 BASE = ["not binary(index_hygiene)", "not binary(viewer_markdown)"]
 
+# The two exhaustive stdlib round-trips are excluded from EVERY leg, because they
+# have a leg of their own: ci.yml's `Stdlib round-trip` step runs them on
+# push-to-main and nightly, on every platform, in parallel with nothing else.
+# What they verify is FORMAT STABILITY — the whole parsed stdlib survives
+# serialise->deserialise byte-identical — which breaks when the IR schema or the
+# serialiser changes, so it is rare and always deliberate.  The cheap canary
+# `tests_scripts_round_trip` (83s) stays on the PR path and still fails if
+# round-tripping breaks at all.
+#
+# Excluding them only on the PR path ran them TWICE per push: once here in the
+# contended suite, once alone in their own step.  The contended copy is the
+# expensive one — 501s vs 269s on Windows, 493s vs 232s on ubuntu, where it also
+# SET the suite's critical path, since a parallel suite cannot finish faster than
+# its slowest single test.  It is also what turned the Windows leg red: contended,
+# the pair rides nextest's 600s `slow-timeout` (545/533/571/589/501s over
+# 08-01..08-09) and hit the cap on three consecutive runs once the suite's total
+# load grew 16% (1844s -> 2141s) on a 1% test-count rise.  Measured ISOLATED the
+# pair did not get slower across those same shas (76.6s -> 79.9s), so the cap was
+# never the real problem and raising it would only have hidden the double-run.
+DEDICATED_STEP = [
+    "not test(stdlib_load_compares_equal_to_fresh)",
+    "not test(stdlib_whole_data_round_trip)",
+]
+
 # The Chrome + SwiftShader browser-render tests (html_render, and the headless-page
 # asyncify resume in html_asyncify) are GPU/headless-browser FLAKY — they gate the
 # PR path with noise for a layer (WebGL/shader) that rarely regresses
@@ -38,22 +62,9 @@ BASE = ["not binary(index_hygiene)", "not binary(viewer_markdown)"]
 # differential oracle).  The DETERMINISTIC, node-based html_wasm instantiate-probe
 # (catches the LinkError / import-mismatch class) STAYS on the PR path — it does
 # not flake.
-#
-# The two exhaustive stdlib round-trips are the single biggest cost in the suite
-# AND its floor: 379s + 375s on macOS (308s + 308s on ubuntu), ~65% of the
-# `ir_schema_roundtrip` binary and ~11% of ALL per-test time.  A parallel suite
-# cannot finish faster than its slowest single test.  What they verify is FORMAT
-# STABILITY: the whole parsed stdlib survives serialise->deserialise
-# byte-identical.  That breaks when the IR schema or the serialiser changes —
-# rare, and always deliberate.  The cheap canary `tests_scripts_round_trip` (83s)
-# STAYS on the PR path and still fails if round-tripping breaks at all; the
-# exhaustive pair runs on push-to-main and nightly, so a schema change is caught
-# the same day, by the run that is nobody's inner loop.
 PR_ONLY = [
     "not binary(html_render)",
     "not binary(html_asyncify)",
-    "not test(stdlib_load_compares_equal_to_fresh)",
-    "not test(stdlib_whole_data_round_trip)",
 ]
 
 
@@ -73,7 +84,7 @@ def main() -> None:
         raise SystemExit(__doc__)
     event, shard = sys.argv[1], (sys.argv[2] if len(sys.argv) == 3 else None)
 
-    clauses = list(BASE)
+    clauses = list(BASE) + list(DEDICATED_STEP)
     if event == "pull_request":
         clauses += PR_ONLY
     if shard == "heavy":

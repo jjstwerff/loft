@@ -622,13 +622,22 @@ jobs:
       # so a real WebGL/asyncify regression is visible within a day without the flaky
       # browser render ever blocking a PR.  Self-skips cleanly when the runner has no
       # chrome/node (recorded in the skip ledger surfaced below).
-      # The exhaustive stdlib round-trips demoted off the per-PR path above.  Runs on
-      # push-to-main + the daily schedule, on EVERY platform in the matrix (the
+      # The exhaustive stdlib round-trips, excluded from the suite filter above.  Runs
+      # on push-to-main + the daily schedule, on EVERY platform in the matrix (the
       # serialiser is layout-sensitive, so an ARM/x86 difference is exactly the kind
       # of thing this pair exists to catch).  ~6m on macOS, ~5m on ubuntu, in
       # parallel with nothing else — it is the last thing this job does.
-      - name: Stdlib round-trip (nightly — the exhaustive pair, off the PR path)
-        if: github.event_name != 'pull_request'
+      #
+      # `!cancelled()` rather than a bare event check, because this is the ONLY leg
+      # that runs the pair: `ci_test_filter.py` excludes them everywhere else, so a
+      # skip here means format stability went unverified on that push.  A step with
+      # no `if:` is skipped when an earlier one fails, which is precisely what
+      # happened while the Test step was red — three consecutive pushes reported
+      # nothing about the round-trips at all.  A failure that is invisible is worse
+      # than one that is loud, so this reports even when the suite above is already
+      # failing.
+      - name: Stdlib round-trip (the exhaustive pair, off the PR path)
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         shell: bash
         run: >
           cargo nextest run --profile ci --no-fail-fast

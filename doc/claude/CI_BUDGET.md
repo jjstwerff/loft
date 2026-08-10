@@ -308,6 +308,36 @@ Risk: an IR-schema diff that breaks only the exhaustive pair lands and is caught
 that night rather than on the PR. Acceptable — it is precisely a "format did not
 change by accident" check, and the canary still guards the common case.
 
+**LANDED — but only half of it, for two months.** The exclusion went into
+`ci_test_filter.py`'s `PR_ONLY` list, which is applied under
+`if event == "pull_request"`. So the PR path got the win and **push-to-main and
+nightly ran the pair TWICE**: once inside the contended suite, once again in the
+dedicated `Stdlib round-trip` step that exists to run them "in parallel with
+nothing else". Both this section and that step's own comment described the
+intended single run; the filter never implemented it.
+
+The contended copy is the expensive one, and on ubuntu it *was* the critical path:
+
+| leg | contended (in the suite) | alone (dedicated step) |
+|---|---|---|
+| ubuntu | 493s + 484s, inside a 1306s suite | 232s + 233s |
+| Windows | 501s + 500s | 269s + 269s |
+
+It is also what turned the Windows leg red. Contended, the pair rides nextest's
+600s `slow-timeout`: 545/533/571/589/501s over 08-01..08-09, then three
+consecutive pushes pinned at the cap once the suite's total load grew 16 %
+(1844s → 2141s) on a 1 % test-count rise. Measured **isolated**, the pair did not
+get slower across those same commits (76.6s → 79.9s on one box), so the timeout
+was a symptom of the double-run, not of a slow test — raising the cap would only
+have hidden it.
+
+Fixed by excluding the pair on *every* leg (a `DEDICATED_STEP` list applied
+unconditionally). The step that now solely carries them also gained
+`!cancelled()`: with no `if:`, it is skipped whenever an earlier step fails, so
+across all three red pushes format stability was verified **nowhere** — the one
+guarantee this section is about, silently absent exactly when the suite was
+broken.
+
 ### B′. Duration-balanced sharding — TRIED, MEASURED, REVERTED
 
 **Result: 24m11s versus 24m26s unsharded — fifteen seconds, for double the runner
