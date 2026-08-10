@@ -1295,21 +1295,64 @@ fn the_c_arity_ceiling_is_the_same_on_both_backends() -> std::io::Result<()> {
         csrc.push_str(&format!("long long ar{n}({params}) {{ return {body}; }}\n"));
     }
     std::fs::write(dir.join("arity.c"), &csrc)?;
-    let libname = if cfg!(target_os = "macos") {
+    // Windows wants a COFF archive named `arity.lib`: loft resolves a `[c]` library
+    // to a bare `-l` name, and MSVC turns that into `<stem>.lib` (WINDOWS.md § the
+    // C-ABI arm — the same reason that arm copies `<stem>.dll.lib` → `<stem>.lib`).
+    // A Unix `-shared` object is not that whatever it is named, so this fixture built
+    // `libarity.so` there and the link died on `LNK1181: cannot open input file
+    // 'arity.lib'`.  STATIC, not an import library: an import lib links and then
+    // leaves `arity.dll` to be found at RUN time, and the program runs out of loft's
+    // native cache rather than this directory.
+    let libname = if cfg!(windows) {
+        "arity.lib"
+    } else if cfg!(target_os = "macos") {
         "libarity.dylib"
     } else {
         "libarity.so"
     };
-    let cc = std::process::Command::new("cc")
-        .args(["-O1", "-fPIC", "-shared", "-o"])
-        .arg(dir.join(libname))
-        .arg(dir.join("arity.c"))
-        .output()?;
-    assert!(
-        cc.status.success(),
-        "the arity fixture must build: {}",
-        String::from_utf8_lossy(&cc.stderr)
-    );
+    if cfg!(windows) {
+        let obj = dir.join("arity.obj");
+        let cc = std::process::Command::new("cc")
+            .args(["-O1", "-c", "-o"])
+            .arg(&obj)
+            .arg(dir.join("arity.c"))
+            .output()?;
+        assert!(
+            cc.status.success(),
+            "the arity fixture must compile: {}",
+            String::from_utf8_lossy(&cc.stderr)
+        );
+        // `ar` ships alongside the `cc` the guard above already found.  If it is
+        // missing this host cannot build the fixture at all, which is a skip rather
+        // than a failure — said OUT LOUD, because nextest hides a passing test's
+        // stdout and a silent skip reads exactly like coverage.
+        match std::process::Command::new("ar")
+            .arg("rcs")
+            .arg(dir.join(libname))
+            .arg(&obj)
+            .output()
+        {
+            Ok(ar) if ar.status.success() => {}
+            other => {
+                println!(
+                    "skip the_c_arity_ceiling_is_the_same_on_both_backends \
+                     (no `ar` to archive the C fixture into {libname}: {other:?})"
+                );
+                return Ok(());
+            }
+        }
+    } else {
+        let cc = std::process::Command::new("cc")
+            .args(["-O1", "-fPIC", "-shared", "-o"])
+            .arg(dir.join(libname))
+            .arg(dir.join("arity.c"))
+            .output()?;
+        assert!(
+            cc.status.success(),
+            "the arity fixture must build: {}",
+            String::from_utf8_lossy(&cc.stderr)
+        );
+    }
     std::fs::write(
         dir.join("pkg/arity/loft.toml"),
         format!(
