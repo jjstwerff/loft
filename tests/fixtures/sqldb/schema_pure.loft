@@ -133,9 +133,29 @@ struct S7BareWorld { docs: hash<S7BareDoc[id]> = [] }
 struct S7bPt { px: integer, py: integer }
 struct S7bClash { const id: integer, origin: S7bPt, origin_px: integer }
 struct S7bWorldClash { docs: hash<S7bClash[id]> = [] }
-struct S7bHolder { hx: integer, marks: vector<integer> = [] }
+struct S7bHolder { hx: integer, marks: vector<integer> = [], tags: vector<integer> = [] }
 struct S7bDeep { const id: integer, held: S7bHolder }
 struct S7bWorldDeep { docs: hash<S7bDeep[id]> = [] }
+
+// @PLN23 S7b-ii — an inline struct inside an inline struct, and the
+// discriminating case: a collection in an inline struct inside a record ELEMENT.
+// The ELEMENT has identity and adds an ordinal; the inline struct has none and
+// adds only to the name.
+struct S7iiB { bz: integer, deep: vector<integer> = [] }
+struct S7iiA { ay: integer, b: S7iiB }
+struct S7iiDoc { const id: integer, a: S7iiA }
+struct S7iiWorld { docs: hash<S7iiDoc[id]> = [] }
+
+struct S7iiInner { q: integer, bits: vector<integer> = [] }
+struct S7iiNote { const label: text, at: S7iiInner }
+struct S7iiDocN { const id: integer, notes: vector<S7iiNote> = [] }
+struct S7iiWorldN { docs: hash<S7iiDocN[id]> = [] }
+
+// An inline struct whose ONLY field is a collection: it contributes no column,
+// which is an ordinary shape rather than a refusal.
+struct S7iiBare { only: vector<integer> = [] }
+struct S7iiDocB { const id: integer, bare: S7iiBare }
+struct S7iiWorldB { docs: hash<S7iiDocB[id]> = [] }
 // An inline struct inside a CHILD element flattens exactly as it does in an
 // owner: one rule, applied wherever a record's columns are derived.
 struct S7bNote { const label: text, at: S7bPt }
@@ -901,15 +921,69 @@ fn main() {
   r7bc = (d7bc[0] ?? no_def()).refusal;
   assert(r7bc.find("origin_px") != null, "S7b: a flattened name collision must refuse: {r7bc}");
 
-  // A collection inside an inline struct belongs to the OWNER's table —
-  // `origin` adds no identity, so it needs no extra key. Not reached yet, and
-  // named rather than dropped.
+  // --- @PLN23 S7b-ii: a collection inside an INLINE struct ------------------
+  //
+  // It is a child table of the OWNER, and it needs no extra key: `origin` has no
+  // identity to contribute, so it adds to the NAME and to nothing else. That is
+  // the same rule as everywhere else in this mapping — identity is what earns an
+  // address — applied one level in.
   w7bd = S7bWorldDeep { };
   ti_7bd = type_of(w7bd.docs);
   d7bd = derive_tables(ti_7bd);
-  r7bd = (d7bd[0] ?? no_def()).refusal;
-  assert(r7bd.find("marks") != null && r7bd.find("S7b-ii") != null,
-    "S7b: a collection inside an inline struct must refuse naming it: {r7bd}");
+  assert(len(d7bd) == 3, "S7b-ii: owner + two child tables, got {len(d7bd)}");
+  n7bd = "";
+  for t7 in d7bd { n7bd += "{t7.nm}," }
+  assert(n7bd == "s7bdeep,s7bdeep_held_marks,s7bdeep_held_tags,",
+    "S7b-ii table names [{n7bd}]");
+  // The inline struct's SCALARS still flatten into the owner, at the same time.
+  assert(cols(d7bd[0] ?? no_def()) == "id held_hx", "S7b-ii owner columns [{cols(d7bd[0] ?? no_def())}]");
+  hm = d7bd[1] ?? no_def();
+  nhm = "";
+  for hc2 in hm.columns { nhm += "{hc2.nm}," }
+  // (s7bdeep_id, ord, value) — NOT (s7bdeep_id, ord, ord_2, value). An inline
+  // struct is not a level.
+  assert(nhm == "s7bdeep_id,ord,value,", "S7b-ii child columns [{nhm}]");
+
+  // Two inline levels, still one ordinal.
+  w7ii = S7iiWorld { };
+  ti_7ii = type_of(w7ii.docs);
+  d7ii = derive_tables(ti_7ii);
+  assert(len(d7ii) == 2, "S7b-ii nested inline: two tables, got {len(d7ii)}");
+  nested_child = d7ii[1] ?? no_def();
+  assert(nested_child.nm == "s7iidoc_a_b_deep", "S7b-ii nested inline name {nested_child.nm}");
+  nni = "";
+  for nc2 in nested_child.columns { nni += "{nc2.nm}," }
+  assert(nni == "s7iidoc_id,ord,value,", "S7b-ii nested inline columns [{nni}]");
+  assert(cols(d7ii[0] ?? no_def()) == "id a_ay a_b_bz",
+    "S7b-ii nested inline owner [{cols(d7ii[0] ?? no_def())}]");
+
+  // THE discriminating case. A collection in an inline struct inside a record
+  // ELEMENT: the element has identity and adds `ord`, the inline struct has none
+  // and adds only to the name. Getting this wrong gives one ordinal too many —
+  // in the right order, with the right names, and wrong.
+  w7in = S7iiWorldN { };
+  ti_7in = type_of(w7in.docs);
+  d7in = derive_tables(ti_7in);
+  assert(len(d7in) == 3, "S7b-ii in-element: three tables, got {len(d7in)}");
+  ine = d7in[2] ?? no_def();
+  assert(ine.nm == "s7iidocn_notes_at_bits", "S7b-ii in-element name {ine.nm}");
+  nin = "";
+  for ic3 in ine.columns { nin += "{ic3.nm}," }
+  assert(nin == "s7iidocn_id,ord,ord_2,value,", "S7b-ii in-element columns [{nin}]");
+  // …and the element's own inline scalars flattened into ITS table, not the
+  // owner's.
+  midt = d7in[1] ?? no_def();
+  assert(midt.has_column("at_q") && !(d7in[0] ?? no_def()).has_column("at_q"),
+    "S7b-ii: an element's inline scalars belong to the element's table");
+
+  // An inline struct whose only field is a collection contributes no column.
+  w7ib = S7iiWorldB { };
+  ti_7ib = type_of(w7ib.docs);
+  d7ib = derive_tables(ti_7ib);
+  assert(len(d7ib) == 2, "S7b-ii bare inline: two tables, got {len(d7ib)}");
+  assert(cols(d7ib[0] ?? no_def()) == "id", "S7b-ii bare inline owner [{cols(d7ib[0] ?? no_def())}]");
+  assert((d7ib[1] ?? no_def()).nm == "s7iidocb_bare_only",
+    "S7b-ii bare inline child {(d7ib[1] ?? no_def()).nm}");
 
   // The collision one level down. The address columns are named by this
   // derivation and the element's by its author, so `ord_2` can be both.

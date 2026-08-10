@@ -300,20 +300,17 @@ fn expand_field(owner_label: text, nm_prefix: text, path_prefix: vector<integer>
     sub = st ?? no_type();
     for sf in sub.fields {
       if !is_data(sf) { continue }
-      if is_child_collection(sf) {
-        // A collection inside an inline struct is a child table of the OWNER —
-        // `Doc.origin.marks` needs no extra key, because `origin` adds no
-        // identity. The derivation does not reach through an inline struct for
-        // collection fields yet, so it says so rather than dropping it.
-        return no_table("{owner_label}.{nm}.{sf.name} is a collection inside an inline struct — @PLN23 S7b-ii");
-      }
+      // @PLN23 S7b-ii — a collection inside an inline struct is a child table
+      // of the OWNER, found by `collection_fields`. Skipped here for the same
+      // reason a top-level collection field is: it is rows, not a column.
+      if is_child_collection(sf) { continue }
       one = expand_field(owner_label, "{nm}_", p, sf, depth);
       if one.refusal != "" { return one }
       for oc in one.columns { out += [oc] }
     }
-    if len(out) == 0 {
-      return no_table("{owner_label}.{nm} is a {f.type_name} with no stored fields");
-    }
+    // No refusal on an empty answer: an inline struct whose only fields are
+    // COLLECTIONS contributes no column, and its collections are tables of the
+    // owner. That is an ordinary shape once a collection field can become one.
     return TableDef { nm: "", columns: out };
   }
   ct = column_type(f.kind);
@@ -1465,6 +1462,39 @@ fn is_child_collection(f: FieldInfo) -> boolean {
   return f.kind == VectorKind || f.kind == KeyedKind;
 }
 
+/// A collection field, and the NAME PATH that reaches it — @PLN23 S7b-ii.
+///
+/// `Doc.origin.marks` arrives here as `origin_marks`, because the field path
+/// lives in the table name and nowhere else.
+pub struct CollectionField { const path_name: text, f: FieldInfo }
+
+/// Every collection field one record type holds, INCLUDING those reached
+/// through inline structs.
+///
+/// **An inline struct contributes to the name and to nothing else.** It has no
+/// identity, so it adds no address column and no depth: `Doc.origin.marks` is
+/// `doc_origin_marks`, addressed by `(doc_id, ord)` exactly as `Doc.marks` would
+/// be. Compare a record ELEMENT, which does have identity and therefore does add
+/// an ordinal (§ S7a) — that is the same distinction the mapping has made since
+/// S6a, one level further in.
+fn collection_fields(elem: TypeInfo, prefix: text) -> vector<CollectionField> {
+  out: vector<CollectionField> = [];
+  for f in elem.fields {
+    if !is_data(f) { continue }
+    if is_child_collection(f) {
+      out += [CollectionField { path_name: "{prefix}{f.name}", f: f }];
+      continue;
+    }
+    if f.kind == RecordKind || f.kind == VariantKind {
+      st = type_named(f.type_name);
+      if st == null { continue }
+      sub = st ?? no_type();
+      for cf in collection_fields(sub, "{prefix}{f.name}_") { out += [cf] }
+    }
+  }
+  return out;
+}
+
 /// The owner's own columns — the scalar ones.
 ///
 /// Collection fields are rows in another table (`derive_children`), so they are
@@ -1520,7 +1550,7 @@ fn derive_owner_columns(elem: TypeInfo) -> TableDef {
 /// the element's columns, which is what makes the same function serve every
 /// depth.
 fn derive_child(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
-                depth: integer) -> TableDef {
+                field_path: text, depth: integer) -> TableDef {
   ct = type_named(f.type_name);
   if ct == null {
     return no_table("{owner_table}.{f.name}: {f.type_name} is not a type in this program");
@@ -1541,7 +1571,7 @@ fn derive_child(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
     return no_table("{owner_table}.{f.name}: the element type {coll.element} is not a type here");
   }
   elem = et ?? no_type();
-  tname = child_table_name(owner_table, f.name);
+  tname = child_table_name(owner_table, field_path);
 
   // The inherited ADDRESS columns first, because the invariant names them as
   // what identifies the row — so the primary key is a prefix rather than
@@ -1558,7 +1588,7 @@ fn derive_child(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
 
   // The element's own columns, and only then the indexes: a `hash`'s address
   // index is not complete until the element's key columns exist.
-  body = child_body(tname, owner_table, f, elem, coll, cols, depth);
+  body = child_body(tname, owner_table, f, field_path, elem, coll, cols, depth);
   if body.refusal != "" { return body }
   full = body.columns;
 
@@ -1650,9 +1680,9 @@ fn inherited_address(addr: vector<ColumnDef>, parent_depth: integer) -> vector<C
 /// collapses the whole answer: a partial schema builds a database whose own
 /// reader disagrees with its writer.
 fn derive_branch(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
-                 depth: integer) -> vector<TableDef> {
+                 field_path: text, depth: integer) -> vector<TableDef> {
   out: vector<TableDef> = [];
-  child = derive_child(owner_table, addr_cols, f, depth);
+  child = derive_child(owner_table, addr_cols, f, field_path, depth);
   out += [child];
   if child.refusal != "" { return out }
 
@@ -1668,10 +1698,8 @@ fn derive_branch(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
   // own — which is the invariant unchanged, applied to an owner that is itself
   // an element.
   next_addr = inherited_address(child.address_columns(), depth);
-  for gf in elem.fields {
-    if !is_data(gf) { continue }
-    if !is_child_collection(gf) { continue }
-    sub = derive_branch(child.nm, next_addr, gf, depth + 1);
+  for gf in collection_fields(elem, "") {
+    sub = derive_branch(child.nm, next_addr, gf.f, gf.path_name, depth + 1);
     for s in sub {
       if s.refusal != "" {
         bad: vector<TableDef> = [];
@@ -1748,8 +1776,9 @@ fn key_index(tname: text, addr_cols: vector<ColumnDef>, cols: vector<ColumnDef>,
 /// the element's are named by its author, so a `Tag` with a field called `ord`
 /// produces a `CREATE TABLE` with two columns of one name. Only the engine would
 /// notice, and only the engines that reject it.
-fn child_body(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
-              coll: TypeInfo, addr_cols: vector<ColumnDef>, depth: integer) -> TableDef {
+fn child_body(tname: text, owner_table: text, f: FieldInfo, field_path: text,
+              elem: TypeInfo, coll: TypeInfo, addr_cols: vector<ColumnDef>,
+              depth: integer) -> TableDef {
   if elem.kind != RecordKind && elem.kind != VariantKind {
     value_kind = column_type(elem.kind);
     if value_kind == ColOther {
@@ -1878,10 +1907,8 @@ pub fn derive_tables(t: TypeInfo) -> vector<TableDef> {
   }
 
   out += [parent];
-  for f in elem.fields {
-    if !is_data(f) { continue }
-    if !is_child_collection(f) { continue }
-    branch = derive_branch(parent.nm, root_addr, f, 1);
+  for f in collection_fields(elem, "") {
+    branch = derive_branch(parent.nm, root_addr, f.f, f.path_name, 1);
     for b in branch {
       if b.refusal != "" {
         empty: vector<TableDef> = [];

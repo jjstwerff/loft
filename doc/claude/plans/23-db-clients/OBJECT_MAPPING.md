@@ -487,13 +487,50 @@ matches a KEY to a column now requires `len(path) == 1`, the same restriction
   one name, which only the engine notices and only the engines that reject it.
   Refused, naming the column.
 - **A collection inside an inline struct** — `Doc.origin.marks` — is a child
-  table of the OWNER, needing no extra key, because `origin` adds no identity.
-  The derivation does not reach through an inline struct for collection fields
-  yet; it refuses and names **S7b-ii** rather than dropping the field.
+  table of the OWNER, needing no extra key. That is **S7b-ii**, below.
 
 A `RefKind` field is deliberately NOT flattened: a stored reference names a
 record with its own identity, so inlining its fields would decide § Open
 question 2 by accident.
+
+## S7b-ii — an inline struct adds to the NAME and to nothing else
+
+The design stated this one before any code: *"a collection nested inside an
+inline struct (`Doc.origin.marks` → `Doc_origin_marks`) needs no extra key."*
+
+```
+doc               (id, origin_x, origin_y)
+doc_origin_marks  (doc_id, ord, value)          <- not (doc_id, ord, ord_2)
+```
+
+Both halves happen at once: the inline struct's SCALARS flatten into the owner's
+table (§ S7b) and its COLLECTIONS become tables of the owner. An inline struct
+whose only field is a collection therefore contributes no column at all, which is
+an ordinary shape rather than the refusal it used to be.
+
+**The rule is the mapping's only rule, one level in: identity is what earns an
+address.** A record ELEMENT has identity, so it adds an ordinal (§ S7a). An
+inline struct has none, so it adds nothing. `collection_fields` is where that
+lives — it walks through inline structs accumulating a NAME and neither an
+address column nor a depth.
+
+### The case that discriminates
+
+A collection in an inline struct **inside a record element** is the only shape
+where getting this wrong still looks right:
+
+```
+d3_notes          (d3_id, ord, label, at_q)
+d3_notes_at_bits  (d3_id, ord, ord_2, value)
+```
+
+`ord` is the element's — the element has identity. `ord_2` is the collection's
+own. `at` contributes neither, only the `at_` in the name and its scalar `at_q`
+in the element's table. A derivation that treated the inline struct as a level
+would emit `(d3_id, ord, ord_2, ord_3, value)`: one ordinal too many, in the
+right order, with the right names, and wrong. Both directions are gated —
+an element that stops being a level and an inline struct that starts being one
+each fail their own cell.
 
 ## S7c — migration, and why "the address function drives it" is not an answer
 

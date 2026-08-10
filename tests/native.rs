@@ -2394,6 +2394,13 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
 ///           identity, so it has no table — and the write reads it through the
 ///           column's PATH, which is what `field_value(x, [outer, inner])` was
 ///           added to loft for.
+///   notes 1|0|100;1|1|200;2|0|300   @PLN23 S7b-ii — a collection inside an
+///           INLINE struct. `(ledger_id, ord)` and no more: `meta` has no
+///           identity, so it adds to the table NAME and to nothing else, while
+///           its sibling scalar `rev` flattens into the owner's own row
+///           (`ledger 1|one|5`). A record ELEMENT in the same position DOES add
+///           an ordinal — that is the distinction, and it is the mapping's one
+///           rule (identity earns an address) applied one level in.
 ///   permute at_col=4,at_row=3,pid=11,ord_2=1,ord=0,ledger_id=1,   ONE row built from a REVERSED
 ///           definition. The address columns come out outer→inner, so the two
 ///           ordinals are always in depth order and a writer counting them in
@@ -2428,10 +2435,11 @@ fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::
         "rank   7|0|1|a;7|1|2|b;7|2|3|c;9|0|6|g;9|1|8|h",
         "beats  1|0|1|y;1|1|1|x;1|2|2|z",
         "byname 1|1|x;1|1|y;1|2|z",
-        "depth  tables=3 grandchild=ledger_marks_pieces",
-        "ledger 1|one;2|two",
+        "depth  tables=4 grandchild=ledger_marks_pieces inline=ledger_meta_notes",
+        "ledger 1|one|5;2|two|6",
         "marks  1|0|A;1|1|B;2|0|A;2|1|C",
         "pieces 1|0|0|10|1|2;1|0|1|11|3|4;1|1|0|12|5|6;1|1|1|13|7|8;2|0|0|10|1|2;2|0|1|11|3|4;2|1|0|14|9|0",
+        "notes  1|0|100;1|1|200;2|0|300",
         "permute at_col=4,at_row=3,pid=11,ord_2=1,ord=0,ledger_id=1,",
         "children_live ok",
     ];

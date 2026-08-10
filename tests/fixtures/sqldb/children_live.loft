@@ -95,7 +95,12 @@ struct Band { rows: hash<Sheet[id]> = [] }
 struct Spot { row: integer, col: integer }
 struct Piece { const pid: integer, at: Spot }
 struct Mark2 { const label: text, pieces: vector<Piece> = [] }
-struct Ledger { const id: integer, title: text, marks: vector<Mark2> = [] }
+/// @PLN23 S7b-ii — an INLINE struct that holds a collection. `rev` flattens into
+/// the owner's table; `notes` becomes a table of the OWNER, addressed by
+/// `(ledger_id, ord)` and NOT by an extra level — `meta` has no identity to
+/// contribute, so it adds to the NAME and to nothing else.
+struct Meta { rev: integer, notes: vector<integer> = [] }
+struct Ledger { const id: integer, title: text, marks: vector<Mark2> = [], meta: Meta }
 struct Books { rows: hash<Ledger[id]> = [] }
 
 /// The three documents this gate writes — one definition, used by the writer
@@ -168,13 +173,13 @@ fn band() -> Band {
 /// which is "fewer rows than expected".
 fn books() -> Books {
   b = Books { };
-  b.rows += [Ledger { id: 1, title: "one", marks: [
+  b.rows += [Ledger { id: 1, title: "one", meta: Meta { rev: 5, notes: [100, 200] }, marks: [
     Mark2 { label: "A", pieces: [Piece { pid: 10, at: Spot { row: 1, col: 2 } },
                                  Piece { pid: 11, at: Spot { row: 3, col: 4 } }] },
     Mark2 { label: "B", pieces: [Piece { pid: 12, at: Spot { row: 5, col: 6 } },
                                  Piece { pid: 13, at: Spot { row: 7, col: 8 } }] },
   ] }];
-  b.rows += [Ledger { id: 2, title: "two", marks: [
+  b.rows += [Ledger { id: 2, title: "two", meta: Meta { rev: 6, notes: [300] }, marks: [
     Mark2 { label: "A", pieces: [Piece { pid: 10, at: Spot { row: 1, col: 2 } },
                                  Piece { pid: 11, at: Spot { row: 3, col: 4 } }] },
     Mark2 { label: "C", pieces: [Piece { pid: 14, at: Spot { row: 9, col: 0 } }] },
@@ -288,6 +293,21 @@ fn beat_row(t: TableDef, owner: Sheet, e: Beat, ord: integer) -> vector<Bound> {
     if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
     else if c.src == SrcOrdinal { vals += [val_int(ord)] }
     else { vals += [bound_of(c, field_value(e, c.path))] }
+  }
+  return vals;
+}
+
+/// A row of an INLINE struct's collection (@PLN23 S7b-ii).
+///
+/// The owner is the ROOT record, not the inline struct: `meta` is not a level,
+/// so there is no intermediate record for a column to read from. The walk is
+/// unchanged — only the loop that reaches the elements names `lg.meta.notes`.
+fn note_row(t: TableDef, owner: Ledger, v: integer, ord: integer) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.path))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ord)] }
+    else { vals += [val_int(v)] }
   }
   return vals;
 }
@@ -512,7 +532,8 @@ fn main() {
   if !ledger.table_ok() { println("FAIL ledger derive: {ledger.refusal}"); d.db_shut(); return }
   lmarks = table_named(ktabs, child_table_name(ledger.nm, "marks"));
   lpieces = table_named(ktabs, child_table_name(lmarks.nm, "pieces"));
-  println("depth  tables={len(ktabs)} grandchild={lpieces.nm}");
+  lnotes = table_named(ktabs, child_table_name(ledger.nm, "meta_notes"));
+  println("depth  tables={len(ktabs)} grandchild={lpieces.nm} inline={lnotes.nm}");
   for kt in ktabs {
     for kstmt in kt.render(dial) {
       if !d.db_exec(kstmt) {
@@ -546,11 +567,19 @@ fn main() {
       }
     }
   }
+  for lg4 in bk.rows {
+    for nt in lg4.meta.notes {
+      if !d.db_run(lnotes.insert_row(dial, note_row(lnotes, lg4, nt, nt#count))) {
+        println("FAIL note {lg4.id}/{nt#count}: {d.db_last_error()}"); d.db_shut(); return;
+      }
+    }
+  }
   if !d.db_commit() { println("FAIL ledger commit: {d.db_last_error()}"); d.db_shut(); return }
 
   println("ledger {dump(d, dial, ledger)}");
   println("marks  {dump(d, dial, lmarks)}");
   println("pieces {dump(d, dial, lpieces)}");
+  println("notes  {dump(d, dial, lnotes)}");
 
   // One row built from a REVERSED definition. Every value must follow its
   // COLUMN, so `ord` is still the mark's index and `ord_2` still the piece's —
