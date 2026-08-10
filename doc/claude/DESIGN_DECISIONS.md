@@ -2744,13 +2744,78 @@ a missing feature.
   different by declaration rather than by accident. Ergonomics alone does not reopen it;
   the model question is the blocker.
 
+---
+
+## C105 — a hash lookup keeps its TWO random reads (no hash-in-slot, no entries in the bucket table)
+
+**Catalogue:** @F7 (`hash<T[keys]>` keyed collection).
+
+### Question
+
+`hash<T[k]>` lookups cost ~180 ns at 1M keys against a reported ~22 ns for .NET's
+`Dictionary<long,int>` ([loft#809](https://github.com/loft-lang/loft/issues/809)). Two
+designs were proposed against the gap: **arc D**, caching the key's hash in the bucket
+slot, and the shape behind Q1's "approach Dictionary" — putting the ENTRIES in the bucket
+table so a hit is one random read instead of two.
+
+### Evaluation
+
+@PLN135 arc H shipped the part that paid: entries moved into a chunked arena, insert 1.28x
+and bytes/entry 27.67 → 18.6 (−33%). What the two remaining proposals buy was then
+measured rather than argued.
+
+**Arc D — cache the hash in the slot.** Its real value is not the lookup; it is removing
+the from-scratch re-hash at every resize. Measured on 1M `integer` keys, alternating a
+reserved fill against a grown one so the gap IS the resize: 92 ms, 43 ms and 28 ms out of
+350–386 ms — a median ~12% of a GROWN insert and **0% of a reserved one**, because
+`reserve(h, n)` already removes the resize entirely. The cost is a bucket slot of 8 bytes
+instead of 4, doubling the table (5.3 MB → 10.7 MB at 1M), plus a SECOND persisted-store
+format break. On a hit it skips nothing: the entry still has to be read to return it.
+
+**Entries in the bucket table.** This is the one design that removes a random read, and
+it is the one @PLN135's Q5 already refused: growth reallocates the table, so every entry
+moves and every outstanding `DbRef` into the collection goes stale. That is a wrong READ
+rather than an error, in the subsystem ranked weakness #1, and
+[COMPATIBILITY.md](COMPATIBILITY.md) forbids it. Reference stability is a property callers
+have today.
+
+**The baseline is also not what it looks like.** The same 1M lookups cost 99–118 ns in
+ascending key order against 175–179 ns shuffled — the ENTRY read becoming prefetchable,
+since entries go into the arena in insertion order. Every @PLN135 figure before
+2026-08-09 was taken in insertion order, so the reported ~20x compared two sides that may
+not have used the same access order. A comparison whose sides differ in that is not a
+comparison.
+
+A layout-neutral hoist was written and measured too — `entry_ref` re-read the arena's
+directory field and its size header on EVERY probe, both loop-invariant. Alternating A/B
+over 1M shuffled lookups: median 214 ns before, 231 ns after. Inside the noise, because
+the loop is two cache misses and those reads are hot. Reverted rather than shipped.
+
+### Decision
+
+- **Closed 2026-08-10.** A hash lookup reads the bucket slot and then the entry, and both
+  stay random. Arc D is not worth a second format break and a doubled table for ≤12% of a
+  case `reserve` already fixes; entries-in-table is not worth reference stability at any
+  price. loft#809 is closed on the same evidence.
+- `reserve(h, n)` is the supported answer for a fill whose size is known, and it is worth
+  saying in a consumer's docs rather than optimising around its absence.
+
+### Revisit when
+
+- A like-for-like re-measurement — **same access order and same working set on both
+  sides** — still shows a large gap. The number loft#809 was opened on cannot currently
+  support that claim.
+- Reference stability into a keyed collection stops being a property loft offers, at
+  which point entries-in-table becomes available and would remove one of the two reads.
+- A hash's bucket table stops being the memory it is today (e.g. a load factor or slot
+  width change lands for another reason), so arc D's doubling is no longer the cost it is
+  now.
+
+---
+
 ## C106 — `#c` has ONE arity ceiling for both backends, and it was raised rather than lowered
 
 **Catalogue:** @F92 (direct C binding), @F53 (native backend)
-
-> Numbered C106, not C105: C105 is claimed by the in-flight `tuxedo-809-resize-rehash`
-> branch, and two entries sharing an id in a register whose whole job is to be citable is
-> worse than a gap.
 
 ### Context
 
