@@ -98,6 +98,7 @@ fn fires_interpret() {
     assert_fires("--interpret");
 }
 
+// @speed 0.6
 #[test]
 fn fires_native() {
     assert_fires("--native");
@@ -184,6 +185,7 @@ fn guard_clause_narrows_interpret_585() {
     assert_guard_585("--interpret");
 }
 
+// @speed 1.9
 #[test]
 fn guard_clause_narrows_native_585() {
     assert_guard_585("--native");
@@ -191,6 +193,7 @@ fn guard_clause_narrows_native_585() {
 
 // ── OK: discharged arg, τ? param, null-transparent fn — all silent ────────────────────────────
 
+// @speed 0.9
 #[test]
 fn legal_forms_stay_silent() {
     for (body, tag) in [

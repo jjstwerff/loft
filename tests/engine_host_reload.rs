@@ -151,6 +151,7 @@ fn main() {{
     )
 }
 
+// @speed 1.7
 #[test]
 fn live_reload_swaps_a_running_fn() {
     let port = common::test_port(PORT_BASE);
@@ -265,6 +266,7 @@ fn reload_installs_from_foreign_cwd_with_warnings() {
 /// (`engine_host::clients()` — the shadow snippet parse keeps the session's
 /// import scoping) and a cross-file user fn (the emitted call targets the
 /// RUNNING state's code positions; the shadow itself never generates code).
+// @speed 0.7
 #[test]
 fn live_reload_module_file_with_lib_and_cross_file_calls() {
     if !loft_bin().exists() {

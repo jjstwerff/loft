@@ -65,6 +65,7 @@ fn run_harness(args: &[&str]) -> (bool, String) {
 /// fire.  Fails if (a) a detector channel is silent on the preserved gate-OFF
 /// bug (vacuous harness), or (b) the default gate flags a control cell (the
 /// join_own flip regressed).
+// @speed 1.2
 #[test]
 fn fuzz_gate_positive_control_pairs() {
     let (ok, text) = run_harness(&["--self-test"]);
@@ -81,6 +82,7 @@ fn fuzz_gate_positive_control_pairs() {
 /// The 54-cell map, interp + poison fast loop — crash / leak / poison-UAF
 /// channels on every `cargo test` run (native runs only when a cell flags, so
 /// the clean path costs no rustc).  Zero findings expected.
+// @speed 2.5
 #[test]
 fn fuzz_gate_map54_fast_loop() {
     let cells = tempfile_dir();

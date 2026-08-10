@@ -122,6 +122,7 @@ fn unstamp(dgram: &str) -> (i64, String) {
     (seq.parse().expect("numeric seq"), payload.to_string())
 }
 
+// @speed 2.9
 #[test]
 fn udp_sync_channel_end_to_end() {
     let port = common::test_port(PORT_BASE);

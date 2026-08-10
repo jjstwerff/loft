@@ -40,6 +40,7 @@ cargo run --bin gendoc                   # regenerate doc/*.html
 make ci                                  # fmt → clippy → test (full local gate)
 make test                                # clippy + test → result.txt
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
+make speed                               # what got slower/faster — a REPORT, never a gate
 make index ; ./scripts/idx tag:@P259     # rebuild + query the tracker index (prefer over grep -rn)
 make view                                # branch-aware doc/code viewer (SSH-forward 8765)
 ```

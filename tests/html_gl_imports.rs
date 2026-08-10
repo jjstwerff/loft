@@ -46,6 +46,7 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+// @speed 0.5
 #[test]
 fn dhtml_vector_arg_gl_host_import_is_emitted() {
     if !which("node") {

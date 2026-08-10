@@ -248,6 +248,7 @@ fn dir() -> std::io::Result<()> {
 /// Skips silently if `rustc` is not in PATH or the `wasm32-wasip2` target is not
 /// installed.  Runs the resulting `.wasm` with `wasmtime` if it is in PATH; otherwise
 /// only verifies compilation succeeds.
+// @speed 0.6
 #[test]
 fn wasm_dir() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -276,6 +277,7 @@ fn wasm_dir() -> std::io::Result<()> {
 /// discovers and executes all zero-parameter user functions automatically.
 /// To run a single file use the individual test functions below, e.g.:
 ///   cargo test --test wrap integers
+// @speed 3.9
 #[test]
 fn loft_suite() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -480,6 +482,7 @@ pub fn run_lib_test_in_temp_cwd(
 /// (an in-process harness mis-resolves intra-package `use` and skips
 /// `extensions::load_all`).  The native counterpart is
 /// `tests/native.rs::native_library_suite`.
+// @speed 5.2
 #[test]
 fn library_suite() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());

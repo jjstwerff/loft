@@ -197,6 +197,7 @@ fn http_get(path: &str, port: u16) -> String {
 /// LOFT_VIEW_PORT support); this test honours that until the
 /// viewer learns the env var.  Adjust both the const above
 /// and the viewer once env var support lands.
+// @speed 1.3
 #[test]
 fn markdown_renderer_pins_high_impact_features() {
     if registry_predates_dn1() {

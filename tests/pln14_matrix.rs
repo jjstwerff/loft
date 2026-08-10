@@ -1010,6 +1010,7 @@ fn image_path(tag: &str) -> std::path::PathBuf {
 
 /// The `save → restore` cells of the Stage-A matrix, finally built: every value
 /// type must survive a round-trip through an on-disk image and read back equal.
+// @speed 0.5
 #[test]
 fn every_value_type_survives_the_resume_image() {
     let mut checked = 0;
@@ -1218,6 +1219,7 @@ fn a_restored_session_observes_from_the_store() {
 /// A re-bind releases the record the old value held, so a `n = n + 1` REPL loop
 /// does not grow the session store without bound.  The env is the ONLY holder of
 /// a ref into that store, which is what makes freeing on replace safe.
+// @speed 0.5
 #[test]
 fn re_binding_does_not_grow_the_session_store() {
     let mut s = session();

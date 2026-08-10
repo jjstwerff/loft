@@ -351,6 +351,19 @@ rebuild-native-cdylibs:
 TEST_SCRATCH := /var/tmp/loft-test-scratch-$(shell printf '%s' "$(CURDIR)" | cksum | cut -d' ' -f1)
 TEST_ENV := TMPDIR=$(TEST_SCRATCH) LOFT_TMPDIR=$(TEST_SCRATCH)
 
+# Speed REPORT for the slow tests — never a gate.  `speed` measures the tests
+# that carry a `// @speed` annotation, one at a time (parallel wall-clock is
+# mostly contention), best of two runs, and prints what drifted.  `speed-discover`
+# is the wide parallel pass that finds which tests deserve an annotation.
+# Nothing here fails: correctness fails a build, speed is what you read.
+.PHONY: speed speed-discover speed-bless
+speed:  ## Report how the slow tests' speed has drifted (never fails)
+	python3 scripts/test_speed.py run
+speed-discover:  ## Find tests slow enough to deserve a @speed annotation
+	python3 scripts/test_speed.py discover
+speed-bless:  ## Write the measured numbers back into the tests
+	python3 scripts/test_speed.py run --bless
+
 test: clippy rebuild-native-cdylibs
 	-rm -f tests/generated/*
 	-rm -f tests/dumps/*.txt

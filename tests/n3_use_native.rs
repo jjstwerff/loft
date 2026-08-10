@@ -82,6 +82,7 @@ fn cdylib_present(dir: &std::path::Path) -> bool {
     })
 }
 
+// @speed 0.6
 #[test]
 fn use_compile_native_library_dispatches_on_real_binary() {
     // The binary auto-builds the cdylib via rustc; skip where it isn't available.
@@ -161,6 +162,7 @@ fn use_compile_native_library_dispatches_on_real_binary() {
 /// (`__lambda_N`, made `pub_visible` by the enclosing `pub fn`) is NOT a dispatch
 /// target — it is a fn-ref target, not script-callable public API — so no
 /// `loft_shared_n___lambda` symbol appears in the cdylib.
+// @speed 0.7
 #[test]
 fn mixed_library_dispatches_native_and_interprets_rest() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -539,6 +541,7 @@ fn cdylib_type_indices_stay_valid_across_consumer_contexts() {
 /// would pass this test while verifying nothing. So the SAME copy is done with a
 /// MATCHING artifact first, and that one must be adopted. Both arms churn the
 /// mtime identically; only the declared layout differs.
+// @speed 1.9
 #[test]
 fn a_foreign_context_artifact_is_rejected_not_adopted() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -875,6 +878,7 @@ fn inserting_into_a_keyed_collection_over_an_imported_struct_works() {
 /// Builds more distinct contexts than the keep window and requires the directory to
 /// stop growing.  The count is what carries this: a fix that pruned nothing would
 /// still leave every program RUNNING, so no behavioural assertion can see it.
+// @speed 7.9
 #[test]
 fn a_packages_artifact_directory_stays_bounded() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -1212,6 +1216,7 @@ fn a_partially_exporting_cdylib_marks_only_what_resolves() {
 ///
 /// The decoy stands in for the shim: a loadable `.so` that is not of the
 /// `loft_auto_<pkg>_` family, placed first so it is the oldest.
+// @speed 7.5
 #[test]
 fn a_foreign_library_in_native_auto_survives_pruning() {
     if Command::new("rustc").arg("--version").output().is_err() {
