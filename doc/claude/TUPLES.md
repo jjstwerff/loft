@@ -337,8 +337,8 @@ Tuple match on a local variable, parameter, or literal is independent and can la
   variables, literals, ranges, or-patterns, and `null`.
 - Support nested tuple patterns for tuple-valued elements.
 - Exhaustiveness: a compile error when no arm is total (catches all cases).
-- Guards are specified to work the same way as for enum and struct match. They do not
-  parse on a tuple arm — [loft#839](https://github.com/loft-lang/loft/issues/839).
+- Guards work the same way as for enum and struct match: the captures are assigned
+  before the guard runs, so a guard can test them.
 
 ---
 
@@ -347,7 +347,7 @@ Tuple match on a local variable, parameter, or literal is independent and can la
 ```
 tuple-match     ::= 'match' tuple-expr '{' tuple-arm+ '}'
 
-tuple-arm       ::= tuple-pattern [ guard ] '=>' expression   // guard: see loft#839
+tuple-arm       ::= tuple-pattern [ guard ] '=>' expression
 
 tuple-pattern   ::= '_'                                  // total wildcard
                   | '(' elem-pattern { ',' elem-pattern } ')'
@@ -438,20 +438,16 @@ the element position inside a tuple pattern.
   `_` for the ones you do not bind"*. A pattern listing MORE elements than the subject has
   is refused the same way, naming the subject's arity.
   (Until [loft#832](https://github.com/loft-lang/loft/issues/832) both shapes HUNG the
-  parser instead of being rejected — see § Guards below for the one arm form that is still
-  refused.)
-- **Guards**: `(a, _, _) if a > 10 => …` — the grammar below lists a guard as optional on
-  every arm, and it does not parse. [loft#839](https://github.com/loft-lang/loft/issues/839)
-  carries the repro and why enabling the parse alone is worse than the refusal (the arm's
-  captures are assigned after the condition runs, so the guard reads an unassigned
-  variable and the arm silently fails to match). Write the test as an `if` inside the arm
-  body instead. The same gap applies to vector/slice arms; scalar and enum arms take
-  guards normally.
+  parser instead of being rejected.)
+- **Guards**: `(a, _, _) if a > 10 => …` — supported on every tuple and vector/slice arm.
+  The arm's captures are assigned before the guard runs, so the guard can read them; a
+  false guard falls through to the next arm, and a guarded arm never counts toward
+  exhaustiveness. The single exception is a **cursor** arm, where the pattern advances the
+  shared cursor as part of binding: a guard failing after that would leave the cursor
+  consumed and the next arm reading from the wrong position, so the combination is refused
+  and the test belongs in the arm body.
 - **Match on tuple-returning function calls**: `match foo() { ... }` — requires T1.8a
   (tuple function return convention). The subject must be a tuple variable or parameter.
-  ⚠ On `--native` a tuple **parameter** with a `text` element fails to compile when it is
-  the match subject ([loft#840](https://github.com/loft-lang/loft/issues/840)); copy it
-  into a local and match that.
 
 ---
 

@@ -11,11 +11,11 @@
 // Fixed arity is the design (TUPLES.md § "What is NOT supported"), so `_` is how a position
 // goes unbound — these cases are what the refusal's message tells the author to write.
 //
-// Two shapes are deliberately absent because they are broken for reasons of their own, and a
-// test that carried them would fail for something this file is not about:
-//   * an `if` guard on a tuple arm — never parses (loft#839);
-//   * a tuple containing `text` reaching the match as a function PARAMETER — builds on the
-//     interpreter, fails rustc on `--native` (loft#840).  Hence the subject below is a local.
+// Two shapes this file deliberately leaves to their own regressions, each of which was a
+// separate defect found from here: an `if` guard on a tuple arm
+// (`839-match-arm-guards.loft`) and a tuple containing `text` reaching the match as a
+// function PARAMETER (`840-tuple-arg-owned-crossing.loft`).  The subject below stays a
+// local so a failure here means what this file is about.
 
 fn describe(n: integer, name: text, flag: boolean) -> text {
   t: (integer, text, boolean) = (n, name, flag);

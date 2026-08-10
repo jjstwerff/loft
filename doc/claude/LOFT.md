@@ -1459,11 +1459,12 @@ match score {
 }
 ```
 
-**Guard clauses:** a scalar, enum or struct arm may have an `if` guard after the
-pattern. The guard is evaluated when the pattern matches; if the guard is false,
-matching falls through to the next arm. A guard on a **vector/slice or tuple** arm does
-not parse — [loft#839](https://github.com/loft-lang/loft/issues/839); write the test as
-an `if` inside the arm body there. Guarded arms do **not** count toward exhaustiveness — because the guard
+**Guard clauses:** any arm may have an `if` guard after the pattern. The guard is
+evaluated when the pattern matches, with the arm's captures already bound, so it can
+test them (`[a, _, _] if a > 10`, `(n, _, true) if n > 10`); if the guard is false,
+matching falls through to the next arm. The one arm that refuses a guard is a **cursor**
+match arm, where the pattern advances the shared cursor before the guard could be tested
+— put the test inside the arm body there. Guarded arms do **not** count toward exhaustiveness — because the guard
 can fail at runtime, the compiler cannot guarantee the arm will handle that variant.
 Even if every variant has a guarded arm, a wildcard `_ =>` or an unguarded arm covering
 each variant is still required:
