@@ -3,6 +3,12 @@
 
 ## Status
 
+**CLOSED 2026-08-10 — delivered.**  Arcs A–E and the design questions that were load-bearing
+(Q2, Q3→C109, Q4, Q5).  Two remain open by choice and are described where they sit: **Q1**
+(scalar-by-1-element-vector ergonomics) and **E6b** (handing a retaining API a *loft* vector is
+still a silent use-after-free — undetectable at the declaration, and cured by the C-owned
+buffer idiom rather than by a language feature).  Anything further belongs in a new plan.
+
 **Arcs A, B, C, D and E DONE.**  A purpose-built C library reproducing each calling
 convention the numeric stack uses was bound through `#c` and run on both backends; the matrix
 below is that measurement, not a reading of the ABI.  Arc E then bound **real OpenBLAS** —
