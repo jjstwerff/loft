@@ -411,6 +411,34 @@ pub fn store_persist_bind(r: reference, path: text) -> boolean fs#update;
 #rust"stores.bind_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
 
+// Write an image of `r` laid out for PAGING, and keep the live collection as it
+// is. Use this for a file another program (or a browser) will READ — a
+// vocabulary, a map, any shipped dataset — where what matters is how few pages a
+// query touches.
+//
+// `store_persist_bind` copies the live bytes, so every record keeps its place and
+// your references stay valid. That place is the layout: records sit where they
+// were INSERTED, so a `trie` prefix query returning 20 records reads 20 scattered
+// pages. This writes a rebuilt copy instead, with each record placed in its
+// collection's own order — key order for a `trie` — so one prefix is one run.
+// Measured on a 74,692-word vocabulary, one 20-record prefix query: 22 requests
+// and 1.25 MB from a bound image, 4 and 0.26 MB from this one.
+//
+// The live collection is untouched: nothing moves, so every reference you hold
+// stays valid, and the file is NOT bound (writes after this do not reach it).
+// Call it when the data is final. To keep writing, use `store_persist_bind`.
+//   words: trie<Word[w]> = []
+//   for w in vocabulary() { words += [Word { w: w }] }
+//   store_persist_copy(words, "vocab.store")   // ship this file
+//   // a reader pages it: store_load_prefix(local, "vocab.store", "kerk", 20)
+//
+// Returns `false` on an I/O or format error, and for a collection whose shape the
+// rebuild cannot carry. The image is sized to its content, with none of the
+// growth slack a bound file keeps.
+pub fn store_persist_copy(r: reference, path: text) -> boolean fs#update;
+#rust"stores.persist_copy((@r).store_nr, std::path::Path::new(@path))"
+#impure(io)
+
 // Load a persisted store IMAGE fully into memory, populating the empty
 // store-rooted collection `r` so it can be queried like any in-memory
 // collection.  The portable, read-only counterpart of `store_persist_bind`:

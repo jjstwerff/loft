@@ -167,6 +167,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_durable_seal", n_store_durable_seal),
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
+    #[cfg(feature = "mmap")]
+    ("n_store_persist_copy", n_store_persist_copy),
     ("n_store_load", n_store_load),
     ("n_store_verify", n_store_verify),
     ("n_store_reclaim", n_store_reclaim),
@@ -1272,6 +1274,20 @@ fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.bind_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
+}
+
+/// @PLN134 — interpreter handler for `store_persist_copy`.  Pops a path (text)
+/// + a reference (DbRef) and writes a REBUILT image of that slot, laid out so a
+/// paged reader touches few pages, without re-rooting the live slot.  Args pop in
+/// reverse, as everywhere: path, then the reference.  See
+/// `Stores::persist_copy` for why the rebuild is legal here and not in
+/// `bind_path`.
+#[cfg(feature = "mmap")]
+fn n_store_persist_copy(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.persist_copy(v_ref.store_nr, std::path::Path::new(v_path.str()));
     stores.put(stack, ok);
 }
 

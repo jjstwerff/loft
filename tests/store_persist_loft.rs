@@ -2619,11 +2619,15 @@ fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
 fn compaction_is_correct_for_every_collection_kind_it_accepts() {
     let script = workspace_root().join("tests/scripts/store_compact_kinds.loft");
     // kind, and the verdict the loader must reach for it.
-    let kinds: [(&str, &str); 5] = [
+    let kinds: [(&str, &str); 6] = [
         ("hash", "compacted"),
         ("sorted", "compacted"),
         ("index", "compacted"),
         ("nested", "compacted"),
+        // @PLN134 — a trie became compactable when its records had a reason to
+        // move: the rebuild places them in key order, which is what a paged
+        // prefix query is cheap on.
+        ("trie", "compacted"),
         // The one refusal in the accept-list: a spatial collection is a `Radix`,
         // which `copy_claims` panics on and the keystone walks as empty.
         ("spatial", "cannot carry"),
@@ -3690,6 +3694,119 @@ fn store_verify_reads_a_field_collection_as_itself_both_backends() {
         assert!(
             !stderr.contains("cr-check"),
             "{backend}: no structural complaint may be printed: {stderr}"
+        );
+    }
+}
+
+/// @PLN134 — `store_persist_copy` writes an image a prefix query can PAGE, and
+/// leaves every reference into the live collection valid.
+///
+/// The layout half cannot be asserted from inside the program: what a query
+/// fetches is a property of the FILE, so this compares the same 20-record prefix
+/// against two images built from the same collection in the same run — one bound
+/// (records where they were inserted), one copied (records in key order).
+///
+/// The comparison is calibrated, not a constant: the bound image's own request
+/// count is the baseline, so the cell survives a different corpus, page size or
+/// machine, and it FAILS on the implementation most likely to be written by
+/// accident — one that writes a faithful byte copy and calls it laid out, which
+/// would answer every key correctly and fetch exactly as much.
+///
+/// The reference half is the script's (`held ok=`): a rebuild that moved the
+/// records the caller still holds would print a plausible number, so the script
+/// checks the VALUE, not the absence of a crash.
+#[test]
+fn a_trie_survives_the_rebuild_and_comes_out_in_key_order() {
+    let script = workspace_root().join("tests/scripts/134-persist-copy-key-order.loft");
+    let query = workspace_root().join("tests/scripts/134-persist-copy-query.loft");
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let dir = scratch(&format!("persist_copy_{tag}"));
+        let bound = dir.join("bound.store");
+        let copied = dir.join("copied.store");
+
+        let run = |s: &Path, mode: &str, img: &Path| -> String {
+            let out = Command::new(loft_bin())
+                .arg(backend)
+                .arg(s)
+                .env("LOFT_PERSIST_TEST_PATH", &bound)
+                .env("LOFT_PERSIST_TEST_COPY", &copied)
+                .env("LOFT_PERSIST_TEST_MODE", mode)
+                .env("LOFT_PERSIST_TEST_IMG", img)
+                .env("LOFT_LOADER_STATS", "1")
+                // 512-byte pages, as the trie's other paged tests use: at 64 KB
+                // this corpus is ~5 pages whole, so every layout reads the same
+                // handful and the cell could not tell a descent from a scan.
+                // The effect under test is scatter, and scatter needs pages to
+                // scatter ACROSS.
+                .env("LOFT_PAGE_BYTES", "512")
+                .current_dir(workspace_root())
+                .output()
+                .expect("failed to invoke loft binary");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success() && !stdout.contains("FAIL"),
+                "{backend} mode={mode}: {stdout}\n{stderr}"
+            );
+            format!("{stdout}{stderr}")
+        };
+
+        let wrote = run(&script, "write", &bound);
+        assert!(
+            wrote.contains("held ok="),
+            "{backend}: the reference held across the copy must still read its own \
+             value — that guarantee is why the rebuild is not done in the bind \
+             path:\n{wrote}"
+        );
+
+        // The copy must be the same collection, read back in a separate process.
+        let read = run(&script, "read", &copied);
+        for key in ["count=", "aa=", "zusloot=", "arkerk=", "absent="] {
+            let of = |out: &str| -> String {
+                out.lines()
+                    .find(|l| l.contains(key))
+                    .unwrap_or_else(|| panic!("no `{key}` in:\n{out}"))
+                    .split_once(' ')
+                    .map(|(_, r)| r.to_string())
+                    .unwrap_or_default()
+            };
+            assert_eq!(
+                of(&wrote),
+                of(&read),
+                "{backend}: `{key}` differs between the live collection and its \
+                 copy — a rebuild that dropped or reordered records would still \
+                 satisfy any assertion about SIZE:\n{wrote}{read}"
+            );
+        }
+
+        // The layout half. `requests` is what the reader actually fetched.
+        let requests = |out: &str| -> u32 {
+            out.lines()
+                .filter(|l| l.contains("store_load_prefix:"))
+                .filter_map(|l| {
+                    l.split_whitespace()
+                        .find_map(|t| t.strip_prefix("requests="))
+                        .and_then(|n| n.parse::<u32>().ok())
+                })
+                .sum()
+        };
+        let as_built = requests(&run(&query, "query", &bound));
+        let key_order = requests(&run(&query, "query", &copied));
+        assert!(
+            as_built > 0 && key_order > 0,
+            "{backend}: both images must actually be queried — a run that fetched \
+             nothing would pass the ratio below vacuously ({as_built} vs {key_order})"
+        );
+        assert!(
+            key_order * 2 <= as_built,
+            "{backend}: a key-ordered image must fetch substantially less than the \
+             image built by insertion. This corpus measures 216 against 58 (3.7x), \
+             and ~4x on a real 74k-word vocabulary at 64 KB pages; the cell asserts \
+             only 2x so it survives a smaller corpus or a changed page size without \
+             going quiet about a regression. \
+             as-built={as_built} key-order={key_order}"
         );
     }
 }
