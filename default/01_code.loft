@@ -1704,6 +1704,17 @@ pub enum FieldValue {
 pub struct StructField {
   name: text,
   value: FieldValue,
+  // Was the field DECLARED nullable (`text?` rather than `text`)?
+  //
+  // The payload variants above are typed non-null, and `τ?` shares `τ`'s
+  // runtime layout (@PLN25) — a nullable field spells absence with a SENTINEL
+  // rather than a wrapper. So a null field's value arrives inside `FvText` /
+  // `FvInt` / … as that sentinel, and this flag is what says so; without it a
+  // reader would have to discover the possibility by being surprised.
+  //
+  // Mirrors `FieldInfo.nullable` from `type_of` (07_reflect.loft) on purpose:
+  // the two field lists describe the same declaration and must agree.
+  nullable: boolean,
 }
 
 // Built-in `to_text` impls so primitives satisfy `Printable`
