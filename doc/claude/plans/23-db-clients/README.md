@@ -8,7 +8,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 **@PLN23 `status:active`** — S1–S5, S6a–S6c, S7a–S7b and T1–T3 built and in the
-repo; S7c (migration) is the only rung not built.
+repo. The S1-S7 ladder is complete.
 Of the two language gaps it surfaced, **@PLN124 is built** and S4 is its first
 consumer; @PLN125 is not. @PLN24 (`#c`) has since closed.
 
@@ -73,7 +73,7 @@ exists at all.
 | S7a the derivation recurses — grandchild tables, any depth | done |
 | S7b inline structs flatten (`origin_x`, `origin_y`) | done — needed a language change |
 | S7b-ii a collection inside an inline struct | done |
-| S7c migration on a changed struct | not designed |
+| S7c migration on a changed struct | done |
 | P1–P6 the other three platforms | see [PLATFORMS.md](PLATFORMS.md) — Linux only today |
 
 ## S4 — a value cannot become syntax

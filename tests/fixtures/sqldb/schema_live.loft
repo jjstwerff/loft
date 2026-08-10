@@ -33,6 +33,12 @@ struct Person {
   flag: boolean,
 }
 
+// @PLN23 S7c — a type that has GAINED a nullable field the table lacks, and one
+// whose field has been RENAMED. Both migrations are shape-only, which is the
+// whole claim: the rows below must come back untouched.
+struct Grown { gid: integer, label: text, memo: text? }
+struct Moved { mid: integer, tag: text? }
+
 fn main() {
   if !sqlite_available() {
     println("SKIP schema_live — libsqlite3 is not installed here");
@@ -149,6 +155,71 @@ fn main() {
                                indexes: [IndexDef { nm: "x", columns: [IndexColumn { nm: "id" }] }] };
   b4 = reconcile(twant, thave);
   println("extra bound={b4.binding_ok()} write={b4.binding_writable()} why={b4.write_refusal}");
+
+  // --- @PLN23 S7c: a plan that runs, and rows that survive it ---------------
+  //
+  // The gate is what is TRUE afterwards: the original values are still there,
+  // the new column reads NULL rather than a fabricated value, and the binding
+  // that refused before now works. A migration that changed content would show
+  // up here as a value that moved.
+  _ = d.db_exec("DROP TABLE IF EXISTS grown");
+  if !d.db_exec("CREATE TABLE grown (gid BIGINT NOT NULL, label TEXT NOT NULL)") {
+    println("FAIL grown ddl: {d.db_last_error()}"); return;
+  }
+  _ = d.db_exec("CREATE INDEX grown_by_gid ON grown (gid)");
+  _ = d.db_exec("INSERT INTO grown VALUES (1,'ada'),(2,'grace')");
+
+  grown: hash<Grown[gid]> = [];
+  ti_g = type_of(grown);
+  gwant = derive(ti_g);
+  ghave = introspect(d, dial, "grown");
+  // Before the migration the table cannot serve the type at all, and the refusal
+  // NAMES the column — which is what the plan is derived from.
+  gb0 = reconcile(gwant, ghave);
+  println("grown before bound={gb0.binding_ok()} why={gb0.refusal}");
+
+  no_ren: vector<Renamed> = [];
+  gplan = migrate(gwant, ghave, dial, no_ren);
+  println("grown plan ready={gplan.migration_ready()} steps={len(gplan.steps)}");
+  for gs in gplan.steps {
+    if gs.sql == "" { println("FAIL grown blocked: {gs.refusal}"); return }
+    if !d.db_exec(gs.sql) { println("FAIL grown step [{gs.sql}]: {d.db_last_error()}"); return }
+  }
+  gafter = introspect(d, dial, "grown");
+  gb1 = reconcile(gwant, gafter);
+  println("grown after bound={gb1.binding_ok()} write={gb1.binding_writable()} why={gb1.refusal}");
+  // The CONTENT is the claim. Two rows, both values intact, and the new column
+  // NULL rather than "" — the distinction the whole binding layer exists for.
+  grows = "";
+  if d.db_select("SELECT gid, label, CASE WHEN memo IS NULL THEN 'null' ELSE memo END FROM grown ORDER BY gid") {
+    while d.db_next() {
+      grows += "{d.db_col(0) ?? "?"}|{d.db_col(1) ?? "?"}|{d.db_col(2) ?? "?"};";
+    }
+  }
+  println("grown rows {grows}");
+
+  // A RENAME, declared. The values must travel with the name — that is what
+  // makes a rename shape rather than content.
+  _ = d.db_exec("DROP TABLE IF EXISTS moved");
+  if !d.db_exec("CREATE TABLE moved (mid BIGINT NOT NULL, label TEXT)") {
+    println("FAIL moved ddl: {d.db_last_error()}"); return;
+  }
+  _ = d.db_exec("CREATE INDEX moved_by_mid ON moved (mid)");
+  _ = d.db_exec("INSERT INTO moved VALUES (7,'seven'),(8,'eight')");
+  moved: hash<Moved[mid]> = [];
+  ti_m = type_of(moved);
+  mwant2 = derive(ti_m);
+  mhave2 = introspect(d, dial, "moved");
+  mplan = migrate(mwant2, mhave2, dial, [Renamed { was: "label", now: "tag" }]);
+  println("moved plan ready={mplan.migration_ready()} steps={len(mplan.steps)}");
+  for ms in mplan.steps {
+    if !d.db_exec(ms.sql) { println("FAIL moved step [{ms.sql}]: {d.db_last_error()}"); return }
+  }
+  mrows = "";
+  if d.db_select("SELECT mid, tag FROM moved ORDER BY mid") {
+    while d.db_next() { mrows += "{d.db_col(0) ?? "?"}|{d.db_col(1) ?? "?"};" }
+  }
+  println("moved rows {mrows}");
 
   d.db_shut();
   gone = delete(path);

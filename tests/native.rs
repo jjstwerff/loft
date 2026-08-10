@@ -2265,6 +2265,21 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
     //   extra bound=true write=false   ONE table, two verdicts. An unknown NOT
     //           NULL column with no default is perfectly readable and impossible
     //           to INSERT into.
+    //
+    // @PLN23 S7c adds a migration that RUNS, and the rows are the gate:
+    //
+    //   grown rows 1|ada|null;2|grace|null;   the two original rows, untouched,
+    //           and the added column reading NULL rather than a fabricated
+    //           value. A plan changes a table's SHAPE and never its CONTENT, and
+    //           this line is where that stops being a sentence.
+    //   grown before bound=false … / grown after bound=true write=true   the
+    //           binding that refused now works, and the plan came off the SAME
+    //           comparison that refused — migration and binding disagree about
+    //           nothing.
+    //   moved rows 7|seven;8|eight;   a DECLARED rename, and the values
+    //           travelled with the name. Undeclared it would be an ADD plus an
+    //           orphan, which is what "indistinguishable from a drop plus an
+    //           add" means.
     let expect = [
         "created cols=4 ix=1 bound=true write=true why=",
         "declared flag=INTEGER score=REAL",
@@ -2273,6 +2288,14 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
         "varchar score conversion=ConvFloat",
         "noindex bound=false why=table noix_person has no index on id",
         "extra bound=true write=false why=column tenant is NOT NULL with no default",
+        // @PLN23 S7c — the migration ran, and the CONTENT is the claim. A plan
+        // that changed content would show up as a value that moved.
+        "grown before bound=false why=table grown has no column memo",
+        "grown plan ready=true steps=1",
+        "grown after bound=true write=true why=",
+        "grown rows 1|ada|null;2|grace|null;",
+        "moved plan ready=true steps=1",
+        "moved rows 7|seven;8|eight;",
         "schema_live ok",
     ];
 

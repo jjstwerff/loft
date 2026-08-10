@@ -195,7 +195,7 @@ alongside one.
 | **S6c** | a keyed sub-collection | **done** — `hash` addresses by its declared key and carries no ordinal; `sorted` / `index` / `trie` take the ordinal and their key gets its own index; `spatial` refuses. § S6c below |
 | **S7a** | the derivation RECURSES | **done** — a collection inside a record element is a grandchild table, addressed by (root key, the parent element's address, its own), to any depth. § S7a below |
 | **S7b** | inline structs flatten | **done** — `origin` becomes `origin_x` / `origin_y`; it needed a language change first, § S7b below |
-| **S7c** | migration on a changed struct | not designed, § S7c below |
+| **S7c** | migration on a changed struct | **done** — a plan that changes SHAPE and never CONTENT, § S7c below |
 
 S1–S3 are worth doing even if the mapping is never built: they are the proof
 @PLN24 has been waiting for since arc F was written, on a real library rather
@@ -532,30 +532,99 @@ right order, with the right names, and wrong. Both directions are gated —
 an element that stops being a level and an inline struct that starts being one
 each fail their own cell.
 
-## S7c — migration, and why "the address function drives it" is not an answer
+## S7c — migration: a plan that changes SHAPE and never CONTENT
 
-Still not designed, and the ladder's one-word entry for it was the weakest line
-in this document. What exists is the raw material: `reconcile` already compares
-the definition loft WANTS against the one the database HAS and refuses with the
-column or index it is about. Migration is the step that turns those refusals into
-a plan.
+The ladder's one word for this was the weakest line in the document, and the
+reason is worth keeping: the address rule answers *where a value GOES*, and
+migration asks *which old value is THIS one*. Only the first is derivable, so
+"the address function drives it" was never an answer.
 
-The three cases are not one problem:
+The invariant that is:
 
-- **A field GAINED** is the easy one: `ADD COLUMN`, nullable or with a default,
-  and the existing rows are answerable.
-- **A field LOST** has no safe automatic answer. Dropping the column destroys
-  data that a rolled-back binary would want; leaving it makes the table
-  unwritable when it is `NOT NULL` with no default.
-- **A field RENAMED is indistinguishable from one dropped and one added**, by
-  construction — reflection reports names and positions, and a rename changes
-  both. Nothing in the type says the two are the same field, so the answer has to
-  come from a declaration the author writes, which is the same missing piece the
-  "declared mapping" note under § S4 already names.
+> **A migration plan changes a table's SHAPE and never its CONTENT.** Every step
+> it emits adds or re-labels a column; no step writes, invents or destroys a
+> value. Where the new shape would need a value the type does not carry, it
+> reports instead of emitting. Where the change is not derivable from the type at
+> all, it needs a declaration — because that is a fact about INTENT, not shape.
 
-That last one is why the address function cannot drive it: the address rule
-answers *where a value goes*, and migration asks *which old value is this new
-one*. They are different questions, and only the first is derivable.
+Every case is correct for that one reason, which is what makes it a design rather
+than a list:
+
+| case | emitted | why — the same reason each time |
+|---|---|---|
+| a field gained, nullable | `ADD COLUMN` | shape only; the new column holds no value |
+| a field gained, `NOT NULL` | **no**, reported | would have to invent a value for every existing row |
+| a field **lost** | **no step at all** | the column keeps its values and is still readable |
+| a rename, declared | `RENAME COLUMN` | shape only; the values travel with the name |
+| a rename, undeclared | an `ADD`, and the old column left | the plan cannot know they are one column |
+| an index loft wants | `CREATE INDEX` | shape only |
+| a column whose TYPE differs | **no step** | `reconcile` converts at READ time, so loft never alters a type |
+
+### The three cases were not three problems
+
+**A lost field needs no step, and that is the design rather than an omission.**
+An extra column is readable — a `SELECT` names only what loft wants — and
+`reconcile` already reports the one case where it blocks a write (`NOT NULL`, no
+default). The answer was already there, by doing nothing. Noticing that is what
+made the design shorter than the three-case sketch it started as.
+
+**There is no DROP, and it is absent rather than guarded.** Dropping is the only
+step that destroys content, and the only place where forgetting a check would be
+both silent and unrecoverable. So the step kinds have no drop: it cannot be
+emitted by omission, which collapses the re-assertion count to one — the ADD
+path's nullability check — and that one is LOUD, because the engine refuses it
+too.
+
+**A rename is declared, not derived.** Reflection reports names and positions and
+a rename changes both, so a renamed field is indistinguishable from one dropped
+and one added *by construction*. `Renamed { was, now }` is therefore an input.
+Without it the plan does exactly what the indistinguishability implies — an add,
+and an orphan — which is not a bug but the honest reading of the evidence.
+
+### Measured before it was written
+
+On sqlite 3.45, because the claims are about what an engine does:
+
+- a nullable `ADD COLUMN` on a **populated** table succeeds, and the existing
+  rows read null for it;
+- the same add with `NOT NULL` and no default is refused **by the engine** —
+  *"Cannot add a NOT NULL column with default value NULL"* — so the plan's
+  refusal agrees with the engine rather than being stricter than it;
+- `NOT NULL` **with** a default succeeds, which is the escape the refusal names;
+- `RENAME COLUMN` carries the values across.
+
+`Dialect.renames_columns` is false by default and true only for sqlite, where it
+was run. A migration refuses a rename on an engine loft has not tried it against
+— the same admission `catalog_schema` makes, and for the same reason. All four
+are expected to take the identical spelling, and *expected* is precisely what
+this package does not ship on, having been wrong twice about one.
+
+### The cleanest claim, attacked
+
+*"Shape never content"* absorbs every case above, which is the shape of an
+over-unification. The attack: **a column whose type loft disagrees with is a
+shape change that WOULD destroy content** — `ALTER COLUMN … TYPE INTEGER` over a
+column holding text is exactly the step the invariant forbids, and it is the one
+a migration engine would most naturally emit.
+
+It survives, and for a reason rather than by luck: `reconcile` converts at READ
+time — every driver hands values over as text — so loft never needs to alter a
+type at all. The gate asserts the plan is EMPTY for a `varchar` under a `float`
+field. If conversion happened at write time instead, the invariant would be
+false, and this is the cell that would say so.
+
+### Named gap
+
+`reconcile` accepts a `VARCHAR(3)` for a `float` field, because what it checks is
+the conversion and every driver crosses values as text. Writing `0.125` into it
+truncates — a content risk that lives in `reconcile`, not in migration, and this
+plan does not close it.
+
+### Nothing here runs anything
+
+`ensure` still never touches a structure it did not find missing. A `Migration`
+is a VALUE the caller inspects and chooses to run, which is what makes
+"loft never alters somebody else's schema" and "loft can migrate" both true.
 
 ## S6 writes N graphs REGROUPED BY TABLE, not one graph at a time
 

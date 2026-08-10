@@ -1001,5 +1001,106 @@ fn main() {
   one6 = derive(type_of(w6.docs));
   assert(!one6.table_ok(), "S6a: derive must still refuse a record with a collection");
 
+  // --- @PLN23 S7c: migration — shape, never content -------------------------
+  //
+  // One rule decides every case: a plan changes a table's SHAPE and never its
+  // CONTENT. Each cell below is a different case and the SAME reason.
+  mwant = tp;                                    // the five-column `person`
+  mhave: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "id", kind: ColInteger },
+    ColumnDef { nm: "nm", kind: ColText },
+    ColumnDef { nm: "gone", kind: ColText, nullable: true },
+  ], indexes: [IndexDef { nm: "person_pk", columns: [IndexColumn { nm: "id" }] }] };
+  no_renames: vector<Renamed> = [];
+  mg = migrate(mwant, mhave, dsq, no_renames);
+  assert(mg.refusal == "", "S7c: a plan was refused: {mg.refusal}");
+
+  // `score`, `flag` and `initial` are all NOT NULL and missing. Each REPORTS,
+  // because adding one would have to invent a value for every existing row —
+  // which the engine itself refuses (measured: "Cannot add a NOT NULL column
+  // with default value NULL").
+  msql = "";
+  mrefused = "";
+  for st in mg.steps {
+    if st.sql == "" { mrefused += "{st.subject}," } else { msql += "{st.subject}," }
+  }
+  assert(mrefused == "score,flag,initial,", "S7c reported steps [{mrefused}]");
+  // …and NOTHING is emitted for `gone`, the column the type no longer wants. It
+  // keeps its values and is still readable; dropping it is the one step that
+  // would destroy content, so there is no drop to emit.
+  assert(msql.find("gone") == null, "S7c: a lost field must produce no step [{msql}]");
+  assert(!mg.migration_ready(), "S7c: a plan with a reported step is not ready");
+  assert(mg.migration_blocked().find("score") != null,
+    "S7c: the block names the column: {mg.migration_blocked()}");
+
+  // A NULLABLE gained field IS emitted — shape only, because the new column
+  // holds no value.
+  owant = to;                                    // `optional` (oid, note TEXT?)
+  ohave: TableDef = TableDef { nm: "optional", columns: [
+    ColumnDef { nm: "oid", kind: ColInteger },
+  ], indexes: [IndexDef { nm: "optional_by_oid", columns: [IndexColumn { nm: "oid" }] }] };
+  og = migrate(owant, ohave, dsq, no_renames);
+  assert(len(og.steps) == 1, "S7c nullable add: one step, got {len(og.steps)}");
+  ostep = og.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(ostep.sql == "ALTER TABLE \"optional\" ADD COLUMN \"note\" TEXT",
+    "S7c nullable add [{ostep.sql}]");
+  assert(og.migration_ready(), "S7c: a nullable add is runnable");
+
+  // A DECLARED rename re-labels the column instead of adding one — and the old
+  // column does not survive as an orphan, because the values travel with it.
+  rwant: TableDef = TableDef { nm: "optional", columns: [
+    ColumnDef { nm: "oid", kind: ColInteger },
+    ColumnDef { nm: "note", kind: ColText, nullable: true },
+  ], indexes: [IndexDef { nm: "optional_by_oid", columns: [IndexColumn { nm: "oid" }] }] };
+  rhave: TableDef = TableDef { nm: "optional", columns: [
+    ColumnDef { nm: "oid", kind: ColInteger },
+    ColumnDef { nm: "memo", kind: ColText, nullable: true },
+  ], indexes: [IndexDef { nm: "optional_by_oid", columns: [IndexColumn { nm: "oid" }] }] };
+  rg = migrate(rwant, rhave, dsq, [Renamed { was: "memo", now: "note" }]);
+  assert(len(rg.steps) == 1, "S7c rename: one step, got {len(rg.steps)}");
+  rstep = rg.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(rstep.sql == "ALTER TABLE \"optional\" RENAME COLUMN \"memo\" TO \"note\"",
+    "S7c rename [{rstep.sql}]");
+
+  // WITHOUT the declaration the same pair is an ADD, and `memo` is left behind.
+  // The plan is not wrong — it is what "indistinguishable from a drop plus an
+  // add" MEANS, and the difference between the two cells is the declaration.
+  ug = migrate(rwant, rhave, dsq, no_renames);
+  ustep = ug.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(ustep.sql.find("ADD COLUMN") != null,
+    "S7c: an undeclared rename is an add [{ustep.sql}]");
+
+  // An engine loft has not RUN a rename against refuses it rather than sending a
+  // statement nobody has tried — the same admission `catalog_schema` makes.
+  pg_rn = migrate(rwant, rhave, dialect_postgres(), [Renamed { was: "memo", now: "note" }]);
+  pstep = pg_rn.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(pstep.sql == "" && pstep.refusal.find("postgres") != null,
+    "S7c: an unmeasured rename must refuse: {pstep.refusal}");
+
+  // A missing INDEX is shape, so it belongs in a plan — and only in a plan.
+  // `reconcile` refuses it rather than creating it, because altering somebody
+  // else's populated table is not loft's to decide unattended.
+  nwant = tp;
+  nhave: TableDef = TableDef { nm: "person", columns: tp.columns };
+  ng = migrate(nwant, nhave, dsq, no_renames);
+  nix = "";
+  for st2 in ng.steps { if st2.sql.find("CREATE INDEX") != null { nix += "{st2.subject}," } }
+  assert(nix == "person_by_id,", "S7c index step [{nix}]");
+
+  // The cleanest claim, attacked: a column whose TYPE loft disagrees with is a
+  // SHAPE change that would destroy content — and it survives only because
+  // `reconcile` converts at READ time and loft never alters a type. If a plan
+  // emitted one, "shape never content" would be false.
+  twant = tp;
+  thave: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "id", kind: ColInteger }, ColumnDef { nm: "nm", kind: ColText },
+    ColumnDef { nm: "score", kind: ColText, db_type: "varchar(40)" },
+    ColumnDef { nm: "flag", kind: ColInteger }, ColumnDef { nm: "initial", kind: ColText },
+  ], indexes: [IndexDef { nm: "person_by_id", columns: [IndexColumn { nm: "id" }] }] };
+  tg = migrate(twant, thave, dsq, no_renames);
+  assert(len(tg.steps) == 0,
+    "S7c: a type difference must produce NO step, got {len(tg.steps)}");
+  assert(tg.migration_ready(), "S7c: and the plan is ready — there is nothing to do");
+
   println("schema ok");
 }

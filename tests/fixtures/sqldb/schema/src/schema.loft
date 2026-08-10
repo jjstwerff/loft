@@ -453,6 +453,16 @@ pub struct Dialect {
   /// to give — a connection string can name a database, a search path can move
   /// it, and asking is the only way that stays true.
   const catalog_schema: text = "",
+  /// Has loft RUN `ALTER TABLE … RENAME COLUMN … TO …` against this engine?
+  ///
+  /// False by default, and a migration refuses a rename here rather than sending
+  /// a statement nobody has run — the same admission `catalog_schema` makes, for
+  /// the same reason. All four engines are expected to take the identical
+  /// spelling (sqlite 3.25+, PostgreSQL, MariaDB 10.5.2+, duckdb), so this is a
+  /// one-line change per engine once someone runs it there; "expected" is
+  /// precisely what this package does not ship on, having been wrong twice
+  /// before about a spelling (@PLN133 P3).
+  const renames_columns: boolean = false,
 }
 
 pub fn dialect_sqlite() -> Dialect {
@@ -466,6 +476,8 @@ pub fn dialect_sqlite() -> Dialect {
     nm: "sqlite", quote: "\"",
     int_type: "INTEGER", float_type: "REAL", text_type: "TEXT",
     boolean_type: "INTEGER",
+    // Measured here, on 3.45: the rename runs and carries the values across.
+    renames_columns: true,
     float_before: "printf('%!.17g', ", float_after: ")",
     style: SQL_QMARK,
   };
@@ -1962,4 +1974,183 @@ pub fn select_rows(self: TableDef, d: Dialect) -> SqlText {
     q.lit("{d.quote_ident(ic.nm)} {dir}");
   }
   return q;
+}
+
+// --- @PLN23 S7c: migration — a table that must catch up with its type --------
+//
+// **A migration plan changes a table's SHAPE and never its CONTENT.**
+//
+// Every step it emits adds or re-labels a column. No step writes, invents or
+// destroys a value. Where the new shape would need a value the type does not
+// carry — a `NOT NULL` column on a populated table — it REPORTS instead of
+// emitting. And where the change is not derivable from the type at all — a
+// rename — it needs a declaration from the author, because that is a fact about
+// INTENT rather than about shape.
+//
+// Every case is correct for that one reason:
+//
+// | case | emitted | why — the same reason each time |
+// |---|---|---|
+// | a field gained, nullable | `ADD COLUMN` | shape only; the new column holds no value |
+// | a field gained, `NOT NULL` | no, reported | would have to invent a value for every existing row |
+// | a field LOST | no step at all | the column keeps its values and is still readable |
+// | a rename, declared | `RENAME COLUMN` | shape only; the values travel with the name |
+// | a rename, undeclared | an ADD, and the old column left | the plan cannot know they are one column |
+// | an index loft wants | `CREATE INDEX` | shape only |
+// | a column whose TYPE differs | no step | `reconcile` converts at READ time, so loft never alters a type |
+//
+// **A field LOST needs no step, and that is the design rather than an
+// omission.** An extra column is readable — a `SELECT` names only what loft
+// wants — and `reconcile` already reports the one case where it blocks a write.
+// So the answer was already there, by doing nothing.
+//
+// **There is no DROP, and it is absent rather than guarded.** Dropping is the
+// one step that destroys content, and the only place where forgetting a check
+// would be silent AND unrecoverable. The step kinds have no drop, so it cannot
+// be emitted by omission.
+//
+// Measured on sqlite 3.45 before this was written: a nullable `ADD COLUMN` on a
+// POPULATED table succeeds and the existing rows read null for it; the same add
+// with `NOT NULL` and no default is refused by the engine itself — *"Cannot add
+// a NOT NULL column with default value NULL"* — so the refusal below agrees with
+// the engine rather than being stricter than it; and `RENAME COLUMN` carries the
+// values across.
+//
+// **Nothing here runs anything.** `ensure` still never touches a structure it did
+// not find missing; a plan is a VALUE the caller inspects and chooses to run.
+
+/// A rename the AUTHOR declares: the column the database has, and the loft field
+/// it now answers to.
+///
+/// It has to be declared because it cannot be derived. Reflection reports names
+/// and positions, and a rename changes both — so a renamed field is
+/// indistinguishable from one dropped and one added, by construction. This is
+/// the same missing piece the declared column mapping under § S4 names.
+pub struct Renamed { const was: text, const now: text }
+
+/// One step of a migration.
+///
+/// `sql` is empty exactly when `refusal` is not: a step loft will not perform
+/// carries the reason instead of a statement, so a caller that runs every
+/// non-empty `sql` cannot accidentally run a refused one.
+pub struct MigrationStep {
+  /// The column or index this step is about.
+  const subject: text,
+  /// The statement to run; `""` for a step loft will not perform.
+  const sql: text,
+  /// Why loft will not perform it; `""` when there is a statement.
+  refusal: text = "",
+}
+
+/// What a table must become for the type it no longer matches.
+pub struct Migration {
+  const table: text,
+  const steps: vector<MigrationStep>,
+  /// Why there is no plan at all; `""` when there is one.
+  refusal: text = "",
+}
+
+/// Is there a plan here, and can every step of it be run?
+///
+/// A plan with a reported step is still a plan — the runnable steps are runnable
+/// — so this answers the stricter question a caller needs before it decides to
+/// migrate unattended.
+pub fn migration_ready(self: Migration) -> boolean {
+  if self.refusal != "" { return false }
+  for s in self.steps {
+    if s.refusal != "" { return false }
+  }
+  return true;
+}
+
+/// The steps loft will not perform, as one line — for a message a DBA can act
+/// on, which is the same bar every refusal in this package meets.
+pub fn migration_blocked(self: Migration) -> text {
+  out = "";
+  for s in self.steps {
+    if s.refusal == "" { continue }
+    if out != "" { out += "; " }
+    out += s.refusal;
+  }
+  return out;
+}
+
+/// The plan that brings the table loft FOUND up to the type it wants.
+///
+/// `want` is the derived definition, `have` the one `introspect` read back — the
+/// same two values `reconcile` compares, so migration and binding disagree about
+/// nothing.
+///
+/// Declared renames are applied FIRST, because a rename is what stops the
+/// renamed column looking like a gained one; without the declaration the plan
+/// says exactly what it would do without it, which is an add and an orphan.
+pub fn migrate(want: TableDef, have: TableDef, d: Dialect, renames: vector<Renamed>) -> Migration {
+  if want.refusal != "" { return Migration { table: "", refusal: want.refusal } }
+  if have.refusal != "" { return Migration { table: "", refusal: have.refusal } }
+
+  steps: vector<MigrationStep> = [];
+  tname = d.quote_ident(have.nm);
+  // The columns a declared rename will produce, so the add pass does not also
+  // ask for them. Names rather than a second pass over `renames`: the question
+  // the add pass asks is "will this column exist", and that is one list.
+  renamed_to: vector<text> = [];
+
+  for r in renames {
+    if !have.has_column(r.was) { continue }
+    if !want.has_column(r.now) { continue }
+    if have.has_column(r.now) { continue }
+    renamed_to += [r.now];
+    if !d.renames_columns {
+      steps += [MigrationStep {
+        subject: r.now, sql: "",
+        refusal: "loft has not run a column rename against {d.nm} — {r.was} to {r.now} is not a statement it will send",
+      }];
+      continue;
+    }
+    steps += [MigrationStep {
+      subject: r.now,
+      sql: "ALTER TABLE {tname} RENAME COLUMN {d.quote_ident(r.was)} TO {d.quote_ident(r.now)}",
+    }];
+  }
+
+  for wc in want.columns {
+    if have.has_column(wc.nm) { continue }
+    already = false;
+    for rn in renamed_to {
+      if rn == wc.nm { already = true }
+    }
+    if already { continue }
+    if !wc.nullable {
+      // The engine itself refuses this, measured — so the plan reports what the
+      // author must decide rather than sending a statement that fails. A default
+      // would make it addable, and the loft type carries none.
+      steps += [MigrationStep {
+        subject: wc.nm, sql: "",
+        refusal: "{wc.nm} is NOT NULL and the existing rows have no value for it — add it with a default, or make the loft field nullable",
+      }];
+      continue;
+    }
+    steps += [MigrationStep {
+      subject: wc.nm,
+      sql: "ALTER TABLE {tname} ADD COLUMN {d.quote_ident(wc.nm)} {d.type_spelling(wc.kind)}",
+    }];
+  }
+
+  // An index is shape, so it belongs in a plan — and only in a plan. `reconcile`
+  // refuses a missing one rather than creating it, because adding an index to
+  // somebody else's populated table can take a long time and can change their
+  // write performance. Opting in is what a migration IS.
+  for wix in want.indexes {
+    if index_served(have, wix) { continue }
+    steps += [MigrationStep {
+      subject: wix.nm,
+      sql: render_index(wix, tname, d),
+    }];
+  }
+
+  // A column the table HAS and the type does not want produces no step at all.
+  // It keeps its values, it is still readable, and `reconcile` already reports
+  // the one case where it stops a write. Dropping it would be the only step here
+  // that destroys content.
+  return Migration { table: have.nm, steps: steps };
 }
