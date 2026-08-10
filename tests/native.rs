@@ -2645,14 +2645,24 @@ fn a_structure_written_is_immediately_readable_through_one_connection_string() -
     //           eager load would read 3.
     //   absent=true clean=[]               a genuine absence is not a failure —
     //           the mirror of the bug @PLN129 arc C exists for.
+    //   digest=true                        @PLN23 S5: the record that came back
+    //           IS the record that went in, compared through the same walk that
+    //           WROTE it.  It sees what the tokens beside it cannot — those name
+    //           only grace's fields and alan's NAME, so a driver returning
+    //           `flag=false` for every row keeps every other claim (grace's flag
+    //           genuinely is false) and fails on alan's digest alone.  Measured:
+    //           that break leaves `created digest=true` and turns
+    //           `created second=alan touched=2 digest=true` false.
     let expect = [
         "created value=grace float=0.25 flag=false",
+        "created digest=true",
         "created identity=true resident=1",
-        "created second=alan touched=2",
+        "created second=alan touched=2 digest=true",
         "created absent=true clean=[]",
         "followed value=grace float=0.25 flag=false",
+        "followed digest=true",
         "followed identity=true resident=1",
-        "followed second=alan touched=2",
+        "followed second=alan touched=2 digest=true",
         "followed absent=true clean=[]",
         "round_trip ok",
     ];

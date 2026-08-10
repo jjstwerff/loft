@@ -2750,8 +2750,12 @@ pub fn reflect_field_into(stores: &mut Stores, value: &DbRef, position: i64, kt:
                 (i64::from(v & 1), 0.0, 0, v == 255 || v == i32::MIN)
             }
             Some(LayoutNode::Base(BaseKind::Character)) => {
+                // A `character`'s null is **0**, not a high sentinel: text
+                // iteration stops at a NUL, so 0 could never be a character a
+                // loop reads back, and the language spends it as the absent
+                // value instead (STDLIB.md § chr).
                 let v = store.get_u32_raw(value.rec, at);
-                (i64::from(v), 0.0, 0, v == u32::MAX)
+                (i64::from(v), 0.0, 0, v == 0)
             }
             Some(LayoutNode::Base(BaseKind::Text)) => {
                 // **text-null is CONTENT-based**: a null `text` is a string

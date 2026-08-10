@@ -1183,6 +1183,9 @@ pub fn val_null() -> Bound { b = Bound { kind: SQL_NULL, t: "", i: 0, f: 0.0 }; 
 /// `derive` fixed from the loft type's field positions. A count that does not
 /// match refuses: a row written into the wrong columns is a wrong value that
 /// reads back perfectly.
+///
+/// Building `values` by hand is not the intended use — see `bound_of` and
+/// § S5 below, where the row comes off the VALUE.
 pub fn insert_row(self: TableDef, d: Dialect, values: vector<Bound>) -> SqlText {
   q: SqlText = SqlText { };
   if self.refusal != "" { q.refused = true; return q }
@@ -1203,4 +1206,56 @@ pub fn insert_row(self: TableDef, d: Dialect, values: vector<Bound>) -> SqlText 
   }
   q.lit(")");
   return q;
+}
+
+// --- S5: the row a VALUE implies ---------------------------------------------
+//
+// @PLN23 S5. `insert_row` renders the STATEMENT from the definition; this is the
+// other half — the VALUES, taken off a loft value rather than listed by hand.
+// @PLN133 S13 stopped exactly here ("the GENERIC struct walk stays @PLN23 S5:
+// reflection reports types, not values"), and `field_value` (@PLN127's value
+// half) is what closes it.
+//
+// **The walk is over the DEFINITION's columns, not the type's fields**, and that
+// ordering is the whole trick: `insert_row` requires the values in column order,
+// and reading each column's `position` out of the value produces them in that
+// order by construction. There is no second traversal to keep in step, and no
+// count to get wrong.
+//
+// It cannot be one generic function over the struct type, and that is a language
+// fact rather than a design choice: a generic body is parsed once against its
+// type variable, so `field_value` is refused there. The walk therefore sits
+// where the concrete type is known — the same place the lazy READ driver already
+// sits (@PLN133 S8), so both halves of the mapping are per-element-type and
+// neither names a column.
+
+/// The bound value for one column, read out of a reflected field.
+///
+/// **Keyed on the COLUMN, not on the reflected kind.** `derive` already decided
+/// what this column holds — a `character` becomes text, a `single` becomes a
+/// float — and dispatching on `v.kind` here would be a SECOND mapping of the
+/// same fact, free to disagree with the first. One derivation decides; this
+/// reads its answer.
+///
+/// A null field becomes SQL NULL, never the empty string or zero. That is the
+/// distinction the binding layer exists for, and `ValueInfo` carries it apart
+/// from the payload so it survives the trip.
+pub fn bound_of(c: ColumnDef, v: ValueInfo) -> Bound {
+  // A column with no field behind it (`position` is -1) and a field that has no
+  // scalar reading both arrive as `OtherKind`, and both mean the same thing
+  // here: this program has no value for that column. NULL says so; a zero would
+  // be a claim.
+  if v.kind == OtherKind { return val_null() }
+  if v.is_null { return val_null() }
+  if c.kind == ColInteger { return val_int(v.i) }
+  if c.kind == ColFloat { return val_float(v.f) }
+  if c.kind == ColBoolean { return val_boolean(v.i != 0) }
+  if c.kind == ColText {
+    // A character is stored as a code point and read back from a text column's
+    // first character, so it goes down as the one-character text `chr` builds —
+    // the round trip `column_type` promises when it maps it to `ColText`.
+    if v.kind == CharacterKind { return val_text(chr(v.i)) }
+    return val_text(v.t);
+  }
+  return val_null();
 }
