@@ -362,12 +362,15 @@ loader's, turned into a fault by `fetch_from_file`) and `Stores::bind_lazy` (the
 static ones, answered at the bind).
 
 - **A collection kind an IMAGE cannot page — at the BIND.** `store_bind_lazy`
-  answers `false` for a `sorted` / `index` / `spatial` bound to a `.store` file or
-  URL: the paged reader serves a `hash` and a `trie` (@PLN134), that is a static
-  property of the pair, and refusing at the call that is wrong beats refusing at
-  an arbitrary later lookup. The refused kinds load WHOLE (`store_load`,
-  `store_load_url_trusted`), which carries every kind. A DATABASE source is not
-  judged here — a `trie` gets `sorted`'s SQL shape and is served.
+  answers `false` for a `sorted` / `index` bound to a `.store` file or URL: the
+  paged reader serves a `hash`, a `trie` (@PLN134) and a `spatial` (@PLN136), that
+  is a static property of the pair, and refusing at the call that is wrong beats
+  refusing at an arbitrary later lookup. The refused kinds load WHOLE
+  (`store_load`, `store_load_url_trusted`), which carries every kind. A DATABASE
+  source is not judged here — a `trie` gets `sorted`'s SQL shape and is served.
+  A `spatial` faults a POINT as the degenerate bounding box, and the fetch routes on
+  the collection's KIND rather than the key's shape: a spatial key arrives as one
+  value per axis, and a one-axis one is indistinguishable from a hash's integer key.
 - **Writes.** Read-only. A write to a lazily-backed record is refused loudly;
   silently diverging from the source of truth is the failure this design exists to
   avoid.

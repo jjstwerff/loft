@@ -48,7 +48,8 @@ whether a game feels good:
   player, not the cell under them.
 - **Batch the ring.** `store_load_keys` opens the reader once and reuses its page
   cache, so a ring is one traversal rather than N; `store_load_range` does the
-  same for a contiguous span of spatial keys.
+  same for a contiguous span of spatial keys, and `store_load_box` fetches a
+  viewport's worth of a `spatial` index in one traversal.
 
 Split the pack the way the reads split: assets needed on **every** frame from the
 first (the UI atlas, the player mesh, core sounds) are small and universal, so
@@ -67,6 +68,7 @@ for the world.
 | `store_load_keys(local, url, keys)` | several keys, reader opened once | a batch — cheaper than N calls |
 | `store_load_range(local, url, lo, hi)` | a contiguous key range | ordered collections |
 | `store_load_prefix(local, url, pre, n)` | a text prefix, capped at `n` | a search box over a `trie` |
+| `store_load_box(local, url, from, till, n)` | a bounding box, capped at `n` | a map viewport over a `spatial` |
 
 `store_load_prefix` is the one a phone typing into a search box wants: a laid-out
 vocabulary trie answers `"kerk"` in about **3.8 pages** — a root→leaf descent plus
@@ -75,7 +77,16 @@ image (@PLN134). The cap bounds the WALK, not just the answer, so asking for 8 o
 459 matches fetches 8 records' worth of pages; a negative cap means no limit and
 on a common prefix reads the whole run.
 
-The five paged forms take **a local path or an `http(s)://` URL, interchangeably**,
+`store_load_box` is its counterpart for a map: the corners are `vector<integer>`,
+so one call serves 1, 2 or 3 axes. Measured on a 3.2 M-point index (a 158 MB
+image), a 200-marker viewport costs **5.3 pages** cold and about **1.5** for each
+pan after it (@PLN136). Two things bound it, and a map needs both — the cap bounds
+the walk as above, and so does the BOX: a spatial index is ordered by Morton code,
+the code interval between two corners is a superset the curve threads in and out
+of, and on a wide, shallow viewport that superset is 1.46 M records for 4 k of
+answer. The walk seeks over each excursion rather than reading it.
+
+The six paged forms take **a local path or an `http(s)://` URL, interchangeably**,
 on every target including the browser (`--html`). Nothing in the program changes
 when the data moves from disk to a CDN — which is what makes "develop against a
 local file, ship against a URL" work.

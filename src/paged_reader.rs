@@ -882,6 +882,20 @@ impl<P: PageProvider> PagedReader<P> {
         i64::from_ne_bytes(b)
     }
 
+    /// 2-byte unsigned read (a narrow integer key field).
+    pub fn u16_at(&mut self, rec: u32, fld: u32) -> u16 {
+        let mut b = [0u8; 2];
+        self.read_into(u64::from(rec) * 8 + u64::from(fld), &mut b);
+        u16::from_ne_bytes(b)
+    }
+
+    /// 1-byte read (a `byte` key field).
+    pub fn u8_at(&mut self, rec: u32, fld: u32) -> u8 {
+        let mut b = [0u8; 1];
+        self.read_into(u64::from(rec) * 8 + u64::from(fld), &mut b);
+        b[0]
+    }
+
     /// The record's size header (word 0) = its word count (`room`).
     pub fn record_words(&mut self, rec: u32) -> u32 {
         self.u32_at(rec, 0)
@@ -1129,8 +1143,10 @@ pub fn sorted_range_positions<P: PageProvider>(
 // @PLN134 — a TRIE read a page at a time
 // ---------------------------------------------------------------------------
 
-/// Payload offset of an element record's fields; mirrors `trie_db::PAYLOAD`.
-const TRIE_PAYLOAD: u32 = 8;
+/// Payload offset of an element record's fields; mirrors `trie_db::PAYLOAD` and
+/// `radix_db::PAYLOAD` — the shared keyed-collection convention, so a trie and a
+/// spatial index read theirs from the same constant.
+const ELEM_PAYLOAD: u32 = 8;
 
 /// `text`'s key type number, as `compare_key` spells it. A trie over any other key
 /// type has no bytes to walk, so the paged form declines it rather than reading a
@@ -1264,7 +1280,7 @@ impl<P: PageProvider> crate::radix_tree::TreeKeys for PagedTrie<'_, P> {
 /// walk, and answering a miss beats reading an integer as a string.
 fn trie_key_pos(keys: &[crate::keys::Key]) -> Option<u32> {
     match keys.first() {
-        Some(k) if k.type_nr == TRIE_TEXT_TYPE => Some(TRIE_PAYLOAD + u32::from(k.position)),
+        Some(k) if k.type_nr == TRIE_TEXT_TYPE => Some(ELEM_PAYLOAD + u32::from(k.position)),
         _ => None,
     }
 }
@@ -1355,6 +1371,256 @@ pub fn trie_prefix_recs<P: PageProvider>(
         rec = it.step_gen(&mut src, true).unwrap_or(0);
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// @PLN136 — a SPATIAL index read a page at a time
+// ---------------------------------------------------------------------------
+
+/// The tree's node array and coordinate reader, over a PAGED image — the spatial
+/// twin of [`PagedTrie`].
+///
+/// The kinds share the tree and nothing above it, and the split shows here: this
+/// answers a record's AXES, where the trie answers a record's bytes. Everything
+/// between — the descent, the split point, the in-order step, the seek — is
+/// [`radix_tree`](crate::radix_tree)'s, and the box walk on top of it is
+/// [`radix_db`](crate::radix_db)'s, so a query over a file and a query over resident
+/// memory are the same query with a different byte source.
+///
+/// Fuel, for the same reason `PagedTrie` carries it: the bytes are a file, a file
+/// can be truncated or hostile, and a child pointer that cycles would make a descent
+/// spin. Refilled per WALK, so each of a seek's four bounded walks gets its own
+/// budget rather than a guessed share of one.
+struct PagedSpatial<'a, P: PageProvider> {
+    reader: &'a mut PagedReader<P>,
+    /// The tree container record, `0` when the collection is empty.
+    tree: u32,
+    /// The collection's coordinate key fields, axis 0 first.
+    keys: Vec<crate::keys::Key>,
+    /// Node high-water mark, read once — what each walk's fuel is drawn from.
+    nodes: u32,
+    /// Node hops left in the CURRENT walk; refilled by `walk_begin`.
+    fuel: u32,
+    /// The last record's axis codes. A seek asks for word after word of one
+    /// record's key and the box test then asks for its axes, so without this every
+    /// comparison costs a re-read of the record's coordinate fields.
+    cached: Option<(u32, [u64; crate::radix_db::MAX_AXES])>,
+}
+
+impl<'a, P: PageProvider> PagedSpatial<'a, P> {
+    fn open(
+        reader: &'a mut PagedReader<P>,
+        root_rec: u32,
+        root_pos: u32,
+        keys: &[crate::keys::Key],
+    ) -> Self {
+        let tree = reader.u32_at(root_rec, root_pos);
+        let nodes = if tree == 0 {
+            0
+        } else {
+            reader.u32_at(tree, crate::radix_tree::NODES)
+        };
+        Self {
+            reader,
+            tree,
+            keys: keys.to_vec(),
+            nodes,
+            fuel: 0,
+            cached: None,
+        }
+    }
+
+    /// One axis field's signed value — the paged mirror of `radix_db`'s `axis_i64`,
+    /// width for width.
+    ///
+    /// The widths and their null sentinels are the schema's, and this is the SECOND
+    /// reader of them. The two disagreeing on one width makes a record's Morton code
+    /// differ between the storages, which does not present as an error: it presents
+    /// as a box query that misses a point inside it. `a_paged_box_agrees_with_the
+    /// _resident_one` drives every width through both readers and compares the
+    /// answers, which is what holds them in step.
+    fn axis_value(&mut self, rec: u32, key: &crate::keys::Key) -> i64 {
+        let p = ELEM_PAYLOAD + u32::from(key.position);
+        match key.type_nr.unsigned_abs() {
+            // 4-byte signed (`int<…>`), as `Store::get_i32_raw` reads it.
+            8 => i64::from(self.reader.i32_at(rec, p)),
+            // 2-byte, `1`-biased with `0` reserved for null (`Store::get_short`).
+            9 => {
+                let raw = self.reader.u16_at(rec, p);
+                if raw == 0 {
+                    i64::from(i32::MIN)
+                } else {
+                    i64::from(i32::from(raw) - 1)
+                }
+            }
+            // 1-byte, unbiased (`Store::get_byte` with `min` 0).
+            10 => i64::from(self.reader.u8_at(rec, p)),
+            // 2-byte signed.
+            11 => i64::from(self.reader.u16_at(rec, p) as i16),
+            // `integer` (1), `long` (2), and any other integer default.
+            _ => self.reader.i64_at(rec, p),
+        }
+    }
+
+    /// The record's axis codes, order-preserving, kept until another record is asked
+    /// for.
+    fn axes(&mut self, rec: u32) -> [u64; crate::radix_db::MAX_AXES] {
+        if self.cached.as_ref().is_none_or(|(r, _)| *r != rec) {
+            let mut out = [0u64; crate::radix_db::MAX_AXES];
+            // The keys are read out first: `axis_value` takes `&mut self` (a read
+            // may fetch a page), so it cannot borrow the key from `self.keys`.
+            let axes: Vec<crate::keys::Key> = self
+                .keys
+                .iter()
+                .take(crate::radix_db::MAX_AXES)
+                .cloned()
+                .collect();
+            for (slot, key) in out.iter_mut().zip(&axes) {
+                *slot = crate::radix_db::coord_code(self.axis_value(rec, key));
+            }
+            self.cached = Some((rec, out));
+        }
+        self.cached
+            .map_or([0; crate::radix_db::MAX_AXES], |(_, a)| a)
+    }
+}
+
+impl<P: PageProvider> crate::radix_tree::TreeNodes for PagedSpatial<'_, P> {
+    fn walk_begin(&mut self) {
+        self.fuel = self.nodes.saturating_add(4);
+    }
+    fn top(&mut self) -> crate::radix_tree::Child {
+        if self.tree == 0 {
+            return crate::radix_tree::Child::Empty;
+        }
+        crate::radix_tree::Child::decode(self.reader.i32_at(self.tree, crate::radix_tree::TOP))
+    }
+    fn len(&mut self) -> u32 {
+        if self.tree == 0 {
+            return 0;
+        }
+        self.reader.u32_at(self.tree, crate::radix_tree::LEN)
+    }
+    fn node_bit(&mut self, n: u32) -> u32 {
+        self.reader
+            .u32_at(self.tree, crate::radix_tree::node_off(n))
+    }
+    fn node_parent(&mut self, n: u32) -> u32 {
+        self.reader
+            .u32_at(self.tree, crate::radix_tree::node_off(n) + 4)
+    }
+    fn child(&mut self, n: u32, dir: bool) -> crate::radix_tree::Child {
+        if self.fuel == 0 || n == 0 || n > self.nodes {
+            return crate::radix_tree::Child::Empty;
+        }
+        self.fuel -= 1;
+        crate::radix_tree::Child::decode(
+            self.reader
+                .i32_at(self.tree, crate::radix_tree::child_off(n, dir)),
+        )
+    }
+}
+
+impl<P: PageProvider> crate::radix_tree::TreeKeys for PagedSpatial<'_, P> {
+    fn rec_bits(&mut self, _rec: u32) -> u32 {
+        crate::radix_db::key_bits(&self.keys)
+    }
+    fn rec_word(&mut self, rec: u32, word: u32) -> u64 {
+        let axes = self.axes(rec);
+        crate::radix_db::interleave(word, self.keys.len(), |a| axes[a])
+    }
+}
+
+impl<P: PageProvider> crate::radix_db::BoxNodes for PagedSpatial<'_, P> {
+    fn rec_axes(&mut self, rec: u32, _n: usize) -> [u64; crate::radix_db::MAX_AXES] {
+        self.axes(rec)
+    }
+}
+
+/// One axis field's value, read through the paged decoder — for
+/// `radix_db::paged::every_axis_width_decodes_to_what_was_written`, which fixes both
+/// readers to the SCHEMA rather than to each other.
+#[cfg(test)]
+pub fn spatial_axis_value<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    rec: u32,
+    key: &crate::keys::Key,
+) -> i64 {
+    // No tree is opened: reading one field needs the reader and the key, nothing the
+    // container holds. `open` still probes `(0, 0)` for a tree id and gets whatever
+    // the store's signature word says — harmless, because every read here is total
+    // (the reader zero-pads past EOF) and `axis_value` never consults `tree`.
+    let mut src = PagedSpatial::open(reader, 0, 0, std::slice::from_ref(key));
+    src.axis_value(rec, key)
+}
+
+/// The coordinate key fields of a SPATIAL collection, when every axis is an integer
+/// one. `None` for any other key shape.
+///
+/// A `spatial` key is 1–3 integer axes by construction (the parser rejects more, and
+/// rejects a non-integer axis), so this declines only a collection that is not a
+/// spatial one — which is what makes answering a miss right rather than reading a
+/// string pointer as a coordinate.
+fn spatial_keys(keys: &[crate::keys::Key]) -> Option<Vec<crate::keys::Key>> {
+    if keys.is_empty() || keys.len() > crate::radix_db::MAX_AXES {
+        return None;
+    }
+    // The trie's TEXT key is the one shape sharing this tree that has no coordinate.
+    if keys.iter().any(|k| k.type_nr == TRIE_TEXT_TYPE) {
+        return None;
+    }
+    Some(keys.to_vec())
+}
+
+/// Every record of the paged SPATIAL index inside the closed box with corners
+/// `from` and `till`, in Morton order, capped at `limit` — the reader port of
+/// `radix_db::box_range`, and the spatial counterpart of [`trie_prefix_recs`].
+///
+/// **The cap bounds the WALK.** The box's records come out in Morton order and the
+/// `limit`-th is the last one anything is fetched for. That is not the same
+/// statement as "the answer is capped": a walk that materialised the box and then
+/// truncated would fetch every page the box covers to return twenty markers, which
+/// is the one way a paged spatial query quietly becomes a whole-image read.
+///
+/// **And the box bounds it too.** Seeking to one corner and stepping to the other
+/// reads the Morton INTERVAL, which is a superset the box threads in and out of —
+/// on a map's wide, shallow viewport, 1.46 M records to return 4 k of them
+/// (@PLN136). `box_walk` seeks over each gap instead, so the walk reads what it
+/// returns and one viewport costs single-digit pages.
+pub fn spatial_box_recs<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    root_rec: u32,
+    root_pos: u32,
+    from: &[i64],
+    till: &[i64],
+    keys: &[crate::keys::Key],
+    limit: Option<usize>,
+) -> Vec<u32> {
+    use crate::radix_db::MAX_AXES;
+    let Some(keys) = spatial_keys(keys) else {
+        return Vec::new();
+    };
+    let n = keys.len();
+    if from.len() < n || till.len() < n {
+        return Vec::new();
+    }
+    let mut src = PagedSpatial::open(reader, root_rec, root_pos, &keys);
+    if src.tree == 0 {
+        return Vec::new();
+    }
+    let (mut qlo, mut qhi) = ([0u64; MAX_AXES], [0u64; MAX_AXES]);
+    for a in 0..n {
+        // A corner-swapped axis names the same interval, as the resident surface
+        // reads it.
+        let (lo, hi) = if from[a] <= till[a] {
+            (from[a], till[a])
+        } else {
+            (till[a], from[a])
+        };
+        qlo[a] = crate::radix_db::coord_code(lo);
+        qhi[a] = crate::radix_db::coord_code(hi);
+    }
+    crate::radix_db::box_walk(&mut src, n, &qlo, &qhi, limit.unwrap_or(usize::MAX))
 }
 
 #[cfg(test)]

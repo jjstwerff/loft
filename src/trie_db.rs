@@ -1028,16 +1028,12 @@ mod pages {
     )]
 
     use super::*;
+    use crate::page_metrics::{
+        CACHE_PAGES, FINE, PAGE, SessionCache, add_span, layouts, mean, pct, row,
+    };
     use crate::radix_tree as rt;
     use std::collections::{BTreeSet, HashMap};
 
-    const PAGE: u64 = 64 * 1024;
-    /// The finer granularity the same touch set is bucketed at. A descent reads a
-    /// handful of 16-byte nodes; what that costs is decided by the fetch size, not
-    /// by the walk, and one page size cannot show that.
-    const FINE: u64 = 4096;
-    /// `PagedReader`'s default cache, in pages — what a warm session keeps.
-    const CACHE_PAGES: usize = 64;
     /// How many records a query returns; `t["kerk"..:20]` caps it, and the cap is
     /// what makes a search box cheap.
     const CAP: usize = 20;
@@ -1183,105 +1179,6 @@ mod pages {
         }
     }
 
-    /// A candidate node numbering: where each node would sit if a persist-time pass
-    /// wrote the array in this order.
-    ///
-    /// It maps a RECORDED offset to the offset it would have had, so one walk of the
-    /// tree evaluates a layout — no image is rewritten to ask what one costs.
-    struct Layout {
-        name: &'static str,
-        rank: Vec<u32>,
-    }
-
-    impl Layout {
-        fn new(name: &'static str, order: &[u32], nodes: u32) -> Layout {
-            let mut rank = vec![u32::MAX; (nodes + 2) as usize];
-            for (i, &n) in order.iter().enumerate() {
-                assert_eq!(
-                    rank[n as usize],
-                    u32::MAX,
-                    "{name} numbers node {n} twice — not a permutation"
-                );
-                rank[n as usize] = u32::try_from(i).unwrap_or(u32::MAX);
-            }
-            assert_eq!(
-                order.len(),
-                nodes as usize,
-                "{name} covers {} of {nodes} nodes",
-                order.len()
-            );
-            Layout { name, rank }
-        }
-
-        /// Ids as handed out, so every number below has its own baseline rather
-        /// than a separately computed one.
-        fn as_built(nodes: u32) -> Layout {
-            Layout::new("as built", &(1..=nodes).collect::<Vec<_>>(), nodes)
-        }
-
-        /// Offset -> node id -> rank -> the offset it WOULD have had.
-        fn moved(&self, off: u32) -> u64 {
-            let id = (off - 24) / 16 + 1;
-            let within = u64::from((off - 24) % 16);
-            match self.rank.get(id as usize) {
-                Some(&r) if r != u32::MAX => 24 + 16 * u64::from(r) + within,
-                _ => u64::from(off),
-            }
-        }
-
-        fn pages(&self, touched: &BTreeSet<u32>, page: u64) -> usize {
-            touched
-                .iter()
-                .map(|o| self.moved(*o) / page)
-                .collect::<BTreeSet<u64>>()
-                .len()
-        }
-    }
-
-    /// Every candidate, in the order they are worth reading.
-    fn layouts(f: &Fixture) -> Vec<Layout> {
-        vec![
-            Layout::as_built(f.nodes),
-            Layout::new("BFS", &rt::bfs_order(&f.store, f.tree), f.nodes),
-            Layout::new("DFS", &rt::dfs_order(&f.store, f.tree), f.nodes),
-            Layout::new("key order", &rt::key_order(&f.store, f.tree), f.nodes),
-            Layout::new("vEB", &rt::veb_order(&f.store, f.tree), f.nodes),
-        ]
-    }
-
-    /// One printed row: each item formatted and appended in turn.
-    ///
-    /// `map(format!).collect::<String>()` is the obvious spelling and allocates per
-    /// cell; one helper keeps the four tables here reading the same way.
-    fn row<T>(items: impl IntoIterator<Item = T>, cell: impl Fn(T) -> String) -> String {
-        items.into_iter().fold(String::new(), |mut s, i| {
-            s.push_str(&cell(i));
-            s
-        })
-    }
-
-    fn mean(v: &[usize]) -> f64 {
-        v.iter().sum::<usize>() as f64 / v.len().max(1) as f64
-    }
-
-    fn pct(v: &[usize], p: f64) -> usize {
-        if v.is_empty() {
-            return 0;
-        }
-        let mut s = v.to_vec();
-        s.sort_unstable();
-        s[((s.len() - 1) as f64 * p) as usize]
-    }
-
-    /// Add the pages a byte span covers. A record straddles a boundary as often as
-    /// not, and counting only its first page understates every layout equally —
-    /// which is worse than it sounds, because the comparison is the point.
-    fn add_span(pages: &mut BTreeSet<u64>, off: u64, len: u64, page: u64) {
-        for p in (off / page)..=((off + len.saturating_sub(1)) / page) {
-            pages.insert(p);
-        }
-    }
-
     /// The node array under five numberings.
     #[test]
     #[ignore = "measurement — run with --release --lib --ignored --nocapture"]
@@ -1294,7 +1191,7 @@ mod pages {
             f.node_bytes() as f64 / (1024.0 * 1024.0),
             f.node_bytes().div_ceil(PAGE)
         );
-        let ls = layouts(&f);
+        let ls = layouts(&f.store, f.tree, f.nodes);
         println!(
             "\n  distinct pages per query, mean (p95)      floor = 1 page\n  {:>6} {:>5} {}",
             "prefix",
@@ -1418,7 +1315,7 @@ mod pages {
     #[ignore = "measurement — run with --release --lib --ignored --nocapture"]
     fn warm_cache_session() {
         let Some(f) = build() else { return };
-        let ls = layouts(&f);
+        let ls = layouts(&f.store, f.tree, f.nodes);
         let keys = [1usize, 2, 3, 4, 5, 6, 7, 8];
         println!(
             "\n  pages FETCHED per keystroke, {CACHE_PAGES}-page cache, cold at keystroke 1\n  \
@@ -1435,27 +1332,11 @@ mod pages {
                 .collect();
             let mut per_key = vec![Vec::new(); keys.len()];
             for w in &words {
-                // A cache per session: a user types one word, and the next user
-                // starts cold. The steady state across many words is kinder still,
-                // and this is the honest side.
-                let mut cache: Vec<u64> = Vec::with_capacity(CACHE_PAGES);
+                let mut cache = SessionCache::new();
                 for (i, &k) in keys.iter().enumerate() {
                     let touched = f.query_touch(&w[..k]).0;
                     let want: BTreeSet<u64> = touched.iter().map(|o| l.moved(*o) / PAGE).collect();
-                    let mut fetched = 0;
-                    for p in want {
-                        if let Some(at) = cache.iter().position(|&c| c == p) {
-                            let p = cache.remove(at);
-                            cache.push(p);
-                        } else {
-                            fetched += 1;
-                            if cache.len() == CACHE_PAGES {
-                                cache.remove(0);
-                            }
-                            cache.push(p);
-                        }
-                    }
-                    per_key[i].push(fetched);
+                    per_key[i].push(cache.fetch(&want));
                 }
             }
             println!(

@@ -22,6 +22,7 @@ use crate::vector;
 enum PagedKind {
     Hash,
     Trie,
+    Radix,
 }
 
 // @PLN103 P3 — the `LOFT_STORES=timeline` runtime store timeline. A pure diagnostic
@@ -1370,33 +1371,22 @@ impl Stores {
         let n = keys.len().min(crate::radix_db::MAX_AXES);
         let from = [fx, fy, fz];
         let till = [tx, ty, tz];
-        let till_ref = (has_till != 0).then_some(&till[..n]);
         let cap = (limit >= 0).then_some(limit as usize);
-        // loft#800 — a CLOSED box promises containment, and the code interval is only a
-        // superset of it.  Filter here rather than inside `range`, because the other two
-        // surfaces this method serves (`xs[(x,y)..]`, `xs[(x,y)..:n]`) want exactly the
-        // Z-order walk and would be wrong to filter: this layer is the one that knows
-        // which form it is, and `has_till` is that fact.
+        // Two different queries share this entry point, and `has_till` is the fact
+        // that tells them apart. A CLOSED box promises containment (loft#800); the
+        // open forms (`xs[(x,y)..]`, `xs[(x,y)..:n]`) promise the Z-order tail and
+        // would be WRONG to filter.
         //
-        // The cap moves AFTER the filter for the same reason — capping the raw interval
-        // first would drop in-box records in favour of out-of-box ones.
-        let raw_cap = if has_till != 0 { None } else { cap };
-        let recs = crate::radix_db::range(
-            coll,
-            &self.allocations,
-            &keys,
-            &from[..n],
-            till_ref,
-            raw_cap,
-        );
+        // @PLN136 — the box form walks the box rather than the code interval between
+        // its corners. The interval is a superset that Z-order threads in and out of:
+        // reading it and filtering costs every record in it, which on the degenerate
+        // shapes a map issues is 1.46 M records read to return 4 k. `box_range` seeks
+        // over each gap instead, and its cap bounds the WALK, so the two reasons the
+        // old composition had to cap AFTER filtering are both gone.
         let recs = if has_till != 0 {
-            let store = crate::keys::store(coll, &self.allocations);
-            recs.into_iter()
-                .filter(|&r| crate::radix_db::in_box(store, r, &keys, &from[..n], &till[..n]))
-                .take(cap.unwrap_or(usize::MAX))
-                .collect()
+            crate::radix_db::box_range(coll, &self.allocations, &keys, &from[..n], &till[..n], cap)
         } else {
-            recs
+            crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], None, cap)
         };
         self.build_rec_scratch(coll, &recs)
     }
@@ -3105,9 +3095,9 @@ impl Stores {
             // reader will page, and a trie numbered in insertion order costs it 27
             // pages of 64 KB per prefix query instead of 3. Semantics-preserving, so
             // the live store simply keeps the better layout too.
-            let laid = self.relayout_tries(slot);
+            let laid = self.relayout_trees(slot);
             if laid > 0 && std::env::var_os("LOFT_LOADER_STATS").is_some() {
-                eprintln!("store_persist_bind: laid out {laid} trie(s) for paging");
+                eprintln!("store_persist_bind: laid out {laid} tree(s) for paging");
             }
             // FRESH PATH — snapshot current bytes, size the image to the data,
             // write to disk, then re-open via mmap.
@@ -3226,7 +3216,7 @@ impl Stores {
     /// word vocabulary, one 20-record prefix query: 22 requests / 1.25 MB as
     /// built, against 4 / 0.26 MB from this image.
     ///
-    /// Nodes are laid out too, by the same [`relayout_tries`](Self::relayout_tries)
+    /// Nodes are laid out too, by the same [`relayout_trees`](Self::relayout_trees)
     /// pass binding runs — on the COPY, so the live tree keeps its numbering.
     ///
     /// The image is sized to its content with no growth slack: binding leaves an
@@ -3262,7 +3252,7 @@ impl Stores {
         };
         // On the COPY: this is the image a reader pages, and the live tree keeps
         // the numbering its own references were handed out against.
-        let laid = self.relayout_tries(dst_slot);
+        let laid = self.relayout_trees(dst_slot);
         let rebuilt = self.take_store(dst_slot);
         self.release_slot(dst_slot);
 
@@ -3293,7 +3283,7 @@ impl Stores {
         }
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
             eprintln!(
-                "store_persist_copy: wrote {} bytes, laid out {laid} trie(s) for paging",
+                "store_persist_copy: wrote {} bytes, laid out {laid} tree(s) for paging",
                 padded.len()
             );
         }
@@ -3539,7 +3529,8 @@ impl Stores {
         }
     }
 
-    /// @PLN134 — lay every trie in `slot` out for PAGING, and answer how many.
+    /// @PLN134, @PLN136 — lay every radix TREE in `slot` out for PAGING, and answer
+    /// how many.
     ///
     /// A trie's node ids are handed out in INSERTION order, which puts a root→leaf
     /// path nowhere near itself. Measured over 978 842 words, one prefix query then
@@ -3553,12 +3544,19 @@ impl Stores {
     /// records, their order and every answer are untouched — so a caller that keeps
     /// using the store afterwards sees no difference beyond a faster walk.
     ///
+    /// Both kinds that share the tree, because both are read the same way: a `trie`
+    /// answers a prefix and a `spatial` answers a bounding box, and the numbering
+    /// that decides what either costs is one numbering. A capped box query over 3.2 M
+    /// real map points touches 222 pages of 64 KB as built and 3.6 renumbered
+    /// (@PLN136) — the trie's 27 → 2.8, in a shape the trie's measurement did not
+    /// cover.
+    ///
     /// Only trees in `slot` are laid out. The walk can reach another store through
     /// a `ChildRec` or a cross-store element, and rewriting a tree the caller did
     /// not ask to persist would be a surprise, so the pass drops those. It does not
-    /// descend through a trie's own ELEMENTS either — a trie of tries is not a shape
+    /// descend through a tree's own ELEMENTS either — a trie of tries is not a shape
     /// worth spending a million walk steps to rule out.
-    pub(crate) fn relayout_tries(&mut self, slot: u16) -> u32 {
+    pub(crate) fn relayout_trees(&mut self, slot: u16) -> u32 {
         let idx = slot as usize;
         if idx >= self.allocations.len() {
             return 0;
@@ -3567,12 +3565,12 @@ impl Stores {
         if tp == u16::MAX {
             return 0;
         }
-        // The DATA walk is skipped entirely where the SCHEMA cannot hold a trie.
+        // The DATA walk is skipped entirely where the SCHEMA cannot hold a tree.
         // Persisting is a whole-image write on every kind of store, and a walk over
-        // a million hash elements to conclude "no tries here" would be a cost every
+        // a million hash elements to conclude "no trees here" would be a cost every
         // one of them pays for a kind it does not have. The type graph answers the
         // same question in the number of TYPES.
-        if !self.type_has_trie(tp, &mut Vec::new()) {
+        if !self.type_has_tree(tp, &mut Vec::new()) {
             return 0;
         }
         let root = DbRef {
@@ -3584,7 +3582,7 @@ impl Stores {
         // and the pass needs `&mut Store`.
         let mut found = Vec::new();
         let mut budget = 200_000u32;
-        self.trie_roots(&root, tp, &mut budget, &mut found);
+        self.tree_roots(&root, tp, &mut budget, &mut found);
         let mut done = 0;
         for at in found {
             if at.store_nr != slot {
@@ -3599,30 +3597,30 @@ impl Stores {
         done
     }
 
-    /// Can a value of `tp` contain a `trie` at all?
+    /// Can a value of `tp` contain a radix TREE — a `trie` or a `spatial` — at all?
     ///
     /// A question about the SCHEMA, so it costs the number of types rather than the
-    /// number of records — which is what lets [`relayout_tries`](Self::relayout_tries)
-    /// decline instantly on the stores that have no trie in them.
-    fn type_has_trie(&self, tp: u16, seen: &mut Vec<u16>) -> bool {
+    /// number of records — which is what lets [`relayout_trees`](Self::relayout_trees)
+    /// decline instantly on the stores that have no tree in them.
+    fn type_has_tree(&self, tp: u16, seen: &mut Vec<u16>) -> bool {
         if tp as usize >= self.types.len() || seen.contains(&tp) {
             return false;
         }
         seen.push(tp);
         match &self.types[tp as usize].parts {
-            Parts::Trie(_, _) => true,
+            // Both kinds ARE the tree, so neither is descended into further here.
+            Parts::Trie(_, _) | Parts::Radix(_, _) => true,
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
                 .clone()
                 .iter()
-                .any(|f| self.type_has_trie(f.content, seen)),
+                .any(|f| self.type_has_tree(f.content, seen)),
             Parts::Vector(c)
             | Parts::Sorted(c, _)
             | Parts::Array(c)
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
-            | Parts::Radix(c, _)
-            | Parts::ChildRec(c) => self.type_has_trie(*c, seen),
-            Parts::Index(c, _, _) => self.type_has_trie(*c, seen),
+            | Parts::ChildRec(c) => self.type_has_tree(*c, seen),
+            Parts::Index(c, _, _) => self.type_has_tree(*c, seen),
             // Spelled out rather than closed with `_`: a new collection kind that
             // can hold a trie must be named here, and the compiler is what says so.
             // DATABASE.md § "Adding or changing a collection kind".
@@ -3636,18 +3634,19 @@ impl Stores {
         }
     }
 
-    /// Every `trie` field reachable from `rec`, as the `DbRef` holding its tree id.
+    /// Every radix-tree field reachable from `rec` — a `trie` or a `spatial` — as
+    /// the `DbRef` holding its tree id.
     ///
     /// `budget` stops the walk on a pathological graph, the same way
     /// [`intra_record_slack`](Self::intra_record_slack) bounds its own: running out
-    /// lays out fewer tries, which costs pages on a query and never correctness.
-    fn trie_roots(&self, rec: &DbRef, tp: u16, budget: &mut u32, out: &mut Vec<DbRef>) {
+    /// lays out fewer trees, which costs pages on a query and never correctness.
+    fn tree_roots(&self, rec: &DbRef, tp: u16, budget: &mut u32, out: &mut Vec<DbRef>) {
         if *budget == 0 || tp as usize >= self.types.len() {
             return;
         }
         *budget -= 1;
         match &self.types[tp as usize].parts {
-            Parts::Trie(_, _) => out.push(*rec),
+            Parts::Trie(_, _) | Parts::Radix(_, _) => out.push(*rec),
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 for f in fields.clone() {
                     // A field that owns no heap record cannot hold a collection, so
@@ -3658,13 +3657,13 @@ impl Stores {
                             rec: rec.rec,
                             pos: rec.pos + u32::from(f.position),
                         };
-                        self.trie_roots(&at, f.content, budget, out);
+                        self.tree_roots(&at, f.content, budget, out);
                     }
                 }
             }
             _ => {
                 for c in self.for_each_owned_child(rec, tp).children {
-                    self.trie_roots(&c.child, c.child_tp, budget, out);
+                    self.tree_roots(&c.child, c.child_tp, budget, out);
                 }
             }
         }
@@ -3787,12 +3786,21 @@ impl Stores {
                 },
                 seen,
             ),
-            // `spatial` stays refused: it shares the tree but keys on a bounding
-            // box, which is a different WALK — a prefix is one contiguous run, a
-            // box over a Morton code is several disjoint ones — and no
-            // measurement says what its rebuild is worth. @PLN136 opens by taking
-            // one; flipping this arm is part of that plan, not ahead of it.
-            Parts::Radix(..) => false,
+            // A `spatial` rebuilds through `copy_claims_radix_body`, which re-inserts
+            // every element into a fresh tree — in MORTON order, which is the
+            // placement @PLN136 measured. It was refused here while nobody had taken
+            // that measurement; over 3.2 M real map points, one capped box query
+            // reads 204 pages of 64 KB from an as-inserted image and 1.7 from a
+            // Morton-ordered one. `a_spatial_survives_the_rebuild_and_comes_out_in
+            // _morton_order` is the proof, and it asserts placement as well as every
+            // answer.
+            Parts::Radix(..) => self.type_is_compactable(
+                match &self.types[tp as usize].parts {
+                    Parts::Radix(v, _) => *v,
+                    _ => unreachable!("matched Radix"),
+                },
+                seen,
+            ),
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
                 .clone()
                 .iter()
@@ -3868,7 +3876,7 @@ impl Stores {
         self.copy_claims(&src, &to, tp);
         // The scratch carries the schema it was rebuilt from. `compact_slot` sets
         // this on the way out and could leave it until then; a caller that runs a
-        // SCHEMA-driven pass over the scratch cannot — `relayout_tries` reads
+        // SCHEMA-driven pass over the scratch cannot — `relayout_trees` reads
         // `known_type` and silently does nothing without it, which is a layout
         // quietly not applied rather than an error.
         self.allocations[dst_slot as usize].set_known_type(tp);
@@ -4491,8 +4499,9 @@ impl Stores {
     /// exactly that, loft#802). When the root is a `trie` the answer is neither:
     /// a trie IS pageable (@PLN134), just not by the loader that asked, so the
     /// cure is the trie's own call and sending the author to `store_load` would
-    /// cost them the whole saving. When the root is anything else, it is the #632
-    /// wrapper-struct trap and the declaration IS the fix.
+    /// cost them the whole saving — and the same is true of a `spatial` since
+    /// @PLN136. When the root is anything else, it is the #632 wrapper-struct trap
+    /// and the declaration IS the fix.
     #[cfg(paged_store)]
     fn wrong_collection_reason(&self, tp: u16, want: &str) -> String {
         let name = self.type_name(tp);
@@ -4504,15 +4513,16 @@ impl Stores {
                  `store_load_prefix` for a prefix"
             );
         }
+        if matches!(parts, Some(Parts::Radix(..))) {
+            return format!(
+                "its bound store roots `{name}`, not {want} — a spatial index is \
+                 keyed on COORDINATES, so read it with `store_load_box` for a \
+                 bounding box"
+            );
+        }
         let keyed = matches!(
             parts,
-            Some(
-                Parts::Hash(..)
-                    | Parts::Sorted(..)
-                    | Parts::Ordered(..)
-                    | Parts::Index(..)
-                    | Parts::Radix(..)
-            )
+            Some(Parts::Hash(..) | Parts::Sorted(..) | Parts::Ordered(..) | Parts::Index(..))
         );
         if keyed {
             format!(
@@ -4566,12 +4576,13 @@ impl Stores {
         // collection that is `Sorted` in a small program is `Ordered` in one where
         // its element is reused — both are the same keyed collection here.
         //
-        // `Trie` belongs for the same reason `Hash` does and `Sorted` does not:
-        // its field form is a 4-byte claim slot holding the tree record id, and it
-        // never promotes, so the layout a paged descent reads at `local.pos` is the
-        // same whether the collection was declared as a local or as a struct field
-        // (@PLN134). A `sorted` field can be promoted to `ordered` by unrelated
-        // program structure, which is why `load_range` refuses that form audibly.
+        // `Trie` and `Radix` belong for the same reason `Hash` does and `Sorted`
+        // does not: their field form is a 4-byte claim slot holding the tree record
+        // id, and neither promotes, so the layout a paged descent reads at
+        // `local.pos` is the same whether the collection was declared as a local or
+        // as a struct field (@PLN134, @PLN136). A `sorted` field can be promoted to
+        // `ordered` by unrelated program structure, which is why `load_range`
+        // refuses that form audibly.
         let is_keyed = |t: u16| {
             matches!(
                 self.types[t as usize].parts,
@@ -4580,6 +4591,7 @@ impl Stores {
                     | Parts::Ordered(..)
                     | Parts::Index(..)
                     | Parts::Trie(..)
+                    | Parts::Radix(..)
             )
         };
         match &self.types[tp as usize].parts {
@@ -4658,10 +4670,14 @@ impl Stores {
     /// is at least possible.
     ///
     /// Static, and that is the point: a `.store` IMAGE is read by the paged
-    /// loader, which serves a `hash` (integer- or text-keyed) and a `trie` (one
-    /// text-keyed descent, @PLN134). Every other keyed kind is refused at the
-    /// first lookup and would be refused at every lookup after it, so the answer
-    /// is already known when the binding is made and costs no I/O to give.
+    /// loader, which serves a `hash` (integer- or text-keyed), a `trie` (one
+    /// text-keyed descent, @PLN134) and a `spatial` (a bounding-box walk over the
+    /// same tree, @PLN136). Every other keyed kind is refused at the first lookup
+    /// and would be refused at every lookup after it, so the answer is already
+    /// known when the binding is made and costs no I/O to give.
+    ///
+    /// A kind that becomes servable and is not removed from here keeps refusing a
+    /// binding that would now work, which is why the two move in ONE change.
     ///
     /// A DATABASE source is NOT judged here. Its refusals depend on the schema
     /// on the other end — a column that is missing, a type that will not map —
@@ -4686,15 +4702,15 @@ impl Stores {
         let tp = self.collection_type_of_store(root_tp);
         if matches!(
             self.types.get(tp as usize).map(|t| &t.parts),
-            Some(Parts::Hash(..) | Parts::Trie(..))
+            Some(Parts::Hash(..) | Parts::Trie(..) | Parts::Radix(..))
         ) {
             return None;
         }
         Some(format!(
             "a lazily-bound `.store` image is read a page at a time, which only a \
-             `hash` or a `trie` supports, and `{}` is neither — read it whole with \
-             `store_load` (or `store_load_url_trusted` for a URL), which carries \
-             every kind",
+             `hash`, a `trie` or a `spatial` supports, and `{}` is none of them — \
+             read it whole with `store_load` (or `store_load_url_trusted` for a \
+             URL), which carries every kind",
             self.type_name(root_tp)
         ))
     }
@@ -4995,6 +5011,110 @@ impl Stores {
         loaded
     }
 
+    /// @PLN136 — load every entry inside the bounding box `[from, till]` from a
+    /// persisted `spatial<T[…]>` image into the (empty) local spatial collection,
+    /// fetching only the pages the box walk touches. Returns the count loaded.
+    ///
+    /// The capability the spatial kind exists for, now over a link. Measured on a
+    /// 3.2 M-point map index (a 158 MB image, 2532 pages of 64 KB): one capped
+    /// viewport query touches 3.6 pages of nodes and 1.7 of records, and panning the
+    /// map costs ~1.5 pages a step against 426 from an image written as inserted.
+    ///
+    /// **Two bounds, and the plan is about both.** `limit < 0` means no cap, matching
+    /// `build_radix_range_vec`; the cap bounds the WALK, so the untaken tail is never
+    /// fetched. And the BOX bounds it: the Morton interval between two corners is a
+    /// superset that Z-order threads in and out of, so a walk that read the interval
+    /// and filtered would fetch 1.46 M records' pages to return 4 k on the wide,
+    /// shallow viewport a map actually issues.
+    ///
+    /// A corner given the other way round names the same box, as the resident
+    /// surface reads it. Extra coordinates past the collection's own axes are
+    /// ignored, and too few refuse — the same ABI a 1-D…3-D slice lowers through.
+    #[cfg(paged_store)]
+    pub fn load_box(
+        &mut self,
+        local: &DbRef,
+        path: &str,
+        from: &[i64],
+        till: &[i64],
+        limit: i64,
+    ) -> i64 {
+        if !self.layout_gate_ok(path, local) {
+            return 0;
+        }
+        use crate::paged_reader::{PageSource, PagedReader};
+        let Ok(source) = PageSource::open(path) else {
+            self.refuse_paged(path, "it cannot be opened as a paged source");
+            return 0;
+        };
+        let mut reader = PagedReader::new(source);
+        let root_tp = self.allocations[local.store_nr as usize].known_type;
+        if root_tp == u16::MAX {
+            self.refuse_paged(path, "the target collection's store has no recorded type");
+            return 0;
+        }
+        let tp = self.collection_type_of_store(root_tp);
+        let Some(Parts::Radix(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts)
+        else {
+            let reason = self.wrong_collection_reason(root_tp, "a spatial index");
+            self.refuse_paged(path, &reason);
+            return 0;
+        };
+        let content_tp = *content_tp;
+        if !self.is_copyable_entry(content_tp) {
+            let reason = self.not_copyable_reason(content_tp);
+            self.refuse_paged(path, &reason);
+            return 0;
+        }
+        let keys = self.keys(tp).to_vec();
+        if from.len() < keys.len() || till.len() < keys.len() {
+            self.refuse_paged(
+                path,
+                &format!(
+                    "the box has {} and {} coordinates but `{}` has {} axes — a \
+                     corner must name every one of them",
+                    from.len(),
+                    till.len(),
+                    self.type_name(tp),
+                    keys.len()
+                ),
+            );
+            return 0;
+        }
+        let cap = (limit >= 0).then(|| usize::try_from(limit).unwrap_or(usize::MAX));
+        let found = crate::paged_reader::spatial_box_recs(
+            &mut reader,
+            local.rec,
+            local.pos,
+            from,
+            till,
+            &keys,
+            cap,
+        );
+        let mut loaded = 0i64;
+        for rec in found {
+            if self.copy_entry(
+                &mut reader,
+                local,
+                content_tp,
+                &keys,
+                (rec, crate::store::RECORD_PAYLOAD),
+                PagedKind::Radix,
+            ) {
+                loaded += 1;
+            }
+        }
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_load_box: {from:?}..{till:?} limit={limit} loaded={loaded} bytes_fetched={} requests={} file={}",
+                reader.provider().bytes_fetched(),
+                reader.provider().requests(),
+                reader.size()
+            );
+        }
+        loaded
+    }
+
     /// @PLN97 arc G Phase 3a — load the requested integer keys' entries from a
     /// persisted HASH image at `path` into the empty local hash `local`,
     /// fetching only the pages the lookups touch. Returns the count actually
@@ -5170,6 +5290,10 @@ impl Stores {
                 ),
                 _ => (0, 0),
             },
+            // A spatial index is reached by a BOX, never by one key: `store_load_box`
+            // is its entry point and locates its own records, so nothing routes a
+            // single-key lookup here. Locating nothing is the honest answer.
+            PagedKind::Radix => (0, 0),
         };
         if matched.0 == 0 {
             return false;
@@ -5208,7 +5332,9 @@ impl Stores {
                     crate::hash::alloc_entry(local, stride, local.rec, &mut self.allocations),
                 )
             }
-            PagedKind::Trie => {
+            // Both tree kinds store an element as a claimed RECORD with its payload
+            // at offset 8, so the copy is the same claim; only the linker differs.
+            PagedKind::Trie | PagedKind::Radix => {
                 let size = reader.record_words(src_rec);
                 if size < 2 {
                     return false;
@@ -5266,6 +5392,7 @@ impl Stores {
         match kind {
             PagedKind::Hash => crate::hash::add(local, &entry, &mut self.allocations, keys),
             PagedKind::Trie => crate::trie_db::add(local, &entry, &mut self.allocations, keys),
+            PagedKind::Radix => crate::radix_db::add(local, &entry, &mut self.allocations, keys),
         }
         true
     }
@@ -5518,19 +5645,44 @@ impl Stores {
     }
 
     /// Read a `vector<integer>` (`keys_vec`) into an `i64` slice and load those
-    /// keys via [`load_keys`](Stores::load_keys). The single vector-reading home
-    /// used by BOTH backends (the interpreter handler and the `#rust` codegen
-    /// body), so the element layout lives in one place. `integer` elements are
-    /// i64 at `8 + i·8` within the vector's inner record.
+    /// keys via [`load_keys`](Stores::load_keys). Used by BOTH backends — the
+    /// interpreter handler and the `#rust` codegen body.
     #[cfg(paged_store)]
     pub fn load_keys_vec(&mut self, local: &DbRef, path: &str, keys_vec: &DbRef) -> i64 {
-        let length = crate::vector::length_vector(keys_vec, &self.allocations);
-        let inner = self.store(keys_vec).get_u32_raw(keys_vec.rec, keys_vec.pos);
-        let mut vals = Vec::with_capacity(length as usize);
-        for i in 0..length {
-            vals.push(self.store(keys_vec).get_int(inner, 8 + i * 8));
-        }
+        let vals = self.int_vector(keys_vec);
         self.load_keys(local, path, &vals)
+    }
+
+    /// The `i64` values a `vector<integer>` holds — the single vector-reading home
+    /// for the paged loaders, so the element layout lives in one place. `integer`
+    /// elements are i64 at `8 + i·8` within the vector's inner record.
+    #[cfg(paged_store)]
+    fn int_vector(&self, v: &DbRef) -> Vec<i64> {
+        let length = crate::vector::length_vector(v, &self.allocations);
+        let inner = self.store(v).get_u32_raw(v.rec, v.pos);
+        (0..length)
+            .map(|i| self.store(v).get_int(inner, 8 + i * 8))
+            .collect()
+    }
+
+    /// Read two `vector<integer>` corners and load the box they name via
+    /// [`load_box`](Stores::load_box) — the vector-reading twin of
+    /// [`load_keys_vec`](Stores::load_keys_vec), used by BOTH backends.
+    ///
+    /// A vector rather than a fixed `(x1, y1, x2, y2)`: the same call then serves a
+    /// 1-D, 2-D and 3-D collection, which is what the resident slice already does
+    /// through its `MAX_AXES`-wide ABI.
+    #[cfg(paged_store)]
+    pub fn load_box_vec(
+        &mut self,
+        local: &DbRef,
+        path: &str,
+        from: &DbRef,
+        till: &DbRef,
+        limit: i64,
+    ) -> i64 {
+        let (f, t) = (self.int_vector(from), self.int_vector(till));
+        self.load_box(local, path, &f, &t, limit)
     }
 }
 

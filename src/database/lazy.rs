@@ -300,13 +300,44 @@ impl Stores {
         // Clear first, so what is read back after the call is THIS fetch's
         // refusal and not one an earlier `store_load_key` left behind.
         self.paged_refusal = None;
-        // One key, whichever spelling it arrived in. A composite key is not
-        // fetchable yet — @PLN125's associated types are what would carry it —
-        // so it is left to answer absent rather than fetching the wrong row.
-        let hit = match key {
-            [Content::Long(k)] => self.load_key(data, path, *k),
-            [Content::Str(s)] => self.load_key_text(data, path, s.str()),
-            _ => false,
+        // Routed by the COLLECTION's kind, not by the key's shape. A `spatial`
+        // lookup arrives as one `Content::Long` per axis, and a one-axis one is
+        // indistinguishable from a hash's integer key — so reading the shape would
+        // send `spatial<T[x]>` to the hash loader and get a refusal for a binding
+        // that works (@PLN136).
+        let radix = {
+            let root = self.allocations[data.store_nr as usize].known_type;
+            let tp = self.collection_type_of_store(root);
+            matches!(
+                self.types.get(tp as usize).map(|t| &t.parts),
+                Some(crate::database::Parts::Radix(..))
+            )
+        };
+        // One key, whichever spelling it arrived in. A composite key that is NOT a
+        // coordinate is not fetchable yet — @PLN125's associated types are what
+        // would carry it — so it is left to answer absent rather than fetching the
+        // wrong row.
+        let hit = if radix {
+            // A point is the degenerate box, and it loads every record AT that
+            // point: a spatial collection keeps duplicates at one coordinate, so
+            // taking the first would leave the rest permanently unreachable.
+            let at: Option<Vec<i64>> = key
+                .iter()
+                .map(|c| match c {
+                    Content::Long(v) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            match at {
+                Some(at) if !at.is_empty() => self.load_box(data, path, &at, &at, -1) > 0,
+                _ => false,
+            }
+        } else {
+            match key {
+                [Content::Long(k)] => self.load_key(data, path, *k),
+                [Content::Str(s)] => self.load_key_text(data, path, s.str()),
+                _ => false,
+            }
         };
         if hit {
             return Fetched::Inserted;

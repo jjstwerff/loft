@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN136 — the paged BOX query, run against ONE image so the driver can read what
+// it fetched off `LOFT_LOADER_STATS`. Companion to
+// `136-persist-copy-morton-order.loft`; the driver
+// (`tests/store_persist_loft.rs::a_spatial_survives_the_rebuild_and_comes_out_in_morton_order`)
+// runs it once per image and compares.
+//
+// Each viewport gets its OWN local, so no reader cache carries between them and
+// every line is the cold cost of a first pan — which is what a map actually pays.
+//
+// Env in:
+//   LOFT_PERSIST_TEST_IMG   the image to query
+
+struct Pin {
+  x: integer,
+  y: integer,
+  n: integer,
+}
+
+fn main() {
+  img = env_variable("LOFT_PERSIST_TEST_IMG");
+  if img == "" { return }
+
+  for t in [0, 1, 2, 3, 4, 5] {
+    cx = t * 1000;
+    cy = t * 1000;
+    local: spatial<Pin[x, y]> = [];
+    got = store_load_box(local, img, [cx, cy], [cx + 50, cy + 50], 20);
+    if got == 0 { println("FAIL no-records-for {cx},{cy}"); return }
+    // The records that came back must be the ones inside the box, not the Morton
+    // interval's excursions: the loader copies what the walk returned, so a wrong
+    // walk shows up here as a coordinate outside the viewport.
+    for p in local {
+      if p.x < cx || p.x > cx + 50 || p.y < cy || p.y > cy + 50 {
+        println("FAIL outside-box {p.x},{p.y} for {cx},{cy}");
+        return
+      }
+    }
+    println("box={cx},{cy} got={got}");
+  }
+}

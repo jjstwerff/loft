@@ -198,6 +198,8 @@ pub mod trace;
 pub mod codegen_runtime;
 pub mod generation;
 pub mod ops;
+#[cfg(test)]
+mod page_metrics;
 pub mod parser;
 #[cfg(feature = "png")]
 mod png_store;

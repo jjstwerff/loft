@@ -196,6 +196,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(paged_store)]
     ("n_store_load_prefix", n_store_load_prefix),
     #[cfg(paged_store)]
+    ("n_store_load_box", n_store_load_box),
+    #[cfg(paged_store)]
     ("n_store_load_range", n_store_load_range),
     // Whole-image URL loads, verified and trusted. BOTH are available on the browser
     // (`--html`) target, where the fetch is bridged to JS `fetch()` via the asyncify
@@ -1443,6 +1445,20 @@ fn n_store_load_prefix(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let n = stores.load_prefix(&v_ref, v_path.str(), v_pre.str(), v_limit);
+    stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_load_box` — load every entry inside a bounding
+/// box from a persisted SPATIAL image; returns the count.  Args pop in reverse:
+/// limit, till, from, path, local.  @PLN136.
+#[cfg(paged_store)]
+fn n_store_load_box(stores: &mut Stores, stack: &mut DbRef) {
+    let v_limit = *stores.get::<i64>(stack);
+    let v_till = *stores.get::<DbRef>(stack);
+    let v_from = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_box_vec(&v_ref, v_path.str(), &v_from, &v_till, v_limit);
     stores.put(stack, n);
 }
 
