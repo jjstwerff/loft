@@ -443,6 +443,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_stack_trace", n_stack_trace),
     ("n_reflect_type", n_reflect_type),
     ("n_type_named", n_type_named),
+    ("n_reflect_field", n_reflect_field),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("n_hash_sorted", n_hash_sorted),
@@ -2604,6 +2605,18 @@ fn n_type_named(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
+/// @PLN23 S5: `field_value(x, position)` — the VALUE at a reflected position.
+///
+/// Arguments come off the stack in reverse, so the parse-time type id (pushed
+/// last by the lowering in `src/parser/control.rs`) is read first.
+fn n_reflect_field(stores: &mut Stores, stack: &mut DbRef) {
+    let kt = *stores.get::<i64>(stack) as u16;
+    let position = *stores.get::<i64>(stack);
+    let value = *stores.get::<DbRef>(stack);
+    let result = reflect_field_into(stores, &value, position, kt);
+    stores.put(stack, result);
+}
+
 /// Shared by both backends: the named type's shape, or a null `DbRef`.
 pub fn type_named_in(stores: &mut Stores, name: &str) -> DbRef {
     let kt = stores.name(name);
@@ -2611,6 +2624,192 @@ pub fn type_named_in(stores: &mut Stores, name: &str) -> DbRef {
         return DbRef::NULL;
     }
     reflect_type_into(stores, kt)
+}
+
+/// @PLN23 S5 — `field_value(x, position)`: what the record actually holds
+/// there, shared by both backends.
+///
+/// The VALUE half of reflection, and it reads through the SAME `LayoutDesc`
+/// [`reflect_type_into`] reports positions from.  One descriptor means a
+/// position reflection hands out is a position this can read, with no second
+/// account of the layout to drift against.
+///
+/// **The position is checked, never trusted.**  Only a field the descriptor says
+/// BEGINS at `position` — and that [`LayoutField::is_data`] admits — is read.  A
+/// hand-made offset, a position belonging to a different type, the interior of a
+/// wider field, or an index node's `#left_1` bookkeeping all answer `OtherKind`
+/// with no read at all, so there is no argument a caller can pass that addresses
+/// bytes the layout did not name.
+///
+/// A null record answers `OtherKind` for the same reason a bad position does:
+/// there is no field there to read.
+///
+/// # Panics
+/// When `default/07_reflect.loft` has drifted from the field names read here —
+/// deliberately loud, exactly as [`reflect_type_into`] is.
+pub fn reflect_field_into(stores: &mut Stores, value: &DbRef, position: i64, kt: u16) -> DbRef {
+    use crate::database::{BaseKind, LayoutNode};
+
+    let fv_tp = stores.name("ValueInfo");
+    let lookup = |stores: &Stores, field: &str| {
+        let p = stores.position(fv_tp, field);
+        assert_ne!(
+            p,
+            u16::MAX,
+            "ValueInfo schema is missing field '{field}' — \
+             default/07_reflect.loft has drifted from src/native.rs::reflect_field_into"
+        );
+        u32::from(p)
+    };
+    let fv_kind = lookup(stores, "kind");
+    let fv_null = lookup(stores, "is_null");
+    let fv_i = lookup(stores, "i");
+    let fv_f = lookup(stores, "f");
+    let fv_t = lookup(stores, "t");
+
+    // Resolve the field BEFORE allocating, so a refusal costs nothing and the
+    // descriptor borrow ends before the answer record is claimed.
+    let desc = stores.layout_descriptor(&[kt]);
+    let found = u16::try_from(position).ok().and_then(|p| {
+        match desc.nodes.get(&kt) {
+            Some(LayoutNode::Record(fields) | LayoutNode::EnumValue(_, fields)) => fields
+                .iter()
+                .find(|f| f.is_data() && f.position == p)
+                .cloned(),
+            // Only a record and a struct-enum variant have fields. Every other
+            // kind has no position to begin with.
+            _ => None,
+        }
+    });
+    let content = found.as_ref().map(|f| f.content);
+    // A second descriptor walk is not needed: the field's own type node is in
+    // the same descriptor, because `layout_descriptor` closes over what `kt`
+    // reaches.
+    let field_node = content.and_then(|c| desc.nodes.get(&c)).cloned();
+    let kind = match &field_node {
+        // `reflect_kind` is the ONE kind derivation — the same one `type_of`
+        // reported this field's kind with, so the two answers cannot disagree.
+        Some(_) if value.rec != 0 => reflect_kind(field_node.as_ref()),
+        // No field there, or nothing to read it out of. `OtherKind`.
+        _ => 14,
+    };
+
+    let fv_bytes = u32::from(stores.size(fv_tp));
+    let out = stores.database(fv_bytes.div_ceil(8) + 1);
+    // Stamp the record's own type id, for the reason `reflect_type_into` does:
+    // a typeless record reads as `kt=65535 ?` in a leak report.
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, 4, u32::from(fv_tp));
+    stores
+        .store_mut(&out)
+        .set_byte(out.rec, out.pos + fv_kind, 0, kind);
+    // Every payload starts neutral, so a kind that carries none leaves no bytes
+    // from a reused block looking like an answer.
+    stores.store_mut(&out).set_int(out.rec, out.pos + fv_i, 0);
+    *stores
+        .store_mut(&out)
+        .addr_mut::<f64>(out.rec, out.pos + fv_f) = 0.0;
+    stores
+        .store_mut(&out)
+        .set_u32_raw(out.rec, out.pos + fv_t, 0);
+
+    // Three different answers, kept apart: `OtherKind` means nothing begins
+    // there, a non-scalar kind means there is nothing to read out, and
+    // `is_null` means the SCALAR that is there holds loft's null. Folding any
+    // two together would make a caller unable to tell a missing field from a
+    // null one.
+    let mut is_null = false;
+    if kind != 14 {
+        let at = value.pos + u32::from(found.map_or(0, |f| f.position));
+        let store = stores.store(value);
+        // Each arm reads exactly the way `read_via_descriptor` reads that kind,
+        // and spells null with that kind's OWN sentinel — a narrow integer's is
+        // the minimum of its storage width, not `i64::MIN`.
+        let (i_val, f_val, t_ref, null) = match &field_node {
+            Some(LayoutNode::Base(BaseKind::Integer)) => {
+                let v = store.get_int(value.rec, at);
+                (v, 0.0, 0, v == i64::MIN)
+            }
+            Some(LayoutNode::Base(BaseKind::Long)) => {
+                let v = store.get_long(value.rec, at);
+                (v, 0.0, 0, v == i64::MIN)
+            }
+            Some(LayoutNode::Base(BaseKind::Float)) => {
+                let v = store.get_float(value.rec, at);
+                (0, v, 0, v.is_nan())
+            }
+            Some(LayoutNode::Base(BaseKind::Single)) => {
+                let v = store.get_single(value.rec, at);
+                (0, f64::from(v), 0, v.is_nan())
+            }
+            Some(LayoutNode::Base(BaseKind::Boolean)) => {
+                // Three-state (@PLN17): the byte reads 255 for null, and
+                // `get_byte` hands that back as 255 rather than as a truth.
+                let v = store.get_byte(value.rec, at, 0);
+                (i64::from(v & 1), 0.0, 0, v == 255 || v == i32::MIN)
+            }
+            Some(LayoutNode::Base(BaseKind::Character)) => {
+                let v = store.get_u32_raw(value.rec, at);
+                (i64::from(v), 0.0, 0, v == u32::MAX)
+            }
+            Some(LayoutNode::Base(BaseKind::Text)) => {
+                // **text-null is CONTENT-based**: a null `text` is a string
+                // record holding the `STRING_NULL` ("\0") bytes, not a 0
+                // pointer. Testing the pointer alone reads a null as the empty
+                // string — and telling `null` from `""` is the distinction this
+                // whole reading exists for, so the content is what decides.
+                let r = store.get_u32_raw(value.rec, at);
+                let null = r == 0 || store.get_str(r) == crate::state::STRING_NULL;
+                (0, 0.0, if null { 0 } else { r }, null)
+            }
+            // A narrow integer reports `IntegerKind`, so its width and its null
+            // live here rather than in the kind the caller sees.
+            Some(LayoutNode::Byte { .. }) => {
+                let v = store.get_byte(value.rec, at, 0);
+                (i64::from(v), 0.0, 0, v == 255 || v == i32::MIN)
+            }
+            Some(LayoutNode::Short { .. }) => {
+                let v = store.get_short(value.rec, at, 0);
+                (i64::from(v), 0.0, 0, v == i32::MIN)
+            }
+            Some(LayoutNode::ShortRaw { start, .. }) => {
+                let v = store.get_i16_raw(value.rec, at, *start);
+                (i64::from(v), 0.0, 0, v == i32::from(i16::MIN))
+            }
+            Some(LayoutNode::Int { .. }) => {
+                let v = store.get_i32_raw(value.rec, at);
+                (i64::from(v), 0.0, 0, v == i32::MIN)
+            }
+            // A record, a vector, a keyed collection or a stored reference has
+            // no scalar reading — `kind` already said so, and reporting it null
+            // as well would claim something that was never looked at.
+            _ => (0, 0.0, 0, false),
+        };
+        is_null = null;
+        if !is_null {
+            stores
+                .store_mut(&out)
+                .set_int(out.rec, out.pos + fv_i, i_val);
+            *stores
+                .store_mut(&out)
+                .addr_mut::<f64>(out.rec, out.pos + fv_f) = f_val;
+            if t_ref != 0 {
+                // Copied into the ANSWER's store rather than pointed at: the
+                // caller owns the `FieldValue` and may outlive the record it
+                // was read from.
+                let s = stores.store(value).get_str(t_ref).to_string();
+                let copy = stores.store_mut(&out).set_str(&s);
+                stores
+                    .store_mut(&out)
+                    .set_u32_raw(out.rec, out.pos + fv_t, copy);
+            }
+        }
+    }
+    stores
+        .store_mut(&out)
+        .set_byte(out.rec, out.pos + fv_null, 0, i32::from(is_null));
+    out
 }
 
 /// The `TypeKind` discriminant for a descriptor node — 1-indexed, matching the
