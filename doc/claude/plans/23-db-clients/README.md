@@ -7,15 +7,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S5, S6a–S6c and T1–T3 built and in the repo; S7
-(grandchild tables, migration) is designed, not built. Of the two language gaps it
-surfaced, **@PLN124 is built** and S4 is its first consumer; @PLN125 is not. @PLN24
-(`#c`) has since closed.
+**@PLN23 `status:active`** — S1–S5, S6a–S6c, S7a and T1–T3 built and in the repo.
+Of the two language gaps it surfaced, **@PLN124 is built** and S4 is its first
+consumer; @PLN125 is not. @PLN24 (`#c`) has since closed.
 
 S6c measured what the collection kinds DO rather than what they mean, and
 corrected one row of the addressing table: a loft `index` does NOT permit
 duplicates. The answer it gets is unchanged and the reason is not —
 [OBJECT_MAPPING.md § What S6c measured](OBJECT_MAPPING.md).
+
+**S7 surfaced a fourth language gap.** Value reflection sees a nested record and
+gives no handle to descend into it (`field_value` answers `RecordKind` with no
+payload), so an inline struct cannot be flattened into columns by a walk that
+names no field — S7b is blocked on that, not on the mapping. It is a @PLN127
+question; the other half of S7, the recursion into grandchild tables, needed no
+language change and is built.
 
 S5 needed a third language gap closed, and closing it is what unblocked the write
 half: reflection described a TYPE and nothing could read a VALUE's field, which is
@@ -61,7 +67,9 @@ exists at all.
 | S6a a `vector<scalar>` field becomes one child table | done |
 | S6b a `vector<record>` field, written to sqlite and read back | done |
 | S6c a keyed sub-collection — `hash`, `sorted`, `index`, `trie` | done |
-| S7 the mapping generalises — grandchildren, migration | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
+| S7a the derivation recurses — grandchild tables, any depth | done |
+| S7b inline structs flatten (`origin_x`, `origin_y`) | blocked on a reflection gap |
+| S7c migration on a changed struct | not designed |
 | P1–P6 the other three platforms | see [PLATFORMS.md](PLATFORMS.md) — Linux only today |
 
 ## S4 — a value cannot become syntax

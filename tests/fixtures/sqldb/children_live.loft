@@ -87,6 +87,13 @@ struct Beat { const bar: integer, note: text }
 struct Sheet { const id: integer, beats: sorted<Beat[bar]> = [], byname: hash<Beat[note]> = [] }
 struct Band { rows: hash<Sheet[id]> = [] }
 
+/// @PLN23 S7 — a collection inside a record ELEMENT, which is a table of its
+/// own addressed by (the root's key, the parent element's address, its own).
+struct Piece { const pid: integer }
+struct Mark2 { const label: text, pieces: vector<Piece> = [] }
+struct Ledger { const id: integer, title: text, marks: vector<Mark2> = [] }
+struct Books { rows: hash<Ledger[id]> = [] }
+
 /// The three documents this gate writes — one definition, used by the writer
 /// and by the expected lines the reader is checked against.
 ///
@@ -145,6 +152,44 @@ fn band() -> Band {
   s.beats += [Beat { bar: 2, note: "z" }];
   b.rows += [s];
   return b;
+}
+
+/// Two ledgers, two marks each, two pieces each — the smallest shape in which
+/// each of the THREE address levels is separately load-bearing.
+///
+/// The repetition is the point. Both ledgers have a mark called `A`, and both
+/// `A`s hold pieces 10 and 11. So dropping `ledger_id` merges the two ledgers'
+/// marks, dropping `ord` merges `A`'s pieces with `B`'s, and dropping `ord_2`
+/// collapses the pieces within one mark — three different wrong answers, none of
+/// which is "fewer rows than expected".
+fn books() -> Books {
+  b = Books { };
+  b.rows += [Ledger { id: 1, title: "one", marks: [
+    Mark2 { label: "A", pieces: [Piece { pid: 10 }, Piece { pid: 11 }] },
+    Mark2 { label: "B", pieces: [Piece { pid: 12 }, Piece { pid: 13 }] },
+  ] }];
+  b.rows += [Ledger { id: 2, title: "two", marks: [
+    Mark2 { label: "A", pieces: [Piece { pid: 10 }, Piece { pid: 11 }] },
+    Mark2 { label: "C", pieces: [Piece { pid: 14 }] },
+  ] }];
+  return b;
+}
+
+/// The same definition with its columns REVERSED.
+///
+/// `derive_tables` emits the address columns outer→inner, so the two ordinals of
+/// a grandchild always appear in depth order — which means a writer that took
+/// them in ROW order would agree with `ords[c.depth]` on every row this gate
+/// writes, and be wrong the moment anything reordered the columns. Reversing
+/// them is the only thing that tells the two apart, and without it `depth` is a
+/// field no test could distinguish from a counter.
+fn permuted(t: TableDef) -> TableDef {
+  rev: vector<ColumnDef> = [];
+  for c in t.columns {
+    back = len(t.columns) - 1 - c#count;
+    rev += [t.columns[back] ?? c];
+  }
+  return TableDef { nm: t.nm, columns: rev, indexes: t.indexes };
 }
 
 /// The table called `nm`, or a refusal — never a guess by position.
@@ -244,6 +289,42 @@ fn beat_row(t: TableDef, owner: Sheet, e: Beat, ord: integer) -> vector<Bound> {
 fn sheet_row(t: TableDef, s: Sheet) -> vector<Bound> {
   vals: vector<Bound> = [];
   for c in t.columns { vals += [bound_of(c, field_value(s, c.position))] }
+  return vals;
+}
+
+fn ledger_row(t: TableDef, l: Ledger) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns { vals += [bound_of(c, field_value(l, c.position))] }
+  return vals;
+}
+
+fn mark2_row(t: TableDef, owner: Ledger, e: Mark2, ords: vector<integer>) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ords[c.depth] ?? -1)] }
+    else { vals += [bound_of(c, field_value(e, c.position))] }
+  }
+  return vals;
+}
+
+/// A GRANDCHILD row (@PLN23 S7), and the walk is the same one again.
+///
+/// `ords[c.depth]` is the whole of what depth added: the row carries two
+/// ordinal columns, and the COLUMN says which level each one is. A writer that
+/// took them in the order they appear would be counting, which is the thing
+/// `ColumnSource` removed one level up — and it would still pass every test
+/// whose two ordinals happen to be in the same order as its loops.
+///
+/// `?? -1` rather than `?? 0`: a depth this walk has no ordinal for is a fault,
+/// and `-1` is a value no ordinal can legitimately be, so it reads as one.
+fn piece_row(t: TableDef, root: Ledger, e: Piece, ords: vector<integer>) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(root, c.position))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ords[c.depth] ?? -1)] }
+    else { vals += [bound_of(c, field_value(e, c.position))] }
+  }
   return vals;
 }
 
@@ -415,6 +496,70 @@ fn main() {
 
   println("beats  {dump(d, dial, beats)}");
   println("byname {dump(d, dial, byname)}");
+
+  // --- @PLN23 S7: a grandchild table ----------------------------------------
+  bk = books();
+  kti = type_of(bk.rows);
+  ktabs = derive_tables(kti);
+  ledger = ktabs[0] ?? TableDef { nm: "", refusal: "no ledger tables" };
+  if !ledger.table_ok() { println("FAIL ledger derive: {ledger.refusal}"); d.db_shut(); return }
+  lmarks = table_named(ktabs, child_table_name(ledger.nm, "marks"));
+  lpieces = table_named(ktabs, child_table_name(lmarks.nm, "pieces"));
+  println("depth  tables={len(ktabs)} grandchild={lpieces.nm}");
+  for kt in ktabs {
+    for kstmt in kt.render(dial) {
+      if !d.db_exec(kstmt) {
+        println("FAIL ledger ddl [{kstmt}]: {d.db_last_error()}");
+        d.db_shut();
+        return;
+      }
+    }
+  }
+  if !d.db_begin() { println("FAIL ledger begin: {d.db_last_error()}"); d.db_shut(); return }
+  for lg in bk.rows {
+    if !d.db_run(ledger.insert_row(dial, ledger_row(ledger, lg))) {
+      println("FAIL ledger {lg.id}: {d.db_last_error()}"); d.db_shut(); return;
+    }
+  }
+  for lg2 in bk.rows {
+    for mk in lg2.marks {
+      if !d.db_run(lmarks.insert_row(dial, mark2_row(lmarks, lg2, mk, [0, mk#count]))) {
+        println("FAIL mark {lg2.id}/{mk#count}: {d.db_last_error()}"); d.db_shut(); return;
+      }
+    }
+  }
+  for lg3 in bk.rows {
+    for mk2 in lg3.marks {
+      for pc in mk2.pieces {
+        if !d.db_run(lpieces.insert_row(dial, piece_row(lpieces, lg3, pc, [0, mk2#count, pc#count]))) {
+          println("FAIL piece {lg3.id}/{mk2#count}/{pc#count}: {d.db_last_error()}");
+          d.db_shut();
+          return;
+        }
+      }
+    }
+  }
+  if !d.db_commit() { println("FAIL ledger commit: {d.db_last_error()}"); d.db_shut(); return }
+
+  println("ledger {dump(d, dial, ledger)}");
+  println("marks  {dump(d, dial, lmarks)}");
+  println("pieces {dump(d, dial, lpieces)}");
+
+  // One row built from a REVERSED definition. Every value must follow its
+  // COLUMN, so `ord` is still the mark's index and `ord_2` still the piece's —
+  // a writer counting ordinals in row order swaps exactly these two.
+  plg = bk.rows[1];
+  if plg == null { println("FAIL no ledger 1"); d.db_shut(); return }
+  pmk = plg.marks[0] ?? Mark2 { label: "?" };
+  ppc = pmk.pieces[1] ?? Piece { pid: -1 };
+  pdef = permuted(lpieces);
+  prow = piece_row(pdef, plg, ppc, [0, 0, 1]);
+  ptxt = "";
+  for pcol in pdef.columns {
+    pb = prow[pcol#count] ?? val_null();
+    ptxt += "{pcol.nm}={pb.as_text()},";
+  }
+  println("permute {ptxt}");
 
   d.db_shut();
   gone = delete(path);

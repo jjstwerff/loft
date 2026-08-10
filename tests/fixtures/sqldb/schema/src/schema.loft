@@ -98,6 +98,15 @@ pub struct ColumnDef {
   /// record `src` names. Everything but a child table answers `SrcField`, which
   /// is why it defaults to that.
   src: ColumnSource = SrcField,
+  /// How far down the collection path the record this column reads from sits:
+  /// `0` is the owner the whole graph hangs from, `1` an element of one of its
+  /// collections, `2` an element of one of THOSE.
+  ///
+  /// Only a grandchild needs it, and only for its ordinals: `(doc_id, ord,
+  /// ord_2)` has two `SrcOrdinal` columns, and a writer that told them apart by
+  /// their ORDER would be counting again — the thing `src` exists to stop one
+  /// level up. With it the write path is `ords[c.depth]` at any depth.
+  depth: integer = 0,
   /// Would an `INSERT` that omits this column succeed?
   ///
   /// Only a column read back from a database can answer no, and it is the one
@@ -1415,7 +1424,14 @@ fn derive_owner_columns(elem: TypeInfo) -> TableDef {
 /// cannot read one back, so rendering it would make a table loft MADE and a
 /// table loft FOUND differ in a field — the one property @PLN133 rests on. The
 /// deviation is recorded rather than half-closed.
-fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) -> TableDef {
+/// **@PLN23 S7 — `addr_cols` is the address this row INHERITS**, already named
+/// and already tagged. At the first level it is the root's key columns; below
+/// that it is the parent child table's own address. `derive_child` never renames
+/// anything and never asks how deep it is: it appends this level's address and
+/// the element's columns, which is what makes the same function serve every
+/// depth.
+fn derive_child(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
+                depth: integer) -> TableDef {
   ct = type_named(f.type_name);
   if ct == null {
     return no_table("{owner_table}.{f.name}: {f.type_name} is not a type in this program");
@@ -1438,35 +1454,28 @@ fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) 
   elem = et ?? no_type();
   tname = child_table_name(owner_table, f.name);
 
-  // The ADDRESS columns first, because the invariant names them as what
-  // identifies the row — so the primary key is a prefix rather than something a
-  // reader looks for.
-  cols: vector<ColumnDef> = [];
+  // The inherited ADDRESS columns first, because the invariant names them as
+  // what identifies the row — so the primary key is a prefix rather than
+  // something a reader looks for.
+  cols = addr_cols;
   ixc: vector<IndexColumn> = [];
-  for k in owner_keys {
-    // `position` is the OWNER's byte offset, and `src` is what says so. No
-    // field of the ELEMENT fills this column, and a `-1` here would have made
-    // it indistinguishable from a column with no field at all — which is the
-    // difference the write path turns on once an element has fields of its own.
-    nm = owner_column(owner_table, k.nm);
-    cols += [ColumnDef { nm: nm, kind: k.kind, nullable: false,
-                         position: k.position, src: SrcOwnerKey }];
-    ixc += [IndexColumn { nm: nm }];
-  }
+  for ac in addr_cols { ixc += [IndexColumn { nm: ac.nm }] }
   if addr == AddrOrdinal {
-    cols += [ColumnDef { nm: "ord", kind: ColInteger, nullable: false, src: SrcOrdinal }];
-    ixc += [IndexColumn { nm: "ord" }];
+    on = ordinal_name(addr_cols);
+    cols += [ColumnDef { nm: on, kind: ColInteger, nullable: false,
+                         src: SrcOrdinal, depth: depth }];
+    ixc += [IndexColumn { nm: on }];
   }
 
   // The element's own columns, and only then the indexes: a `hash`'s address
   // index is not complete until the element's key columns exist.
-  body = child_body(tname, owner_table, f, elem, coll, cols);
+  body = child_body(tname, owner_table, f, elem, coll, cols, depth);
   if body.refusal != "" { return body }
   full = body.columns;
 
   if addr == AddrKey {
     for k2 in coll.keys {
-      kn = element_column_at(full, k2.position);
+      kn = element_column_at(full, k2.position, depth);
       if kn == "" {
         return no_table("{owner_table}.{f.name}: a key of {coll.name} is not one of {elem.name}'s stored columns");
       }
@@ -1481,13 +1490,108 @@ fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) 
   // whose lookup no index serves — so omitting it builds a database this
   // collection's own reader cannot bind to.
   if addr == AddrOrdinal && len(coll.keys) > 0 {
-    kix = key_index(tname, full, coll);
+    kix = key_index(tname, addr_cols, full, coll, depth);
     if kix.nm == "" {
       return no_table("{owner_table}.{f.name}: a key of {coll.name} is not one of {elem.name}'s stored columns");
     }
     ixs += [kix];
   }
   return TableDef { nm: tname, columns: full, indexes: ixs };
+}
+
+/// What this level's ordinal column is called: `ord`, then `ord_2`, `ord_3`.
+///
+/// The INHERITED address columns keep their names, so a join is name-to-name at
+/// every depth and only the new level needs a fresh one. Naming it after the
+/// field instead would put the path in a COLUMN, and the path already lives in
+/// the table name.
+fn ordinal_name(addr_cols: vector<ColumnDef>) -> text {
+  n = 0;
+  for c in addr_cols {
+    if c.src == SrcOrdinal { n += 1 }
+  }
+  if n == 0 { return "ord" }
+  return "ord_{n + 1}";
+}
+
+/// The columns that ADDRESS a row of this table — its own address index, read
+/// back as columns.
+///
+/// A deeper table inherits its parent's address, and this is where that address
+/// is stated: the index the derivation already built. Nothing rebuilds the rule
+/// at depth, which is the whole of the S7 generalisation — the address function
+/// is asked once per level and answers for that level.
+pub fn address_columns(self: TableDef) -> vector<ColumnDef> {
+  out: vector<ColumnDef> = [];
+  ix = self.indexes[0] ?? IndexDef { nm: "" };
+  for ic in ix.columns {
+    for c in self.columns {
+      if c.nm == ic.nm { out += [c] }
+    }
+  }
+  return out;
+}
+
+/// A table's address, seen from ONE LEVEL DOWN.
+///
+/// `SrcField` means "this table's own element", and one level down that is no
+/// longer true — a `hash` child's key column is one of its element's fields, and
+/// in its child it is an ANCESTOR's field. Re-tagging it, with the depth it came
+/// from, is the whole of what descending costs; everything else is inherited
+/// verbatim, names included.
+fn inherited_address(addr: vector<ColumnDef>, parent_depth: integer) -> vector<ColumnDef> {
+  out: vector<ColumnDef> = [];
+  for c in addr {
+    if c.src == SrcField {
+      out += [ColumnDef { nm: c.nm, kind: c.kind, nullable: c.nullable,
+                          position: c.position, src: SrcOwnerKey, depth: parent_depth }];
+    } else {
+      out += [c];
+    }
+  }
+  return out;
+}
+
+/// One collection field's table, and every table its own element implies below
+/// it — depth first, each parent before its children.
+///
+/// That order is the order a writer must send them in, so nothing downstream
+/// re-derives it. A refusal anywhere collapses the branch, and `derive_tables`
+/// collapses the whole answer: a partial schema builds a database whose own
+/// reader disagrees with its writer.
+fn derive_branch(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
+                 depth: integer) -> vector<TableDef> {
+  out: vector<TableDef> = [];
+  child = derive_child(owner_table, addr_cols, f, depth);
+  out += [child];
+  if child.refusal != "" { return out }
+
+  ct = type_named(f.type_name);
+  if ct == null { return out }
+  coll = ct ?? no_type();
+  et = type_named(coll.element);
+  if et == null { return out }
+  elem = et ?? no_type();
+  if elem.kind != RecordKind && elem.kind != VariantKind { return out }
+
+  // The grandchildren are addressed by THIS table's whole address plus their
+  // own — which is the invariant unchanged, applied to an owner that is itself
+  // an element.
+  next_addr = inherited_address(child.address_columns(), depth);
+  for gf in elem.fields {
+    if !is_data(gf) { continue }
+    if !is_child_collection(gf) { continue }
+    sub = derive_branch(child.nm, next_addr, gf, depth + 1);
+    for s in sub {
+      if s.refusal != "" {
+        bad: vector<TableDef> = [];
+        bad += [s];
+        return bad;
+      }
+      out += [s];
+    }
+  }
+  return out;
 }
 
 /// The child column filled by the ELEMENT's field at `position`, or `""`.
@@ -1501,9 +1605,9 @@ fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) 
 /// it the key — a plausible index over the wrong column. Byte 0 is where a
 /// struct's first stored field lives, which makes this the common case rather
 /// than a corner.
-fn element_column_at(cols: vector<ColumnDef>, position: integer) -> text {
+fn element_column_at(cols: vector<ColumnDef>, position: integer, depth: integer) -> text {
   for c in cols {
-    if c.src == SrcField && c.position == position { return c.nm }
+    if c.src == SrcField && c.depth == depth && c.position == position { return c.nm }
   }
   return "";
 }
@@ -1515,13 +1619,17 @@ fn element_column_at(cols: vector<ColumnDef>, position: integer) -> text {
 /// does for a parent. Two indexes share this table, and a fixed suffix cannot
 /// collide with `_by_owner` whatever the element's fields are called — so the
 /// duplicate-index-name failure is removed rather than detected.
-fn key_index(tname: text, cols: vector<ColumnDef>, coll: TypeInfo) -> IndexDef {
+fn key_index(tname: text, addr_cols: vector<ColumnDef>, cols: vector<ColumnDef>,
+             coll: TypeInfo, depth: integer) -> IndexDef {
+  // The INHERITED address prefixes it, and this level's own ordinal does not:
+  // the key is an ALTERNATIVE way into the same collection, so it must be
+  // scoped to the collection and not to a position within it. Filtering `cols`
+  // by `SrcOwnerKey` instead would drop an ancestor's ORDINAL, which below the
+  // first level is part of what says which collection this is.
   kixc: vector<IndexColumn> = [];
-  for c in cols {
-    if c.src == SrcOwnerKey { kixc += [IndexColumn { nm: c.nm }] }
-  }
+  for c in addr_cols { kixc += [IndexColumn { nm: c.nm }] }
   for k in coll.keys {
-    kn = element_column_at(cols, k.position);
+    kn = element_column_at(cols, k.position, depth);
     if kn == "" { return IndexDef { nm: "" } }
     kixc += [IndexColumn { nm: kn, ascending: k.ascending }];
   }
@@ -1535,19 +1643,18 @@ fn key_index(tname: text, cols: vector<ColumnDef>, coll: TypeInfo) -> IndexDef {
 /// Columns only, and the caller builds the indexes: a `hash`'s address index
 /// needs the element's key columns, which do not exist until this returns.
 ///
-/// Two failure paths are peculiar to a record element, and both are silent
-/// without a check here:
+/// **A collection inside the element is SKIPPED here** (@PLN23 S7): it is a
+/// grandchild table of its own, derived by `derive_branch` after this one, and
+/// putting it in a column would be the same mistake as flattening a collection
+/// into its owner.
 ///
-/// - **A collection inside the element** is a grandchild table, addressed by
-///   (owner, ord, ord). The rule extends to it and the derivation does not
-///   recurse yet, so it refuses and names the step rather than dropping the
-///   field.
-/// - **A name collision.** The address columns are named by this derivation and
-///   the element's are named by its author, so a `Tag` with a field called `ord`
-///   produces a `CREATE TABLE` with two columns of one name. Only the engine
-///   would notice, and only the engines that reject it.
+/// One failure path is peculiar to a record element and silent without a check:
+/// **a name collision.** The address columns are named by this derivation and
+/// the element's are named by its author, so a `Tag` with a field called `ord`
+/// produces a `CREATE TABLE` with two columns of one name. Only the engine would
+/// notice, and only the engines that reject it.
 fn child_body(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
-              coll: TypeInfo, addr_cols: vector<ColumnDef>) -> TableDef {
+              coll: TypeInfo, addr_cols: vector<ColumnDef>, depth: integer) -> TableDef {
   if elem.kind != RecordKind && elem.kind != VariantKind {
     value_kind = column_type(elem.kind);
     if value_kind == ColOther {
@@ -1556,7 +1663,8 @@ fn child_body(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
     scalar = addr_cols;
     // A scalar element has no fields, so the element IS the value and the
     // column is named for that rather than for a field that does not exist.
-    scalar += [ColumnDef { nm: "value", kind: value_kind, nullable: false, src: SrcElement }];
+    scalar += [ColumnDef { nm: "value", kind: value_kind, nullable: false,
+                           src: SrcElement, depth: depth }];
     return TableDef { nm: tname, columns: scalar };
   }
 
@@ -1569,9 +1677,7 @@ fn child_body(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
   cols = addr_cols;
   for ef in elem.fields {
     if !is_data(ef) { continue }
-    if is_child_collection(ef) {
-      return no_table("{owner_table}.{f.name} holds {elem.name}, whose {ef.name} is a collection of its own — @PLN23 S7");
-    }
+    if is_child_collection(ef) { continue }
     ek = column_type(ef.kind);
     if ek == ColOther {
       return no_table("{owner_table}.{f.name}: {elem.name}.{ef.name} is a {ef.type_name}, which is not one column");
@@ -1582,11 +1688,13 @@ fn child_body(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
       }
     }
     cols += [ColumnDef { nm: ef.name, kind: ek, nullable: ef.nullable,
-                         position: ef.position, src: SrcField }];
+                         position: ef.position, src: SrcField, depth: depth }];
   }
-  if len(cols) == len(addr_names) {
-    return no_table("{owner_table}.{f.name} holds {elem.name}, which has no stored columns");
-  }
+  // No refusal when the element contributes no column of its own. Once a
+  // collection field becomes a table rather than a column, an element whose only
+  // fields are collections is an ordinary shape, and its row is its ADDRESS —
+  // which is what says that element exists and is what its own children hang
+  // from.
   return TableDef { nm: tname, columns: cols };
 }
 
@@ -1655,17 +1763,30 @@ pub fn derive_tables(t: TypeInfo) -> vector<TableDef> {
     return out;
   }
 
+  // The root's key columns, named and tagged as the address every table below
+  // inherits. The renaming happens ONCE, here: `id` becomes `doc_id` at the
+  // first level and is carried down untouched after that, so a join is
+  // name-to-name at every depth.
+  root_addr: vector<ColumnDef> = [];
+  for kc in key_cols {
+    root_addr += [ColumnDef { nm: owner_column(parent.nm, kc.nm), kind: kc.kind,
+                              nullable: false, position: kc.position,
+                              src: SrcOwnerKey, depth: 0 }];
+  }
+
   out += [parent];
   for f in elem.fields {
     if !is_data(f) { continue }
     if !is_child_collection(f) { continue }
-    child = derive_child(parent.nm, key_cols, f);
-    if child.refusal != "" {
-      empty: vector<TableDef> = [];
-      empty += [child];
-      return empty;
+    branch = derive_branch(parent.nm, root_addr, f, 1);
+    for b in branch {
+      if b.refusal != "" {
+        empty: vector<TableDef> = [];
+        empty += [b];
+        return empty;
+      }
+      out += [b];
     }
-    out += [child];
   }
   return out;
 }

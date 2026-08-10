@@ -2377,6 +2377,25 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
 ///           one element type are views of one record set (loft#843), so both
 ///           child tables hold all three.
 ///
+/// @PLN23 S7 recurses: a collection inside a record ELEMENT is a table of its
+/// own, addressed by (the root's key, the parent element's address, its own).
+///
+///   pieces 1|0|0|10;1|0|1|11;1|1|0|12;1|1|1|13;2|0|0|10;2|0|1|11;2|1|0|14
+///           Two ledgers, two marks each, two pieces each — the smallest shape
+///           where each of the THREE address levels is separately load-bearing.
+///           Both ledgers have a mark `A` and both `A`s hold pieces 10 and 11,
+///           so dropping `ledger_id` merges the ledgers, dropping `ord` merges
+///           `A`'s pieces with `B`'s, and dropping `ord_2` collapses the pieces
+///           within one mark. Three different wrong answers, and none of them is
+///           "fewer rows than expected".
+///   marks 1|0|A;1|1|B;2|0|A;2|1|C   the repeated label, one level up.
+///   permute pid=11,ord_2=1,ord=0,ledger_id=1,   ONE row built from a REVERSED
+///           definition. The address columns come out outer→inner, so the two
+///           ordinals are always in depth order and a writer counting them in
+///           ROW order agrees on every other line here. Reversing the columns is
+///           the only thing that tells `ords[c.depth]` from a counter — without
+///           it, `ColumnDef.depth` is a field no test could distinguish from one.
+///
 /// sqlite, so a machine with no database still runs it.
 #[test]
 fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::Result<()> {
@@ -2404,6 +2423,11 @@ fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::
         "rank   7|0|1|a;7|1|2|b;7|2|3|c;9|0|6|g;9|1|8|h",
         "beats  1|0|1|y;1|1|1|x;1|2|2|z",
         "byname 1|1|x;1|1|y;1|2|z",
+        "depth  tables=3 grandchild=ledger_marks_pieces",
+        "ledger 1|one;2|two",
+        "marks  1|0|A;1|1|B;2|0|A;2|1|C",
+        "pieces 1|0|0|10;1|0|1|11;1|1|0|12;1|1|1|13;2|0|0|10;2|0|1|11;2|1|0|14",
+        "permute pid=11,ord_2=1,ord=0,ledger_id=1,",
         "children_live ok",
     ];
 

@@ -193,7 +193,9 @@ alongside one.
 | **S6a** | a `vector<scalar>` field | **done** — one child table, columns `(owner key, ord, value)`, and `element_address` is the one place the address rule is stated |
 | **S6b** | a `vector<record>` field | **done** — the same address columns, and one column per stored field of the element. Written to sqlite and read back on both loft backends: § S6b below |
 | **S6c** | a keyed sub-collection | **done** — `hash` addresses by its declared key and carries no ordinal; `sorted` / `index` / `trie` take the ordinal and their key gets its own index; `spatial` refuses. § S6c below |
-| **S7** | the mapping generalises | the single address function drives DDL, write, read; migration on a changed struct |
+| **S7a** | the derivation RECURSES | **done** — a collection inside a record element is a grandchild table, addressed by (root key, the parent element's address, its own), to any depth. § S7a below |
+| **S7b** | inline structs flatten | BLOCKED on a reflection gap, § S7b below — not started |
+| **S7c** | migration on a changed struct | not designed, § S7c below |
 
 S1–S3 are worth doing even if the mapping is never built: they are the proof
 @PLN24 has been waiting for since arc F was written, on a real library rather
@@ -371,6 +373,112 @@ so rendering it would make a table loft MADE and a table loft FOUND differ in a
 field — the single property @PLN133 rests on. The deviation stays recorded rather
 than half-closed; closing it means teaching `introspect` to read uniqueness
 first.
+
+## S7a — the derivation recurses, and nothing restates the rule at depth
+
+The invariant does not change one level down; only what counts as "the owner"
+does. A grandchild's owner is an ELEMENT, whose own identity is (the root's key,
+its address) — so the grandchild's address is that, plus its own:
+
+```
+doc                     (id, title)
+doc_marks               (doc_id, ord, label)
+doc_marks_pieces        (doc_id, ord, ord_2, pid)
+doc_deep_inner_tags     (doc_id, ord, ord_2, ord_3, value)
+```
+
+**Each level asks the table above it for its address**, rather than rebuilding
+the rule from the type: `address_columns` reads back the address index the
+derivation already built. That is the S7 claim in one function — the address
+rule is stated once and consulted per level, so a fifth re-assertion site never
+appears no matter how deep the graph goes.
+
+**The inherited columns keep their names**, so a join is name-to-name at every
+depth and only the new level needs a fresh one: `ord`, `ord_2`, `ord_3`, numbered
+by how many ordinals the row INHERITS. Naming them after their field instead
+would put the path in a COLUMN, and the path already lives in the table name —
+which is also what lets two collections under one element share every address
+column without colliding.
+
+**Descending costs exactly one re-tag.** `SrcField` means "this table's own
+element", and one level down that is no longer true: a `hash` child's key column
+is one of ITS element's fields, and in its child it is an ancestor's. So
+`inherited_address` re-tags those as `SrcOwnerKey` with the depth they came
+from, and everything else is inherited verbatim. A collection inside a hash
+element shows both halves at once:
+
+```
+hdoc_seen       (hdoc_id, hl, ord?)          hl is SrcField   @1
+hdoc_seen_bits  (hdoc_id, hl, ord, value)    hl is SrcOwnerKey@1, and the new
+                                             level's ordinal is `ord`, not
+                                             `ord_2`, because a hash inherits no
+                                             ordinal to number past
+```
+
+**`ColumnDef.depth` is what stops the write path counting again.** A grandchild
+row has two `SrcOrdinal` columns, and a writer telling them apart by their ORDER
+would be doing exactly what `ColumnSource` removed one level up. With depth the
+walk is `ords[c.depth]` at any depth, and it assumes nothing about column order.
+
+That last point needed a test built specially, because it is invisible by
+default: the address columns come out outer→inner, so the two ordinals are always
+in depth order and a counter agrees with `ords[c.depth]` on every ordinary row.
+`children_live` therefore builds one row from a definition whose columns are
+REVERSED — without that line, `depth` is a field no test could distinguish from a
+counter.
+
+**An element whose only fields are collections is now an ordinary shape.** Its
+row is its ADDRESS, which is what says the element exists and is what its own
+children hang from. Before S7a that refused as "has no stored columns", which was
+right only while a collection field could not become a table.
+
+## S7b — inline structs, and the reflection gap that blocks them
+
+The design's first stated fact is that *an inline struct has no identity, so it
+has no table*: `origin` flattens to `origin_x` / `origin_y`. That is **not
+built**, and the reason is worth recording because it is not about the mapping.
+
+Measured: `field_value(doc, <origin's position>)` answers `kind = RecordKind`
+with **no payload**. Value reflection SEES a nested record and hands back no way
+to descend into it, so there is no reflective route from a `Doc` to `origin.x`.
+
+A concrete walk can still read it by naming the field — `field_value(d.origin,
+x_position)` works — but then the row walk names a FIELD, and *"it names no
+column and no field"* is the property S5 and S6 exist to keep. Shipping the DDL
+half alone would be worse: a table whose columns the generic write path cannot
+fill, which is the reader-disagrees-with-writer failure this whole derivation
+refuses elsewhere.
+
+So S7b waits on value reflection gaining a handle to a nested record — the same
+shape of gap as the three @PLN23 already recorded in
+[INTERFACES.md](../../INTERFACES.md), and a @PLN127 question rather than a
+@PLN23 one. Until then a nested record refuses, naming the field, exactly as it
+did before.
+
+## S7c — migration, and why "the address function drives it" is not an answer
+
+Still not designed, and the ladder's one-word entry for it was the weakest line
+in this document. What exists is the raw material: `reconcile` already compares
+the definition loft WANTS against the one the database HAS and refuses with the
+column or index it is about. Migration is the step that turns those refusals into
+a plan.
+
+The three cases are not one problem:
+
+- **A field GAINED** is the easy one: `ADD COLUMN`, nullable or with a default,
+  and the existing rows are answerable.
+- **A field LOST** has no safe automatic answer. Dropping the column destroys
+  data that a rolled-back binary would want; leaving it makes the table
+  unwritable when it is `NOT NULL` with no default.
+- **A field RENAMED is indistinguishable from one dropped and one added**, by
+  construction — reflection reports names and positions, and a rename changes
+  both. Nothing in the type says the two are the same field, so the answer has to
+  come from a declaration the author writes, which is the same missing piece the
+  "declared mapping" note under § S4 already names.
+
+That last one is why the address function cannot drive it: the address rule
+answers *where a value goes*, and migration asks *which old value is this new
+one*. They are different questions, and only the first is derivable.
 
 ## S6 writes N graphs REGROUPED BY TABLE, not one graph at a time
 

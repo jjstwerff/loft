@@ -88,9 +88,44 @@ struct S6Own { const name: text, s6docown_id: integer }
 struct S6DocOwn { const id: integer, items: vector<S6Own> = [] }
 struct S6WorldOwn { docs: hash<S6DocOwn[id]> = [] }
 
+// @PLN23 S7 — a collection inside a record ELEMENT is a table of its own,
+// addressed by (the root's key, the parent element's address, its own).
 struct S6Deep { const name: text, marks: vector<integer> = [] }
 struct S6DocDeep { const id: integer, items: vector<S6Deep> = [] }
 struct S6WorldDeep { docs: hash<S6DocDeep[id]> = [] }
+
+// Depth 3, and two collections under one element: the ordinals are numbered by
+// how many the row INHERITS, not by which field they belong to.
+struct S7Thing { const tid: integer }
+struct S7Note { const label: text, tags: vector<integer> = [], things: vector<S7Thing> = [] }
+struct S7Deep { const d: integer, inner: vector<S7Note> = [] }
+struct S7DocDeep { const id: integer, deep: vector<S7Deep> = [] }
+struct S7WorldDeep { docs: hash<S7DocDeep[id]> = [] }
+
+// A collection inside a HASH element. The inherited address is (owner, key) and
+// carries no ordinal, so the new level's is `ord` rather than `ord_2` — and the
+// inherited key column stops being one of THIS element's fields.
+struct S7HNote { const hl: text, bits: vector<integer> = [] }
+struct S7HDoc { const id: integer, seen: hash<S7HNote[hl]> = [] }
+struct S7HWorld { docs: hash<S7HDoc[id]> = [] }
+
+// A KEYED grandchild: the address rule applies unchanged one level down.
+struct S7KTag { const nm: text, v: integer }
+struct S7KNote { const label: text, byname: hash<S7KTag[nm]> = [] }
+struct S7KDoc { const id: integer, marks: vector<S7KNote> = [] }
+struct S7KWorld { docs: hash<S7KDoc[id]> = [] }
+
+// The collision one level down: an element field called `ord_2`.
+struct S7Clash { const c: text, ord_2: integer }
+struct S7ClashNote { const label: text, items: vector<S7Clash> = [] }
+struct S7ClashDoc { const id: integer, marks: vector<S7ClashNote> = [] }
+struct S7ClashWorld { docs: hash<S7ClashDoc[id]> = [] }
+
+// An element whose ONLY fields are collections. Its row is its address, which
+// is what says the element exists and is what its children hang from.
+struct S7Bare { pieces: vector<integer> = [] }
+struct S7BareDoc { const id: integer, bares: vector<S7Bare> = [] }
+struct S7BareWorld { docs: hash<S7BareDoc[id]> = [] }
 
 // A nullable element field, and a composite owner key: two facts the child
 // table must carry through from a place other than its own element.
@@ -594,13 +629,6 @@ fn main() {
   assert(owr.find("s6docown_id") != null && owr.find("collides") != null,
     "S6b: an element field named like the owner column must refuse: {owr}");
 
-  wdp = S6WorldDeep { };
-  ti_wdp = type_of(wdp.docs);
-  dp = derive_tables(ti_wdp);
-  assert(len(dp) == 1, "S6b: a nested collection must collapse the whole answer");
-  dpr = (dp[0] ?? no_def()).refusal;
-  assert(dpr.find("marks") != null && dpr.find("S7") != null,
-    "S6b: a collection inside the element must refuse naming S7: {dpr}");
 
   // --- @PLN23 S6c: a KEYED sub-collection ------------------------------------
   //
@@ -702,6 +730,123 @@ fn main() {
   sptr = (spt[0] ?? no_def()).refusal;
   assert(sptr.find("sp") != null && sptr.find("spatial") != null,
     "S6c: a spatial child must refuse naming the field: {sptr}");
+
+  // --- @PLN23 S7: the derivation RECURSES -----------------------------------
+  //
+  // The invariant does not change one level down; only what counts as "the
+  // owner" does. A grandchild's owner is an ELEMENT, whose own identity is (the
+  // root's key, its address) — so the grandchild's address is that, plus its
+  // own. Nothing here re-derives the rule: each level asks the table above it
+  // for its address index, which is where the derivation already stated it.
+  wdp = S6WorldDeep { };
+  ti_wdp = type_of(wdp.docs);
+  dp = derive_tables(ti_wdp);
+  assert(len(dp) == 3, "S7: owner + child + grandchild, got {len(dp)}");
+  gkid = dp[2] ?? no_def();
+  assert(gkid.nm == "s6docdeep_items_marks", "S7 grandchild name {gkid.nm}");
+  ngk = "";
+  for gc in gkid.columns { ngk += "{gc.nm}," }
+  assert(ngk == "s6docdeep_id,ord,ord_2,value,", "S7 grandchild columns [{ngk}]");
+  gix = gkid.indexes[0] ?? no_index();
+  assert(index_columns(gix) == "s6docdeep_id, ord, ord_2",
+    "S7 grandchild address [{index_columns(gix)}]");
+  // The INHERITED columns keep their names, so a join to the parent is
+  // name-to-name; only the new level needed one.
+  pkid = dp[1] ?? no_def();
+  assert(pkid.has_column("ord") && gkid.has_column("ord"),
+    "S7: the inherited ordinal must keep its name at both levels");
+
+  // The write path tells two ordinals apart by DEPTH, never by their order in
+  // the row — the counting `ColumnSource` removed one level up.
+  o1 = gkid.column_named("ord") ?? no_col();
+  o2 = gkid.column_named("ord_2") ?? no_col();
+  assert(o1.src == SrcOrdinal && o1.depth == 1, "S7 ord depth {o1.depth}");
+  assert(o2.src == SrcOrdinal && o2.depth == 2, "S7 ord_2 depth {o2.depth}");
+  gval = gkid.column_named("value") ?? no_col();
+  assert(gval.src == SrcElement && gval.depth == 2, "S7 value {gval.src}@{gval.depth}");
+
+  // Depth THREE, and two collections under one element. `ord_2` is decided by
+  // how many ordinals the row INHERITS, not by which field it belongs to — so
+  // two siblings both get `ord_2`, in two different tables.
+  w73 = S7WorldDeep { };
+  ti_73 = type_of(w73.docs);
+  d3 = derive_tables(ti_73);
+  n3names = "";
+  for dt3 in d3 { n3names += "{dt3.nm}," }
+  assert(n3names == "s7docdeep,s7docdeep_deep,s7docdeep_deep_inner,s7docdeep_deep_inner_tags,s7docdeep_deep_inner_things,",
+    "S7 depth-3 tables [{n3names}]");
+  deep3 = d3[3] ?? no_def();
+  nd3 = "";
+  for dc in deep3.columns { nd3 += "{dc.nm}," }
+  assert(nd3 == "s7docdeep_id,ord,ord_2,ord_3,value,", "S7 depth-3 columns [{nd3}]");
+  o3 = deep3.column_named("ord_3") ?? no_col();
+  assert(o3.depth == 3, "S7 ord_3 depth {o3.depth}");
+  // Two collections under ONE element give two tables with the SAME address —
+  // `tags` and `things` both hang off an `S7Note` at depth 3. What keeps them
+  // apart is the field path in the TABLE NAME, which is the rule that also lets
+  // them share every address column without colliding.
+  sib = d3[4] ?? no_def();
+  assert(sib.nm == "s7docdeep_deep_inner_things", "S7 sibling name {sib.nm}");
+  assert(index_columns(sib.indexes[0] ?? no_index()) == index_columns(deep3.indexes[0] ?? no_index()),
+    "S7: two siblings under one element share an address");
+  assert(sib.has_column("tid") && !sib.has_column("value"),
+    "S7: and differ only in what the element contributes");
+
+  // A collection inside a HASH element. The inherited address is (owner, key)
+  // and carries NO ordinal, so this level's is `ord`; and the inherited key
+  // column stops being one of this table's own fields, which is the one thing
+  // descending has to change.
+  w7h = S7HWorld { };
+  ti_7h = type_of(w7h.docs);
+  dh = derive_tables(ti_7h);
+  assert(len(dh) == 3, "S7 hash-parent: three tables, got {len(dh)}");
+  hg = dh[2] ?? no_def();
+  nhg = "";
+  for hc in hg.columns { nhg += "{hc.nm}," }
+  assert(nhg == "s7hdoc_id,hl,ord,value,", "S7 hash-parent grandchild [{nhg}]");
+  hl = hg.column_named("hl") ?? no_col();
+  assert(hl.src == SrcOwnerKey && hl.depth == 1,
+    "S7: an inherited key column is an ANCESTOR's field, got {hl.src}@{hl.depth}");
+  // …and in the PARENT it is still that element's own field.
+  hp = dh[1] ?? no_def();
+  hpl = hp.column_named("hl") ?? no_col();
+  assert(hpl.src == SrcField && hpl.depth == 1, "S7 parent key column {hpl.src}@{hpl.depth}");
+
+  // A KEYED grandchild: the address rule is the same one level down, so a hash
+  // under a vector element is addressed by (root key, parent ordinal, its key)
+  // and carries no ordinal of its own.
+  w7k = S7KWorld { };
+  ti_7k = type_of(w7k.docs);
+  dk = derive_tables(ti_7k);
+  kg = dk[2] ?? no_def();
+  nkg = "";
+  for kc2 in kg.columns { nkg += "{kc2.nm}," }
+  assert(nkg == "s7kdoc_id,ord,nm,v,", "S7 keyed grandchild [{nkg}]");
+  kgi = kg.indexes[0] ?? no_index();
+  assert(index_columns(kgi) == "s7kdoc_id, ord, nm", "S7 keyed grandchild address [{index_columns(kgi)}]");
+  assert(!kg.has_column("ord_2"), "S7: a keyed grandchild has no ordinal of its own");
+
+  // An element whose only fields are COLLECTIONS is an ordinary shape now: its
+  // row is its address, which is what says the element exists and is what its
+  // own children hang from.
+  w7b = S7BareWorld { };
+  ti_7b = type_of(w7b.docs);
+  db = derive_tables(ti_7b);
+  assert(len(db) == 3, "S7 bare element: three tables, got {len(db)}");
+  bare = db[1] ?? no_def();
+  nb2 = "";
+  for barec in bare.columns { nb2 += "{barec.nm}," }
+  assert(nb2 == "s7baredoc_id,ord,", "S7 bare element columns [{nb2}]");
+
+  // The collision one level down. The address columns are named by this
+  // derivation and the element's by its author, so `ord_2` can be both.
+  w7c = S7ClashWorld { };
+  ti_7c = type_of(w7c.docs);
+  dc2 = derive_tables(ti_7c);
+  assert(len(dc2) == 1, "S7: a deep collision must collapse the whole answer");
+  dc2r = (dc2[0] ?? no_def()).refusal;
+  assert(dc2r.find("ord_2") != null && dc2r.find("collides") != null,
+    "S7: an element field called ord_2 must refuse naming it: {dc2r}");
 
   // `derive` is UNCHANGED and still answers one table: a record with a
   // collection field refuses there rather than quietly losing the field, which
