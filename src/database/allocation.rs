@@ -3208,6 +3208,106 @@ impl Stores {
         true
     }
 
+    /// @PLN134 — write a persisted IMAGE of the collection in `slot`, laid out
+    /// for PAGING, and leave the live store exactly where it was.
+    ///
+    /// The difference from [`bind_path`](Self::bind_path) is the whole point.
+    /// Binding snapshots the live bytes, so every record keeps its position and
+    /// the caller's `DbRef`s stay valid — a guarantee `store_persist_bind`
+    /// documents and must keep. But position IS the layout: a record number is a
+    /// word offset, so records claimed in insertion order are scattered across
+    /// the image, and a prefix query that returns 20 of them touches ~20 pages of
+    /// 64 KB to read a few hundred bytes each.
+    ///
+    /// So this writes a REBUILT copy instead. The rebuild re-claims every record
+    /// in its collection's own walk order — KEY order for a `trie` — and the copy
+    /// is a scratch store nobody holds a reference into, which is what makes
+    /// moving records legal here and not in the bind path. Measured on a 74 692
+    /// word vocabulary, one 20-record prefix query: 22 requests / 1.25 MB as
+    /// built, against 4 / 0.26 MB from this image.
+    ///
+    /// Nodes are laid out too, by the same [`relayout_tries`](Self::relayout_tries)
+    /// pass binding runs — on the COPY, so the live tree keeps its numbering.
+    ///
+    /// The image is sized to its content with no growth slack: binding leaves an
+    /// eighth because the file goes on being the live arena, and this file is a
+    /// artefact to read or ship. Answers `false` on any I/O or format error, and
+    /// on a store with no schema to walk — never a panic, matching every other
+    /// store builtin.
+    #[cfg(feature = "mmap")]
+    pub fn persist_copy(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        use crate::store::PRIMARY;
+        let idx = slot as usize;
+        if idx >= self.allocations.len() {
+            return false;
+        }
+        let (tp, root_words) = {
+            let s = &self.allocations[idx];
+            if s.free || s.known_type == u16::MAX {
+                return false;
+            }
+            let header = *s.addr::<i32>(PRIMARY, 0);
+            if header <= 0 {
+                return false;
+            }
+            (s.known_type, header as u32)
+        };
+        // A shape the rebuild cannot carry would come out of the copy wrong, and
+        // wrong is worse than refused — the same gate compaction applies.
+        if !self.type_is_compactable(tp, &mut Vec::new()) {
+            return false;
+        }
+        let Ok(dst_slot) = self.rebuild_into_scratch(slot, tp, root_words) else {
+            return false;
+        };
+        // On the COPY: this is the image a reader pages, and the live tree keeps
+        // the numbering its own references were handed out against.
+        let laid = self.relayout_tries(dst_slot);
+        let rebuilt = self.take_store(dst_slot);
+        self.release_slot(dst_slot);
+
+        let src_words = rebuilt.capacity_words();
+        let snapshot = {
+            let raw =
+                unsafe { std::slice::from_raw_parts(rebuilt.base_ptr(), (src_words as usize) * 8) };
+            raw.to_vec()
+        };
+        drop(rebuilt);
+        let live_end = store_image_live_end(&snapshot, src_words).unwrap_or(src_words);
+        let target_words = live_end.max(crate::store::MIN_BOUND_WORDS);
+        let Some(padded) = build_padded_store_image(&snapshot, src_words, target_words) else {
+            return false;
+        };
+        if std::fs::write(path, &padded).is_err() {
+            return false;
+        }
+        // Same sidecar the bind path writes, for the same reason: a paged or
+        // remote loader gates on it BEFORE range-reading foreign bytes, and an
+        // image written by this call is exactly the one that gets served.
+        let id = crate::schema_sidecar::LayoutIdentity::of(self, &[tp]);
+        if id.write_beside(path).is_err() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_persist_copy: could not write layout sidecar beside {}",
+                path.display()
+            );
+        }
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_persist_copy: wrote {} bytes, laid out {laid} trie(s) for paging",
+                padded.len()
+            );
+        }
+        true
+    }
+
+    /// No-op shim when the `mmap` feature is disabled — the image writer needs
+    /// the same file support binding does.
+    #[cfg(not(feature = "mmap"))]
+    #[allow(clippy::unused_self)]
+    pub fn persist_copy(&mut self, _slot: u16, _path: &std::path::Path) -> bool {
+        false
+    }
+
     /// No-op shim when the `mmap` feature is disabled.  Always returns
     /// `false` so consumers branch into their non-mmap fallback (today,
     /// JSON via `text as Struct`).  Avoids `cfg`-gating every caller.
@@ -3672,7 +3772,24 @@ impl Stores {
             // records WITHIN one.  Nothing would rewrite a foreign pointer at
             // the far end, so refuse rather than guess.
             Parts::DbRef => false,
-            Parts::Radix(..) | Parts::Trie(..) => false,
+            // A `trie` rebuilds through `copy_claims_trie_body`, which re-inserts
+            // every element into a fresh tree — and does it in KEY order, which is
+            // the placement @PLN134 wants an image to have. It was refused here
+            // when the kind landed (#804), appended to `Radix`'s refusal rather
+            // than reasoned about on its own; the deep copy it needs already
+            // existed and was already used for every other copy of a trie.
+            // `a_trie_survives_the_rebuild_and_comes_out_in_key_order` is the
+            // proof, and it asserts placement as well as every answer.
+            Parts::Trie(..) => self.type_is_compactable(
+                match &self.types[tp as usize].parts {
+                    Parts::Trie(v, _) => *v,
+                    _ => unreachable!("matched Trie"),
+                },
+                seen,
+            ),
+            // `spatial` stays refused: it shares the tree but keys on a bounding
+            // box, and no measurement says its rebuild is sound (@PLN134 item 3).
+            Parts::Radix(..) => false,
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
                 .clone()
                 .iter()
@@ -3687,6 +3804,72 @@ impl Stores {
         };
         seen.pop();
         ok
+    }
+
+    /// Rebuild the collection rooted in `slot` into a fresh SCRATCH slot, and
+    /// answer that slot.  The caller owns it: `take_store` + `release_slot`.
+    ///
+    /// The rebuild is a deep copy through [`Stores::copy_claims`], so the
+    /// destination's records are claimed in the order each kind's own walk hands
+    /// them out — which for a `trie` is KEY order (`trie_db::records` walks the
+    /// tree in-order), and that is the placement a paged prefix query is cheap
+    /// on. It is the same pass for every caller; what differs is what they do
+    /// with the result, so it lives here once rather than in each.
+    ///
+    /// This moves records by construction. It is therefore safe only where the
+    /// caller can account for every interior `DbRef` — see [`compact_slot`]'s
+    /// note, which is the reasoning in full.
+    ///
+    /// [`compact_slot`]: Self::compact_slot
+    fn rebuild_into_scratch(
+        &mut self,
+        slot: u16,
+        tp: u16,
+        root_words: u32,
+    ) -> Result<u16, &'static str> {
+        use crate::store::PRIMARY;
+        // The destination's FIRST claim is the root, so it lands at PRIMARY —
+        // where the source has it, and where the caller's reference points.
+        let mut dst = crate::store::Store::new_in_use(root_words + PRIMARY + 1);
+        let dst_root = dst.claim(root_words);
+        if dst_root != PRIMARY {
+            return Err("a fresh store did not hand out PRIMARY first");
+        }
+        // Carry the root block's raw bytes first: `copy_claims` rebuilds the
+        // heap children and rewrites the pointers into them, but says nothing
+        // about any inline bytes sharing the record.
+        let dst_slot = self.adopt_store(dst);
+        let src = DbRef {
+            store_nr: slot,
+            rec: PRIMARY,
+            pos: 8,
+        };
+        let to = DbRef {
+            store_nr: dst_slot,
+            rec: PRIMARY,
+            pos: 8,
+        };
+        self.copy_block_cross_store(
+            slot,
+            PRIMARY,
+            0,
+            dst_slot,
+            PRIMARY,
+            0,
+            (root_words as isize) * 8,
+        );
+        // Re-assert the destination's own block header: the raw copy above
+        // brought the SOURCE's size word with it, and the two blocks are the
+        // same size only because we claimed it that way.
+        *self.allocations[dst_slot as usize].addr_mut::<i32>(PRIMARY, 0) = root_words as i32;
+        self.copy_claims(&src, &to, tp);
+        // The scratch carries the schema it was rebuilt from. `compact_slot` sets
+        // this on the way out and could leave it until then; a caller that runs a
+        // SCHEMA-driven pass over the scratch cannot — `relayout_tries` reads
+        // `known_type` and silently does nothing without it, which is a layout
+        // quietly not applied rather than an error.
+        self.allocations[dst_slot as usize].set_known_type(tp);
+        Ok(dst_slot)
     }
 
     /// @PLN123 B2 — rebuild the collection rooted in `slot` into a densely
@@ -3803,41 +3986,7 @@ impl Stores {
             }
         }
 
-        // The destination's FIRST claim is the root, so it lands at PRIMARY —
-        // where the source has it, and where the caller's reference points.
-        let mut dst = crate::store::Store::new_in_use(root_words + PRIMARY + 1);
-        let dst_root = dst.claim(root_words);
-        if dst_root != PRIMARY {
-            return Err("a fresh store did not hand out PRIMARY first");
-        }
-        // Carry the root block's raw bytes first: `copy_claims` rebuilds the
-        // heap children and rewrites the pointers into them, but says nothing
-        // about any inline bytes sharing the record.
-        let dst_slot = self.adopt_store(dst);
-        let src = DbRef {
-            store_nr: slot,
-            rec: PRIMARY,
-            pos: 8,
-        };
-        let to = DbRef {
-            store_nr: dst_slot,
-            rec: PRIMARY,
-            pos: 8,
-        };
-        self.copy_block_cross_store(
-            slot,
-            PRIMARY,
-            0,
-            dst_slot,
-            PRIMARY,
-            0,
-            (root_words as isize) * 8,
-        );
-        // Re-assert the destination's own block header: the raw copy above
-        // brought the SOURCE's size word with it, and the two blocks are the
-        // same size only because we claimed it that way.
-        *self.allocations[dst_slot as usize].addr_mut::<i32>(PRIMARY, 0) = root_words as i32;
-        self.copy_claims(&src, &to, tp);
+        let dst_slot = self.rebuild_into_scratch(slot, tp, root_words)?;
 
         let mut rebuilt = self.take_store(dst_slot);
         // `take_store` leaves a freed sentinel but does NOT set the slot's free
