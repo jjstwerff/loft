@@ -208,6 +208,14 @@ pub struct CoroutineFrame {
     /// mutated between yields and any `DbRef` locals held by the generator may be stale.
     /// Always compiled in (was debug-only before CO1.9) so the guard fires in release too.
     pub saved_store_generations: Vec<(u16, u32)>,
+    /// Which occupant of this slot the frame is.
+    ///
+    /// A frame is freed on exhaustion (S26) and its slot handed to the next generator, so
+    /// the index alone does not identify a coroutine for longer than it lives.  Every handle
+    /// carries the stamp of the frame it was made for (`DbRef::pos`), and each entry point
+    /// compares it before touching the slot — otherwise the scope-exit free of an exhausted
+    /// handle would release whichever generator inherited its index (loft#835).
+    pub generation: u32,
 }
 
 /// Internal State of the interpreter to run bytecode.
@@ -296,6 +304,9 @@ pub struct State {
     pub(crate) stack_trace_lib_nr: u16,
     /// Coroutine frame storage (CO1.1).  Index 0 is always `None` (null sentinel).
     pub coroutines: Vec<Option<Box<CoroutineFrame>>>,
+    /// Stamp handed to the next coroutine frame, so a recycled slot is distinguishable
+    /// from the frame that held it before — see [`CoroutineFrame::generation`].
+    pub(crate) coroutine_generation: u32,
     /// Indices of currently-running coroutines in `coroutines`.
     pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
@@ -563,6 +574,7 @@ impl State {
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None], // index 0 = null sentinel
+            coroutine_generation: 1,
             active_coroutines: Vec::new(),
             generate_depth: 0,
             #[cfg(debug_assertions)]
@@ -1021,18 +1033,23 @@ impl State {
 
     // ── CO1.1 — Coroutine frame helpers ─────────────────────────────────────
 
-    /// Allocate a coroutine frame. Returns the index (always >= 1).
-    pub fn allocate_coroutine(&mut self, frame: CoroutineFrame) -> usize {
+    /// Allocate a coroutine frame.  Returns its index (always >= 1) and the generation
+    /// stamp that, together with the index, names THIS frame rather than whatever later
+    /// inherits its slot — see [`CoroutineFrame::generation`].
+    pub fn allocate_coroutine(&mut self, mut frame: CoroutineFrame) -> (usize, u32) {
+        let generation = self.coroutine_generation;
+        self.coroutine_generation = self.coroutine_generation.wrapping_add(1).max(1);
+        frame.generation = generation;
         // Reuse the first free slot (index >= 1).
         for (i, slot) in self.coroutines.iter_mut().enumerate().skip(1) {
             if slot.is_none() {
                 *slot = Some(Box::new(frame));
-                return i;
+                return (i, generation);
             }
         }
         let idx = self.coroutines.len();
         self.coroutines.push(Some(Box::new(frame)));
-        idx
+        (idx, generation)
     }
 
     /// Free a coroutine frame, making the slot available for reuse.
@@ -1041,17 +1058,110 @@ impl State {
     /// embedded in `stack_bytes` before the `Vec<u8>` backing is freed.  Without
     /// this, an early `break` from a generator loop leaks every text local that was
     /// live at the last yield point.
-    pub fn free_coroutine(&mut self, idx: usize) {
-        if idx > 0 && idx < self.coroutines.len() {
+    pub fn free_coroutine(&mut self, gen_ref: &DbRef) {
+        if self.coroutine_slot_matches(gen_ref) {
+            let idx = gen_ref.rec as usize;
+            let mut owned_stores: Vec<DbRef> = Vec::new();
             if let Some(frame) = self.coroutines[idx].as_mut()
                 && frame.status == CoroutineStatus::Suspended
             {
                 let d_nr = frame.d_nr;
                 let data_ptr = self.data_ptr; // raw ptr — no borrow conflict with frame
                 Self::drop_text_locals_in_bytes(d_nr, &mut frame.stack_bytes, data_ptr);
+                owned_stores =
+                    Self::owned_store_locals_in_bytes(d_nr, &mut frame.stack_bytes, data_ptr);
             }
             self.coroutines[idx] = None;
+            // After the slot is cleared, so a nested generator handle among these frees its
+            // own frame without re-entering this one.
+            for db in owned_stores {
+                // A local the generator's own scope exit already freed leaves a stale
+                // reference in the slot; skip anything whose store is no longer allocated
+                // rather than free it twice.
+                if db.store_nr != COROUTINE_STORE
+                    && ((db.store_nr as usize) >= self.database.allocations.len()
+                        || self.database.allocations[db.store_nr as usize].free)
+                {
+                    continue;
+                }
+                self.free_ref_db(db);
+            }
         }
+    }
+
+    /// The store-backed locals a SUSPENDED generator still owns, read out of its
+    /// serialised frame so they can be freed along with it.
+    ///
+    /// A generator frees its own heap locals from the tail of its body, and a generator
+    /// whose consumer stopped early never reaches that tail — so
+    /// `for x in steps() { … break … }` left the vector the generator was walking
+    /// allocated for the rest of the program (loft#835).  Stopping early is ordinary code,
+    /// not misuse: iterating until a match is found and breaking is the main reason to
+    /// reach for a generator, and `GOALS.md` § Goal E says a scope's heap memory is freed
+    /// with no exceptions the programmer has to learn.
+    ///
+    /// Only abandoned frames reach here — an exhausted one already ran its own
+    /// `OpFreeRef`s — and only locals the generator OWNS are collected, so a yielded view
+    /// of somebody else's store is left alone.  Each slot is zeroed once read, so a second
+    /// pass over the same frame frees nothing.
+    ///
+    /// # Safety
+    /// Must only be called for `Suspended` frames whose local region was zeroed at first
+    /// resume (Step 1 of S25.3): that is what makes a never-assigned slot read back as an
+    /// empty reference instead of as garbage.
+    fn owned_store_locals_in_bytes(
+        d_nr: u32,
+        bytes: &mut [u8],
+        data_ptr: *const Data,
+    ) -> Vec<DbRef> {
+        let mut owned = Vec::new();
+        if data_ptr.is_null() {
+            return owned;
+        }
+        // SAFETY: data_ptr is set in execute_argv and valid throughout execution.
+        let data = unsafe { &*data_ptr };
+        let Some(def) = data.definitions.get(d_nr as usize) else {
+            return owned;
+        };
+        let vars = &def.variables();
+        for v in 0..vars.count() {
+            if vars.is_argument(v) {
+                continue;
+            }
+            let tp = vars.tp(v);
+            // `Iterator` joins the heap types here: a generator local holding another
+            // generator's handle is freed through the same path, which `free_ref_db`
+            // routes back to this function for that frame.
+            if !Self::is_heap_type(tp) && !matches!(tp, Type::Iterator(_, _)) {
+                continue;
+            }
+            if !vars.owns_store(v) {
+                continue;
+            }
+            let slot = vars.stack(v);
+            if slot == u16::MAX {
+                continue;
+            }
+            let off = slot as usize;
+            if off + std::mem::size_of::<DbRef>() > bytes.len() {
+                continue; // local beyond the yield snapshot — never assigned
+            }
+            // SAFETY: stack_bytes holds each local at its original stack offset, written
+            // by the same `DbRef` layout `get_stack::<DbRef>` reads.  Unaligned on purpose.
+            #[allow(clippy::cast_ptr_alignment)]
+            let db: DbRef =
+                unsafe { std::ptr::read_unaligned(bytes.as_ptr().add(off).cast::<DbRef>()) };
+            unsafe {
+                std::ptr::write_bytes(bytes.as_mut_ptr().add(off), 0, std::mem::size_of::<DbRef>());
+            }
+            // `rec == 0` covers both the null sentinel and a slot the zeroed local region
+            // left untouched; neither names a store to free.
+            if db.rec == 0 {
+                continue;
+            }
+            owned.push(db);
+        }
+        owned
     }
 
     /// S25.3 (C24): compute the size of the local-variable region above the
@@ -1285,13 +1395,17 @@ impl State {
             #[cfg(debug_assertions)]
             saved_text_positions: std::collections::BTreeSet::new(),
             saved_store_generations: Vec::new(),
+            generation: 0, // stamped by allocate_coroutine
         };
-        let idx = self.allocate_coroutine(frame);
+        let (idx, generation) = self.allocate_coroutine(frame);
 
+        // `pos` carries the generation: a coroutine reference addresses no store, so the
+        // field is free, and every handle to this frame then names the frame rather than
+        // the index it happens to occupy.
         let db_ref = DbRef {
             store_nr: COROUTINE_STORE,
             rec: idx as u32,
-            pos: 0,
+            pos: generation,
         };
         self.put_stack(db_ref);
     }
@@ -1319,8 +1433,10 @@ impl State {
              (use a non-generator worker function in par())"
         );
         // S26: slot may be None — freed on exhaustion by coroutine_return.
-        // Treat as exhausted (same as the Exhausted variant).
-        if self.coroutines[idx].is_none() {
+        // Treat as exhausted (same as the Exhausted variant).  A generation mismatch is
+        // the same answer for the same reason: this handle's frame is gone, and whatever
+        // now occupies the slot belongs to somebody else.
+        if !self.coroutine_slot_matches(&gen_ref) {
             self.push_null_value(value_size);
             return;
         }
@@ -1482,14 +1598,30 @@ impl State {
         if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
             return true; // null iterator is exhausted
         }
-        let idx = gen_ref.rec as usize;
-        if idx >= self.coroutines.len() {
-            return true;
+        if !self.coroutine_slot_matches(gen_ref) {
+            return true; // the frame this handle named is gone
         }
-        match &self.coroutines[idx] {
+        match &self.coroutines[gen_ref.rec as usize] {
             Some(frame) => frame.status == CoroutineStatus::Exhausted,
             None => true,
         }
+    }
+
+    /// Does `gen_ref` still name a live frame — the right index AND the right occupant?
+    ///
+    /// A handle outlives the frame it points at: the frame is freed on exhaustion (S26)
+    /// while the variable holding the handle lives to the end of its scope, where its
+    /// `OpFreeRef` fires.  Comparing the generation stamp in `pos` is what stops that free
+    /// — and any late advance — from reaching the generator that inherited the slot.
+    pub(crate) fn coroutine_slot_matches(&self, gen_ref: &DbRef) -> bool {
+        if gen_ref.store_nr != COROUTINE_STORE || gen_ref.rec == 0 {
+            return false;
+        }
+        let idx = gen_ref.rec as usize;
+        self.coroutines
+            .get(idx)
+            .and_then(Option::as_ref)
+            .is_some_and(|frame| frame.generation == gen_ref.pos)
     }
 
     // CO1.6c: push a typed null sentinel onto the stack.
@@ -5471,6 +5603,7 @@ impl State {
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None],
+            coroutine_generation: 1,
             active_coroutines: Vec::new(),
             generate_depth: 0,
             #[cfg(debug_assertions)]

@@ -322,6 +322,59 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
     out
 }
 
+/// Emit `drop_stores` — release the heap locals a generator still owns when its handle is
+/// freed without the generator having exhausted.
+///
+/// A generator frees its own locals from the tail of its body, and a consumer that stops
+/// early never reaches that tail (loft#835).  Every scope-exit free the generator DOES run
+/// nulls its own field (`OpFreeRefEmitter` writes the `store_nr = u16::MAX` reset against
+/// `self.var_x` for a persistent local), so freeing exactly the fields that are still set
+/// frees each local once and only once.
+///
+/// Nothing is emitted for a generator with no owned heap local; the trait's no-op default
+/// stands.  `Type::Iterator` is included: a nested generator handle routes back through
+/// `OpFreeRef`, which frees that coroutine in turn.
+fn emit_drop_stores(
+    w: &mut dyn Write,
+    persistent: &[(u16, Type)],
+    data: &crate::data::Data,
+    def_nr: u32,
+) -> std::io::Result<()> {
+    let vars = data.def(def_nr).variables();
+    let owned: Vec<String> = persistent
+        .iter()
+        .filter(|(v, tp)| {
+            vars.owns_store(*v)
+                && matches!(
+                    tp,
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Enum(_, true, _)
+                        | Type::Iterator(_, _)
+                )
+        })
+        .map(|(v, _)| sanitize(vars.name(*v)))
+        .collect();
+    if owned.is_empty() {
+        return Ok(());
+    }
+    writeln!(w, "    fn drop_stores(&mut self, stores: &mut Stores) {{")?;
+    for name in &owned {
+        writeln!(
+            w,
+            "        if self.var_{name}.store_nr != u16::MAX {{ \
+             loft::codegen_runtime::coroutine_drop_local(stores, self.var_{name}, \"var_{name}\"); \
+             self.var_{name}.store_nr = u16::MAX; }}"
+        )?;
+    }
+    writeln!(w, "    }}")
+}
+
 /// Emit the struct definition for a coroutine state machine.
 #[allow(clippy::too_many_arguments)]
 fn emit_struct_def(
@@ -978,6 +1031,7 @@ impl Output<'_> {
             "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
         )?;
         self.emit_next_i64(w, &attrs, &segments, &tail, has_yf, &yield_tp)?;
+        emit_drop_stores(w, &persistent, self.data, def_nr)?;
         writeln!(w, "}}\n")?;
         self.coroutine_persistent_vars = prev_persistent;
         self.coroutine_allocated_vars = prev_allocated;

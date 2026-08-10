@@ -716,7 +716,7 @@ impl State {
         // explicitly so that text_owned, stack_bytes, and call_frames are released
         // when a `for` loop exits early (before the generator exhausts).
         if db.store_nr == super::COROUTINE_STORE {
-            self.free_coroutine(db.rec as usize);
+            self.free_coroutine(&db);
             return;
         }
         // Plan-57 Phase C: single-ownership (ref-count removed) — close the OS file

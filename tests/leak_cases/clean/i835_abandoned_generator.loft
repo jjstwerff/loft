@@ -1,0 +1,98 @@
+// loft#835 — a generator whose consumer stops early frees its backing store.
+//
+// A generator frees its own heap locals from the tail of its body, and an abandoned one
+// never reaches that tail: the vector `steps` was walking stayed allocated for the rest of
+// the program.  Stopping early is ordinary code — iterating until a match is found and
+// breaking is the main reason to reach for a generator at all.
+//
+// Every shape below abandons a generator that owns at least one heap local.  The controls
+// that were already clean before the fix (running to exhaustion, a range-backed generator,
+// an early break with no generator at all) live in the same file so a fix that leaked in
+// the other direction — freeing a store twice, or freeing one the generator still needed —
+// shows up here as a crash rather than as a silent pass.
+
+fn from_vector() -> iterator<integer> {
+  v = [10, 20, 30, 40, 50];
+  for x in v { yield x; }
+}
+
+fn two_heap_locals() -> iterator<integer> {
+  a = [1, 2, 3];
+  b = [4, 5, 6];
+  for x in a { yield x; }
+  for y in b { yield y; }
+}
+
+struct P { n: integer }
+
+fn from_struct_vector() -> iterator<integer> {
+  v = [P { n: 1 }, P { n: 2 }, P { n: 3 }];
+  for p in v { yield p.n; }
+}
+
+// Straight-line yields are lazy on BOTH backends, so this is the shape that pins the
+// native half: a loop-generator runs eagerly there (CL-9 / loft#836) and therefore always
+// reaches its own tail, which hid the native leak behind the interpreter's.
+fn straight_line_heap_locals() -> iterator<integer> {
+  a = [1, 2, 3];
+  yield a[0];
+  b = [4, 5, 6];
+  yield b[0];
+  yield 99;
+}
+
+fn from_range() -> iterator<integer> {
+  for i in 0..5 { yield i; }
+}
+
+fn plain_vector() -> vector<integer> {
+  [10, 20, 30, 40, 50]
+}
+
+pub fn test() {
+  // Abandoned — the shapes that leaked.
+  seen = 0;
+  for x in from_vector() { seen += x; if x >= 20 { break; } }
+  assert(seen == 30, "abandoned vector generator: {seen}");
+
+  seen2 = 0;
+  for x in two_heap_locals() { seen2 += x; if x >= 2 { break; } }
+  assert(seen2 == 3, "abandoned generator with two heap locals: {seen2}");
+
+  seen3 = 0;
+  for x in from_struct_vector() { seen3 += x; if x >= 2 { break; } }
+  assert(seen3 == 3, "abandoned generator over a vector of structs: {seen3}");
+
+  seen5 = 0;
+  for x in straight_line_heap_locals() { seen5 += x; if x >= 1 { break; } }
+  assert(seen5 == 1, "abandoned straight-line generator holding heap locals: {seen5}");
+
+  // Abandoned through a BOUND handle (loft#841 made this shape run at all).
+  g = from_vector();
+  seen4 = 0;
+  for x in g { seen4 += x; if x >= 20 { break; } }
+  assert(seen4 == 30, "abandoned bound handle: {seen4}");
+
+  // Controls — clean before the fix, and the frame's locals must not be freed twice.
+  total = 0;
+  for x in from_vector() { total += x; }
+  assert(total == 150, "generator run to exhaustion: {total}");
+
+  ranged = 0;
+  for x in from_range() { ranged += x; if x >= 2 { break; } }
+  assert(ranged == 3, "abandoned range generator: {ranged}");
+
+  v = plain_vector();
+  direct = 0;
+  for x in v { direct += x; if x >= 20 { break; } }
+  assert(direct == 30, "early break with no generator: {direct}");
+
+  // Two generators in sequence: the first exhausts and its slot is recycled, then the
+  // first handle's scope-exit free must not reach the second one's frame.
+  first = 0;
+  for x in from_vector() { first += x; }
+  second = 0;
+  for x in from_vector() { second += x; if x >= 20 { break; } }
+  assert(first == 150, "first generator exhausted: {first}");
+  assert(second == 30, "second generator abandoned after a slot recycle: {second}");
+}
