@@ -87,6 +87,23 @@ specifically:** the usual Linux build is LP64, so Fortran `INTEGER` is `int`, no
 `int64_t` — and that is one thing loft cannot check for you, because both builds export
 the same symbol names.
 
+**Libraries that keep your buffer** — FFTW's plan/execute split, zlib's `z_stream`,
+`sqlite3_bind_text(…, SQLITE_STATIC)` — bind by letting C own the memory. Allocate on
+the C side, hold the pointer as an `integer`, and copy in and out with `memcpy` (libc,
+so no shim and no `[c] libs` entry):
+
+```loft
+inp = fftw_malloc(n * 16);
+p = plan_dft_1d(n, inp, outp, -1, 64);
+load(inp, src, n * 16);      // #c "memcpy" "void*(void*, const void*, size_t)"
+execute(p);
+```
+
+Handing such a library a loft `vector` instead is a use-after-free — loft frees the
+vector at its last use, which is the call that handed the pointer over, and C reads
+whatever took its place. For FFTW the C-owned form is what its own documentation
+recommends anyway, since `fftw_malloc` is where the SIMD alignment comes from.
+
 ### A hash costs a third less memory, and fills faster
 
 `hash<T[key]>` used to give every entry a store record of its own — a header word each,

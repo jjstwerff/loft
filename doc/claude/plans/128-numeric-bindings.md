@@ -47,12 +47,14 @@ argument-collapsing shim" (it did not bind at all), and "a Fortran argument list
 slots per scalar" (it costs one).  Both came from measuring a fixture built to loft's own
 shape — the benchmark held the axis fixed for free.
 
-**E6b is the one finding the plan closes WITHOUT a fix.**  The retained-buffer case is a
-silent use-after-free on both backends; the earlier ✅ came from varying allocation count
-instead of whether the vector is used again.  Unlike C108's overrun it cannot be caught at the
-declaration — the detectable condition ("a vector's last use is a `#c` call") is the *common
-correct* case — so it needs a way to DECLARE retention, which is design work (Q5).  It removes
-FFTW as the cheap first consumer.  The working cells are guarantee probes in `tests/native.rs`.
+**E6b is the one finding the plan closes without a LANGUAGE fix — but it is not a gap.**
+Handing a **loft** vector to an API that retains it is a silent use-after-free on both
+backends, and unlike C108's overrun it cannot be caught at the declaration: the detectable
+condition ("a vector's last use is a `#c` call") is the *common correct* case.  The cure is
+that C owns the buffer — allocate on the C side, hold it as an opaque handle, `memcpy` in and
+out.  FFTW, zlib's `z_stream` and `sqlite3_bind_text(SQLITE_STATIC)` are all bindable that
+way; measured end to end for FFTW on both backends.  Why a retention DECLARATION would be the
+worse answer is under Q5.  The working cells are guarantee probes in `tests/native.rs`.
 
 **Issue:** [loft-lang/plans#128](https://github.com/loft-lang/plans/issues/128).
 
@@ -83,6 +85,7 @@ matters is that each is an oracle, not a recording.)
 | E5 | a scalar double in and out **by pointer** (arc B's idiom) | ✅ 5 | ✅ 5 |
 | E6 | a **retained** buffer read after the call returned, the vector USED again later | ✅ | ✅ |
 | E6b | the same, but the vector has **no later use** | ❌ **silent UAF** | ❌ **silent UAF** |
+| **E6c** | a retaining API over a **C-owned** buffer (the cure for E6b) | ✅ 18000 | ✅ 18000 |
 | E7 | **14 C argument slots** | ✅ 1015 | ✅ 1015 |
 | E7b | **33 C argument slots** (past the new ceiling) | ❌ refused | ❌ refused |
 | E3 | a `double` **argument** by value | ❌ refused | ❌ refused |
@@ -102,6 +105,8 @@ matters is that each is an oracle, not a recording.)
 | **G11** | `vector<single>` at `double *` — C writes 24 B into 12 | ❌ refused (was: **heap overrun**) | ❌ refused |
 | **G12** | `vector<text>` at `const char *const *` | ❌ refused (was: SIGSEGV) | ❌ refused |
 | **G5** | a 64-bit `INTEGER` declaration against an **LP64** build | ⚠ binds, out-params corrupt | ⚠ same |
+| **G7** | **real GSL** — `gsl_fft_complex_radix2_forward` and the wavetable/workspace path | ✅ 10 0 −2 2 −2 0 −2 −2 | ✅ same |
+| **G8** | **real FFTW** — plan/execute over C-owned `fftw_malloc` buffers (Q5) | ✅ 10 0 −2 2 −2 0 −2 −2 | ✅ same |
 
 The G-rows are arc E, measured against real OpenBLAS with `oracle.c` — a C program calling the
 same routines — as the expected value.  The G9–G12 rows were all ✅-looking runs before it: a
@@ -148,11 +153,17 @@ both backends — which is what makes binding the numeric stack worth doing at a
 
 - **BLAS and LAPACK — done, not "possible".**  Bound against real OpenBLAS on both backends,
   oracle-matched, no shim and no C toolchain.
-- **HDF5 / GSL** — pointer+integer APIs throughout; nothing in the matrix blocks them.  GSL in
-  particular gets easier with C109: its `gsl_*` functions overwhelmingly return a `double`.
-- **FFTW — NOT yet**, despite the pointer+integer API.  Its plan/execute split retains the
-  caller's buffers between two calls, which is exactly the E6b use-after-free.  It needs
-  either C-owned buffers held as opaque handles, or the retention declaration Q5 describes.
+- **GSL — bound.**  `gsl_fft_complex_radix2_forward` and the mixed-radix wavetable/workspace
+  path both answer a C oracle on both backends.  Its retained state is a C-owned wavetable and
+  workspace held as handles, so E6b never arises; and C109 is what makes the rest of the
+  library reachable, since `gsl_*` functions overwhelmingly return a `double`.
+- **HDF5** — pointer+integer APIs throughout; nothing in the matrix blocks it.
+- **FFTW — yes, over C-owned buffers.**  `fftw_malloc` the buffers, hold them as opaque
+  handles, `memcpy` in and out (libc, no shim); the plan then retains memory FFTW owns and
+  nothing loft owns is held across a call.  Measured end to end against a C oracle on both
+  backends.  This is what FFTW's own documentation tells C callers to do — `fftw_malloc` is
+  where the SIMD alignment comes from — so it is the idiom rather than a workaround.  What is
+  NOT bindable is FFTW retaining a **loft** vector, which is E6b.
 - **Fortran BLAS and LAPACK** — bindable DIRECTLY since arc D.  One slot per by-reference
   argument, so `dgemm_` costs 13 and even the 20+-argument drivers fit under 32.  The
   numeric core (arrays in, results written back, nothing copied at the boundary) is proven
@@ -236,8 +247,9 @@ What binding it actually proved, beyond the three findings in the status above:
   `dgetrf_` + `dgetrs_` (LAPACK, gfortran, `TRANS` is a `CHARACTER`) answer the oracle exactly.
   These routines read only the first character, which is why the C convention every C caller of
   BLAS already uses is enough.  A routine taking a real Fortran string still needs a shim.
-- **E6b does not bite here.**  BLAS and LAPACK retain nothing across calls, which is what makes
-  them the right first target and FFTW the wrong one.
+- **E6b does not bite here.**  BLAS and LAPACK retain nothing across calls, which is what
+  makes them the cheapest first target — and FFTW turned out to be reachable too, over
+  C-owned buffers (Q5).
 
 **The dogfood loop, in one line:** the binding worked on the first try, and everything worth
 fixing was found by writing the declaration *wrong* in the ways a real author would.
@@ -268,9 +280,11 @@ function's, not the author's.
 4. **D** — done, and not as a shim generator: the boundary was corrected instead.  The
    ordering assumption that C gated D held, but for the opposite reason — C's arithmetic was
    what pointed at the wrong fix.
-5. **E** — **NOT FFTW** (its plan/execute split hits the E6b use-after-free).  BLAS or
-   LAPACK is now the cheapest honest target, since arc D binds them with no shim; GSL and
-   HDF5 remain fine.  Needs a machine with the dev package installed.
+5. **E** — done, against BLAS/LAPACK, which arc D binds with no shim and which retain
+   nothing.  FFTW was ruled out here for hitting the E6b use-after-free; that was right about
+   a loft vector and wrong about the library, which binds fine over C-owned buffers (Q5).
+   GSL is bound too, and its FFT is the same shape.  The dev package was never needed —
+   `apt-get download` and the shared library are enough.
 
 ## Open design questions
 
@@ -363,7 +377,9 @@ function's, not the author's.
    what `LoftCShape::PointerAndCount` already documents ("valid for the duration of the call
    only") — the contract was right and the measurement was wrong.
 
-   **This removes FFTW as "the cheapest honest target" for arc E.**  `fftw_plan_dft` retains
+   **This removes FFTW as "the cheapest honest target" for arc E** — as a binding over loft
+   vectors.  Over C-owned buffers it is ordinary, and that is where Q5 lands.
+   `fftw_plan_dft` retains
    the buffers and `fftw_execute` reads them later, which is precisely the failing shape.
    A retaining C API cannot be bound directly until there is a way to DECLARE retention, so
    arc E should start from a non-retaining API (HDF5, GSL) or from C-owned buffers held as
@@ -372,8 +388,30 @@ function's, not the author's.
    No diagnostic is proposed: the detectable condition ("a vector's last use is a `#c`
    call") is the *common correct* case — every read-only binding like `lc_i64_sum(v)` looks
    the same — so a warning would fire on the safe pattern and stay silent on the dangerous
-   one.  The fix has to be a declaration (`#c` marking a parameter as retained), which is
-   design work, not a lint.
+   one.
+
+   **CLOSED: the answer is C-owned buffers, not a retention declaration.**  Two measurements
+   settled it, and both were needed:
+
+   1. **The failure is LIFETIME, not address stability.**  A retained pointer was probed with
+      C *writing* through it (reading proves only that the memory has not been reused yet),
+      and the write still landed in the vector after 500 000 intervening allocations grew the
+      store.  The one thing that does move a vector is **resizing it** (`a = a + [x]`), which
+      a control confirmed the instrument can see.
+   2. **But address stability is not GUARANTEED.**  `Store::resize_store` grows by
+      `A.realloc`, which may move; glibc extended in place every time here, which is a coin
+      flip won, not a promise.
+
+   So "declare the parameter retained and extend the lifetime" would be a fix that works
+   almost always — the worst kind.  Doing it properly needs address stability *by
+   construction* (a pinned vector in a store of its own), which is a larger change than the
+   handle idiom it would replace, and it still could not answer *until when* — the retention
+   ends at `fftw_destroy_plan`, which loft cannot see either.
+
+   C-owned buffers cost two O(n) copies against an FFT's O(n log n), need no language
+   feature, and are what the retaining libraries already document.  Pinned by
+   `native::a_retaining_c_api_binds_over_a_c_owned_buffer`, and written up in PACKAGES.md
+   § *Binding a retaining API* so it reads as the idiom rather than as a gap.
 
 **E (done).** The deliverable is in three places.  `tests/fixtures/c_abi` gained one reader per
 element width and the two by-value-return functions (`lc_ddot_`, `lc_sdot_`), each validated by

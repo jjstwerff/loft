@@ -753,9 +753,51 @@ later use of `a` keeps it alive and the read is correct — which is precisely w
 makes the bug dangerous: it appears and disappears with edits that look unrelated.
 
 This is the FFTW plan API's exact shape (`fftw_plan_dft` retains the buffers,
-`fftw_execute` reads them later), so **a retaining C API cannot be bound directly
-today**.  Give the buffer to C instead — allocate it on the C side and hold it as
-an opaque handle — or keep the call and every use of the buffer in one expression.
+`fftw_execute` reads them later), and it is not an FFTW quirk: zlib's `z_stream`
+keeps `next_in` / `next_out`, `sqlite3_bind_text(…, SQLITE_STATIC)` keeps your
+bytes, and every "context object" API is this.
+
+##### Binding a retaining API: give C the buffer
+
+**The cure is that C owns the memory.**  Allocate on the C side, hold the pointer
+as an opaque `integer`, and copy in and out — then nothing loft owns is retained,
+the buffer's lifetime is the handle's, and each copy lives only for its own call,
+which is what `#c` already guarantees.  It needs no shim, because `memcpy` is
+libc and needs no `[c] libs` entry:
+
+```loft
+pub fn fftw_malloc(nbytes: integer) -> integer;   #c "fftw_malloc" "void*(size_t)"
+pub fn fftw_free(p: integer);                     #c "fftw_free" "void(void*)"
+pub fn plan_dft_1d(n: integer, inp: integer, outp: integer, sign: integer, flags: integer) -> integer;
+#c "fftw_plan_dft_1d" "void*(int, double*, double*, int, unsigned)"
+pub fn execute(p: integer);                       #c "fftw_execute" "void(const void*)"
+
+// The two crossings.  Same libc symbol; only the DIRECTION differs, which is
+// what puts the loft vector on a different side of the boundary each time.
+pub fn load(dst: integer, src: vector<float>, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"
+pub fn store(dst: vector<float>, src: integer, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"
+```
+
+```loft
+inp = fftw_malloc(n * 16);  outp = fftw_malloc(n * 16);
+p = plan_dft_1d(n, inp, outp, -1, 64);   // FFTW_FORWARD, FFTW_ESTIMATE
+load(inp, src, n * 16);
+execute(p);
+store(dst, outp, n * 16);
+```
+
+This is not a workaround for a gap — for FFTW it is what the library's own
+documentation tells C callers to do, because `fftw_malloc` is what supplies the
+SIMD alignment a caller array would forfeit.  Measured on both backends against
+a C program computing the same transform.
+
+**What it costs.** Two O(n) copies per call, against an FFT's O(n log n) of work.
+And `nbytes` is **your** arithmetic: a `void *` pointee is the opaque escape
+hatch, so the element-width check above does not apply and a `store` sized larger
+than the destination writes past the end of the vector.  Size the copy off the
+same expression that sized the allocation.
 There is no annotation for "C keeps this pointer"; until there is, the rule is the
 one at the top of this paragraph, and it is a rule about *your* code, not a
 guarantee loft enforces.

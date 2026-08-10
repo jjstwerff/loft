@@ -3316,6 +3316,108 @@ fn a_vector_element_must_match_the_c_pointee() -> std::io::Result<()> {
     Ok(())
 }
 
+/// @PLN128 Q5 — a RETAINING C API is bindable, over a C-owned buffer.
+///
+/// The plan/execute split is not an FFTW quirk: zlib's `z_stream` keeps
+/// `next_in`/`next_out`, `sqlite3_bind_text(SQLITE_STATIC)` keeps the caller's
+/// bytes, and every "context object" API is this shape. C holds a buffer
+/// pointer across two calls the caller makes.
+///
+/// Bound with a **loft** vector that is a use-after-free (E6b): loft frees the
+/// vector at its last loft-visible use, which is the call that handed the
+/// pointer over, and C reads whatever took its place. Measured, both backends,
+/// no fault and no diagnostic — and deliberately NOT asserted here, because
+/// pinning the current output would lock the bug in.
+///
+/// Bound with a **C-owned** buffer it is ordinary, which is what this pins.
+/// Nothing loft owns is retained; the buffer's lifetime is the handle's; and
+/// the two copies live only for their own call, which is what `#c` already
+/// guarantees. It needs no shim — `memcpy` is libc — and it is what FFTW's own
+/// documentation tells C callers to do anyway, because `fftw_malloc` is what
+/// gives the SIMD alignment.
+///
+/// The expected value is `lc_selftest.c`'s, computed in C.
+#[test]
+fn a_retaining_c_api_binds_over_a_c_owned_buffer() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let built = std::process::Command::new("make")
+        .arg("-C")
+        .arg(&root)
+        .output()?;
+    assert!(
+        built.status.success(),
+        "the fixture library must build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let prog = std::env::temp_dir().join("loft_pln128_retain.loft");
+    std::fs::write(
+        &prog,
+        "use lcabi;\n\
+         fn main() {\n\
+         \x20 n = 3;\n\
+         \x20 bytes = n * 8;\n\
+         \x20 buf = lc_buf_alloc(bytes);\n\
+         \x20 src: vector<float> = [1.5, 2.25, 4.0];\n\
+         \x20 lc_load(buf, src, bytes);\n\
+         // The plan RETAINS the buffer here and reads it in `lc_run` below —\n\
+         // a later call, which is the shape that fails with a loft vector.\n\
+         \x20 p = lc_plan(buf, n);\n\
+         \x20 println(\"retained {lc_run(p)}\");\n\
+         // And back out, so the round trip is closed rather than assumed.\n\
+         \x20 back: vector<float> = [0.0, 0.0, 0.0];\n\
+         \x20 lc_store(back, buf, bytes);\n\
+         \x20 println(\"roundtrip {back[0]} {back[1]} {back[2]}\");\n\
+         \x20 lc_plan_free(p);\n\
+         \x20 lc_buf_free(buf);\n\
+         }\n",
+    )?;
+    let libdir = root.join("pkg");
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        // 1.5*1 + 2.25*2 + 4.0*3 = 18.0, scaled by 1000 — `lc_selftest.c`'s value.
+        "retained 18000",
+        "roundtrip 1.5 2.25 4",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "a retaining API must answer the same on both backends"
+    );
+    Ok(())
+}
+
 /// @PLN128 arc E — a float RETURN binds; a float ARGUMENT still does not.
 ///
 /// The plan settled the two together and that was one decision too few. An

@@ -203,6 +203,23 @@ LC_API void lc_dgemm_(const char *transa, const char *transb, const int64_t *m,
 LC_API int64_t lc_split_(const double *v, int64_t sel, const double *w,
                          int64_t nw);
 
+/* ---- A RETAINING API (@PLN128 Q5) ---------------------------------------
+ * C keeps a buffer pointer across two calls the caller makes — FFTW's
+ * plan/execute split, zlib's `z_stream`, `sqlite3_bind_text(SQLITE_STATIC)`.
+ * Bound with a LOFT vector this is a use-after-free; bound with a C-owned
+ * buffer held as an opaque handle it is ordinary, which is what the fixture
+ * demonstrates. */
+struct lc_plan_s {
+  double *buf;
+  int64_t n;
+};
+
+LC_API void *lc_buf_alloc(int64_t nbytes);
+LC_API void lc_buf_free(void *p);
+LC_API void *lc_plan(void *buf, int64_t n);
+LC_API int64_t lc_run(const void *plan);
+LC_API void lc_plan_free(void *plan);
+
 /* ---- ELEMENT WIDTHS (@PLN128 arc E) -------------------------------------
  * A vector reaches C as a pointer into loft's own element bytes, so the loft
  * element type and the C pointee are two spellings of one layout.  One reader

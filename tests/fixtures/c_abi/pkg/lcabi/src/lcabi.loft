@@ -118,3 +118,29 @@ pub fn lc_ddot(n: vector<integer>, x: vector<float>, y: vector<float>) -> float;
 #c "lc_ddot_" "double(const int64_t*, const double*, const double*)"
 pub fn lc_sdot(n: vector<integer>, x: vector<single>, y: vector<single>) -> single;
 #c "lc_sdot_" "float(const int64_t*, const float*, const float*)"
+
+// @PLN128 Q5 — a RETAINING C API, bound the way one has to be.
+//
+// `lc_plan` keeps the buffer it is given and `lc_run` reads it on a LATER call.
+// Handing it a loft `vector` is a use-after-free: loft frees the vector at its
+// last loft-visible use, which is that very call.  So C owns the buffer, loft
+// holds it as an opaque handle, and the two crossings are ordinary copies that
+// live only for their own call — which is exactly what `#c` guarantees.
+//
+// `memcpy` needs no `[c] libs` entry and no shim: it is libc, already linked.
+// Bound twice because the DIRECTION is the only difference, and each direction
+// puts the loft vector on a different side of the boundary.
+pub fn lc_buf_alloc(nbytes: integer) -> integer;   #c "lc_buf_alloc" "void*(int64_t)"
+pub fn lc_buf_free(p: integer);                    #c "lc_buf_free" "void(void*)"
+pub fn lc_plan(buf: integer, n: integer) -> integer;
+#c "lc_plan" "void*(void*, int64_t)"
+pub fn lc_run(plan: integer) -> integer;           #c "lc_run" "int64_t(const void*)"
+pub fn lc_plan_free(plan: integer);                #c "lc_plan_free" "void(void*)"
+
+// The `void*` pointee is the OPAQUE escape hatch (C108): it is what lets a
+// `vector<float>` cross as raw bytes here, and the reason `nbytes` is the
+// author's arithmetic rather than something loft checks.
+pub fn lc_load(dst: integer, src: vector<float>, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"
+pub fn lc_store(dst: vector<float>, src: integer, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"

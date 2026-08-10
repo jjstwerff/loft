@@ -350,6 +350,55 @@ void lc_shim_scale(double *out, int64_t n_out, const double *v, int64_t n_v) {
   if (n_out >= 1 && n_v >= 1) out[0] = v[0] * 2.0;
 }
 
+/* ---- A RETAINING API (@PLN128 Q5) ---------------------------------------
+ * FFTW's plan/execute split in miniature, and the shape zlib's `z_stream`,
+ * `sqlite3_bind_text(SQLITE_STATIC)` and every "context object" share: C keeps
+ * a buffer pointer across TWO calls the caller makes.
+ *
+ * Handing loft's own vector to `lc_plan` is a use-after-free — loft frees it at
+ * its last loft-visible use, which is that call.  The cure needs no language
+ * feature: let C own the buffer (`lc_buf_alloc`), hold it as an opaque handle,
+ * and copy in and out.  Then nothing loft owns is retained, and the buffer's
+ * lifetime is the handle's. */
+
+void *lc_buf_alloc(int64_t nbytes) {
+  return malloc((size_t)nbytes);
+}
+
+void lc_buf_free(void *p) {
+  free(p);
+}
+
+void *lc_plan(void *buf, int64_t n) {
+  struct lc_plan_s *p = (struct lc_plan_s *)malloc(sizeof(struct lc_plan_s));
+  if (p == 0) {
+    return 0;
+  }
+  p->buf = (double *)buf;
+  p->n = n;
+  return (void *)p;
+}
+
+/* Reads the retained buffer on a LATER call, which is the whole point.
+ * Position-weighted, so a buffer that moved or was reused answers a different
+ * number rather than the right one by luck. */
+int64_t lc_run(const void *plan) {
+  const struct lc_plan_s *p = (const struct lc_plan_s *)plan;
+  double s = 0.0;
+  int64_t i;
+  if (p == 0 || p->buf == 0) {
+    return -1;
+  }
+  for (i = 0; i < p->n; i++) {
+    s += p->buf[i] * (double)(i + 1);
+  }
+  return (int64_t)(s * 1000.0);
+}
+
+void lc_plan_free(void *plan) {
+  free(plan);
+}
+
 /* ---- ELEMENT WIDTHS (@PLN128 arc E) -------------------------------------
  * One reader per element width loft may hand over.  A vector reaches C as a
  * pointer into loft's OWN element bytes, so these are what says the two sides

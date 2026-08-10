@@ -233,6 +233,21 @@ int main(void) {
     eq("single elements", lc_f32_dot_milli(af, 3), 10500);
   }
   {
+    /* @PLN128 Q5 — a retaining API over a C-OWNED buffer.  The plan reads the
+     * buffer on a LATER call than the one that handed it over, which is the
+     * shape that is a use-after-free when the buffer is loft's.
+     * 1.5*1 + 2.25*2 + 4.0*3 = 18.0, scaled by 1000. */
+    double src[3];
+    double *buf = (double *)lc_buf_alloc(3 * (int64_t)sizeof(double));
+    void *plan;
+    src[0] = 1.5; src[1] = 2.25; src[2] = 4.0;
+    memcpy(buf, src, sizeof src);
+    plan = lc_plan(buf, 3);
+    eq("a retained C-owned buffer survives to the next call", lc_run(plan), 18000);
+    lc_plan_free(plan);
+    lc_buf_free(buf);
+  }
+  {
     /* @PLN128 arc E — the level-1 BLAS *function* shape, answer by value.
      *   ddot: 1.5*4 + 2.5*8 + 4.0*16 = 6 + 20 + 64 = 90
      * The same numbers for both widths, so the f32 rung and the f64 rung are
