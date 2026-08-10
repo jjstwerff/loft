@@ -10,6 +10,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > observed. The owner's rule is the premise: **a normal PR must settle within
 > 20 minutes**, and anything that pushes past it gets parallelised or moved to a
 > slower cadence until we are consistently back under.
+>
+> **Compliance reading (2026-08-09): the rule is not met, and has not moved since
+> this design was written.** Wall-clock to settle for the last 13 completed
+> `pull_request` runs of `ci.yml` — created→updated, which is what an author
+> actually waits — is **24–34 minutes, median ~31**. The one run under 20 minutes
+> failed early, so it is not evidence of a fast path. Reproduce with:
+> `gh run list --workflow=ci.yml --limit 40 --json createdAt,updatedAt,event,conclusion`.
+> The per-job analysis below already records both test legs exceeding 20 minutes;
+> what this adds is that the whole-run figure has stayed there, so the
+> "parallelise or move to a slower cadence until we are consistently back under"
+> half of the rule is still owed work.
 
 ## The rule that decides placement
 
@@ -36,6 +47,9 @@ does not belong on a PR, however cheap it is.**
 | **nightly 06:17 + on `src/**`,`default/**`** | `revalidate-libs` — every published lib against this loft, plus the warning dashboard | `schedule`, `push`, `pull_request` |
 | **nightly 07:00** | `lib-branch-report` — unmerged branches across the library repos | `schedule` |
 | **daily 03:00** | the Windows leg (mirrored onto PRs as the non-blocking `Windows (daily)` check) | `schedule` |
+| **daily 05:00** | `browser-threads` — the threaded-wasm browser leg | `schedule` |
+| **daily 05:45** | `lib-main-health` — published libs against their own `main` | `schedule` |
+| **Mondays 06:00** | `repro-build` — reproducible-build check (weekly, not nightly) | `schedule` |
 | **library repos** | one `library-ci` per repo, all callers of `library-ci-reusable.yml` | `push: main`, `pull_request` |
 
 ## Where the time goes — measured

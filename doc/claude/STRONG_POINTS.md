@@ -154,10 +154,13 @@ model is no longer the one they were sold. The crawler dogfood's survival guide
 ([loft#248](https://github.com/loft-lang/loft/issues/248)) is this turn-off made
 literal.
 
-**Raise it higher.** Promote `LOFT_STORE_GUARD` from a *reporting* detector to a
-hard `#[cfg(debug_assertions)]` assertion that **forbids** drift corpus-wide, so
-the rule cannot quietly regain exceptions as new code lands. *Check:* the guard is
-silent corpus-wide **and** the assertion holds and keeps holding.
+**Raise it higher.** The hard assertion exists: `scopes.rs`'s `reclaim_guard` arms on
+`cfg!(debug_assertions)` or `LOFT_STORE_GUARD`, and the nightly debug-assertions sweep
+gates on it. What is missing is **reach** — the sweep covers 5 test targets, and
+`[profile.dev.package.loft] debug-assertions = false` compiles the assert out of ordinary
+test builds, so most of the corpus never arms the guard and drift can still land
+unobserved. *Check:* the guard is silent corpus-wide **and** the assertion holds and keeps
+holding.
 
 ---
 
@@ -328,7 +331,7 @@ not touch the host or other sessions.
 
 ## 10. It ships, and the value is legible on contact
 
-**Strength.** loft releases on a monthly cadence (current `2026.6.0`),
+**Strength.** loft releases on a monthly cadence (current `2026.8.0`),
 `loft install <name>` fetches published libraries end to end, and a newcomer meets
 the value in a browser — [playground](https://loft-lang.org/loft/playground.html),
 [gallery](https://loft-lang.org/loft/gallery.html), a playable game — with no

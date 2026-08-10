@@ -280,6 +280,15 @@ pub struct Parser {
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
     /// binding so it never leaks into the next statement.
     pub(crate) amp_pending: bool,
+    /// @PLN87 B-Ref-AnnotationOnly — true while the parser is positioned at the HEAD
+    /// of a place where `&` may legally appear: the whole right-hand side of a plain
+    /// `=` binding, or the start of a statement (where the D-bind-7 guard reports a
+    /// bare `&a;`).  The FIRST primary parsed consumes it, so a `&` reached after any
+    /// operator (`1 + &a`), or inside a nested construct (a call argument, a literal
+    /// element, a parenthesis), sees `false` and is rejected.  Without it the guard
+    /// could only peek the NEXT token, which cannot tell the whole RHS from the LAST
+    /// operand of one — the hole that let `b = 1 + &a;` compile.
+    pub(crate) amp_head: bool,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -838,6 +847,7 @@ impl Parser {
             pending_param_locks: Vec::new(),
             pending_param_positions: Vec::new(),
             amp_pending: false,
+            amp_head: false,
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,

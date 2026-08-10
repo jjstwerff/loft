@@ -127,11 +127,11 @@ deviation and shrinks operational.md's D-op-1 on the dispatch side).
   so accept/reject must agree across the drivers (D-op-1's driver-agreement facet). `G-Sat`/`G-Check`
   are checkable directly (a missing method rejects on both backends); the runtime behaviour of a
   monomorphized generic is pinned by `tests/scripts/86-interfaces.loft` and `tests/scripts/48-generics.loft`.
-- **Test-hygiene note (not an open code deviation):** `86-interfaces.loft::test_bounded_for_loop_struct`
-  is still commented out with a stale "crashes with P136 (use-after-free)" note. That bug is FIXED —
-  the exact shape (a bounded `<T: Validatable>` for-loop over a struct vector calling a method per
-  element) now runs clean on **both** backends and is poison-clean. The guard should be re-enabled;
-  it is not a deviation, it is a dormant regression test.
+- **Test-hygiene note (resolved 2026-08-09):** `86-interfaces.loft::test_bounded_for_loop_struct`
+  — a bounded `<T: Validatable>` for-loop over a struct vector calling a method per element — was
+  commented out under a stale "crashes with P136 (use-after-free)" note. That bug is FIXED and the
+  guard is live: `loft --tests tests/scripts/86-interfaces.loft` runs 11 functions including it,
+  green. Only the trailing "Uncomment when fixed" comment beside it is left over.
 
 ---
 

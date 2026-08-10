@@ -54,7 +54,41 @@ hold *any* expression, not just a bare name (verified: `{42:#x}`, `{col}`, `{a /
 **In words.** `"…{e}…"` is not a hidden `+`-chain of separate strings; it builds one text buffer
 by appending each rendered piece. Because the interpreter and `--native` call the identical
 rendering code, the produced text is the same on both — this is what makes formatting a *rules*
-doc (a written contract) rather than a place the backends can drift.
+doc (a written contract) rather than a place the backends can drift. `F-Desugar` is the DEFAULT
+lowering; where the template's expected type is a **target** (`F-Target` below) the same syntax
+lowers to method calls instead, and the template's value is that type rather than `text`.
+
+### Targets — the same template builds a VALUE instead of text (@PLN124)
+
+```
+  (F-Target)     when a template is CHECKED AGAINST a type τ that opts in, it does NOT build text:
+                 it lowers to a fresh τ and, in source order, calls  τ.lit(s)  for each literal run
+                 and  τ.hole_<kind>(v)  for each interpolation.  The template's value is the τ.
+                 A type opts in by DEFINING those methods (structural, like an interface — there is
+                 no annotation).  The kind is DERIVED from the hole's type, never chosen:
+                   text/text? → hole_text · integer → hole_int · float → hole_float ·
+                   single → hole_single · boolean → hole_boolean · character → hole_character ·
+                   a struct/enum → hole_<type name in method case> (`SqlIdent` → hole_sql_ident,
+                   an acronym run breaking at the last capital: `SQLIdent` → hole_sql_ident).
+  (F-Target-Pos) the expected type is taken from an ANNOTATED binding (`q: Query = "…"`) or a
+                 struct-literal FIELD of the target type.  A call ARGUMENT and a RETURN position do
+                 NOT target (measured: `expected Query, got text`); route through a local.
+  (F-Target-Kind) a hole whose kind the target does not define is a STATIC error — "Query has no
+                 `fn hole_int(self: Query, v: integer)` — declare one to accept this hole".
+  (F-Target-Spec) a format SPEC on a hole of a target template is a STATIC error — "a format spec
+                 has no meaning on a Query hole — the value is handed to the type, not rendered".
+                 F-Spec applies to text templates only.
+```
+
+**In words.** The point is that a value which has been rendered into text can no longer be told
+apart from text the author wrote. A target keeps them separate: the type sees the author's bytes
+through `lit` and each interpolated value through a `hole_…` method, so an interpolated value has
+no route into the syntax — which is what lets a library build a SQL statement, a shell command or
+a path in which a value can never *become* syntax. Because the method name is derived from the
+hole's type rather than chosen, a target and the parser cannot disagree about what a hole is
+called, and the diagnostic names the exact method to add. There is no new syntax: the same
+`"…{e}…"` either builds text or builds a `Query`, decided entirely by the type it is checked
+against.
 
 ### Rendering per type — the default form, and null
 
@@ -136,6 +170,11 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
   `334.10`, `"{\"abc\":>7}"` is `    abc`.
 - **Fault-safety (`F-FaultSafe`)** — `a = 5; b = 0; "{a / b}"` is `null(/0)` on both backends, and
   the program continues.
+- **Target (`F-Target`)** — with `lit` + `hole_text` + `hole_int` on `Query`,
+  `q: Query = "SELECT * FROM t WHERE name = {name} AND id = {n}"` leaves `len(q.parts) == 2` and
+  `q.values == ["ada", "7"]` — identical on both backends; the same template assigned to `text`
+  renders the ordinary string. The two refusals (`F-Target-Kind`, `F-Target-Spec`) reject on
+  `--dump` / `--interpret` / `--native` alike (the D-op-2 driver-agreement facet).
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on a rendered
 string is the definitional error this doc names.

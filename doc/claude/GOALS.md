@@ -770,39 +770,51 @@ not "all of A" or "all of B":
   the Miri/ASan set covers the surfaces the games use (eval stack, store
   claim/copy/resize, vectors, fn-refs, text). *Not* "every Goal-A coverage leg
   shipped."
-  **Reading (2026-07-10): near, with two named gaps.** @PLN85 closed; every *tracked*
-  store-lifetime bug is fixed, and the nightly sanitizer set (Miri, ASan UAF/OOB, TSan,
-  `LOFT_POISON`, native-ASan) is green on `main`. Two gaps keep this from reading MET.
-  (i) **Coverage is narrower than the Checks above state**: the `stack_align_guard` sweep
-  runs four test binaries, not the corpus; and `LOFT_STORE_GUARD=1` (Goal E's Check) is set
-  in *no* workflow — the assert it was promoted to is compiled out of normal test builds by
-  `[profile.dev.package.loft] debug-assertions = false`, so only the nightly debug-assertions
-  gate exercises it, over `--lib --test issues`. (ii) **The class is not yet retired by
-  construction**: the fuzz/sanitizer corpora that must prove it are now standing (@PLN53 + @PLN54
-  both closed 2026-07-10), so the **one** remaining step is the Cluster C / H10 fold — land it and
-  the silence becomes proof. Tracked in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
+  **Reading (2026-08-09): the gate is RED, and coverage is still narrower than the Checks
+  state.** @PLN85 closed and every *tracked* store-lifetime bug is fixed, but three things
+  keep this from reading MET.
+  (i) **The nightly is failing now.** `miri.yml` on `main` was green 2026-08-05 through
+  2026-08-08 and went red on 2026-08-09: the ASan interpreter leak gate fails on *both*
+  ubuntu and macOS, and the debug-assertions sweep fails with it. This is the floor's own
+  Check, so until it is green again the floor cannot clear. A fresh regression, not a
+  standing state — the failing run swept `8350a2ab`; the current tip is not yet swept.
+  (ii) **Coverage is narrower than the Checks above state**, though less so than it was.
+  The `stack_align_guard` sweep runs 16 in-process test binaries — but that is 16 of 179,
+  and `tests/data_structures.rs` runs wholly in-process yet is not among them, so a sweep
+  described as covering "the corpus" does not. `LOFT_STORE_GUARD=1` (Goal E's Check) *is*
+  wired now: `miri.yml`'s debug-assertions sweep sets it, and its enforced twin — the
+  `reclaim_guard` `assert_eq!` in `scopes.rs` — hard-gates there through
+  `cfg(debug_assertions)`. But it reaches 5 targets (`--lib --test issues --test wrap
+  --test strings --test frame_vars`), and `[profile.dev.package.loft] debug-assertions =
+  false` compiles the assert out of ordinary test builds, so most of the corpus never arms
+  it. (iii) **The class is not yet retired by construction**: the fuzz/sanitizer corpora
+  that must prove it are now standing (@PLN53 + @PLN54 both closed 2026-07-10), so the
+  **one** remaining step is the Cluster C / H10 fold — land it and the silence becomes
+  proof. Tracked in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
 - **Structure floor — cleared when:** the libraries a game depends on (graphics,
   game_client / game_protocol, server) are extracted, installable, and
   version-stable through the registry. *Not* "the whole package toolchain
   polished."
-  **Reading (2026-07-10): still MET on the named bar — but "installable" is doing quiet work.**
-  The [`loft-lang/registry`](https://github.com/loft-lang/registry) carries 22 signed
+  **Reading (2026-08-09): MET, and the caveat that used to qualify it is closed.**
+  The [`loft-lang/registry`](https://github.com/loft-lang/registry) carries 34 signed
   (`index.json` + Ed25519 `.sig`), per-version-`sha256` packages with dependency resolution
   (`server` → `web >=0.1`; `hex_terrain` → `hex_grid`) — `graphics`, `game_protocol`, `server`,
   the hex-world stack, `web`, `crypto` (the zero-trust lib), assets, docs — each on its own
   semver track. `loft install <name>` resolves and fetches end to end, including transitive
   deps. Extraction + installability + version-stability read true.
-  **Caveat that the bar does not capture:** *installable* here means **resolves + fetches**, not
-  *yields a working artifact*. The nightly `registry-validation` gate has **never had a green
-  run**: `graphics` does not build `--native` on a clean runner (its `alsa-sys` dep needs
-  `libasound2-dev`, which the workflow never installs), and `hex_terrain 0.1.0` fails its own
-  test against current loft (it uses the plain-bind write-through idiom that now **copies** —
-  C86 H-Copy — so it silently computes a wrong answer). Neither overturns the MET reading, but
-  both are real ecosystem rot, and the second is exactly the compatibility failure the
-  wide-release bar's **gate 5** exists to prevent.
+  **`installable` now means a working artifact, not just resolve + fetch.** The nightly
+  `registry-validation` gate passes every one of the 34 package legs, and has been green on
+  `main` on most nights since 2026-07-31 (08-07, 08-08 and 08-09 consecutively). Both faults
+  that used to hold it red are fixed: the workflow installs `libasound2-dev`, so `graphics`
+  builds `--native` on a clean runner, and `hex_terrain` validates green against current
+  loft. That closes the ecosystem rot this caveat recorded — including the C86 H-Copy
+  compatibility break, which is the exact failure the wide-release bar's **gate 5** exists
+  to prevent.
 
-The structure floor's bar reads MET and the soundness floor is near, so **the pause
-is at its end, not its middle**. When both read true the dogfood loop sets the
+The structure floor's bar reads MET without a caveat, and the soundness floor is close
+on substance but currently **red on its own gate**, so **the pause is at its end, not its
+middle** — held open by a regression to clear, not by a body of work still to do. When
+both read true the dogfood loop sets the
 agenda again — and the work above it is no longer *extracting* libraries but raising
 each to the **per-library quality bar** (cross-target parity + `verified`,
 [LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md)) — a Goal-C-and-up concern, not a

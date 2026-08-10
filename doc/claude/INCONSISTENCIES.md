@@ -19,7 +19,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [26. Match Exhaustiveness Ignores Guarded Arms](#26-match-exhaustiveness-ignores-guarded-arms)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
-- [33. `const` Applies to Locals and Parameters but Not Fields](#33-const-applies-to-locals-and-parameters-but-not-fields)
 - [Summary by Severity](#summary-by-severity)
 
 ---
@@ -198,48 +197,6 @@ bare- from labelled-continue and pins the labelled result (106).
 Earlier writeup here claimed silent-miscompile behaviour; that was a
 misreading from a reproducer whose sum happened to be the same under
 both semantics.
-
----
-
-## 33. `const` Applies to Locals and Parameters but Not Fields
-
-**Severity: Low**
-
-After [@P246](PROBLEMS.md) closed (file-scope `const NAME = expr;`
-accepted) and the UPPER_CASE-non-const warning landed, loft's
-immutability story is uniform at every scope **except** struct
-fields:
-
-| Where | Immutable form |
-|---|---|
-| File-scope constant | `const PI = 3.14;` (or bare-name `PI = 3.14;`) |
-| Local variable | `const x = 5;` |
-| Function parameter | `fn f(const x: T)` |
-| **Struct field** | **(no equivalent — every field is implicitly mutable)** |
-
-The asymmetry is the only place where "I want this thing
-immutable" can't be expressed.  The motivating consumer shape is a
-grid/cell world whose tick loop rebuilds each cell wholesale
-(`grid[idx] = Cell{…}`, never an in-place field write): its
-identity fields should be const after construction, but loft can't
-express the constraint, so a contributor writing `cell.color = 0;`
-gets no compiler help.
-
-**Advice:** Extend `const` to struct fields as a write-once-at-
-construction modifier.  Purely static check, zero runtime cost,
-no schema change.  Design + sequencing in
-[plans/40-const-fields/README.md](plans/40-const-fields/README.md).
-
-**Status (2026-07-16):** Resolved — `const` struct fields are
-implemented (@PLN40).  A field may be marked `const` (write-once
-at construction); it is set in the struct literal or takes its
-default, and any later `t.field = …` reassignment is a compile
-error, enforced at the same parse-time write guard as key fields.
-`const` freezes the field binding, not its contents.  The
-asymmetry is gone: `const` now applies to locals, parameters, and
-fields.  Documented in LOFT.md § Fields; regression-guarded by the
-`pln40_const_*` tests in `tests/issues.rs` and
-`tests/scripts/40-const-fields.loft`.
 
 ---
 

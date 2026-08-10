@@ -53,13 +53,17 @@ The methodology behind this file (categories, no-time-projections, features-need
 > 3. **Un-mute the nightlies** (effort S).  `ci.yml` and `registry-validation.yml` have **no failure
 >    notifier at all** — `ci.yml` carries the 3-OS matrix and the differential oracle (Goal D's whole
 >    Check) and went red 6 of 10 scheduled nights with nobody told.  Reuse `miri.yml`'s `notify` job.
->    Then the `graphics` one-liner (`libasound2-dev` + `pkg-config` on the runner).  A gate nobody
->    watches is not a gate — that is how `registry-validation` was mistaken for a DNS flake for days.
+>    (The `graphics` runner one-liner this item also called for is done — `registry-validation.yml`
+>    installs `libasound2-dev`.)  A gate nobody watches is not a gate — that is how
+>    `registry-validation` was mistaken for a DNS flake for days.
 >
-> Two standing gates are RED and neither is a flake: `main` fails the **differential oracle** (a
-> native/wasm accept-reject divergence on a match-arm tail call), and **`registry-validation` has
-> never had a green run** (`graphics` = missing `libasound2-dev` on the runner; `hex_terrain` = stale
-> plain-bind write-through vs C86 H-Copy).
+> **`registry-validation` is green** (since 2026-07-26; all 34 package legs pass, 08-07 through
+> 08-09 consecutively). Both faults that held it red are fixed — the workflow installs
+> `libasound2-dev` for `graphics`, and `hex_terrain` no longer fails on plain-bind write-through
+> vs C86 H-Copy. The **differential oracle is green too** — all 30 corpus programs agree across
+> interpret / native / wasm at `4c80e706` (2026-08-09), with both positive controls passing, so
+> the native/wasm accept-reject divergence on a match-arm tail call is no longer reproducing.
+> It runs `--ignored`, outside the per-PR set, so it needs re-running to stay current.
 >
 > Lower-friction picks that remain valid: **`loft search` CLI** (effort S — the
 > advertised-but-unimplemented registry discovery command; spec:
@@ -78,10 +82,12 @@ The methodology behind this file (categories, no-time-projections, features-need
 > `status:future` — it is a migration stub pointing at `lib_plans/future/25-ffi-dispatch/`.  Either
 > close `@PLN74` or stop calling the work complete; do not read the two numbers as the same plan.
 
-The 2026-07 cycle shipped as `2026.7.1` (stability + type safety).  The **H-register is drained**
+The 2026-07 cycle shipped as `2026.7.1` (stability + type safety); the current release is
+`2026.8.0`.  The **H-register is drained**
 ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the **GitHub issue
-tracker is empty — which under fix-don't-file means "no deferrals", not "no bugs"** (the ledger is in
-the docs; see the digest above).  The stability roadmap itself is **not** drained either: gate 1's
+tracker holds 4 open bugs** (2026-08-09) — under fix-don't-file a low count means "few
+deferrals", not "no bugs"; the ledger is in the docs, see the digest above.  Three of the four
+came from the crawler consumer, which is where most bug flow now originates.  The stability roadmap itself is **not** drained either: gate 1's
 Cluster C fold remains, and gate 5 is now [@PLN102](https://github.com/loft-lang/plans/issues/102).
 Under the warm feature freeze
 (below), **in-scope** = library enablement + optimisations + stabilisation;

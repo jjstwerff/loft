@@ -885,6 +885,66 @@ fn main() {
     );
 }
 
+// ── a PATTERN's captures must not leak `expr_not_null` into the arm body ──────
+//
+// `expr_not_null` is a TRANSIENT marker ("the field access just parsed is non-null")
+// consumed by the very next operator.  A match PATTERN reads the subject's fields to
+// bind its captures, so the LAST capture parsed leaves the marker set with nothing in
+// the pattern to consume it, and the arm BODY inherited it — the same leak the
+// statement boundary was already reset for.  The first `??` in the body then reported
+// that stale NAME: below, `r` is bound only by the second alternative and is not
+// mentioned in the body at all, yet the warning named it.
+//
+// It is not a cosmetic misattribution.  On the sibling shape `(p ?? 0) + (r ?? 0)` the
+// same message told the author to delete the `r ?? 0` that is doing the work — `r` is
+// null whenever the FIRST alternative matched (types.md `P-Alt-Diff`), so taking the
+// advice turns the arm into `p + r`, which evaluates to null.
+#[test]
+fn pattern_captures_do_not_leak_not_null_into_arm_body() {
+    let source = "\
+enum E { A { p: integer }, B { q: integer }, C { r: integer } }
+fn f(v: vector<E>) -> integer {
+  match v { [(A { p } B { q } |A { p } C { r })] => (p ?? 0) + (q ?? 0), _ => -1, }
+}
+fn main() { print(\"x={f([E::A { p: 1 }, E::B { q: 2 }])}\\n\"); }
+";
+    let (stdout, diag, _code) = run_with_warnings("pattern_capture_not_null_leak", source);
+    assert!(
+        !diag.contains("Redundant null coalescing"),
+        "a pattern capture must not leak its not-null marker into the arm body; \
+         got stderr={diag:?}"
+    );
+    assert!(
+        stdout.contains("x=3"),
+        "value must be unchanged; got stdout={stdout:?}"
+    );
+}
+
+// The other direction: resetting at the `=>` must not DISABLE the lint inside an arm.
+// A genuinely redundant coalesce in the body re-arms the marker from its own field
+// read, so it still warns — and names the field it is actually about.
+#[test]
+fn redundant_coalesce_inside_arm_body_still_warns() {
+    let source = "\
+struct S { x: integer }
+enum E { A { p: integer }, C { r: integer } }
+fn f(v: vector<E>, s: S) -> integer {
+  match v { [(A { p } |C { r })] => (s.x ?? 0) + (p ?? 0) + (r ?? 0), _ => -1, }
+}
+fn main() { print(\"x={f([E::A { p: 1 }], S { x: 5 })}\\n\"); }
+";
+    let (stdout, diag, _code) = run_with_warnings("redundant_coalesce_in_arm", source);
+    assert!(
+        diag.contains("Redundant null coalescing") && diag.contains("'x'"),
+        "a genuinely redundant `s.x ?? 0` inside an arm body must still warn, naming 'x'; \
+         got stderr={diag:?}"
+    );
+    assert!(
+        stdout.contains("x=6"),
+        "value must be unchanged; got stdout={stdout:?}"
+    );
+}
+
 // ── @PLN102 case E sibling: `== null` after a fault op is not always-constant ──
 // The redundant-null-CHECK lint shares the `expr_not_null` root: `sqrt(field) == null`
 // is a genuine check (sqrt of a non-null CAN be null), so it must not warn "always

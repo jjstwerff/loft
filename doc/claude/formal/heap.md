@@ -61,7 +61,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ### Heap values and the reference null
 
 ```
-  (H-Ref)      a DbRef r is a value (a normal form); it does not step.
+  (H-RefVal)   a DbRef r is a value (a normal form); it does not step.  (Named apart from
+               `H-Ref` below, the `&`-bind ALIASING rule, which other docs cite by that name.)
   (H-RefNull)  nullref is the reference null — the per-type SENTINEL (E-Null) of a
                reference type.  Two configs that agree on the abstract reference (a live
                record, or nullref) MUST agree, however a backend encodes the sentinel.

@@ -1540,7 +1540,13 @@ use a separate collection or add after the loop"
             && self.lexer.peek_token("[");
         let prev_read_target = std::mem::replace(&mut self.expected, f_type.clone());
         let rhs_pos = self.lexer.peek_pos().clone();
+        // @PLN87 B-Ref-AnnotationOnly — a plain `=` RHS is the one expression position
+        // where a leading `&` binds a reference, so open the head there.  A COMPOUND
+        // assignment (`b += &a`) is excluded on purpose: it mutates `b`, it does not
+        // give `b` a reference type, so it is not a bind site.
+        self.amp_head = op == "=";
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        self.amp_head = false;
         self.expected = prev_read_target;
         // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue
         // and the `&` opts INTO aliasing (B-Ref-Write — the write-through "north star" —
@@ -3189,7 +3195,14 @@ use a separate collection or add after the loop"
         if self.peek_tuple_lhs() {
             self.in_tuple_lhs = true;
         }
+        // @PLN87 B-Ref-AnnotationOnly — a statement may BEGIN with `&` in exactly one
+        // shape, `name = &src`, whose `&` is reached through the RHS head opened in
+        // `parse_assign_op`.  Open the head here too so a bare `&a;` / block-final
+        // `{ &a }` still reaches the D-bind-7 guard below with its own message,
+        // instead of being reported here as a sub-expression use.
+        self.amp_head = started_with_amp;
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
+        self.amp_head = false;
         self.in_tuple_lhs = saved_tuple_lhs;
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);

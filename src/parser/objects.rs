@@ -2825,7 +2825,17 @@ impl Parser {
 
                 td.clone()
             } else {
-                self.parse_operators(&td, &mut value, &mut parent_tp, 0)
+                // @PLN87 B-Ref-AnnotationOnly — a `reference<T>` FIELD is the third place a
+                // prefix `&` legally annotates a binding: `Linked { link: &pool[i] }` stores
+                // a cross-store pointer, which is what the field's type asks for.  (It is a
+                // different type former from `&τ`, the stack link the rest of the rule is
+                // about — see `Type::Reference` vs `Type::RefVar`.)  Open the head only for
+                // that field type, so a `&` in a field of any OTHER type stays the
+                // sub-expression use the rule forbids.
+                self.amp_head = matches!(td, Type::Reference(_, _));
+                let t = self.parse_operators(&td, &mut value, &mut parent_tp, 0);
+                self.amp_head = false;
+                t
             };
             // #330: an initialiser that READS the in-place target is hoisted
             // into a typed temp; the temps run before the OpDatabase re-init

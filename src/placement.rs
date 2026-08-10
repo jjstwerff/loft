@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
+
 //! The on-disk PLACEMENT contract of the keyed collections (@PLN135 Q2).
 //!
 //! A persisted store is a raw image, and the @PLN97 layout identity commits to how its

@@ -46,7 +46,7 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 
 > **Stage 1–2 (2026-07-04) — the worklist earned its keep.** Two real findings: (1) **H-Copy was
 > imprecise** — a struct-typed projection is a VIEW, not a copy (heap.md corrected: added
-> `H-View`); (2) **coroutine laziness diverges** for LOOP-based yields (native eager) —
+> `H-View`); (2) **coroutine laziness diverges** for a loop body of MORE than one statement (native eager) —
 > reclassified as a DECIDED EDGE (a rustc restriction, the maker's accepted trade-off), not a bug.
 > Everything else on the priority + runtime + static-reject rows verified ✓ on BOTH backends
 > (F-ParamRebind incl. native, `par` N-independence, null/OOB-continue, range/reduce-left/map-fresh,
@@ -98,8 +98,11 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 ## coroutines.md
 
 - ✓/edge **G-Call / G-Next laziness** — STRAIGHT-LINE yields are lazy on BOTH backends
-  (`a g1 b g2`). LOOP-based yields are lazy on interp, EAGER on native — a DECIDED EDGE (rustc
-  restriction, CL-9), NOT a bug. *Guard: `oracle/26-coroutine-laziness` (straight-line).*
+  (`a g1 b g2`). A loop body of MORE than one statement is lazy on interp, EAGER on native — a
+  DECIDED EDGE (rustc restriction, CL-9, [loft#836](https://github.com/loft-lang/loft/issues/836)),
+  NOT a bug. The edge is one STATEMENT wide, not one construct wide: `for x in it { yield x }` is
+  lazy on native too (the `YieldFrom` segment), verified over a 1e9 range. *Guard:
+  `oracle/26-coroutine-laziness` (straight-line).*
 - ✓ **G-Next values / G-Done** — one value per advance (sum 30); exhaustion (take-first-2 ⇒ 1),
   both backends. Nested CALL between yields works too. *Guard: oracle `12`.*
 - deferred **G-YieldDepth** — a `yield` INSIDE a helper (true stackful) needs `yield from` (CO1.4,

@@ -111,12 +111,16 @@ computed lazily, on demand, rather than read from a store.
 OPEN: **0**. One thing the VERIFICATION worklist surfaced (2026-07-04) is a **decided edge**, not
 a deviation — recorded here so it is not mistaken for a bug:
 
-> **DECIDED EDGE — native is EAGER for yields inside a LOOP (a rustc restriction).** Laziness
-> (G-Call / G-Next) holds fully for **straight-line** yields on BOTH backends (`print("a"); yield 1;
-> print("b"); yield 2` interleaves as `a g1 b g2` on native too — verified). But when the `yield`
-> is inside a **loop** (`for i in 0..n { … yield … }`), `--native` runs the loop **eagerly**,
-> buffering all its yields, because a fully-lazy resumable state machine across a Rust loop body is
-> not expressible under rustc's restrictions. So `for i in 0..2 { print("y{i} "); yield i }`
+> **DECIDED EDGE — native is EAGER for a loop body that does MORE than yield (a rustc
+> restriction).** Laziness (G-Call / G-Next) holds fully for **straight-line** yields on BOTH
+> backends (`print("a"); yield 1; print("b"); yield 2` interleaves as `a g1 b g2` on native too —
+> verified). The edge is **one statement wide, not one construct wide**: a loop whose body is
+> nothing but `yield <loop var>` is ALSO lazy on native — `detect_yield_from` matches it and lowers
+> it to the lazy `YieldFrom` segment, so `for x in 0..1000000000 { yield x }` consumed three values
+> and stopped (eager buffering would have needed ~8 GB; verified both backends). Eagerness begins
+> the moment the body holds a **second statement**: `--native` then runs the loop eagerly, buffering
+> all its yields, because a fully-lazy resumable state machine across a Rust loop body is not
+> expressible under rustc's restrictions. So `for i in 0..2 { print("y{i} "); yield i }`
 > consumed by `for x in gen() { print("g{x} ") }` is `y0 g0 y1 g1` (interp, lazy) vs `y0 y1 g0 g1`
 > (native, eager). **Values agree** for a finite, fully-consumed generator; the observable
 > difference is (a) side-effect interleaving, and (b) an INFINITE or early-`break`-consumed
@@ -127,7 +131,8 @@ a deviation — recorded here so it is not mistaken for a bug:
 > **Removal design written** — [COROUTINE.md § Design: lazy loop yields (CL-9)](../COROUTINE.md#design-lazy-loop-yields-cl-9):
 > persist the loop cursor in the coroutine frame (the existing `coroutine_persistent_*` machinery)
 > and decompose `ForLoopBody` from the eager `Vec` buffer into resumable header/body states. When
-> that lands, this edge closes.
+> that lands, this edge closes. Tracked as
+> [loft#836](https://github.com/loft-lang/loft/issues/836).
 
 - **Conformance is otherwise differential, and this is the hardest case** — the two backends
   implement suspension by the most different mechanisms (interp: serialise the frame to a heap

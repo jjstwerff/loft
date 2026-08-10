@@ -457,12 +457,14 @@ overflows *at runtime* yields **null and keeps running** (operational.md `E-Unco
               op or cast and appears in the syntax.
 ```
 
-### Pattern captures (@PLN35, SPEC-FIRST · planned, NOT yet implemented)
+### Pattern captures (@PLN35, SHIPPED)
 
-> **@PLN35 · SPEC-FIRST** — the target for PEG match-pattern capture typing
-> ([matching.md § Rules — PEG patterns](matching.md)), written ahead of the code; pinned per-phase
-> by the @PLN89 oracle as [../plans/35-match-peg/](../plans/35-match-peg/) lands. Design:
-> [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
+> **@PLN35 · SHIPPED.** These rules were written spec-first, ahead of the code; the code
+> landed with phases 1–7 + PC1–PC5 ([matching.md § Rules — PEG patterns](matching.md)) and now
+> obeys them — verified both backends: an alternation binding a name in only SOME branches
+> reads `null` in the branch that does not bind it (`P-Alt-Diff`), and a capture inside `(a)?`
+> reads `null` when the optional is absent (`P-Opt-Ty`). Pinned per-phase by the @PLN89 oracle;
+> design: [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
 
 A pattern capture binds a name to a matched sub-result. **The headline is that this introduces NO
 new type former** — every capture lands on `τ`, `τ?`, or `vector<τ>`, unified by the SAME join `⊔`

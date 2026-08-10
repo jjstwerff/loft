@@ -1905,6 +1905,55 @@ fn pln87_amp_in_subexpr_is_error() {
         .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_in_subexpr_is_error:1:28");
 }
 
+// @PLN87 B-Ref-AnnotationOnly — the SWEEP over `&`-position, not one cell.  The guard
+// used to decide by peeking the token AFTER the `&`-operand: a `;`/`}` there meant "the
+// whole RHS".  That proves nothing FOLLOWS the `&`, never that nothing PRECEDED it, so
+// every shape where the `&` is the LAST operand of a larger expression compiled — incl.
+// the rule's own named example, `x + &y`.  `pln87_amp_in_subexpr_is_error` missed them
+// all because it puts the `&` at the HEAD (`b = &a + 1`), the one sub-expression
+// position the peek did catch.  These five cover the positions it did not.
+#[test]
+fn pln87_amp_as_tail_operand_is_error() {
+    code!("fn test() { a = 5; b = 1 + &a; print(\"{b}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_as_tail_operand_is_error:1:31");
+}
+
+// A COMPOUND assignment is not a bind site: `b += &a` mutates `b`, it does not give `b`
+// a reference type, so the `&` has no binding to annotate.
+#[test]
+fn pln87_amp_as_compound_assign_rhs_is_error() {
+    code!("fn test() { a = 3; b = 1; b += &a; print(\"{b}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_as_compound_assign_rhs_is_error:1:35");
+}
+
+// A block-final `1 + &a` — a tail VALUE, not a binding.  (A bare block-final `&a` keeps
+// its own D-bind-7 message below; here the `&` is an operand, so it is the general ban.)
+#[test]
+fn pln87_amp_in_block_final_expression_is_error() {
+    code!("fn tv(a: integer) -> integer { 1 + &a } fn test() { print(\"{tv(5)}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_in_block_final_expression_is_error:1:40");
+}
+
+// A struct-literal FIELD value — the L7 concern for a record rather than a vector: a
+// closing `}` follows the operand, which is exactly what the old peek read as "the
+// whole RHS terminates here".
+#[test]
+fn pln87_amp_in_struct_literal_field_is_error() {
+    code!("struct S { x: integer } fn test() { a = 3; s = S { x: &a }; print(\"{s.x}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_in_struct_literal_field_is_error:1:59");
+}
+
+// A `return &a;` — the `;` terminates, but a return is not a binding either.  It already
+// rejected before the head gate, via the D-bind-7 message rather than the general ban:
+// the returned expression is parsed as its own statement, and that statement DOES begin
+// with `&`, so the bare-reference guard is the one that fires.  "Discards the reference"
+// is the accurate reading of a returned `&a`.  Pinned so the sweep stays a sweep.
+#[test]
+fn pln87_amp_in_return_statement_is_error() {
+    code!("fn tr(a: integer) -> integer { return &a; } fn test() { print(\"{tr(5)}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`); a bare `&a` discards the reference. Drop it, or write `name = &a` to bind one at pln87_amp_in_return_statement_is_error:1:39");
+}
+
 // @PLN87 L7 — a reference cannot be smuggled into a data-structure literal: a `&` in a
 // collection element hits the general-operator ban, keeping references from outliving
 // their source.  (A `&T` struct-FIELD type is likewise rejected — "Attribute … needs

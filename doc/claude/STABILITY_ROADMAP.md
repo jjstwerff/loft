@@ -355,18 +355,21 @@ either conclusion.
    loudly rejects the unparseable, spec-ready and independent of policy — and a *semantic* half gated on
    the **language-versioning decision** (the pivot: a bound only means "compatibility" once the language
    has a version axis that increments on breaking changes, which calver does not).
-   **Verified mechanism gap:** `manifest::check_version` honours only a `>=` lower bound — an upper
-   bound, exact pin, caret, or malformed constraint is silently accepted as "any version" — and
-   under calendar versioning (`2026.7.1`) the `>=0.8` that every published library carries is
-   permanently vacuous. So a library *cannot* declare incompatibility even if its author knows.
-   (Re-verified against the current tree this session: `"<=0.1"` / `"=0.1"` / `"garbage"` all ACCEPT,
-   only `">=9999.0"` REJECTs.)
-   **The failure mode it prevents is already live.** `hex_terrain 0.1.0` fails its own registry
-   test with `0 land cells`: it uses the plain-bind write-through idiom (`th = t.tr_h; th[i] = v`),
-   and loft now **copies on plain bind** (C86 H-Copy), so the heights land in throwaway copies.
-   `graphics` hit the identical class and was migrated to `&self.data`; `hex_terrain` never was.
-   Both pin `loft = ">=0.8"`, so nothing guarded them, and the library does not crash — it
-   computes a plausible-looking wrong answer. That is precisely what
+   **The mechanical half now ships** (verified 2026-08-09): `manifest::check_version` parses
+   comma-separated predicates AND-ed into a range, `parse_predicate` binds `>=`, `<=`, `>`, `<`,
+   `=` and a bare version (lower bound, for backward compatibility), and anything else returns
+   `VersionCheck::Malformed` with a message naming the supported forms. The loud-rejection cases
+   are pinned by `tests/compat_floor.rs` (`"garbage"`, `""`, `"1.2.3.4"`, `"v1.0"`, `"latest"`,
+   `"0.x"`) and `tests/package_layout.rs`. What remains is the *semantic* half: under calendar
+   versioning the `>=0.8` that published libraries carry is still vacuous, so a library can now
+   *express* incompatibility but the version axis does not yet make a bound mean it.
+   **The failure mode it prevents was live.** `hex_terrain 0.1.0` failed its own registry
+   test with `0 land cells`: it used the plain-bind write-through idiom (`th = t.tr_h; th[i] = v`),
+   and loft now **copies on plain bind** (C86 H-Copy), so the heights landed in throwaway copies.
+   `graphics` hit the identical class and was migrated to `&self.data`; `hex_terrain` has since
+   been fixed too and the package validates green. Both pinned `loft = ">=0.8"`, so nothing
+   guarded them, and the library did not crash — it computed a plausible-looking wrong answer.
+   That is precisely what
    [GOALS.md](GOALS.md) forbids of the platform: *"the platform never broke its users; the cost of
    change was paid by the maker, not the customer."* A compat promise with a deprecation channel
    is the mechanism that would have caught it.

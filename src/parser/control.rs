@@ -429,6 +429,19 @@ impl Parser {
     /// recovery the surrounding loop spins on the unconsumed token —
     /// see PROBLEMS.md P206.
     fn expect_match_arm_arrow(&mut self) {
+        // @PLN46/@PLN25 — `expr_not_null` is a TRANSIENT marker ("the field access just
+        // parsed is non-null"), consumed by the very next operator.  A PATTERN reads the
+        // subject's fields to bind its captures, so the last capture parsed leaves the
+        // marker set with nothing in the pattern to consume it — and the arm BODY then
+        // inherits it.  The first `??` in the body reports that stale name: an arm body
+        // `(p ?? 0) + (q ?? 0)` under `[(A { p } B { q } |A { p } C { r })]` warned
+        // "'r' is 'not null'", naming a capture the body never mentions, and on the
+        // `(p ?? 0) + (r ?? 0)` shape it told the author to delete the `r ?? 0` that is
+        // doing the work (dropping it yields null).  The `=>` is the pattern→body
+        // boundary every arm passes through, so reset here — the same reset the
+        // statement boundary already does (parse_block, "leak into a LATER statement").
+        self.expr_not_null = false;
+        self.expr_not_null_name.clear();
         // Trace point: match arm-arrow consumption.  Captures whether
         // the parser is looking at `->` (wrong), `=>` (right), or
         // something else (recover via `recover_to`).  Recurring

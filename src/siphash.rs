@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I90 — Shared utilities & data structures
+
 //! SipHash-1-3, owned by loft (loft#827).
 //!
 //! A persisted `hash<T[k]>` stores its seed in the file so that every reader re-derives

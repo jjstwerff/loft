@@ -377,14 +377,14 @@ match t {
     (n, msg)  => println("{n}: {msg}")
 }
 
-// Range on first element
+// Range on first element — DESIGNED, DOES NOT PARSE TODAY (see the gap list below)
 match t {
     (0..10, _) => println("single digit")
     (10..100, name) => println("two digits: {name}")
     _ => println("large or negative")
 }
 
-// Or-pattern in element position
+// Or-pattern in element position — DESIGNED, DOES NOT PARSE TODAY (see below)
 match t {
     (1 | 2 | 3, _) => println("one, two, or three")
     (0, _) | (_, "") => println("zero or empty")  // ERROR — arm-level | not supported
@@ -406,6 +406,25 @@ match t {
 }
 ```
 
+### Element patterns that are DESIGNED but do not parse yet (verified 2026-08-09)
+
+Both forms below are shown as working in the examples above; neither is implemented.
+
+The gap stayed invisible because tuple patterns fall through the seam between the two
+doc-tests that should cover them: `tests/docs/29-match.loft` has 33 `match` expressions
+and **no tuple arm** (and no range arm either), while `tests/docs/28-tuples.loft` has
+**no `match` at all**. Nothing in `tests/scripts/` covers a tuple element pattern either.
+The pair below is the coverage that would have caught it.
+
+| written | today |
+|---|---|
+| `match t { (0..10, _) => … }` | `error: Expect token }` |
+| `match t { (1 \| 2 \| 3, _) => … }` | `error: Expect token \|` |
+
+Neither is a range/or limitation as such: the same forms work on a **scalar** subject —
+`match n { 0..10 => "single digit", _ => "big" }` prints `single digit`. What is missing is
+the element position inside a tuple pattern.
+
 ### What is NOT supported (T1.9 scope)
 
 - **Or-patterns at arm level**: `(1, _) | (2, _) => ...` — only `|` inside an element
@@ -413,6 +432,12 @@ match t {
   requires restructuring the arm-building loop (deferred to T1.10 if needed).
 - **Rest patterns**: `(first, ..)` — tuple arity is fixed and known at compile time;
   no `..` rest needed (unlike vector/slice match).
+  ⚠ **A `..` in a tuple pattern HANGS THE PARSER** rather than being rejected —
+  [loft#832](https://github.com/loft-lang/loft/issues/832). Verified on `(first, ..)`,
+  `(.., last)`, `(a, b, ..)` and `(first, ...)`, each killed by the watchdog in
+  `phase=parse`, on both backends. Unsupported syntax must be refused with a diagnostic,
+  so this is a bug, not the "not needed" above. Workaround: write the arity out with `_`
+  for unbound positions.
 - **Match on tuple-returning function calls**: `match foo() { ... }` — requires T1.8a
   (tuple function return convention). The subject must be a tuple variable or parameter.
 
