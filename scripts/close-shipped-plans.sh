@@ -30,6 +30,17 @@
 # Needs: gh (authenticated, write access to the plans repo), git.
 set -euo pipefail
 
+# The LIVE status labels a plan can be sitting on when it ships.  A closed plan
+# must carry a TERMINAL one (`status:finished` / `status:declined`) and no live
+# one beside it, because a label is a query surface: `status:next` left on a
+# closed plan keeps it in everyone's next-up queue forever.
+#
+# Removing only `status:active` is what left @PLN48 (`future`) and @PLN102
+# (`next`) mislabeled — and the run reported `✓` both times, which is why it went
+# unnoticed until a by-hand audit found them.  `scripts/audit-stale-plans.sh` now
+# FAILS on the class, so this list and that check must name the same labels.
+LIVE_LABELS="status:active status:future status:next status:closing"
+
 REPO="loft-lang/plans"; RANGE=""; BODY_FILE=""; DRY=0; YES=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -80,20 +91,59 @@ if [ "$DRY" != 1 ] && [ "$YES" != 1 ]; then
 fi
 
 # 3. Close each (idempotent).
+# The live labels currently on issue $1, one per line (empty when none).
+stale_labels() {
+    local have
+    have=$(gh issue view "$1" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null || true)
+    local l
+    for l in $LIVE_LABELS; do
+        # `if`, not `&&`: under `set -e` an AND-OR list that fails as the last
+        # command of a loop body takes the shell down with it, and "this plan has
+        # no stale label" is the COMMON case.
+        if printf '%s\n' "$have" | grep -qx "$l"; then
+            printf '%s\n' "$l"
+        fi
+    done
+    return 0
+}
+
 for n in $NUMS; do
     state=$(gh issue view "$n" --repo "$REPO" --json state -q .state 2>/dev/null || echo MISSING)
     case "$state" in
         MISSING) echo "  #$n — not found in $REPO, skipping" ;;
-        CLOSED)  echo "  #$n — already closed, skipping" ;;
+        CLOSED)
+            # Idempotent re-run, or a hand-close. Either way the LABELS may still
+            # be wrong, and saying so is the difference between this drifting
+            # silently and someone fixing it.
+            stale=$(stale_labels "$n" | tr '\n' ' ')
+            if [ -n "${stale// /}" ]; then
+                echo "  #$n — already closed, but still labelled: ${stale% } (run scripts/audit-stale-plans.sh)"
+            else
+                echo "  #$n — already closed, skipping"
+            fi
+            ;;
         OPEN)
             if [ "$DRY" = 1 ]; then
-                echo "  #$n — would set status:finished + close"
+                stale=$(stale_labels "$n" | tr '\n' ' ')
+                echo "  #$n — would set status:finished + close${stale:+, dropping ${stale% }}"
             else
-                gh issue edit "$n" --repo "$REPO" \
-                    --remove-label status:active --add-label status:finished >/dev/null 2>&1 || true
+                # EVERY live label goes, not just `status:active`. Only the ones
+                # actually present are named: `--remove-label` on an absent label
+                # is an error, and swallowing that error is how a failed label
+                # edit used to print `✓`.
+                rm_args=()
+                while IFS= read -r l; do
+                    [ -n "$l" ] && rm_args+=(--remove-label "$l")
+                done < <(stale_labels "$n")
+                if gh issue edit "$n" --repo "$REPO" \
+                       ${rm_args[@]+"${rm_args[@]}"} --add-label status:finished >/dev/null; then
+                    label_note=""
+                else
+                    label_note=" (LABEL UPDATE FAILED — fix by hand)"
+                fi
                 gh issue close "$n" --repo "$REPO" \
                     --comment "Shipped to main — closed by close-shipped-plans (from $SRC). status:finished." >/dev/null
-                echo "  #$n — status:finished + closed ✓"
+                echo "  #$n — status:finished + closed ✓$label_note"
             fi
             ;;
         *) echo "  #$n — unexpected state '$state', skipping" ;;
