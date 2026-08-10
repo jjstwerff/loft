@@ -86,6 +86,24 @@ fn vals(self: Trace) -> text {
 // the accumulator has to stand on its own.
 fn seq_of(t: Trace) -> text { return t.seq(); }
 
+// A target in RETURN position (loft#837). LOFT.md lists the return type beside the
+// assignment and the parameter, and it was the one of the three that did not work: the
+// block-tail `expected` push was gated to enum and collection results, so a struct
+// target never reached the string and the tail was checked as `text` against `Trace`.
+// A builder function is the shape this feature most wants — without it, every builder
+// has to route through a local for no reason the author can see.
+fn built_as_tail(n: integer) -> Trace { "t{n}u" }
+
+// The explicit `return` spelling of the same thing, because they are separate paths in
+// the parser and the issue reported both.
+fn built_as_return(n: integer) -> Trace { return "r{n}s"; }
+
+// A tail that is an `if`, so the target has to survive being threaded into both
+// branches rather than into one expression.
+fn built_in_branch(n: integer, hi: boolean) -> Trace {
+  if hi { "H{n}" } else { "L{n}" }
+}
+
 fn main() {
   name = "ada";
   n = 7;
@@ -125,6 +143,18 @@ fn main() {
 
   // Argument position: the `expected` push is what carries the target here.
   assert(seq_of("p{n}q") == "lit(p)>int>lit(q)", "a format string builds in argument position");
+
+  // Return position — the third of LOFT.md's three (loft#837).
+  g = built_as_tail(n);
+  assert(g.seq() == "lit(t)>int>lit(u)", "a block tail builds in return position");
+  assert(g.vals() == "[7]", "and the value reaches the type as a value");
+  h = built_as_return(n);
+  assert(h.seq() == "lit(r)>int>lit(s)", "an explicit return builds too");
+  assert(h.vals() == "[7]", "with the value kept apart from the text");
+  i = built_in_branch(n, true);
+  assert(i.seq() == "lit(H)>int", "an if-tail carries the target into its branch");
+  j = built_in_branch(n, false);
+  assert(j.seq() == "lit(L)>int", "and into the other branch");
 
   // The bytes an author writes are literals even when they LOOK like data.
   g: Trace = "a'b\"c;--{name}";

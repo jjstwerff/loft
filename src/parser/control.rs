@@ -684,7 +684,17 @@ impl Parser {
             // loft#703 — a KEYED result threads for the same reason: `[K { … }]` infers
             // `vector<K>` wherever it stands, so a keyed tail has no other way to say
             // which container to build.
-            if self.enum_context(result) || crate::parser::vectors::is_collection(result) {
+            // @PLN124/loft#837 — an INTERPOLATION TARGET threads for the third time for
+            // the same reason: `fn q(name: text) -> Query { "hi {name}" }` has no other
+            // way to say which type the string builds, and LOFT.md § "Building a value
+            // instead of text" lists the return type beside the assignment and the
+            // parameter.  `interpolation_target` is a pure lookup (Reference → struct →
+            // defines `lit`), so widening the gate costs a def-table probe on block tails
+            // whose result is a struct.
+            if self.enum_context(result)
+                || crate::parser::vectors::is_collection(result)
+                || self.interpolation_target(result) != u32::MAX
+            {
                 self.expected = result.clone();
             }
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
@@ -7501,7 +7511,14 @@ impl Parser {
                 }
                 break;
             }
-            // Parse guard
+            // Parse guard.  `has_keyword` matches only an IDENTIFIER and `if` lexes as a
+            // token, so this never fires and a guarded vector arm is refused with "Expect
+            // token =>" — even though LOFT.md says any arm may carry a guard.  Left as it
+            // is deliberately: swapping in `has_token` lets the guard parse, but the arm's
+            // bindings are assigned inside the arm BODY, which runs after the condition,
+            // so a guard reading a capture reads an unassigned variable and the arm
+            // silently does not match.  A clean refusal beats a silent wrong answer;
+            // loft#839 carries the repro and what enabling it needs.
             let guard_opt = if self.lexer.has_keyword("if") {
                 let mut guard = Value::Null;
                 let gt = self.expression(&mut guard);
@@ -7630,8 +7647,22 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
+            // Every iteration must consume at least one token.  A pattern the element
+            // loop below cannot make sense of leaves the cursor parked mid-arm, and
+            // `expect_match_arm_arrow`'s `recover_to` cannot rescue it: that helper
+            // resynchronises, and returns WITHOUT consuming when the cursor already
+            // sits on one of its stop tokens or on an unmatched closer.  The arm then
+            // re-parses the same token forever — silently, because first-pass
+            // diagnostics are suppressed (loft#832).  Compared against `arm_start` at
+            // the bottom of the loop.
+            let arm_start = self.lexer.at();
 
             let mut is_wildcard = false;
+            // A pattern that was REFUSED binds nothing and tests nothing, which reads
+            // exactly like `(_, _, _)` at the classification below — and a wildcard arm
+            // ends the arm loop, so a rejected first arm would swallow every arm after
+            // it and report a missing `}` instead of the refusal (loft#832).
+            let mut bad_pattern = false;
             let mut bindings: Vec<Value> = Vec::new();
             let mut elem_conds: Vec<Value> = Vec::new();
 
@@ -7648,12 +7679,39 @@ impl Parser {
             } else if self.lexer.has_token("(") {
                 // Element-by-element pattern
                 for (i, elem_type) in elem_types.iter().enumerate().take(arity) {
-                    if i > 0 && !self.lexer.has_token(",") && !self.first_pass {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "expected ',' between tuple pattern elements"
-                        );
+                    // The break is NOT gated on the pass: both passes must walk the
+                    // arm the same way, or the first one wanders into positions the
+                    // second never visits and stops making progress.
+                    if i > 0 && !self.lexer.has_token(",") {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "expected ',' between tuple pattern elements"
+                            );
+                        }
+                        break;
+                    }
+                    // A `..` rest is not part of the tuple design — arity is fixed
+                    // (TUPLES.md § "What is NOT supported"), so there is nothing for a
+                    // rest to stand for.  Refuse it by name and skip to the closing
+                    // `)`, rather than letting it fall through to the literal branch
+                    // below, where `expression` consumes the `..` but leaves the `)`
+                    // unclaimed and the arm loop spinning (loft#832).
+                    if self.lexer.peek_token("..") || self.lexer.peek_token("..=") {
+                        bad_pattern = true;
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a `..` rest pattern is not supported in a tuple pattern — \
+                                 a tuple's arity is fixed, so write every position, \
+                                 using `_` for the ones you do not bind"
+                            );
+                        }
+                        self.lexer.has_token("..=");
+                        self.lexer.has_token("..");
+                        self.lexer.recover_to(&[")"]);
                         break;
                     }
                     let elem_type = elem_type.clone();
@@ -7699,17 +7757,36 @@ impl Parser {
                         elem_conds.push(elem_cond);
                     }
                 }
-                if !self.lexer.has_token(")") && !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "expected ')' to close tuple pattern"
-                    );
+                if !self.lexer.has_token(")") {
+                    bad_pattern = true;
+                    if !self.first_pass {
+                        // A `,` here means the pattern listed MORE elements than the
+                        // subject has; anything else is ordinary junk.  Naming the
+                        // arity is what tells the author which side to change.
+                        if self.lexer.peek_token(",") {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "tuple pattern has more elements than the {}-element subject tuple",
+                                arity
+                            );
+                        } else {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "expected ')' to close tuple pattern"
+                            );
+                        }
+                    }
+                    // Skip the surplus so the arm reaches its `=>` — without this the
+                    // cursor stays parked on the `,` and the arm loop spins (loft#832).
+                    self.lexer.recover_to(&[")"]);
+                    self.lexer.has_token(")");
                 }
                 // All element positions were wildcards/bindings with no literal conditions.
                 // The arm is effectively unconditional (wildcard) when there are no bindings
                 // either; if there are bindings it acts like a wildcard-with-capture.
-                if elem_conds.is_empty() && bindings.is_empty() {
+                if elem_conds.is_empty() && bindings.is_empty() && !bad_pattern {
                     is_wildcard = true;
                 }
             } else if !self.first_pass {
@@ -7720,7 +7797,10 @@ impl Parser {
                 );
             }
 
-            // Optional guard clause
+            // Optional guard clause — see the vector arm loop's note on why this stays
+            // `has_keyword` (loft#839).  TUPLES.md § Grammar has carried `tuple-arm ::=
+            // tuple-pattern [ guard ] '=>' expression` since T1.9, and no guarded tuple
+            // arm has ever parsed.
             let guard_opt = if self.lexer.has_keyword("if") {
                 let mut g = Value::Null;
                 let gt = self.expression(&mut g);
@@ -7797,6 +7877,16 @@ impl Parser {
                 // optional arm separator
                 self.lexer.has_token(",");
                 self.lexer.has_token(";");
+            }
+            // Backstop for the invariant declared at `arm_start`: a whole arm parsed
+            // without consuming a token means no later iteration can consume one
+            // either, so stop instead of spinning.  The shapes known to reach here
+            // are handled above with their own diagnostics; this catches the ones
+            // nobody has written a probe for yet.  `token("}")` below reports the
+            // arm loop's failure to reach a close brace, as the vector arm loop's
+            // own no-progress `break` does.
+            if self.lexer.at() == arm_start {
+                break;
             }
         }
         self.lexer.token("}");

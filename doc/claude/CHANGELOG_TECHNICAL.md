@@ -147,6 +147,87 @@ fact it needed, and the stand-in was true when the fact was not.
   `native::a_lazy_read_gives_one_answer_down_rust_and_down_loft`. The sweep now
   takes only the `loft_auto_<pkg>_` family it built; guard
   `::a_foreign_library_in_native_auto_survives_pruning`.
+### The block-tail `expected` push learns a third shape: the interpolation target (#837) (2026-08-10)
+
+@PLN124's target is read off the one `⇐` channel, and `parse_block` pushed the block's
+result type into that channel only when the result was an **enum** (@PLN22 phase 1) or a
+**collection** (@PLN90 W8). A struct is neither, so `fn q(name: text) -> Query { "hi
+{name}" }` parsed its tail with `expected = Unknown`, took the ordinary text path, and
+failed the tail conversion — *"expected Query, got text on return from block"*. The gate
+now also fires when `interpolation_target(result)` resolves, which is a pure lookup
+(`Type::Reference` → `DefType::Struct` → defines `t_<len><name>_lit`), so the cost is one
+def-table probe on block tails whose result is a struct.
+
+One gate covers all three reported spellings — block tail, explicit `return`, and an `if`
+tail threading into both branches — because they share `parse_block`'s tail.
+
+The issue asked which of doc and code was wrong, on the reading that the **call-argument**
+position had been closed deliberately by #776. It has not: the argument position builds
+correctly on both backends on current `main` (verified `parts == ["hi "]`, `values ==
+["ada"]`, not merely that it type-checks), so the doc's list was accurate except for the
+return. #776's narrowing was of the HOLE channel, not the argument channel, and that gate
+still holds — `q: Query = "{"seed"}"` passes `"seed"` to `hole_text` as a value rather
+than building a second accumulator.
+
+Guards: `tests/scripts/interpolation-hook.loft` grows `built_as_tail` / `built_as_return`
+/ `built_in_branch` beside the existing `seq_of` argument-position case, asserting the
+call SEQUENCE (`lit(t)>int>lit(u)`) rather than the result — a target that only checked
+the final string could not tell the hook from ordinary formatting. Both backends.
+
+### A tuple match arm that consumes nothing is a parse that never ends (#832) (2026-08-10)
+
+`parse_tuple_match`'s arm loop could iterate without consuming a token, and then it
+never stopped. `(first, ..)` reached the element loop's literal branch, where
+`expression` took the `..` and left the `)` unclaimed; `expect_match_arm_arrow` then
+found no `=>` and called `recover_to(&[",", "}", ";"])`, which **resynchronises** and
+returns WITHOUT consuming when the cursor already sits on a stop token or an unmatched
+closer. The arm re-parsed the same token forever — 2.1 million iterations in four
+seconds — and silently, because first-pass diagnostics are suppressed. loft is
+unbounded by default, so nothing bounded it.
+
+The filed scope was `..`; the matrix widened it. **An over-arity pattern hangs
+identically** (`(a, b, c, d)` on a three-element tuple): the element loop stops at the
+subject's arity and leaves the cursor on the surplus `,`. Junk arm heads (`1`, `"x"`,
+`[1,2,3]`, `{ }`) recover fine, because `recover_to` scans forward from them and does
+consume — which is what made the boundary look narrower than it was.
+
+Three changes, one invariant — *every arm-loop iteration consumes at least one token*:
+
+- `..` / `..=` is refused **by name** in an element position, with the supported form in
+  the message, then skipped to the closing `)`. Arity is fixed by design (TUPLES.md
+  § "What is NOT supported"), so a rest has nothing to stand for.
+- A pattern longer than the subject reports the subject's **arity** rather than a bare
+  "expected ')'", and the surplus is skipped so the arm reaches its `=>`.
+- A `bad_pattern` flag keeps a refused arm from being classified as a **wildcard**. A
+  refusal binds nothing and tests nothing, which reads exactly like `(_, _, _)` — and a
+  wildcard arm ends the arm loop, so a rejected FIRST arm swallowed every arm after it
+  and reported a missing `}` instead of the refusal. This is why `(.., last)` and `(..)`
+  behaved differently from `(first, ..)`, which binds and so escaped the misclassification.
+- The element loop's missing-comma `break` is no longer gated on `!first_pass`. Both
+  passes must walk an arm the same way, or the first wanders into positions the second
+  never visits.
+- A backstop compares `lexer.at()` across the whole iteration and breaks if nothing moved,
+  so an unknown shape ends in a diagnostic rather than a stuck build.
+
+Two adjacent defects found by the first tuple-element-pattern coverage the corpus has
+ever had (`28-tuples.loft` carries no `match`, which is why the hang shipped), both
+filed rather than fixed here:
+
+- **#839** — an `if` guard never parses on a vector or tuple arm: those two loops call
+  `has_keyword("if")`, which matches only `LexItem::Identifier`, while `if` lexes as a
+  token; the three working match kinds use `has_token`. Swapping it in was tried and
+  reverted: the guard then parses and the arm silently does not match, because captures
+  are assigned in the arm BODY and the condition runs first, so the guard reads an
+  unassigned variable. A clean refusal beats a silent wrong answer; both call sites
+  record why.
+- **#840** — a tuple **parameter** with a `text` element fails rustc on `--native` when
+  it is the match subject: the `match_tuple` temp is spelled with the owned type
+  (`String`) and initialised from the borrowed parameter (`&str`).
+
+Guards: `tests/scripts/832-tuple-pattern-refused.loft` (every `..` position plus
+over-arity, asserting the REJECTION — a timeout-only test would pass for the wrong
+reason) and `832-tuple-pattern-elements.loft` (the positive twin; a fix that rejected
+every tuple pattern would satisfy the first alone). Both backends.
 
 ### One SQL boundary closes: a table loft made and a table loft found are the same value (@PLN133) (2026-08-08)
 

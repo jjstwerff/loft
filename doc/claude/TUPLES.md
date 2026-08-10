@@ -337,7 +337,8 @@ Tuple match on a local variable, parameter, or literal is independent and can la
   variables, literals, ranges, or-patterns, and `null`.
 - Support nested tuple patterns for tuple-valued elements.
 - Exhaustiveness: a compile error when no arm is total (catches all cases).
-- Guards work the same way as for enum and struct match.
+- Guards are specified to work the same way as for enum and struct match. They do not
+  parse on a tuple arm — [loft#839](https://github.com/loft-lang/loft/issues/839).
 
 ---
 
@@ -346,7 +347,7 @@ Tuple match on a local variable, parameter, or literal is independent and can la
 ```
 tuple-match     ::= 'match' tuple-expr '{' tuple-arm+ '}'
 
-tuple-arm       ::= tuple-pattern [ guard ] '=>' expression
+tuple-arm       ::= tuple-pattern [ guard ] '=>' expression   // guard: see loft#839
 
 tuple-pattern   ::= '_'                                  // total wildcard
                   | '(' elem-pattern { ',' elem-pattern } ')'
@@ -431,15 +432,26 @@ the element position inside a tuple pattern.
   position is supported (reuses existing scalar or-pattern). A full arm-level or-pattern
   requires restructuring the arm-building loop (deferred to T1.10 if needed).
 - **Rest patterns**: `(first, ..)` — tuple arity is fixed and known at compile time;
-  no `..` rest needed (unlike vector/slice match).
-  ⚠ **A `..` in a tuple pattern HANGS THE PARSER** rather than being rejected —
-  [loft#832](https://github.com/loft-lang/loft/issues/832). Verified on `(first, ..)`,
-  `(.., last)`, `(a, b, ..)` and `(first, ...)`, each killed by the watchdog in
-  `phase=parse`, on both backends. Unsupported syntax must be refused with a diagnostic,
-  so this is a bug, not the "not needed" above. Workaround: write the arity out with `_`
-  for unbound positions.
+  no `..` rest needed (unlike vector/slice match). A `..` in any position is refused by
+  name, and the message says what to write instead: *"a `..` rest pattern is not
+  supported in a tuple pattern — a tuple's arity is fixed, so write every position, using
+  `_` for the ones you do not bind"*. A pattern listing MORE elements than the subject has
+  is refused the same way, naming the subject's arity.
+  (Until [loft#832](https://github.com/loft-lang/loft/issues/832) both shapes HUNG the
+  parser instead of being rejected — see § Guards below for the one arm form that is still
+  refused.)
+- **Guards**: `(a, _, _) if a > 10 => …` — the grammar below lists a guard as optional on
+  every arm, and it does not parse. [loft#839](https://github.com/loft-lang/loft/issues/839)
+  carries the repro and why enabling the parse alone is worse than the refusal (the arm's
+  captures are assigned after the condition runs, so the guard reads an unassigned
+  variable and the arm silently fails to match). Write the test as an `if` inside the arm
+  body instead. The same gap applies to vector/slice arms; scalar and enum arms take
+  guards normally.
 - **Match on tuple-returning function calls**: `match foo() { ... }` — requires T1.8a
   (tuple function return convention). The subject must be a tuple variable or parameter.
+  ⚠ On `--native` a tuple **parameter** with a `text` element fails to compile when it is
+  the match subject ([loft#840](https://github.com/loft-lang/loft/issues/840)); copy it
+  into a local and match that.
 
 ---
 

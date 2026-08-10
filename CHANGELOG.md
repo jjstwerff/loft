@@ -618,6 +618,42 @@ Do keep in mind that a NUL survives a round trip through *bytes*, not through
 To preserve NULs, walk `for i in 0..size(s) { s.byte_at(i) }` and keep the data as
 `vector<u8>`.
 
+### A builder function can return the string it builds
+
+A type that builds itself from a format string could be reached by assigning to it
+or by passing it to a function, but not by returning it — which is the shape such a
+type most wants:
+
+```loft
+fn where_name(name: text) -> Query { "SELECT * FROM t WHERE name = {name}" }
+// was: expected Query, got text on return from block
+```
+
+Every builder had to route through a local first, for no reason an author could
+see. It now works from a block tail, from an explicit `return`, and from an `if`
+tail whose branches each build one. What a value can be built from is unchanged —
+a string written inside a `{…}` hole is still a value handed to the type, not a
+second thing being built.
+
+### A tuple pattern the compiler cannot accept now says so
+
+Writing a `..` rest in a tuple pattern used to stop the compiler dead:
+
+```loft
+match t { (first, ..) => "got {first}", _ => "no" }
+```
+
+No error, no output — the parser looped on that token forever. loft puts no time
+bound on itself by default, so an editor calling the compiler simply stopped
+answering. Tuple arity is fixed by design, so there is nothing a rest could stand
+for; the point is that unsupported syntax has to be *refused*, and this said
+nothing at all.
+
+Both that and a pattern with more elements than the tuple has (`(a, b, c, d)` on a
+three-element tuple) now come back as one error naming what to write instead. The
+arm loop also carries the rule it was missing — every arm must consume something —
+so a shape nobody has thought of yet ends in a message rather than a stuck build.
+
 ### A destructured name may be a stdlib name
 
 `trim = 7` has always made an ordinary local — `trim` being a stdlib method does not
