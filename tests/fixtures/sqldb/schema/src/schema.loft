@@ -1331,9 +1331,15 @@ pub fn element_address(coll: TypeInfo) -> Address {
   // A vector and an array differ in whether elements are inline or referenced,
   // which is a storage fact and not an addressing one. Both are positional.
   if coll.kind == VectorKind { return AddrOrdinal }
+  // A spatial collection orders by Morton code over several coordinates, and
+  // SQL has no shape that means the same thing. So it has no address here —
+  // the same answer `derive` gives it as an owner, from the same reasoning.
+  if coll.collection == KeyedRadix { return AddrNone }
   if coll.collection == KeyedHash { return AddrKey }
-  // sorted / ordered / index / radix / trie: ordered or indexed BY the key, and
-  // none of them promises it is unique.
+  // sorted / ordered / index / trie: ordered or indexed BY the key, and none of
+  // them promises it is unique. The ordinal is the CONSERVATIVE answer — it is
+  // never wrong rows, only a weaker address — which is why every kind but the
+  // hash takes it rather than each being decided on its own.
   if coll.kind == KeyedKind { return AddrOrdinal }
   return AddrNone;
 }
@@ -1393,37 +1399,48 @@ fn derive_owner_columns(elem: TypeInfo) -> TableDef {
 /// values) in that order — the shape the invariant names, so the primary key is
 /// a prefix of the row rather than something a reader has to look for.
 ///
-/// The index is on (owner, address) and ORDINARY. The design calls that pair
-/// unique by construction, which it is for an ordinal, so a UNIQUE index would
-/// be honest here in a way it is not for the owner's own key — `IndexDef` has no
-/// way to say so yet, and an ordinary index serves the lookup either way.
+/// **The kind decides how many address columns there are, and it is the only
+/// thing that decides.** An ordinal-addressed collection gets an `ord`; a `hash`
+/// does not, because its address is the DECLARED KEY and those are fields of the
+/// element — already columns. An ordinal there would be a second identity for a
+/// row that has one.
 ///
 /// **A scalar element and a RECORD element differ only in the last columns.**
 /// The address half is identical, which is what says the two are one rule: a
 /// `vector<integer>` adds one `value` column, and a `vector<Tag>` (S6b) adds one
 /// column per stored field of `Tag`. Neither adds anything to the address.
+///
+/// Every index here is ORDINARY, including a `hash`'s, where the pair really is
+/// unique by construction. `IndexDef` cannot spell `UNIQUE` and `introspect`
+/// cannot read one back, so rendering it would make a table loft MADE and a
+/// table loft FOUND differ in a field — the one property @PLN133 rests on. The
+/// deviation is recorded rather than half-closed.
 fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) -> TableDef {
   ct = type_named(f.type_name);
   if ct == null {
     return no_table("{owner_table}.{f.name}: {f.type_name} is not a type in this program");
   }
   coll = ct ?? no_type();
+  // Worded here rather than in `element_address`, which answers `AddrNone` for
+  // it: the addressing DECISION stays in one place, and a refusal a DBA can act
+  // on is worded where the refusal is made.
+  if coll.collection == KeyedRadix {
+    return no_table("{owner_table}.{f.name} is a spatial collection — its order is not one SQL can express");
+  }
   addr = element_address(coll);
   if addr == AddrNone {
     return no_table("{owner_table}.{f.name} is a {f.type_name}, which addresses no elements");
-  }
-  if addr == AddrKey {
-    return no_table("{owner_table}.{f.name} is keyed by its own fields — @PLN23 S6c");
   }
   et = type_named(coll.element);
   if et == null {
     return no_table("{owner_table}.{f.name}: the element type {coll.element} is not a type here");
   }
   elem = et ?? no_type();
+  tname = child_table_name(owner_table, f.name);
 
-  // The ADDRESS columns first — (the owner's key, the ordinal) — because the
-  // invariant names that pair as what identifies the row, and putting it first
-  // makes the primary key a prefix rather than something a reader looks for.
+  // The ADDRESS columns first, because the invariant names them as what
+  // identifies the row — so the primary key is a prefix rather than something a
+  // reader looks for.
   cols: vector<ColumnDef> = [];
   ixc: vector<IndexColumn> = [];
   for k in owner_keys {
@@ -1436,37 +1453,90 @@ fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) 
                          position: k.position, src: SrcOwnerKey }];
     ixc += [IndexColumn { nm: nm }];
   }
-  cols += [ColumnDef { nm: "ord", kind: ColInteger, nullable: false, src: SrcOrdinal }];
-  ixc += [IndexColumn { nm: "ord" }];
-
-  tname = child_table_name(owner_table, f.name);
-  if elem.kind == RecordKind || elem.kind == VariantKind {
-    return record_child(tname, owner_table, f, elem, cols, ixc);
+  if addr == AddrOrdinal {
+    cols += [ColumnDef { nm: "ord", kind: ColInteger, nullable: false, src: SrcOrdinal }];
+    ixc += [IndexColumn { nm: "ord" }];
   }
 
-  value_kind = column_type(elem.kind);
-  if value_kind == ColOther {
-    return no_table("{owner_table}.{f.name} holds {coll.element}, which is not one column");
+  // The element's own columns, and only then the indexes: a `hash`'s address
+  // index is not complete until the element's key columns exist.
+  body = child_body(tname, owner_table, f, elem, coll, cols);
+  if body.refusal != "" { return body }
+  full = body.columns;
+
+  if addr == AddrKey {
+    for k2 in coll.keys {
+      kn = element_column_at(full, k2.position);
+      if kn == "" {
+        return no_table("{owner_table}.{f.name}: a key of {coll.name} is not one of {elem.name}'s stored columns");
+      }
+      ixc += [IndexColumn { nm: kn, ascending: k2.ascending }];
+    }
   }
-  // A scalar element has no fields, so the element IS the value and the column
-  // is named for that rather than for a field that does not exist.
-  cols += [ColumnDef { nm: "value", kind: value_kind, nullable: false, src: SrcElement }];
-  return TableDef {
-    nm: tname,
-    columns: cols,
-    indexes: [IndexDef { nm: "{tname}_by_owner", columns: ixc }],
-  };
+  ixs: vector<IndexDef> = [IndexDef { nm: "{tname}_by_owner", columns: ixc }];
+
+  // @PLN23 S6c — an ordinal-addressed collection that DECLARES a key still owes
+  // that key an index. The key is an access path here rather than a name, which
+  // is the correction the falsifying `INSERT` made, and @PLN129 refuses a bind
+  // whose lookup no index serves — so omitting it builds a database this
+  // collection's own reader cannot bind to.
+  if addr == AddrOrdinal && len(coll.keys) > 0 {
+    kix = key_index(tname, full, coll);
+    if kix.nm == "" {
+      return no_table("{owner_table}.{f.name}: a key of {coll.name} is not one of {elem.name}'s stored columns");
+    }
+    ixs += [kix];
+  }
+  return TableDef { nm: tname, columns: full, indexes: ixs };
 }
 
-/// @PLN23 S6b — the address columns, plus one column per stored field of the
-/// element record.
+/// The child column filled by the ELEMENT's field at `position`, or `""`.
 ///
-/// The element's columns carry the ELEMENT's byte positions, so the write path
-/// reads them out of the element with the same `field_value` call a parent row
-/// uses; `src` is what says which record to read them from.
+/// **Only the columns whose value comes from the element are searched**, and
+/// that restriction is the whole function. A child table carries positions from
+/// TWO records, so a search by position alone matches the owner's column on a
+/// number that means something else entirely. Measured, not hypothetical:
+/// `Doc.id` is at byte 0 and `Tag.weight` is at byte 0, so a
+/// `sorted<Tag[weight]>` under a `hash<Doc[id]>` would index `doc_id` and call
+/// it the key — a plausible index over the wrong column. Byte 0 is where a
+/// struct's first stored field lives, which makes this the common case rather
+/// than a corner.
+fn element_column_at(cols: vector<ColumnDef>, position: integer) -> text {
+  for c in cols {
+    if c.src == SrcField && c.position == position { return c.nm }
+  }
+  return "";
+}
+
+/// The `(owner, key)` index an ordinal-addressed sub-collection's DECLARED key
+/// implies, or one with an empty name when a key lands on no column.
 ///
-/// Two failure paths are peculiar to this shape, and both are silent without a
-/// check here:
+/// Named `_by_key` rather than after its columns, which is what `derive_index`
+/// does for a parent. Two indexes share this table, and a fixed suffix cannot
+/// collide with `_by_owner` whatever the element's fields are called — so the
+/// duplicate-index-name failure is removed rather than detected.
+fn key_index(tname: text, cols: vector<ColumnDef>, coll: TypeInfo) -> IndexDef {
+  kixc: vector<IndexColumn> = [];
+  for c in cols {
+    if c.src == SrcOwnerKey { kixc += [IndexColumn { nm: c.nm }] }
+  }
+  for k in coll.keys {
+    kn = element_column_at(cols, k.position);
+    if kn == "" { return IndexDef { nm: "" } }
+    kixc += [IndexColumn { nm: kn, ascending: k.ascending }];
+  }
+  return IndexDef { nm: "{tname}_by_key", columns: kixc };
+}
+
+/// The child table's COLUMNS: the address columns it is handed, plus whatever
+/// the element contributes — one per stored field of a RECORD element (@PLN23
+/// S6b), or one `value` column for a scalar one (S6a).
+///
+/// Columns only, and the caller builds the indexes: a `hash`'s address index
+/// needs the element's key columns, which do not exist until this returns.
+///
+/// Two failure paths are peculiar to a record element, and both are silent
+/// without a check here:
 ///
 /// - **A collection inside the element** is a grandchild table, addressed by
 ///   (owner, ord, ord). The rule extends to it and the derivation does not
@@ -1476,8 +1546,20 @@ fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) 
 ///   the element's are named by its author, so a `Tag` with a field called `ord`
 ///   produces a `CREATE TABLE` with two columns of one name. Only the engine
 ///   would notice, and only the engines that reject it.
-fn record_child(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
-                addr_cols: vector<ColumnDef>, ixc: vector<IndexColumn>) -> TableDef {
+fn child_body(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
+              coll: TypeInfo, addr_cols: vector<ColumnDef>) -> TableDef {
+  if elem.kind != RecordKind && elem.kind != VariantKind {
+    value_kind = column_type(elem.kind);
+    if value_kind == ColOther {
+      return no_table("{owner_table}.{f.name} holds {coll.element}, which is not one column");
+    }
+    scalar = addr_cols;
+    // A scalar element has no fields, so the element IS the value and the
+    // column is named for that rather than for a field that does not exist.
+    scalar += [ColumnDef { nm: "value", kind: value_kind, nullable: false, src: SrcElement }];
+    return TableDef { nm: tname, columns: scalar };
+  }
+
   // The address columns' names, taken before anything is appended — a second
   // list rather than a re-scan of `cols`, so what the element is checked
   // against cannot grow as the element's own columns are added to it.
@@ -1505,11 +1587,7 @@ fn record_child(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
   if len(cols) == len(addr_names) {
     return no_table("{owner_table}.{f.name} holds {elem.name}, which has no stored columns");
   }
-  return TableDef {
-    nm: tname,
-    columns: cols,
-    indexes: [IndexDef { nm: "{tname}_by_owner", columns: ixc }],
-  };
+  return TableDef { nm: tname, columns: cols };
 }
 
 /// A `TypeInfo` that is not any type — the value a null `type_named` collapses

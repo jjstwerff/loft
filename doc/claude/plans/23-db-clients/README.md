@@ -7,10 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S5, S6a–S6b and T1–T3 built and in the repo; S6c
-(keyed sub-collections) and S7 are designed, not built. Of the two language gaps it
+**@PLN23 `status:active`** — S1–S5, S6a–S6c and T1–T3 built and in the repo; S7
+(grandchild tables, migration) is designed, not built. Of the two language gaps it
 surfaced, **@PLN124 is built** and S4 is its first consumer; @PLN125 is not. @PLN24
 (`#c`) has since closed.
+
+S6c measured what the collection kinds DO rather than what they mean, and
+corrected one row of the addressing table: a loft `index` does NOT permit
+duplicates. The answer it gets is unchanged and the reason is not —
+[OBJECT_MAPPING.md § What S6c measured](OBJECT_MAPPING.md).
 
 S5 needed a third language gap closed, and closing it is what unblocked the write
 half: reflection described a TYPE and nothing could read a VALUE's field, which is
@@ -55,7 +60,8 @@ exists at all.
 | S5 a flat struct round-trips, by a walk that names no column | done |
 | S6a a `vector<scalar>` field becomes one child table | done |
 | S6b a `vector<record>` field, written to sqlite and read back | done |
-| S6c a keyed sub-collection — `hash`, then `sorted` | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
+| S6c a keyed sub-collection — `hash`, `sorted`, `index`, `trie` | done |
+| S7 the mapping generalises — grandchildren, migration | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
 | P1–P6 the other three platforms | see [PLATFORMS.md](PLATFORMS.md) — Linux only today |
 
 ## S4 — a value cannot become syntax

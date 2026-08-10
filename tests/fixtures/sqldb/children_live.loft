@@ -10,31 +10,41 @@
 // falsified by exactly that — `ERROR 1062 Duplicate entry '7-3'` — and not by
 // re-reading the prose (OBJECT_MAPPING.md § What the probe falsified).
 //
-// **The three writes come off one derivation.** `derive_tables` answers the
-// parent and both children; `render` creates them; `insert_row` + the row
-// walks below fill them; `select_rows` reads them back. Nothing here names a
-// column, and nothing counts the owner's key columns — each column says where
-// its own value comes from (`ColumnSource`), which is the re-assertion § S6
-// collapses to one place.
+// **Every write comes off one derivation.** `derive_tables` answers the parent
+// and each child; `render` creates them; `insert_row` plus the row walks below
+// fill them; `select_rows` reads them back. Nothing here names a column, and
+// nothing counts the owner's key columns — each column says where its own value
+// comes from (`ColumnSource`), which is the re-assertion § S6 collapses to one
+// place. The four row walks differ only in the element type they read, which is
+// a language fact: reflection is refused inside a generic.
 //
 // **What makes the read non-vacuous.** The data is chosen so a wrong address
 // rule reads differently rather than merely reading less:
 //
 //   - doc 9 holds the SAME tag twice (`a/1` at ordinals 0 and 1). Under a
 //     key-addressed rule those are one row; under the ordinal rule they are two.
-//     This is the falsified claim, standing as a test.
-//   - `a/1` also appears in doc 7, so an owner column that went missing merges
-//     two documents' children into one run rather than losing anything.
+//   - `a/1` also appears in doc 7, and `m1` is in both docs' `seen`, so an owner
+//     column that went missing merges two documents' children into one run
+//     rather than losing anything.
 //   - doc 11 has an EMPTY tag vector and doc 9 an empty score vector: a parent
 //     row with no children, which is a row the write path must still produce.
 //   - one tag's `note` is SQL NULL and another's is the empty string, side by
 //     side. They are not the same value, and most of why a binding exists at all
 //     is that they stay apart.
+//   - doc 7's `rank` steps go in as 3, 1, 2. The ordinal is the COLLECTION's
+//     order, and only an out-of-order insertion can tell that from insertion
+//     order.
+//   - `band()` is the one shape that can hold two elements of one key, and it
+//     needs both of its collections to do it — see the comment there. It is
+//     also where the same records show up in TWO child tables, addressed two
+//     ways, from writing to only one of the collections.
+//   - the `scores` rows are written BACKWARDS, which is the only thing here that
+//     can tell `select_rows`' `ORDER BY` from no clause at all.
 //
 // sqlite, because it needs no server: a machine with no database still runs
 // this, so it cannot skip into a green that asserted nothing.
 //
-// The writes are grouped BY TABLE — all parents, then all scores, then all tags
+// The writes are grouped BY TABLE — all parents, then each child table in turn
 // — which is the shape OBJECT_MAPPING.md § S6 gives, and the one that takes
 // locks in a single order rather than in data-dependent order.
 
@@ -43,13 +53,39 @@ use schema;
 use sql;
 
 struct Tag { const name: text, weight: integer, note: text? }
+/// The `hash` element (@PLN23 S6c): addressed by its own declared key.
+struct Mark { const label: text, score: integer }
+/// The `sorted` element (@PLN23 S6c): addressed by the ordinal, its key indexed.
+///
+/// `at` is at byte 0 and so is `Doc.id`, which is not a coincidence worth
+/// avoiding — it is the case a key lookup by POSITION alone gets wrong, and it
+/// is what a struct's first stored field always looks like.
+struct Step { const at: integer, what: text }
 struct Doc {
   const id: integer,
   title: text,
   scores: vector<integer> = [],
   tags: vector<Tag> = [],
+  seen: hash<Mark[label]> = [],
+  rank: sorted<Step[at]> = [],
 }
 struct World { docs: hash<Doc[id]> = [] }
+
+/// The pair that carries the falsified claim, and it needs BOTH collections.
+///
+/// Measured, one axis at a time on both backends: a `sorted<T[k]>` REPLACES on
+/// an equal key when it is the only keyed view of `T` in the program, and KEEPS
+/// both when `T` has another keyed view — merely DECLARED is enough. The records
+/// are one set and each collection is a view of it, so `beats` shows two
+/// elements of one bar because `byname` is what tells them apart (loft#843).
+///
+/// So "a `sorted` may hold two elements of one key" — the sentence a real
+/// `INSERT` put into this design — is true, and this is the shape that makes it
+/// true. A gate using a single-view `sorted` would have written one row and
+/// proved nothing.
+struct Beat { const bar: integer, note: text }
+struct Sheet { const id: integer, beats: sorted<Beat[bar]> = [], byname: hash<Beat[note]> = [] }
+struct Band { rows: hash<Sheet[id]> = [] }
 
 /// The three documents this gate writes — one definition, used by the writer
 /// and by the expected lines the reader is checked against.
@@ -60,19 +96,55 @@ struct World { docs: hash<Doc[id]> = [] }
 /// that is supposed to prove SQL NULL survives the round trip would have been
 /// comparing two empty strings. The null and the empty string sit side by side
 /// in doc 7 for exactly that reason.
+///
+/// **The `rank` steps go in UNSORTED**, which is the whole point of that cell:
+/// the ordinal is the collection's OWN order, not the order a program happened
+/// to add things in, and only an out-of-order insertion can tell the two apart.
+/// The two-elements-of-one-key case lives in `band()` below, which needs a shape
+/// this record does not have.
 fn world() -> World {
   w = World { };
   w.docs += [Doc { id: 7, title: "seven", scores: [10, 20], tags: [
     Tag { name: "a", weight: 1, note: null },
     Tag { name: "b", weight: 2, note: "" },
+  ], seen: [
+    Mark { label: "m1", score: 10 },
+    Mark { label: "m2", score: 20 },
+  ], rank: [
+    Step { at: 3, what: "c" },
+    Step { at: 1, what: "a" },
+    Step { at: 2, what: "b" },
   ] }];
   w.docs += [Doc { id: 9, title: "nine", tags: [
     Tag { name: "a", weight: 1, note: "x" },
     Tag { name: "a", weight: 1, note: "x" },
     Tag { name: "c", weight: 3, note: null },
+  ], seen: [
+    // `m1` again, under a different owner: a hash key is unique WITHIN its
+    // collection, and the owner column is the only thing keeping the two apart.
+    Mark { label: "m1", score: 99 },
+  ], rank: [
+    Step { at: 8, what: "h" },
+    Step { at: 6, what: "g" },
   ] }];
   w.docs += [Doc { id: 11, title: "eleven", scores: [30] }];
   return w;
+}
+
+/// One sheet whose `beats` holds TWO elements of one bar.
+///
+/// Only `beats` is added to; `byname` fills itself, because the two collections
+/// are views of one set of records. That is the mapping consequence worth
+/// seeing: the same three records land in BOTH child tables, addressed two
+/// different ways.
+fn band() -> Band {
+  b = Band { };
+  s = Sheet { id: 1 };
+  s.beats += [Beat { bar: 1, note: "x" }];
+  s.beats += [Beat { bar: 1, note: "y" }];
+  s.beats += [Beat { bar: 2, note: "z" }];
+  b.rows += [s];
+  return b;
 }
 
 /// The table called `nm`, or a refusal — never a guess by position.
@@ -125,6 +197,56 @@ fn score_row(t: TableDef, owner: Doc, v: integer, ord: integer) -> vector<Bound>
   return vals;
 }
 
+/// A row of a HASH child table (@PLN23 S6c) — the SAME walk again.
+///
+/// The ordinal is passed and never used, because this table has no `SrcOrdinal`
+/// column: a hash addresses its rows by the declared key, which is already one
+/// of the element's columns. The COLUMNS decide what a row needs, not the
+/// caller, which is why one walk serves both addressing rules.
+fn mark_row(t: TableDef, owner: Doc, e: Mark, ord: integer) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ord)] }
+    else { vals += [bound_of(c, field_value(e, c.position))] }
+  }
+  return vals;
+}
+
+/// A row of a SORTED child table (@PLN23 S6c).
+///
+/// Identical to the walk above, and one function per element type is a language
+/// fact rather than a choice: reflection is refused inside a generic, so the
+/// walk has to sit where the concrete type is known.
+fn step_row(t: TableDef, owner: Doc, e: Step, ord: integer) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ord)] }
+    else { vals += [bound_of(c, field_value(e, c.position))] }
+  }
+  return vals;
+}
+
+/// The same walk once more, for the sheet's two views of one record set. It
+/// serves BOTH the ordinal-addressed table and the key-addressed one.
+fn beat_row(t: TableDef, owner: Sheet, e: Beat, ord: integer) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ord)] }
+    else { vals += [bound_of(c, field_value(e, c.position))] }
+  }
+  return vals;
+}
+
+/// The sheet's parent row.
+fn sheet_row(t: TableDef, s: Sheet) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns { vals += [bound_of(c, field_value(s, c.position))] }
+  return vals;
+}
+
 /// Every row of one table, rendered as `a|b|c;a|b|c` — `~` for SQL NULL.
 ///
 /// The `SELECT` and its order come off the same `TableDef` the writer used, so
@@ -165,7 +287,12 @@ fn main() {
   if !parent.table_ok() { println("FAIL derive: {parent.refusal}"); d.db_shut(); return }
   scores = table_named(tables, child_table_name(parent.nm, "scores"));
   tags = table_named(tables, child_table_name(parent.nm, "tags"));
+  seen = table_named(tables, child_table_name(parent.nm, "seen"));
+  rank = table_named(tables, child_table_name(parent.nm, "rank"));
   println("tables={len(tables)} parent={parent.nm} scores={scores.nm} tags={tags.nm}");
+  // A hash child carries NO ordinal and one index; an ordered child carries the
+  // ordinal and TWO — the address index, and the one its declared key owes.
+  println("seen ord={seen.has_column("ord")} ix={len(seen.indexes)} rank ord={rank.has_column("ord")} ix={len(rank.indexes)}");
 
   // The DDL for all three, in the order `derive_tables` gives — the owner
   // first, because a child's rows reference it.
@@ -192,10 +319,18 @@ fn main() {
       return;
     }
   }
+  // **This one table's rows go in BACKWARDS**, and that is the only thing in
+  // the gate that can tell `select_rows`' `ORDER BY` from no clause at all.
+  // Everything else writes each collection in its own order, which is exactly
+  // the order the reader asks for — so those rows come back right whether or not
+  // the query orders them. A real table is not in insertion order either, after
+  // the first update; this is the cheapest stand-in for that.
   for doc2 in w.docs {
     for s in doc2.scores {
-      if !d.db_run(scores.insert_row(dial, score_row(scores, doc2, s, s#count))) {
-        println("FAIL score {doc2.id}/{s#count}: {d.db_last_error()}");
+      back = len(doc2.scores) - 1 - s#count;
+      v = doc2.scores[back] ?? 0;
+      if !d.db_run(scores.insert_row(dial, score_row(scores, doc2, v, back))) {
+        println("FAIL score {doc2.id}/{back}: {d.db_last_error()}");
         d.db_shut();
         return;
       }
@@ -210,11 +345,76 @@ fn main() {
       }
     }
   }
+  for doc4 in w.docs {
+    for m in doc4.seen {
+      if !d.db_run(seen.insert_row(dial, mark_row(seen, doc4, m, m#count))) {
+        println("FAIL mark {doc4.id}/{m.label}: {d.db_last_error()}");
+        d.db_shut();
+        return;
+      }
+    }
+  }
+  for doc5 in w.docs {
+    // `#count` over a SORTED collection is the position in its own order, which
+    // is what makes the ordinal the collection's order rather than the order a
+    // program added things in.
+    for s2 in doc5.rank {
+      if !d.db_run(rank.insert_row(dial, step_row(rank, doc5, s2, s2#count))) {
+        println("FAIL step {doc5.id}/{s2#count}: {d.db_last_error()}");
+        d.db_shut();
+        return;
+      }
+    }
+  }
   if !d.db_commit() { println("FAIL commit: {d.db_last_error()}"); d.db_shut(); return }
 
   println("docs   {dump(d, dial, parent)}");
   println("scores {dump(d, dial, scores)}");
   println("tags   {dump(d, dial, tags)}");
+  println("seen   {dump(d, dial, seen)}");
+  println("rank   {dump(d, dial, rank)}");
+
+  // --- two views of ONE record set, addressed two ways -----------------------
+  bd = band();
+  bti = type_of(bd.rows);
+  btabs = derive_tables(bti);
+  sheet = btabs[0] ?? TableDef { nm: "", refusal: "no sheet tables" };
+  if !sheet.table_ok() { println("FAIL sheet derive: {sheet.refusal}"); d.db_shut(); return }
+  beats = table_named(btabs, child_table_name(sheet.nm, "beats"));
+  byname = table_named(btabs, child_table_name(sheet.nm, "byname"));
+  for bt in btabs {
+    for bstmt in bt.render(dial) {
+      if !d.db_exec(bstmt) {
+        println("FAIL sheet ddl [{bstmt}]: {d.db_last_error()}");
+        d.db_shut();
+        return;
+      }
+    }
+  }
+  if !d.db_begin() { println("FAIL sheet begin: {d.db_last_error()}"); d.db_shut(); return }
+  for sh in bd.rows {
+    if !d.db_run(sheet.insert_row(dial, sheet_row(sheet, sh))) {
+      println("FAIL sheet {sh.id}: {d.db_last_error()}"); d.db_shut(); return;
+    }
+  }
+  for sh2 in bd.rows {
+    for bt2 in sh2.beats {
+      if !d.db_run(beats.insert_row(dial, beat_row(beats, sh2, bt2, bt2#count))) {
+        println("FAIL beat {sh2.id}/{bt2#count}: {d.db_last_error()}"); d.db_shut(); return;
+      }
+    }
+  }
+  for sh3 in bd.rows {
+    for bt3 in sh3.byname {
+      if !d.db_run(byname.insert_row(dial, beat_row(byname, sh3, bt3, bt3#count))) {
+        println("FAIL byname {sh3.id}/{bt3.note}: {d.db_last_error()}"); d.db_shut(); return;
+      }
+    }
+  }
+  if !d.db_commit() { println("FAIL sheet commit: {d.db_last_error()}"); d.db_shut(); return }
+
+  println("beats  {dump(d, dial, beats)}");
+  println("byname {dump(d, dial, byname)}");
 
   d.db_shut();
   gone = delete(path);

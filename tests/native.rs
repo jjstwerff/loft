@@ -2352,6 +2352,31 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
 ///           NULL beside `b`'s empty string: not the same value, which is most
 ///           of why a binding exists.
 ///
+/// @PLN23 S6c adds the two KEYED shapes, and the kind is the only thing that
+/// decides between them:
+///
+///   seen ord=false ix=1 rank ord=true ix=2   a `hash` addresses by its declared
+///           key, so it carries no ordinal and one index; a `sorted` takes the
+///           ordinal and owes its key an index of its own. @PLN129 refuses a
+///           bind whose lookup no index serves, so the second one is not
+///           decoration — and a `sorted` sub-collection had neither it nor a
+///           refusal before S6c.
+///   seen 7|m1|10;7|m2|20;9|m1|99   `m1` under two owners. A hash key is unique
+///           WITHIN its collection, and the owner column is the only thing
+///           keeping the two apart.
+///   rank 7|0|1|a;7|1|2|b;7|2|3|c;…   the steps went in as 3,1,2. The ordinal is
+///           the COLLECTION's order, not the order a program added things in,
+///           and only an out-of-order insertion can tell those apart.
+///   beats 1|0|1|y;1|1|1|x;1|2|2|z   TWO elements of bar 1, surviving as rows 0
+///           and 1. This is the `INSERT` that falsified the clean addressing
+///           rule, kept as a test — and it needs `Beat` to have a second keyed
+///           view, because a `sorted` whose element type has only one view
+///           REPLACES on an equal key (measured, both backends).
+///   byname 1|1|x;1|1|y;1|2|z   the SAME three records, addressed by the other
+///           view's key. Only `beats` was written to; two keyed collections over
+///           one element type are views of one record set (loft#843), so both
+///           child tables hold all three.
+///
 /// sqlite, so a machine with no database still runs it.
 #[test]
 fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::Result<()> {
@@ -2370,10 +2395,15 @@ fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::
     let script = libdir.join("children_live.loft");
 
     let expect = [
-        "tables=3 parent=doc scores=doc_scores tags=doc_tags",
+        "tables=5 parent=doc scores=doc_scores tags=doc_tags",
+        "seen ord=false ix=1 rank ord=true ix=2",
         "docs   7|seven;9|nine;11|eleven",
         "scores 7|0|10;7|1|20;11|0|30",
         "tags   7|0|a|1|~;7|1|b|2|;9|0|a|1|x;9|1|a|1|x;9|2|c|3|~",
+        "seen   7|m1|10;7|m2|20;9|m1|99",
+        "rank   7|0|1|a;7|1|2|b;7|2|3|c;9|0|6|g;9|1|8|h",
+        "beats  1|0|1|y;1|1|1|x;1|2|2|z",
+        "byname 1|1|x;1|1|y;1|2|z",
         "children_live ok",
     ];
 

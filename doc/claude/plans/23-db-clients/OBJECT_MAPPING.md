@@ -78,7 +78,8 @@ not *keyed vs positional*. It is **unique vs not**:
 | `vector<T>`, `array<T>` | inline / referenced | **ordinal** | position is the only identity there is |
 | `hash<T[k]>` | own records | **the declared key** | a hash key is unique by construction |
 | `sorted<T[k]>`, `ordered<T[k]>` | own records | **ordinal**, key indexed | ordered BY the key, duplicates allowed |
-| `index<T[k]>`, `radix<T[k]>` | own records | **ordinal**, key indexed | an index permits duplicates by definition |
+| `index<T[k]>`, `trie<T[k]>` | own records | **ordinal**, key indexed | the key is not declared unique, so nothing may lean on it |
+| `spatial<T[k…]>` | own records | **none** | a Morton order over several axes is not a SQL order |
 
 Only `hash` earns its key as identity. For the rest the declared key becomes an
 ordinary `KEY`, which is what it always was — an access path, not a name.
@@ -86,6 +87,60 @@ ordinary `KEY`, which is what it always was — an access path, not a name.
 This is the over-unification failure exactly as predicted: the clean rule
 absorbed four kinds that are not in the family, and it presented as elegance. No
 amount of re-reading the prose would have caught it; one `INSERT` did.
+
+### What S6c measured, and the row it corrected
+
+The table above was written from what the collection kinds MEAN. Building S6c
+measured what they DO, one axis at a time on both backends — and one row was
+wrong for a reason worth keeping:
+
+| kind | equal key, only view of `T` | equal key, `T` has another keyed view |
+|---|---|---|
+| `hash` | replaces | **replaces** |
+| `index` | replaces | **replaces** |
+| `sorted` / `ordered` | replaces | **keeps both** |
+
+- **`index` does not permit duplicates.** The old row said it did "by
+  definition"; a loft `index` replaces on an equal key, in both configurations.
+  The ANSWER stays the ordinal, and the reason changes: an address may rest only
+  on a uniqueness the type DECLARES, and `index` declares none. A guarantee is a
+  declaration, not an observed behaviour — leaning on the behaviour would put
+  the schema at the mercy of an insert path nobody promised.
+- **`sorted` really can hold two elements of one key**, so the sentence the
+  falsifying `INSERT` put into this design is true. But it is true for a reason
+  the design did not state: the duplicate survives only when the element type has
+  ANOTHER keyed collection over it — merely DECLARED is enough, never
+  instantiated. Two keyed collections over one element type are views of one
+  record set (loft#843), so `sorted<Beat[bar]>` shows two elements of one bar
+  because `hash<Beat[note]>` is what tells them apart.
+
+That last point is the one to carry forward: **whether a `sorted` can hold
+duplicates is not a property of the collection**. It depends on what else in the
+program keys that element type, which another file can change. So the ordinal is
+not merely the conservative answer for a non-hash collection — it is the only
+answer a derivation is entitled to, because the alternative depends on a fact
+outside the type it is deriving from.
+
+A `hash` is unaffected: it enforces its key in both configurations, which is what
+makes `AddrKey` sound.
+
+### Two views, two child tables, the same records
+
+The same measurement has a direct consequence for the mapping, and it surprises:
+a record with `beats: sorted<Beat[bar]>` and `byname: hash<Beat[note]>` writes
+**every one of its records into BOTH child tables**, addressed two different
+ways — and adding to only one of the two collections fills both. That is not
+duplication the mapping introduced; it is what the loft value is. `children_live`
+measures it:
+
+```
+beats  1|0|1|y;1|1|1|x;1|2|2|z     ordinal-addressed, two elements of bar 1
+byname 1|1|x;1|1|y;1|2|z           the same three, addressed by the other key
+```
+
+It belongs beside "Sharing is lost" below: a tree mapping cannot represent a
+graph, and two views of one record set are the case where the copying is
+visible within a single owner.
 
 ## The re-assertion sites, counted before any code
 
@@ -137,7 +192,7 @@ alongside one.
 | **S5** | a FLAT struct round-trips | **done** — one loft struct ↔ one table, written and read back, compared by content digest. `round_trip.loft` no longer lists the row's values by hand; `row_of` walks the DEFINITION's columns, each of which carries the byte position of the field that fills it, and reads them with `field_value`. See § S5 below |
 | **S6a** | a `vector<scalar>` field | **done** — one child table, columns `(owner key, ord, value)`, and `element_address` is the one place the address rule is stated |
 | **S6b** | a `vector<record>` field | **done** — the same address columns, and one column per stored field of the element. Written to sqlite and read back on both loft backends: § S6b below |
-| **S6c** | a keyed sub-collection | `hash` → `sorted`. `element_address` already answers both; the derivation refuses them and names this step |
+| **S6c** | a keyed sub-collection | **done** — `hash` addresses by its declared key and carries no ordinal; `sorted` / `index` / `trie` take the ordinal and their key gets its own index; `spatial` refuses. § S6c below |
 | **S7** | the mapping generalises | the single address function drives DDL, write, read; migration on a changed struct |
 
 S1–S3 are worth doing even if the mapping is never built: they are the proof
@@ -261,6 +316,61 @@ field is the empty string, not loft's null.** `Tag { name: "a", weight: 1 }`
 meaning "no note" stores `''`, so the first version of the null cell compared two
 empty strings and passed while testing nothing. The gate writes `note: null`
 outright.
+
+## S6c — the two keyed shapes, and the index a key still owes
+
+The collection's KIND decides how many address columns a child table has, and it
+is the only thing that decides:
+
+```sql
+CREATE TABLE "doc_seen" ("doc_id" INTEGER NOT NULL, "label" TEXT NOT NULL,
+                         "score" INTEGER NOT NULL)
+CREATE INDEX "doc_seen_by_owner" ON "doc_seen" ("doc_id" ASC, "label" ASC)
+
+CREATE TABLE "doc_rank" ("doc_id" INTEGER NOT NULL, "ord" INTEGER NOT NULL,
+                         "at" INTEGER NOT NULL, "what" TEXT NOT NULL)
+CREATE INDEX "doc_rank_by_owner" ON "doc_rank" ("doc_id" ASC, "ord" ASC)
+CREATE INDEX "doc_rank_by_key"   ON "doc_rank" ("doc_id" ASC, "at" ASC)
+```
+
+**A `hash` carries no ordinal.** Its address is the declared key, and those are
+fields of the element — already columns. An ordinal there would be a second
+identity for a row that has one.
+
+**An ordinal-addressed collection still owes its key an index**, and that is the
+half S6a and S6b silently left open. A `sorted` sub-collection was `AddrOrdinal`,
+so it fell straight through to the record path and derived a table with the
+address index and nothing on its key — no refusal, no index. @PLN129 refuses a
+bind whose lookup no index serves, so that table was a database its own
+collection's reader could not bind to. The `_by_key` index closes it.
+
+The key index is named `_by_key` rather than after its columns, which is what a
+parent's index does. Two indexes share a child table, and a fixed suffix cannot
+collide with `_by_owner` whatever the element's fields are called — the
+duplicate-index-name failure is removed rather than detected.
+
+### Positions from two records in one table
+
+A child table now carries `position` values from the OWNER and from the ELEMENT,
+and finding the key column by position alone reads one as the other. This is not
+a corner case: measured, `Doc.id` is at byte 0 and `Step.at` is at byte 0, so a
+`sorted<Step[at]>` under a `hash<Doc[id]>` indexes `doc_id` and calls it the key
+— a plausible index over the wrong column, and no index on the key at all. Byte 0
+is where a struct's first stored field lives.
+
+`ColumnSource` is what makes the lookup answerable: the search is restricted to
+the columns whose value comes from the element. The same field that removed the
+counting from the write path removes the ambiguity from the read path, which is
+the sign it is at the right level.
+
+### The index and the ORDINARY-vs-UNIQUE deviation
+
+Every child index is ordinary, including a `hash`'s, where the pair genuinely is
+unique. `IndexDef` cannot spell `UNIQUE` and `introspect` cannot read one back,
+so rendering it would make a table loft MADE and a table loft FOUND differ in a
+field — the single property @PLN133 rests on. The deviation stays recorded rather
+than half-closed; closing it means teaching `introspect` to read uniqueness
+first.
 
 ## S6 writes N graphs REGROUPED BY TABLE, not one graph at a time
 

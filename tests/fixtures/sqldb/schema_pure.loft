@@ -51,8 +51,30 @@ struct S6World { docs: hash<S6Doc[id]> = [] }
 struct S6Tag { const name: text, weight: integer }
 struct S6DocB { const id: integer, tags: vector<S6Tag> = [] }
 struct S6WorldB { docs: hash<S6DocB[id]> = [] }
-struct S6DocC { const id: integer, seen: hash<S6Tag[name]> = [] }
+// @PLN23 S6c — one owner carrying all three keyed shapes. `S6Tag` holds `name`
+// at byte 8 and `weight` at byte 0, and `S6DocC.id` is at byte 0 — so the
+// ordered collection's key position EQUALS the owner column's, which is the
+// case a key lookup by position alone gets wrong.
+struct S6DocC {
+  const id: integer,
+  seen: hash<S6Tag[name]> = [],
+  rank: sorted<S6Tag[weight]> = [],
+  down: sorted<S6Tag[-weight]> = [],
+}
 struct S6WorldC { docs: hash<S6DocC[id]> = [] }
+
+struct S6DocPair { const id: integer, pairs: hash<S6Tag[name, weight]> = [] }
+struct S6WorldPairKey { docs: hash<S6DocPair[id]> = [] }
+
+struct S6DocIx { const id: integer, ix: index<S6Tag[weight]> = [] }
+struct S6WorldIx { docs: hash<S6DocIx[id]> = [] }
+
+// A spatial collection interleaves its axes into a Morton code, so both keys
+// must be numbers — and SQL has no shape that means the same thing either as an
+// owner or as a child.
+struct S6Pt { const px: integer, py: integer }
+struct S6DocSp { const id: integer, sp: spatial<S6Pt[px, py]> = [] }
+struct S6WorldSp { docs: hash<S6DocSp[id]> = [] }
 
 // S6b's own failure paths. Each is silent without a check: two columns of one
 // name reach the engine as a `CREATE TABLE` only some engines reject, and a
@@ -423,14 +445,6 @@ fn main() {
     "S6a child DDL [{ddl6[0] ?? ""}]"
   );
 
-  // The kind S6 does not build yet REFUSES, naming its own step — a partial
-  // schema is the outcome worse than none.
-  wc = S6WorldC { };
-  ti_wc = type_of(wc.docs);
-  c6b = derive_tables(ti_wc);
-  assert(len(c6b) == 1 && (c6b[0] ?? no_def()).refusal.find("S6c") != null,
-    "S6: a keyed sub-collection must refuse naming S6c");
-
   // --- @PLN23 S6b: a `vector<record>` field becomes ONE child table ----------
   //
   // The same rule as S6a, and only the last columns differ: the address half is
@@ -587,6 +601,107 @@ fn main() {
   dpr = (dp[0] ?? no_def()).refusal;
   assert(dpr.find("marks") != null && dpr.find("S7") != null,
     "S6b: a collection inside the element must refuse naming S7: {dpr}");
+
+  // --- @PLN23 S6c: a KEYED sub-collection ------------------------------------
+  //
+  // Two shapes, and the collection's KIND is the only thing that decides between
+  // them. A `hash` addresses its elements by the DECLARED KEY — unique by
+  // construction, and already columns because they are fields of the element —
+  // so it carries no ordinal. Every other keyed kind takes the ordinal, and its
+  // declared key becomes an ordinary access path: the correction a real INSERT
+  // made to the first design, since a `sorted<Tag[weight]>` may hold two
+  // elements of one weight.
+  wc = S6WorldC { };
+  ti_wc = type_of(wc.docs);
+  kc6 = derive_tables(ti_wc);
+  assert(len(kc6) == 4, "S6c: owner + three children, got {len(kc6)}");
+  seen6 = kc6[1] ?? no_def();
+  rank6 = kc6[2] ?? no_def();
+  down6 = kc6[3] ?? no_def();
+
+  // A HASH: no ordinal column, and the address index completes with the
+  // element's own key column.
+  assert(seen6.nm == "s6docc_seen", "S6c hash child {seen6.nm}");
+  nseen = "";
+  for sc in seen6.columns { nseen += "{sc.nm}," }
+  assert(nseen == "s6docc_id,name,weight,", "S6c hash columns [{nseen}]");
+  assert(!seen6.has_column("ord"),
+    "S6c: a hash addresses by its key, so an ordinal would be a second identity");
+  assert(len(seen6.indexes) == 1, "S6c hash indexes {len(seen6.indexes)}");
+  hix = seen6.indexes[0] ?? no_index();
+  assert(index_columns(hix) == "s6docc_id, name", "S6c hash index [{index_columns(hix)}]");
+  ddlh = seen6.render(dialect_sqlite());
+  assert(
+    (ddlh[0] ?? "") == "CREATE TABLE \"s6docc_seen\" (\"s6docc_id\" INTEGER NOT NULL, \"name\" TEXT NOT NULL, \"weight\" INTEGER NOT NULL)",
+    "S6c hash DDL [{ddlh[0] ?? ""}]"
+  );
+
+  // A SORTED collection: the ordinal addresses, and the declared key still owes
+  // an index of its own. @PLN129 refuses a bind whose lookup no index serves, so
+  // a writer that omitted it builds a database this collection's own reader
+  // cannot bind to — which is what a `sorted` sub-collection did before S6c.
+  assert(rank6.nm == "s6docc_rank", "S6c ordered child {rank6.nm}");
+  nrank = "";
+  for rc in rank6.columns { nrank += "{rc.nm}," }
+  assert(nrank == "s6docc_id,ord,name,weight,", "S6c ordered columns [{nrank}]");
+  assert(len(rank6.indexes) == 2,
+    "S6c: an ordered child owes an address index AND a key index, got {len(rank6.indexes)}");
+  raddr = rank6.indexes[0] ?? no_index();
+  rkey = rank6.indexes[1] ?? no_index();
+  assert(index_columns(raddr) == "s6docc_id, ord", "S6c address index [{index_columns(raddr)}]");
+  // THE cell for the position collision. `S6DocC.id` is at byte 0 and
+  // `S6Tag.weight` is at byte 0, so a key lookup that did not restrict itself to
+  // the ELEMENT's columns names `s6docc_id` here — a plausible index over the
+  // owner column, twice, and no index on the key at all.
+  assert(index_columns(rkey) == "s6docc_id, weight", "S6c key index [{index_columns(rkey)}]");
+  assert(rkey.nm == "s6docc_rank_by_key", "S6c key index name {rkey.nm}");
+  // A fixed suffix rather than one built from the columns: two indexes share
+  // this table, and `_by_key` cannot collide with `_by_owner` whatever the
+  // element's fields are called.
+  assert(raddr.nm != rkey.nm, "S6c: the two child indexes must not share a name");
+
+  // The DIRECTION of a sub-collection's key reaches its index.
+  dkey = down6.indexes[1] ?? no_index();
+  dlast = dkey.columns[1] ?? IndexColumn { nm: "" };
+  assert(dlast.nm == "weight" && !dlast.ascending,
+    "S6c descending key {dlast.nm}/{dlast.ascending}");
+  assert(
+    render_index(dkey, "\"s6docc_down\"", dialect_sqlite())
+      == "CREATE INDEX \"s6docc_down_by_key\" ON \"s6docc_down\" (\"s6docc_id\" ASC, \"weight\" DESC)",
+    "S6c descending key DDL [{render_index(dkey, "\"s6docc_down\"", dialect_sqlite())}]"
+  );
+
+  // A COMPOSITE sub-collection key, in key order — not position order, and not
+  // the element's declaration order.
+  wpk = S6WorldPairKey { };
+  ti_wpk = type_of(wpk.docs);
+  pk = derive_tables(ti_wpk);
+  assert(len(pk) == 2, "S6c composite key: owner + one child, got {len(pk)}");
+  pkc = pk[1] ?? no_def();
+  assert(!pkc.has_column("ord"), "S6c: a composite-keyed hash still carries no ordinal");
+  pkix = pkc.indexes[0] ?? no_index();
+  assert(index_columns(pkix) == "s6docpair_id, name, weight",
+    "S6c composite hash index [{index_columns(pkix)}]");
+
+  // An `index` collection permits duplicates by definition, so it takes the
+  // ordinal exactly as `sorted` does — the conservative answer, which is never
+  // wrong rows.
+  wix = S6WorldIx { };
+  ti_wix = type_of(wix.docs);
+  ixt = derive_tables(ti_wix);
+  ixc2 = ixt[1] ?? no_def();
+  assert(ixc2.has_column("ord") && len(ixc2.indexes) == 2,
+    "S6c index kind: ord={ixc2.has_column("ord")} indexes={len(ixc2.indexes)}");
+
+  // A spatial collection has no SQL shape as a CHILD either, and the refusal
+  // says which field rather than only which kind.
+  wsp = S6WorldSp { };
+  ti_wsp = type_of(wsp.docs);
+  spt = derive_tables(ti_wsp);
+  assert(len(spt) == 1, "S6c: a spatial child must collapse the whole answer");
+  sptr = (spt[0] ?? no_def()).refusal;
+  assert(sptr.find("sp") != null && sptr.find("spatial") != null,
+    "S6c: a spatial child must refuse naming the field: {sptr}");
 
   // `derive` is UNCHANGED and still answers one table: a record with a
   // collection field refuses there rather than quietly losing the field, which
