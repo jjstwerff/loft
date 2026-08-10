@@ -46,6 +46,20 @@ fn cols(t: TableDef) -> text {
   return out.trim();
 }
 
+struct S6Doc { const id: integer, title: text, scores: vector<integer> = [] }
+struct S6World { docs: hash<S6Doc[id]> = [] }
+struct S6Tag { const name: text, weight: integer }
+struct S6DocB { const id: integer, tags: vector<S6Tag> = [] }
+struct S6WorldB { docs: hash<S6DocB[id]> = [] }
+struct S6DocC { const id: integer, seen: hash<S6Tag[name]> = [] }
+struct S6WorldC { docs: hash<S6DocC[id]> = [] }
+
+/// Stand-ins for the `?? ` on a vector index — never reached, and named so a
+/// failure reads as the index being absent rather than as a wrong value.
+fn no_def() -> TableDef { return TableDef { nm: "?", refusal: "?" }; }
+fn no_col() -> ColumnDef { return ColumnDef { nm: "?", kind: ColOther }; }
+fn no_index() -> IndexDef { return IndexDef { nm: "?" }; }
+
 fn main() {
   // Every `type_of` is bound to a LOCAL before it is passed. A reflected record
   // used directly as a call argument leaks on the interpreter — one record per
@@ -322,6 +336,63 @@ fn main() {
   if dma == null { assert(false, "maria has a dialect") } else {
     assert(dma.quote == "`", "maria quoting");
   }
+
+  // --- @PLN23 S6a: a `vector<scalar>` field becomes ONE child table ----------
+  //
+  // A loft value is a COLUMN of the nearest enclosing record that has identity;
+  // a value with its OWN identity is a row, keyed by (the owner's key, the
+  // address its collection guarantees to be unique). For a vector that address
+  // is the ordinal, because position is the only identity a vector has.
+  w6 = S6World { };
+  t6 = derive_tables(type_of(w6.docs));
+  assert(len(t6) == 2, "S6a: owner + one child, got {len(t6)}");
+
+  parent6 = t6[0] ?? no_def();
+  child6 = t6[1] ?? no_def();
+  assert(parent6.nm == "s6doc", "S6a parent name {parent6.nm}");
+  assert(len(parent6.columns) == 2, "S6a parent columns {len(parent6.columns)}");
+
+  // The child's columns are (owner key, address, value) IN THAT ORDER, so the
+  // primary key is a prefix of the row rather than something a reader hunts for.
+  assert(child6.nm == "s6doc_scores", "S6a child name {child6.nm}");
+  names6 = "";
+  for c6 in child6.columns { names6 += "{c6.nm}," }
+  assert(names6 == "s6doc_id,ord,value,", "S6a child columns [{names6}]");
+
+  // The owner column is `position = -1`: no field of the ELEMENT fills it, and
+  // the number that means "not in the type" has to be there rather than a
+  // position borrowed from somewhere it would read wrongly.
+  first6 = child6.columns[0] ?? no_col();
+  assert(first6.position == -1, "S6a owner column position {first6.position}");
+
+  // The index is on (owner, address) — what a child lookup is served by.
+  ix6 = child6.indexes[0] ?? no_index();
+  ixn6 = "";
+  for ic6 in ix6.columns { ixn6 += "{ic6.nm}," }
+  assert(ixn6 == "s6doc_id,ord,", "S6a child index [{ixn6}]");
+
+  // The DDL, hand-checked rather than round-tripped through the same renderer
+  // that produced it.
+  ddl6 = child6.render(dialect_sqlite());
+  assert(
+    (ddl6[0] ?? "") == "CREATE TABLE \"s6doc_scores\" (\"s6doc_id\" INTEGER NOT NULL, \"ord\" INTEGER NOT NULL, \"value\" INTEGER NOT NULL)",
+    "S6a child DDL [{ddl6[0] ?? ""}]"
+  );
+
+  // The kinds S6a does not build REFUSE, each naming its own step — a partial
+  // schema is the outcome worse than none.
+  b6 = derive_tables(type_of(S6WorldB { }.docs));
+  assert(len(b6) == 1 && (b6[0] ?? no_def()).refusal.find("S6b") != null,
+    "S6a: a record-element vector must refuse naming S6b");
+  c6b = derive_tables(type_of(S6WorldC { }.docs));
+  assert(len(c6b) == 1 && (c6b[0] ?? no_def()).refusal.find("S6c") != null,
+    "S6a: a keyed sub-collection must refuse naming S6c");
+
+  // `derive` is UNCHANGED and still answers one table: a record with a
+  // collection field refuses there rather than quietly losing the field, which
+  // is what every existing consumer of it relies on.
+  one6 = derive(type_of(w6.docs));
+  assert(!one6.table_ok(), "S6a: derive must still refuse a record with a collection");
 
   println("schema ok");
 }
