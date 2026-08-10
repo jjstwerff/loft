@@ -7,9 +7,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S4 and T1–T3 built and in the repo; S5+ (the object
-mapping) is designed, not built. Of the two language gaps it surfaced, **@PLN124 is now built** and S4
-is its first consumer; @PLN125 is not. Depends on @PLN24 (`#c`), also active.
+**@PLN23 `status:active`** — S1–S5 and T1–T3 built and in the repo; S6+ (sub-records)
+is designed, not built. Of the two language gaps it surfaced, **@PLN124 is built** and S4
+is its first consumer; @PLN125 is not. @PLN24 (`#c`) has since closed.
+
+S5 needed a third language gap closed, and closing it is what unblocked the write
+half: reflection described a TYPE and nothing could read a VALUE's field, which is
+where @PLN133 S13 stopped. `field_value(x, position)` now does
+([STDLIB.md § Reflection](../../STDLIB.md)).
 
 **Linux x86-64, macOS and Windows all run these tests** — macOS and Windows prove the
 sqlite cell on both loft backends (`@PLN23 backends exercised: ["sqlite"]`), with the
@@ -46,7 +51,8 @@ exists at all.
 | S3 a real cursor, and NULL is not the empty string | done |
 | S4 prepared statements, on all four backends | done |
 | T1–T3 begin / commit / rollback, and nesting REFUSED | done |
-| S5+ the object mapping | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
+| S5 a flat struct round-trips, by a walk that names no column | done |
+| S6+ sub-records — vector, hash, sorted | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
 | P1–P6 the other three platforms | see [PLATFORMS.md](PLATFORMS.md) — Linux only today |
 
 ## S4 — a value cannot become syntax

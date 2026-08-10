@@ -134,13 +134,51 @@ alongside one.
 | **S3b** | one contract, several libraries | **done** — `SqlDb` over sqlite, postgres, mariadb **and duckdb**; one generic `dump` that never names a backend. duckdb is in the tree now rather than proven-and-discarded: `[c] optional-libs` (@PLN24 arc G) means the fixture builds and runs without its 70 MB `.so`, so keeping the backend costs nothing |
 | **S4** | prepared statements | **done** — all four backends, both loft backends, one generic `bound<D: SqlDb>`. `MYSQL_BIND` is an array of structs and this is where the ANSI-C shim earned its keep (@PLN24 arc D). Statements are built by loft's own format strings (@PLN124), so there are no `?` placeholders for a caller to write or a backend to find |
 | **T1–T3** | transactions | begin / commit / rollback on all three backends; nesting refused. See [INTERPOLATION_HOOK.md § Transaction ladder](INTERPOLATION_HOOK.md) — cheap, and S5 needs it |
-| **S5** | a FLAT struct round-trips | one loft struct ↔ one table, written and read back, compared by content digest |
+| **S5** | a FLAT struct round-trips | **done** — one loft struct ↔ one table, written and read back, compared by content digest. `round_trip.loft` no longer lists the row's values by hand; `row_of` walks the DEFINITION's columns, each of which carries the byte position of the field that fills it, and reads them with `field_value`. See § S5 below |
 | **S6** | sub-records, one kind per step | `vector<scalar>` → `vector<struct>` → `hash` → `sorted`. Each is one child table and one addressing rule |
 | **S7** | the mapping generalises | the single address function drives DDL, write, read; migration on a changed struct |
 
 S1–S3 are worth doing even if the mapping is never built: they are the proof
 @PLN24 has been waiting for since arc F was written, on a real library rather
 than a fixture.
+
+## S5 — the row comes off the VALUE
+
+`insert_row` renders the STATEMENT from the definition; S5 is the other half, the
+VALUES. @PLN133 S13 stopped exactly here — *"the GENERIC struct walk stays @PLN23
+S5: reflection reports types, not values"* — because reflection described a TYPE
+and nothing could read a value's field. `field_value(x, position)` is the half
+that was missing, and it is now in the stdlib beside `type_of`
+([STDLIB.md § Reflection](../../STDLIB.md)).
+
+**The walk is over the DEFINITION's columns, not the type's fields.** Each
+`ColumnDef` already carries the byte `position` of the loft field that fills it,
+so reading that byte produces the values in the order `insert_row` requires — by
+construction, with no second traversal to keep in step and no count to get wrong.
+`bound_of` is keyed on the COLUMN rather than on the reflected kind for the same
+reason: `derive` already decided that a `character` is a text column, and
+dispatching on the value's kind would be a second mapping free to disagree with
+the first.
+
+**It cannot be one generic function over the struct type, and that is a language
+fact.** A generic body is parsed once against its type variable, so reflection is
+refused there (a compile error, since answering would give an ORM an empty row).
+The write half therefore sits where the concrete type is known — beside the lazy
+READ driver (@PLN133 S8), which already sits there. Both halves are
+per-element-type and neither names a column, which is the property S5 claims.
+
+### The digest, and why it is not decoration
+
+S5's step says "compared by content digest", and the digest earns its place
+rather than restating what the gate already checked. `round_trip.loft`'s other
+tokens name only grace's fields and alan's NAME. Measured: a driver that returns
+`flag=false` for every row keeps every one of them — grace's flag genuinely is
+false — and turns `second=alan touched=2 digest=true` FALSE. The digest is the
+only channel that sees it.
+
+It compares against the SOURCE list, never against the value under test: a
+fallback to the record being checked would compare a thing with itself and pass
+whatever the database did.
 
 ## S6 writes N graphs REGROUPED BY TABLE, not one graph at a time
 

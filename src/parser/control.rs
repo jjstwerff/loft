@@ -12307,11 +12307,7 @@ impl Parser {
                 }
                 *val = Value::Call(
                     d_nr,
-                    vec![
-                        list[0].clone(),
-                        list[1].clone(),
-                        Value::Int(i32::from(kt)),
-                    ],
+                    vec![list[0].clone(), list[1].clone(), Value::Int(i32::from(kt))],
                 );
                 return Type::Reference(fv, crate::data::Deps::none());
             }
