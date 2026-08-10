@@ -104,6 +104,35 @@ vector at its last use, which is the call that handed the pointer over, and C re
 whatever took its place. For FFTW the C-owned form is what its own documentation
 recommends anyway, since `fftw_malloc` is where the SIMD alignment comes from.
 
+### Reflection can now read a value, not only a type
+
+`type_of` tells you a record has a `text` at byte 16. `field_value` reads what is
+actually there:
+
+```loft
+t = type_of(row);
+for f in t.fields {
+  v = field_value(row, f.position);
+  if v.is_null { println("{f.name} is null") }
+  else if v.kind == TextKind { println("{f.name}={v.t}") }
+  else { println("{f.name}={v.i}") }
+}
+```
+
+That is the half a generic serialiser or an ORM was missing — walking a value
+without naming a single field. A field inside an inline struct is reached with a
+path, `field_value(doc, [8, 0])` for `doc.origin.x`, because a nested record
+reports its fields relative to itself. The offsets are walked one step at a time
+and never added up: each step has to BEGIN a field of the type it is read
+against, which is what keeps this a field read rather than a pointer.
+
+Three answers stay apart, because code that confused them would write the wrong
+row: nothing begins at that position, something begins there with no single value
+to read (a vector, a keyed collection, a nested record), and the scalar holds
+`null` — which is not `""`, `0` or `false`. Inside a generic body it is a compile
+error rather than an empty answer, since an empty answer there is a row with no
+columns.
+
 ### A hash costs a third less memory, and fills faster
 
 `hash<T[key]>` used to give every entry a store record of its own — a header word each,

@@ -7,8 +7,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S5, S6a–S6c, S7a–S7b and T1–T3 built and in the
-repo. The S1-S7 ladder is complete.
+**CLOSED 2026-08-10 — S1–S5, S6a–S6c, S7a–S7c, T1–T3 and P1–P6 are all
+answered**, on Linux, macOS and Windows, both loft backends. Tracker:
+[@PLN23](https://github.com/loft-lang/plans/issues/23).
+
+What closes is the **claim**, not a library: a loft object has a canonical SQL
+shape, and one uniform interface reaches four C libraries with no Rust crate and
+no `rustc`. Both halves are proven by running code in `tests/fixtures/sqldb/`.
+What a shipping library still needs is listed under
+[§ What this plan does not deliver](#what-this-plan-does-not-deliver) — routed,
+not left implied. This directory is the closure record: what was decided, what
+the build corrected, and what each step measured.
+
 Of the two language gaps it surfaced, **@PLN124 is built** and S4 is its first
 consumer; @PLN125 is not. @PLN24 (`#c`) has since closed.
 
@@ -74,7 +84,7 @@ exists at all.
 | S7b inline structs flatten (`origin_x`, `origin_y`) | done — needed a language change |
 | S7b-ii a collection inside an inline struct | done |
 | S7c migration on a changed struct | done |
-| P1–P6 the other three platforms | see [PLATFORMS.md](PLATFORMS.md) — Linux only today |
+| P1–P6 the other three platforms | done — Linux, macOS and Windows each run the sqlite cell on both loft backends; the servers are reported skips off Linux (P5); wasm refuses by name ([PLATFORMS.md](PLATFORMS.md)) |
 
 ## S4 — a value cannot become syntax
 
@@ -159,6 +169,29 @@ attack cell loudly.
   The fixture still SKIPs cleanly when the library is absent, and the test now
   holds duckdb to the full bar whenever it is present.
 
+## What this plan does not deliver
+
+The ladder proves the mapping and the binding; it does not make `sqldb` a package
+anyone can install. The gap list lives here rather than in a successor's head,
+and every item already has a written home:
+
+| what is missing | where it is written down |
+|---|---|
+| **data enums, tuples, `ChildRec` / stored `DbRef`** — first-class loft types with no row shape at all | [OBJECT_MAPPING.md § What is NOT designed yet](OBJECT_MAPPING.md) |
+| **`float` / `single` across a `NUMERIC` column** — and a float binds as TEXT on every backend, because a double travels in an SSE register the fixed `#c` caller does not write (@PLN24) | § Named gaps above |
+| **`boolean` is three-state** (@PLN17), and SQL's two-state-plus-NULL only looks like it lines up | [OBJECT_MAPPING.md § What is NOT designed yet](OBJECT_MAPPING.md) |
+| **incremental element mutation** — the mapping is defined for whole-collection writes, because an ordinal is not stable under an insert | [OBJECT_MAPPING.md § Failure paths](OBJECT_MAPPING.md) |
+| **concurrency** — no optimistic versioning, no row locking; two writers to one owner's child rows interleave | same |
+| **the N-graph write plan is designed, not measured** — grouped-by-table against interleaved, on three engines | [OBJECT_MAPPING.md § Still to be measured](OBJECT_MAPPING.md) |
+| **reading a schema loft does not own** — the ETL half, where SQL types have to become loft types | [BROADENING.md](../../BROADENING.md) |
+| **a bounded `text`** for a key column, and whether `Reference(T)` is ever a foreign key | [OBJECT_MAPPING.md § Open](OBJECT_MAPPING.md) |
+| **`reconcile` accepts a `VARCHAR(3)` for a `float` field** — a content risk that lives in `reconcile`, not in migration | [OBJECT_MAPPING.md § Named gap](OBJECT_MAPPING.md) |
+| **one statement per connection**, one parameter array per process — the shims' slots are static | § Named gaps above |
+| **postgres and maria off Linux** (P5) — a CI-provisioning question, answered today by a reported SKIP | [PLATFORMS.md § The ladder](PLATFORMS.md) |
+
+No successor plan is filed. This is the scope one would take, and choosing to
+take it is a scoping decision rather than a closing step.
+
 ## The documents
 
 - **[OBJECT_MAPPING.md](OBJECT_MAPPING.md)** — how a loft object with sub-records
@@ -171,8 +204,8 @@ attack cell loudly.
   safe builder possible at all. Built as **@PLN124**; what shipped is in
   [plans/124-interpolation-hook](../124-interpolation-hook/README.md).
 - **[PLATFORMS.md](PLATFORMS.md)** — building the client on Linux, macOS, Windows and
-  wasm. The state is measured per platform, and two of the four cells passed
-  **without testing anything**; the P1–P6 ladder fixes that before it chases greens.
+  wasm. Every cell is measured, and P1–P6 are answered: two of the four used to pass
+  **without testing anything**, and the guard that ended that is the doc's main lesson.
 - **[MACOS_HANDOFF.md](MACOS_HANDOFF.md)** — the tasks that can only be answered on
   Apple hardware, each with what it unblocks and what would change our minds.
 - **[MACOS_RESULTS.md](MACOS_RESULTS.md)** — the answers, measured on Apple silicon.

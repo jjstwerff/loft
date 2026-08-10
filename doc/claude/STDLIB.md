@@ -1230,7 +1230,9 @@ Match `kind` to know which one carries the answer.
 t = type_of(row);
 for f in t.fields {
   v = field_value(row, f.position);
-  if v.is_null { println("{f.name}=null") } else { println("{f.name}={v.t}") }
+  if v.is_null { println("{f.name} is null") }
+  else if v.kind == TextKind { println("{f.name}={v.t}") }
+  else { println("{f.name}={v.i}") }
 }
 ```
 

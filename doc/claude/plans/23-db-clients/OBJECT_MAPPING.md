@@ -12,6 +12,14 @@ Written before the code, because the failure paths are where the invariant
 surfaces. One claim in here is already **falsified by measurement**, and it was
 the cleanest one.
 
+**S1–S7c are built, and @PLN23 closed on them (2026-08-10).** Every step below is
+running code under `tests/fixtures/sqldb/`, driven from `tests/native.rs`; the
+design paragraphs and the measurements that corrected them are kept side by side
+on purpose, because in three places what the types MEAN and what they DO turned
+out to differ. What the mapping still does not cover is
+[§ What is NOT designed yet](#what-is-not-designed-yet), collected with the rest
+in [README.md § What this plan does not deliver](README.md).
+
 ## The instance the design is read off
 
 Not reasoned from the type system downward — plotted for one concrete object and
@@ -754,12 +762,17 @@ Reading a schema someone else owns — the ETL half of the BROADENING.md gap —
 needs SQL types to become loft types, a different problem with its own lossiness
 (unsigned, `DECIMAL`, arrays, `JSONB`).
 
-**Migration is one word in S7.** A struct that gains, loses or renames a field
-needs a defined answer, and "the address function drives it" is not one.
+**Migration was one word in S7, and is no longer on this list.** "The address
+function drives it" was never an answer, because the address rule says where a
+value GOES and migration asks which old value THIS one is. What replaced it is
+[§ S7c](#s7c--migration-a-plan-that-changes-shape-and-never-content), and it is a
+different invariant: a plan changes a table's SHAPE and never its CONTENT.
 
 None of these blocks S4–S6, which is why the ladder still stands: each of those
 is provable on flat structs and single-kind collections without an answer here.
-They do block calling the library finished.
+They do block calling the library finished, which is why they are collected in
+[README.md § What this plan does not deliver](README.md) rather than left here
+for a successor to rediscover.
 
 ## Open
 
