@@ -343,13 +343,12 @@ impl Parser {
             // A handle already in a variable is used in place.  Copying it into a `__gen`
             // temp would hand a second owner to one coroutine's state store, and the loop's
             // scope would free it out from under the variable the caller still holds.
-            let (gen_var, setup) = match code.unspan() {
-                Value::Var(v) => (*v, Value::Null),
-                _ => {
-                    let g = self.create_unique("__gen", is_type);
-                    self.vars.defined(g);
-                    (g, v_set(g, code.clone()))
-                }
+            let (gen_var, setup) = if let Value::Var(v) = code.unspan() {
+                (*v, Value::Null)
+            } else {
+                let g = self.create_unique("__gen", is_type);
+                self.vars.defined(g);
+                (g, v_set(g, code.clone()))
             };
             *code = setup;
             let op = self.data.def_nr("OpCoroutineNext");
