@@ -295,32 +295,42 @@ impl LayoutDesc {
                         self.size(*elem)
                     )
                 }
+                // Every keyed kind renders its placement token, not just the one whose
+                // token is currently off baseline: `tag` renders nothing at BASELINE, so
+                // three of these four are invisible today and would silently disagree
+                // with `layout_dump` the moment their kind's placement moved — which is
+                // exactly the divergence `descriptor_render_reproduces_layout_dump`
+                // exists to catch, and it can only catch what both sides render.
                 Iterated::Hash { elem, keys } => {
                     format!(
-                        "hash<{}>(keys={keys:?},elem_size={})",
+                        "hash<{}>(keys={keys:?},elem_size={}{})",
                         self.name(*elem),
-                        self.size(*elem)
+                        self.size(*elem),
+                        crate::placement::tag(crate::placement::HASH)
                     )
                 }
                 Iterated::Index { elem, keys, left } => {
                     format!(
-                        "index<{}>(keys={keys:?},left={left},elem_size={})",
+                        "index<{}>(keys={keys:?},left={left},elem_size={}{})",
                         self.name(*elem),
-                        self.size(*elem)
+                        self.size(*elem),
+                        crate::placement::tag(crate::placement::INDEX)
                     )
                 }
                 Iterated::Radix { elem, keys } => {
                     format!(
-                        "spatial<{}>(keys={keys:?},elem_size={})",
+                        "spatial<{}>(keys={keys:?},elem_size={}{})",
                         self.name(*elem),
-                        self.size(*elem)
+                        self.size(*elem),
+                        crate::placement::tag(crate::placement::RADIX)
                     )
                 }
                 Iterated::Trie { elem, key } => {
                     format!(
-                        "trie<{}>(key={key},elem_size={})",
+                        "trie<{}>(key={key},elem_size={}{})",
                         self.name(*elem),
-                        self.size(*elem)
+                        self.size(*elem),
+                        crate::placement::tag(crate::placement::TRIE)
                     )
                 }
             },

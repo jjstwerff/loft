@@ -1276,20 +1276,26 @@ pub fn fast_key<'a>(keys: &[Key], key: &'a [Content]) -> Option<FastKey<'a>> {
 }
 
 impl FastKey<'_> {
-    /// Does the record at `rec` (whose fields start at byte 8) carry this key?
+    /// Does the value at `(rec, base)` carry this key?
+    ///
+    /// `base` is where the value's fields start: byte 8 of its own record when an
+    /// entry IS a record, or its slot offset when it lives in a chunked arena
+    /// (@PLN135 arc H).  It used to be the constant 8, which is the same fact as a
+    /// `DbRef`'s `pos` — passing it makes the caller's `pos` the single home for
+    /// where a value begins, rather than a second copy that only agrees by luck.
     ///
     /// Each arm is the equality half of the identically-numbered arm of
     /// [`compare_key`]; keep them together when either changes.
     #[must_use]
-    pub fn matches(&self, s: &Store, rec: u32) -> bool {
+    pub fn matches(&self, s: &Store, rec: u32, base: u32) -> bool {
         match self {
-            FastKey::Int(pos, v) => s.get_int(rec, 8 + pos) == *v,
-            FastKey::Long(pos, v) => s.get_long(rec, 8 + pos) == *v,
-            FastKey::I32(pos, v) => i64::from(s.get_i32_raw(rec, 8 + pos)) == *v,
+            FastKey::Int(pos, v) => s.get_int(rec, base + pos) == *v,
+            FastKey::Long(pos, v) => s.get_long(rec, base + pos) == *v,
+            FastKey::I32(pos, v) => i64::from(s.get_i32_raw(rec, base + pos)) == *v,
             FastKey::ShortRaw(pos, start, v) => {
-                i64::from(s.get_short_full(rec, 8 + pos, *start)) == *v
+                i64::from(s.get_short_full(rec, base + pos, *start)) == *v
             }
-            FastKey::Str(pos, v) => s.get_str(s.get_u32_raw(rec, 8 + pos)) == *v,
+            FastKey::Str(pos, v) => s.get_str(s.get_u32_raw(rec, base + pos)) == *v,
         }
     }
 }

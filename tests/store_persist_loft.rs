@@ -1564,7 +1564,13 @@ fn paged_refusal_on_sorted_field_is_audible() {
 /// byte-reproducible.
 fn persist_size(test: &str, n: u32, per: u32, mode: &str, seed: Option<&str>) -> (u64, String) {
     let dir = scratch(test);
-    let path = dir.join("size.store");
+    persist_size_at(&dir.join("size.store"), n, per, mode, seed)
+}
+
+/// [`persist_size`] against a path that already exists — the `rebind` mode needs the
+/// store the build modes left, and `scratch` wipes its directory.
+fn persist_size_at(path: &Path, n: u32, per: u32, mode: &str, seed: Option<&str>) -> (u64, String) {
+    let path = path.to_path_buf();
     let script = workspace_root().join("tests/scripts/store_persist_size_710.loft");
     let mut cmd = Command::new(loft_bin());
     cmd.arg("--interpret")
@@ -1623,19 +1629,54 @@ fn persisted_size_tracks_content_not_construction() {
          small={small} large={large} ratio={growth:.2}"
     );
 
-    let (whole, d_whole) = persist_size("size710_whole", 125, 2312, "whole", None);
-    let (inter, d_inter) = persist_size("size710_interleaved", 125, 2312, "interleaved", None);
+    let whole_dir = scratch("size710_whole");
+    let inter_dir = scratch("size710_interleaved");
+    let whole_path = whole_dir.join("size.store");
+    let inter_path = inter_dir.join("size.store");
+    let (_, d_whole) = persist_size_at(&whole_path, 125, 2312, "whole", None);
+    let (_, d_inter) = persist_size_at(&inter_path, 125, 2312, "interleaved", None);
     let digest = |line: &str| line.split("digest").nth(1).unwrap_or("").trim().to_string();
     assert_eq!(
         digest(&d_whole),
         digest(&d_inter),
         "the two orders must hold identical data, or the sizes below compare nothing:\n  {d_whole}\n  {d_inter}"
     );
+
+    // Compare the orders AFTER a rebind, which is the comparison loft#710 is about.
+    //
+    // As BUILT they differ, and the header above already says why: the two orders
+    // leave different INTERIOR free space, and reclaiming that is compaction's job,
+    // not the image writer's.  The 1.3 bound used to hold as-built only because both
+    // orders were dominated by the same allocator churn — @PLN135 arc H removed most
+    // of it from the `whole` order (4 228 864 → 2 607 280 bytes, measured) and could
+    // not remove it from `interleaved`, where the slack is INSIDE live records. So the
+    // as-built ratio started measuring how much one order had improved, which is not a
+    // property anyone wants pinned.
+    let (whole, r_whole) = persist_size_at(&whole_path, 125, 2312, "rebind", None);
+    let (inter, r_inter) = persist_size_at(&inter_path, 125, 2312, "rebind", None);
+    assert_eq!(
+        digest(&r_whole),
+        digest(&r_inter),
+        "a rebound store must hold the same data:\n  {r_whole}\n  {r_inter}"
+    );
+    assert_eq!(
+        digest(&r_whole),
+        digest(&d_whole),
+        "the rebind must not change the data it rebuilt:\n  {d_whole}\n  {r_whole}"
+    );
     let ratio = whole.max(inter) as f64 / whole.min(inter) as f64;
     assert!(
         ratio < 1.3,
-        "construction order decided the size 1.84x at this shape; it must not: \
-         whole={whole} interleaved={inter} ratio={ratio:.2}"
+        "construction order decided the size 1.84x at this shape; after a rebind it \
+         must not: whole={whole} interleaved={inter} ratio={ratio:.2}"
+    );
+    // And it must land on the CONTENT, not merely agree with itself: 125 records of
+    // 2312 points, 8 bytes a point, is 2 312 000 bytes of coordinates.
+    let content = 125.0 * 2312.0 * 8.0;
+    assert!(
+        whole.max(inter) as f64 / content < 1.3,
+        "a rebound store should be its content plus the format's eighth: \
+         content={content} whole={whole} interleaved={inter}"
     );
 }
 

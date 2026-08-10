@@ -290,18 +290,20 @@ pub fn hash_records_walk() {
         3,
         "hash::records must return every live record: got {recs:?}"
     );
-    // Each returned rec-nr must resolve to a non-zero record pointer.
-    for rec_nr in &recs {
+    // Each returned entry must resolve to a non-zero record pointer.
+    for entry in &recs {
         assert_ne!(
-            *rec_nr, 0,
+            entry.rec, 0,
             "record 0 is the null sentinel — should be skipped"
         );
     }
-    // The three record-numbers are distinct.
-    let mut sorted = recs.clone();
+    // The three entries are distinct.  @PLN135 arc H — entries of one hash SHARE a
+    // chunk record, so identity is `(rec, pos)`; comparing record numbers alone would
+    // now call three separate slots of one chunk a duplicate.
+    let mut sorted: Vec<(u32, u32)> = recs.iter().map(|r| (r.rec, r.pos)).collect();
     sorted.sort_unstable();
     sorted.dedup();
-    assert_eq!(sorted.len(), recs.len(), "duplicate rec-nr returned");
+    assert_eq!(sorted.len(), recs.len(), "duplicate entry returned");
 }
 
 #[test]
@@ -360,12 +362,7 @@ pub fn hash_records_sorted_single_field() {
     let name_off = u32::from(stores.position(s, "name"));
     let names: Vec<String> = recs
         .iter()
-        .map(|&r| {
-            let rec = DbRef {
-                store_nr: into.store_nr,
-                rec: r,
-                pos: 8,
-            };
+        .map(|&rec| {
             let name_pos =
                 stores.allocations[rec.store_nr as usize].get_u32_raw(rec.rec, rec.pos + name_off);
             stores.allocations[rec.store_nr as usize]
@@ -412,12 +409,7 @@ pub fn hash_records_sorted_multi_field() {
     let score_off = u32::from(stores.position(s, "score"));
     let pairs: Vec<(String, i64)> = recs
         .iter()
-        .map(|&r| {
-            let rec = DbRef {
-                store_nr: into.store_nr,
-                rec: r,
-                pos: 8,
-            };
+        .map(|&rec| {
             let store = &stores.allocations[rec.store_nr as usize];
             let region_pos = store.get_u32_raw(rec.rec, rec.pos + region_off);
             let region = store.get_str(region_pos).to_string();
@@ -480,19 +472,34 @@ pub fn hash_sorted_vec_u32_layout() {
     // Data record: offset 4 = count.
     let count = stores.allocations[result.store_nr as usize].get_u32_raw(data_rec, 4);
     assert_eq!(count, 3, "expected 3 elements, got {count}");
-    // Data record offset 8..8+12 holds 3 u32 rec-nrs at 4-byte stride.
-    // Read each, resolve its `name` field, verify ascending order.
+    // @PLN135 arc H — an entry is a SLOT in a chunked arena, so an element of this
+    // scratch is a `(record, offset)` PAIR at 8-byte stride, not a bare record number
+    // whose payload starts at byte 8.  The header's third word (offset 12) carries
+    // that width so `vector::step_ordered` decodes it without being told; assert it
+    // here, because a scratch that says 4 while holding pairs reads every second
+    // element as an offset and yields records that do not exist.  The same word
+    // carries the marker that lets a RELEASED scratch be told from whatever claims
+    // its block next — see `a_released_iteration_scratch_is_not_acted_on_twice`.
+    let tag = stores.allocations[result.store_nr as usize].get_u32_raw(result.rec, 12);
+    assert_eq!(
+        tag,
+        loft::vector::scratch_tag(8),
+        "the hash scratch header must carry the marker and its 8-byte pair stride"
+    );
+    // Read each pair, resolve its `name` field, verify ascending order.
     // Post-2c layout for Elm{name:text, value:integer}: value at 0 (8B), name at 8 (4B).
     let name_pos = u32::from(stores.position(s, "name"));
     let mut names = Vec::new();
     for i in 0..3u32 {
-        let base = 8 + i * 4;
-        let rec_nr = stores.allocations[result.store_nr as usize].get_u32_raw(data_rec, base);
+        let base = 8 + i * 8;
+        let store = &stores.allocations[result.store_nr as usize];
+        let rec_nr = store.get_u32_raw(data_rec, base);
+        let elem_pos = store.get_u32_raw(data_rec, base + 4);
         assert_ne!(rec_nr, 0, "element {i} rec-nr should be nonzero");
         let rec = DbRef {
             store_nr: into.store_nr,
             rec: rec_nr,
-            pos: 8,
+            pos: elem_pos,
         };
         let store = &stores.allocations[rec.store_nr as usize];
         let name_off = store.get_u32_raw(rec.rec, rec.pos + name_pos);
@@ -837,20 +844,140 @@ pub fn hash_growth_frees_the_table_it_replaces() {
         (u.claimed_count, n)
     }
 
-    // 8 entries stay inside the first table (16 slots, resize at 12): zero rebuilds.
+    // @PLN135 arc H — entries are SLOTS in a chunked arena, so a hash's claimed
+    // records no longer scale with the entry count at all.  The whole of what it
+    // claims is now hand-computable, which is a stronger statement than the
+    // differential this used to make: the store's own root record, the bucket table,
+    // the arena's chunk directory, and one record per CHUNK.
+    //
+    // Chunk `k` holds `arena::BASE << k` slots, so the chunk count for `n` entries is
+    // `arena::chunk_of(n - 1) + 1`.  Stated as an exact expectation rather than a
+    // formula shared with the code: a closed form that agrees with itself proves
+    // nothing, and a stranded table or a leaked chunk shows up here as one extra.
+    let expect = |n: u32| -> u32 { 1 + 1 + 1 + loft::arena::chunk_of(n - 1) + 1 };
+
+    // 8 entries stay inside the first table (16 slots, resize at 12) and inside chunk 0.
     let (small, small_n) = claims_for(8);
-    // 2000 entries cross ~8 doublings, so pre-fix this carried ~8 stranded tables.
+    // 2000 entries cross ~8 table doublings and six chunks: pre-fix this carried ~8
+    // stranded tables, and one record per entry on top.
     let (large, large_n) = claims_for(2000);
 
-    let small_fixed = small - small_n;
-    let large_fixed = large - large_n;
     assert_eq!(
-        large_fixed,
-        small_fixed,
-        "a rebuilt hash carries {} extra claimed record(s) that {} entries do not explain \
-         — the tables it replaced were never given back (claims: {large} for {large_n}, \
-         {small} for {small_n})",
-        large_fixed as i64 - small_fixed as i64,
-        large_n
+        small,
+        expect(small_n),
+        "{small_n} entries should claim root + table + directory + 1 chunk, got {small}"
     );
+    assert_eq!(
+        large,
+        expect(large_n),
+        "{large_n} entries should claim root + table + directory + {} chunks, got {large} \
+         — a table it replaced, or a chunk, was never given back",
+        loft::arena::chunk_of(large_n - 1) + 1
+    );
+    // The point of the pair: growing to 2000 costs SIX more records than 8 does, not
+    // 1992.  A per-entry claim would put 2000 here.
+    assert_eq!(
+        large - small,
+        5,
+        "growing from {small_n} to {large_n} entries must cost only the extra chunks"
+    );
+}
+
+/// A released iteration scratch must not be acted on again once its block has been
+/// re-claimed — and above all must not take the STORE with it.
+///
+/// `free_iteration_scratch` reads the header's fields to decide what to release, and
+/// one of those decisions is *"the elements live in another store, so this scratch has
+/// a dedicated one — free the whole store."*  It guarded that with
+/// `is_claimed_record`, which answers whether the BLOCK is live, not whether the block
+/// is still ours.  A scratch that has already been released leaves its block on the
+/// free list; the next claim takes it; every field read after that is somebody else's
+/// bytes.
+///
+/// Nothing re-claimed such a block promptly enough to matter until @PLN135 arc H made
+/// a hash's first insert claim an arena CHUNK — which is exactly the size that lands
+/// there.  The stale header then read a chunk's payload as `elem_store`, decided it
+/// differed, and freed the store the collection itself lives in: every entry gone
+/// between one call and the next, no error anywhere.  It surfaced as
+/// `multiplayer_v2::v2_two_clients_with_spectator_routing` hanging, because the server
+/// keeps its client table in a struct a closure captures and every lookup after the
+/// first iteration missed.
+///
+/// The sequence below is that one, deterministic and without a socket in sight.
+#[test]
+pub fn a_released_iteration_scratch_is_not_acted_on_twice() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "key", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["key".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    stores.parse("[{key:1},{key:2},{key:3}]", v, &into);
+
+    let scratch = stores.build_hash_unsorted_vec(&into, v);
+    assert_eq!(
+        scratch.store_nr, into.store_nr,
+        "the scratch must share the collection's store, or this proves nothing"
+    );
+    // Release it once — the normal end of a loop.
+    stores.free_iteration_scratch(&scratch);
+    // Something else takes the block back.  In the real case that is a hash's first
+    // arena chunk; here it is a claim of the header's own size, which is what makes
+    // the reuse certain rather than incidental.
+    // The free released two blocks — the element vector and the header — so take
+    // them back in turn until the HEADER's block is the one re-claimed.
+    let store = &mut stores.allocations[scratch.store_nr as usize];
+    let mut taker = 0;
+    for _ in 0..4 {
+        let got = store.claim(2);
+        if got == scratch.rec {
+            taker = got;
+            break;
+        }
+    }
+    // The CONTROL.  If nothing landed on the header's block, the stale reference
+    // below still points at its own freed header and the test proves nothing.
+    assert_eq!(
+        taker, scratch.rec,
+        "the re-claim must take the released scratch's block, or this proves nothing"
+    );
+    // The new tenant's bytes. Offset 8 is where the free path reads the element
+    // store; anything that is not this store's number sends it down the
+    // free-the-whole-store branch.
+    store.set_u32_raw(taker, 4, 0xDEAD);
+    store.set_u32_raw(taker, 8, 0xBEEF);
+    store.set_u32_raw(taker, 12, 0xF00D);
+
+    // The stale reference, freed a second time.  This is the call that used to read
+    // the new tenant's bytes and free the store.
+    stores.free_iteration_scratch(&scratch);
+
+    // A freed store keeps its buffer until the slot is reused, so reading a value
+    // back proves nothing about its lifetime — ask the store.
+    assert!(
+        !stores.allocations[into.store_nr as usize].is_free(),
+        "a stale scratch reference freed the whole store the collection lives in"
+    );
+    // And the collection is intact.
+    assert_eq!(
+        hash::count(&into, &stores.allocations),
+        3,
+        "the collection lost entries to a stale scratch free"
+    );
+    for i in 1..=3i64 {
+        let key = [Content::Long(i)];
+        assert_ne!(
+            hash::find(&into, &stores.allocations, stores.keys(v), &key).rec,
+            0,
+            "key {i} is gone"
+        );
+    }
 }

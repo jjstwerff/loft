@@ -26,6 +26,35 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A hash costs a third less memory, and fills faster
+
+`hash<T[key]>` used to give every entry a store record of its own — a header word each,
+plus the allocator's rounding. Its entries now sit packed at a fixed stride in an arena
+the collection owns:
+
+| 1M integer keys | before | after |
+|---|---|---|
+| filling it (pre-sized) | 330 ms | **258 ms** |
+| bytes per entry | 27.7 | **18.6** |
+| store records for 2000 entries | ~2000 | **9** |
+
+Lookups are unchanged. That is worth saying plainly, because the change was designed
+expecting them to get faster: a lookup reads two random places — the bucket, then the
+entry — and packing the entries moves where the second one lands without making it any
+less of a cache miss. Density pays when you read things near each other, and a hash
+lookup never does.
+
+Nothing about your code changes. A store file written by an older loft is **refused**
+rather than misread, because entries live somewhere new inside it; re-write it with this
+version to load it again.
+
+Building it also turned up an older bug worth naming, because it could lose data
+silently: after a `for` loop over a keyed collection finished, the little scratch it
+had used could be handed back twice, and the second time it might read whatever had
+since taken its place — occasionally deciding to throw away the whole store the
+collection lived in. A long-running program that iterated a collection and then kept
+using it could find it empty, with nothing reported. That is fixed.
+
 ### Reading a binary file as text says so now
 
 `file(p).content()` returns **null** when there is no text to read — the file is

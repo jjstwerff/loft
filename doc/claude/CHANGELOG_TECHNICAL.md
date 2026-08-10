@@ -9,6 +9,82 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A hash's entries move into a chunked arena, and the lookup win it was built for does not exist (@PLN135 arc H, #809) (2026-08-10)
+
+`hash<T[k]>` stops claiming one store record per entry. Entries are slots at a fixed
+stride in a chunked arena (`src/arena.rs`) whose bookkeeping lives in the bucket table,
+and a bucket slot holds a 1-based arena INDEX rather than a record number.
+`placement::HASH` bumps 1 → 2, so a store written before this REFUSES instead of being
+misread — the reason Q2 shipped ahead of H.
+
+Measured against the installed `v2026.8.0` as before-oracle, alternating A/B on a quiet
+box, 1M `integer` keys, `--native-release`:
+
+| | before | after | |
+|---|---|---|---|
+| insert (reserved) | 330 ms | **258 ms** | **1.28x** |
+| store bytes / entry | 27.67 B | **18.6 B** | **−33%** |
+| claimed records, 2000 entries | ~2000 | **9** | table + directory + 6 chunks |
+| random lookup | 184 ns | 183 ns | **unchanged** |
+
+**@PLN135 predicted 2.3x on lookup and that is wrong, from correct measurements.** Q1's
+ablation (the record read is 82% of a random lookup) and Q5's shapes (a dense
+`vector<Entry>` at 80 ns against the hash's 200) are both sound; the inference is not.
+80 ns is ONE random read and a hash lookup makes TWO — bucket, then entry — so packing
+the entries moves where the second miss lands without removing it. Density pays for
+locality and a lookup has none. What the arena removes is the per-entry `Store::claim`,
+which is what #809's title names, and that lands on insert and on bytes.
+
+Three things the build turned up that the design did not:
+
+* **A hash has TWO kinds of entry.** A secondary index (a sibling field's
+  `other_indexes`) reaches records the PRIMARY collection owns and must neither move nor
+  free them. The discriminator is the recorded stride — a table that allocated its
+  entries knows their width, one that borrows records has none — so `stride == 0` means
+  borrowed, and every decode, free and teardown reads it.
+* **Chunk sizes must stop doubling** (`arena::CAP_CHUNK`). Uncapped, the tail waste is
+  proportional and measured 27.33 B/entry — the whole saving — and it made a store's size
+  depend on construction order. Capping bounds it at one partly-filled chunk: the
+  difference between −1% and −33%.
+* **Creation and freeing are one change.** `record_new`'s keyed arm allocates from the
+  arena; `for_each_owned_child` stops returning each entry as an `owning_elem` for
+  `Store::delete` and returns the chunks and directory through a new
+  `OwnedWalk::extra_recs`. Half of that alone hands interior arena bytes to the free tree.
+
+**A latent store-lifetime bug came with it, and it is the sharper half.**
+`free_iteration_scratch` decided what to release by reading its scratch header's
+fields, guarded only by `Store::is_claimed_record` — which says the BLOCK is live, not
+that it is still ours. A released scratch leaves its block on the free list and the
+next claim takes it; every field read after that is somebody else's bytes. One of
+those reads decides *"the elements live in another store, so free the whole store"*,
+and it fired: the arena's first chunk is exactly the claim that lands on a released
+2-word header, so a hash captured by a closure lost the entire store it lived in
+between one invocation and the next — every entry gone, no error anywhere. It surfaced
+as `multiplayer_v2::v2_two_clients_with_spectator_routing` hanging: the tictactoe
+server keeps its client table in a struct its `server::run` closure captures, so every
+lookup after the first iteration missed and `handle_click` returned at its first guard,
+leaving both clients to wait out their budget. The scratch header now carries a marker
+(`vector::scratch_tag`, and the same word holds the element width), and the free path
+refuses a record that does not present it — refusing costs at most the scratch's own
+two blocks once, acting on a foreign record cost the store. Guard:
+`data_structures::a_released_iteration_scratch_is_not_acted_on_twice`, which re-claims
+the released header's block deliberately and asserts on `Store::is_free` rather than on
+a value read back, because a freed store keeps its buffer until the slot is reused.
+
+Four `store_persist_loft` tests changed with it, none by loosening a bound. Two fixtures
+(`store_compact_slack_730`, `store_load_density_729`) were building their vectors in a
+LOCAL and copying the finished thing into the entry, which acquires none of the in-place
+growth slack they are named for — the entry's copy is claimed at its exact length. What
+they actually acquired was the blocks the local abandoned on the way up, i.e. free space
+BETWEEN records, and the arena made the allocator pack those better (same digest, file
+1 729 032 → 1 091 112 B). Both now append through `h[i].data`, which grows the record the
+collection HOLDS. `persisted_size_tracks_content_not_construction` now compares the two
+construction orders AFTER a rebind, which is the comparison loft#710 is about — as built
+they differ by interior free space that only compaction reclaims, as that test's own
+header says. `reclaim_and_compaction_refuse_a_sealed_store…` grows its control 10x
+instead of 2x, because 3000 extra entries are now ~48 KB of slots rather than 3000 claims
+and no longer push the store buffer past its bound size.
+
 ### Three answers that were derived from a proxy instead of the fact (#829, #830, #831) (2026-08-09)
 
 Three consumer-filed defects with one shape: a decision read a stand-in for the

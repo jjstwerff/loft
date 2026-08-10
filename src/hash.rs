@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I90 — Shared utilities & data structures
 
+use crate::arena;
 use crate::keys;
 use crate::keys::{Content, DbRef, Key};
 use crate::store::Store;
@@ -9,28 +10,122 @@ use std::cmp::Ordering;
 
 // Bucket-record layout (word-addressed; each field is a byte offset within
 // the record `claim`).  Word 0 is the size/length header, word 1 holds the
-// per-hash seed, and the bucket array starts at word 2:
+// per-hash seed, words 2–3 the entry arena's bookkeeping, and the bucket
+// array starts at word 4:
 //
 //   fld 0  : size header (word count = `room`; doubles as data, see
 //            `Store::record_words`)
-//   fld 4  : `LEN_FLD`  — live-entry count (u32)
-//   fld 8  : `SEED_FLD` — per-hash hash seed (u64, low half at 8, high at 12)
-//   fld 16 : `BUCKET0`  — first bucket slot (u32 record-numbers, 2 per word)
+//   fld 4  : `LEN_FLD`    — live-entry count (u32)
+//   fld 8  : `SEED_FLD`   — per-hash hash seed (u64, low half at 8, high at 12)
+//   fld 16 : `DIR_FLD`    — the arena's chunk-directory record (`crate::arena`)
+//   fld 20 : `NEXT_FLD`   — the arena's append cursor
+//   fld 24 : `FREE_FLD`   — head of the arena's free list
+//   fld 28 : `STRIDE_FLD` — bytes per entry slot
+//   fld 32 : `BUCKET0`    — first bucket slot (u32 entry INDICES, 2 per word)
 //
 // The seed makes a persisted hash portable: it is stored WITH the buckets,
 // so a reader re-derives the same bucket for every key (see
-// `keys::seeded_hasher`).  `elms = (room - 2) * 2` — two words (header +
-// seed) are reserved before the bucket array.
-// These four ARE the on-disk bucket contract: a reader that computes any of them
+// `keys::seeded_hasher`).  `elms = (room - RESERVED_WORDS) * 2`.
+//
+// A bucket slot holds a 1-based ARENA INDEX, not a record number (@PLN135 arc H).
+// Entries live packed at a fixed stride inside the arena's chunks rather than one
+// store record each: a record costs a header word plus `Store::claim`'s rounding —
+// 27.67 B measured for a 16 B entry — and the cost that matters is not the bytes but
+// the working set they spread a random lookup across (234 ns against 80 for the same
+// payload read out of one dense array, measured on this tree).
+//
+// These ARE the on-disk bucket contract: a reader that computes any of them
 // differently looks in the wrong place for an entry a writer put somewhere. They are
 // public so `tests/layout_golden.rs::placement_contract_is_pinned` can pin them —
 // changing one without bumping `crate::placement::HASH` would let an older store be
 // misread instead of refused. See [`crate::placement`].
 pub const LEN_FLD: u32 = 4;
 pub const SEED_FLD: u32 = 8;
-pub const BUCKET0: u32 = 16;
-/// Bytes per bucket slot — a `u32` record number, 2 to a word.
+pub const STRIDE_FLD: u32 = 28;
+pub const BUCKET0: u32 = 32;
+/// Words reserved before the bucket array: header, seed, and the arena's four fields.
+pub const RESERVED_WORDS: u32 = 4;
+/// Bytes per bucket slot — a `u32` entry index, 2 to a word.
 pub const SLOT_BYTES: u32 = 4;
+
+/// Bytes per entry slot for an element type of `size` bytes.
+///
+/// Rounded up to 8 so every field keeps the alignment it had when an entry was its
+/// own record (a record's payload starts at byte 8 of a word-aligned block, so an
+/// `integer` field was 8-byte aligned and `Store::get_long` dereferences a typed
+/// pointer).  The floor of 8 also guarantees room for the free-list link a released
+/// slot threads through its own first 4 bytes.
+#[must_use]
+pub fn stride_for(size: u32) -> u32 {
+    size.max(8).next_multiple_of(8)
+}
+
+/// Bucket slots in table record `claim`.
+fn elms(store: &Store, claim: u32) -> u32 {
+    (store.record_words(claim) - RESERVED_WORDS) * 2
+}
+
+/// Bytes per entry slot, as recorded in the table.
+///
+/// Stored rather than re-derived from the element type, so every reader of a hash —
+/// the teardown walk, the iteration builder, the paged reader — decodes an entry
+/// without having to be handed a type it would otherwise only need for this.
+#[must_use]
+pub fn stride(store: &Store, claim: u32) -> u32 {
+    store.get_u32_raw(claim, STRIDE_FLD)
+}
+
+/// What a bucket slot names.
+///
+/// A hash has TWO kinds of entry and only one of them is its own.  A PRIMARY hash
+/// allocates its entries from the arena and a slot holds a 1-based index into it.  A
+/// SECONDARY index — a sibling field's `other_indexes` — is a second way to reach
+/// records the PRIMARY collection owns and allocated, so its slots hold those record
+/// numbers exactly as every slot did before @PLN135 arc H.  Nothing may move them:
+/// they belong to the other collection, which frees them.
+///
+/// The two are told apart by the stride the table records, because that is the fact
+/// itself: a table whose entries it allocated knows their width, and a table that
+/// borrows records has none to know.  `ensure_table` writes the width when
+/// `alloc_entry` mints the table and leaves it 0 when `add` does — so the
+/// discriminator is set by WHO ALLOCATED THE ENTRY, which is the same question.
+#[must_use]
+pub fn owns_entries(store: &Store, claim: u32) -> bool {
+    stride(store, claim) != 0
+}
+
+/// The `DbRef` a bucket slot decodes to, or a null ref when it names nothing.
+///
+/// For an owned entry `(chunk, offset)` is arithmetic against a chunk directory small
+/// enough to stay cache-resident, so a hit still costs ONE random read — the entry's
+/// own bytes.  For a borrowed record it is the record at its payload start, which is
+/// what a slot has always meant.
+fn entry_ref(store: &Store, claim: u32, index: u32, store_nr: u16, stride: u32) -> DbRef {
+    if stride == 0 {
+        return DbRef {
+            store_nr,
+            rec: index,
+            pos: crate::store::RECORD_PAYLOAD,
+        };
+    }
+    match arena::slot(store, claim, index, stride) {
+        Some((rec, pos)) => DbRef { store_nr, rec, pos },
+        None => DbRef {
+            store_nr,
+            rec: 0,
+            pos: 0,
+        },
+    }
+}
+
+/// The bucket-slot value for `rec` in table `claim` — the inverse of [`entry_ref`].
+fn slot_value(store: &Store, claim: u32, rec: &DbRef, stride: u32) -> u32 {
+    if stride == 0 {
+        rec.rec
+    } else {
+        arena::index_of(store, claim, rec.rec, rec.pos, stride)
+    }
+}
 
 /// Read the per-hash seed stored in bucket record `claim`.
 fn read_seed(store: &Store, claim: u32) -> u64 {
@@ -45,36 +140,87 @@ fn write_seed(store: &mut Store, claim: u32, seed: u64) {
     store.set_u32_raw(claim, SEED_FLD + 4, (seed >> 32) as u32);
 }
 
+/// The hash's table record, creating and seeding it if this is the first touch.
+///
+/// Creation moved ahead of the first insert because an entry is now allocated from
+/// the arena whose bookkeeping lives IN this record, and an entry is built before it
+/// is inserted (`record_new` → the constructor's field writes → `insert_record`).
+/// So `record_new` needs the table, and `add` finds it already there.
+///
+/// `stride` is recorded once, on creation: every entry of a given hash is the same
+/// element type, so the width cannot change under it.
+pub fn ensure_table(hash: &DbRef, stride: u32, stores: &mut [Store]) -> u32 {
+    let existing = keys::store(hash, stores).get_u32_raw(hash.rec, hash.pos);
+    if existing != 0 {
+        return existing;
+    }
+    // Claim 12 words so the bucket array (room - RESERVED_WORDS words, 2 slots/word)
+    // starts at 16 slots, the size it has always started at.
+    let claim = keys::mut_store(hash, stores).claim(12);
+    keys::mut_store(hash, stores).zero_fill(claim);
+    // Seed the new table and store the seed with its buckets, so any
+    // reader (including a different process) re-derives identical buckets.
+    let seed = keys::fresh_seed();
+    write_seed(keys::mut_store(hash, stores), claim, seed);
+    keys::mut_store(hash, stores).set_u32_raw(claim, STRIDE_FLD, stride);
+    keys::mut_store(hash, stores).set_u32_raw(hash.rec, hash.pos, claim);
+    claim
+}
+
+/// Hand out a zeroed entry slot, as the `DbRef` the caller then builds the entry
+/// through.
+///
+/// The replacement for the per-entry `Store::claim` in `record_new`'s keyed arm.
+/// `owner` is the record that owns the collection — written once per CHUNK, since
+/// every slot in a chunk shares it, and read by `database::search` to decide whether
+/// a record is live.
+///
+/// # Panics
+///
+/// If the slot the arena just handed out cannot be addressed — the arena's own
+/// invariant, asserted here rather than papered over, because a silent null would
+/// hand the constructor a `DbRef` that writes to record 0.
+pub fn alloc_entry(hash: &DbRef, stride: u32, owner: u32, stores: &mut [Store]) -> DbRef {
+    let claim = ensure_table(hash, stride, stores);
+    let store = keys::mut_store(hash, stores);
+    let index = arena::alloc(store, claim, stride, owner);
+    let (rec, pos) = arena::slot(store, claim, index, stride).expect("just allocated");
+    DbRef {
+        store_nr: hash.store_nr,
+        rec,
+        pos,
+    }
+}
+
 pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
     let mut claim = keys::store(hash, stores).get_u32_raw(hash.rec, hash.pos);
-    let length = if claim == 0 {
-        // First insert: claim 10 words so the bucket array (room - 2 words,
-        // 2 slots/word) starts at 16 slots — matching the old 9-word/16-slot
-        // table now that words 0 and 1 hold the header and the seed.
-        claim = keys::mut_store(hash, stores).claim(10);
-        keys::mut_store(hash, stores).zero_fill(claim);
-        // Seed the new table and store the seed with its buckets, so any
-        // reader (including a different process) re-derives identical buckets.
-        let seed = keys::fresh_seed();
-        write_seed(keys::mut_store(hash, stores), claim, seed);
-        keys::mut_store(hash, stores).set_u32_raw(hash.rec, hash.pos, claim);
-        0
-    } else {
-        keys::store(hash, stores).get_u32_raw(claim, LEN_FLD)
-    };
+    if claim == 0 {
+        // Reached only when the entry was allocated somewhere else — a SECONDARY index
+        // over another collection's records.  Stride 0 records that: this table
+        // borrows, so its slots hold record numbers and it frees nothing.
+        claim = ensure_table(hash, 0, stores);
+    }
+    let length = keys::store(hash, stores).get_u32_raw(claim, LEN_FLD);
+    let width = stride(keys::store(hash, stores), claim);
+    let index = slot_value(keys::store(hash, stores), claim, rec, width);
+    debug_assert!(
+        index != 0,
+        "a bucket slot of 0 means EMPTY, so an entry that decodes to 0 is one this \
+         table cannot find again (rec={}, pos={}, stride={width})",
+        rec.rec,
+        rec.pos,
+    );
     let room = keys::store(hash, stores).record_words(claim);
-    // Grow at load factor 0.75 (= 0.75·elms).  The `+ 2` counts the two
-    // reserved words (header + seed) before the bucket array: rehash when
-    // `length >= 1.5·(room - 2) = 0.75·elms`.  (Was `+ 1` when only the
-    // header word was reserved.)
-    if (length * 2 / 3) + 2 >= room {
+    // Grow at load factor 0.75 (= 0.75·elms).  The `+ RESERVED_WORDS` counts the words
+    // before the bucket array: rehash when `length >= 1.5·(room - 4) = 0.75·elms`.
+    if (length * 2 / 3) + RESERVED_WORDS >= room {
         let new_claim = keys::mut_store(hash, stores).claim(room * 2 - 1);
         keys::mut_store(hash, stores).zero_fill(new_claim);
         rehash_into(hash, claim, new_claim, stores, keys);
         install_table(hash, claim, new_claim, stores);
         claim = new_claim;
     }
-    hash_set(claim, rec, stores, keys);
+    hash_set(claim, index, rec, stores, keys);
     keys::mut_store(rec, stores).set_u32_raw(claim, LEN_FLD, length + 1);
     // hash_validate(hash, key, stores, keys);
 }
@@ -90,30 +236,30 @@ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
 ///
 /// The size solves [`add`]'s own growth condition: `add` rebuilds when
 /// `(length * 2 / 3) + 2 >= room`, so `room` must exceed that for `length == count`.
-pub fn reserve(hash: &DbRef, count: i64, stores: &mut [Store], keys: &[Key]) {
+pub fn reserve(hash: &DbRef, count: i64, stride: u32, stores: &mut [Store], keys: &[Key]) {
     // A negative or absurd count asks for nothing; a table so large its word count
     // overflows a `u32` cannot be claimed at all.  Both mean "leave it alone" — this
     // is a hint, and a hint never fails the program.
     let Ok(count) = u64::try_from(count) else {
         return;
     };
-    let Ok(want) = u32::try_from((count * 2 / 3) + 3) else {
+    // `+ 1` past the reserved words is the whole point: `add` rebuilds when
+    // `(length * 2 / 3) + RESERVED_WORDS >= room`, so `room` must EXCEED that for
+    // `length == count` — sized to exactly the trigger, the last insert grows the
+    // table and the reservation buys nothing but a doubling (measured: a 1M table
+    // reserved at the trigger ended up 10.7 MB at load 0.37 instead of 5.3 MB at 0.75).
+    let Ok(want) = u32::try_from((count * 2 / 3) + u64::from(RESERVED_WORDS) + 1) else {
         return;
     };
-    let claim = keys::store(hash, stores).get_u32_raw(hash.rec, hash.pos);
-    if claim != 0 && keys::store(hash, stores).record_words(claim) >= want {
+    // Create the table if it is not there yet, so the seed, the stride and the arena
+    // fields all come from the one place that mints them.
+    let claim = ensure_table(hash, stride, stores);
+    if keys::store(hash, stores).record_words(claim) >= want {
         return;
     }
     let new_claim = keys::mut_store(hash, stores).claim(want);
     keys::mut_store(hash, stores).zero_fill(new_claim);
-    if claim == 0 {
-        // No table yet: this IS the first allocation, so mint the seed `add` would
-        // have minted on the first insert.
-        let seed = keys::fresh_seed();
-        write_seed(keys::mut_store(hash, stores), new_claim, seed);
-    } else {
-        rehash_into(hash, claim, new_claim, stores, keys);
-    }
+    rehash_into(hash, claim, new_claim, stores, keys);
     install_table(hash, claim, new_claim, stores);
 }
 
@@ -148,61 +294,65 @@ fn install_table(hash: &DbRef, old_claim: u32, new_claim: u32, stores: &mut [Sto
 fn rehash_into(hash: &DbRef, from: u32, into: u32, stores: &mut [Store], keys: &[Key]) {
     let seed = read_seed(keys::store(hash, stores), from);
     write_seed(keys::mut_store(hash, stores), into, seed);
+    // The arena's bookkeeping travels with the table it lives in.  Leaving it behind
+    // would strand every chunk and the directory in the freed predecessor — the
+    // abandoned-table leak this plan already fixed once, except that this one also
+    // loses the ENTRIES, so the next insert would hand out index 1 again on top of a
+    // live entry.  These four fields plus the seed are the whole of the table's
+    // identity; the buckets are re-derived below.
+    let width = stride(keys::store(hash, stores), from);
+    for fld in [arena::DIR_FLD, arena::NEXT_FLD, arena::FREE_FLD, STRIDE_FLD] {
+        let v = keys::store(hash, stores).get_u32_raw(from, fld);
+        keys::mut_store(hash, stores).set_u32_raw(into, fld, v);
+    }
     let length = keys::store(hash, stores).get_u32_raw(from, LEN_FLD);
-    let elms = (keys::store(hash, stores).record_words(from) - 2) * 2;
-    let mut move_rec = DbRef {
-        store_nr: hash.store_nr,
-        rec: 0,
-        pos: 0,
-    };
-    for i in 0..elms {
-        let v = keys::store(hash, stores).get_u32_raw(from, BUCKET0 + SLOT_BYTES * i);
-        if v == 0 {
+    let count = elms(keys::store(hash, stores), from);
+    for i in 0..count {
+        let index = keys::store(hash, stores).get_u32_raw(from, BUCKET0 + SLOT_BYTES * i);
+        if index == 0 {
             continue;
         }
-        move_rec.rec = v;
-        move_rec.pos = 8;
-        hash_set(into, &move_rec, stores, keys);
+        let entry = entry_ref(keys::store(hash, stores), from, index, hash.store_nr, width);
+        hash_set(into, index, &entry, stores, keys);
     }
     keys::mut_store(hash, stores).set_u32_raw(into, LEN_FLD, length);
 }
 
-fn hash_set(claim: u32, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
-    let index = hash_free_pos(claim, rec, stores, keys);
-    keys::mut_store(rec, stores).set_u32_raw(claim, index, rec.rec);
+/// File arena `index` (whose entry is at `rec`) into table `claim`'s buckets.
+fn hash_set(claim: u32, index: u32, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
+    let pos = hash_free_pos(claim, rec, stores, keys);
+    keys::mut_store(rec, stores).set_u32_raw(claim, pos, index);
 }
 
 fn hash_free_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32 {
-    let room = keys::store(rec, stores).record_words(claim);
-    let elms = (room - 2) * 2;
+    let count = elms(keys::store(rec, stores), claim);
     let seed = read_seed(keys::store(rec, stores), claim);
     let hash_val = keys::hash(rec, stores, keys, seed);
-    let mut index = (hash_val % u64::from(elms)) as u32;
-    for _ in 0..elms {
+    let mut index = (hash_val % u64::from(count)) as u32;
+    for _ in 0..count {
         if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES) == 0 {
             break;
         }
         index += 1;
-        if index >= elms {
+        if index >= count {
             index = 0;
         }
     }
     BUCKET0 + index * SLOT_BYTES
 }
 
-/// Return the 0-based slot index in `claim` that currently holds `rec.rec`.
-fn hash_rec_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32 {
-    let room = keys::store(rec, stores).record_words(claim);
-    let elms = (room - 2) * 2;
+/// Return the 0-based bucket that currently holds arena index `want`.
+fn hash_rec_pos(claim: u32, want: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32 {
+    let count = elms(keys::store(rec, stores), claim);
     let seed = read_seed(keys::store(rec, stores), claim);
     let hash_val = keys::hash(rec, stores, keys, seed);
-    let mut index = (hash_val % u64::from(elms)) as u32;
-    for _ in 0..elms {
-        if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES) == rec.rec {
+    let mut index = (hash_val % u64::from(count)) as u32;
+    for _ in 0..count {
+        if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES) == want {
             break;
         }
         index += 1;
-        if index >= elms {
+        if index >= count {
             index = 0;
         }
     }
@@ -225,11 +375,12 @@ pub fn find(hash_ref: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -
     if room == 0 {
         return record;
     }
-    let elms = (room - 2) * 2;
+    let count = elms(store, claim);
+    let width = stride(store, claim);
     let seed = read_seed(store, claim);
     let hash_val = keys::key_hash(key, seed);
-    let mut index = (hash_val % u64::from(elms)) as u32;
-    let mut rec_pos = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
+    let mut index = (hash_val % u64::from(count)) as u32;
+    let mut slot = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
     // @PLN135 arc B — a probe asks only *is this the key*, about the SAME key every
     // time, so the `(Content, type_nr)` match belongs outside the loop.  `fast_key`
     // resolves the field offset and the value once; the loop then reads the field
@@ -238,39 +389,38 @@ pub fn find(hash_ref: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -
     // (dedup runs one `find` per insert).  A compound key, or a width `fast_key` does
     // not list, answers `None` and takes the general loop below.
     if let Some(fast) = keys::fast_key(keys, key) {
-        for _ in 0..elms {
-            if rec_pos == 0 {
+        for _ in 0..count {
+            if slot == 0 {
                 record.rec = 0;
                 record.pos = 0;
                 break;
             }
-            if fast.matches(store, rec_pos) {
-                record.rec = rec_pos;
-                record.pos = 8;
+            let entry = entry_ref(store, claim, slot, hash_ref.store_nr, width);
+            if fast.matches(store, entry.rec, entry.pos) {
+                record = entry;
                 break;
             }
             index += 1;
-            if index >= elms {
+            if index >= count {
                 index = 0;
             }
-            rec_pos = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
+            slot = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
         }
         return record;
     }
-    'Record: for _ in 0..elms {
-        if rec_pos == 0 {
+    'Record: for _ in 0..count {
+        if slot == 0 {
             record.rec = 0;
             record.pos = 0;
             break;
         }
-        record.rec = rec_pos;
-        record.pos = 8;
+        record = entry_ref(store, claim, slot, hash_ref.store_nr, width);
         if keys::key_compare(key, &record, stores, keys) != Ordering::Equal {
             index += 1;
-            if index >= elms {
+            if index >= count {
                 index = 0;
             }
-            rec_pos = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
+            slot = store.get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
             continue 'Record;
         }
         break;
@@ -287,38 +437,72 @@ pub fn remove(hash_ref: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key])
     if length == 0 {
         return;
     }
-    let room = keys::store(hash_ref, stores).record_words(claim);
-    let elms = (room - 2) * 2;
+    let count = elms(keys::store(hash_ref, stores), claim);
+    let width = stride(keys::store(hash_ref, stores), claim);
     let seed = read_seed(keys::store(hash_ref, stores), claim);
-    // Find the slot holding rec and zero it (create the hole).
-    let mut hole = hash_rec_pos(claim, rec, stores, keys);
+    let gone = slot_value(keys::store(hash_ref, stores), claim, rec, width);
+    if gone == 0 {
+        return;
+    }
+    // Find the slot holding the entry and zero it (create the hole).
+    let mut hole = hash_rec_pos(claim, gone, rec, stores, keys);
     keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + hole * SLOT_BYTES, 0);
     // Walk forward from hole+1 and pull each element back if its probe distance
     // to the hole is shorter than its probe distance to its current slot.
     // Stop at the first empty slot (all probe chains end at one).
-    let mut idx = (hole + 1) % elms;
-    for _ in 0..elms {
+    let mut idx = (hole + 1) % count;
+    for _ in 0..count {
         let val = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + idx * SLOT_BYTES);
         if val == 0 {
             break;
         }
-        let next = DbRef {
-            store_nr: hash_ref.store_nr,
-            rec: val,
-            pos: 8,
-        };
-        let ideal = (keys::hash(&next, stores, keys, seed) % u64::from(elms)) as u32;
+        let next = entry_ref(
+            keys::store(hash_ref, stores),
+            claim,
+            val,
+            hash_ref.store_nr,
+            width,
+        );
+        let ideal = (keys::hash(&next, stores, keys, seed) % u64::from(count)) as u32;
         // Move if probe distance to hole is shorter than probe distance to idx.
-        let d_hole = (hole + elms - ideal) % elms;
-        let d_idx = (idx + elms - ideal) % elms;
+        let d_hole = (hole + count - ideal) % count;
+        let d_idx = (idx + count - ideal) % count;
         if d_hole < d_idx {
             keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + hole * SLOT_BYTES, val);
             keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + idx * SLOT_BYTES, 0);
             hole = idx;
         }
-        idx = (idx + 1) % elms;
+        idx = (idx + 1) % count;
     }
     keys::mut_store(hash_ref, stores).set_u32_raw(claim, LEN_FLD, length - 1);
+}
+
+/// Give an entry's slot back to the arena — the counterpart of the `Store::delete`
+/// that used to release an entry record.
+///
+/// Deliberately NOT part of [`remove`], which only UNLINKS: a secondary index shares
+/// its entries with the primary collection and must never free them.  That split is
+/// also what keeps the order safe — a released slot threads the free list through its
+/// own first four bytes, so it must be released only after the caller has finished
+/// reading the entry's fields (its key to unlink by, its pointers to free).
+pub fn free_entry(hash_ref: &DbRef, rec: &DbRef, stores: &mut [Store]) {
+    let claim = keys::store(hash_ref, stores).get_u32_raw(hash_ref.rec, hash_ref.pos);
+    if claim == 0 {
+        return;
+    }
+    let width = stride(keys::store(hash_ref, stores), claim);
+    if width == 0 {
+        // A borrowed record belongs to the primary collection, which frees it.
+        return;
+    }
+    let index = arena::index_of(
+        keys::store(hash_ref, stores),
+        claim,
+        rec.rec,
+        rec.pos,
+        width,
+    );
+    arena::free(keys::mut_store(hash_ref, stores), claim, index, width);
 }
 
 /**
@@ -340,10 +524,9 @@ pub fn count(hash_ref: &DbRef, stores: &[Store]) -> u32 {
     if claim == 0 {
         return 0;
     }
-    let room = keys::store(hash_ref, stores).record_words(claim);
-    let elms = (room - 2) * 2;
+    let count = elms(keys::store(hash_ref, stores), claim);
     let mut total: u32 = 0;
-    for i in 0..elms {
+    for i in 0..count {
         if keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES) != 0 {
             total += 1;
         }
@@ -367,9 +550,7 @@ pub fn table_bytes(hash_ref: &DbRef, stores: &[Store]) -> u32 {
     if claim == 0 {
         return 0;
     }
-    let room = keys::store(hash_ref, stores).record_words(claim);
-    let elms = (room - 2) * 2;
-    elms * 4
+    elms(keys::store(hash_ref, stores), claim) * SLOT_BYTES
 }
 
 /// C60 Step 1: collect every live record's record-number from a hash.
@@ -383,21 +564,39 @@ pub fn table_bytes(hash_ref: &DbRef, stores: &[Store]) -> u32 {
 /// Runs in O(room) time where `room` is the bucket array length,
 /// typically around 1.5× the live-record count.
 #[must_use]
-pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
-    let claim = keys::store(hash_ref, stores).get_u32_raw(hash_ref.rec, hash_ref.pos);
+pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<DbRef> {
+    let store = keys::store(hash_ref, stores);
+    let claim = store.get_u32_raw(hash_ref.rec, hash_ref.pos);
     if claim == 0 {
         return Vec::new();
     }
-    let room = keys::store(hash_ref, stores).record_words(claim);
-    let elms = (room - 2) * 2;
+    let count = elms(store, claim);
+    let width = stride(store, claim);
     let mut out = Vec::new();
-    for i in 0..elms {
-        let rec = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES);
-        if rec != 0 {
-            out.push(rec);
+    for i in 0..count {
+        let index = store.get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES);
+        if index != 0 {
+            out.push(entry_ref(store, claim, index, hash_ref.store_nr, width));
         }
     }
     out
+}
+
+/// Every record the hash's storage occupies besides the entries themselves: the
+/// arena's chunks and its directory.
+///
+/// What a teardown frees AFTER recursing into the entries' own children — the table
+/// record is the caller's `container_rec` and is freed alongside.  An arena chunk
+/// missed here leaks every entry in it, which is the class this plan already fixed
+/// once for abandoned bucket tables.
+#[must_use]
+pub fn arena_records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
+    let store = keys::store(hash_ref, stores);
+    let claim = store.get_u32_raw(hash_ref.rec, hash_ref.pos);
+    if claim == 0 {
+        return Vec::new();
+    }
+    arena::all_records(store, claim)
 }
 
 /// C60 Step 2: collect every live record sorted by the hash's key.
@@ -420,26 +619,9 @@ pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
 /// not reachable from valid loft source.
 #[must_use]
 #[allow(dead_code)]
-pub fn records_sorted(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<u32> {
+pub fn records_sorted(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<DbRef> {
     let mut recs = records(hash_ref, stores);
-    // Build DbRefs once so the comparator doesn't re-materialise them.
-    // Records in a hash all live in the same store and share the same
-    // schema offset (pos=8 is the record body, matching what
-    // `validate` uses internally).
-    let store_nr = hash_ref.store_nr;
-    recs.sort_by(|a, b| {
-        let ra = DbRef {
-            store_nr,
-            rec: *a,
-            pos: 8,
-        };
-        let rb = DbRef {
-            store_nr,
-            rec: *b,
-            pos: 8,
-        };
-        keys::compare(&ra, &rb, stores, keys)
-    });
+    recs.sort_by(|a, b| keys::compare(a, b, stores, keys));
     recs
 }
 
@@ -457,27 +639,16 @@ pub fn records_sorted(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<u
 pub fn validate(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) {
     let claim = keys::store(hash_ref, stores).get_u32_raw(hash_ref.rec, hash_ref.pos);
     let length = keys::store(hash_ref, stores).get_u32_raw(claim, LEN_FLD);
-    let room = keys::store(hash_ref, stores).record_words(claim);
-    let elms = (room - 2) * 2;
-    let mut record = DbRef {
-        store_nr: hash_ref.store_nr,
-        rec: 0,
-        pos: 0,
-    };
     let mut l = 0;
-    for i in 0..elms {
-        let rec = keys::store(hash_ref, stores).get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES);
-        if rec != 0 {
-            record.rec = rec;
-            record.pos = 8;
-            l += 1;
-            let key = keys::get_key(&record, stores, keys);
-            assert_eq!(
-                find(hash_ref, stores, keys, &key).rec,
-                rec,
-                "Incorrect entry"
-            );
-        }
+    for record in records(hash_ref, stores) {
+        l += 1;
+        let key = keys::get_key(&record, stores, keys);
+        let found = find(hash_ref, stores, keys, &key);
+        assert_eq!(
+            (found.rec, found.pos),
+            (record.rec, record.pos),
+            "Incorrect entry"
+        );
     }
     assert_eq!(length, l, "Incorrect hash length");
 }

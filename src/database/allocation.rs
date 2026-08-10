@@ -135,6 +135,13 @@ pub(super) struct OwnedChild {
 pub(super) struct OwnedWalk {
     pub children: Vec<OwnedChild>,
     pub container_rec: Option<u32>,
+    /// Further records the container's storage occupies, freed after the children and
+    /// alongside `container_rec`.  A hash's entry arena is the one producer: its
+    /// chunks and their directory hold the entries, so a chunk missed here leaks
+    /// every entry in it — the class @PLN135 already fixed once for abandoned bucket
+    /// tables, and the reason [`crate::hash::arena_records`] is read here rather than
+    /// re-derived (@PLN135 arc H).
+    pub extra_recs: Vec<u32>,
     pub zero_field: bool,
 }
 
@@ -219,6 +226,7 @@ impl Stores {
     pub(super) fn for_each_owned_child(&self, rec: &DbRef, tp: u16) -> OwnedWalk {
         let mut children = Vec::new();
         let mut container_rec = None;
+        let mut extra_recs = Vec::new();
         match &self.types[tp as usize].parts {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 let capacity_bytes = u64::from(self.store(rec).capacity_words()) * 8;
@@ -261,6 +269,7 @@ impl Stores {
                         return OwnedWalk {
                             children,
                             container_rec: Some(cur),
+                            extra_recs: Vec::new(),
                             zero_field: true,
                         };
                     }
@@ -292,6 +301,7 @@ impl Stores {
                         return OwnedWalk {
                             children,
                             container_rec: Some(cur),
+                            extra_recs: Vec::new(),
                             zero_field: true,
                         };
                     }
@@ -316,21 +326,34 @@ impl Stores {
                 if cur != 0 && !self.owned_edge_in_store(rec, cur) {
                     self.refuse_owned_edge(rec, tp, cur, "hash");
                 } else if cur != 0 {
-                    // Enumerate the live element records through `hash::records`,
-                    // the single owner of the bucket-record layout (the seed word
-                    // and bucket offset live only in `src/hash.rs`).  Mirrors the
-                    // `Index` arm's `collect_index_nodes`.  `cur` is the bucket
-                    // record itself — a separate container to free (below).
-                    for elm in hash::records(rec, &self.allocations) {
+                    // Enumerate the live entries through `hash::records`, the single
+                    // owner of the bucket-record layout (the seed word, the bucket
+                    // offset and the arena decode live only in `src/hash.rs`).
+                    // `cur` is the table record itself — a separate container to free.
+                    //
+                    // @PLN135 arc H — an entry is a SLOT in the arena, not a record of
+                    // its own, so there is no per-element record to `delete`:
+                    // `owning_elem` is `None` and the storage comes back with the
+                    // chunks in `extra_recs`.  Creation and freeing had to change in
+                    // one step for exactly this reason — redirecting creation while
+                    // this arm still freed each entry as a record would hand interior
+                    // arena bytes to `Store::delete` as if they were blocks, which is
+                    // silent heap corruption rather than a leak.
+                    //
+                    // A hash that BORROWS its entries (a secondary index over another
+                    // collection's records) is unchanged: its slots still name records
+                    // the primary owns, so they come back as `owning_elem` exactly as
+                    // before and the arena contributes nothing.
+                    let owned = hash::owns_entries(self.store(rec), cur);
+                    for entry in hash::records(rec, &self.allocations) {
                         children.push(OwnedChild {
-                            child: DbRef {
-                                store_nr: rec.store_nr,
-                                rec: elm,
-                                pos: 8,
-                            },
+                            child: entry,
                             child_tp: v,
-                            owning_elem: Some(elm),
+                            owning_elem: (!owned).then_some(entry.rec),
                         });
+                    }
+                    if owned {
+                        extra_recs = hash::arena_records(rec, &self.allocations);
                     }
                     container_rec = Some(cur);
                 }
@@ -457,6 +480,7 @@ impl Stores {
         OwnedWalk {
             children,
             container_rec,
+            extra_recs,
             zero_field,
         }
     }
@@ -1240,7 +1264,7 @@ impl Stores {
     pub fn build_hash_sorted_vec(&mut self, hash_ref: &DbRef, tp: u16) -> DbRef {
         let keys = self.types[tp as usize].keys.clone();
         let recs = crate::hash::records_sorted(hash_ref, &self.allocations, &keys);
-        self.build_rec_scratch(hash_ref, &recs)
+        self.build_ref_scratch(hash_ref, &recs)
     }
 
     /// Like `build_hash_sorted_vec` but in raw bucket-walk order, skipping the
@@ -1251,7 +1275,7 @@ impl Stores {
     /// `for e in h` (which is key-ordered) — acceptable for a hash.
     pub fn build_hash_unsorted_vec(&mut self, hash_ref: &DbRef, _tp: u16) -> DbRef {
         let recs = crate::hash::records(hash_ref, &self.allocations);
-        self.build_rec_scratch(hash_ref, &recs)
+        self.build_ref_scratch(hash_ref, &recs)
     }
 
     /// @PLN48 — the Radix counterpart, feeding the same Ordered (on=3) iteration
@@ -1411,6 +1435,63 @@ impl Stores {
             }
             store.set_u32_raw(header_rec, 4, vec_rec);
             store.set_u32_raw(header_rec, 8, u32::from(hash_ref.store_nr));
+            store.set_u32_raw(
+                header_rec,
+                crate::vector::SCRATCH_TAG_FLD,
+                crate::vector::scratch_tag(4),
+            );
+        }
+        DbRef {
+            store_nr: scratch_store,
+            rec: header_rec,
+            pos: 4,
+        }
+    }
+
+    /// The `build_rec_scratch` sibling for elements that are `(record, offset)` pairs
+    /// rather than record numbers — a hash's arena entries (@PLN135 arc H).
+    ///
+    /// Same shape, 8 bytes per element instead of 4, and the header's third word says
+    /// so: `vector::step_ordered` reads that width rather than being told, so one
+    /// stepper serves the arena form and the rec-number form (radix, index) alike.
+    fn build_ref_scratch(&mut self, hash_ref: &DbRef, refs: &[DbRef]) -> DbRef {
+        // Pick the scratch store: a read-only/exposed source needs a separate writable
+        // home (claiming into it would panic and could move its buffer, invalidating the
+        // exposed view).  `database(1)` hands back a fresh owned store.
+        let scratch_store = if self.store(hash_ref).read_only {
+            self.database(1).store_nr
+        } else {
+            hash_ref.store_nr
+        };
+        let scratch_ref = DbRef {
+            store_nr: scratch_store,
+            rec: 0,
+            pos: 0,
+        };
+        let n = refs.len();
+        // 8-byte header + n * 8 bytes of (rec, pos) pairs.
+        let vec_words = ((n as u32) * 8 + 8).div_ceil(8).max(1);
+        let vec_cr = self.claim(&scratch_ref, vec_words);
+        let vec_rec = vec_cr.rec;
+        // 2-word header: offset 4 = the pair vector, offset 8 = SOURCE store_nr,
+        // offset 12 = the element width (8 — the marker `step_ordered` reads).
+        let header_cr = self.claim(&scratch_ref, 2);
+        let header_rec = header_cr.rec;
+        {
+            let store = self.store_mut(&scratch_ref);
+            store.set_u32_raw(vec_rec, 4, n as u32);
+            for (i, r) in refs.iter().enumerate() {
+                let base = 8 + (i as u32) * 8;
+                store.set_u32_raw(vec_rec, base, r.rec);
+                store.set_u32_raw(vec_rec, base + 4, r.pos);
+            }
+            store.set_u32_raw(header_rec, 4, vec_rec);
+            store.set_u32_raw(header_rec, 8, u32::from(hash_ref.store_nr));
+            store.set_u32_raw(
+                header_rec,
+                crate::vector::SCRATCH_TAG_FLD,
+                crate::vector::scratch_tag(8),
+            );
         }
         DbRef {
             store_nr: scratch_store,
@@ -1459,6 +1540,25 @@ impl Stores {
         }
         let store = &self.allocations[scratch.store_nr as usize];
         if store.free || !store.is_claimed_record(scratch.rec) {
+            return;
+        }
+        // The record must still BE this scratch's header before a single one of its
+        // fields is believed.
+        //
+        // `is_claimed_record` says the block is live; it does not say it is still
+        // ours. A scratch that has already been released leaves its block on the
+        // free list, and the next claim takes it — after which the reads below are
+        // somebody else's bytes. That was survivable only while nothing large
+        // re-claimed it promptly; @PLN135 arc H made a hash's first insert claim an
+        // arena CHUNK, which lands on exactly such a block, and the mismatch below
+        // then read `elem_store` out of chunk payload and FREED THE WHOLE STORE the
+        // collection lives in — every entry gone between one closure invocation and
+        // the next, with no error anywhere (`v2_two_clients_with_spectator_routing`).
+        //
+        // So the header is self-identifying, and a record that does not carry the tag
+        // is left alone. Refusing costs at most the scratch's own two blocks, once;
+        // acting on a foreign record costs the store.
+        if !crate::vector::is_scratch_header(store, scratch) {
             return;
         }
         // Offset 8 of the header (`pos` is 4) — the store the ELEMENTS live in.
@@ -1919,7 +2019,7 @@ impl Stores {
                 // Bounds-checked hash walk (the per-element kind for_each_owned_child
                 // trusts; here it is guard-before-deref).  Mirrors hash.rs: the root
                 // word holds the bucket-record claim; bucket layout is word 0 = room,
-                // buckets from fld 16 (`BUCKET0`), `elms = (room - 2) * 2`.
+                // buckets from `BUCKET0`, `elms = (room - RESERVED_WORDS) * 2`.
                 let cur = store.get_u32_raw(rec.rec, rec.pos);
                 if cur == 0 {
                     return;
@@ -1940,19 +2040,44 @@ impl Stores {
                 // meant to sit above — so reading word 0 with it panicked the
                 // debug-assertions gate ("Fld 0 is outside of record N").
                 let room = store.record_words(cur);
-                if room < 2 || u64::from(room) > u64::from(cap) {
+                if room < crate::hash::RESERVED_WORDS || u64::from(room) > u64::from(cap) {
                     eprintln!(
                         "[cr-check] {path}: hash bucket rec {cur} insane room {room} (cap {cap})",
                     );
                     *problems += 1;
                     return;
                 }
-                let elms = (room - 2) * 2;
+                let elms = (room - crate::hash::RESERVED_WORDS) * 2;
+                // @PLN135 arc H — a slot holds an arena INDEX for a hash that owns its
+                // entries, and a record number for one that borrows them (a secondary
+                // index).  The stride the table records is the discriminator, and the
+                // chunk directory has to be reached before any slot can be decoded —
+                // guarded first, like everything else here, because this walk exists
+                // to survive a corrupt store rather than to assume a sound one.
+                let stride = crate::hash::stride(store, cur);
+                let dir = store.get_u32_raw(cur, crate::arena::DIR_FLD);
+                if stride != 0 && dir >= cap {
+                    eprintln!(
+                        "[cr-check] {path}: hash arena directory {dir} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
                 for i in 0..elms {
-                    let entry = store.get_u32_raw(cur, 16 + i * 4);
-                    if entry == 0 {
+                    let slot =
+                        store.get_u32_raw(cur, crate::hash::BUCKET0 + i * crate::hash::SLOT_BYTES);
+                    if slot == 0 {
                         continue;
                     }
+                    let (entry, pos) = if stride == 0 {
+                        (slot, crate::store::RECORD_PAYLOAD)
+                    } else {
+                        match crate::arena::slot(store, cur, slot, stride) {
+                            Some(found) => found,
+                            None => continue,
+                        }
+                    };
                     if entry >= cap {
                         eprintln!(
                             "[cr-check] {path}: hash entry rec {entry} beyond store #{} capacity {cap}",
@@ -1968,7 +2093,7 @@ impl Stores {
                         &DbRef {
                             store_nr: rec.store_nr,
                             rec: entry,
-                            pos: 8,
+                            pos,
                         },
                         *v,
                         &format!("{path}{{#{entry}}}"),
@@ -2203,29 +2328,21 @@ impl Stores {
         //
         // Sorting by the source element record restores the source's order, so
         // compaction changes a store's SIZE without changing its shape.
+        // @PLN135 arc H — an entry is a SLOT, so `owning_elem` is `None` and the
+        // source order is the arena's own: `(chunk record, offset)` sorts to the order
+        // the entries were handed out, because a chunk is filled before the next is
+        // appended.  The destination allocates its slots through the same arena, so
+        // visiting in that order rebuilds the source's physical layout.
         let mut children = self.for_each_owned_child(rec, tp).children;
-        children.sort_by_key(|c| c.owning_elem.unwrap_or(0));
+        children.sort_by_key(|c| (c.child.rec, c.child.pos));
+        let stride = crate::hash::stride_for(size);
         for child in children {
-            let Some(elm) = child.owning_elem else {
-                continue;
-            };
-            // @P295 — element record layout (per `record_new`'s Hash arm):
-            // offset 0 = header, offset 4 = back-pointer to the parent record,
-            // offset 8 = struct payload (`size` bytes).  Claim WITH the header
-            // word, set the back-pointer, copy the full `size`-byte payload from
-            // offset 8, deep-copy its nested claims, then re-insert by key.
-            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
-            self.store_mut(to).set_u32_raw(new, 4, to.rec);
-            let src_db = DbRef {
-                store_nr: rec.store_nr,
-                rec: elm,
-                pos: 8,
-            };
-            let new_db = DbRef {
-                store_nr: to.store_nr,
-                rec: new,
-                pos: 8,
-            };
+            let src_db = child.child;
+            // The destination's slot comes from ITS arena, not from a claim: an entry
+            // has no header word and no back-pointer of its own any more (the chunk
+            // carries the owner).  Allocate, copy the payload, deep-copy the nested
+            // claims, then re-insert by key.
+            let new_db = crate::hash::alloc_entry(to, stride, to.rec, &mut self.allocations);
             self.copy_block(&src_db, &new_db, size);
             self.copy_claims(&src_db, &new_db, content_tp);
             hash::add(to, &new_db, &mut self.allocations, &keys);
@@ -2827,6 +2944,9 @@ impl Stores {
                     if let Some(elm) = c.owning_elem {
                         self.store_mut(rec).delete(elm);
                     }
+                }
+                for extra in walk.extra_recs {
+                    self.store_mut(rec).delete(extra);
                 }
                 if let Some(cur) = walk.container_rec {
                     self.store_mut(rec).delete(cur);
@@ -4685,7 +4805,14 @@ impl Stores {
         );
         let mut loaded = 0i64;
         for rec in found {
-            if self.copy_entry(&mut reader, local, content_tp, &keys, rec, PagedKind::Trie) {
+            if self.copy_entry(
+                &mut reader,
+                local,
+                content_tp,
+                &keys,
+                (rec, crate::store::RECORD_PAYLOAD),
+                PagedKind::Trie,
+            ) {
                 loaded += 1;
             }
         }
@@ -4792,7 +4919,7 @@ impl Stores {
         reader.warm(&cands);
 
         // Pass 1 — locate. Independent per key, now against warm bucket pages.
-        let found: Vec<u32> = key_sets
+        let found: Vec<(u32, u32)> = key_sets
             .iter()
             .map(|k| {
                 crate::paged_reader::find_hash_entry(&mut reader, local.rec, local.pos, k, &keys)
@@ -4803,30 +4930,20 @@ impl Stores {
         // says how long a record is), then exactly those bodies. Guessing a page per entry
         // was tried and reverted — it fetched a page the walk did not need, and loft#729
         // already established that buying depth with bytes just moves the cost.
-        let hdrs: Vec<(u64, usize)> = found
-            .iter()
-            .filter(|&&m| m != 0)
-            .map(|&m| (u64::from(m) * 8, 8))
-            .collect();
-        reader.warm(&hdrs);
+        // @PLN135 arc H — an entry is a SLOT at a known stride, so its extent is
+        // arithmetic and there is no per-entry header word to fetch first: one warm
+        // over exactly the bytes the copy reads replaces the header-then-body pair.
+        let stride = crate::hash::stride_for(u32::from(self.size(content_tp)));
         let bodies: Vec<(u64, usize)> = found
             .iter()
-            .filter(|&&m| m != 0)
-            .filter_map(|&m| {
-                let size = reader.record_words(m);
-                (size >= 2).then(|| {
-                    (
-                        u64::from(m) * 8 + 8,
-                        usize::try_from((size * 8).saturating_sub(8)).unwrap_or(0),
-                    )
-                })
-            })
+            .filter(|&&(m, _)| m != 0)
+            .map(|&(m, pos)| (u64::from(m) * 8 + u64::from(pos), stride as usize))
             .collect();
         reader.warm(&bodies);
 
         // Pass 2 — materialise.
         let mut loaded = 0i64;
-        for (k, &matched) in key_sets.iter().zip(&found) {
+        for (k, &(matched, _)) in key_sets.iter().zip(&found) {
             if matched != 0
                 && self.load_one(&mut reader, local, content_tp, &keys, k, PagedKind::Hash)
             {
@@ -4866,6 +4983,8 @@ impl Stores {
         key_content: &[crate::keys::Content],
         kind: PagedKind,
     ) -> bool {
+        // `(record, offset)`: a trie entry is still a record whose payload starts at
+        // byte 8; a hash entry is a slot inside an arena chunk (@PLN135 arc H).
         let matched = match kind {
             PagedKind::Hash => crate::paged_reader::find_hash_entry(
                 reader,
@@ -4877,13 +4996,14 @@ impl Stores {
             // A trie keys on ONE text column, so the probe is that column's string;
             // any other spelling cannot match and locates nothing.
             PagedKind::Trie => match key_content.first() {
-                Some(crate::keys::Content::Str(s)) => {
-                    crate::paged_reader::trie_find_rec(reader, local.rec, local.pos, s.str(), keys)
-                }
-                _ => 0,
+                Some(crate::keys::Content::Str(s)) => (
+                    crate::paged_reader::trie_find_rec(reader, local.rec, local.pos, s.str(), keys),
+                    crate::store::RECORD_PAYLOAD,
+                ),
+                _ => (0, 0),
             },
         };
-        if matched == 0 {
+        if matched.0 == 0 {
             return false;
         }
         self.copy_entry(reader, local, content_tp, keys, matched, kind)
@@ -4902,50 +5022,76 @@ impl Stores {
         local: &DbRef,
         content_tp: u16,
         keys: &[crate::keys::Key],
-        matched: u32,
+        matched: (u32, u32),
         kind: PagedKind,
     ) -> bool {
-        let size = reader.record_words(matched);
-        if size < 2 {
-            return false;
-        }
-        // 1) Move the entry record's field words verbatim. Inline scalars are
+        let (src_rec, src_pos) = matched;
+        // How many bytes the entry occupies, and where the local copy goes.  A trie
+        // entry is a record: its header says how long it is, and the copy claims one
+        // of its own.  A hash entry is an arena SLOT (@PLN135 arc H): its width is the
+        // element type's stride — there is no header to read — and the local copy is a
+        // slot handed out by the destination's own arena, never a claim, or the two
+        // halves of this collection would disagree about what an entry is.
+        let (bytes, entry) = match kind {
+            PagedKind::Hash => {
+                let stride = crate::hash::stride_for(u32::from(self.size(content_tp)));
+                (
+                    stride,
+                    crate::hash::alloc_entry(local, stride, local.rec, &mut self.allocations),
+                )
+            }
+            PagedKind::Trie => {
+                let size = reader.record_words(src_rec);
+                if size < 2 {
+                    return false;
+                }
+                let store = &mut self.allocations[local.store_nr as usize];
+                let new_rec = store.claim(size);
+                store.zero_fill(new_rec);
+                (
+                    (size * 8).saturating_sub(crate::store::RECORD_PAYLOAD),
+                    DbRef {
+                        store_nr: local.store_nr,
+                        rec: new_rec,
+                        pos: crate::store::RECORD_PAYLOAD,
+                    },
+                )
+            }
+        };
+        // 1) Move the entry's field words verbatim. Inline scalars are
         //    now correct; every `text` field still holds the SOURCE store's
         //    string-record id (a dangling pointer) — fixed in step 2.
-        let store = &mut self.allocations[local.store_nr as usize];
-        let new_rec = store.claim(size);
-        store.zero_fill(new_rec);
         // One fetch for the entry's field words, unpacked locally — the twin of
         // the bulk read in `copy_flat_subrecord` (loft#729).
-        let body = usize::try_from((size * 8).saturating_sub(8)).unwrap_or(0);
         let wordwise = std::env::var_os("LOFT_LOADER_WORDWISE").is_some();
         let buf = if wordwise {
             Vec::new()
         } else {
-            reader.resolve(u64::from(matched) * 8 + 8, body)
+            reader.resolve(u64::from(src_rec) * 8 + u64::from(src_pos), bytes as usize)
         };
-        let mut fld = 8u32;
-        while fld + 4 <= size * 8 {
-            let i = (fld - 8) as usize;
+        let mut off = 0u32;
+        while off + 4 <= bytes {
+            let i = off as usize;
             let w = if wordwise {
-                reader.u32_at(matched, fld)
+                reader.u32_at(src_rec, src_pos + off)
             } else {
                 u32::from_ne_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]])
             };
-            self.allocations[local.store_nr as usize].set_u32_raw(new_rec, fld, w);
-            fld += 4;
+            self.allocations[local.store_nr as usize].set_u32_raw(entry.rec, entry.pos + off, w);
+            off += 4;
         }
 
         // 2) 3b.2–3b.4b — relocate the entry's pointer fields (text / vector /
         //    nested / vector<struct>) so the local copy owns its whole graph.
-        //    Hash entry: dst + src field data both start at fld 8.
-        self.relocate_ptr_fields(reader, new_rec, 8, matched, 8, content_tp, local.store_nr);
-
-        let entry = DbRef {
-            store_nr: local.store_nr,
-            rec: new_rec,
-            pos: 8,
-        };
+        self.relocate_ptr_fields(
+            reader,
+            entry.rec,
+            entry.pos,
+            src_rec,
+            src_pos,
+            content_tp,
+            local.store_nr,
+        );
         // The verified linker for the kind, never a hand-rolled insert: a working-set
         // copy that built its own bucket or node would be a second implementation of
         // the structure the collection is checked against.

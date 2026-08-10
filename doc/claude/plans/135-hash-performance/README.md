@@ -7,9 +7,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arcs A, B and C shipped** (all layout-neutral), **Q2 shipped**, and the only arc
-left is **H**. **Q1 is answered H, not D**; **Q2's refusal mechanism is in the tree**;
-**Q3 dissolved**.
+**CLOSED (2026-08-10) — arcs A, B, C, Q2 and H all shipped.** H is in the tree and
+measured, and the measurement corrects this plan's central prediction: see
+[§ What H actually bought](#what-h-actually-bought-2026-08-10--insert-and-bytes-not-lookup).
+Read that section before re-deriving anything from the Q1 / Q5 numbers below, which are
+correct as measurements and were over-read as a forecast.
+
+| | before | after | |
+|---|---|---|---|
+| insert 1M, reserved | 330 ms | **258 ms** | **1.28x** |
+| store bytes / entry | 27.67 B | **18.6 B** | **−33%** |
+| claimed records, 2000 entries | ~2000 | **9** | table + directory + 6 chunks |
+| random lookup, 1M | 184 ns | 183 ns | **unchanged** |
 
 **What H must be built as changed on 2026-08-09, and the reason was never the byte
 layout.** Drafted as one contiguous array, H moves every entry when it grows and
@@ -21,7 +30,9 @@ So H can keep every live entry at the address it was handed out at, which is wha
 compatible, without giving up the locality it exists to buy. **Q4** (load factor) is
 settled inside H.
 
-**Q1 — answered: H, not D.** See
+**Q1 — answered: H, not D.** (And the ANSWER was right while the forecast attached to it
+was not — H's win is insert and bytes, not the lookup this paragraph predicted. See
+[§ What H actually bought](#what-h-actually-bought-2026-08-10--insert-and-bytes-not-lookup).) See
 [§ The Q1 measurement (2026-08-09)](#the-q1-measurement-2026-08-09--it-is-one-access-and-it-is-a-byte-problem).
 The record read is **82%** of a 1M random lookup and the bucket read is 8%, so D spends
 the one format break available on the small term; H's ceiling (measured against a dense
@@ -543,6 +554,53 @@ matrix on `--interpret` first, then both; `placement_contract_is_pinned` MUST fa
 re-blessed with the new constants — a token nobody bumps is a comment; and
 `a_changed_placement_token_refuses_the_store` must still refuse a pre-H store rather than
 misread it. Re-measure against **34 MB**, not 49.
+
+## What H actually bought (2026-08-10) — insert and bytes, not lookup
+
+Built, and measured against the installed `v2026.8.0` as a before-oracle, alternating
+A/B on a quiet box (24 cores, load 3.6), 1M `integer` keys, `--native-release`:
+
+| | before | after | |
+|---|---|---|---|
+| insert (reserved) | 330 ms | **258 ms** | **1.28x** |
+| store bytes / entry (slope over 100K→800K) | 27.67 B | **18.6 B** | **−33%** |
+| claimed records, 2000 entries | ~2000 | **9** | table + directory + 6 chunks |
+| random lookup | 184 ns | 183 ns | **unchanged** |
+
+**The predicted 2.3x lookup win did not happen, and the reason is in the reasoning, not
+the build.** This plan inferred it from two measurements that are both correct:
+
+* Q1's ablation — *the record read is 82% of a random 1M lookup*;
+* Q5's shapes — a dense `vector<Entry>` reads in 80 ns where the hash takes 200.
+
+The inference from them is what fails. **80 ns is ONE random read; a hash lookup makes
+TWO** — the bucket slot, then the entry. Packing the entries changes WHERE the second
+read lands; it does not make it stop missing, because a lookup by construction has no
+locality to exploit. Q1's 82% says that read is expensive — never that its being
+scattered is what made it so, and the two are different claims that the ablation cannot
+tell apart. Density pays for SEQUENTIAL or clustered access, which is exactly what the
+`vector<Entry>` probe measured and a hash never does.
+
+What the arena does remove is the per-entry `Store::claim` — a header word, the
+`claim_block` rounding, and one allocator round trip per insert — which is what
+[loft#809](https://github.com/loft-lang/loft/issues/809)'s title names, and it shows up
+on **insert and on bytes**. That is a real win and worth the format break; it is not the
+win this plan advertised, and the two should not be conflated in whatever comes next.
+
+**Chunk sizes double only to `arena::CAP_CHUNK`, then stay fixed.** Uncapped, the tail
+waste is proportional — a collection just into chunk `k` has up to half of it empty — and
+that measured 27.33 B/entry, i.e. it ate the entire per-entry saving, while also making a
+store's SIZE depend on construction order. Capping bounds the waste at one partly-filled
+chunk. It is the difference between −1% and −33%, and it was invisible until the footprint
+was measured against the before-oracle rather than reasoned about.
+
+**A hash has TWO kinds of entry**, which this plan's § How to build H did not name. A
+PRIMARY hash allocates its own entries from the arena. A SECONDARY index — a sibling
+field's `other_indexes` — is a second route to records the PRIMARY owns, and it may
+neither move nor free them. The discriminator is the stride the table records, because
+that IS the distinction: a table that allocated its entries knows their width, a table
+that borrows records has none to know. `stride == 0` means borrowed. Found by an assertion
+in `add`, not by reading the code.
 
 ## Open design questions
 

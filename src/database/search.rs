@@ -507,9 +507,14 @@ impl Stores {
             // `remove`, so no extra delete there.  A `Radix` element holds its
             // own block exactly as a hash element does (the same pair
             // `remove_owned` calls `own_block`), so it needs the same reclaim.
-            if matches!(
+            // @PLN135 arc H — a hash entry's storage goes back to its ARENA; a
+            // `Store::delete` here would hand the whole chunk (and every live entry
+            // in it) to the free tree.
+            if matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
+                hash::free_entry(coll, &existing, &mut self.allocations);
+            } else if matches!(
                 self.types[db as usize].parts,
-                Parts::Hash(_, _) | Parts::Radix(_, _) | Parts::Trie(_, _)
+                Parts::Radix(_, _) | Parts::Trie(_, _)
             ) {
                 self.store_mut(coll).delete(existing.rec);
             }
@@ -569,11 +574,19 @@ impl Stores {
         let keys = self.types[db as usize].keys.clone();
         let key = keys::get_key(rec, &self.allocations, &keys);
         let existing = self.find(data, db, &key);
-        if existing.rec != 0 && existing.rec != rec.rec {
+        // @PLN135 arc H — two entries of the same hash now share a chunk RECORD, so
+        // "is this the same entry" is `(rec, pos)`, not `rec` alone.  Comparing only
+        // the record number would read a neighbouring slot in the same chunk as the
+        // entry being inserted and skip the dedup.
+        if existing.rec != 0 && (existing.rec, existing.pos) != (rec.rec, rec.pos) {
             self.remove(data, &existing, db);
             if !secondary {
                 self.remove_claims(&existing, content_tp);
-                self.store_mut(data).delete(existing.rec);
+                if matches!(self.types[db as usize].parts, Parts::Hash(_, _)) {
+                    hash::free_entry(data, &existing, &mut self.allocations);
+                } else {
+                    self.store_mut(data).delete(existing.rec);
+                }
             }
         }
     }
@@ -660,6 +673,17 @@ impl Stores {
             // `own_block` is exactly the set whose elements HAVE their own
             // record, so the payload start is the right answer for all of them
             // rather than a per-kind adjustment.
+            //
+            // @PLN135 arc H — a HASH entry is a slot in a chunked arena, not a record
+            // of its own: its payload starts at the slot offset the caller already
+            // holds, and normalising to byte 8 would walk the CHUNK's first slot
+            // instead.  Its storage comes back to the arena rather than to
+            // `Store::delete`, which would hand the whole chunk to the free tree.
+            if matches!(parts, Parts::Hash(..)) {
+                self.remove_claims(rec, content);
+                hash::free_entry(data, rec, &mut self.allocations);
+                return;
+            }
             let elem = DbRef {
                 store_nr: rec.store_nr,
                 rec: rec_nr,

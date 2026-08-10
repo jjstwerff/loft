@@ -684,6 +684,34 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
     }
 }
 
+/// Byte offset in an iteration-scratch header holding [`scratch_tag`].
+///
+/// The header is two words: offset 4 the element vector, offset 8 the source store,
+/// and this. It exists so a scratch can be RECOGNISED — a released scratch leaves its
+/// block on the free list, the next claim takes it, and every field read after that is
+/// somebody else's. `Store::is_claimed_record` cannot tell those apart, and acting on
+/// the difference cost a whole store (see `Stores::free_iteration_scratch`).
+pub const SCRATCH_TAG_FLD: u32 = 12;
+
+/// High half: the marker. Low half: bytes per element — 4 for a rec-number scratch
+/// (radix, index), 8 for the `(record, offset)` pairs a hash's arena entries need.
+const SCRATCH_MARK: u32 = 0x5C4A_0000;
+const SCRATCH_MARK_MASK: u32 = 0xFFFF_0000;
+
+/// The tag an iteration-scratch header carries, for an element width of `width` bytes.
+#[must_use]
+pub fn scratch_tag(width: u32) -> u32 {
+    SCRATCH_MARK | (width & 0xFFFF)
+}
+
+/// Is `scratch` still the header its builder wrote?
+#[must_use]
+pub fn is_scratch_header(store: &Store, scratch: &DbRef) -> bool {
+    store.record_words(scratch.rec) >= 2
+        && store.get_u32_raw(scratch.rec, scratch.pos + SCRATCH_TAG_FLD - 4) & SCRATCH_MARK_MASK
+            == SCRATCH_MARK
+}
+
 /// One step of the Ordered iteration path over a `hash`/`index`/`radix`/`spatial`
 /// collection: advance the u32-stride rec-nr cursor and yield the record it points at.
 /// Shared by the interpreter (`State::step`) and the native runtime
@@ -700,14 +728,33 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
 ///   scratch live in a different (writable) store than a read-only/exposed source — see
 ///   expose-iteration-scratch.md.
 pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store], sourced: bool) -> (DbRef, u32) {
-    let mut pos = cur as i32;
-    vector_next(data, &mut pos, 4, stores);
     let store = keys::store(data, stores);
-    let vector = store.get_u32_raw(data.rec, data.pos);
-    let rec = if pos == i32::MAX {
-        0
+    // @PLN135 arc H — a hash's entries are SLOTS in a chunked arena, so an element is
+    // `(record, offset)` and no longer a record number whose body starts at 8.  Its
+    // scratch therefore strides 8 bytes and says so in the header word the builder
+    // writes; every other producer (radix, index, the co-located on=3 path) leaves
+    // that word 0 and keeps the 4-byte rec-number form.  Reading the width from the
+    // scratch is what lets one stepper serve both without the caller having to know
+    // which kind built it.
+    let tag = if sourced {
+        store.get_u32_raw(data.rec, data.pos + SCRATCH_TAG_FLD - 4)
     } else {
-        store.get_u32_raw(vector, pos as u32)
+        0
+    };
+    let wide = tag & SCRATCH_MARK_MASK == SCRATCH_MARK && tag & 0xFFFF == 8;
+    let stride: u16 = if wide { 8 } else { 4 };
+    let mut pos = cur as i32;
+    vector_next(data, &mut pos, stride, stores);
+    let vector = store.get_u32_raw(data.rec, data.pos);
+    let (rec, elem_pos) = if pos == i32::MAX {
+        (0, 8)
+    } else if wide {
+        (
+            store.get_u32_raw(vector, pos as u32),
+            store.get_u32_raw(vector, pos as u32 + 4),
+        )
+    } else {
+        (store.get_u32_raw(vector, pos as u32), 8)
     };
     let elem_store = if sourced {
         store.get_u32_raw(data.rec, data.pos + 4) as u16
@@ -718,7 +765,7 @@ pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store], sourced: bool) -> 
         DbRef {
             store_nr: elem_store,
             rec,
-            pos: 8,
+            pos: elem_pos,
         },
         pos as u32,
     )

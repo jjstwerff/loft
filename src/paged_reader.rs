@@ -888,44 +888,82 @@ impl<P: PageProvider> PagedReader<P> {
     }
 }
 
-/// Locate the record stored under `key` in a HASH rooted at `(root_rec,
-/// root_pos)` of the paged image — a read-only port of `hash::find`
-/// (`src/hash.rs`) over [`PagedReader`] instead of a `Store`. Returns the entry
-/// record number, or 0 when absent. `keys` is the collection's key schema
-/// (`Stores::keys(type)`); `key_hash` is reused verbatim (it hashes the
-/// `Content` key, not a store). The bucket-record layout constants mirror
-/// `hash.rs`: seed at fld 8, buckets from fld 16, `elms = (room-2)·2`.
+/// Where a hash's entry for `key` lives in the paged image, as `(record, byte
+/// offset)`, or `(0, 0)` when absent — a read-only port of `hash::find`
+/// (`src/hash.rs`) over [`PagedReader`] instead of a `Store`.
+///
+/// `keys` is the collection's key schema (`Stores::keys(type)`); `key_hash` is reused
+/// verbatim (it hashes the `Content` key, not a store). The bucket-record layout
+/// mirrors `hash.rs`, and it is the same fact seen twice: seed at `SEED_FLD`, buckets
+/// from `BUCKET0`, `elms = (room - RESERVED_WORDS)·2`, a slot holding an arena index
+/// decoded through [`crate::arena`] — or, for a table that borrows its records, the
+/// record number itself.  A pre-@PLN135-arc-H image cannot reach here: the placement
+/// token refuses it at load.
 pub fn find_hash_entry<P: PageProvider>(
     reader: &mut PagedReader<P>,
     root_rec: u32,
     root_pos: u32,
     key: &[crate::keys::Content],
     keys: &[crate::keys::Key],
-) -> u32 {
+) -> (u32, u32) {
     let claim = reader.u32_at(root_rec, root_pos);
     if claim == 0 {
-        return 0;
+        return (0, 0);
     }
     let room = reader.record_words(claim);
-    if room < 2 {
-        return 0;
+    if room < crate::hash::RESERVED_WORDS {
+        return (0, 0);
     }
-    let elms = (room - 2) * 2;
-    let seed = reader.i64_at(claim, 8) as u64; // SEED_FLD
+    let elms = (room - crate::hash::RESERVED_WORDS) * 2;
+    let stride = reader.u32_at(claim, crate::hash::STRIDE_FLD);
+    let seed = reader.i64_at(claim, crate::hash::SEED_FLD) as u64;
     let hash_val = crate::keys::key_hash(key, seed);
     let mut index = (hash_val % u64::from(elms)) as u32;
-    let mut rec = reader.u32_at(claim, 16 + index * 4); // BUCKET0
+    let mut slot = reader.u32_at(
+        claim,
+        crate::hash::BUCKET0 + index * crate::hash::SLOT_BYTES,
+    );
     for _ in 0..elms {
-        if rec == 0 {
-            return 0;
+        if slot == 0 {
+            return (0, 0);
         }
-        if key_compare_reader(reader, key, rec, 8, keys) == std::cmp::Ordering::Equal {
-            return rec;
+        let (rec, pos) = entry_at(reader, claim, slot, stride);
+        if rec != 0 && key_compare_reader(reader, key, rec, pos, keys) == std::cmp::Ordering::Equal
+        {
+            return (rec, pos);
         }
         index = (index + 1) % elms;
-        rec = reader.u32_at(claim, 16 + index * 4);
+        slot = reader.u32_at(
+            claim,
+            crate::hash::BUCKET0 + index * crate::hash::SLOT_BYTES,
+        );
     }
-    0
+    (0, 0)
+}
+
+/// Decode one bucket slot of the paged image — the read-only twin of `hash.rs`'s
+/// `entry_ref`.  `stride == 0` marks a table that BORROWS its records (a secondary
+/// index), where a slot is a record number and the payload starts at byte 8.
+fn entry_at<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    claim: u32,
+    slot: u32,
+    stride: u32,
+) -> (u32, u32) {
+    if stride == 0 {
+        return (slot, 8);
+    }
+    let dir = reader.u32_at(claim, crate::arena::DIR_FLD);
+    if dir == 0 {
+        return (0, 0);
+    }
+    let (k, off) = crate::arena::locate(slot, stride);
+    let cap = (reader.record_words(dir) - 1) * 2;
+    if k >= cap {
+        return (0, 0);
+    }
+    let chunk = reader.u32_at(dir, crate::arena::DIR0 + 4 * k);
+    if chunk == 0 { (0, 0) } else { (chunk, off) }
 }
 
 /// loft#782 — the byte address of each key's FIRST bucket slot, without a read per key.
@@ -949,19 +987,23 @@ pub fn hash_bucket_addrs<P: PageProvider>(
         return Vec::new();
     }
     let room = reader.record_words(claim);
-    if room < 2 {
+    if room < crate::hash::RESERVED_WORDS {
         return Vec::new();
     }
-    let elms = (room - 2) * 2;
+    let elms = (room - crate::hash::RESERVED_WORDS) * 2;
     if elms == 0 {
         return Vec::new();
     }
-    let seed = reader.i64_at(claim, 8) as u64; // SEED_FLD
+    let seed = reader.i64_at(claim, crate::hash::SEED_FLD) as u64;
     key_sets
         .iter()
         .map(|k| {
             let index = (crate::keys::key_hash(k, seed) % u64::from(elms)) as u32;
-            (u64::from(claim) * 8 + u64::from(16 + index * 4), 4)
+            (
+                u64::from(claim) * 8
+                    + u64::from(crate::hash::BUCKET0 + index * crate::hash::SLOT_BYTES),
+                crate::hash::SLOT_BYTES as usize,
+            )
         })
         .collect()
 }

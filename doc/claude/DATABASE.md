@@ -837,25 +837,62 @@ Used for `hash<T>` and the hash component of `index<T>`.
 
 ### Record Layout
 
-The hash table is stored as a single record in a `Store`:
+The bucket table is a single record in a `Store`:
 
 ```
-word 0: room    (u32) — number of slots / 2 + 1  (actual slot count = room * 2 - 2 approximately)
-word 1: length  (u32) — number of live elements
-word 2+: slots  (4 bytes each) — each slot is a rec value (0 = empty, non-zero = occupied)
+byte  0: room    (u32) — the record's size header, doubling as the word count
+byte  4: LEN_FLD    (u32) — live-entry count
+byte  8: SEED_FLD   (u64) — the per-hash seed, stored WITH the buckets so any
+                            reader re-derives identical buckets
+byte 16: DIR_FLD    (u32) — the entry arena's chunk directory (`src/arena.rs`)
+byte 20: NEXT_FLD   (u32) — the arena's append cursor
+byte 24: FREE_FLD   (u32) — head of the arena's free list
+byte 28: STRIDE_FLD (u32) — bytes per entry slot, 0 when the table BORROWS
+byte 32: BUCKET0    — slots, 4 bytes each (0 = empty)
 ```
 
-The slot count derived from `room` grows as a power of two.
+`elms = (room - RESERVED_WORDS) * 2`, with `RESERVED_WORDS = 4`.
+
+### Entries live in a chunked arena, not one record each (@PLN135 arc H)
+
+A bucket slot holds a **1-based arena index**, not a record number. Entries sit packed at
+a fixed stride inside chunk records, so a `hash` costs 18.6 bytes an entry where a record
+each cost 27.67, and 2000 entries claim 9 store records (table + directory + 6 chunks)
+instead of 2000. Filling one is ~1.28x faster; **lookups are unchanged** — see
+[@PLN135 § What H actually bought](plans/135-hash-performance/README.md), which records why
+the locality win this was designed for does not exist.
+
+The arena grows by APPENDING a chunk and never reallocates one that already holds slots,
+so a `DbRef` a caller is holding stays valid for the entry's whole life — the stability a
+per-entry record gave for free. Chunk sizes double only to `arena::CAP_CHUNK` and are
+fixed after that, which bounds the tail waste at one partly-filled chunk instead of half
+the collection.
+
+**Two kinds of entry.** A PRIMARY hash allocates its entries from the arena. A SECONDARY
+index — a sibling field's `other_indexes` — is a second route to records the primary owns,
+and may neither move nor free them; its slots hold those record numbers, exactly as every
+slot did before. `STRIDE_FLD == 0` marks the borrowed case, and `hash::owns_entries` is the
+one place that asks. Freeing follows: an owned entry's storage returns to the arena
+(`hash::free_entry`), a borrowed one is left to its owner.
+
+The layout is pinned by `tests/layout_golden.rs::placement_contract_is_pinned`; changing
+any of it without bumping `placement::HASH` would let an older store be misread instead of
+refused ([`src/placement.rs`](../../src/placement.rs)).
 
 ### Probing and Load Factor
 
 Collision resolution is **linear probing**: on collision, advance slot index by 1 (wrapping). The load factor threshold is:
 
 ```rust
-length * 14 / 16 >= room
+(length * 2 / 3) + RESERVED_WORDS >= room
 ```
 
-When this condition is met after an insertion, the table is rehashed into a new record with doubled capacity.
+which is `length >= 0.75 * elms`. When it is met after an insertion, the table is rehashed
+into a new record with doubled capacity, and the arena's four fields travel with it —
+leaving them behind would strand every chunk and hand out index 1 again on top of a live
+entry. `reserve(h, n)` sizes the table so this never fires while filling to `n`; it claims
+one word PAST the trigger, because a table sized to exactly the trigger grows on the last
+insert and the reservation buys nothing.
 
 ### Hash Function
 

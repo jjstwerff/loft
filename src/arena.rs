@@ -70,9 +70,31 @@
 
 use crate::store::Store;
 
-/// Slots in chunk 0.  Chunk `k` holds `BASE << k`, so a collection with three entries
-/// costs one small chunk rather than rounding up to the size that suits a million.
+/// Slots in chunk 0.  Chunk `k` holds `BASE << k` until [`CAP_CHUNK`], so a collection
+/// with three entries costs one small chunk rather than rounding up to the size that
+/// suits a million.
 pub const BASE: u32 = 64;
+
+/// The last chunk that DOUBLES; every chunk past it holds [`CAP_SLOTS`].
+///
+/// Doubling forever makes the tail waste proportional: a collection that has just
+/// crossed into chunk `k` has up to half of it unused, so a 1M-entry hash can carry
+/// ~500K empty slots.  Measured, that ate the whole per-entry saving the arena exists
+/// for — 27.33 B/entry against a record's 27.67 — and it made a store's SIZE depend on
+/// construction order, because two collections grown side by side each pay their own
+/// oversized tail (`store_persist_loft::persisted_size_tracks_content_not_construction`).
+///
+/// Capping bounds the waste at a CONSTANT instead: one partly-filled chunk, whatever
+/// the collection's size.  The cost is more chunks — 1M entries at 16 B is ~122 of
+/// them — and the directory that maps them is still a few hundred bytes, so it stays
+/// cache-resident and the index stays 4 bytes wide.
+pub const CAP_CHUNK: u32 = 7;
+
+/// Slots in every chunk past [`CAP_CHUNK`].
+pub const CAP_SLOTS: u32 = BASE << CAP_CHUNK;
+
+/// The first 0-based slot of the first fixed-size chunk — the end of the doubling run.
+const CAP_START: u32 = BASE * ((1 << (CAP_CHUNK + 1)) - 1);
 
 /// First byte of the chunk-record array in the directory record.
 pub const DIR0: u32 = 8;
@@ -99,23 +121,33 @@ pub fn locate(index: u32, stride: u32) -> (u32, u32) {
 
 /// The chunk holding 0-based slot `i`.
 ///
-/// Chunk `k` starts at `BASE * ((1 << k) - 1)`, so `i / BASE + 1` lands in `[2^k, 2^(k+1))`
-/// exactly when `i` is in chunk `k`, and the chunk number is that value's floor-log2.
+/// Inside the doubling run, chunk `k` starts at `BASE * ((1 << k) - 1)`, so
+/// `i / BASE + 1` lands in `[2^k, 2^(k+1))` exactly when `i` is in chunk `k`, and the
+/// chunk number is that value's floor-log2.  Past [`CAP_CHUNK`] the chunks are equal,
+/// so it is a division.  Both are O(1) — this runs on every lookup that hits.
 #[must_use]
 pub fn chunk_of(i: u32) -> u32 {
-    (i / BASE + 1).ilog2()
+    if i < CAP_START {
+        (i / BASE + 1).ilog2()
+    } else {
+        CAP_CHUNK + 1 + (i - CAP_START) / CAP_SLOTS
+    }
 }
 
 /// The first 0-based slot number that chunk `k` holds.
 #[must_use]
 pub fn first_index_of(k: u32) -> u32 {
-    BASE * ((1 << k) - 1)
+    if k <= CAP_CHUNK {
+        BASE * ((1 << k) - 1)
+    } else {
+        CAP_START + (k - CAP_CHUNK - 1) * CAP_SLOTS
+    }
 }
 
 /// How many slots chunk `k` holds.
 #[must_use]
 pub fn chunk_slots(k: u32) -> u32 {
-    BASE << k
+    if k <= CAP_CHUNK { BASE << k } else { CAP_SLOTS }
 }
 
 /// Words to claim for chunk `k` at `stride` bytes per slot: the header word plus the

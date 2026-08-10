@@ -82,9 +82,17 @@
 const BASELINE: &str = "1";
 
 /// `hash<T[k]>` — the open-addressed bucket array in `crate::hash`: a size header word,
-/// a seed word, then `u32` record numbers probed linearly forward, indexed by
-/// `key_hash(key, seed) % elms` with `elms = (room - 2) * 2`.
-pub const HASH: &str = "1";
+/// a seed word, the entry arena's four bookkeeping words, then `u32` ENTRY INDICES
+/// probed linearly forward, indexed by `key_hash(key, seed) % elms` with
+/// `elms = (room - 4) * 2`.
+///
+/// `2` is @PLN135 arc H.  A slot used to hold the record number of an entry that was a
+/// store record of its own; it now holds a 1-based index into the chunked arena in
+/// [`crate::arena`], where entries live packed at a fixed stride.  A pre-H store read
+/// by a post-H loft would take a record number for an arena index and find an entry at
+/// a byte offset nothing put one at, so it must REFUSE rather than answer — which is
+/// what this token buys, and the reason it shipped before H rather than with it.
+pub const HASH: &str = "2";
 
 /// `index<T[k]>` — the red-black tree in `crate::tree`.
 pub const INDEX: &str = "1";
