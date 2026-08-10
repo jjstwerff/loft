@@ -158,8 +158,9 @@ pub struct TypeInfo {
 /// known. Making it work inside a generic needs the body parsed per
 /// instantiation, which is a different plan.
 ///
-/// Read-only. Constructing or mutating a value by field NAME is a separate and
-/// larger question, deliberately out of scope until reading has shipped.
+/// Describes a TYPE. To read what a VALUE holds at one of these positions, use
+/// `field_value`. WRITING a value by field is a separate and larger question,
+/// deliberately still out of scope.
 //
 // `type_of(x)` is intercepted in `src/parser/control.rs` and lowered to
 // `n_reflect_type(<type-id>)`, so the id is a parse-time constant on both
@@ -194,4 +195,120 @@ pub fn reflect_type(kt: integer) -> TypeInfo;
 // replays the type registrations — names included — and `Stores::name` is a
 // total lookup that answers "absent" rather than minting a type for a typo.
 pub fn type_named(name: text) -> TypeInfo?;
+#impure(host_io)
+
+/// One field's VALUE, read out of a record at the position reflection reported.
+///
+/// `kind` says which payload carries the answer, so a caller matches it once
+/// rather than asking a different question per type:
+///
+/// | `kind` | read |
+/// |---|---|
+/// | `IntegerKind` · `LongKind` | `i` |
+/// | `BooleanKind` | `i` — 1 or 0 |
+/// | `CharacterKind` | `i` — the code point |
+/// | `FloatKind` · `SingleKind` | `f` |
+/// | `TextKind` | `t` |
+/// | `OtherKind` | nothing — see `field_value` |
+///
+/// A boolean and a character ride in `i` for the reason a bound SQL value does:
+/// one integer path is one thing to get right, and the `kind` beside it is what
+/// keeps them apart.
+pub struct ValueInfo {
+  /// What the type's own descriptor says lives at that position — never what
+  /// the caller expected to find there.
+  kind: TypeKind,
+  /// The SCALAR at that position holds loft's NULL.
+  ///
+  /// Separate from the payload because a null is not a value a payload can
+  /// spell: `0`, `""` and `false` are ordinary answers a field can genuinely
+  /// hold, and an ORM that could not tell them from SQL NULL would write the
+  /// wrong row. Test this before reading `i` / `f` / `t`.
+  ///
+  /// `false` for a `kind` that has no scalar reading and for `OtherKind` — a
+  /// field that was never read is not a field that read as null, and those are
+  /// three answers rather than two.
+  is_null: boolean,
+  i: integer,
+  f: float,
+  t: text,
+}
+
+/// The value `value` holds at byte `position` — the VALUE half of reflection.
+///
+/// `type_of` says a record has a `text` at byte 16; this reads it. Together they
+/// are what a generic serialiser, an ORM write or a diff needs, and neither half
+/// is enough alone:
+///
+/// ```loft
+/// t = type_of(row);
+/// for f in t.fields {
+///   v = field_value(row, f.position);
+///   if v.is_null { println("{f.name}=null") } else { println("{f.name}={v.t}") }
+/// }
+/// ```
+///
+/// **The position is CHECKED against the type's own descriptor, never trusted.**
+/// A number that does not begin a field — a hand-made offset, a stale one, a
+/// position from a different type — answers `OtherKind`, which is also what a
+/// field whose type has no scalar reading (a nested record, a vector, a keyed
+/// collection, a stored reference) answers. So there is no offset a caller can
+/// pass that reads bytes belonging to something else, which is what makes this
+/// ordinary loft rather than a pointer.
+///
+/// `kind` is the DESCRIPTOR's answer, not the caller's: passing the position of
+/// an `integer` field does not make the reading an integer, it makes it whatever
+/// that field is. That is why the kind is reported rather than requested.
+///
+/// **REFUSED inside a generic**, and refused rather than merely unsupported. A
+/// generic body is parsed once against its type variable, so there is no
+/// concrete type to read positions out of — the same limit `type_of` has. Left
+/// to answer, every call there reports `OtherKind`, which for an ORM's write
+/// half is an EMPTY ROW rather than an error: the write succeeds and the columns
+/// are missing. So it is a compile error naming the type variable. Call it one
+/// frame out, where the type is known, and pass the values in.
+//
+// `field_value(x, position)` is intercepted in `src/parser/control.rs` and
+// lowered to `reflect_field(x, position, <type-id>)`, so the id is a parse-time
+// constant on both backends — the same mechanism `type_of` and `to_json` use.
+//
+// The value parameter is declared `TypeInfo` only because loft has no way to
+// spell "any record"; the parser substitutes the real argument, and only the
+// reference ABI matters here. `struct_to_json` (06_json.loft) does the same.
+pub fn reflect_field(value: TypeInfo, position: integer, kt: integer) -> ValueInfo;
+// Reads through the SAME `Parts::Struct` field list the store itself is walked
+// by, and allocates the answer into the caller's own stores → par-safe.
+#impure(host_io)
+
+/// The value at the end of a PATH of positions — `field_value(x, [8, 0])`.
+///
+/// `type_of` reports a nested record's fields at positions relative to THAT
+/// record, so one number cannot name `origin.x` — and reflection hands back no
+/// handle to a nested record to call `field_value` on again. A path closes that:
+/// each element is a position in the record the previous element landed in.
+///
+/// **The offsets must not be added up by the caller.** `field_value(doc, 8 + 0)`
+/// asks for a field BEGINNING at byte 8 of `Doc`, which is `origin` itself — the
+/// check that makes this ordinary loft rather than a pointer is that a position
+/// must begin a field of the type it is read against. So the walk happens
+/// inside, one descriptor step per element, each checked the same way.
+///
+/// ```loft
+/// // Doc.origin @8, Point.y @8
+/// v = field_value(doc, [8, 8]);   // doc.origin.y
+/// ```
+///
+/// Every step but the last must land on an INLINE record. A step onto a scalar,
+/// a vector, a keyed collection or a stored reference answers `OtherKind` and
+/// reads nothing: a stored reference names a record with its own identity, and
+/// following it would be a pointer chase rather than a field read. An empty path
+/// answers `OtherKind` for the same reason a bad position does — nothing names a
+/// field there.
+///
+/// A one-element path is the single-position form, and answers identically.
+//
+// `field_value(x, path)` is intercepted in `src/parser/control.rs` beside the
+// single-position form and lowered to `reflect_field_path(x, path, <type-id>)`,
+// so the type id is a parse-time constant on both backends.
+pub fn reflect_field_path(value: TypeInfo, path: vector<integer>, kt: integer) -> ValueInfo;
 #impure(host_io)

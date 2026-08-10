@@ -893,6 +893,39 @@ fn a_packages_artifact_directory_stays_bounded() {
     // COUNTS `native-auto/`, so it must own it.
     let lib = private_lib(&tmp, &["mathnative", "typeshift"]);
     let native_auto = lib.join("mathnative/native-auto");
+    std::fs::create_dir_all(&native_auto).unwrap();
+
+    // loft#831, residual half — a stand-in for the `[c] shim` cdylib a package builds
+    // into this same directory. It is seeded HERE, before the loop, because the sweep
+    // orders by mtime and a shim is content-keyed and built exactly ONCE: it is
+    // permanently the oldest file, and therefore the first thing an age-ordered sweep
+    // takes. Deleting an auto-native artifact costs a rebuild; deleting the shim
+    // deletes the only definition of the package's `#c` symbols, and the next run dies
+    // with "symbol not found — or check the spelling", naming neither the library nor
+    // the sweep. Reproduced against `tests/fixtures/sqldb/sqlite` before the fix:
+    // saturate, run once, shim gone, exit 101.
+    //
+    // It rides along with the bound assertion rather than in a test of its own because
+    // the twelve rustc builds below are the whole cost, and running them twice put ~12s
+    // on the PR's critical path — `n3_use_native` sits in nextest's single-slot
+    // `heavy-serial` group, so that is 12s nothing else can overlap with.
+    let ext = if cfg!(target_os = "windows") {
+        "dll"
+    } else if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let prefix = if cfg!(target_os = "windows") {
+        ""
+    } else {
+        "lib"
+    };
+    let shim = native_auto.join(format!("{prefix}mathnative_shim_00000000deadbeef.{ext}"));
+    assert!(
+        write_decoy_cdylib(&shim, &[], &tmp),
+        "rustc could not build the stand-in shim"
+    );
 
     // Each program pads its own type table with a different number of structs, so
     // every one is a distinct layout fingerprint and mints its own artifact.
@@ -947,10 +980,32 @@ fn a_packages_artifact_directory_stays_bounded() {
         "the {built} contexts shared one artifact, so this test proves nothing about \
          pruning — the padding no longer shifts the layout fingerprint"
     );
+    // The sweep bounds only the family it BUILT, so the decoy is not counted here.
+    let family = std::fs::read_dir(&native_auto)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| {
+                    // The LIBRARIES only: each artifact also leaves the generated `.rs`
+                    // and `.args` it was built from, and counting those reads as 3x.
+                    e.path().extension().is_some_and(|x| x == ext)
+                        && e.path()
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.contains("loft_auto_"))
+                })
+                .count()
+        })
+        .unwrap_or(0);
     assert!(
-        count <= 8,
-        "`native-auto/` grew to {count} artifacts from {built} contexts; it must keep \
-         at most the 8 most recent (`KEEP_ARTIFACTS`)"
+        family <= 8,
+        "`native-auto/` grew to {family} auto-native artifacts from {built} contexts; \
+         it must keep at most the 8 most recent (`KEEP_ARTIFACTS`) — total files {count}"
+    );
+    // And the sweep took nothing that was not its own: a `[c]` shim living in the same
+    // directory would take the package's whole `#c` surface with it (loft#831).
+    assert!(
+        shim.exists(),
+        "the sweep deleted a foreign library from native-auto/"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);
@@ -1192,113 +1247,6 @@ fn a_partially_exporting_cdylib_marks_only_what_resolves() {
     assert!(
         !stderr.contains("could not be wired"),
         "a marked function must be one that wires.\nstderr:\n{stderr}"
-    );
-
-    let _ = std::fs::remove_dir_all(&tmp);
-}
-
-/// loft#831, residual half — `native-auto/` is not exclusively the auto-native
-/// builder's, and the sweep that bounds it must only take its OWN artifacts.
-///
-/// A package with a `[c] shim` builds its shim cdylib into the same directory.
-/// That library is content-keyed and built exactly ONCE, so it is permanently the
-/// oldest file there — and an age-ordered sweep over every `.so` deletes the
-/// oldest first.  Deleting an auto-native artifact costs a rebuild; deleting the
-/// shim removes the only definition of the package's `#c` symbols, and the next
-/// run dies with *"`#c` symbol 'ls_slot_a' not found — … or check the spelling"*,
-/// which names neither the library nor the sweep that ate it.
-///
-/// Reproduced deterministically against `tests/fixtures/sqldb/sqlite` before the
-/// fix: saturate the directory, run once, and the shim is gone with exit 101.
-/// Parallel runs are what saturate it — each distinct type-layout context mints
-/// an artifact of its own — which is why this surfaced as a suite that loses a
-/// different test on each parallel run and passes serially.
-///
-/// The decoy stands in for the shim: a loadable `.so` that is not of the
-/// `loft_auto_<pkg>_` family, placed first so it is the oldest.
-// @speed 12.5
-#[test]
-fn a_foreign_library_in_native_auto_survives_pruning() {
-    if Command::new("rustc").arg("--version").output().is_err() {
-        eprintln!("skip: rustc unavailable");
-        return;
-    }
-    let pid = std::process::id();
-    let tmp = std::env::temp_dir().join(format!("loft_831_prune_{pid}"));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
-    let lib = private_lib(&tmp, &["mathnative", "typeshift"]);
-    let native_auto = lib.join("mathnative/native-auto");
-    std::fs::create_dir_all(&native_auto).unwrap();
-
-    // Named the way `c_shim.rs` names a shim: `<pkg>_shim_<key>`, platform prefix
-    // included, so this is the real filename shape and not a lookalike.
-    let ext = if cfg!(target_os = "windows") {
-        "dll"
-    } else if cfg!(target_os = "macos") {
-        "dylib"
-    } else {
-        "so"
-    };
-    let prefix = if cfg!(target_os = "windows") {
-        ""
-    } else {
-        "lib"
-    };
-    let shim = native_auto.join(format!("{prefix}mathnative_shim_00000000deadbeef.{ext}"));
-    assert!(
-        write_decoy_cdylib(&shim, &[], &tmp),
-        "rustc could not build the stand-in shim"
-    );
-
-    // Twelve distinct type-layout contexts, each minting its own artifact — past
-    // the eight-artifact keep window, so the sweep definitely runs.
-    for n in 0..12 {
-        let pad: String = (0..n)
-            .map(|i| format!("struct Pad{i} {{ p_a: integer, p_b: text }}\n"))
-            .collect();
-        let prog = tmp.join(format!("ctx{n}.loft"));
-        std::fs::write(
-            &prog,
-            format!("use mathnative;\n{pad}fn main() {{ println(\"{{double(21)}}\"); }}\n"),
-        )
-        .unwrap();
-        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
-            .arg("--lib")
-            .arg(&lib)
-            .arg(&prog)
-            .env("LOFT_NO_CACHE", "1")
-            .output()
-            .expect("run the loft binary");
-        assert!(
-            out.status.success(),
-            "context {n} must still run.\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    let auto: Vec<String> = std::fs::read_dir(&native_auto)
-        .expect("read native-auto")
-        .flatten()
-        .filter_map(|e| e.path().file_name()?.to_str().map(ToString::to_string))
-        .filter(|n| n.ends_with(ext))
-        .collect();
-    // The CONTROL: the contexts really did mint distinct artifacts, so the bound
-    // below is a bound rather than everything sharing one name.
-    let family = auto.iter().filter(|n| n.contains("loft_auto_")).count();
-    assert!(
-        family > 1,
-        "the contexts shared one artifact, so this proves nothing about pruning: {auto:?}"
-    );
-    assert!(
-        family <= 8,
-        "the auto-native family must stay bounded at KEEP_ARTIFACTS: {auto:?}"
-    );
-    // The point: a library the sweep does not own is still there.
-    assert!(
-        shim.exists(),
-        "the sweep deleted a foreign library from native-auto/ — a `[c]` shim would \
-         take the package's whole `#c` surface with it (loft#831).  Present: {auto:?}"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

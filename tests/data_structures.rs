@@ -524,9 +524,14 @@ pub fn array_record() {
         stores.dump_type("Elm"),
         "Elm[12/8]: parents [Main 10]{n:text[8], c:integer[0]}"
     );
+    // `other [65535, 0]`: the leading 65535 marks `search` as a VIEW of records
+    // `list` also holds; the `0` is the back-link to `list` itself. Both
+    // directions are recorded since loft#843, so an insert maintains the sibling
+    // whichever field it is spelled through — it used to be earlier-declared →
+    // later-declared only, which made that depend on declaration order.
     assert_eq!(
         stores.dump_type("Main"),
-        "Main[8/4]:{list:array<Elm>[0] other [1], search:hash<Elm[n]>[4] other [65535]}"
+        "Main[8/4]:{list:array<Elm>[0] other [1], search:hash<Elm[n]>[4] other [65535, 0]}"
     );
     let mut into = stores.database(2);
     stores.set_default_value(m, &into);
@@ -561,9 +566,14 @@ pub fn ordered_record() {
         stores.dump_type("Elm"),
         "Elm[12/8]: parents [Main 10]{n:text[8], c:integer[0]}"
     );
+    // `other [65535, 0]`: the leading 65535 marks `search` as a VIEW of records
+    // `list` also holds; the `0` is the back-link to `list` itself. Both
+    // directions are recorded since loft#843, so an insert maintains the sibling
+    // whichever field it is spelled through — it used to be earlier-declared →
+    // later-declared only, which made that depend on declaration order.
     assert_eq!(
         stores.dump_type("Main"),
-        "Main[8/4]:{list:ordered<Elm[n]>[0] other [1], search:hash<Elm[n]>[4] other [65535]}"
+        "Main[8/4]:{list:ordered<Elm[n]>[0] other [1], search:hash<Elm[n]>[4] other [65535, 0]}"
     );
     let db = stores.database(2);
     let mut into = DbRef {

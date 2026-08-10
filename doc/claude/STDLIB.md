@@ -1188,15 +1188,125 @@ Two limits worth knowing before you reach for it:
   reports `IntegerKind`; its width is in `size`, not in a separate kind.
   `boolean` and `character` report what was declared.
 
-Read-only, and it describes a TYPE: there is no way to read a VALUE's field by
-name, so a generic serialiser needs more than this.  What it is sufficient for is
-the schema half — `tests/scripts/pln127-reflect-consumer.loft` generates
-`CREATE TABLE` from a loft struct through this API alone.  `nullable` is reported even though it is not a
-layout fact — a nullable field occupies the same bytes and spells absence with a
-sentinel — because the compiler records it for you; it is what a generated
+Read-only, and it describes a TYPE.  `nullable` is reported even though it is not
+a layout fact — a nullable field occupies the same bytes and spells absence with
+a sentinel — because the compiler records it for you; it is what a generated
 `CREATE TABLE` needs for `NOT NULL`.  Whether a field is `const` is NOT reported:
-it constrains loft code rather than data.  Constructing or mutating a value by field name
-is deliberately out of scope (@PLN127).
+it constrains loft code rather than data.  WRITING a value by field name is
+deliberately still out of scope (@PLN127).
+
+### Reading a value: `field_value`
+
+`type_of` says a record has a `text` at byte 16; `field_value(x, position)` reads
+it.  Together they are what a generic serialiser, an ORM write or a value diff
+needs — neither half is enough alone.
+
+| Function | Description |
+|----------|-------------|
+| `field_value(x, position: integer) -> ValueInfo` | What `x` holds at that byte position, tagged with the kind the type's own descriptor gives it. |
+| `field_value(x, path: vector<integer>) -> ValueInfo` | The same, reached through a chain of INLINE record fields — `field_value(doc, [8, 0])` is `doc.origin.x`. A one-element path answers exactly what the bare position does. |
+
+**A nested record needs the path form, and the offsets must not be added up.**
+`type_of` reports a nested record's fields at positions relative to THAT record,
+and a `ValueInfo` for a record field carries no handle to call `field_value` on
+again — so one number cannot name `origin.x`. Summing them does not work either,
+and that is the point rather than a limitation: the check that makes this
+ordinary loft rather than a pointer is that a position must **begin a field of
+the type it is read against**, and `origin`'s offset plus `x`'s begins nothing in
+the owner. The walk therefore happens inside, one descriptor step per element,
+each checked the same way.
+
+Every step but the last must land on an inline record. A step onto a scalar, a
+vector, a keyed collection or a stored reference answers `OtherKind` and reads
+nothing — a stored reference names a record with its own identity, and following
+it would be a pointer chase rather than a field read. An empty path answers
+`OtherKind` for the same reason a bad position does.
+
+`ValueInfo` carries `kind`, `is_null`, and three payloads — `i` (integer, long,
+boolean as 1/0, character as its code point), `f` (float, single) and `t` (text).
+Match `kind` to know which one carries the answer.
+
+```loft
+t = type_of(row);
+for f in t.fields {
+  v = field_value(row, f.position);
+  if v.is_null { println("{f.name} is null") }
+  else if v.kind == TextKind { println("{f.name}={v.t}") }
+  else { println("{f.name}={v.i}") }
+}
+```
+
+- **The position is CHECKED against the descriptor, never trusted.**  Only a
+  field the type says BEGINS there is read.  A hand-made offset, a stale one, one
+  belonging to a different type, the interior of a wider field, or an `index`
+  element's `#left_1` bookkeeping all answer `OtherKind` with no read at all — so
+  no argument reads bytes the layout did not name.
+- **`kind` is the descriptor's answer, not yours.**  Passing the position of an
+  `integer` field does not make the reading an integer; it makes it whatever that
+  field is.  That is why the kind is reported rather than requested.
+- **Three answers stay distinct**: `OtherKind` (nothing begins there), a
+  non-scalar kind (a nested record, a vector, a keyed collection, a stored
+  reference — nothing to read out), and `is_null` (the scalar holds loft's null).
+  `is_null` is `false` for the first two, because a field that was never read is
+  not a field that read as null.
+- **`null` is not `""`, `0` or `false`.**  A null `text?` answers `is_null`; an
+  empty `text` answers a zero-length string.  An ORM that confused them would
+  write the wrong row, which is why the flag rides beside the payload rather than
+  inside it.
+- **A narrow field is read at ITS width**, with its own sentinel — an `i32` field
+  reports `IntegerKind` and does not take its neighbour's bytes.
+- **REFUSED inside a generic**, and refused rather than quietly unsupported.  A
+  generic body is parsed once against its type variable, so there is no concrete
+  type; left to answer, every call there reports `OtherKind`, which for an ORM is
+  an EMPTY ROW rather than an error.  It is a compile error naming the type
+  variable — call it one frame out and pass the values in.
+
+The two halves have one consumer each in the tree:
+`tests/scripts/pln127-reflect-consumer.loft` generates `CREATE TABLE` from a loft
+struct through the type half alone, and `tests/fixtures/sqldb/round_trip.loft`
+builds an `INSERT`'s values through this one (@PLN23 S5) — walking the table
+definition's columns, each of which carries the byte position of the field that
+fills it.
+
+### The other way round: `for f in s#fields`
+
+`s#fields` is SYNTAX, not a function: the loop is unrolled at compile time into
+one block per field, and `f` is a `StructField` carrying `name`, `value` and
+`nullable`.
+
+```loft
+for f in m#fields {
+  if f.value is FvText { v } { println("{f.name} = {v}") }
+  if f.value is FvInt  { v } { println("{f.name} = {v}") }
+}
+```
+
+`value` is a `FieldValue` struct-enum — `FvBool` · `FvInt` · `FvLong` ·
+`FvFloat` · `FvSingle` · `FvChar` · `FvText` — so the payload arrives already
+typed and no position arithmetic is involved.
+
+**Which of the two to reach for.**  `#fields` gives you per-field CODE with typed
+payloads and no runtime cost; `type_of` + `field_value` give you per-field DATA
+you can carry, index and compare.  Use `#fields` to *write* something per field;
+use reflection when the field list itself is the value — when it has to line up
+with a table definition, a wire format, or another type's fields.
+
+Three things to know:
+
+- **Only scalar fields are visited.**  A nested record, a vector or a keyed
+  collection has no `FieldValue` payload and is skipped.  `type_of(x).fields`
+  reports those, so the two lists agree on scalars and reflection is the longer
+  one.
+- **`nullable` says a sentinel is possible.**  The payload variants are typed
+  non-null and `τ?` shares `τ`'s runtime layout, so a null field's value arrives
+  inside `FvText` / `FvInt` / … as loft's null.  The flag is what tells you that
+  can happen; it mirrors `FieldInfo.nullable`.  (Nullable fields used to be
+  skipped entirely — the loop simply ran fewer times than the struct has fields,
+  including for nullable fields holding real values.  Fixed; guarded by
+  `tests/scripts/pln23-field-iter-nullable.loft`.)
+- **It is an unroll, so it costs code.**  Two work-refs per field per loop, live
+  until scope exit.  Collect several answers in ONE loop rather than writing
+  three loops over the same struct.
 
 ---
 

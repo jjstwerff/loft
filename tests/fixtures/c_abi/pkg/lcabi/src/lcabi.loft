@@ -43,3 +43,104 @@ pub fn lc_latin1_text() -> text;               #c "lc_latin1_text" "const char*(
 pub fn lc_arity7(a: integer, b: integer, c: integer, d: integer, e: integer, f: integer, g: integer) -> integer;
 #c "lc_arity7" "int64_t(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t)"
 pub fn lc_shim_f64(bits: integer) -> integer;  #c "lc_shim_f64" "int64_t(int64_t)"
+
+// @PLN128 — the numeric shapes. A `vector<T>` reaches C as pointer-then-count
+// where the C signature has a parameter for the count, which is why each of
+// these declares one; the Fortran block below is the same loft spelling against
+// a signature that has none, and costs ONE slot per argument.
+pub fn lc_dsum_scaled(v: vector<float>) -> integer;
+#c "lc_dsum_scaled" "int64_t(const double*, int64_t)"
+// The load-bearing one: C writes THROUGH `y`, and loft sees the writes. Every
+// BLAS/LAPACK result comes back this way, so this cell is the reason the
+// numeric stack is bindable at all.
+pub fn lc_daxpy(y: vector<float>, x: vector<float>, a_milli: integer);
+#c "lc_daxpy" "void(double*, int64_t, const double*, int64_t, int64_t)"
+pub fn lc_scalar_ref(p: vector<integer>) -> integer;
+#c "lc_scalar_ref" "int64_t(const int64_t*, int64_t)"
+// The idiom the float refusal prescribes — a scalar double in and out entirely
+// by pointer, needing no float→bits conversion (loft has none).
+pub fn lc_shim_scale(out: vector<float>, v: vector<float>);
+#c "lc_shim_scale" "void(double*, int64_t, const double*, int64_t)"
+
+// @PLN128 arc D — the FORTRAN shape: every argument a bare pointer, no counts
+// anywhere.  Nothing above this line could express it, which is why no real
+// BLAS or LAPACK routine was bindable: the signature a `nm` listing shows was
+// refused for arity, and the shape loft used to insist on delivered each count
+// where the callee expected the next pointer.
+//
+// The count is not a property of `vector` — it is the C signature's decision,
+// so these declarations are ordinary vectors and read the same as the counted
+// ones above.
+pub fn lc_daxpby(n: vector<integer>, alpha: vector<float>, x: vector<float>,
+                 beta: vector<float>, y: vector<float>);
+#c "lc_daxpby_" "void(const int64_t*, const double*, const double*, const double*, double*)"
+
+// `dgemm_` at full width: THIRTEEN by-reference arguments and thirteen C
+// slots, the case @PLN128 is sized around.  The two `char *` arguments are
+// `text`, which crosses as a NUL-terminated `const char *` — exactly what a C
+// caller passes for a Fortran `character*1`.
+pub fn lc_dgemm(transa: text, transb: text, m: vector<integer>, n: vector<integer>,
+                k: vector<integer>, alpha: vector<float>, a: vector<float>,
+                lda: vector<integer>, b: vector<float>, ldb: vector<integer>,
+                beta: vector<float>, c: vector<float>, ldc: vector<integer>);
+#c "lc_dgemm_" "void(const char*, const char*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int64_t*, const double*, const int64_t*, const double*, double*, const int64_t*)"
+
+// Counted and bare MIXED in one signature, arranged so a left-to-right walk
+// that grabs a count whenever an integer follows a pointer assigns it to the
+// wrong vector: `sel` sits where `v`'s count would go, and the count that is
+// really there belongs to `w`.
+pub fn lc_split(v: vector<float>, sel: integer, w: vector<float>) -> integer;
+#c "lc_split_" "int64_t(const double*, int64_t, const double*, int64_t)"
+
+// @PLN128 arc E — one binding per element WIDTH loft may hand over.  A vector
+// crosses as a pointer into loft's own element bytes, so the loft element type
+// and the C pointee are two spellings of one layout and the declaration is
+// refused when they disagree.  These are the agreeing half; the refusals are in
+// `a_vector_element_must_match_the_c_pointee`.
+pub fn lc_u32_dot(v: vector<u32>) -> integer;
+#c "lc_u32_dot" "int64_t(const unsigned*, int64_t)"
+pub fn lc_u16_dot(v: vector<u16>) -> integer;
+#c "lc_u16_dot" "int64_t(const unsigned short*, int64_t)"
+pub fn lc_u8_dot(v: vector<u8>) -> integer;
+#c "lc_u8_dot" "int64_t(const unsigned char*, int64_t)"
+pub fn lc_char_dot(v: vector<character>) -> integer;
+#c "lc_char_dot" "int64_t(const unsigned*, int64_t)"
+pub fn lc_bool_dot(v: vector<boolean>) -> integer;
+#c "lc_bool_dot" "int64_t(const unsigned char*, int64_t)"
+pub fn lc_f32_dot(v: vector<single>) -> integer;
+#c "lc_f32_dot_milli" "int64_t(const float*, int64_t)"
+
+// @PLN128 arc E — the level-1 BLAS *function* shape: bare pointers in, and the
+// answer BY VALUE in an SSE register.  `ddot_`, `dnrm2_` and `dasum_` are all
+// this shape, and until the caller grew a float-returning rung every one of
+// them needed an ANSI-C shim of its own.
+pub fn lc_ddot(n: vector<integer>, x: vector<float>, y: vector<float>) -> float;
+#c "lc_ddot_" "double(const int64_t*, const double*, const double*)"
+pub fn lc_sdot(n: vector<integer>, x: vector<single>, y: vector<single>) -> single;
+#c "lc_sdot_" "float(const int64_t*, const float*, const float*)"
+
+// @PLN128 Q5 — a RETAINING C API, bound the way one has to be.
+//
+// `lc_plan` keeps the buffer it is given and `lc_run` reads it on a LATER call.
+// Handing it a loft `vector` is a use-after-free: loft frees the vector at its
+// last loft-visible use, which is that very call.  So C owns the buffer, loft
+// holds it as an opaque handle, and the two crossings are ordinary copies that
+// live only for their own call — which is exactly what `#c` guarantees.
+//
+// `memcpy` needs no `[c] libs` entry and no shim: it is libc, already linked.
+// Bound twice because the DIRECTION is the only difference, and each direction
+// puts the loft vector on a different side of the boundary.
+pub fn lc_buf_alloc(nbytes: integer) -> integer;   #c "lc_buf_alloc" "void*(int64_t)"
+pub fn lc_buf_free(p: integer);                    #c "lc_buf_free" "void(void*)"
+pub fn lc_plan(buf: integer, n: integer) -> integer;
+#c "lc_plan" "void*(void*, int64_t)"
+pub fn lc_run(plan: integer) -> integer;           #c "lc_run" "int64_t(const void*)"
+pub fn lc_plan_free(plan: integer);                #c "lc_plan_free" "void(void*)"
+
+// The `void*` pointee is the OPAQUE escape hatch (C108): it is what lets a
+// `vector<float>` cross as raw bytes here, and the reason `nbytes` is the
+// author's arithmetic rather than something loft checks.
+pub fn lc_load(dst: integer, src: vector<float>, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"
+pub fn lc_store(dst: vector<float>, src: integer, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"

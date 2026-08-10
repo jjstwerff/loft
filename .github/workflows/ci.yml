@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.diff.outputs.code }}
-      os: ${{ steps.osmatrix.outputs.os }}
+      legs: ${{ steps.osmatrix.outputs.legs }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -139,13 +139,24 @@ jobs:
           # merge, never at release.  Same trade, same reasoning, as Windows.
           # A manual dispatch picks its own runners, so one platform's answer
           # costs one platform's time (see the `workflow_dispatch` note above).
+          #
+          # The PR leg is additionally SPLIT IN TWO, along the `heavy-serial` test
+          # group boundary (@CI_BUDGET "Where the 31 minutes actually are").  That
+          # group is 77 of 3937 tests and 57% of the suite's COLD wall clock: it is
+          # `max-threads = 1`, so it cannot overlap itself, and cold it does not
+          # overlap the other 3860 either — measured 226s + 174s = 398s, additive.
+          # Run as two jobs they are concurrent, so the leg costs the LONGER of the
+          # two rather than their sum.  Two earlier sharding attempts failed because
+          # they cut ACROSS this group, putting a serial slot in every shard; cutting
+          # ALONG it is the untried axis.  Only the PR path is split — push/nightly
+          # keeps one job per OS, so its three required contexts are unchanged.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
             && [ -n "${{ inputs.os }}" ] && [ "${{ inputs.os }}" != "all" ]; then
-            echo 'os=["${{ inputs.os }}"]' >> "$GITHUB_OUTPUT"
+            echo 'legs=[{"os":"${{ inputs.os }}"}]' >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'legs=[{"os":"ubuntu-latest","shard":"heavy"},{"os":"ubuntu-latest","shard":"rest"}]' >> "$GITHUB_OUTPUT"
           else
-            echo 'os=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'legs=[{"os":"ubuntu-latest"},{"os":"macos-latest"},{"os":"windows-latest"}]' >> "$GITHUB_OUTPUT"
           fi
       - id: diff
         shell: bash
@@ -268,14 +279,15 @@ jobs:
       - run: echo "macOS full suite runs on push-to-main + daily (off the PR matrix). Per-PR macOS coverage is Miri-macOS + the ASan-macOS UAF/OOB sweep. This required context is a non-blocking placeholder on PRs."
 
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }})${{ matrix.shard && format(' [{0}]', matrix.shard) || '' }}
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # UNSHARDED — and this has now been measured TWICE, by two different
-      # splitting strategies.  Do not try a third without reading both results.
+      # SHARDED ON THE PR PATH ONLY, and only along the `heavy-serial` boundary.
+      # Two earlier strategies were measured and REVERTED; read both before
+      # changing this, because each failed for a reason the next one has to answer.
       #
       # 1. HASH partitioning (nextest --partition): balances by test COUNT, so the
       #    slow integration tests piled into one shard — macOS shard1 6m vs shard2
@@ -296,14 +308,31 @@ jobs:
       #    24m11s versus 24m26s unsharded — FIFTEEN SECONDS for double the minutes.
       #
       # The fixed per-job overhead is what sharding multiplies and never amortises:
-      # ~5m build + ~3.5m cache restore/save = ~8.5 min before a test runs.  THAT is
-      # the lever (sccache, trimming the cache steps), not moving tests between
-      # runners.  See doc/claude/CI_BUDGET.md for the full measurement.
+      # ~5m build + ~3.5m cache restore/save = ~8.5 min before a test runs.  It is
+      # still paid twice here — what changed is that the thing being bought is now
+      # worth more than 15 seconds.
       #
-      # OS list comes from `changes.os`: ubuntu per-PR (macOS + Windows are daily +
-      # push-to-main, with placeholder contexts on PRs), all three otherwise.
+      # 3. THIS ONE: cut ALONG the group boundary, so `heavy-serial` is one whole
+      #    shard (77 tests) and its complement the other (3860).  Both failures
+      #    above have the same root — a single-slot group SCATTERED across shards
+      #    pins every shard to a serial floor while the work divides unevenly.  A
+      #    cut that keeps the group intact is the axis neither tried.  Cold, the
+      #    two sides are additive (226s + 174s = 398s measured), which is exactly
+      #    the condition under which running them concurrently pays; warm they
+      #    overlap and it would not.  CI is always cold.
+      #
+      # An ARCHIVE (cargo nextest archive, build once + reuse) was evaluated and
+      # rejected: it SERIALISES the build ahead of the shards, so the projection
+      # was 23.5 min against 21.5 for two concurrent builds — it trades wall clock
+      # for runner-minutes, the opposite of the goal.  It also cannot carry the
+      # auto-native tests, which shell out to `rustc --extern loft` and need
+      # `target/release/deps` (1412 rlibs, 1.8 GB) that the archive omits.
+      #
+      # Legs come from `changes.legs`: two ubuntu shards per-PR (macOS + Windows are
+      # daily + push-to-main, with placeholder contexts on PRs), all three unsharded
+      # otherwise.  A leg with no `shard` key runs the whole suite.
       matrix:
-        os: ${{ fromJSON(needs.changes.outputs.os) }}
+        include: ${{ fromJSON(needs.changes.outputs.legs) }}
 
     steps:
       - uses: actions/checkout@v5
@@ -408,9 +437,18 @@ jobs:
       #     persist.  The trade is a cold dep recompile (~9 min) each Windows
       #     run; net Windows wall-clock still drops sharply (~30m → ~13m) once
       #     paired with the focused PR test set below.
-      - name: Cache cargo registry and build (non-Windows — keeps target/)
+      # RESTORE-only, with the save moved to the end of the job (see "Save cargo
+      # cache" below).  The two PR shards run on the same OS in the same run, so
+      # they compute the SAME key — and with a combined restore+save the faster
+      # `rest` shard reaches its post-step first, takes the key, and the `heavy`
+      # shard's save is skipped as already-existing.  That is the wrong way round:
+      # `~/.loft/build-cache` and `target/loft-native-cache` are populated by the
+      # native compiles that the `heavy-serial` group does almost all of, so the
+      # leg whose artifacts matter would be the one that never persists them, and
+      # the serial floor this split exists to shorten would stay permanently cold.
+      - name: Restore cargo registry and build (non-Windows — keeps target/)
         if: runner.os != 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry/index
@@ -430,9 +468,9 @@ jobs:
       # ~700s → ~1200s, eating the cache-save win (measured on PR #413's Windows
       # leg).  This sub-path is small, so the Windows cache still fits under the
       # 10 GB eviction budget AND the test phase restores warm on repeat runs.
-      - name: Cache cargo registry and build (Windows — drops target/ bulk, keeps native-test cache)
+      - name: Restore cargo registry and build (Windows — drops target/ bulk, keeps native-test cache)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry/index
@@ -558,34 +596,12 @@ jobs:
           # and a skip there is surfaced by the ledger rather than enforced.
           LOFT_REQUIRE_SQLITE: ${{ runner.os == 'Linux' && '1' || '' }}
         run: |
-          FILTER="not binary(index_hygiene) and not binary(viewer_markdown)"
-          # The Chrome + SwiftShader browser-render tests (html_render, and the
-          # headless-page asyncify resume in html_asyncify) are GPU/headless-browser
-          # FLAKY — they gate the PR path with noise for a layer (WebGL/shader) that
-          # rarely regresses independently.  Keep them OFF the per-PR run; they run
-          # nightly below (like the differential oracle).  The DETERMINISTIC,
-          # node-based html_wasm instantiate-probe (catches the LinkError / import-
-          # mismatch class) STAYS on the PR path — it does not flake.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            FILTER="$FILTER and not binary(html_render) and not binary(html_asyncify)"
-            # The two exhaustive stdlib round-trips are the single biggest cost in
-            # the suite AND its floor: 379s + 375s on macOS (308s + 308s on ubuntu),
-            # ~65% of the `ir_schema_roundtrip` binary and ~11% of ALL per-test time.
-            # A parallel suite cannot finish faster than its slowest single test, so
-            # while they are here the macOS leg cannot beat ~14m39s (8m20s build +
-            # 6m19s test) however it is scheduled — which is why sharding was
-            # measured not to help (see the matrix comment above).
-            #
-            # What they verify is FORMAT STABILITY: the whole parsed stdlib survives
-            # serialise→deserialise byte-identical.  That breaks when the IR schema
-            # or the serialiser changes — rare, and always deliberate.  The cheap
-            # canary `tests_scripts_round_trip` (83s) STAYS on the PR path and still
-            # fails if round-tripping breaks at all; the exhaustive pair runs on
-            # push-to-main and nightly (step below), so a schema change is caught the
-            # same day, by the run that is nobody's inner loop.
-            FILTER="$FILTER and not test(stdlib_load_compares_equal_to_fresh)"
-            FILTER="$FILTER and not test(stdlib_whole_data_round_trip)"
-          fi
+          # The exclusions and the shard boundary both live in the script — the
+          # sharded PR legs and the unsharded push/nightly legs have to agree on
+          # them, and a filter spelled twice drifts into a phantom flake.  It reads
+          # the `heavy-serial` membership straight out of .config/nextest.toml
+          # rather than restating it.
+          FILTER="$(python3 scripts/ci_test_filter.py "${{ github.event_name }}" ${{ matrix.shard }})"
           # A PR run is FEEDBACK — stop at the first failure, the author fixes it
           # and pushes again, and the runner minutes go to the next PR.  The
           # nightly and push-to-main runs are REPORTS: they are nobody's inner
@@ -802,6 +818,63 @@ jobs:
         if: runner.os != 'Windows'
         continue-on-error: true
         run: find "${{ github.workspace }}/target/loft-native-cache" -type f -mtime +30 -delete || true
+
+      # The save half of the restore steps above.  Exactly ONE leg per (os, run)
+      # may write the run-scoped key, and on a sharded PR that leg is `heavy`: it
+      # holds the native-compile caches, and it is the long pole whose warmth is
+      # the whole point of the split.  An unsharded leg (`shard` unset — every
+      # push/nightly/dispatch leg, and every non-ubuntu one) saves as before.
+      # Accepted trade: native artifacts that only `rest` produces are not
+      # persisted, so those recompile each run.  One cache lineage is kept rather
+      # than two because `target/` is the bulk of it and a second copy competes
+      # for the repo's 10 GB eviction budget with seven other job caches.  If
+      # `rest` is later seen drifting slower run-over-run, that is the thing to
+      # revisit — measure it, do not assume it.
+      #
+      # Saves on RED as well as green — a failing test must not throw away a cold
+      # build, or every red PR pays the full rebuild on its next push.  But NOT on
+      # cancelled: `cancel-in-progress` kills the previous run on every new push,
+      # and that run's `target/` is mid-build.  The key is run-scoped, so a partial
+      # tree saved there becomes the newest prefix match and would be restored by
+      # everything after it — `always()` would quietly poison the cache lineage.
+      - name: Save cargo cache
+        if: "!cancelled() && (matrix.shard == '' || matrix.shard == 'heavy')"
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.loft/build-cache
+            ${{ runner.os == 'Windows' && 'target/loft-native-cache' || 'target' }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+
+  # `Test (ubuntu-latest)` is a branch-protection REQUIRED context, and on a PR no
+  # single job produces it any more — the leg is two shards (`[heavy]`, `[rest]`).
+  # Renaming the required context would mean a repo-settings change that blocks
+  # every open PR the moment it lands and unblocks nothing if the split is later
+  # reverted, so the shards report under their own names and this job re-publishes
+  # the required one from their combined result.
+  #
+  # Attribution is exact because the PR matrix is ubuntu-ONLY: `needs.test.result`
+  # aggregates precisely the two ubuntu shards and nothing else.  That is also why
+  # the split stops at the PR path — on push/nightly the matrix spans three OSes,
+  # `needs` cannot address individual matrix CELLS, and one aggregate result would
+  # red all three contexts over one platform's failure.
+  #
+  # `always()` so a failed shard reaches the check instead of skipping it (a
+  # skipped required check is not a red one).  Mirrors `test`'s `code == 'true'`
+  # condition so it stays mutually exclusive with the `test-skip` shim, which
+  # publishes this same context on a docs-only diff.
+  test-pr-gate:
+    name: Test (ubuntu-latest)
+    needs: [changes, test]
+    if: always() && github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "heavy + rest shards: ${{ needs.test.result }}"
+          [ "${{ needs.test.result }}" = "success" ]
 
   # @PLAN53 — the cheap per-PR sanitizer.  `stack_align_guard` asserts every
   # typed eval-stack access lands on its alignment boundary; it runs at normal

@@ -275,8 +275,21 @@ impl Stores {
                     let fld_content = self.content(f.content);
                     if fld_content != u16::MAX && fld_content == self.content(content) {
                         if others.is_empty() {
+                            // Leading `u16::MAX` marks this field as a VIEW of
+                            // records another field also holds — read by the
+                            // JSON walker to skip default-initialising it. It is
+                            // a marker, not a link, and everything that walks
+                            // this list skips it.
                             others.push(u16::MAX);
                         }
+                        // Link BOTH ways. Only the earlier-declared field used to
+                        // point at the later one, so which collection maintained
+                        // the others depended on DECLARATION ORDER: an insert
+                        // spelled through the second field reached only that
+                        // field, and said nothing. Two keyed collections over one
+                        // element type are two VIEWS of one set — neither
+                        // spelling is the privileged one (loft#843).
+                        others.push(f_nr as u16);
                         linked.insert(f_nr as u16, fld.len() as u16);
                     }
                 }
@@ -544,7 +557,8 @@ impl Stores {
                 {
                     self.types[c as usize].linked = true;
                     self.types[c_nr].parts = Parts::Array(c);
-                    self.types[c_nr].name = format!("array<{}>", self.types[c as usize].name);
+                    let renamed = format!("array<{}>", self.types[c as usize].name);
+                    self.rename_type(c_nr as u16, renamed);
                 }
                 if let Parts::Sorted(c, key) = self.types[c_nr].parts.clone()
                     && linked.contains(&c)
@@ -553,7 +567,7 @@ impl Stores {
                     self.key_name(c, &key, &mut name);
                     self.types[c as usize].linked = true;
                     self.types[c_nr].parts = Parts::Ordered(c, key.clone());
-                    self.types[c_nr].name = name;
+                    self.rename_type(c_nr as u16, name);
                 }
             }
         }
@@ -1767,6 +1781,23 @@ impl Stores {
     #[must_use]
     pub fn name(&self, name: &str) -> u16 {
         *self.names.get(name).unwrap_or(&u16::MAX)
+    }
+
+    /// Rename a type and keep the name INDEX in step.
+    ///
+    /// `finish_type` renames a `vector<T>` to `array<T>` and a `sorted<T[k]>` to
+    /// `ordered<T[k]>` when the element is held by a keyed collection elsewhere.
+    /// Writing `types[n].name` alone left `names` pointing at the OLD spelling
+    /// only, so reflection reported `array<Tag>` as a field's type name and
+    /// `type_named("array<Tag>")` answered null — a name the API hands out and
+    /// then cannot resolve. The declared spelling keeps working, because a
+    /// program that wrote `vector<Tag>` should still find it by that.
+    fn rename_type(&mut self, t_nr: u16, name: String) {
+        if self.types[t_nr as usize].name == name {
+            return;
+        }
+        self.types[t_nr as usize].name.clone_from(&name);
+        self.names.insert(name, t_nr);
     }
 
     /// The number of registered types — pair with [`rollback_types_to`] to undo

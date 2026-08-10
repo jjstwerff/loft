@@ -12240,6 +12240,98 @@ impl Parser {
                 *val = Value::Call(d_nr, vec![Value::Int(i32::from(kt))]);
                 return Type::Reference(ti, crate::data::Deps::none());
             }
+            // @PLN23 S5 — `field_value(x, position)`: the VALUE half of
+            // reflection, and the other half of the same parse-time trick.
+            //
+            // The type id is resolved HERE for the reason `type_of` resolves it
+            // here: `--native` REPLAYS the type table rather than minting it, so
+            // a runtime name lookup would have nothing to answer from. Unlike
+            // `type_of`, the argument IS evaluated — the value is what is being
+            // read.
+            "field_value" if types.len() == 2 => {
+                let fv = self.data.def_nr("ValueInfo");
+                // Every refusal below still answers `ValueInfo`. The error is
+                // already reported, and handing back `Unknown` would cascade a
+                // second, misleading complaint about the enclosing variable
+                // changing type — which buries the one that says what to fix.
+                let answer = if fv == u32::MAX {
+                    Type::Unknown(0)
+                } else {
+                    Type::Reference(fv, crate::data::Deps::none())
+                };
+                if self.first_pass {
+                    // First pass needs the RESULT type so an enclosing
+                    // `v = field_value(row, p)` infers `ValueInfo` on both
+                    // passes and the name-keyed variable tables do not shift
+                    // underneath — the same reason `type_of` does this.
+                    return answer;
+                }
+                // Inside a generic the body is parsed ONCE against its type
+                // variable, so there is no concrete type to read positions out
+                // of and every call would answer `OtherKind` — an empty row
+                // rather than an error, which is the silent under-delivery this
+                // API exists to avoid. Say so where the author can see it.
+                if let Some(tv) = self.generic_type_name(&types[0]) {
+                    let tv = tv.to_string();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field_value cannot read a value of the type variable `{tv}` — a generic \
+                         body is parsed once, so the concrete type is not known here. Call it \
+                         where the type is known, and pass the values in."
+                    );
+                    return answer;
+                }
+                // Only a record has fields to read. Refusing here beats
+                // answering `OtherKind` at run time: the author wrote a type
+                // that can never have a field at any position, and that is a
+                // mistake the compiler can see.
+                if !matches!(types[0], Type::Reference(_, _)) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field_value needs a record — {} has no fields to read",
+                        types[0].name(&self.data)
+                    );
+                    return answer;
+                }
+                // @PLN23 S7b — a PATH reads through inline records, and it is
+                // the same operation at a greater depth rather than a second
+                // one: a one-element path answers what the bare position does.
+                // So the two share a name and the argument's type picks the
+                // lowering, which is the same decision `types.len()` already
+                // makes one line up.
+                let path_form = matches!(&types[1], Type::Vector(_, _));
+                if !path_form && !matches!(types[1], Type::Integer(_)) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field_value takes a position or a path of positions — {} is neither",
+                        types[1].name(&self.data)
+                    );
+                    return answer;
+                }
+                let kt = self.get_type(&types[0].clone());
+                let fname = if path_form {
+                    "n_reflect_field_path"
+                } else {
+                    "n_reflect_field"
+                };
+                let d_nr = self.data.def_nr(fname);
+                if d_nr == u32::MAX || fv == u32::MAX {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field_value is unavailable — default/07_reflect.loft did not load"
+                    );
+                    return answer;
+                }
+                *val = Value::Call(
+                    d_nr,
+                    vec![list[0].clone(), list[1].clone(), Value::Int(i32::from(kt))],
+                );
+                return Type::Reference(fv, crate::data::Deps::none());
+            }
             "parallel_for" => return self.parse_parallel_for(val, list, types),
             "par_fold" => return self.parse_par_fold(val, list, types),
             "map" => return self.parse_map(val, list, types),

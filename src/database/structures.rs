@@ -100,7 +100,23 @@ impl Stores {
             // an owner and `database::search` reads that offset to decide a record is
             // live.  Allocation happens here, before the constructor writes any field,
             // exactly as the per-entry claim did.
-            Parts::Hash(c, _) => {
+            // ...EXCEPT when a sibling collection VIEWS these same records through
+            // a 4-byte record id.  A `vector` / `sorted` over an element type that
+            // another keyed field also holds becomes an `array` / `ordered`, whose
+            // slots store `rec.rec` alone and are read back at a hard-coded
+            // `pos = 8` (`vector::ordered_find`) — an address that only names an
+            // element OWNING its record.  A packed entry lives at a stride INSIDE a
+            // shared record, so its position is not recoverable from the id and
+            // every entry in one chunk reads back as that chunk's first: right
+            // length, wrong rows, silently (loft#843).
+            //
+            // `linked` is set exactly where that conversion happens
+            // (`types.rs::finish_type`), so it IS the condition — and such a hash
+            // allocates one record per entry, the way every hash did before the
+            // arena.  `hash::add` then finds no table of its own and builds one
+            // with stride 0, which is already how it records "these records are
+            // somebody else's": it borrows them and frees nothing.
+            Parts::Hash(c, _) if !self.types[c as usize].linked => {
                 let stride = crate::hash::stride_for(u32::from(self.size(c)));
                 crate::hash::alloc_entry(&d, stride, data.rec, &mut self.allocations)
             }
@@ -108,7 +124,8 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Index(c, _, _)
             | Parts::Radix(c, _)
-            | Parts::Trie(c, _) => {
+            | Parts::Trie(c, _)
+            | Parts::Hash(c, _) => {
                 let rec = self.claim(&d, 1 + ((u32::from(self.size(c)) + 7) >> 3));
                 self.store_mut(&rec).set_u32_raw(rec.rec, 4, data.rec);
                 rec
@@ -158,8 +175,18 @@ impl Stores {
         {
             let f = &fields[field as usize];
             let o = &f.other_indexes;
-            if !o.is_empty() && o[0] != u16::MAX {
+            {
                 for fld_nr in o {
+                    // A leading `u16::MAX` marks this field as a VIEW of records
+                    // another field also holds — read by the JSON walk to skip
+                    // default-initialising it. It is a marker, not a field
+                    // number, so it is SKIPPED rather than treated as the end of
+                    // the list: that is what lets a view maintain its siblings
+                    // too, and an insert then means the same thing whichever of
+                    // the collections it is spelled through (loft#843).
+                    if *fld_nr == u16::MAX {
+                        continue;
+                    }
                     let sibling_content = fields[*fld_nr as usize].content;
                     // @PLN25 Scope B — a keyed index over a shared NULLABLE array indexes only
                     // the non-null records: when the sibling keyed element is `__nullable<S>`
@@ -237,7 +264,16 @@ impl Stores {
             return;
         };
         let keys = self.types[tp as usize].keys.clone();
-        let stride = crate::hash::stride_for(u32::from(self.size(c)));
+        // Stride 0 for a hash whose records a sibling `array` / `ordered` also
+        // holds: those entries are allocated one per record (see `record_new`),
+        // and stride 0 is how a table records that it BORROWS them. Sizing the
+        // table with a real stride here would claim an arena the entries never
+        // come from, and make the teardown believe it owns them (loft#843).
+        let stride = if self.types[c as usize].linked {
+            0
+        } else {
+            crate::hash::stride_for(u32::from(self.size(c)))
+        };
         crate::hash::reserve(data, count, stride, &mut self.allocations, &keys);
     }
 

@@ -324,3 +324,187 @@ int64_t lc_shim_mod(int64_t a, int64_t b) {
 int64_t lc_shim_sum3(int64_t a, int64_t b, int64_t c) {
   return lc_var_sum(3, a, b, c);
 }
+
+/* ---- NUMERIC (@PLN128) -------------------------------------------------- */
+
+int64_t lc_dsum_scaled(const double *p, int64_t n) {
+  double s = 0.0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += p[i];
+  return (int64_t)(s * 1000.0);
+}
+
+void lc_daxpy(double *y, int64_t ny, const double *x, int64_t nx,
+              int64_t a_milli) {
+  double a = (double)a_milli / 1000.0;
+  int64_t n = ny < nx ? ny : nx;
+  int64_t i;
+  for (i = 0; i < n; i++) y[i] = y[i] + a * x[i];
+}
+
+int64_t lc_scalar_ref(const int64_t *p, int64_t n) {
+  return (n == 1) ? *p * 7 : -1;
+}
+
+void lc_shim_scale(double *out, int64_t n_out, const double *v, int64_t n_v) {
+  if (n_out >= 1 && n_v >= 1) out[0] = v[0] * 2.0;
+}
+
+/* ---- A RETAINING API (@PLN128 Q5) ---------------------------------------
+ * FFTW's plan/execute split in miniature, and the shape zlib's `z_stream`,
+ * `sqlite3_bind_text(SQLITE_STATIC)` and every "context object" share: C keeps
+ * a buffer pointer across TWO calls the caller makes.
+ *
+ * Handing loft's own vector to `lc_plan` is a use-after-free — loft frees it at
+ * its last loft-visible use, which is that call.  The cure needs no language
+ * feature: let C own the buffer (`lc_buf_alloc`), hold it as an opaque handle,
+ * and copy in and out.  Then nothing loft owns is retained, and the buffer's
+ * lifetime is the handle's. */
+
+void *lc_buf_alloc(int64_t nbytes) {
+  return malloc((size_t)nbytes);
+}
+
+void lc_buf_free(void *p) {
+  free(p);
+}
+
+void *lc_plan(void *buf, int64_t n) {
+  struct lc_plan_s *p = (struct lc_plan_s *)malloc(sizeof(struct lc_plan_s));
+  if (p == 0) {
+    return 0;
+  }
+  p->buf = (double *)buf;
+  p->n = n;
+  return (void *)p;
+}
+
+/* Reads the retained buffer on a LATER call, which is the whole point.
+ * Position-weighted, so a buffer that moved or was reused answers a different
+ * number rather than the right one by luck. */
+int64_t lc_run(const void *plan) {
+  const struct lc_plan_s *p = (const struct lc_plan_s *)plan;
+  double s = 0.0;
+  int64_t i;
+  if (p == 0 || p->buf == 0) {
+    return -1;
+  }
+  for (i = 0; i < p->n; i++) {
+    s += p->buf[i] * (double)(i + 1);
+  }
+  return (int64_t)(s * 1000.0);
+}
+
+void lc_plan_free(void *plan) {
+  free(plan);
+}
+
+/* ---- ELEMENT WIDTHS (@PLN128 arc E) -------------------------------------
+ * One reader per element width loft may hand over.  A vector reaches C as a
+ * pointer into loft's OWN element bytes, so these are what says the two sides
+ * agree about the stride: a reader striding differently from the writer reads
+ * garbage, and the weighted sums below make that visible rather than plausible
+ * (an unweighted sum survives a reversed or shifted array). */
+
+int64_t lc_u16_dot(const uint16_t *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_u8_dot(const unsigned char *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_u32_dot(const uint32_t *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_char_dot(const uint32_t *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_bool_dot(const unsigned char *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (p[i] ? 1 : 0) * (i + 1);
+  return s;
+}
+
+int64_t lc_f32_dot_milli(const float *p, int64_t n) {
+  double s = 0.0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (double)p[i] * (double)(i + 1);
+  return (int64_t)(s * 1000.0);
+}
+
+/* ---- FORTRAN SHAPE (@PLN128 arc D) --------------------------------------
+ * Every argument by reference, no counts anywhere.  See lc_types.h. */
+
+/* @PLN128 arc E — the level-1 BLAS *function* shape: bare pointers in, and the
+ * answer comes back BY VALUE in an SSE register.  `ddot_`, `dnrm2_` and
+ * `dasum_` are all this, and until the caller grew a float-returning rung none
+ * of them could be bound without an ANSI-C shim per routine. */
+double lc_ddot_(const int64_t *n, const double *x, const double *y) {
+  double s = 0.0;
+  int64_t i;
+  for (i = 0; i < *n; i++) s += x[i] * y[i];
+  return s;
+}
+
+/* The `float` twin — `sdot_`.  A single is not a narrowed double: it comes back
+ * as a single in the same register, and reading those bits as a double is a
+ * denormal. */
+float lc_sdot_(const int64_t *n, const float *x, const float *y) {
+  float s = 0.0f;
+  int64_t i;
+  for (i = 0; i < *n; i++) s += x[i] * y[i];
+  return s;
+}
+
+void lc_daxpby_(const int64_t *n, const double *alpha, const double *x,
+                const double *beta, double *y) {
+  int64_t i;
+  for (i = 0; i < *n; i++) y[i] = (*alpha) * x[i] + (*beta) * y[i];
+}
+
+int64_t lc_split_(const double *v, int64_t sel, const double *w, int64_t nw) {
+  double s = v[0] * 100.0 + (double)sel * 10.0;
+  int64_t i;
+  for (i = 0; i < nw; i++) s += w[i] * (double)(i + 1);
+  return (int64_t)(s * 1000.0);
+}
+
+void lc_dgemm_(const char *transa, const char *transb, const int64_t *m,
+               const int64_t *n, const int64_t *k, const double *alpha,
+               const double *a, const int64_t *lda, const double *b,
+               const int64_t *ldb, const double *beta, double *c,
+               const int64_t *ldc) {
+  int64_t i, j, p;
+  /* Only 'N'/'N' is implemented.  Reading the two chars is deliberate: a
+   * binding that delivers them in the wrong place answers -1 everywhere
+   * instead of quietly computing the right product from the rest. */
+  if (*transa != 'N' || *transb != 'N') {
+    for (j = 0; j < *n; j++)
+      for (i = 0; i < *m; i++) c[i + j * (*ldc)] = -1.0;
+    return;
+  }
+  for (j = 0; j < *n; j++) {
+    for (i = 0; i < *m; i++) {
+      double acc = 0.0;
+      for (p = 0; p < *k; p++)
+        acc += a[i + p * (*lda)] * b[p + j * (*ldb)];
+      c[i + j * (*ldc)] = (*alpha) * acc + (*beta) * c[i + j * (*ldc)];
+    }
+  }
+}

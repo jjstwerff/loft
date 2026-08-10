@@ -90,6 +90,7 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F108](F108.md) | Lazy store binding — a collection fetches on a miss |
 | [@F109](F109.md) | `#superseded` — steer callers to a newer form without breaking the old one |
 | [@F110](F110.md) | Diagnostic suggestions — what to write instead, checked by running it |
+| [@F111](F111.md) | `for f in s#fields` — a compile-time loop over a struct's scalar fields |
 
 ## Infrastructure (`@I`)
 

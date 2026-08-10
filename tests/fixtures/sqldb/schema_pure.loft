@@ -46,6 +46,144 @@ fn cols(t: TableDef) -> text {
   return out.trim();
 }
 
+struct S6Doc { const id: integer, title: text, scores: vector<integer> = [] }
+struct S6World { docs: hash<S6Doc[id]> = [] }
+struct S6Tag { const name: text, weight: integer }
+struct S6DocB { const id: integer, tags: vector<S6Tag> = [] }
+struct S6WorldB { docs: hash<S6DocB[id]> = [] }
+// @PLN23 S6c — one owner carrying all three keyed shapes. `S6Tag` holds `name`
+// at byte 8 and `weight` at byte 0, and `S6DocC.id` is at byte 0 — so the
+// ordered collection's key position EQUALS the owner column's, which is the
+// case a key lookup by position alone gets wrong.
+struct S6DocC {
+  const id: integer,
+  seen: hash<S6Tag[name]> = [],
+  rank: sorted<S6Tag[weight]> = [],
+  down: sorted<S6Tag[-weight]> = [],
+}
+struct S6WorldC { docs: hash<S6DocC[id]> = [] }
+
+struct S6DocPair { const id: integer, pairs: hash<S6Tag[name, weight]> = [] }
+struct S6WorldPairKey { docs: hash<S6DocPair[id]> = [] }
+
+struct S6DocIx { const id: integer, ix: index<S6Tag[weight]> = [] }
+struct S6WorldIx { docs: hash<S6DocIx[id]> = [] }
+
+// A spatial collection interleaves its axes into a Morton code, so both keys
+// must be numbers — and SQL has no shape that means the same thing either as an
+// owner or as a child.
+struct S6Pt { const px: integer, py: integer }
+struct S6DocSp { const id: integer, sp: spatial<S6Pt[px, py]> = [] }
+struct S6WorldSp { docs: hash<S6DocSp[id]> = [] }
+
+// S6b's own failure paths. Each is silent without a check: two columns of one
+// name reach the engine as a `CREATE TABLE` only some engines reject, and a
+// dropped collection field produces a database whose reader disagrees with its
+// writer.
+struct S6Clash { const name: text, ord: integer }
+struct S6DocClash { const id: integer, items: vector<S6Clash> = [] }
+struct S6WorldClash { docs: hash<S6DocClash[id]> = [] }
+
+struct S6Own { const name: text, s6docown_id: integer }
+struct S6DocOwn { const id: integer, items: vector<S6Own> = [] }
+struct S6WorldOwn { docs: hash<S6DocOwn[id]> = [] }
+
+// @PLN23 S7 — a collection inside a record ELEMENT is a table of its own,
+// addressed by (the root's key, the parent element's address, its own).
+struct S6Deep { const name: text, marks: vector<integer> = [] }
+struct S6DocDeep { const id: integer, items: vector<S6Deep> = [] }
+struct S6WorldDeep { docs: hash<S6DocDeep[id]> = [] }
+
+// Depth 3, and two collections under one element: the ordinals are numbered by
+// how many the row INHERITS, not by which field they belong to.
+struct S7Thing { const tid: integer }
+struct S7Note { const label: text, tags: vector<integer> = [], things: vector<S7Thing> = [] }
+struct S7Deep { const d: integer, inner: vector<S7Note> = [] }
+struct S7DocDeep { const id: integer, deep: vector<S7Deep> = [] }
+struct S7WorldDeep { docs: hash<S7DocDeep[id]> = [] }
+
+// A collection inside a HASH element. The inherited address is (owner, key) and
+// carries no ordinal, so the new level's is `ord` rather than `ord_2` — and the
+// inherited key column stops being one of THIS element's fields.
+struct S7HNote { const hl: text, bits: vector<integer> = [] }
+struct S7HDoc { const id: integer, seen: hash<S7HNote[hl]> = [] }
+struct S7HWorld { docs: hash<S7HDoc[id]> = [] }
+
+// A KEYED grandchild: the address rule applies unchanged one level down.
+struct S7KTag { const nm: text, v: integer }
+struct S7KNote { const label: text, byname: hash<S7KTag[nm]> = [] }
+struct S7KDoc { const id: integer, marks: vector<S7KNote> = [] }
+struct S7KWorld { docs: hash<S7KDoc[id]> = [] }
+
+// The collision one level down: an element field called `ord_2`.
+struct S7Clash { const c: text, ord_2: integer }
+struct S7ClashNote { const label: text, items: vector<S7Clash> = [] }
+struct S7ClashDoc { const id: integer, marks: vector<S7ClashNote> = [] }
+struct S7ClashWorld { docs: hash<S7ClashDoc[id]> = [] }
+
+// An element whose ONLY fields are collections. Its row is its address, which
+// is what says the element exists and is what its children hang from.
+struct S7Bare { pieces: vector<integer> = [] }
+struct S7BareDoc { const id: integer, bares: vector<S7Bare> = [] }
+struct S7BareWorld { docs: hash<S7BareDoc[id]> = [] }
+
+// @PLN23 S7b failure paths. A flattened struct NAMES its columns and so does
+// the author, so the two can collide; and a collection inside an inline struct
+// belongs to the OWNER's table, which the derivation does not reach yet.
+struct S7bPt { px: integer, py: integer }
+struct S7bClash { const id: integer, origin: S7bPt, origin_px: integer }
+struct S7bWorldClash { docs: hash<S7bClash[id]> = [] }
+struct S7bHolder { hx: integer, marks: vector<integer> = [], tags: vector<integer> = [] }
+struct S7bDeep { const id: integer, held: S7bHolder }
+struct S7bWorldDeep { docs: hash<S7bDeep[id]> = [] }
+
+// @PLN23 S7b-ii — an inline struct inside an inline struct, and the
+// discriminating case: a collection in an inline struct inside a record ELEMENT.
+// The ELEMENT has identity and adds an ordinal; the inline struct has none and
+// adds only to the name.
+struct S7iiB { bz: integer, deep: vector<integer> = [] }
+struct S7iiA { ay: integer, b: S7iiB }
+struct S7iiDoc { const id: integer, a: S7iiA }
+struct S7iiWorld { docs: hash<S7iiDoc[id]> = [] }
+
+struct S7iiInner { q: integer, bits: vector<integer> = [] }
+struct S7iiNote { const label: text, at: S7iiInner }
+struct S7iiDocN { const id: integer, notes: vector<S7iiNote> = [] }
+struct S7iiWorldN { docs: hash<S7iiDocN[id]> = [] }
+
+// An inline struct whose ONLY field is a collection: it contributes no column,
+// which is an ordinary shape rather than a refusal.
+struct S7iiBare { only: vector<integer> = [] }
+struct S7iiDocB { const id: integer, bare: S7iiBare }
+struct S7iiWorldB { docs: hash<S7iiDocB[id]> = [] }
+// An inline struct inside a CHILD element flattens exactly as it does in an
+// owner: one rule, applied wherever a record's columns are derived.
+struct S7bNote { const label: text, at: S7bPt }
+struct S7bDocN { const id: integer, notes: vector<S7bNote> = [] }
+struct S7bWorldN { docs: hash<S7bDocN[id]> = [] }
+
+// A nullable element field, and a composite owner key: two facts the child
+// table must carry through from a place other than its own element.
+struct S6Note { const label: text, body: text? }
+struct S6Pair { const a: integer, const b: text, notes: vector<S6Note> = [] }
+struct S6WorldPair { rows: hash<S6Pair[a, b]> = [] }
+
+// Both kinds of collection in ONE owner: three tables, and the field path in
+// the table NAME is what keeps them apart.
+struct S6DocBoth {
+  const id: integer,
+  scores: vector<integer> = [],
+  tags: vector<S6Tag> = [],
+}
+struct S6WorldBoth { docs: hash<S6DocBoth[id]> = [] }
+
+/// Stand-ins for the `?? ` on a vector index — never reached, and named so a
+/// failure reads as the index being absent rather than as a wrong value.
+fn no_def() -> TableDef { return TableDef { nm: "?", refusal: "?" }; }
+fn no_col() -> ColumnDef { return ColumnDef { nm: "?", kind: ColOther }; }
+fn no_index() -> IndexDef { return IndexDef { nm: "?" }; }
+fn no_ti() -> TypeInfo { return TypeInfo { name: "?", kind: OtherKind, collection: NotKeyed }; }
+
 fn main() {
   // Every `type_of` is bound to a LOCAL before it is passed. A reflected record
   // used directly as a call argument leaks on the interpreter — one record per
@@ -111,11 +249,37 @@ fn main() {
   assert(cols(tl) == "lk payload", "linked columns: {cols(tl)}");
 
   // --- refusals name what is wrong ------------------------------------------
+  // --- @PLN23 S7b: an inline struct has no identity, so it has no table -----
+  //
+  // It FLATTENS into the record that holds it. Identity is what earns a row and
+  // `inner` has none — there is nothing to look one up by — so its fields become
+  // columns of `nested`, named for the path that reaches them.
   nested = Nested { id: 1, inner: Person { } };
   ti_nested = type_of(nested);
   tn = derive(ti_nested);
-  assert(!tn.table_ok(), "a nested record is not one column");
-  assert(tn.refusal.find("inner") != null, "refusal names the field: {tn.refusal}");
+  assert(tn.table_ok(), "an inline struct must flatten: {tn.refusal}");
+  assert(cols(tn) == "id inner_id inner_nm inner_score inner_flag inner_initial",
+    "S7b flattened columns: {cols(tn)}");
+
+  // The PATH is what reads it: `field_value` walks the chain rather than adding
+  // it up, because `inner`'s offset plus `score`'s begins no field of `Nested`.
+  // The name is what SQL sees and the path is what the walk uses — neither
+  // derives the other.
+  isc = tn.column_named("inner_score") ?? no_col();
+  assert(len(isc.path) == 2, "S7b path length {len(isc.path)}");
+  assert(isc.kind == ColFloat, "S7b nested kind {isc.kind}");
+  ti_inner = type_named("Person") ?? no_ti();
+  inner_pos = -1;
+  for pf in ti_nested.fields { if pf.name == "inner" { inner_pos = pf.position } }
+  score_pos = -1;
+  for pf2 in ti_inner.fields { if pf2.name == "score" { score_pos = pf2.position } }
+  assert((isc.path[0] ?? -9) == inner_pos && (isc.path[1] ?? -9) == score_pos,
+    "S7b path [{isc.path[0] ?? -9},{isc.path[1] ?? -9}] vs field {inner_pos}/{score_pos}");
+  // A DIRECT field still carries a one-element path, so there is one shape for
+  // a walk to read rather than a special case per depth.
+  idc = tn.column_named("id") ?? no_col();
+  assert(len(idc.path) == 1 && (idc.path[0] ?? -9) == idc.position,
+    "S7b direct path [{len(idc.path)}]");
 
   spots: spatial<Person[id, score]> = [];
   ti_spots = type_of(spots);
@@ -322,6 +486,621 @@ fn main() {
   if dma == null { assert(false, "maria has a dialect") } else {
     assert(dma.quote == "`", "maria quoting");
   }
+
+  // --- @PLN23 S6a: a `vector<scalar>` field becomes ONE child table ----------
+  //
+  // A loft value is a COLUMN of the nearest enclosing record that has identity;
+  // a value with its OWN identity is a row, keyed by (the owner's key, the
+  // address its collection guarantees to be unique). For a vector that address
+  // is the ordinal, because position is the only identity a vector has.
+  w6 = S6World { };
+  t6 = derive_tables(type_of(w6.docs));
+  assert(len(t6) == 2, "S6a: owner + one child, got {len(t6)}");
+
+  parent6 = t6[0] ?? no_def();
+  child6 = t6[1] ?? no_def();
+  assert(parent6.nm == "s6doc", "S6a parent name {parent6.nm}");
+  assert(len(parent6.columns) == 2, "S6a parent columns {len(parent6.columns)}");
+
+  // The child's columns are (owner key, address, value) IN THAT ORDER, so the
+  // primary key is a prefix of the row rather than something a reader hunts for.
+  assert(child6.nm == "s6doc_scores", "S6a child name {child6.nm}");
+  names6 = "";
+  for c6 in child6.columns { names6 += "{c6.nm}," }
+  assert(names6 == "s6doc_id,ord,value,", "S6a child columns [{names6}]");
+
+  // Each child column says WHERE its value comes from, and `position` is a byte
+  // offset in whichever record that is. The owner column carries the OWNER's
+  // offset — `S6Doc.id` at 0 — so the write path reads it with the same
+  // `field_value` call a parent row uses instead of counting key columns.
+  first6 = child6.columns[0] ?? no_col();
+  assert(first6.src == SrcOwnerKey, "S6a owner column source {first6.src}");
+  assert(first6.position == 0, "S6a owner column position {first6.position}");
+  ord6 = child6.columns[1] ?? no_col();
+  assert(ord6.src == SrcOrdinal, "S6a ord source {ord6.src}");
+  // A scalar element has no field to read, so the column names the ELEMENT.
+  // That is a different answer from `SrcField`, and the write path needs it to
+  // be: `field_value` on an integer has no position to take.
+  val6 = child6.columns[2] ?? no_col();
+  assert(val6.src == SrcElement, "S6a value source {val6.src}");
+  // The owner's own table is untouched by all of this.
+  pc6 = parent6.columns[0] ?? no_col();
+  assert(pc6.src == SrcField, "S6a parent column source {pc6.src}");
+
+  // The index is on (owner, address) — what a child lookup is served by.
+  ix6 = child6.indexes[0] ?? no_index();
+  ixn6 = "";
+  for ic6 in ix6.columns { ixn6 += "{ic6.nm}," }
+  assert(ixn6 == "s6doc_id,ord,", "S6a child index [{ixn6}]");
+
+  // The DDL, hand-checked rather than round-tripped through the same renderer
+  // that produced it.
+  ddl6 = child6.render(dialect_sqlite());
+  assert(
+    (ddl6[0] ?? "") == "CREATE TABLE \"s6doc_scores\" (\"s6doc_id\" INTEGER NOT NULL, \"ord\" INTEGER NOT NULL, \"value\" INTEGER NOT NULL)",
+    "S6a child DDL [{ddl6[0] ?? ""}]"
+  );
+
+  // --- @PLN23 S6b: a `vector<record>` field becomes ONE child table ----------
+  //
+  // The same rule as S6a, and only the last columns differ: the address half is
+  // identical, and the element's own stored fields follow it. That is what says
+  // the two are one rule rather than two shapes that happen to look alike.
+  wb = S6WorldB { };
+  ti_wb = type_of(wb.docs);
+  b6 = derive_tables(ti_wb);
+  assert(len(b6) == 2, "S6b: owner + one child, got {len(b6)}");
+  pb = b6[0] ?? no_def();
+  cb6 = b6[1] ?? no_def();
+  assert(pb.nm == "s6docb" && len(pb.columns) == 1, "S6b parent {pb.nm}/{len(pb.columns)}");
+  assert(cb6.nm == "s6docb_tags", "S6b child name {cb6.nm}");
+  nb = "";
+  for c in cb6.columns { nb += "{c.nm}," }
+  assert(nb == "s6docb_id,ord,name,weight,", "S6b child columns [{nb}]");
+
+  // The element's columns carry the ELEMENT's byte offsets, and those are NOT
+  // declaration order — `S6Tag` holds `name` at 8 and `weight` at 0. Anything
+  // pairing a column to a field by ORDER rather than by this number is wrong,
+  // and would read plausibly on a struct whose two orders agree.
+  tag_ti = type_named("S6Tag") ?? no_ti();
+  nm_pos = -1;
+  wt_pos = -1;
+  for tf in tag_ti.fields {
+    if tf.name == "name" { nm_pos = tf.position }
+    if tf.name == "weight" { wt_pos = tf.position }
+  }
+  assert(nm_pos != wt_pos, "S6b: the two element fields must be at different offsets");
+  cname = cb6.column_named("name") ?? no_col();
+  cweight = cb6.column_named("weight") ?? no_col();
+  assert(cname.position == nm_pos && cname.src == SrcField,
+    "S6b name column {cname.position}/{cname.src}, field at {nm_pos}");
+  assert(cweight.position == wt_pos && cweight.src == SrcField,
+    "S6b weight column {cweight.position}/{cweight.src}, field at {wt_pos}");
+  assert(cname.kind == ColText && cweight.kind == ColInteger,
+    "S6b element column kinds {cname.kind}/{cweight.kind}");
+
+  // The ADDRESS is unchanged by the element having fields — the owner's key and
+  // the ordinal, in that order, and the index over exactly that pair.
+  ob6 = cb6.columns[0] ?? no_col();
+  assert(ob6.src == SrcOwnerKey && ob6.nm == "s6docb_id", "S6b owner column {ob6.nm}/{ob6.src}");
+  ixb = cb6.indexes[0] ?? no_index();
+  ixnb = "";
+  for icb in ixb.columns { ixnb += "{icb.nm}," }
+  assert(ixnb == "s6docb_id,ord,", "S6b child index [{ixnb}]");
+  assert(ixb.nm == "s6docb_tags_by_owner", "S6b index name {ixb.nm}");
+
+  // Hand-written, not round-tripped through the renderer that produced it.
+  ddlb = cb6.render(dialect_sqlite());
+  assert(
+    (ddlb[0] ?? "") == "CREATE TABLE \"s6docb_tags\" (\"s6docb_id\" INTEGER NOT NULL, \"ord\" INTEGER NOT NULL, \"name\" TEXT NOT NULL, \"weight\" INTEGER NOT NULL)",
+    "S6b child DDL [{ddlb[0] ?? ""}]"
+  );
+
+  // The reader's SELECT comes off the SAME definition, ordered by the child's
+  // own index — which is the order that rebuilds each owner's vector.
+  dsq = dialect_sqlite();
+  selb = cb6.select_rows(dsq).statement(dsq.style, dsq.quote) ?? "";
+  assert(
+    selb == "SELECT \"s6docb_id\", \"ord\", \"name\", \"weight\" FROM \"s6docb_tags\" ORDER BY \"s6docb_id\" ASC, \"ord\" ASC",
+    "S6b child SELECT [{selb}]"
+  );
+
+  // The DIRECTION comes off the index as well, which an all-ascending child
+  // table cannot show: `visits` is declared `-started`, and a hard-coded `ASC`
+  // would read right everywhere above and wrong here.
+  selv = tv.select_rows(dsq).statement(dsq.style, dsq.quote) ?? "";
+  assert(selv.ends_with("ORDER BY \"person_id\" ASC, \"started\" DESC"),
+    "descending key in the read order [{selv}]");
+  // No index, no defined row order — a table read with nothing to order by
+  // reassembles a collection into whatever sequence the engine scanned.
+  assert(tr.select_rows(dsq).statement(dsq.style, dsq.quote) == null,
+    "a table with no index has no defined row order");
+
+  // --- S6b: a composite owner key, and a nullable element field --------------
+  //
+  // Two facts the child table carries from somewhere other than its own element:
+  // how many columns address an owner, and that one of the element's columns may
+  // be SQL NULL. A child table with one hard-coded owner column would pass every
+  // assertion above.
+  wp = S6WorldPair { };
+  ti_wp = type_of(wp.rows);
+  p6 = derive_tables(ti_wp);
+  assert(len(p6) == 2, "S6b composite: owner + one child, got {len(p6)}");
+  pp = p6[0] ?? no_def();
+  cp = p6[1] ?? no_def();
+  npair = "";
+  for c in cp.columns { npair += "{c.nm}," }
+  assert(npair == "s6pair_a,s6pair_b,ord,label,body,", "S6b composite child columns [{npair}]");
+  // Each owner column carries the position of the KEY it stands for, in key
+  // order, so the write path never matches a key to a column by name.
+  keys_seen = "";
+  for k in ti_wp.keys {
+    kc = cp.columns[k#count] ?? no_col();
+    assert(kc.src == SrcOwnerKey, "S6b composite owner column {kc.nm} source {kc.src}");
+    assert(kc.position == k.position, "S6b composite key {k#count} at {kc.position}, key says {k.position}");
+    keys_seen += "{kc.nm},";
+  }
+  assert(keys_seen == "s6pair_a,s6pair_b,", "S6b composite owner columns [{keys_seen}]");
+  bodyc = cp.column_named("body") ?? no_col();
+  assert(bodyc.nullable, "S6b: a nullable element field must give a nullable column");
+  labelc = cp.column_named("label") ?? no_col();
+  assert(!labelc.nullable, "S6b: a non-null element field must give NOT NULL");
+  ddlp = cp.render(dialect_sqlite());
+  assert(
+    (ddlp[0] ?? "") == "CREATE TABLE \"s6pair_notes\" (\"s6pair_a\" INTEGER NOT NULL, \"s6pair_b\" TEXT NOT NULL, \"ord\" INTEGER NOT NULL, \"label\" TEXT NOT NULL, \"body\" TEXT)",
+    "S6b composite DDL [{ddlp[0] ?? ""}]"
+  );
+
+  // --- S6b: both kinds of collection in ONE owner ----------------------------
+  //
+  // Three tables and no collision, because the field PATH lives in the table
+  // name rather than in a column.
+  wt6 = S6WorldBoth { };
+  ti_wt = type_of(wt6.docs);
+  t3 = derive_tables(ti_wt);
+  assert(len(t3) == 3, "S6b: two collections give three tables, got {len(t3)}");
+  n3 = "";
+  for t in t3 { n3 += "{t.nm}," }
+  assert(n3 == "s6docboth,s6docboth_scores,s6docboth_tags,", "S6b table names [{n3}]");
+  // The owner's table comes first because a child's rows reference it — the
+  // order a writer must send them in.
+  sc3 = t3[1] ?? no_def();
+  tg3 = t3[2] ?? no_def();
+  assert(len(sc3.columns) == 3 && len(tg3.columns) == 4,
+    "S6b: scalar child {len(sc3.columns)} columns, record child {len(tg3.columns)}");
+
+  // --- S6b: the failure paths peculiar to a record element -------------------
+  //
+  // Every one of these is SILENT without a check. The two collisions reach the
+  // engine as a `CREATE TABLE` naming one column twice — which sqlite rejects
+  // and not every engine does — and the nested collection would produce a
+  // database whose own reader disagrees with its writer.
+  wcl = S6WorldClash { };
+  ti_wcl = type_of(wcl.docs);
+  cl = derive_tables(ti_wcl);
+  assert(len(cl) == 1, "S6b: a collision must collapse the whole answer");
+  clr = (cl[0] ?? no_def()).refusal;
+  assert(clr.find("ord") != null && clr.find("collides") != null,
+    "S6b: an element field called ord must refuse naming it: {clr}");
+
+  wow = S6WorldOwn { };
+  ti_wow = type_of(wow.docs);
+  ow = derive_tables(ti_wow);
+  owr = (ow[0] ?? no_def()).refusal;
+  assert(owr.find("s6docown_id") != null && owr.find("collides") != null,
+    "S6b: an element field named like the owner column must refuse: {owr}");
+
+
+  // --- @PLN23 S6c: a KEYED sub-collection ------------------------------------
+  //
+  // Two shapes, and the collection's KIND is the only thing that decides between
+  // them. A `hash` addresses its elements by the DECLARED KEY — unique by
+  // construction, and already columns because they are fields of the element —
+  // so it carries no ordinal. Every other keyed kind takes the ordinal, and its
+  // declared key becomes an ordinary access path: the correction a real INSERT
+  // made to the first design, since a `sorted<Tag[weight]>` may hold two
+  // elements of one weight.
+  wc = S6WorldC { };
+  ti_wc = type_of(wc.docs);
+  kc6 = derive_tables(ti_wc);
+  assert(len(kc6) == 4, "S6c: owner + three children, got {len(kc6)}");
+  seen6 = kc6[1] ?? no_def();
+  rank6 = kc6[2] ?? no_def();
+  down6 = kc6[3] ?? no_def();
+
+  // A HASH: no ordinal column, and the address index completes with the
+  // element's own key column.
+  assert(seen6.nm == "s6docc_seen", "S6c hash child {seen6.nm}");
+  nseen = "";
+  for sc in seen6.columns { nseen += "{sc.nm}," }
+  assert(nseen == "s6docc_id,name,weight,", "S6c hash columns [{nseen}]");
+  assert(!seen6.has_column("ord"),
+    "S6c: a hash addresses by its key, so an ordinal would be a second identity");
+  assert(len(seen6.indexes) == 1, "S6c hash indexes {len(seen6.indexes)}");
+  hix = seen6.indexes[0] ?? no_index();
+  assert(index_columns(hix) == "s6docc_id, name", "S6c hash index [{index_columns(hix)}]");
+  ddlh = seen6.render(dialect_sqlite());
+  assert(
+    (ddlh[0] ?? "") == "CREATE TABLE \"s6docc_seen\" (\"s6docc_id\" INTEGER NOT NULL, \"name\" TEXT NOT NULL, \"weight\" INTEGER NOT NULL)",
+    "S6c hash DDL [{ddlh[0] ?? ""}]"
+  );
+
+  // A SORTED collection: the ordinal addresses, and the declared key still owes
+  // an index of its own. @PLN129 refuses a bind whose lookup no index serves, so
+  // a writer that omitted it builds a database this collection's own reader
+  // cannot bind to — which is what a `sorted` sub-collection did before S6c.
+  assert(rank6.nm == "s6docc_rank", "S6c ordered child {rank6.nm}");
+  nrank = "";
+  for rc in rank6.columns { nrank += "{rc.nm}," }
+  assert(nrank == "s6docc_id,ord,name,weight,", "S6c ordered columns [{nrank}]");
+  assert(len(rank6.indexes) == 2,
+    "S6c: an ordered child owes an address index AND a key index, got {len(rank6.indexes)}");
+  raddr = rank6.indexes[0] ?? no_index();
+  rkey = rank6.indexes[1] ?? no_index();
+  assert(index_columns(raddr) == "s6docc_id, ord", "S6c address index [{index_columns(raddr)}]");
+  // THE cell for the position collision. `S6DocC.id` is at byte 0 and
+  // `S6Tag.weight` is at byte 0, so a key lookup that did not restrict itself to
+  // the ELEMENT's columns names `s6docc_id` here — a plausible index over the
+  // owner column, twice, and no index on the key at all.
+  assert(index_columns(rkey) == "s6docc_id, weight", "S6c key index [{index_columns(rkey)}]");
+  assert(rkey.nm == "s6docc_rank_by_key", "S6c key index name {rkey.nm}");
+  // A fixed suffix rather than one built from the columns: two indexes share
+  // this table, and `_by_key` cannot collide with `_by_owner` whatever the
+  // element's fields are called.
+  assert(raddr.nm != rkey.nm, "S6c: the two child indexes must not share a name");
+
+  // The DIRECTION of a sub-collection's key reaches its index.
+  dkey = down6.indexes[1] ?? no_index();
+  dlast = dkey.columns[1] ?? IndexColumn { nm: "" };
+  assert(dlast.nm == "weight" && !dlast.ascending,
+    "S6c descending key {dlast.nm}/{dlast.ascending}");
+  assert(
+    render_index(dkey, "\"s6docc_down\"", dialect_sqlite())
+      == "CREATE INDEX \"s6docc_down_by_key\" ON \"s6docc_down\" (\"s6docc_id\" ASC, \"weight\" DESC)",
+    "S6c descending key DDL [{render_index(dkey, "\"s6docc_down\"", dialect_sqlite())}]"
+  );
+
+  // A COMPOSITE sub-collection key, in key order — not position order, and not
+  // the element's declaration order.
+  wpk = S6WorldPairKey { };
+  ti_wpk = type_of(wpk.docs);
+  pk = derive_tables(ti_wpk);
+  assert(len(pk) == 2, "S6c composite key: owner + one child, got {len(pk)}");
+  pkc = pk[1] ?? no_def();
+  assert(!pkc.has_column("ord"), "S6c: a composite-keyed hash still carries no ordinal");
+  pkix = pkc.indexes[0] ?? no_index();
+  assert(index_columns(pkix) == "s6docpair_id, name, weight",
+    "S6c composite hash index [{index_columns(pkix)}]");
+
+  // An `index` collection permits duplicates by definition, so it takes the
+  // ordinal exactly as `sorted` does — the conservative answer, which is never
+  // wrong rows.
+  wix = S6WorldIx { };
+  ti_wix = type_of(wix.docs);
+  ixt = derive_tables(ti_wix);
+  ixc2 = ixt[1] ?? no_def();
+  assert(ixc2.has_column("ord") && len(ixc2.indexes) == 2,
+    "S6c index kind: ord={ixc2.has_column("ord")} indexes={len(ixc2.indexes)}");
+
+  // A spatial collection has no SQL shape as a CHILD either, and the refusal
+  // says which field rather than only which kind.
+  wsp = S6WorldSp { };
+  ti_wsp = type_of(wsp.docs);
+  spt = derive_tables(ti_wsp);
+  assert(len(spt) == 1, "S6c: a spatial child must collapse the whole answer");
+  sptr = (spt[0] ?? no_def()).refusal;
+  assert(sptr.find("sp") != null && sptr.find("spatial") != null,
+    "S6c: a spatial child must refuse naming the field: {sptr}");
+
+  // --- @PLN23 S7: the derivation RECURSES -----------------------------------
+  //
+  // The invariant does not change one level down; only what counts as "the
+  // owner" does. A grandchild's owner is an ELEMENT, whose own identity is (the
+  // root's key, its address) — so the grandchild's address is that, plus its
+  // own. Nothing here re-derives the rule: each level asks the table above it
+  // for its address index, which is where the derivation already stated it.
+  wdp = S6WorldDeep { };
+  ti_wdp = type_of(wdp.docs);
+  dp = derive_tables(ti_wdp);
+  assert(len(dp) == 3, "S7: owner + child + grandchild, got {len(dp)}");
+  gkid = dp[2] ?? no_def();
+  assert(gkid.nm == "s6docdeep_items_marks", "S7 grandchild name {gkid.nm}");
+  ngk = "";
+  for gc in gkid.columns { ngk += "{gc.nm}," }
+  assert(ngk == "s6docdeep_id,ord,ord_2,value,", "S7 grandchild columns [{ngk}]");
+  gix = gkid.indexes[0] ?? no_index();
+  assert(index_columns(gix) == "s6docdeep_id, ord, ord_2",
+    "S7 grandchild address [{index_columns(gix)}]");
+  // The INHERITED columns keep their names, so a join to the parent is
+  // name-to-name; only the new level needed one.
+  pkid = dp[1] ?? no_def();
+  assert(pkid.has_column("ord") && gkid.has_column("ord"),
+    "S7: the inherited ordinal must keep its name at both levels");
+
+  // The write path tells two ordinals apart by DEPTH, never by their order in
+  // the row — the counting `ColumnSource` removed one level up.
+  o1 = gkid.column_named("ord") ?? no_col();
+  o2 = gkid.column_named("ord_2") ?? no_col();
+  assert(o1.src == SrcOrdinal && o1.depth == 1, "S7 ord depth {o1.depth}");
+  assert(o2.src == SrcOrdinal && o2.depth == 2, "S7 ord_2 depth {o2.depth}");
+  gval = gkid.column_named("value") ?? no_col();
+  assert(gval.src == SrcElement && gval.depth == 2, "S7 value {gval.src}@{gval.depth}");
+
+  // Depth THREE, and two collections under one element. `ord_2` is decided by
+  // how many ordinals the row INHERITS, not by which field it belongs to — so
+  // two siblings both get `ord_2`, in two different tables.
+  w73 = S7WorldDeep { };
+  ti_73 = type_of(w73.docs);
+  d3 = derive_tables(ti_73);
+  n3names = "";
+  for dt3 in d3 { n3names += "{dt3.nm}," }
+  assert(n3names == "s7docdeep,s7docdeep_deep,s7docdeep_deep_inner,s7docdeep_deep_inner_tags,s7docdeep_deep_inner_things,",
+    "S7 depth-3 tables [{n3names}]");
+  deep3 = d3[3] ?? no_def();
+  nd3 = "";
+  for dc in deep3.columns { nd3 += "{dc.nm}," }
+  assert(nd3 == "s7docdeep_id,ord,ord_2,ord_3,value,", "S7 depth-3 columns [{nd3}]");
+  o3 = deep3.column_named("ord_3") ?? no_col();
+  assert(o3.depth == 3, "S7 ord_3 depth {o3.depth}");
+  // Two collections under ONE element give two tables with the SAME address —
+  // `tags` and `things` both hang off an `S7Note` at depth 3. What keeps them
+  // apart is the field path in the TABLE NAME, which is the rule that also lets
+  // them share every address column without colliding.
+  sib = d3[4] ?? no_def();
+  assert(sib.nm == "s7docdeep_deep_inner_things", "S7 sibling name {sib.nm}");
+  assert(index_columns(sib.indexes[0] ?? no_index()) == index_columns(deep3.indexes[0] ?? no_index()),
+    "S7: two siblings under one element share an address");
+  assert(sib.has_column("tid") && !sib.has_column("value"),
+    "S7: and differ only in what the element contributes");
+
+  // A collection inside a HASH element. The inherited address is (owner, key)
+  // and carries NO ordinal, so this level's is `ord`; and the inherited key
+  // column stops being one of this table's own fields, which is the one thing
+  // descending has to change.
+  w7h = S7HWorld { };
+  ti_7h = type_of(w7h.docs);
+  dh = derive_tables(ti_7h);
+  assert(len(dh) == 3, "S7 hash-parent: three tables, got {len(dh)}");
+  hg = dh[2] ?? no_def();
+  nhg = "";
+  for hc in hg.columns { nhg += "{hc.nm}," }
+  assert(nhg == "s7hdoc_id,hl,ord,value,", "S7 hash-parent grandchild [{nhg}]");
+  hl = hg.column_named("hl") ?? no_col();
+  assert(hl.src == SrcOwnerKey && hl.depth == 1,
+    "S7: an inherited key column is an ANCESTOR's field, got {hl.src}@{hl.depth}");
+  // …and in the PARENT it is still that element's own field.
+  hp = dh[1] ?? no_def();
+  hpl = hp.column_named("hl") ?? no_col();
+  assert(hpl.src == SrcField && hpl.depth == 1, "S7 parent key column {hpl.src}@{hpl.depth}");
+
+  // A KEYED grandchild: the address rule is the same one level down, so a hash
+  // under a vector element is addressed by (root key, parent ordinal, its key)
+  // and carries no ordinal of its own.
+  w7k = S7KWorld { };
+  ti_7k = type_of(w7k.docs);
+  dk = derive_tables(ti_7k);
+  kg = dk[2] ?? no_def();
+  nkg = "";
+  for kc2 in kg.columns { nkg += "{kc2.nm}," }
+  assert(nkg == "s7kdoc_id,ord,nm,v,", "S7 keyed grandchild [{nkg}]");
+  kgi = kg.indexes[0] ?? no_index();
+  assert(index_columns(kgi) == "s7kdoc_id, ord, nm", "S7 keyed grandchild address [{index_columns(kgi)}]");
+  assert(!kg.has_column("ord_2"), "S7: a keyed grandchild has no ordinal of its own");
+
+  // An element whose only fields are COLLECTIONS is an ordinary shape now: its
+  // row is its address, which is what says the element exists and is what its
+  // own children hang from.
+  w7b = S7BareWorld { };
+  ti_7b = type_of(w7b.docs);
+  db = derive_tables(ti_7b);
+  assert(len(db) == 3, "S7 bare element: three tables, got {len(db)}");
+  bare = db[1] ?? no_def();
+  nb2 = "";
+  for barec in bare.columns { nb2 += "{barec.nm}," }
+  assert(nb2 == "s7baredoc_id,ord,", "S7 bare element columns [{nb2}]");
+
+  // An inline struct inside a CHILD element flattens the same way — one rule,
+  // wherever a record's columns are derived.
+  w7n = S7bWorldN { };
+  ti_7n = type_of(w7n.docs);
+  dn = derive_tables(ti_7n);
+  nkid = dn[1] ?? no_def();
+  nn = "";
+  for nc in nkid.columns { nn += "{nc.nm}," }
+  assert(nn == "s7bdocn_id,ord,label,at_px,at_py,", "S7b child flatten [{nn}]");
+  atx = nkid.column_named("at_px") ?? no_col();
+  assert(len(atx.path) == 2 && atx.src == SrcField && atx.depth == 1,
+    "S7b child nested column path={len(atx.path)} {atx.src}@{atx.depth}");
+
+  // A flattened struct names its columns and so does the author: `origin: Point`
+  // beside a field called `origin_px` gives two columns of one name, which only
+  // the engine would notice and only the engines that reject it.
+  w7bc = S7bWorldClash { };
+  ti_7bc = type_of(w7bc.docs);
+  d7bc = derive_tables(ti_7bc);
+  r7bc = (d7bc[0] ?? no_def()).refusal;
+  assert(r7bc.find("origin_px") != null, "S7b: a flattened name collision must refuse: {r7bc}");
+
+  // --- @PLN23 S7b-ii: a collection inside an INLINE struct ------------------
+  //
+  // It is a child table of the OWNER, and it needs no extra key: `origin` has no
+  // identity to contribute, so it adds to the NAME and to nothing else. That is
+  // the same rule as everywhere else in this mapping — identity is what earns an
+  // address — applied one level in.
+  w7bd = S7bWorldDeep { };
+  ti_7bd = type_of(w7bd.docs);
+  d7bd = derive_tables(ti_7bd);
+  assert(len(d7bd) == 3, "S7b-ii: owner + two child tables, got {len(d7bd)}");
+  n7bd = "";
+  for t7 in d7bd { n7bd += "{t7.nm}," }
+  assert(n7bd == "s7bdeep,s7bdeep_held_marks,s7bdeep_held_tags,",
+    "S7b-ii table names [{n7bd}]");
+  // The inline struct's SCALARS still flatten into the owner, at the same time.
+  assert(cols(d7bd[0] ?? no_def()) == "id held_hx", "S7b-ii owner columns [{cols(d7bd[0] ?? no_def())}]");
+  hm = d7bd[1] ?? no_def();
+  nhm = "";
+  for hc2 in hm.columns { nhm += "{hc2.nm}," }
+  // (s7bdeep_id, ord, value) — NOT (s7bdeep_id, ord, ord_2, value). An inline
+  // struct is not a level.
+  assert(nhm == "s7bdeep_id,ord,value,", "S7b-ii child columns [{nhm}]");
+
+  // Two inline levels, still one ordinal.
+  w7ii = S7iiWorld { };
+  ti_7ii = type_of(w7ii.docs);
+  d7ii = derive_tables(ti_7ii);
+  assert(len(d7ii) == 2, "S7b-ii nested inline: two tables, got {len(d7ii)}");
+  nested_child = d7ii[1] ?? no_def();
+  assert(nested_child.nm == "s7iidoc_a_b_deep", "S7b-ii nested inline name {nested_child.nm}");
+  nni = "";
+  for nc2 in nested_child.columns { nni += "{nc2.nm}," }
+  assert(nni == "s7iidoc_id,ord,value,", "S7b-ii nested inline columns [{nni}]");
+  assert(cols(d7ii[0] ?? no_def()) == "id a_ay a_b_bz",
+    "S7b-ii nested inline owner [{cols(d7ii[0] ?? no_def())}]");
+
+  // THE discriminating case. A collection in an inline struct inside a record
+  // ELEMENT: the element has identity and adds `ord`, the inline struct has none
+  // and adds only to the name. Getting this wrong gives one ordinal too many —
+  // in the right order, with the right names, and wrong.
+  w7in = S7iiWorldN { };
+  ti_7in = type_of(w7in.docs);
+  d7in = derive_tables(ti_7in);
+  assert(len(d7in) == 3, "S7b-ii in-element: three tables, got {len(d7in)}");
+  ine = d7in[2] ?? no_def();
+  assert(ine.nm == "s7iidocn_notes_at_bits", "S7b-ii in-element name {ine.nm}");
+  nin = "";
+  for ic3 in ine.columns { nin += "{ic3.nm}," }
+  assert(nin == "s7iidocn_id,ord,ord_2,value,", "S7b-ii in-element columns [{nin}]");
+  // …and the element's own inline scalars flattened into ITS table, not the
+  // owner's.
+  midt = d7in[1] ?? no_def();
+  assert(midt.has_column("at_q") && !(d7in[0] ?? no_def()).has_column("at_q"),
+    "S7b-ii: an element's inline scalars belong to the element's table");
+
+  // An inline struct whose only field is a collection contributes no column.
+  w7ib = S7iiWorldB { };
+  ti_7ib = type_of(w7ib.docs);
+  d7ib = derive_tables(ti_7ib);
+  assert(len(d7ib) == 2, "S7b-ii bare inline: two tables, got {len(d7ib)}");
+  assert(cols(d7ib[0] ?? no_def()) == "id", "S7b-ii bare inline owner [{cols(d7ib[0] ?? no_def())}]");
+  assert((d7ib[1] ?? no_def()).nm == "s7iidocb_bare_only",
+    "S7b-ii bare inline child {(d7ib[1] ?? no_def()).nm}");
+
+  // The collision one level down. The address columns are named by this
+  // derivation and the element's by its author, so `ord_2` can be both.
+  w7c = S7ClashWorld { };
+  ti_7c = type_of(w7c.docs);
+  dc2 = derive_tables(ti_7c);
+  assert(len(dc2) == 1, "S7: a deep collision must collapse the whole answer");
+  dc2r = (dc2[0] ?? no_def()).refusal;
+  assert(dc2r.find("ord_2") != null && dc2r.find("collides") != null,
+    "S7: an element field called ord_2 must refuse naming it: {dc2r}");
+
+  // `derive` is UNCHANGED and still answers one table: a record with a
+  // collection field refuses there rather than quietly losing the field, which
+  // is what every existing consumer of it relies on.
+  one6 = derive(type_of(w6.docs));
+  assert(!one6.table_ok(), "S6a: derive must still refuse a record with a collection");
+
+  // --- @PLN23 S7c: migration — shape, never content -------------------------
+  //
+  // One rule decides every case: a plan changes a table's SHAPE and never its
+  // CONTENT. Each cell below is a different case and the SAME reason.
+  mwant = tp;                                    // the five-column `person`
+  mhave: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "id", kind: ColInteger },
+    ColumnDef { nm: "nm", kind: ColText },
+    ColumnDef { nm: "gone", kind: ColText, nullable: true },
+  ], indexes: [IndexDef { nm: "person_pk", columns: [IndexColumn { nm: "id" }] }] };
+  no_renames: vector<Renamed> = [];
+  mg = migrate(mwant, mhave, dsq, no_renames);
+  assert(mg.refusal == "", "S7c: a plan was refused: {mg.refusal}");
+
+  // `score`, `flag` and `initial` are all NOT NULL and missing. Each REPORTS,
+  // because adding one would have to invent a value for every existing row —
+  // which the engine itself refuses (measured: "Cannot add a NOT NULL column
+  // with default value NULL").
+  msql = "";
+  mrefused = "";
+  for st in mg.steps {
+    if st.sql == "" { mrefused += "{st.subject}," } else { msql += "{st.subject}," }
+  }
+  assert(mrefused == "score,flag,initial,", "S7c reported steps [{mrefused}]");
+  // …and NOTHING is emitted for `gone`, the column the type no longer wants. It
+  // keeps its values and is still readable; dropping it is the one step that
+  // would destroy content, so there is no drop to emit.
+  assert(msql.find("gone") == null, "S7c: a lost field must produce no step [{msql}]");
+  assert(!mg.migration_ready(), "S7c: a plan with a reported step is not ready");
+  assert(mg.migration_blocked().find("score") != null,
+    "S7c: the block names the column: {mg.migration_blocked()}");
+
+  // A NULLABLE gained field IS emitted — shape only, because the new column
+  // holds no value.
+  owant = to;                                    // `optional` (oid, note TEXT?)
+  ohave: TableDef = TableDef { nm: "optional", columns: [
+    ColumnDef { nm: "oid", kind: ColInteger },
+  ], indexes: [IndexDef { nm: "optional_by_oid", columns: [IndexColumn { nm: "oid" }] }] };
+  og = migrate(owant, ohave, dsq, no_renames);
+  assert(len(og.steps) == 1, "S7c nullable add: one step, got {len(og.steps)}");
+  ostep = og.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(ostep.sql == "ALTER TABLE \"optional\" ADD COLUMN \"note\" TEXT",
+    "S7c nullable add [{ostep.sql}]");
+  assert(og.migration_ready(), "S7c: a nullable add is runnable");
+
+  // A DECLARED rename re-labels the column instead of adding one — and the old
+  // column does not survive as an orphan, because the values travel with it.
+  rwant: TableDef = TableDef { nm: "optional", columns: [
+    ColumnDef { nm: "oid", kind: ColInteger },
+    ColumnDef { nm: "note", kind: ColText, nullable: true },
+  ], indexes: [IndexDef { nm: "optional_by_oid", columns: [IndexColumn { nm: "oid" }] }] };
+  rhave: TableDef = TableDef { nm: "optional", columns: [
+    ColumnDef { nm: "oid", kind: ColInteger },
+    ColumnDef { nm: "memo", kind: ColText, nullable: true },
+  ], indexes: [IndexDef { nm: "optional_by_oid", columns: [IndexColumn { nm: "oid" }] }] };
+  rg = migrate(rwant, rhave, dsq, [Renamed { was: "memo", now: "note" }]);
+  assert(len(rg.steps) == 1, "S7c rename: one step, got {len(rg.steps)}");
+  rstep = rg.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(rstep.sql == "ALTER TABLE \"optional\" RENAME COLUMN \"memo\" TO \"note\"",
+    "S7c rename [{rstep.sql}]");
+
+  // WITHOUT the declaration the same pair is an ADD, and `memo` is left behind.
+  // The plan is not wrong — it is what "indistinguishable from a drop plus an
+  // add" MEANS, and the difference between the two cells is the declaration.
+  ug = migrate(rwant, rhave, dsq, no_renames);
+  ustep = ug.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(ustep.sql.find("ADD COLUMN") != null,
+    "S7c: an undeclared rename is an add [{ustep.sql}]");
+
+  // An engine loft has not RUN a rename against refuses it rather than sending a
+  // statement nobody has tried — the same admission `catalog_schema` makes.
+  pg_rn = migrate(rwant, rhave, dialect_postgres(), [Renamed { was: "memo", now: "note" }]);
+  pstep = pg_rn.steps[0] ?? MigrationStep { subject: "?", sql: "?" };
+  assert(pstep.sql == "" && pstep.refusal.find("postgres") != null,
+    "S7c: an unmeasured rename must refuse: {pstep.refusal}");
+
+  // A missing INDEX is shape, so it belongs in a plan — and only in a plan.
+  // `reconcile` refuses it rather than creating it, because altering somebody
+  // else's populated table is not loft's to decide unattended.
+  nwant = tp;
+  nhave: TableDef = TableDef { nm: "person", columns: tp.columns };
+  ng = migrate(nwant, nhave, dsq, no_renames);
+  nix = "";
+  for st2 in ng.steps { if st2.sql.find("CREATE INDEX") != null { nix += "{st2.subject}," } }
+  assert(nix == "person_by_id,", "S7c index step [{nix}]");
+
+  // The cleanest claim, attacked: a column whose TYPE loft disagrees with is a
+  // SHAPE change that would destroy content — and it survives only because
+  // `reconcile` converts at READ time and loft never alters a type. If a plan
+  // emitted one, "shape never content" would be false.
+  twant = tp;
+  thave: TableDef = TableDef { nm: "person", columns: [
+    ColumnDef { nm: "id", kind: ColInteger }, ColumnDef { nm: "nm", kind: ColText },
+    ColumnDef { nm: "score", kind: ColText, db_type: "varchar(40)" },
+    ColumnDef { nm: "flag", kind: ColInteger }, ColumnDef { nm: "initial", kind: ColText },
+  ], indexes: [IndexDef { nm: "person_by_id", columns: [IndexColumn { nm: "id" }] }] };
+  tg = migrate(twant, thave, dsq, no_renames);
+  assert(len(tg.steps) == 0,
+    "S7c: a type difference must produce NO step, got {len(tg.steps)}");
+  assert(tg.migration_ready(), "S7c: and the plan is ready — there is nothing to do");
 
   println("schema ok");
 }

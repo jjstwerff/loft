@@ -26,6 +26,113 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### BLAS, LAPACK and any Fortran routine now bind through `#c`
+
+A `vector` reaching C used to be a pointer **and** a count, always. That is right for
+a C library written for loft, and wrong for every numeric library there is: Fortran
+passes each argument by reference, so a BLAS routine takes a list of bare pointers and
+learns the length from a separate `n`. Neither way of writing the declaration worked —
+the honest one was refused for arity, and the one loft accepted handed each count to
+the callee where it expected the next pointer.
+
+**The C signature now decides.** Write the signature the header shows you and the count
+appears exactly where the header puts one:
+
+```loft
+pub fn dgemm(transa: text, transb: text, m: vector<integer>, n: vector<integer>,
+             k: vector<integer>, alpha: vector<float>, a: vector<float>,
+             lda: vector<integer>, b: vector<float>, ldb: vector<integer>,
+             beta: vector<float>, c: vector<float>, ldc: vector<integer>);
+#c "dgemm_" "void(const char*, const char*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int64_t*, const double*, const int64_t*, const double*, double*, const int64_t*)"
+```
+
+Nothing is copied at the boundary — C writes its result straight into your vector — and
+a Fortran argument list costs one slot per argument, so even LAPACK's largest drivers
+fit without a shim. Existing declarations are unaffected: a signature that names a count
+still gets one.
+
+This is measured against **real OpenBLAS** — `daxpy_`, `dgemm_`, `dgesv_`, `ddot_` and
+`dnrm2_` as the library exports them — on both backends, against a C program computing
+the same answers.
+
+**A routine that returns a `double` binds too.** The level-1 BLAS functions answer by
+value (`ddot_`, `dnrm2_`, `dasum_`, and LAPACK's `dlange_`), and they used to be refused
+with advice to write an ANSI-C shim for each one:
+
+```loft
+pub fn ddot(n: vector<i32>, x: vector<float>, incx: vector<i32>,
+            y: vector<float>, incy: vector<i32>) -> float;
+#c "ddot_" "double(const int*, const double*, const int*, const double*, const int*)"
+```
+
+A `double` comes back as `float` and a C `float` as `single`. Passing a float *into* C
+by value is still refused, and still wants the 1-element-vector idiom — Fortran passes
+everything by reference, so numeric bindings never need it.
+
+**And the element type now has to match the C header.** A `vector` reaches C as a pointer
+into loft's own element bytes, so `vector<integer>` (8-byte elements) against a
+`const int *` was C reading every element from the wrong offset — and where C writes,
+straight past the end of your vector. Both used to run to completion with wrong numbers.
+The declaration is now refused, naming both widths:
+
+```
+parameter 5 is `vector<integer>` — 8-byte integer elements — but C parameter 5 is
+`int *`, striding 4 bytes, so C reads every element after the first from the wrong
+offset — and where C writes, past the end of the vector.
+```
+
+Write the element type the C header spells (`vector<i32>` for `int *`, `vector<float>`
+for `double *`), or `void *` in C if the bytes really are opaque. **Note for BLAS
+specifically:** the usual Linux build is LP64, so Fortran `INTEGER` is `int`, not
+`int64_t` — and that is one thing loft cannot check for you, because both builds export
+the same symbol names.
+
+**Libraries that keep your buffer** — FFTW's plan/execute split, zlib's `z_stream`,
+`sqlite3_bind_text(…, SQLITE_STATIC)` — bind by letting C own the memory. Allocate on
+the C side, hold the pointer as an `integer`, and copy in and out with `memcpy` (libc,
+so no shim and no `[c] libs` entry):
+
+```loft
+inp = fftw_malloc(n * 16);
+p = plan_dft_1d(n, inp, outp, -1, 64);
+load(inp, src, n * 16);      // #c "memcpy" "void*(void*, const void*, size_t)"
+execute(p);
+```
+
+Handing such a library a loft `vector` instead is a use-after-free — loft frees the
+vector at its last use, which is the call that handed the pointer over, and C reads
+whatever took its place. For FFTW the C-owned form is what its own documentation
+recommends anyway, since `fftw_malloc` is where the SIMD alignment comes from.
+
+### Reflection can now read a value, not only a type
+
+`type_of` tells you a record has a `text` at byte 16. `field_value` reads what is
+actually there:
+
+```loft
+t = type_of(row);
+for f in t.fields {
+  v = field_value(row, f.position);
+  if v.is_null { println("{f.name} is null") }
+  else if v.kind == TextKind { println("{f.name}={v.t}") }
+  else { println("{f.name}={v.i}") }
+}
+```
+
+That is the half a generic serialiser or an ORM was missing — walking a value
+without naming a single field. A field inside an inline struct is reached with a
+path, `field_value(doc, [8, 0])` for `doc.origin.x`, because a nested record
+reports its fields relative to itself. The offsets are walked one step at a time
+and never added up: each step has to BEGIN a field of the type it is read
+against, which is what keeps this a field read rather than a pointer.
+
+Three answers stay apart, because code that confused them would write the wrong
+row: nothing begins at that position, something begins there with no single value
+to read (a vector, a keyed collection, a nested record), and the scalar holds
+`null` — which is not `""`, `0` or `false`. Inside a generic body it is a compile
+error rather than an empty answer, since an empty answer there is a row with no
+columns.
+
 ### A hash costs a third less memory, and fills faster
 
 `hash<T[key]>` used to give every entry a store record of its own — a header word each,

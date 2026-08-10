@@ -1384,6 +1384,17 @@ impl Parser {
             return;
         }
         let def = self.data.def(self.context);
+        // @PLN128 arc D — a `#c` binding's parameter list is the C function's,
+        // not the author's, so both cures below are impossible: a struct cannot
+        // cross the boundary at all (`c_signature::shape_of` refuses a record,
+        // because a store may move it), and a default does not change the arity
+        // the C signature declares — it only hides the parameter from this
+        // count. Every Fortran routine trips the nudge (`dgemm_` takes 13), so
+        // leaving it on would mean advising every numeric binding to do
+        // something it cannot do.
+        if !def.c_sig.is_empty() {
+            return;
+        }
         let required = def
             .attributes()
             .iter()

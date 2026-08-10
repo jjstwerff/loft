@@ -7,11 +7,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**CLOSED (2026-08-10) — arcs A, B, C, Q2 and H all shipped.** H is in the tree and
-measured, and the measurement corrects this plan's central prediction: see
+**CLOSED (2026-08-10) — arcs A, B, C, Q2 and H all shipped, and nothing further is
+worth building.** H is in the tree and measured, and the measurement corrects this
+plan's central prediction: see
 [§ What H actually bought](#what-h-actually-bought-2026-08-10--insert-and-bytes-not-lookup).
 Read that section before re-deriving anything from the Q1 / Q5 numbers below, which are
-correct as measurements and were over-read as a forecast.
+correct as measurements and were over-read as a forecast. The two items loft#809 still
+lists as open were then measured too, and neither earns its cost —
+[§ What is LEFT after H](#what-is-left-after-h-measured-2026-08-10--and-why-none-of-it-pays).
 
 | | before | after | |
 |---|---|---|---|
@@ -601,6 +604,68 @@ neither move nor free them. The discriminator is the stride the table records, b
 that IS the distinction: a table that allocated its entries knows their width, a table
 that borrows records has none to know. `stride == 0` means borrowed. Found by an assertion
 in `add`, not by reading the code.
+
+## What is LEFT after H, measured (2026-08-10) — and why none of it pays
+
+[loft#809](https://github.com/loft-lang/loft/issues/809)'s own summary lists three
+things as genuinely open. H closed the first. The other two were measured before
+anything was built for them, and neither earns its cost.
+
+**The from-scratch re-hash at every resize — worth ≤12% of one insert case.**
+`reserve(h, n)` already removes it entirely, so the only case it costs anything in is
+an unreserved fill. Measured, 1M `integer` keys, `--native-release`, alternating
+reserved against grown so the gap IS the resize:
+
+| round | reserved | grown | resize |
+|---|---|---|---|
+| 1 | 274 ms | 366 ms | 92 ms |
+| 2 | 307 ms | 350 ms | 43 ms |
+| 3 | 358 ms | 386 ms | 28 ms |
+
+Median ~12% of a grown insert, and **0% of a reserved one**. Removing it means
+caching the hash in the bucket slot (arc D): the slot goes 4 → 8 bytes, so the table
+DOUBLES — 5.3 MB → 10.7 MB at 1M — and it costs a second persisted-store format
+break. Spending a break and doubling the table for ≤12% of the case a one-line
+`reserve` already fixes is not a trade worth making. **Arc D stays retired.**
+
+Note H itself already reduced this: `rehash_into` re-reads each entry's key, and
+entries are now dense, so the walk it does is over a 16 MB arena rather than
+scattered records.
+
+**The two random accesses — cannot become one without giving up a correctness
+property.** A lookup reads the bucket slot, then the entry; both are random, and no
+layout removes either while entries keep the address they were handed out at. Putting
+the entries INSIDE the bucket table is the design that removes one, and it is exactly
+what Q5 refused: growth would then move every entry and invalidate every outstanding
+`DbRef` — a wrong READ, which `COMPATIBILITY.md` forbids. Caching a key fingerprint in
+the slot (D again) skips the entry read on a colliding probe but not on a HIT, which
+is the case being timed.
+
+Measured, for anyone tempted to re-derive it — the same 1M lookups in two orders:
+
+| order | ns/lookup |
+|---|---|
+| ascending | 99–118 |
+| shuffled | 175–179 |
+
+Ascending is not "cache-friendly hashing"; it is the ENTRY read becoming
+prefetchable, because entries were inserted in key order and the arena is dense.
+The bucket read stays random in both. That ~1.7x is also a warning about the
+report's original 20x: **a comparison whose two sides use different access orders
+is not a comparison**, and this plan's pre-2026-08-09 figures were all taken in
+insertion order.
+
+**A hoist was tried and dropped.** `entry_ref` re-read the directory field and the
+directory's size header on every probe, both loop-invariant — arc B's shape exactly.
+Hoisting them measured nothing: alternating A/B, 1M shuffled, median 214 ns before
+and 231 ns after, i.e. inside the noise, because the loop is two cache misses and
+those reads are hot. It is not zero work, but it is below what this box can resolve,
+and an unmeasured change to the heap's hot path is not worth its review cost.
+
+**Recommendation: close #809.** Its headline — the per-entry store claim — is gone,
+insert is 1.28x and bytes 33% lower. What remains is the cost of two random memory
+accesses, which is physics rather than a defect, and the arcs proposed against it
+cost more than they return.
 
 ## Open design questions
 

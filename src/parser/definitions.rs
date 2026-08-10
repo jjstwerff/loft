@@ -1862,10 +1862,14 @@ impl Parser {
             }
         };
         let def = self.data.def(self.context);
+        // The SAME filter the two marshallers use (`c_call::register` and
+        // `generation::output_c_direct_call`). It has to be: they derive the
+        // slot assignment from this list, so a list that differs here would
+        // check one binding and call another.
         let params: Vec<crate::data::Type> = def
             .attributes()
             .iter()
-            .filter(|a| !a.name.starts_with('#'))
+            .filter(|a| !a.name.starts_with("__") && !a.name.starts_with('#'))
             .map(|a| a.typedef.clone())
             .collect();
         let ret = def.returned().clone();

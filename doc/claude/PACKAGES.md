@@ -537,9 +537,10 @@ correct everywhere.  An unknown type is refused, never guessed.
 | `integer`, narrow ints, `boolean`, `character` | one C integer | any width; the value is passed full-width |
 | `text` argument | one `const char*` | **NUL-terminated**, unlike the `#native` path's `ptr, len` |
 | `text` / `text?` RETURN | `char*` | the bytes are **copied** up to the first NUL; loft never frees the pointer |
-| `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* |
+| `vector<T>` | **two**: element pointer + count | C carries no length.  The pointer is valid *for the call only* — see the retention hazard below |
+| `vector<float>` | `double*` + count | C may **write through it**; the writes are visible to loft |
 | C-owned handle (`PGconn *`) | `void*` ↔ loft `integer` | the pointer value crosses as an integer |
-| `float` / `single` | — | **refused**: floats travel in SSE registers a fixed caller does not touch — shim it |
+| `float` / `single` SCALAR | — | **refused**: floats travel in SSE registers a fixed caller does not touch — pass it by pointer as a 1-element `vector<float>` |
 | a loft record | — | **refused**: records live in a store that may move them |
 | a nullable `τ?` ARGUMENT | — | **refused at compile time**: C has no null model |
 
@@ -554,10 +555,252 @@ requires a discharge (`?? 0`, `x?`, `match`).
 **Two shape limits worth knowing before you write a binding.**  A `vector<T>`
 becomes an element pointer **immediately followed by** its count, so `write(fd,
 ptr, n)` binds directly while `memchr(ptr, ch, n)` and `fwrite(ptr, size, n, f)`
-— which separate the pair — need a shim.  And a binding may declare at most **12**
+— which separate the pair — need a shim.  And a binding may declare at most **32**
 C parameters: the interpreter calls through a fixed ladder of per-arity
-trampolines, and the ceiling is a fact about the contract, checked on every build
-whether or not a C caller is compiled in.
+trampolines, and that ladder is where the ceiling comes from.
+
+**One ceiling, both backends** (@PLN128 arc C).  It used to be 12 and it was
+enforced on the interpreter ONLY, which made `#c` two different languages: a
+13-slot binding compiled under `--native`, shipped, and failed for whoever
+interpreted it — including `loft debug`, which *is* the interpreter, so the
+bindings you could not debug were exactly the ones with no other way in.  The
+author never saw it either, because the refusal fired at the call site rather
+than the declaration.
+
+Unifying downward would have narrowed what already compiles, so the ladder was
+extended to 32 instead and `--native` held to the same number.  32 was sized
+against `dgemm_` when a by-reference scalar was still thought to cost two slots
+(pointer + count); since a `vector` carries a count only where the C signature
+has one, `dgemm_` costs **13** and LAPACK's 20-argument drivers fit with room to
+spare.  Past 32 a shim is the answer — a ladder cannot be unbounded.
+
+The check now runs on both backends, in two places: at the **declaration**, for
+code you own (your program, your library, the stdlib), so you see it as you write
+it; and at any **call site**, including one reaching into a dependency, because
+that call genuinely cannot work.  Merely *loading* a dependency that declares an
+over-ceiling binding you never call is fine — a consumer cannot edit someone
+else's declaration, so it must not fail their build.
+
+#### Numeric libraries — what the boundary already does (@PLN128)
+
+BLAS/LAPACK, FFTW, HDF5 and GSL are the same three shapes over and over: an array
+in, an array written back, and a scalar passed by reference.  Every cell below was
+measured on **both backends** against a C oracle that computed the expected value
+itself:
+
+| shape | `--interpret` | `--native` |
+|---|---|---|
+| read a `double` array — `vector<float>` → `(const double*, int64_t)` | ✅ | ✅ |
+| **C writes back through `double*`** (the `daxpy` shape) | ✅ | ✅ |
+| 1-element `vector<integer>` as a Fortran scalar `const int64_t*` | ✅ | ✅ |
+| a scalar `double` in and out through a pointer shim | ✅ | ✅ |
+| **a full Fortran argument list — `dgemm_`'s thirteen bare pointers** | ✅ | ✅ |
+| counted and bare vectors **mixed in one signature** | ✅ | ✅ |
+| 14 C argument slots | ✅ | ✅ |
+| **a `double` RETURNED by value** (`ddot_`, `dnrm2_`) | ✅ | ✅ |
+| 33 C argument slots (past `MAX_C_ARITY`) | ❌ refused | ❌ refused |
+| a `double` **argument** by value | ❌ refused | ❌ refused |
+| a `vector` whose element width differs from the C pointee | ❌ refused | ❌ refused |
+
+Every row above was re-measured against **real OpenBLAS** — `daxpy_`, `dgemm_`,
+`dgesv_`, `ddot_`, `dnrm2_` as the library exports them — not only against a
+fixture written for loft.
+
+**The write-back cell is the one that matters.**  Every BLAS and LAPACK routine
+returns its result by writing through a caller-supplied pointer, so a boundary
+that could not carry those writes could not bind the numeric stack at all.  It
+carries them.
+
+**A scalar float crosses as a 1-element `vector<float>`** — this is the answer to
+the most common question, and the cure the float refusal now names:
+
+```loft
+// C:  void shim_scale(double *out, int64_t n_out, const double *v, int64_t n_v)
+pub fn shim_scale(out: vector<float>, v: vector<float>);
+#c "shim_scale" "void(double*, int64_t, const double*, int64_t)"
+
+v: vector<float> = [2.5];        // a COMPUTED double, not a hand-converted literal
+out: vector<float> = [0.0];
+shim_scale(out, v);              // out[0] == 5.0
+```
+
+There is deliberately no float→bits builtin, so a shim taking "the bit pattern as
+an integer" is **not** a route a real program can take: `x as integer` is a value
+cast (`2.5` → `2`).  Pointers are the whole answer.
+
+##### A `vector` carries a count only where the C signature has one
+
+C carries no length, so a `vector` normally crosses as **pointer then count** —
+and a C library written for loft takes exactly that. Fortran does not. BLAS and
+LAPACK pass **every** argument by reference, so each one is a bare pointer and
+the routine learns the length from a separate `n`, itself a bare pointer.
+
+**Both are supported, and the C signature is what chooses.** Write the signature
+the header shows you and the count appears exactly where the header puts one:
+
+```loft
+// A C library written for loft: the count is in the signature, so loft sends it.
+pub fn lc_i64_sum(v: vector<integer>) -> integer;
+#c "lc_i64_sum" "int64_t(const int64_t*, int64_t)"
+
+// Fortran: thirteen by-reference arguments, thirteen bare pointers, no counts.
+pub fn dgemm(transa: text, transb: text, m: vector<integer>, n: vector<integer>,
+             k: vector<integer>, alpha: vector<float>, a: vector<float>,
+             lda: vector<integer>, b: vector<float>, ldb: vector<integer>,
+             beta: vector<float>, c: vector<float>, ldc: vector<integer>);
+#c "dgemm_" "void(const char*, const char*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int64_t*, const double*, const int64_t*, const double*, double*, const int64_t*)"
+```
+
+So **a Fortran routine costs one slot per argument**: `dgemm_` needs 13, not 26,
+and even LAPACK's largest drivers (20+ arguments) fit under the 32-slot ceiling
+without an argument-collapsing shim. Pointer-and-integer APIs (HDF5, GSL) spend
+one slot per scalar and are nowhere near it either — though see the retention
+hazard below before reaching for one that keeps your buffers.
+
+A **scalar** by reference is a 1-element vector, because loft has no address-of:
+`m: vector<integer> = [2]` is how you pass Fortran's `const int64_t *m`. A
+`character*1` argument is `text` — `"N"` crosses as a NUL-terminated `const
+char *`, which is what a C caller passes.
+
+Two things to know before binding real Fortran:
+
+- **Reading of the signature is unambiguous, but only the signature is checked.**
+  Omit a count the C function really takes and the declaration is now *accepted*,
+  and passes a bare pointer where the callee wants a length. Nothing at runtime
+  can catch that — the same standing rule as any other wrong `#c` signature.
+- **Hidden string lengths.** A Fortran compiler appends a hidden length argument
+  per `character` argument. Reference BLAS and LAPACK do not read them for the
+  length-1 flags, which is why C callers pass `"N"` and nothing else, but a
+  routine that takes a real Fortran string needs a shim that supplies them.
+
+##### The element type must be the one the C header spells
+
+A `vector` reaches C as a pointer into **loft's own element bytes** — nothing is
+converted on the way — so the loft element type and the C pointee are two
+spellings of one layout, and a declaration where they disagree is refused:
+
+| loft element | write the pointee as |
+|---|---|
+| `integer` | a 64-bit integer (`int64_t`, `long` on LP64) |
+| `i32` / `u32` | a 32-bit integer (`int`) |
+| `u16` | a 16-bit integer (`short`) |
+| `u8` / `boolean` | an 8-bit integer (`char`) |
+| `character` | a 32-bit integer — the codepoint |
+| `float` | `double` |
+| `single` | `float` |
+| `i8` / `i16` | **refused** — see below |
+| `vector<text>` | **refused** — the elements are loft's handles, not `char *` |
+| anything above | `void *` — always accepted, and means "these are bytes" |
+
+Signedness is not checked: it changes how a byte is read, never where the next
+one starts, so `vector<u8>` against `const char *` is the ordinary byte-buffer
+idiom.  `i8` and `i16` are refused because loft stores narrow **signed** elements
+as `val - min`, so a loft `0` is the byte `128` — use `i32`, the unsigned
+sibling, or `void *` if you really mean raw bytes.
+
+**The width the C header uses is the one to write, and it is not always obvious.**
+BLAS and LAPACK ship in two builds: LP64 (Fortran `INTEGER` is 32-bit, which is
+what `libopenblas.so.0` on a typical Linux is) and ILP64 (64-bit).  The same
+symbol names serve both, so *nothing but the header tells you which is
+installed* — and the wrong choice is quiet:
+
+```loft
+// Against an LP64 build this reads the right answer for `n`, because the low
+// four bytes of an 8-byte 3 are 3 — and then `info` and `ipiv`, which C WRITES,
+// come back as -4294967296 and 8589934593.
+pub fn dgesv(n: vector<integer>, …);   #c "dgesv_" "void(const int64_t*, …)"
+```
+
+Declare the widths your build uses and the check above holds you to them
+consistently; it cannot tell you which build is on the machine.
+
+##### A `double` return comes back; a `double` argument still does not
+
+The level-1 BLAS *functions* answer by value — `ddot_`, `dnrm2_`, `dasum_`, and
+LAPACK's `dlange_` / `dlamch_` — and that binds directly:
+
+```loft
+pub fn ddot(n: vector<i32>, x: vector<float>, incx: vector<i32>,
+            y: vector<float>, incy: vector<i32>) -> float;
+#c "ddot_" "double(const int*, const double*, const int*, const double*, const int*)"
+```
+
+A C `double` returns as loft `float` and a C `float` as loft `single`, and the
+pairing is exact — a C `float` leaves a *single* in the return register, so
+binding it to `float` would read those bits as a denormal.
+
+A float **argument** is still refused, and that asymmetry is deliberate rather
+than unfinished: the register file is chosen per argument position, so supporting
+one anywhere would need a trampoline per subset of positions, while the return is
+a single axis.  It costs nothing in practice — Fortran passes every argument by
+reference, so a numeric binding has no by-value floats to pass.
+
+##### The retention hazard — a pointer C keeps is a use-after-free
+
+`vector<T>` hands C a pointer **valid for the duration of the call**.  loft cannot
+see that C stored it, so the vector's lifetime still ends at its last *loft-visible*
+use — and a later C read then hits memory loft has reused, silently:
+
+```loft
+a: vector<float> = [1.5, 2.25, 4.0];
+retain(a);                       // C keeps the pointer; `a` has no later use
+b: vector<float> = [100.0, 200.0, 400.0];
+reread();                        // reads `b`, not `a` — measured, both backends
+```
+
+That reads another variable's data with no fault and no diagnostic.  Adding any
+later use of `a` keeps it alive and the read is correct — which is precisely what
+makes the bug dangerous: it appears and disappears with edits that look unrelated.
+
+This is the FFTW plan API's exact shape (`fftw_plan_dft` retains the buffers,
+`fftw_execute` reads them later), and it is not an FFTW quirk: zlib's `z_stream`
+keeps `next_in` / `next_out`, `sqlite3_bind_text(…, SQLITE_STATIC)` keeps your
+bytes, and every "context object" API is this.
+
+##### Binding a retaining API: give C the buffer
+
+**The cure is that C owns the memory.**  Allocate on the C side, hold the pointer
+as an opaque `integer`, and copy in and out — then nothing loft owns is retained,
+the buffer's lifetime is the handle's, and each copy lives only for its own call,
+which is what `#c` already guarantees.  It needs no shim, because `memcpy` is
+libc and needs no `[c] libs` entry:
+
+```loft
+pub fn fftw_malloc(nbytes: integer) -> integer;   #c "fftw_malloc" "void*(size_t)"
+pub fn fftw_free(p: integer);                     #c "fftw_free" "void(void*)"
+pub fn plan_dft_1d(n: integer, inp: integer, outp: integer, sign: integer, flags: integer) -> integer;
+#c "fftw_plan_dft_1d" "void*(int, double*, double*, int, unsigned)"
+pub fn execute(p: integer);                       #c "fftw_execute" "void(const void*)"
+
+// The two crossings.  Same libc symbol; only the DIRECTION differs, which is
+// what puts the loft vector on a different side of the boundary each time.
+pub fn load(dst: integer, src: vector<float>, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"
+pub fn store(dst: vector<float>, src: integer, nbytes: integer) -> integer;
+#c "memcpy" "void*(void*, const void*, size_t)"
+```
+
+```loft
+inp = fftw_malloc(n * 16);  outp = fftw_malloc(n * 16);
+p = plan_dft_1d(n, inp, outp, -1, 64);   // FFTW_FORWARD, FFTW_ESTIMATE
+load(inp, src, n * 16);
+execute(p);
+store(dst, outp, n * 16);
+```
+
+This is not a workaround for a gap — for FFTW it is what the library's own
+documentation tells C callers to do, because `fftw_malloc` is what supplies the
+SIMD alignment a caller array would forfeit.  Measured on both backends against
+a C program computing the same transform.
+
+**What it costs.** Two O(n) copies per call, against an FFT's O(n log n) of work.
+And `nbytes` is **your** arithmetic: a `void *` pointee is the opaque escape
+hatch, so the element-width check above does not apply and a `store` sized larger
+than the destination writes past the end of the vector.  Size the copy off the
+same expression that sized the allocation.
+There is no annotation for "C keeps this pointer"; until there is, the rule is the
+one at the top of this paragraph, and it is a rule about *your* code, not a
+guarantee loft enforces.
 
 **The `char *` return — three answers C's type system cannot give**, so the
 binding gives them, the same way on every backend:

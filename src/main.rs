@@ -7693,10 +7693,17 @@ fn main() {
     // symbol is marked, so a no-op for every program today.
     loft::use_analysis::superseded_fold_diagnostics(&p.data, &mut p.diagnostics, &abs_file);
     // @PLN24 arc B — the interpreter calls `#c` bindings for real now; what
-    // remains gated is the ONE shape its caller does not cover.
-    if !native_mode {
-        loft::use_analysis::c_binding_call_unsupported(&p.data, &mut p.diagnostics, &abs_file);
-    }
+    // remains gated is the ONE shape the contract does not cover.
+    //
+    // @PLN128 arc C — NOT gated on the backend any more. While this ran only
+    // under `!native_mode`, `#c` was two languages: an over-ceiling binding
+    // compiled and ran on `--native`, shipped, and failed for whoever
+    // interpreted it — including `loft debug`, which IS the interpreter, so the
+    // shapes you could not debug were exactly the ones you had no other way to
+    // inspect. The ceiling moved to 32 (`MAX_C_ARITY`) so that unifying meant
+    // raising the interpreter to meet rustc rather than narrowing what already
+    // compiles.
+    loft::use_analysis::c_binding_call_unsupported(&p.data, &mut p.diagnostics, &abs_file);
     // @PLN102 build step 2/3 — report-only link oracles (no-op unless LOFT_DUMP_LINK_SAFE/OBS).
     loft::use_analysis::dump_link_safety(&p.data);
     loft::use_analysis::dump_link_observability(&p.data);

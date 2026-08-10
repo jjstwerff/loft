@@ -1,0 +1,12 @@
+// @PLN128 arc E — a `vector` reaches C as a pointer into loft's OWN element
+// bytes, so the loft element type and the C pointee are two spellings of one
+// layout.  Measured against real OpenBLAS, this exact declaration ran to
+// completion on both backends and answered `ipiv = 8589934593, 0` where the
+// pivots are 1 and 2, because C strides four bytes and loft strides eight.
+pub fn dgesv(n: vector<i32>, nrhs: vector<i32>, a: vector<float>, lda: vector<i32>,
+             ipiv: vector<integer>, b: vector<float>, ldb: vector<i32>, info: vector<i32>);
+#c "dgesv_" "void(const int*, const int*, double*, const int*, int*, double*, const int*, int*)"
+
+fn main() {
+  println("dgesv is declared, never called");
+}

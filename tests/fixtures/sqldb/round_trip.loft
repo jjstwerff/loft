@@ -149,12 +149,81 @@ fn make_foreign(conn: text, table: text, mode: text) -> text {
   return "";
 }
 
+/// The three rows this gate writes.
+///
+/// ONE definition, used by the writer and by the digest the reader is checked
+/// against — so a mismatch is a round-trip fault rather than two hand-kept lists
+/// drifting apart.
+///
+/// The floats are `0.5` / `0.25` / `0.125` for the reason at the top of this
+/// file: every engine stores them exactly, so the digest below is a claim about
+/// the round trip rather than about float rendering.
+fn people() -> vector<RtPerson> {
+  return [
+    RtPerson { id: 1, nm: "ada", score: 0.5, flag: true },
+    RtPerson { id: 42, nm: "grace", score: 0.25, flag: false },
+    RtPerson { id: 7, nm: "alan", score: 0.125, flag: true },
+  ];
+}
+
+/// @PLN23 S5 — the row one VALUE implies, in `want`'s own column order.
+///
+/// **It names no column and no field.** Each column already carries the byte
+/// `position` of the loft field that fills it, and `field_value` reads exactly
+/// that byte; walking the COLUMNS rather than the fields is what puts the values
+/// in the order `insert_row` requires, by construction rather than by matching
+/// two lists.
+///
+/// Concrete in `RtPerson` on purpose, and not a generic: a generic body is
+/// parsed once against its type variable, so reflection is refused there. The
+/// write half therefore sits where the concrete type is known — the same place
+/// `lazy_fetch` above already sits, which makes both halves of the mapping
+/// per-element-type and neither of them column-aware.
+fn row_of(want: TableDef, p: RtPerson) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in want.columns { vals += [bound_of(c, field_value(p, c.position))] }
+  return vals;
+}
+
+/// A record's CONTENT, rendered through the SAME walk that writes it.
+///
+/// This is what makes S5's claim checkable: a column-order swap, a lost null, a
+/// boolean that came back as text, or a float that did not survive the trip all
+/// show up as a different digest rather than as a value nobody compared.
+fn digest(want: TableDef, p: RtPerson) -> text {
+  out = "";
+  for b in row_of(want, p) {
+    if b#count > 0 { out += "|" }
+    if b.kind == SQL_NULL { out += "null" } else { out += b.as_text() }
+  }
+  return out;
+}
+
+/// The digest of the SOURCE record with this id, or `""` when there is none.
+///
+/// Never falls back to the record under test: comparing a value with itself is
+/// the shape that passes whatever the database did.
+fn source_digest(want: TableDef, id: integer) -> text {
+  for p in people() {
+    if p.id == id { return digest(want, p) }
+  }
+  return "";
+}
+
+/// The definition this program's element type implies — the one value the DDL,
+/// the INSERT, the SELECT and the digest are all built from.
+fn want_def() -> TableDef {
+  probe = RtWorld { };
+  return derive(type_of(probe.by_id));
+}
+
 /// Write three rows through the definition the type implies — and CREATE the
 /// table first if it is not there.
 ///
 /// This is the writer half of requirement 2, and every statement it sends came
-/// out of `want`: the DDL through `render`, the row through `insert_row`. The
-/// only thing the program supplies is the values.
+/// out of `want`: the DDL through `render`, the row through `insert_row`, and
+/// since S5 the VALUES through `row_of` — so the program supplies records, not
+/// a hand-ordered list of columns.
 fn write_three(conn: text) -> text {
   w = RtWorld { };
   ti = type_of(w.by_id);
@@ -171,17 +240,8 @@ fn write_three(conn: text) -> text {
   if !b.binding_ok() { why = b.refusal; d.db_shut(); return "bind: {why}" }
   if !b.binding_writable() { ww = b.write_refusal; d.db_shut(); return "write: {ww}" }
 
-  ids = [1, 42, 7];
-  names = ["ada", "grace", "alan"];
-  scores = [0.5, 0.25, 0.125];
-  flags = [true, false, true];
-  for k in ids {
-    row = want.insert_row(dial, [
-      val_int(k),
-      val_text(names[k#count] ?? ""),
-      val_float(scores[k#count] ?? 0.0),
-      val_boolean(flags[k#count] ?? false),
-    ]);
+  for p in people() {
+    row = want.insert_row(dial, row_of(want, p));
     if !d.db_run(row) { why3 = d.db_last_error(); d.db_shut(); return "insert: {why3}" }
   }
   d.db_shut();
@@ -197,6 +257,12 @@ fn read_back(conn: text, label: text) {
   if hit == null { println("FAIL {label} no row 42: {store_lazy_error(w.by_id)}"); return }
   println("{label} value={hit.nm} float={hit.score} flag={hit.flag}");
 
+  // @PLN23 S5 — the record that comes back IS the record that went in, compared
+  // through the same walk that wrote it. Read before the identity test below,
+  // which mutates the record on purpose.
+  want = want_def();
+  println("{label} digest={digest(want, hit) == source_digest(want, 42)}");
+
   // Identity, not equality: the second lookup must answer the SAME record, and
   // must not go to the database again. A cache that copied would pass a value
   // check and fail this one.
@@ -207,7 +273,7 @@ fn read_back(conn: text, label: text) {
 
   second = w.by_id[7];
   if second == null { println("FAIL {label} no row 7"); return }
-  println("{label} second={second.nm} touched={len(w.by_id)}");
+  println("{label} second={second.nm} touched={len(w.by_id)} digest={digest(want, second) == source_digest(want, 7)}");
 
   // A key that is not there is an ABSENCE, not a failure — the mirror of the
   // bug @PLN129 arc C exists for. It costs one trip and leaves the channel

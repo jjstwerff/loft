@@ -21,6 +21,10 @@ at all.
 when the table below has no blank cell — each one a green, or a refusal that
 names itself.
 
+**It is finished: the table has no blank cell, and P1–P6 are answered** (the
+ladder at the end says how each one was). Two of them are answered by a *refusal*
+and a *skip* rather than a green, which is what the bar above asks for.
+
 ## Where it stands — measured
 
 | platform | the shim links | the C library resolves | the four backends | state |
@@ -450,8 +454,8 @@ produce a green that means nothing.
 | **X5** — built | a POSIX name that Windows spells differently | `write` → `_write`, branched per host in the generated fixtures |
 | **P2** — built | the probe asks the HOST's question | `platform::host_library_loadable` translates the declared soname to the host's spellings and `dlopen`s them; sqlite stops being skipped on macOS and Windows |
 | **P3** — done for sqlite | macOS runs what Linux runs | **confirmed on Apple silicon**: `["sqlite"]` exercised, matching the same hard-coded `sqlite` / `sqlite bound` / `sqlite tx` constants Linux matches, `--interpret` == `--native`. postgres / maria / duckdb remain correct skips until P5 answers the search path |
-| **P4** | Windows runs what Linux runs | the same three lines, from a Windows runner with sqlite present |
-| **P5** | the servers, or a declared skip | postgres + maria on macOS/Windows are a CI-provisioning question, not a language one; a skip is fine, an untested green is not |
+| **P4** — done | Windows runs what Linux runs | **measured**: `--test native` on `windows-latest` is 22 passed / 0 failed, reporting `@PLN23 backends exercised: ["sqlite"]` against the same hard-coded strings Linux matches, on both loft backends. Two defects stood between X5 and that line, and neither was about linking — X7, X8 above |
+| **P5** — answered, by the skip | the servers, or a declared skip | **a declared skip.** A stock macOS or Windows runner ships none of postgres, maria or duckdb; each backend now answers `c_library_available` **for itself** (X8), and the run PRINTS the list it exercised, so the skip is reported rather than assumed. Provisioning those servers is a CI question, and this plan does not take it |
 | **P6** — done | wasm refuses clearly | **@PLN24 arc E**: one named error naming the function, the C symbol, the package and the target, on BOTH wasm shapes; asserted end to end (`pln24_a_reachable_c_binding_is_refused_end_to_end_on_wasm`) including the "exactly one message" half, so it cannot regress into a rustc dump. An unused `#c` declaration still builds |
 
 P1 and P6 are independent of everything else and can land in either order. **P2

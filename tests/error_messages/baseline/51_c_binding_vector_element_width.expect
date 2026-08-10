@@ -1,0 +1,10 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: #c "dgesv_": parameter 5 is `vector<integer>` — 8-byte integer elements — but C parameter 5 is `int *`, striding 4 bytes, so C reads every element after the first from the wrong offset — and where C writes, past the end of the vector. Declare the loft element the way the C header spells it, or `void*` in C if the bytes really are opaque
+  --> <cases>/51_c_binding_vector_element_width.loft:8:12
+  |
+8 | #c "dgesv_" "void(const int*, const int*, double*, const int*, int*, double*, const int*, int*)"
+  |            ^
+
+error: aborting due to 1 previous error

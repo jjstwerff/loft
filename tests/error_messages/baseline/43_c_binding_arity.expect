@@ -1,7 +1,7 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: #c "lc_add": the C signature takes 1 parameter(s), the loft declaration needs 2 (a `text` is one `const char*`; a `vector` is a pointer AND a count, because C carries no length)
+error: #c "lc_add": the C signature takes 1 parameter(s), the loft declaration needs 2 (a `text` is one `const char*`)
   --> <cases>/43_c_binding_arity.loft:5:12
   |
 5 | #c "lc_add" "int(int)"

@@ -1247,6 +1247,383 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
     Ok(())
 }
 
+/// @PLN128 arc C / C106 — the `#c` arity ceiling is ONE contract, and both
+/// backends are held to it.
+///
+/// This is a regression guard for an asymmetry that was silent for a long time:
+/// the check ran behind `if !native_mode`, so `--native` bound and correctly
+/// CALLED a 14-slot C function while the interpreter refused the same
+/// declaration. A library author could ship that and only a downstream consumer
+/// would find out — `loft debug` is the interpreter, so the bindings you could
+/// not debug were exactly the ones with no other way in.
+///
+/// Both halves of the boundary are pinned, because either one alone can pass
+/// while the contract is broken: at `MAX_C_ARITY` both backends must CALL and
+/// agree on the value, and one past it both must REFUSE. The expected sums are
+/// position-weighted (argument `i` counts `i`), so a trampoline that dropped or
+/// reordered an argument gives a different number rather than a plausible one.
+#[test]
+fn the_c_arity_ceiling_is_the_same_on_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let max = loft::c_signature::MAX_C_ARITY;
+    let dir = std::env::temp_dir().join("loft_pln128_arity");
+    let src = dir.join("pkg/arity/src");
+    std::fs::create_dir_all(&src)?;
+
+    // One C function at the ceiling and one past it, each weighting argument i
+    // by i+1 so a dropped or reordered argument gives a different number rather
+    // than a plausible one.
+    let mut csrc = String::new();
+    for n in [max, max + 1] {
+        let params = (0..n)
+            .map(|i| format!("long long a{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let body = (0..n)
+            .map(|i| format!("a{i}*{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        csrc.push_str(&format!("long long ar{n}({params}) {{ return {body}; }}\n"));
+    }
+    std::fs::write(dir.join("arity.c"), &csrc)?;
+    let libname = if cfg!(target_os = "macos") {
+        "libarity.dylib"
+    } else {
+        "libarity.so"
+    };
+    let cc = std::process::Command::new("cc")
+        .args(["-O1", "-fPIC", "-shared", "-o"])
+        .arg(dir.join(libname))
+        .arg(dir.join("arity.c"))
+        .output()?;
+    assert!(
+        cc.status.success(),
+        "the arity fixture must build: {}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    std::fs::write(
+        dir.join("pkg/arity/loft.toml"),
+        format!(
+            "[library]\nname = \"arity\"\nversion = \"0.1.0\"\n\n[c]\nlibs = \"../../{libname}\"\n"
+        ),
+    )?;
+    let sig = |n: usize| {
+        let lp = (0..n)
+            .map(|i| format!("p{i}: integer"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cs = vec!["int64_t"; n].join(", ");
+        format!("pub fn ar{n}({lp}) -> integer;\n#c \"ar{n}\" \"int64_t({cs})\"\n")
+    };
+    // Sum of i^2 for i in 1..=n — hand-computable, and different for n and n+1.
+    let want = |n: usize| (1..=n).map(|i| i * i).sum::<usize>();
+    let run = |backend: &str, prog: &std::path::Path| -> std::io::Result<(String, String)> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(dir.join("pkg"))
+            .arg(prog)
+            .output()?;
+        Ok((
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
+    };
+
+    // Pass 1 — CALL SITES. The binding lives in a dependency; the program calls
+    // it. At the ceiling both backends must call it and agree on the value; one
+    // past it, both must refuse.
+    for (n, expect_ok) in [(max, true), (max + 1, false)] {
+        std::fs::write(src.join("arity.loft"), sig(n))?;
+        let call = (1..=n).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let prog = dir.join(format!("call{n}.loft"));
+        std::fs::write(
+            &prog,
+            format!("use arity;\nfn main() {{ println(\"R {{ar{n}({call})}}\") }}\n"),
+        )?;
+        let mut refused = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let (stdout, stderr) = run(backend, &prog)?;
+            if expect_ok {
+                assert!(
+                    stdout.contains(&format!("R {}", want(n))),
+                    "{backend} at the ceiling ({n} slots) must call and answer {}: \
+                     stdout={stdout:?} stderr={stderr:?}",
+                    want(n)
+                );
+            } else {
+                assert!(
+                    stderr.contains("c-binding-not-interpretable"),
+                    "{backend} past the ceiling ({n} slots) must refuse: \
+                     stdout={stdout:?} stderr={stderr:?}"
+                );
+            }
+            refused.push(stderr.contains("c-binding-not-interpretable"));
+        }
+        // The point of the guard: not that each backend behaves, but that they
+        // behave the SAME. The old bug passed a per-backend check.
+        assert_eq!(
+            refused[0], refused[1],
+            "the two backends disagreed about {n} C slots"
+        );
+    }
+
+    // Pass 2 — DECLARATION in code the author OWNS, never called. This is what
+    // puts the error in front of the person who can fix it; before arc C the
+    // only check was at the call site, so the author never saw it at all.
+    let owned = dir.join("owned.loft");
+    std::fs::write(
+        &owned,
+        format!(
+            "{}fn main() {{ println(\"declared, never called\") }}\n",
+            sig(max + 1)
+        ),
+    )?;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&owned)
+            .output()?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("c-binding-not-interpretable"),
+            "{backend} must refuse an over-ceiling DECLARATION in owned code even \
+             when nothing calls it: {stderr:?}"
+        );
+    }
+
+    // ...but a DEPENDENCY declaring one the program never calls must still load:
+    // a consumer cannot edit someone else's declaration, so it must not fail
+    // their build. Mirrors how `superseded_fold_diagnostics` scopes itself.
+    std::fs::write(
+        src.join("arity.loft"),
+        format!("{}{}", sig(max), sig(max + 1)),
+    )?;
+    let call = (1..=max)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let prog = dir.join("dep_ok.loft");
+    std::fs::write(
+        &prog,
+        format!("use arity;\nfn main() {{ println(\"R {{ar{max}({call})}}\") }}\n"),
+    )?;
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run(backend, &prog)?;
+        assert!(
+            stdout.contains(&format!("R {}", want(max))),
+            "{backend}: a dependency's over-ceiling binding that is never called must \
+             not break the build: stdout={stdout:?} stderr={stderr:?}"
+        );
+    }
+    Ok(())
+}
+
+/// @PLN128 — the three shapes every numeric library (BLAS, LAPACK, FFTW, HDF5)
+/// is actually made of, bound through `#c` and checked on both backends.
+///
+/// The load-bearing cell is `lc_daxpy`: **C writes its result THROUGH a
+/// caller-supplied pointer**, which is how every BLAS and LAPACK routine
+/// returns anything at all. If loft could not see those writes the numeric
+/// stack would not be bindable, so this is the property the whole plan rests
+/// on and it gets a guarantee probe rather than a one-off measurement.
+///
+/// The expected values are the ones `lc_selftest.c` computes in C (`make
+/// check`), not numbers copied from a loft run — agreement between two loft
+/// backends is not evidence that either matches C.
+///
+/// Skips when `cc` is absent, like its sibling above; a failed BUILD is a real
+/// failure, not a skip.
+#[test]
+fn numeric_array_shapes_cross_identically_on_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let built = std::process::Command::new("make")
+        .arg("-C")
+        .arg(&root)
+        .output()?;
+    assert!(
+        built.status.success(),
+        "the fixture library must build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let prog = std::env::temp_dir().join("loft_pln128_numeric.loft");
+    std::fs::write(
+        &prog,
+        "use lcabi;\n\
+         fn main() {\n\
+         \x20 a: vector<float> = [1.5, 2.25, 4.0];\n\
+         \x20 println(\"dsum {lc_dsum_scaled(a)}\");\n\
+         // C writes back through `y`. `y` is READ AFTERWARDS, which is also what\n\
+         // keeps it alive across the call — a vector whose last use is the `#c`\n\
+         // call itself is freed at that point and C's pointer dangles.\n\
+         \x20 y: vector<float> = [1.0, 2.0, 3.0];\n\
+         \x20 x: vector<float> = [10.0, 20.0, 30.0];\n\
+         \x20 lc_daxpy(y, x, 1200);\n\
+         \x20 println(\"daxpy {y[0]*1000.0} {y[1]*1000.0} {y[2]*1000.0}\");\n\
+         // A Fortran scalar-by-reference against a C function that DOES take a\n\
+         // count, so this one spends two slots. The Fortran cells below spend\n\
+         // one, and that is the signature's decision rather than the type's.\n\
+         \x20 s: vector<integer> = [6];\n\
+         \x20 println(\"scalar {lc_scalar_ref(s)}\");\n\
+         // The idiom the float refusal prescribes, on a COMPUTED double rather\n\
+         // than a literal an author converted by hand.\n\
+         \x20 v: vector<float> = [2.5];\n\
+         \x20 out: vector<float> = [0.0];\n\
+         \x20 lc_shim_scale(out, v);\n\
+         \x20 println(\"shim {out[0]*1000.0}\");\n\
+         \x20 fortran();\n\
+         }\n\
+         // @PLN128 arc D — the shape every real numeric library actually has:\n\
+         // each argument a BARE pointer, no counts anywhere.  Before the count\n\
+         // became the signature's decision, none of this was reachable — the\n\
+         // honest declaration was refused for arity, and the shape loft insisted\n\
+         // on delivered each count where the callee expected the next pointer,\n\
+         // which SIGSEGV'd the interpreter and produced nothing under --native.\n\
+         fn fortran() {\n\
+         \x20 n: vector<integer> = [3];\n\
+         \x20 al: vector<float> = [2.0];\n\
+         \x20 be: vector<float> = [10.0];\n\
+         \x20 x: vector<float> = [1.5, 2.25, 4.0];\n\
+         \x20 y: vector<float> = [100.0, 200.0, 400.0];\n\
+         \x20 lc_daxpby(n, al, x, be, y);\n\
+         \x20 println(\"daxpby {y[0]*1000.0} {y[1]*1000.0} {y[2]*1000.0}\");\n\
+         // `dgemm_` at full width: thirteen by-reference arguments, thirteen C\n\
+         // slots.  This is the routine the ceiling was sized around.\n\
+         \x20 d: vector<integer> = [2];\n\
+         \x20 a2: vector<float> = [1.0, 2.0, 3.0, 4.0];\n\
+         \x20 b2: vector<float> = [5.0, 6.0, 7.0, 8.0];\n\
+         \x20 c2: vector<float> = [100.0, 200.0, 300.0, 400.0];\n\
+         \x20 lc_dgemm(\"N\", \"N\", d, d, d, al, a2, d, b2, d, be, c2, d);\n\
+         \x20 println(\"dgemm {c2[0]} {c2[1]} {c2[2]} {c2[3]}\");\n\
+         // The two `char *` arguments have to land where the callee reads them.\n\
+         // Asserting only the product above would pass with them misplaced,\n\
+         // because the fixture computes the same product either way — it reports\n\
+         // an unsupported transpose instead, so this cell is what pins them.\n\
+         \x20 c3: vector<float> = [100.0, 200.0, 300.0, 400.0];\n\
+         \x20 lc_dgemm(\"T\", \"N\", d, d, d, al, a2, d, b2, d, be, c3, d);\n\
+         \x20 println(\"dgemm-t {c3[0]}\");\n\
+         // Counted and bare in ONE signature, arranged so a left-to-right walk\n\
+         // that grabs a count whenever an integer follows a pointer gives it to\n\
+         // the wrong vector and answers a different number.\n\
+         \x20 v2: vector<float> = [1.5];\n\
+         \x20 w2: vector<float> = [2.0, 3.0];\n\
+         \x20 println(\"split {lc_split(v2, 7, w2)}\");\n\
+         \x20 elements();\n\
+         }\n\
+         // @PLN128 arc E — one cell per element WIDTH loft may hand over, each\n\
+         // reader position-weighted in C so a stride that disagrees with loft's\n\
+         // answers a different number rather than the right one by luck.  This\n\
+         // is the half the declaration check lets through; the half it refuses\n\
+         // is `a_vector_element_must_match_the_c_pointee`.\n\
+         fn elements() {\n\
+         \x20 a32: vector<u32> = [1000, 2000, 3000];\n\
+         \x20 println(\"u32 {lc_u32_dot(a32)}\");\n\
+         \x20 a16: vector<u16> = [10, 20, 30];\n\
+         \x20 println(\"u16 {lc_u16_dot(a16)}\");\n\
+         \x20 a8: vector<u8> = [1, 2, 200];\n\
+         \x20 println(\"u8 {lc_u8_dot(a8)}\");\n\
+         \x20 ac: vector<character> = ['A', 'B', 'C'];\n\
+         \x20 println(\"char {lc_char_dot(ac)}\");\n\
+         \x20 ab: vector<boolean> = [true, false, true];\n\
+         \x20 println(\"bool {lc_bool_dot(ab)}\");\n\
+         \x20 af: vector<single> = [0.5 as single, 1.25 as single, 2.5 as single];\n\
+         \x20 println(\"single {lc_f32_dot(af)}\");\n\
+         // The level-1 BLAS *function* shape: the answer comes back BY VALUE in\n\
+         // an SSE register.  Refused until the caller grew a float-returning\n\
+         // rung, which is what made `ddot_`/`dnrm2_`/`dasum_` need an ANSI-C\n\
+         // shim each.  Both widths, because a C `float` return is a single in\n\
+         // that register and reading those bits as a double is a denormal.\n\
+         \x20 n3: vector<integer> = [3];\n\
+         \x20 dx: vector<float> = [1.5, 2.5, 4.0];\n\
+         \x20 dy: vector<float> = [4.0, 8.0, 16.0];\n\
+         \x20 println(\"ddot {lc_ddot(n3, dx, dy)}\");\n\
+         \x20 sx: vector<single> = [1.5 as single, 2.5 as single, 4.0 as single];\n\
+         \x20 sy: vector<single> = [4.0 as single, 8.0 as single, 16.0 as single];\n\
+         \x20 println(\"sdot {lc_sdot(n3, sx, sy)}\");\n\
+         }\n",
+    )?;
+    let libdir = root.join("pkg");
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        // 1.5 + 2.25 + 4.0 = 7.75, scaled by 1000.
+        "dsum 7750",
+        // a = 1.2; y[i] += a * x[i] over [1,2,3] and [10,20,30].
+        "daxpy 13000 26000 39000",
+        "scalar 42",
+        "shim 5000",
+        // Every value below is computed in C by `lc_selftest.c`, not read off a
+        // loft run: agreement between two loft backends is not evidence that
+        // either matches C.  y := 2*x + 10*y over [1.5, 2.25, 4] and
+        // [100, 200, 400].
+        "daxpby 1003000 2004500 4008000",
+        // Column-major 2x2: 2*(A*B) + 10*C with A = [[1,3],[2,4]],
+        // B = [[5,7],[6,8]], C = [[100,300],[200,400]].
+        "dgemm 1046 2068 3062 4092",
+        "dgemm-t -1",
+        // 1.5*100 + 7*10 + (2*1 + 3*2), scaled by 1000.
+        "split 228000",
+        // @PLN128 arc E — one per element width, position-weighted so a wrong
+        // stride cannot answer the right number.  All six are in
+        // `lc_selftest.c` too, so C agrees with itself before loft is asked.
+        "u32 14000",
+        "u16 140",
+        "u8 605",
+        "char 398",
+        "bool 4",
+        "single 10500",
+        // The float RETURN, both widths.  1.5*4 + 2.5*8 + 4*16 = 90.
+        "ddot 90",
+        "sdot 90",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "the two backends must agree on every numeric shape"
+    );
+    Ok(())
+}
+
 /// @PLN24 arc D — a C `char *` comes back as loft `text`, identically on both
 /// backends, from libc alone (no fixture, no library to install).
 ///
@@ -1888,6 +2265,21 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
     //   extra bound=true write=false   ONE table, two verdicts. An unknown NOT
     //           NULL column with no default is perfectly readable and impossible
     //           to INSERT into.
+    //
+    // @PLN23 S7c adds a migration that RUNS, and the rows are the gate:
+    //
+    //   grown rows 1|ada|null;2|grace|null;   the two original rows, untouched,
+    //           and the added column reading NULL rather than a fabricated
+    //           value. A plan changes a table's SHAPE and never its CONTENT, and
+    //           this line is where that stops being a sentence.
+    //   grown before bound=false … / grown after bound=true write=true   the
+    //           binding that refused now works, and the plan came off the SAME
+    //           comparison that refused — migration and binding disagree about
+    //           nothing.
+    //   moved rows 7|seven;8|eight;   a DECLARED rename, and the values
+    //           travelled with the name. Undeclared it would be an ADD plus an
+    //           orphan, which is what "indistinguishable from a drop plus an
+    //           add" means.
     let expect = [
         "created cols=4 ix=1 bound=true write=true why=",
         "declared flag=INTEGER score=REAL",
@@ -1896,6 +2288,14 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
         "varchar score conversion=ConvFloat",
         "noindex bound=false why=table noix_person has no index on id",
         "extra bound=true write=false why=column tenant is NOT NULL with no default",
+        // @PLN23 S7c — the migration ran, and the CONTENT is the claim. A plan
+        // that changed content would show up as a value that moved.
+        "grown before bound=false why=table grown has no column memo",
+        "grown plan ready=true steps=1",
+        "grown after bound=true write=true why=",
+        "grown rows 1|ada|null;2|grace|null;",
+        "moved plan ready=true steps=1",
+        "moved rows 7|seven;8|eight;",
         "schema_live ok",
     ];
 
@@ -1941,6 +2341,164 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
                 answer_without_housekeeping(f),
                 answer_without_housekeeping(&stdout),
                 "both backends, one table definition"
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// @PLN23 S6 — the child tables a collection field implies, against a real
+/// engine.
+///
+/// The pure gate proves the DERIVATION; this proves it was a schema an engine
+/// accepts and a round trip that closes. That distinction is the plan's own
+/// history: the cleanest version of the addressing rule — *the declared key
+/// addresses an element* — was falsified by an `INSERT`, not by re-reading the
+/// design (OBJECT_MAPPING.md § What the probe falsified).
+///
+/// Three lines, and each moves in a different direction if the address rule is
+/// wrong:
+///
+///   docs 7|seven;9|nine;11|eleven   doc 11's tag vector is EMPTY and doc 9's
+///           score vector is. A parent with no children is still a row, and a
+///           write path that emitted a parent only when it had children would
+///           lose it silently.
+///   scores 7|0|10;7|1|20;11|0|30   the S6a shape, unchanged by S6b landing
+///           beside it. Two collections of different kinds under one owner, and
+///           the field path in the table NAME is what keeps them apart.
+///   tags 7|0|a|1|~;7|1|b|2|;9|0|a|1|x;9|1|a|1|x;9|2|c|3|~   the S6b shape, and
+///           three claims at once. Doc 9 holds the SAME tag twice: under a
+///           key-addressed rule those collapse to one row, and under the ordinal
+///           rule they are rows 0 and 1 — the falsified claim, standing as a
+///           test. `a/1` is also doc 7's, so an owner column that went missing
+///           MERGES two documents rather than losing anything. And `~` is SQL
+///           NULL beside `b`'s empty string: not the same value, which is most
+///           of why a binding exists.
+///
+/// @PLN23 S6c adds the two KEYED shapes, and the kind is the only thing that
+/// decides between them:
+///
+///   seen ord=false ix=1 rank ord=true ix=2   a `hash` addresses by its declared
+///           key, so it carries no ordinal and one index; a `sorted` takes the
+///           ordinal and owes its key an index of its own. @PLN129 refuses a
+///           bind whose lookup no index serves, so the second one is not
+///           decoration — and a `sorted` sub-collection had neither it nor a
+///           refusal before S6c.
+///   seen 7|m1|10;7|m2|20;9|m1|99   `m1` under two owners. A hash key is unique
+///           WITHIN its collection, and the owner column is the only thing
+///           keeping the two apart.
+///   rank 7|0|1|a;7|1|2|b;7|2|3|c;…   the steps went in as 3,1,2. The ordinal is
+///           the COLLECTION's order, not the order a program added things in,
+///           and only an out-of-order insertion can tell those apart.
+///   beats 1|0|1|y;1|1|1|x;1|2|2|z   TWO elements of bar 1, surviving as rows 0
+///           and 1. This is the `INSERT` that falsified the clean addressing
+///           rule, kept as a test — and it needs `Beat` to have a second keyed
+///           view, because a `sorted` whose element type has only one view
+///           REPLACES on an equal key (measured, both backends).
+///   byname 1|1|x;1|1|y;1|2|z   the SAME three records, addressed by the other
+///           view's key. Only `beats` was written to; two keyed collections over
+///           one element type are views of one record set (loft#843), so both
+///           child tables hold all three.
+///
+/// @PLN23 S7 recurses: a collection inside a record ELEMENT is a table of its
+/// own, addressed by (the root's key, the parent element's address, its own).
+///
+///   pieces 1|0|0|10|1|2;1|0|1|11|3|4;…;2|1|0|14|9|0
+///           Two ledgers, two marks each, two pieces each — the smallest shape
+///           where each of the THREE address levels is separately load-bearing.
+///           Both ledgers have a mark `A` and both `A`s hold pieces 10 and 11,
+///           so dropping `ledger_id` merges the ledgers, dropping `ord` merges
+///           `A`'s pieces with `B`'s, and dropping `ord_2` collapses the pieces
+///           within one mark. Three different wrong answers, and none of them is
+///           "fewer rows than expected".
+///   marks 1|0|A;1|1|B;2|0|A;2|1|C   the repeated label, one level up.
+///   …|10|1|2   the last two columns are `at_row` / `at_col`: an INLINE struct
+///           inside the grandchild's element, flattened (@PLN23 S7b). It has no
+///           identity, so it has no table — and the write reads it through the
+///           column's PATH, which is what `field_value(x, [outer, inner])` was
+///           added to loft for.
+///   notes 1|0|100;1|1|200;2|0|300   @PLN23 S7b-ii — a collection inside an
+///           INLINE struct. `(ledger_id, ord)` and no more: `meta` has no
+///           identity, so it adds to the table NAME and to nothing else, while
+///           its sibling scalar `rev` flattens into the owner's own row
+///           (`ledger 1|one|5`). A record ELEMENT in the same position DOES add
+///           an ordinal — that is the distinction, and it is the mapping's one
+///           rule (identity earns an address) applied one level in.
+///   permute at_col=4,at_row=3,pid=11,ord_2=1,ord=0,ledger_id=1,   ONE row built from a REVERSED
+///           definition. The address columns come out outer→inner, so the two
+///           ordinals are always in depth order and a writer counting them in
+///           ROW order agrees on every other line here. Reversing the columns is
+///           the only thing that tells `ords[c.depth]` from a counter — without
+///           it, `ColumnDef.depth` is a field no test could distinguish from one.
+///
+/// sqlite, so a machine with no database still runs it.
+#[test]
+fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the sqlite backend ships a shim loft must compile
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("children_live.loft");
+
+    let expect = [
+        "tables=5 parent=doc scores=doc_scores tags=doc_tags",
+        "seen ord=false ix=1 rank ord=true ix=2",
+        "docs   7|seven;9|nine;11|eleven",
+        "scores 7|0|10;7|1|20;11|0|30",
+        "tags   7|0|a|1|~;7|1|b|2|;9|0|a|1|x;9|1|a|1|x;9|2|c|3|~",
+        "seen   7|m1|10;7|m2|20;9|m1|99",
+        "rank   7|0|1|a;7|1|2|b;7|2|3|c;9|0|6|g;9|1|8|h",
+        "beats  1|0|1|y;1|1|1|x;1|2|2|z",
+        "byname 1|1|x;1|1|y;1|2|z",
+        "depth  tables=4 grandchild=ledger_marks_pieces inline=ledger_meta_notes",
+        "ledger 1|one|5;2|two|6",
+        "marks  1|0|A;1|1|B;2|0|A;2|1|C",
+        "pieces 1|0|0|10|1|2;1|0|1|11|3|4;1|1|0|12|5|6;1|1|1|13|7|8;2|0|0|10|1|2;2|0|1|11|3|4;2|1|0|14|9|0",
+        "notes  1|0|100;1|1|200;2|0|300",
+        "permute at_col=4,at_row=3,pid=11,ord_2=1,ord=0,ledger_id=1,",
+        "children_live ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(
+                answer_without_housekeeping(f),
+                answer_without_housekeeping(&stdout),
+                "both backends, one set of child tables"
             ),
         }
     }
@@ -2268,14 +2826,24 @@ fn a_structure_written_is_immediately_readable_through_one_connection_string() -
     //           eager load would read 3.
     //   absent=true clean=[]               a genuine absence is not a failure —
     //           the mirror of the bug @PLN129 arc C exists for.
+    //   digest=true                        @PLN23 S5: the record that came back
+    //           IS the record that went in, compared through the same walk that
+    //           WROTE it.  It sees what the tokens beside it cannot — those name
+    //           only grace's fields and alan's NAME, so a driver returning
+    //           `flag=false` for every row keeps every other claim (grace's flag
+    //           genuinely is false) and fails on alan's digest alone.  Measured:
+    //           that break leaves `created digest=true` and turns
+    //           `created second=alan touched=2 digest=true` false.
     let expect = [
         "created value=grace float=0.25 flag=false",
+        "created digest=true",
         "created identity=true resident=1",
-        "created second=alan touched=2",
+        "created second=alan touched=2 digest=true",
         "created absent=true clean=[]",
         "followed value=grace float=0.25 flag=false",
+        "followed digest=true",
         "followed identity=true resident=1",
-        "followed second=alan touched=2",
+        "followed second=alan touched=2 digest=true",
         "followed absent=true clean=[]",
         "round_trip ok",
     ];
@@ -2838,6 +3406,284 @@ fn a_text_return_must_say_it_is_a_c_string() -> std::io::Result<()> {
         assert_eq!(
             seen[0], seen[1],
             "and both backends must say it identically"
+        );
+    }
+    Ok(())
+}
+
+/// @PLN128 arc E — a `vector<T>` and the C pointee are two spellings of ONE
+/// layout, and a declaration where they disagree is refused.
+///
+/// Every case here was a running program with wrong numbers in it, measured
+/// against real OpenBLAS on both backends with exit 0 and no diagnostic:
+///
+/// * `vector<integer>` (8-byte) against LAPACK's `int *` pivot array — `dgesv_`
+///   answered `ipiv = 8589934593, 0` where the pivots are `1, 2`.
+/// * `vector<single>` (4-byte) against `double *` — `daxpy_` wrote 24 bytes
+///   into a 12-byte loft vector, which is a write past the end of a store
+///   allocation from a declaration loft accepted.
+/// * `vector<i8>` / `vector<i16>` — loft stores narrow SIGNED elements as
+///   `val - min`, so C reads every value shifted by 128 / 32768.
+/// * `vector<text>` — the elements are loft's own heap handles, so C
+///   dereferences a store offset as an address: immediate SIGSEGV.
+///
+/// None of them needs a library to be installed: the declaration is what is
+/// wrong, so the refusal lands before anything is called. The counterpart —
+/// every element width that DOES cross, checked against values C computes — is
+/// in `numeric_array_shapes_cross_identically_on_both_backends`.
+#[test]
+fn a_vector_element_must_match_the_c_pointee() -> std::io::Result<()> {
+    // (declaration, the words the refusal has to carry)
+    let cases = [
+        (
+            "pub fn f(v: vector<integer>);   #c \"lc_x\" \"void(int*)\"",
+            "striding 4 bytes",
+        ),
+        (
+            "pub fn f(v: vector<single>);   #c \"lc_x\" \"void(double*)\"",
+            "striding 8 bytes",
+        ),
+        // Same WIDTH, different class. The message must not claim an overrun
+        // here — there isn't one — only that every value arrives different.
+        (
+            "pub fn f(v: vector<float>);   #c \"lc_x\" \"void(const int64_t*)\"",
+            "the same width read as integers",
+        ),
+        (
+            "pub fn f(v: vector<i16>);   #c \"lc_x\" \"void(const short*)\"",
+            "loft stores narrow SIGNED elements as `val - min`",
+        ),
+        (
+            "pub fn f(v: vector<text>);   #c \"lc_x\" \"void(const char *const *)\"",
+            "loft's own heap handles",
+        ),
+    ];
+    for (decl, want) in cases {
+        let path = std::env::temp_dir().join("loft_pln128_elem_refuse.loft");
+        std::fs::write(&path, format!("{decl}\nfn main() {{ println(\"x\") }}\n"))?;
+        let mut seen = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+                .arg(backend)
+                .arg("--errors=compact")
+                .arg(&path)
+                .output()?;
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                !out.status.success(),
+                "{backend} must refuse `{decl}`: {stderr}"
+            );
+            assert!(
+                stderr.contains(want),
+                "{backend}: refusing `{decl}` must say `{want}`: {stderr}"
+            );
+            seen.push(stderr);
+        }
+        assert_eq!(
+            seen[0], seen[1],
+            "and both backends must say it identically"
+        );
+    }
+    // `void*` is the opaque escape hatch and stays open: it is how `write(2)`
+    // takes a `vector<u8>`, and it is the author saying "these are bytes".
+    let path = std::env::temp_dir().join("loft_pln128_elem_opaque.loft");
+    std::fs::write(
+        &path,
+        "pub fn f(v: vector<float>);   #c \"lc_x\" \"void(const void*, int64_t)\"\n\
+         fn main() { println(\"x\") }\n",
+    )?;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--errors=compact")
+            .arg(&path)
+            .output()?;
+        assert!(
+            out.status.success(),
+            "{backend} must accept an opaque `void*` pointee: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// @PLN128 Q5 — a RETAINING C API is bindable, over a C-owned buffer.
+///
+/// The plan/execute split is not an FFTW quirk: zlib's `z_stream` keeps
+/// `next_in`/`next_out`, `sqlite3_bind_text(SQLITE_STATIC)` keeps the caller's
+/// bytes, and every "context object" API is this shape. C holds a buffer
+/// pointer across two calls the caller makes.
+///
+/// Bound with a **loft** vector that is a use-after-free (E6b): loft frees the
+/// vector at its last loft-visible use, which is the call that handed the
+/// pointer over, and C reads whatever took its place. Measured, both backends,
+/// no fault and no diagnostic — and deliberately NOT asserted here, because
+/// pinning the current output would lock the bug in.
+///
+/// Bound with a **C-owned** buffer it is ordinary, which is what this pins.
+/// Nothing loft owns is retained; the buffer's lifetime is the handle's; and
+/// the two copies live only for their own call, which is what `#c` already
+/// guarantees. It needs no shim — `memcpy` is libc — and it is what FFTW's own
+/// documentation tells C callers to do anyway, because `fftw_malloc` is what
+/// gives the SIMD alignment.
+///
+/// The expected value is `lc_selftest.c`'s, computed in C.
+#[test]
+fn a_retaining_c_api_binds_over_a_c_owned_buffer() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c_abi");
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let built = std::process::Command::new("make")
+        .arg("-C")
+        .arg(&root)
+        .output()?;
+    assert!(
+        built.status.success(),
+        "the fixture library must build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let prog = std::env::temp_dir().join("loft_pln128_retain.loft");
+    std::fs::write(
+        &prog,
+        "use lcabi;\n\
+         fn main() {\n\
+         \x20 n = 3;\n\
+         \x20 bytes = n * 8;\n\
+         \x20 buf = lc_buf_alloc(bytes);\n\
+         \x20 src: vector<float> = [1.5, 2.25, 4.0];\n\
+         \x20 lc_load(buf, src, bytes);\n\
+         // The plan RETAINS the buffer here and reads it in `lc_run` below —\n\
+         // a later call, which is the shape that fails with a loft vector.\n\
+         \x20 p = lc_plan(buf, n);\n\
+         \x20 println(\"retained {lc_run(p)}\");\n\
+         // And back out, so the round trip is closed rather than assumed.\n\
+         \x20 back: vector<float> = [0.0, 0.0, 0.0];\n\
+         \x20 lc_store(back, buf, bytes);\n\
+         \x20 println(\"roundtrip {back[0]} {back[1]} {back[2]}\");\n\
+         \x20 lc_plan_free(p);\n\
+         \x20 lc_buf_free(buf);\n\
+         }\n",
+    )?;
+    let libdir = root.join("pkg");
+    let run = |backend: &str| -> std::io::Result<String> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(stdout)
+    };
+    let interp = run("--interpret")?;
+    for want in [
+        // 1.5*1 + 2.25*2 + 4.0*3 = 18.0, scaled by 1000 — `lc_selftest.c`'s value.
+        "retained 18000",
+        "roundtrip 1.5 2.25 4",
+    ] {
+        assert!(
+            interp.contains(want),
+            "interpret missing `{want}`:\n{interp}"
+        );
+    }
+    let native = run("--native")?;
+    assert_eq!(
+        interp, native,
+        "a retaining API must answer the same on both backends"
+    );
+    Ok(())
+}
+
+/// @PLN128 arc E — a float RETURN binds; a float ARGUMENT still does not.
+///
+/// The plan settled the two together and that was one decision too few. An
+/// argument would need a trampoline per SUBSET of positions that are float —
+/// `2^arity`, genuinely impossible — while the return is a single axis and
+/// costs one more expansion of the same arity list. Refusing it cost the
+/// level-1 BLAS *functions* (`ddot_`, `dnrm2_`, `dasum_`) and every LAPACK
+/// auxiliary that answers a number, and the cure it prescribed was an ANSI-C
+/// shim per routine: a C toolchain in the build of every numeric package.
+///
+/// The pairing is exact rather than widening: a C `float` leaves a SINGLE in
+/// the return register, so binding it to loft `float` would read those bits as
+/// a double and get a denormal.
+#[test]
+fn a_float_return_binds_and_a_float_argument_still_does_not() -> std::io::Result<()> {
+    let cases = [
+        (
+            "pub fn f(v: vector<float>) -> integer;   #c \"lc_x\" \"double(const double*, int64_t)\"",
+            Some("must return `float`, not `integer`"),
+        ),
+        (
+            "pub fn f(v: vector<float>) -> float;   #c \"lc_x\" \"float(const double*, int64_t)\"",
+            Some("must return `single`, not `float`"),
+        ),
+        (
+            "pub fn f(v: integer) -> float;   #c \"lc_x\" \"int64_t(int64_t)\"",
+            Some("a float comes back only from a C `float` or `double`"),
+        ),
+        (
+            "pub fn f(v: float);   #c \"lc_x\" \"void(double)\"",
+            Some("travels in an SSE register the caller does not write"),
+        ),
+        // The two that now bind. Nothing is called, so no library is needed —
+        // the declaration either type-checks or it does not.
+        (
+            "pub fn f(v: vector<float>) -> float;   #c \"lc_x\" \"double(const double*, int64_t)\"",
+            None,
+        ),
+        (
+            "pub fn f(v: vector<single>) -> single;   #c \"lc_x\" \"float(const float*, int64_t)\"",
+            None,
+        ),
+    ];
+    for (decl, want) in cases {
+        let path = std::env::temp_dir().join("loft_pln128_float_return.loft");
+        std::fs::write(&path, format!("{decl}\nfn main() {{ println(\"x\") }}\n"))?;
+        let mut seen = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+                .arg(backend)
+                .arg("--errors=compact")
+                .arg(&path)
+                .output()?;
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            match want {
+                Some(w) => {
+                    assert!(
+                        !out.status.success(),
+                        "{backend} must refuse `{decl}`: {stderr}"
+                    );
+                    assert!(
+                        stderr.contains(w),
+                        "{backend}: refusing `{decl}` must say `{w}`: {stderr}"
+                    );
+                }
+                None => assert!(
+                    out.status.success(),
+                    "{backend} must accept `{decl}`: {stderr}"
+                ),
+            }
+            seen.push(stderr);
+        }
+        assert_eq!(
+            seen[0], seen[1],
+            "and both backends must answer `{decl}` identically"
         );
     }
     Ok(())

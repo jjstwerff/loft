@@ -49,6 +49,30 @@ pub enum ColumnType {
   ColOther,
 }
 
+/// Where a column's value comes from when a row is written.
+///
+/// A parent table draws every column from one record, so this says `SrcField`
+/// and never has to be read. A CHILD table draws one row from THREE places —
+/// the owner record, the element's position in the collection, and the element
+/// itself — and a writer that told them apart by COUNTING the owner's key
+/// columns would be a second derivation of a fact the definition already holds.
+/// That is the re-assertion § S6 collapses: the derivation says where each value
+/// comes from, and DDL, write and read all read the answer.
+pub enum ColumnSource {
+  /// `field_value(<this table's record>, position)` — the ordinary case, and
+  /// the only one a parent table or a definition read back from a database has.
+  SrcField,
+  /// `field_value(<the OWNER>, position)`. `position` is the owner's byte
+  /// offset, which is the number `KeyInfo.position` already carries.
+  SrcOwnerKey,
+  /// The element's index in its collection. No record holds it — the collection
+  /// does — so `position` means nothing for this column.
+  SrcOrdinal,
+  /// The element IS the value: a `vector<integer>` has no field to read, so the
+  /// column names the element rather than a field that does not exist.
+  SrcElement,
+}
+
 /// One column.
 pub struct ColumnDef {
   const nm: text,
@@ -68,6 +92,33 @@ pub struct ColumnDef {
   /// a column by value. `-1` for a column that is in the table and not in the
   /// type.
   position: integer = -1,
+  /// WHICH record `position` is an offset into — see `ColumnSource`.
+  ///
+  /// One number and one meaning: `position` is always a byte offset in the
+  /// record `src` names. Everything but a child table answers `SrcField`, which
+  /// is why it defaults to that.
+  src: ColumnSource = SrcField,
+  /// The chain of byte offsets that reaches this column's field, ending at
+  /// `position` — @PLN23 S7b.
+  ///
+  /// One element for a direct field, more for one inside an INLINE struct:
+  /// `origin_x` is `[origin's offset, x's offset]`. `field_value` takes the
+  /// whole chain rather than a sum, because a position has to BEGIN a field of
+  /// the record it is read against, and `origin`'s offset plus `x`'s begins
+  /// nothing in the owner.
+  ///
+  /// Empty on a definition read back from a database, which has no loft field
+  /// behind it at all.
+  path: vector<integer> = [],
+  /// How far down the collection path the record this column reads from sits:
+  /// `0` is the owner the whole graph hangs from, `1` an element of one of its
+  /// collections, `2` an element of one of THOSE.
+  ///
+  /// Only a grandchild needs it, and only for its ordinals: `(doc_id, ord,
+  /// ord_2)` has two `SrcOrdinal` columns, and a writer that told them apart by
+  /// their ORDER would be counting again — the thing `src` exists to stop one
+  /// level up. With it the write path is `ords[c.depth]` at any depth.
+  depth: integer = 0,
   /// Would an `INSERT` that omits this column succeed?
   ///
   /// Only a column read back from a database can answer no, and it is the one
@@ -206,21 +257,92 @@ fn derive_columns(elem: TypeInfo, type_name: text) -> TableDef {
   cols: vector<ColumnDef> = [];
   for f in elem.fields {
     if !is_data(f) { continue }
-    ct = column_type(f.kind);
-    if ct == ColOther {
-      return no_table("{type_name}.{f.name} is a {f.type_name}, which is not one column");
-    }
-    cols += [ColumnDef {
-      nm: f.name,
-      kind: ct,
-      nullable: f.nullable,
-      position: f.position,
-    }];
+    empty_path: vector<integer> = [];
+    one = expand_field(type_name, "", empty_path, f, 0);
+    if one.refusal != "" { return one }
+    for oc in one.columns { cols += [oc] }
   }
   if len(cols) == 0 {
     return no_table("{type_name} has no stored columns");
   }
+  dup = duplicate_column(cols);
+  if dup != "" {
+    return no_table("{type_name} would have two columns called {dup}");
+  }
   return TableDef { nm: table_name_for(type_name), columns: cols };
+}
+
+/// @PLN23 S7b — the columns ONE field contributes.
+///
+/// A scalar contributes itself. An INLINE STRUCT contributes one column per
+/// stored field it holds, recursively: *an inline struct has no identity, so it
+/// has no table*, and `origin` becomes `origin_x` / `origin_y`. Identity is what
+/// earns a row, and `origin` has none — there is nothing to look one up by.
+///
+/// The name carries the field path (`origin_x`), and the PATH carries the byte
+/// offsets that reach it. Both are needed and neither derives the other: the
+/// name is what SQL sees, and the offsets are what `field_value` walks.
+///
+/// A `RefKind` field is NOT flattened — a stored reference names a record with
+/// its own identity, so copying its fields in here would inline something the
+/// mapping says is a foreign key or a copy, and that is § Open question 2.
+fn expand_field(owner_label: text, nm_prefix: text, path_prefix: vector<integer>,
+                f: FieldInfo, depth: integer) -> TableDef {
+  out: vector<ColumnDef> = [];
+  nm = "{nm_prefix}{f.name}";
+  p = path_prefix;
+  p += [f.position];
+  if f.kind == RecordKind || f.kind == VariantKind {
+    st = type_named(f.type_name);
+    if st == null {
+      return no_table("{owner_label}.{nm}: {f.type_name} is not a type in this program");
+    }
+    sub = st ?? no_type();
+    for sf in sub.fields {
+      if !is_data(sf) { continue }
+      // @PLN23 S7b-ii — a collection inside an inline struct is a child table
+      // of the OWNER, found by `collection_fields`. Skipped here for the same
+      // reason a top-level collection field is: it is rows, not a column.
+      if is_child_collection(sf) { continue }
+      one = expand_field(owner_label, "{nm}_", p, sf, depth);
+      if one.refusal != "" { return one }
+      for oc in one.columns { out += [oc] }
+    }
+    // No refusal on an empty answer: an inline struct whose only fields are
+    // COLLECTIONS contributes no column, and its collections are tables of the
+    // owner. That is an ordinary shape once a collection field can become one.
+    return TableDef { nm: "", columns: out };
+  }
+  ct = column_type(f.kind);
+  if ct == ColOther {
+    return no_table("{owner_label}.{nm} is a {f.type_name}, which is not one column");
+  }
+  out += [ColumnDef {
+    nm: nm,
+    kind: ct,
+    nullable: f.nullable,
+    position: f.position,
+    src: SrcField,
+    depth: depth,
+    path: p,
+  }];
+  return TableDef { nm: "", columns: out };
+}
+
+/// The first column name that appears twice, or `""`.
+///
+/// A flattened struct names its columns, and so does the author: a `Doc` with an
+/// `origin: Point` AND a field called `origin_x` produces two columns of one
+/// name. The engine is the only thing that would notice, and only the engines
+/// that reject it — the same class as the child table's address collision, so
+/// it is checked the same way.
+fn duplicate_column(cols: vector<ColumnDef>) -> text {
+  for a in cols {
+    for b in cols {
+      if b#count > a#count && a.nm == b.nm { return a.nm }
+    }
+  }
+  return "";
 }
 
 /// The index a collection kind implies, or one with an empty name when a key
@@ -249,7 +371,12 @@ fn derive_index(t: TypeInfo, base: TableDef) -> IndexDef {
 /// guessable derivation of a fact the descriptor already holds.
 fn column_at(self: TableDef, position: integer) -> text {
   for c in self.columns {
-    if c.position == position { return c.nm }
+    // `len(path) == 1` is what says this column is a DIRECT field of the record
+    // the key is a key of. A flattened `origin_x` carries `x`'s offset within
+    // `Point`, which can equal a top-level field's offset — 0 is where a
+    // struct's first stored field lives, in every struct — so matching on the
+    // number alone would name a nested column as the key (@PLN23 S7b).
+    if len(c.path) == 1 && c.position == position { return c.nm }
   }
   return "";
 }
@@ -326,6 +453,16 @@ pub struct Dialect {
   /// to give — a connection string can name a database, a search path can move
   /// it, and asking is the only way that stays true.
   const catalog_schema: text = "",
+  /// Has loft RUN `ALTER TABLE … RENAME COLUMN … TO …` against this engine?
+  ///
+  /// False by default, and a migration refuses a rename here rather than sending
+  /// a statement nobody has run — the same admission `catalog_schema` makes, for
+  /// the same reason. All four engines are expected to take the identical
+  /// spelling (sqlite 3.25+, PostgreSQL, MariaDB 10.5.2+, duckdb), so this is a
+  /// one-line change per engine once someone runs it there; "expected" is
+  /// precisely what this package does not ship on, having been wrong twice
+  /// before about a spelling (@PLN133 P3).
+  const renames_columns: boolean = false,
 }
 
 pub fn dialect_sqlite() -> Dialect {
@@ -339,6 +476,8 @@ pub fn dialect_sqlite() -> Dialect {
     nm: "sqlite", quote: "\"",
     int_type: "INTEGER", float_type: "REAL", text_type: "TEXT",
     boolean_type: "INTEGER",
+    // Measured here, on 3.45: the rename runs and carries the values across.
+    renames_columns: true,
     float_before: "printf('%!.17g', ", float_after: ")",
     style: SQL_QMARK,
   };
@@ -1183,6 +1322,9 @@ pub fn val_null() -> Bound { b = Bound { kind: SQL_NULL, t: "", i: 0, f: 0.0 }; 
 /// `derive` fixed from the loft type's field positions. A count that does not
 /// match refuses: a row written into the wrong columns is a wrong value that
 /// reads back perfectly.
+///
+/// Building `values` by hand is not the intended use — see `bound_of` and
+/// § S5 below, where the row comes off the VALUE.
 pub fn insert_row(self: TableDef, d: Dialect, values: vector<Bound>) -> SqlText {
   q: SqlText = SqlText { };
   if self.refusal != "" { q.refused = true; return q }
@@ -1203,4 +1345,812 @@ pub fn insert_row(self: TableDef, d: Dialect, values: vector<Bound>) -> SqlText 
   }
   q.lit(")");
   return q;
+}
+
+// --- S5: the row a VALUE implies ---------------------------------------------
+//
+// @PLN23 S5. `insert_row` renders the STATEMENT from the definition; this is the
+// other half — the VALUES, taken off a loft value rather than listed by hand.
+// @PLN133 S13 stopped exactly here ("the GENERIC struct walk stays @PLN23 S5:
+// reflection reports types, not values"), and `field_value` (@PLN127's value
+// half) is what closes it.
+//
+// **The walk is over the DEFINITION's columns, not the type's fields**, and that
+// ordering is the whole trick: `insert_row` requires the values in column order,
+// and reading each column's `position` out of the value produces them in that
+// order by construction. There is no second traversal to keep in step, and no
+// count to get wrong.
+//
+// It cannot be one generic function over the struct type, and that is a language
+// fact rather than a design choice: a generic body is parsed once against its
+// type variable, so `field_value` is refused there. The walk therefore sits
+// where the concrete type is known — the same place the lazy READ driver already
+// sits (@PLN133 S8), so both halves of the mapping are per-element-type and
+// neither names a column.
+
+/// The bound value for one column, read out of a reflected field.
+///
+/// **Keyed on the COLUMN, not on the reflected kind.** `derive` already decided
+/// what this column holds — a `character` becomes text, a `single` becomes a
+/// float — and dispatching on `v.kind` here would be a SECOND mapping of the
+/// same fact, free to disagree with the first. One derivation decides; this
+/// reads its answer.
+///
+/// A null field becomes SQL NULL, never the empty string or zero. That is the
+/// distinction the binding layer exists for, and `ValueInfo` carries it apart
+/// from the payload so it survives the trip.
+pub fn bound_of(c: ColumnDef, v: ValueInfo) -> Bound {
+  // A column with no field behind it (`position` is -1) and a field that has no
+  // scalar reading both arrive as `OtherKind`, and both mean the same thing
+  // here: this program has no value for that column. NULL says so; a zero would
+  // be a claim.
+  if v.kind == OtherKind { return val_null() }
+  if v.is_null { return val_null() }
+  if c.kind == ColInteger { return val_int(v.i) }
+  if c.kind == ColFloat { return val_float(v.f) }
+  if c.kind == ColBoolean { return val_boolean(v.i != 0) }
+  if c.kind == ColText {
+    // A character is stored as a code point and read back from a text column's
+    // first character, so it goes down as the one-character text `chr` builds —
+    // the round trip `column_type` promises when it maps it to `ColText`.
+    if v.kind == CharacterKind { return val_text(chr(v.i)) }
+    return val_text(v.t);
+  }
+  return val_null();
+}
+
+// --- S6: sub-records become child tables -------------------------------------
+//
+// @PLN23 S6. A loft value is a COLUMN of the nearest enclosing record that has
+// identity; a value with its own identity is a ROW, keyed by (the owner's key,
+// the address its collection guarantees to be unique).
+//
+// The address rule has to be restated by DDL generation, the write path, the
+// read path's reassembly, and migration — and omission is silent at every one of
+// them, so it lives in ONE function (`element_address`) that all of them ask.
+// A backend never sees the question: the mapping is backend-agnostic and only
+// the SQL dialect differs below it.
+
+/// What addresses an element of a collection inside its owner.
+///
+/// The split is **unique vs not**, which is not the same as keyed vs positional
+/// — and that correction came from a database rather than from re-reading the
+/// design. A `sorted<Tag[weight]>` may hold two elements of the same weight, so
+/// its declared key is an access path, not a name:
+///
+/// ```
+/// INSERT INTO Doc_rank VALUES (7,3,'m'),(7,3,'n');
+/// ERROR 1062 (23000): Duplicate entry '7-3' for key 'PRIMARY'
+/// ```
+///
+/// Only a `hash` earns its key as identity. For every other kind the declared
+/// key becomes an ordinary index, which is what it always was.
+pub enum Address {
+  /// Position in the collection — the only identity a vector or an array has,
+  /// and the honest one for any kind that admits duplicate keys.
+  AddrOrdinal,
+  /// The collection's declared key, unique by construction.
+  AddrKey,
+  /// No addressable elements: this type is not a collection.
+  AddrNone,
+}
+
+/// The ONE answer to "what addresses an element of this collection".
+pub fn element_address(coll: TypeInfo) -> Address {
+  // A vector and an array differ in whether elements are inline or referenced,
+  // which is a storage fact and not an addressing one. Both are positional.
+  if coll.kind == VectorKind { return AddrOrdinal }
+  // A spatial collection orders by Morton code over several coordinates, and
+  // SQL has no shape that means the same thing. So it has no address here —
+  // the same answer `derive` gives it as an owner, from the same reasoning.
+  if coll.collection == KeyedRadix { return AddrNone }
+  if coll.collection == KeyedHash { return AddrKey }
+  // sorted / ordered / index / trie: ordered or indexed BY the key, and none of
+  // them promises it is unique. The ordinal is the CONSERVATIVE answer — it is
+  // never wrong rows, only a weaker address — which is why every kind but the
+  // hash takes it rather than each being decided on its own.
+  if coll.kind == KeyedKind { return AddrOrdinal }
+  return AddrNone;
+}
+
+/// The column name a child table gives the owner it belongs to: `doc_id` for a
+/// `Doc` keyed on `id`.
+pub fn owner_column(owner_table: text, key_name: text) -> text {
+  return "{owner_table}_{key_name}";
+}
+
+/// The name of the child table one collection field implies.
+///
+/// The field PATH lives in the table name rather than in a column, which is what
+/// keeps `Doc_scores` and `Doc_tags` from colliding and lets a collection nested
+/// inside an inline struct (`Doc.origin.marks` → `doc_origin_marks`) need no
+/// extra key.
+pub fn child_table_name(owner_table: text, field_path: text) -> text {
+  return "{owner_table}_{field_path}";
+}
+
+/// Does this field become its own TABLE rather than a column?
+fn is_child_collection(f: FieldInfo) -> boolean {
+  return f.kind == VectorKind || f.kind == KeyedKind;
+}
+
+/// A collection field, and the NAME PATH that reaches it — @PLN23 S7b-ii.
+///
+/// `Doc.origin.marks` arrives here as `origin_marks`, because the field path
+/// lives in the table name and nowhere else.
+pub struct CollectionField { const path_name: text, f: FieldInfo }
+
+/// Every collection field one record type holds, INCLUDING those reached
+/// through inline structs.
+///
+/// **An inline struct contributes to the name and to nothing else.** It has no
+/// identity, so it adds no address column and no depth: `Doc.origin.marks` is
+/// `doc_origin_marks`, addressed by `(doc_id, ord)` exactly as `Doc.marks` would
+/// be. Compare a record ELEMENT, which does have identity and therefore does add
+/// an ordinal (§ S7a) — that is the same distinction the mapping has made since
+/// S6a, one level further in.
+fn collection_fields(elem: TypeInfo, prefix: text) -> vector<CollectionField> {
+  out: vector<CollectionField> = [];
+  for f in elem.fields {
+    if !is_data(f) { continue }
+    if is_child_collection(f) {
+      out += [CollectionField { path_name: "{prefix}{f.name}", f: f }];
+      continue;
+    }
+    if f.kind == RecordKind || f.kind == VariantKind {
+      st = type_named(f.type_name);
+      if st == null { continue }
+      sub = st ?? no_type();
+      for cf in collection_fields(sub, "{prefix}{f.name}_") { out += [cf] }
+    }
+  }
+  return out;
+}
+
+/// The owner's own columns — the scalar ones.
+///
+/// Collection fields are rows in another table (`derive_children`), so they are
+/// skipped here rather than refused. Everything else `derive_columns` refuses,
+/// it refuses too: a definition that quietly omits a field produces a database
+/// whose reader disagrees with its writer.
+fn derive_owner_columns(elem: TypeInfo) -> TableDef {
+  cols: vector<ColumnDef> = [];
+  for f in elem.fields {
+    if !is_data(f) { continue }
+    if is_child_collection(f) { continue }
+    empty_path: vector<integer> = [];
+    one = expand_field(elem.name, "", empty_path, f, 0);
+    if one.refusal != "" { return one }
+    for oc in one.columns { cols += [oc] }
+  }
+  if len(cols) == 0 {
+    return no_table("{elem.name} has no stored columns");
+  }
+  dup = duplicate_column(cols);
+  if dup != "" {
+    return no_table("{elem.name} would have two columns called {dup}");
+  }
+  return TableDef { nm: table_name_for(elem.name), columns: cols };
+}
+
+/// The child table one collection FIELD implies, or a refusal carrying why.
+///
+/// Columns are (the owner's key, the element's address, the element's own
+/// values) in that order — the shape the invariant names, so the primary key is
+/// a prefix of the row rather than something a reader has to look for.
+///
+/// **The kind decides how many address columns there are, and it is the only
+/// thing that decides.** An ordinal-addressed collection gets an `ord`; a `hash`
+/// does not, because its address is the DECLARED KEY and those are fields of the
+/// element — already columns. An ordinal there would be a second identity for a
+/// row that has one.
+///
+/// **A scalar element and a RECORD element differ only in the last columns.**
+/// The address half is identical, which is what says the two are one rule: a
+/// `vector<integer>` adds one `value` column, and a `vector<Tag>` (S6b) adds one
+/// column per stored field of `Tag`. Neither adds anything to the address.
+///
+/// Every index here is ORDINARY, including a `hash`'s, where the pair really is
+/// unique by construction. `IndexDef` cannot spell `UNIQUE` and `introspect`
+/// cannot read one back, so rendering it would make a table loft MADE and a
+/// table loft FOUND differ in a field — the one property @PLN133 rests on. The
+/// deviation is recorded rather than half-closed.
+/// **@PLN23 S7 — `addr_cols` is the address this row INHERITS**, already named
+/// and already tagged. At the first level it is the root's key columns; below
+/// that it is the parent child table's own address. `derive_child` never renames
+/// anything and never asks how deep it is: it appends this level's address and
+/// the element's columns, which is what makes the same function serve every
+/// depth.
+fn derive_child(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
+                field_path: text, depth: integer) -> TableDef {
+  ct = type_named(f.type_name);
+  if ct == null {
+    return no_table("{owner_table}.{f.name}: {f.type_name} is not a type in this program");
+  }
+  coll = ct ?? no_type();
+  // Worded here rather than in `element_address`, which answers `AddrNone` for
+  // it: the addressing DECISION stays in one place, and a refusal a DBA can act
+  // on is worded where the refusal is made.
+  if coll.collection == KeyedRadix {
+    return no_table("{owner_table}.{f.name} is a spatial collection — its order is not one SQL can express");
+  }
+  addr = element_address(coll);
+  if addr == AddrNone {
+    return no_table("{owner_table}.{f.name} is a {f.type_name}, which addresses no elements");
+  }
+  et = type_named(coll.element);
+  if et == null {
+    return no_table("{owner_table}.{f.name}: the element type {coll.element} is not a type here");
+  }
+  elem = et ?? no_type();
+  tname = child_table_name(owner_table, field_path);
+
+  // The inherited ADDRESS columns first, because the invariant names them as
+  // what identifies the row — so the primary key is a prefix rather than
+  // something a reader looks for.
+  cols = addr_cols;
+  ixc: vector<IndexColumn> = [];
+  for ac in addr_cols { ixc += [IndexColumn { nm: ac.nm }] }
+  if addr == AddrOrdinal {
+    on = ordinal_name(addr_cols);
+    cols += [ColumnDef { nm: on, kind: ColInteger, nullable: false,
+                         src: SrcOrdinal, depth: depth }];
+    ixc += [IndexColumn { nm: on }];
+  }
+
+  // The element's own columns, and only then the indexes: a `hash`'s address
+  // index is not complete until the element's key columns exist.
+  body = child_body(tname, owner_table, f, field_path, elem, coll, cols, depth);
+  if body.refusal != "" { return body }
+  full = body.columns;
+
+  if addr == AddrKey {
+    for k2 in coll.keys {
+      kn = element_column_at(full, k2.position, depth);
+      if kn == "" {
+        return no_table("{owner_table}.{f.name}: a key of {coll.name} is not one of {elem.name}'s stored columns");
+      }
+      ixc += [IndexColumn { nm: kn, ascending: k2.ascending }];
+    }
+  }
+  ixs: vector<IndexDef> = [IndexDef { nm: "{tname}_by_owner", columns: ixc }];
+
+  // @PLN23 S6c — an ordinal-addressed collection that DECLARES a key still owes
+  // that key an index. The key is an access path here rather than a name, which
+  // is the correction the falsifying `INSERT` made, and @PLN129 refuses a bind
+  // whose lookup no index serves — so omitting it builds a database this
+  // collection's own reader cannot bind to.
+  if addr == AddrOrdinal && len(coll.keys) > 0 {
+    kix = key_index(tname, addr_cols, full, coll, depth);
+    if kix.nm == "" {
+      return no_table("{owner_table}.{f.name}: a key of {coll.name} is not one of {elem.name}'s stored columns");
+    }
+    ixs += [kix];
+  }
+  return TableDef { nm: tname, columns: full, indexes: ixs };
+}
+
+/// What this level's ordinal column is called: `ord`, then `ord_2`, `ord_3`.
+///
+/// The INHERITED address columns keep their names, so a join is name-to-name at
+/// every depth and only the new level needs a fresh one. Naming it after the
+/// field instead would put the path in a COLUMN, and the path already lives in
+/// the table name.
+fn ordinal_name(addr_cols: vector<ColumnDef>) -> text {
+  n = 0;
+  for c in addr_cols {
+    if c.src == SrcOrdinal { n += 1 }
+  }
+  if n == 0 { return "ord" }
+  return "ord_{n + 1}";
+}
+
+/// The columns that ADDRESS a row of this table — its own address index, read
+/// back as columns.
+///
+/// A deeper table inherits its parent's address, and this is where that address
+/// is stated: the index the derivation already built. Nothing rebuilds the rule
+/// at depth, which is the whole of the S7 generalisation — the address function
+/// is asked once per level and answers for that level.
+pub fn address_columns(self: TableDef) -> vector<ColumnDef> {
+  out: vector<ColumnDef> = [];
+  ix = self.indexes[0] ?? IndexDef { nm: "" };
+  for ic in ix.columns {
+    for c in self.columns {
+      if c.nm == ic.nm { out += [c] }
+    }
+  }
+  return out;
+}
+
+/// A table's address, seen from ONE LEVEL DOWN.
+///
+/// `SrcField` means "this table's own element", and one level down that is no
+/// longer true — a `hash` child's key column is one of its element's fields, and
+/// in its child it is an ANCESTOR's field. Re-tagging it, with the depth it came
+/// from, is the whole of what descending costs; everything else is inherited
+/// verbatim, names included.
+fn inherited_address(addr: vector<ColumnDef>, parent_depth: integer) -> vector<ColumnDef> {
+  out: vector<ColumnDef> = [];
+  for c in addr {
+    if c.src == SrcField {
+      out += [ColumnDef { nm: c.nm, kind: c.kind, nullable: c.nullable,
+                          position: c.position, src: SrcOwnerKey,
+                          depth: parent_depth, path: c.path }];
+    } else {
+      out += [c];
+    }
+  }
+  return out;
+}
+
+/// One collection field's table, and every table its own element implies below
+/// it — depth first, each parent before its children.
+///
+/// That order is the order a writer must send them in, so nothing downstream
+/// re-derives it. A refusal anywhere collapses the branch, and `derive_tables`
+/// collapses the whole answer: a partial schema builds a database whose own
+/// reader disagrees with its writer.
+fn derive_branch(owner_table: text, addr_cols: vector<ColumnDef>, f: FieldInfo,
+                 field_path: text, depth: integer) -> vector<TableDef> {
+  out: vector<TableDef> = [];
+  child = derive_child(owner_table, addr_cols, f, field_path, depth);
+  out += [child];
+  if child.refusal != "" { return out }
+
+  ct = type_named(f.type_name);
+  if ct == null { return out }
+  coll = ct ?? no_type();
+  et = type_named(coll.element);
+  if et == null { return out }
+  elem = et ?? no_type();
+  if elem.kind != RecordKind && elem.kind != VariantKind { return out }
+
+  // The grandchildren are addressed by THIS table's whole address plus their
+  // own — which is the invariant unchanged, applied to an owner that is itself
+  // an element.
+  next_addr = inherited_address(child.address_columns(), depth);
+  for gf in collection_fields(elem, "") {
+    sub = derive_branch(child.nm, next_addr, gf.f, gf.path_name, depth + 1);
+    for s in sub {
+      if s.refusal != "" {
+        bad: vector<TableDef> = [];
+        bad += [s];
+        return bad;
+      }
+      out += [s];
+    }
+  }
+  return out;
+}
+
+/// The child column filled by the ELEMENT's field at `position`, or `""`.
+///
+/// **Only the columns whose value comes from the element are searched**, and
+/// that restriction is the whole function. A child table carries positions from
+/// TWO records, so a search by position alone matches the owner's column on a
+/// number that means something else entirely. Measured, not hypothetical:
+/// `Doc.id` is at byte 0 and `Tag.weight` is at byte 0, so a
+/// `sorted<Tag[weight]>` under a `hash<Doc[id]>` would index `doc_id` and call
+/// it the key — a plausible index over the wrong column. Byte 0 is where a
+/// struct's first stored field lives, which makes this the common case rather
+/// than a corner.
+fn element_column_at(cols: vector<ColumnDef>, position: integer, depth: integer) -> text {
+  for c in cols {
+    // A DIRECT field of the element, for the reason `column_at` gives: a
+    // flattened column's position is an offset in a struct the key knows
+    // nothing about.
+    if c.src == SrcField && c.depth == depth && len(c.path) == 1 && c.position == position {
+      return c.nm;
+    }
+  }
+  return "";
+}
+
+/// The `(owner, key)` index an ordinal-addressed sub-collection's DECLARED key
+/// implies, or one with an empty name when a key lands on no column.
+///
+/// Named `_by_key` rather than after its columns, which is what `derive_index`
+/// does for a parent. Two indexes share this table, and a fixed suffix cannot
+/// collide with `_by_owner` whatever the element's fields are called — so the
+/// duplicate-index-name failure is removed rather than detected.
+fn key_index(tname: text, addr_cols: vector<ColumnDef>, cols: vector<ColumnDef>,
+             coll: TypeInfo, depth: integer) -> IndexDef {
+  // The INHERITED address prefixes it, and this level's own ordinal does not:
+  // the key is an ALTERNATIVE way into the same collection, so it must be
+  // scoped to the collection and not to a position within it. Filtering `cols`
+  // by `SrcOwnerKey` instead would drop an ancestor's ORDINAL, which below the
+  // first level is part of what says which collection this is.
+  kixc: vector<IndexColumn> = [];
+  for c in addr_cols { kixc += [IndexColumn { nm: c.nm }] }
+  for k in coll.keys {
+    kn = element_column_at(cols, k.position, depth);
+    if kn == "" { return IndexDef { nm: "" } }
+    kixc += [IndexColumn { nm: kn, ascending: k.ascending }];
+  }
+  return IndexDef { nm: "{tname}_by_key", columns: kixc };
+}
+
+/// The child table's COLUMNS: the address columns it is handed, plus whatever
+/// the element contributes — one per stored field of a RECORD element (@PLN23
+/// S6b), or one `value` column for a scalar one (S6a).
+///
+/// Columns only, and the caller builds the indexes: a `hash`'s address index
+/// needs the element's key columns, which do not exist until this returns.
+///
+/// **A collection inside the element is SKIPPED here** (@PLN23 S7): it is a
+/// grandchild table of its own, derived by `derive_branch` after this one, and
+/// putting it in a column would be the same mistake as flattening a collection
+/// into its owner.
+///
+/// One failure path is peculiar to a record element and silent without a check:
+/// **a name collision.** The address columns are named by this derivation and
+/// the element's are named by its author, so a `Tag` with a field called `ord`
+/// produces a `CREATE TABLE` with two columns of one name. Only the engine would
+/// notice, and only the engines that reject it.
+fn child_body(tname: text, owner_table: text, f: FieldInfo, field_path: text,
+              elem: TypeInfo, coll: TypeInfo, addr_cols: vector<ColumnDef>,
+              depth: integer) -> TableDef {
+  if elem.kind != RecordKind && elem.kind != VariantKind {
+    value_kind = column_type(elem.kind);
+    if value_kind == ColOther {
+      return no_table("{owner_table}.{f.name} holds {coll.element}, which is not one column");
+    }
+    scalar = addr_cols;
+    // A scalar element has no fields, so the element IS the value and the
+    // column is named for that rather than for a field that does not exist.
+    scalar += [ColumnDef { nm: "value", kind: value_kind, nullable: false,
+                           src: SrcElement, depth: depth }];
+    return TableDef { nm: tname, columns: scalar };
+  }
+
+  // The address columns' names, taken before anything is appended — a second
+  // list rather than a re-scan of `cols`, so what the element is checked
+  // against cannot grow as the element's own columns are added to it.
+  addr_names: vector<text> = [];
+  for ac in addr_cols { addr_names += [ac.nm] }
+
+  cols = addr_cols;
+  for ef in elem.fields {
+    if !is_data(ef) { continue }
+    if is_child_collection(ef) { continue }
+    empty_path: vector<integer> = [];
+    one = expand_field("{owner_table}.{f.name}: {elem.name}", "", empty_path, ef, depth);
+    if one.refusal != "" { return one }
+    for oc in one.columns {
+      for an in addr_names {
+        if an == oc.nm {
+          return no_table("{owner_table}.{f.name}: {elem.name}.{oc.nm} collides with {an}, the column this table addresses its rows by");
+        }
+      }
+      cols += [oc];
+    }
+  }
+  dup = duplicate_column(cols);
+  if dup != "" {
+    return no_table("{owner_table}.{f.name}: {elem.name} would give two columns called {dup}");
+  }
+  // No refusal when the element contributes no column of its own. Once a
+  // collection field becomes a table rather than a column, an element whose only
+  // fields are collections is an ordinary shape, and its row is its ADDRESS —
+  // which is what says that element exists and is what its own children hang
+  // from.
+  return TableDef { nm: tname, columns: cols };
+}
+
+/// A `TypeInfo` that is not any type — the value a null `type_named` collapses
+/// to, so a refusal path never has to invent one.
+fn no_type() -> TypeInfo {
+  return TypeInfo { name: "", kind: OtherKind, collection: NotKeyed };
+}
+
+/// Every table one keyed collection implies: the OWNER's table first, then one
+/// child table per sub-record collection, in field order.
+///
+/// The owner's table comes first because a child's rows reference it — the same
+/// order a writer must send them in, so nothing downstream has to re-derive it.
+///
+/// A refusal anywhere collapses the whole answer to a single refused `TableDef`.
+/// A partial schema is the outcome worse than none: it creates a database whose
+/// own reader disagrees with its writer, silently, which is the failure this
+/// derivation exists to prevent.
+///
+/// `derive` is unchanged and still answers ONE table — every consumer of it
+/// wants exactly that, and a record with a collection field still refuses there
+/// rather than quietly losing the field.
+pub fn derive_tables(t: TypeInfo) -> vector<TableDef> {
+  out: vector<TableDef> = [];
+  if t.collection == NotKeyed {
+    // A plain record has no key, so nothing says what a child row belongs to.
+    // `derive` is the answer for that shape.
+    out += [derive(t)];
+    return out;
+  }
+  if t.collection == KeyedRadix {
+    out += [no_table("a spatial collection has no SQL shape — its order is not one SQL can express")];
+    return out;
+  }
+  et = type_named(t.element);
+  if et == null {
+    out += [no_table("the element type {t.element} is not a type in this program")];
+    return out;
+  }
+  elem = et ?? no_type();
+  if len(t.keys) == 0 {
+    out += [no_table("{t.name} has no resolvable key fields, so nothing says what a row is found by")];
+    return out;
+  }
+  owner = derive_owner_columns(elem);
+  if owner.refusal != "" { out += [owner]; return out }
+  ix = derive_index(t, owner);
+  if ix.nm == "" {
+    out += [no_table("a key of {t.name} is not one of {elem.name}'s stored columns")];
+    return out;
+  }
+  parent = TableDef { nm: owner.nm, columns: owner.columns, indexes: [ix] };
+
+  // The owner's KEY columns, found by position rather than by name: a name is a
+  // display fact and the byte position is what the collection actually keys on
+  // (`KeyInfo.position` and `FieldInfo.position` are the same number).
+  key_cols: vector<ColumnDef> = [];
+  for k in t.keys {
+    for c in parent.columns {
+      // A DIRECT field only, for the reason `column_at` gives: a flattened
+      // `origin_x` carries `x`'s offset within `Point`, which can equal a
+      // top-level field's — so matching on the number alone would make a nested
+      // column the owner's key.
+      if len(c.path) == 1 && c.position == k.position { key_cols += [c] }
+    }
+  }
+  if len(key_cols) != len(t.keys) {
+    out += [no_table("a key of {t.name} does not land on one of {elem.name}'s columns")];
+    return out;
+  }
+
+  // The root's key columns, named and tagged as the address every table below
+  // inherits. The renaming happens ONCE, here: `id` becomes `doc_id` at the
+  // first level and is carried down untouched after that, so a join is
+  // name-to-name at every depth.
+  root_addr: vector<ColumnDef> = [];
+  for kc in key_cols {
+    root_addr += [ColumnDef { nm: owner_column(parent.nm, kc.nm), kind: kc.kind,
+                              nullable: false, position: kc.position,
+                              src: SrcOwnerKey, depth: 0, path: kc.path }];
+  }
+
+  out += [parent];
+  for f in collection_fields(elem, "") {
+    branch = derive_branch(parent.nm, root_addr, f.f, f.path_name, 1);
+    for b in branch {
+      if b.refusal != "" {
+        empty: vector<TableDef> = [];
+        empty += [b];
+        return empty;
+      }
+      out += [b];
+    }
+  }
+  return out;
+}
+
+/// Every row of a table, in the order its OWN index gives — the read half of
+/// the same definition that wrote them.
+///
+/// For a child table that order is `(owner, ord)`, which is the order that
+/// rebuilds each owner's collection: read the rows, and each owner's run of them
+/// is its vector, in position. Deriving the `ORDER BY` here rather than in each
+/// consumer is the same collapse the columns get — the design counted the read
+/// path's reassembly as one of the sites that must not restate the address rule.
+///
+/// Nothing is bound because nothing is filtered: a child table is read WHOLE and
+/// grouped by owner, which is the shape § S6 gives for writing it too. Selecting
+/// one owner's children per owner would be the interleaved shape that section
+/// exists to rule out.
+///
+/// **The direction comes from the index too**, so a collection declared
+/// `index<Visit[person_id, -started]>` reads back the way it is ordered. A
+/// hard-coded `ASC` would be a second answer to a question the definition
+/// already carries — and one that reads right on every ascending key, which is
+/// most of them.
+///
+/// Refused where there is no index: a table with nothing to order by has no
+/// defined row order, and an unordered read of a child table reassembles a
+/// collection into whatever sequence the engine happened to scan.
+pub fn select_rows(self: TableDef, d: Dialect) -> SqlText {
+  q: SqlText = SqlText { };
+  if self.refusal != "" { q.refused = true; return q }
+  ix = self.indexes[0] ?? IndexDef { nm: "" };
+  if len(ix.columns) == 0 { q.refused = true; return q }
+  q.lit("SELECT ");
+  for c in self.columns {
+    if c#count > 0 { q.lit(", ") }
+    quoted = d.quote_ident(c.nm);
+    if c.kind == ColFloat { q.lit(d.float_read(quoted)) } else { q.lit(quoted) }
+  }
+  q.lit(" FROM {d.quote_ident(self.nm)} ORDER BY ");
+  for ic in ix.columns {
+    if ic#count > 0 { q.lit(", ") }
+    dir = if ic.ascending { "ASC" } else { "DESC" };
+    q.lit("{d.quote_ident(ic.nm)} {dir}");
+  }
+  return q;
+}
+
+// --- @PLN23 S7c: migration — a table that must catch up with its type --------
+//
+// **A migration plan changes a table's SHAPE and never its CONTENT.**
+//
+// Every step it emits adds or re-labels a column. No step writes, invents or
+// destroys a value. Where the new shape would need a value the type does not
+// carry — a `NOT NULL` column on a populated table — it REPORTS instead of
+// emitting. And where the change is not derivable from the type at all — a
+// rename — it needs a declaration from the author, because that is a fact about
+// INTENT rather than about shape.
+//
+// Every case is correct for that one reason:
+//
+// | case | emitted | why — the same reason each time |
+// |---|---|---|
+// | a field gained, nullable | `ADD COLUMN` | shape only; the new column holds no value |
+// | a field gained, `NOT NULL` | no, reported | would have to invent a value for every existing row |
+// | a field LOST | no step at all | the column keeps its values and is still readable |
+// | a rename, declared | `RENAME COLUMN` | shape only; the values travel with the name |
+// | a rename, undeclared | an ADD, and the old column left | the plan cannot know they are one column |
+// | an index loft wants | `CREATE INDEX` | shape only |
+// | a column whose TYPE differs | no step | `reconcile` converts at READ time, so loft never alters a type |
+//
+// **A field LOST needs no step, and that is the design rather than an
+// omission.** An extra column is readable — a `SELECT` names only what loft
+// wants — and `reconcile` already reports the one case where it blocks a write.
+// So the answer was already there, by doing nothing.
+//
+// **There is no DROP, and it is absent rather than guarded.** Dropping is the
+// one step that destroys content, and the only place where forgetting a check
+// would be silent AND unrecoverable. The step kinds have no drop, so it cannot
+// be emitted by omission.
+//
+// Measured on sqlite 3.45 before this was written: a nullable `ADD COLUMN` on a
+// POPULATED table succeeds and the existing rows read null for it; the same add
+// with `NOT NULL` and no default is refused by the engine itself — *"Cannot add
+// a NOT NULL column with default value NULL"* — so the refusal below agrees with
+// the engine rather than being stricter than it; and `RENAME COLUMN` carries the
+// values across.
+//
+// **Nothing here runs anything.** `ensure` still never touches a structure it did
+// not find missing; a plan is a VALUE the caller inspects and chooses to run.
+
+/// A rename the AUTHOR declares: the column the database has, and the loft field
+/// it now answers to.
+///
+/// It has to be declared because it cannot be derived. Reflection reports names
+/// and positions, and a rename changes both — so a renamed field is
+/// indistinguishable from one dropped and one added, by construction. This is
+/// the same missing piece the declared column mapping under § S4 names.
+pub struct Renamed { const was: text, const now: text }
+
+/// One step of a migration.
+///
+/// `sql` is empty exactly when `refusal` is not: a step loft will not perform
+/// carries the reason instead of a statement, so a caller that runs every
+/// non-empty `sql` cannot accidentally run a refused one.
+pub struct MigrationStep {
+  /// The column or index this step is about.
+  const subject: text,
+  /// The statement to run; `""` for a step loft will not perform.
+  const sql: text,
+  /// Why loft will not perform it; `""` when there is a statement.
+  refusal: text = "",
+}
+
+/// What a table must become for the type it no longer matches.
+pub struct Migration {
+  const table: text,
+  const steps: vector<MigrationStep>,
+  /// Why there is no plan at all; `""` when there is one.
+  refusal: text = "",
+}
+
+/// Is there a plan here, and can every step of it be run?
+///
+/// A plan with a reported step is still a plan — the runnable steps are runnable
+/// — so this answers the stricter question a caller needs before it decides to
+/// migrate unattended.
+pub fn migration_ready(self: Migration) -> boolean {
+  if self.refusal != "" { return false }
+  for s in self.steps {
+    if s.refusal != "" { return false }
+  }
+  return true;
+}
+
+/// The steps loft will not perform, as one line — for a message a DBA can act
+/// on, which is the same bar every refusal in this package meets.
+pub fn migration_blocked(self: Migration) -> text {
+  out = "";
+  for s in self.steps {
+    if s.refusal == "" { continue }
+    if out != "" { out += "; " }
+    out += s.refusal;
+  }
+  return out;
+}
+
+/// The plan that brings the table loft FOUND up to the type it wants.
+///
+/// `want` is the derived definition, `have` the one `introspect` read back — the
+/// same two values `reconcile` compares, so migration and binding disagree about
+/// nothing.
+///
+/// Declared renames are applied FIRST, because a rename is what stops the
+/// renamed column looking like a gained one; without the declaration the plan
+/// says exactly what it would do without it, which is an add and an orphan.
+pub fn migrate(want: TableDef, have: TableDef, d: Dialect, renames: vector<Renamed>) -> Migration {
+  if want.refusal != "" { return Migration { table: "", refusal: want.refusal } }
+  if have.refusal != "" { return Migration { table: "", refusal: have.refusal } }
+
+  steps: vector<MigrationStep> = [];
+  tname = d.quote_ident(have.nm);
+  // The columns a declared rename will produce, so the add pass does not also
+  // ask for them. Names rather than a second pass over `renames`: the question
+  // the add pass asks is "will this column exist", and that is one list.
+  renamed_to: vector<text> = [];
+
+  for r in renames {
+    if !have.has_column(r.was) { continue }
+    if !want.has_column(r.now) { continue }
+    if have.has_column(r.now) { continue }
+    renamed_to += [r.now];
+    if !d.renames_columns {
+      steps += [MigrationStep {
+        subject: r.now, sql: "",
+        refusal: "loft has not run a column rename against {d.nm} — {r.was} to {r.now} is not a statement it will send",
+      }];
+      continue;
+    }
+    steps += [MigrationStep {
+      subject: r.now,
+      sql: "ALTER TABLE {tname} RENAME COLUMN {d.quote_ident(r.was)} TO {d.quote_ident(r.now)}",
+    }];
+  }
+
+  for wc in want.columns {
+    if have.has_column(wc.nm) { continue }
+    already = false;
+    for rn in renamed_to {
+      if rn == wc.nm { already = true }
+    }
+    if already { continue }
+    if !wc.nullable {
+      // The engine itself refuses this, measured — so the plan reports what the
+      // author must decide rather than sending a statement that fails. A default
+      // would make it addable, and the loft type carries none.
+      steps += [MigrationStep {
+        subject: wc.nm, sql: "",
+        refusal: "{wc.nm} is NOT NULL and the existing rows have no value for it — add it with a default, or make the loft field nullable",
+      }];
+      continue;
+    }
+    steps += [MigrationStep {
+      subject: wc.nm,
+      sql: "ALTER TABLE {tname} ADD COLUMN {d.quote_ident(wc.nm)} {d.type_spelling(wc.kind)}",
+    }];
+  }
+
+  // An index is shape, so it belongs in a plan — and only in a plan. `reconcile`
+  // refuses a missing one rather than creating it, because adding an index to
+  // somebody else's populated table can take a long time and can change their
+  // write performance. Opting in is what a migration IS.
+  for wix in want.indexes {
+    if index_served(have, wix) { continue }
+    steps += [MigrationStep {
+      subject: wix.nm,
+      sql: render_index(wix, tname, d),
+    }];
+  }
+
+  // A column the table HAS and the type does not want produces no step at all.
+  // It keeps its values, it is still readable, and `reconcile` already reports
+  // the one case where it stops a write. Dropping it would be the only step here
+  // that destroys content.
+  return Migration { table: have.nm, steps: steps };
 }

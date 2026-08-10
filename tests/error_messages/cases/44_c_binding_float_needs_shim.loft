@@ -1,5 +1,8 @@
-// @PLN24 arc A — a float argument travels in an SSE register the integer-class
+// @PLN24 arc A — a float ARGUMENT travels in an SSE register the integer-class
 // caller never writes, so it is refused with the cure rather than bound wrong.
+// The RETURN is a different question and crosses since @PLN128 arc E: the
+// register class is one axis for a return and `2^arity` of them for arguments,
+// which is why only one half of this declaration is refused.
 pub fn scale(v: float) -> float;
 #c "lc_f64" "double(double)"
 

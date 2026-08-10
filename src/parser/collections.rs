@@ -4412,7 +4412,20 @@ use #count instead"
             let attr_name = self.data.attr_name(struct_def_nr, a);
             let attr_type = self.data.attr_type(struct_def_nr, a);
 
-            let variant_name = match &attr_type {
+            // @PLN25 — peel the nullable wrapper FIRST. `text?` is
+            // `Optional(Text)`, which no arm below names, so without this it
+            // fell into the `_ => continue` meant for records and vectors and
+            // the field was SILENTLY SKIPPED: the loop simply ran fewer times,
+            // and `b: text? = "y"` — a real value — never appeared.  That also
+            // made `#fields` and `type_of(x).fields` disagree about what a
+            // struct's fields are, which is two accounts of one layout.
+            //
+            // `Optional(τ)` and `τ` share the runtime layout (no wrapper, a
+            // sentinel for absent), so the READ is the same one either way;
+            // only the declaration differs, and `StructField.nullable` below is
+            // where that difference is reported instead of swallowed.
+            let (base_type, nullable) = attr_type.peel_optional();
+            let variant_name = match base_type {
                 Type::Boolean => "FvBool",
                 // Post-2c round 10c: wide Type::Integer (former Type::Long)
                 // maps to FvLong; narrow range maps to FvInt.
@@ -4422,6 +4435,10 @@ use #count instead"
                 Type::Single => "FvSingle",
                 Type::Character => "FvChar",
                 Type::Text(_) => "FvText",
+                // A record, a vector or a keyed collection genuinely has no
+                // scalar payload to carry. This arm is for those, and for
+                // nothing else — a type that merely LOOKS unfamiliar here is
+                // how the nullable drop happened.
                 _ => continue,
             };
 
@@ -4439,10 +4456,17 @@ use #count instead"
             let fv_insert = Value::Insert(fv_ops);
 
             // Construct StructField: the FieldValue is passed as Value::Var(fv_work)
-            // after the Insert has executed.
+            // after the Insert has executed.  `nullable` rides alongside because
+            // the payload variants are typed non-null: a nullable field's value
+            // arrives as loft's sentinel, and this is what tells a reader that
+            // is possible rather than leaving it to be discovered.
             let (sf_ops, sf_work) = self.build_object_ops(
                 field_def_nr,
-                &[(0, Value::Text(attr_name)), (1, Value::Var(fv_work))],
+                &[
+                    (0, Value::Text(attr_name)),
+                    (1, Value::Var(fv_work)),
+                    (2, Value::Boolean(nullable)),
+                ],
             );
             let sf_insert = Value::Insert(sf_ops);
 

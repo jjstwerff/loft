@@ -4562,6 +4562,25 @@ extern crate loft;"
         let needs_stores = params
             .iter()
             .any(|a| matches!(a.typedef.base(), Type::Vector(_, _)));
+        // Which C slots each loft parameter occupies — the same answer the
+        // interpreter's `dispatch` reads, so a vector carries a count on both
+        // backends or on neither (@PLN128 arc D).
+        let loft_params: Vec<crate::data::Type> =
+            params.iter().map(|a| a.typedef.clone()).collect();
+        let Ok(arg_plan) = crate::c_signature::plan(&loft_params, &sig) else {
+            // Unreachable in practice: the declaration check runs the same
+            // `plan` and its error aborts before any native source is written.
+            // Emitted as `compile_error!` rather than defaulted to an empty
+            // plan, because an empty plan would emit a call with NO arguments
+            // against a typed `extern "C"` — a rustc cascade pointing at loft's
+            // generated source instead of at the declaration. Same shape as the
+            // signature-did-not-parse arm above.
+            writeln!(
+                w,
+                "{{ compile_error!(\"loft --native: this `#c` binding's parameters do not fit its C signature\") }}"
+            )?;
+            return Ok(());
+        };
 
         writeln!(w, "{{")?;
         if needs_stores {
@@ -4574,7 +4593,7 @@ extern crate loft;"
         // duration of the call. Bound here, in the wrapper's own block, so the
         // buffers outlive the call rather than dropping at the end of the call
         // expression.
-        for attr in &params {
+        for (attr, arg) in params.iter().zip(&arg_plan) {
             let var = sanitize(&attr.name);
             match attr.typedef.base() {
                 Type::Text(_) => {
@@ -4593,10 +4612,12 @@ extern crate loft;"
                         w,
                         "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(var_{var}.rec, var_{var}.pos);"
                     )?;
-                    writeln!(
-                        w,
-                        "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(_vr_{var}, 4) }};"
-                    )?;
+                    if *arg == crate::c_signature::CArg::VectorPtrCount {
+                        writeln!(
+                            w,
+                            "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(_vr_{var}, 4) }};"
+                        )?;
+                    }
                     // The elements live in a loft store the allocator may grow,
                     // so this pointer is valid FOR THE CALL and no longer — the
                     // contract the declaration's mapping table states.
@@ -4610,33 +4631,38 @@ extern crate loft;"
         }
 
         // The call itself, argument by argument, against the DECLARED C types.
+        // Which slots each loft parameter occupies comes from
+        // `c_signature::plan`, the same answer the interpreter's `dispatch`
+        // reads — a vector carries a count only where the signature has a
+        // parameter for it (@PLN128 arc D).
         let mut args: Vec<String> = Vec::new();
         let mut c_i = 0usize;
-        for attr in &params {
+        for (attr, arg) in params.iter().zip(&arg_plan) {
             let var = sanitize(&attr.name);
-            match attr.typedef.base() {
-                Type::Text(_) => {
+            match arg {
+                crate::c_signature::CArg::TextPointer => {
                     args.push(format!("_cs_{var}.as_ptr().cast::<std::ffi::c_void>()"));
-                    c_i += 1;
                 }
-                Type::Vector(_, _) => {
+                crate::c_signature::CArg::VectorPtr => {
+                    args.push(format!("_vp_{var}.cast::<std::ffi::c_void>()"));
+                }
+                crate::c_signature::CArg::VectorPtrCount => {
                     args.push(format!("_vp_{var}.cast::<std::ffi::c_void>()"));
                     let count_ty = sig
                         .params
                         .get(c_i + 1)
                         .map_or("i64", crate::c_signature::CType::rust_type);
                     args.push(format!("(_vc_{var} as {count_ty})"));
-                    c_i += 2;
                 }
-                _ => {
+                crate::c_signature::CArg::Scalar => {
                     let ty = sig
                         .params
                         .get(c_i)
                         .map_or("i64", crate::c_signature::CType::rust_type);
                     args.push(format!("((var_{var}) as {ty})"));
-                    c_i += 1;
                 }
             }
+            c_i += arg.slots();
         }
         let call = format!("unsafe {{ __c_{}({}) }}", sig.symbol, args.join(", "));
 
@@ -4645,6 +4671,14 @@ extern crate loft;"
         match (&sig.ret, def.returned().base()) {
             (crate::c_signature::CType::Void, _) => writeln!(w, "  {call};")?,
             (_, Type::Boolean) => writeln!(w, "  (({call}) != 0) as u8")?,
+            // @PLN128 arc E — a float return. The extern already declares `f64`
+            // / `f32` (`CType::rust_type`), so rustc gets the register class
+            // right by construction and the cast only names loft's slot width.
+            // The interpreter reaches the same value through its own rung
+            // (`c_call::call_at_arity_f64`); this is the half that needs no
+            // trampoline at all.
+            (_, Type::Float) => writeln!(w, "  ({call}) as f64")?,
+            (_, Type::Single) => writeln!(w, "  ({call}) as f32")?,
             // @PLN24 arc D — a `char *` return, copied into an owned `String`
             // (the wrapper is `-> String` via `returns_owned_string`).  The
             // three decisions are the interpreter's, restated: NULL is loft

@@ -26,22 +26,113 @@
 //!   from a naive transmute-and-call, and it is the whole reason the
 //!   declaration carries a signature.
 //!
-//! The trampolines cover arity 0..=12. Beyond that the binding is refused
+//! The trampolines cover arity 0..=32. Beyond that the binding is refused
 //! rather than truncated — a wrong arity is silent (the probe called an arity-1
 //! symbol through an arity-3 trampoline and got the right answer), so nothing
 //! downstream would catch it.
+//!
+//! @PLN128 arc C — that ceiling is now the CONTRACT's, not this caller's. It was
+//! 12 and it bound the interpreter alone, so `--native` (which hands the
+//! signature to rustc and can emit any arity) bound shapes the interpreter
+//! refused, and a library could ship a binding only half of loft could call.
+//! The ladder was extended to 32 and `--native` is held to the same number:
+//! unifying by RAISING rather than narrowing, so nothing that compiled stopped
+//! compiling. See `c_signature::MAX_C_ARITY` and DESIGN_DECISIONS.md § C106.
 
 #![cfg(feature = "native-extensions")]
 
 use crate::c_signature::{CSignature, CType};
 
+/// ONE rung of the ladder: transmute `f` to the arity the index list names and
+/// call it.
+///
+/// The rung's function TYPE is derived from the same index list that supplies
+/// the arguments — `rung!(@ty $i)` maps each index to one `u64` — so the arity
+/// is written once per rung instead of twice.  It used to be spelled twice
+/// (`extern "C" fn(u64, u64, u64) -> u64, 0, 1, 2`), and a rung whose type and
+/// index list disagreed would have transmuted to the wrong arity with NOTHING
+/// to catch it: the probe called an arity-1 symbol through an arity-3
+/// trampoline and got the right answer, so there is no runtime signal.  One
+/// list, no disagreement possible.
+macro_rules! rung {
+    (@ty $i:literal) => { u64 };
+    ($ret:ty, $f:expr, $args:expr; $($i:literal),* $(,)?) => {{
+        let g: extern "C" fn($(rung!(@ty $i)),*) -> $ret =
+            unsafe { std::mem::transmute($f) };
+        g($($args[$i]),*)
+    }};
+}
+
+/// The arity ladder, written ONCE and expanded per RETURN class.
+///
+/// A sibling of [`rung`] rather than a macro nested inside it: the arity list
+/// is the part that must not drift between the three callers, so it is spelled
+/// once here and the return type is what varies.  See [`call_at_arity`] for why
+/// arity is the only ARGUMENT dimension.
+macro_rules! call_ladder {
+    ($ret:ty, $f:expr, $args:expr) => {{
+        let (f, args) = ($f, $args);
+        Some(match args.len() {
+            0 => {
+                let g: extern "C" fn() -> $ret = unsafe { std::mem::transmute(f) };
+                g()
+            }
+            1 => rung!($ret, f, args; 0),
+            2 => rung!($ret, f, args; 0, 1),
+            3 => rung!($ret, f, args; 0, 1, 2),
+            4 => rung!($ret, f, args; 0, 1, 2, 3),
+            5 => rung!($ret, f, args; 0, 1, 2, 3, 4),
+            6 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5),
+            7 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6),
+            8 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7),
+            9 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8),
+            10 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+            11 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+            12 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+            13 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+            14 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+            15 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+            16 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+            17 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+            18 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
+            19 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18),
+            20 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19),
+            21 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20),
+            22 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21),
+            23 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22),
+            24 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23),
+            25 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24),
+            26 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25),
+            27 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26),
+            28 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27),
+            29 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28),
+            30 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29),
+            31 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30),
+            32 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31),
+            _ => return None,
+        })
+    }};
+}
+
 /// Call `f` with `args`, at the arity `args.len()` names. `None` when the arity
 /// is past the ladder.
 ///
-/// One transmute target per rung, written out rather than generated: every
-/// integer-class C type — `int`, `long`, a pointer, `char *`, an enum —
-/// occupies one `u64`, so arity is the only dimension. Thirteen function types,
-/// no combinatorial explosion, and no libffi.
+/// One transmute target per rung: every integer-class C type — `int`, `long`, a
+/// pointer, `char *`, an enum — occupies one `u64`, so arity is the only
+/// dimension. Thirty-three function types, no combinatorial explosion, and no
+/// libffi.
+///
+/// Rungs 6 and 7 straddle the SysV x86-64 boundary — the first six integer
+/// arguments travel in registers and the seventh onward on the stack — so those
+/// two are the ones a hand-written trampoline is most likely to get wrong, and
+/// the fixture pins both. Every rung above 7 is the same stack-passing shape as
+/// 7, which is why extending the ladder is mechanical rather than a new risk
+/// per rung.
+///
+/// The ceiling is [`MAX_C_ARITY`] and it is a **contract** number, not a
+/// property of this caller: `--native` hands the signature to rustc and would
+/// happily emit any arity, so the ladder is what both backends are held to
+/// rather than what only this one can do (@PLN128 arc C).
 ///
 /// # Safety
 /// `f` must be a C function whose parameters are all integer-class and whose
@@ -50,111 +141,41 @@ use crate::c_signature::{CSignature, CType};
 /// there is no runtime signal to check against. The declaration is the only
 /// authority, which is why it is checked when it is parsed.
 unsafe fn call_at_arity(f: *const (), args: &[u64]) -> Option<u64> {
-    macro_rules! at {
-        ($ty:ty, $($i:literal),*) => {{
-            let g: $ty = unsafe { std::mem::transmute(f) };
-            g($(args[$i]),*)
-        }};
-    }
-    Some(match args.len() {
-        0 => {
-            let g: extern "C" fn() -> u64 = unsafe { std::mem::transmute(f) };
-            g()
-        }
-        1 => at!(extern "C" fn(u64) -> u64, 0),
-        2 => at!(extern "C" fn(u64, u64) -> u64, 0, 1),
-        3 => at!(extern "C" fn(u64, u64, u64) -> u64, 0, 1, 2),
-        4 => at!(extern "C" fn(u64, u64, u64, u64) -> u64, 0, 1, 2, 3),
-        5 => at!(extern "C" fn(u64, u64, u64, u64, u64) -> u64, 0, 1, 2, 3, 4),
-        6 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5
-        ),
-        // 6 and 7 straddle the SysV boundary: the first six integer arguments
-        // travel in registers and the seventh onward on the stack. The probe
-        // pins both rungs for exactly that reason.
-        7 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6
-        ),
-        8 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7
-        ),
-        9 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8
-        ),
-        10 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9
-        ),
-        11 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10
-        ),
-        12 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11
-        ),
-        _ => return None,
-    })
+    call_ladder!(u64, f, args)
+}
+
+/// The same ladder, transmuted to return a `double` (@PLN128 arc E).
+///
+/// A float RETURN and a float ARGUMENT are not the same problem, and the plan
+/// settled them together once by mistake. An argument would need a rung per
+/// SUBSET of positions that are float — the register file is chosen per
+/// argument, so the family is `2^arity` and genuinely impossible. The return is
+/// **one axis**: the value comes back in `xmm0` or it does not, so it costs one
+/// more expansion of the same arity list. Every argument stays integer-class,
+/// which is exactly the Fortran shape (everything by reference).
+///
+/// It is what makes the level-1 BLAS *functions* — `ddot_`, `dnrm2_`, `dasum_`
+/// — and the LAPACK auxiliaries (`dlange_`, `dlamch_`) bindable at all. Before
+/// it they were refused, and the cure the refusal named was an ANSI-C shim per
+/// routine, which puts a C toolchain in the build of every numeric package to
+/// work around a boundary that can just be correct.
+///
+/// # Safety
+/// As [`call_at_arity`], and `f` must return a C `double`.
+unsafe fn call_at_arity_f64(f: *const (), args: &[u64]) -> Option<f64> {
+    call_ladder!(f64, f, args)
+}
+
+/// The `float` twin of [`call_at_arity_f64`] — `snrm2_`, `sdot_`, `sasum_`.
+///
+/// A separate rung set rather than a `f64` call narrowed afterwards: a C
+/// `float` return leaves `xmm0` holding a single, and reading those bits as a
+/// double is a denormal, not the number.
+///
+/// # Safety
+/// As [`call_at_arity`], and `f` must return a C `float`.
+unsafe fn call_at_arity_f32(f: *const (), args: &[u64]) -> Option<f32> {
+    call_ladder!(f32, f, args)
 }
 
 /// Bring a raw return register back to a loft `integer`.
@@ -612,6 +633,11 @@ pub struct CBinding {
     /// than re-derived, because the two together are the mapping and either
     /// alone is half of it.
     pub loft_params: Vec<crate::data::Type>,
+    /// How each of those parameters is realised in C slots, from
+    /// [`crate::c_signature::plan`] — the one place that answer is derived, so
+    /// this caller and the `--native` emission cannot disagree about whether a
+    /// vector carries a count (@PLN128 arc D).
+    pub arg_plan: Vec<crate::c_signature::CArg>,
     pub void_return: bool,
     /// A `char *` return bound to loft `text`, which comes back through the
     /// destination record rather than the value stack (@PLN24 arc D).
@@ -663,9 +689,16 @@ pub fn register(state: &mut crate::state::State, data: &crate::data::Data) {
             .filter(|a| !a.name.starts_with("__") && !a.name.starts_with('#'))
             .map(|a| a.typedef.clone())
             .collect();
+        // A declaration whose shapes do not fit was already reported at the
+        // declaration; skipping it here leaves the call site to report the
+        // missing binding rather than marshalling against a guess.
+        let Ok(arg_plan) = crate::c_signature::plan(&loft_params, &sig) else {
+            continue;
+        };
         let binding = CBinding {
             sig,
             loft_params,
+            arg_plan,
             void_return: matches!(def.returned(), crate::data::Type::Void),
             text_return: crate::state::codegen::is_c_text_call(def),
         };
@@ -686,7 +719,7 @@ pub fn register(state: &mut crate::state::State, data: &crate::data::Data) {
 /// the slots are built backwards and reversed — the same shape every native
 /// handler in `native.rs` uses.
 fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef) {
-    use crate::data::Type;
+    use crate::c_signature::CArg;
     use crate::keys::{DbRef, Str};
 
     let idx = crate::extensions::current_lib_idx();
@@ -705,9 +738,9 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     // first NUL, so the copy is what makes the two the same thing.
     let mut owned: Vec<Vec<u8>> = Vec::new();
     let mut slots: Vec<u64> = Vec::with_capacity(binding.sig.params.len());
-    for tp in binding.loft_params.iter().rev() {
-        match tp.base() {
-            Type::Text(_) => {
+    for arg in binding.arg_plan.iter().rev() {
+        match arg {
+            CArg::TextPointer => {
                 let s = *stores.get::<Str>(stack);
                 let bytes = s.str().as_bytes();
                 let mut b = Vec::with_capacity(bytes.len() + 1);
@@ -716,7 +749,7 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
                 slots.push(b.as_ptr() as u64);
                 owned.push(b);
             }
-            Type::Vector(_, _) => {
+            CArg::VectorPtr | CArg::VectorPtrCount => {
                 // A loft vector is an OUTER record whose word at (rec, pos)
                 // names the data record; the elements start at byte 8 and the
                 // count sits at byte 4. Pushed as count-then-pointer because
@@ -738,10 +771,18 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
                     let p = std::ptr::from_ref(st.addr::<u8>(data_rec, 8)) as u64;
                     (p, count)
                 };
-                slots.push(count);
+                // @PLN128 arc D — the count goes only where the C signature has
+                // a parameter for it. A Fortran routine takes each argument as
+                // a bare pointer, so pushing a count there would land it where
+                // the callee expects the NEXT pointer.
+                if *arg == CArg::VectorPtrCount {
+                    slots.push(count);
+                }
                 slots.push(ptr);
             }
-            _ => slots.push(*stores.get::<i64>(stack) as u64),
+            CArg::Scalar => {
+                slots.push(*stores.get::<i64>(stack) as u64);
+            }
         }
     }
     slots.reverse();
@@ -749,14 +790,25 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     let Some(f) = resolve(&binding.sig.symbol) else {
         panic!("{}", missing_symbol_message(&binding.sig.symbol));
     };
-    let Some(raw) = (unsafe { call_at_arity(f, &slots) }) else {
-        panic!(
-            "`#c` symbol '{}' needs {} arguments; the caller covers 0..={}. Wrap it \
-             in an ANSI-C shim with fewer parameters",
-            binding.sig.symbol,
-            slots.len(),
-            crate::c_signature::MAX_C_ARITY
+    // @PLN128 arc E — a float return goes down its own rung, because the value
+    // is in `xmm0` and no amount of casting an integer register reaches it.
+    // Taken before the integer path so the arity failure below is reported once,
+    // in the same words, whichever class the return is.
+    if let CType::Float { bits } = binding.sig.ret {
+        let ok = if bits == 32 {
+            (unsafe { call_at_arity_f32(f, &slots) }).map(|v| stores.put(stack, v))
+        } else {
+            (unsafe { call_at_arity_f64(f, &slots) }).map(|v| stores.put(stack, v))
+        };
+        assert!(
+            ok.is_some(),
+            "{}",
+            over_arity_message(&binding, slots.len())
         );
+        return;
+    }
+    let Some(raw) = (unsafe { call_at_arity(f, &slots) }) else {
+        panic!("{}", over_arity_message(&binding, slots.len()));
     };
 
     if binding.void_return {
@@ -784,6 +836,20 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     // The declared width is what makes this right; read raw, a negative `int`
     // would arrive as a large positive.
     stores.put(stack, narrow_return(raw, &binding.sig.ret));
+}
+
+/// The message for a call past the ladder, worded once.
+///
+/// Every return class ends here on the same failure, and a caller who hit the
+/// ceiling should not be told a different story depending on whether the symbol
+/// answers an integer or a double.
+fn over_arity_message(binding: &CBinding, slots: usize) -> String {
+    format!(
+        "`#c` symbol '{}' needs {slots} arguments; the caller covers 0..={}. Wrap it \
+         in an ANSI-C shim with fewer parameters",
+        binding.sig.symbol,
+        crate::c_signature::MAX_C_ARITY
+    )
 }
 
 /// Bring a C `char *` return back as loft text.

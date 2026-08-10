@@ -142,6 +142,101 @@ LC_API int64_t lc_arity12(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e,
                           int64_t f, int64_t g, int64_t h, int64_t i, int64_t j,
                           int64_t k, int64_t l);
 
+/* ---- NUMERIC: the shapes BLAS/LAPACK/FFTW are made of (@PLN128) ----------
+ * loft expands a `vector<T>` into pointer-then-count, so each of these takes
+ * the count C would otherwise have no way to know.  The load-bearing cell is
+ * `lc_daxpy`: every BLAS and LAPACK routine returns its result by WRITING
+ * THROUGH a caller-supplied pointer, so if loft could not see those writes the
+ * numeric stack would not be bindable at all.
+ *
+ * Values are scaled to integers on return because a `double` return would trip
+ * the very refusal this fixture documents — the point is the array crossing,
+ * not the return convention. */
+LC_API int64_t lc_dsum_scaled(const double *p, int64_t n);
+LC_API void lc_daxpy(double *y, int64_t ny, const double *x, int64_t nx,
+                     int64_t a_milli);
+
+/* A Fortran-style scalar-by-reference: loft has no address-of, so a scalar
+ * reaches C as a 1-ELEMENT vector — and therefore costs TWO C slots, which is
+ * why `dgemm_`'s 13 by-reference arguments need a collapsing shim. */
+LC_API int64_t lc_scalar_ref(const int64_t *p, int64_t n);
+
+/* The idiom the float refusal prescribes: a scalar double in and out, entirely
+ * by pointer, so no float→bits conversion (which loft does not have) is
+ * needed anywhere. */
+LC_API void lc_shim_scale(double *out, int64_t n_out, const double *v,
+                          int64_t n_v);
+
+/* ---- FORTRAN SHAPE (@PLN128 arc D) -------------------------------------
+ * Everything above takes loft's pointer-AND-count shape, because it was
+ * written for loft.  BLAS and LAPACK were not: Fortran passes EVERY argument
+ * by reference, so each one is a BARE pointer and the routine learns the
+ * length from a separate `n` — which is itself a bare pointer.  A fixture
+ * that only ever declares a count cannot tell whether a real numeric library
+ * binds, so these two declare none.
+ *
+ * The trailing underscore is the name a Fortran compiler emits, kept so the
+ * declaration reads exactly like the one an author would write against
+ * `libblas`. */
+
+/* y := alpha*x + beta*y — the daxpy/dscal shape, with both scalars by
+ * reference.  Proves the write-back half survives with no count present. */
+LC_API void lc_daxpby_(const int64_t *n, const double *alpha, const double *x,
+                       const double *beta, double *y);
+
+/* The `dgemm_` argument list at full width: THIRTEEN by-reference arguments,
+ * which is the case @PLN128 is sized around.  Column-major, and only the
+ * 'N'/'N' (no-transpose) case is implemented — the two `char *` arguments are
+ * read, so a binding that misplaces them is caught rather than ignored. */
+LC_API void lc_dgemm_(const char *transa, const char *transb, const int64_t *m,
+                      const int64_t *n, const int64_t *k, const double *alpha,
+                      const double *a, const int64_t *lda, const double *b,
+                      const int64_t *ldb, const double *beta, double *c,
+                      const int64_t *ldc);
+
+/* A signature where counted and bare vectors are MIXED, arranged so that a
+ * left-to-right walk which takes a count whenever an integer follows a pointer
+ * gets it wrong: `sel` is an integer sitting where `v`'s count would go, and
+ * the count that IS present belongs to `w`.  Position-weighted, so a binding
+ * that assigns the count to the wrong vector answers a different number rather
+ * than the right one by luck. */
+LC_API int64_t lc_split_(const double *v, int64_t sel, const double *w,
+                         int64_t nw);
+
+/* ---- A RETAINING API (@PLN128 Q5) ---------------------------------------
+ * C keeps a buffer pointer across two calls the caller makes — FFTW's
+ * plan/execute split, zlib's `z_stream`, `sqlite3_bind_text(SQLITE_STATIC)`.
+ * Bound with a LOFT vector this is a use-after-free; bound with a C-owned
+ * buffer held as an opaque handle it is ordinary, which is what the fixture
+ * demonstrates. */
+struct lc_plan_s {
+  double *buf;
+  int64_t n;
+};
+
+LC_API void *lc_buf_alloc(int64_t nbytes);
+LC_API void lc_buf_free(void *p);
+LC_API void *lc_plan(void *buf, int64_t n);
+LC_API int64_t lc_run(const void *plan);
+LC_API void lc_plan_free(void *plan);
+
+/* ---- ELEMENT WIDTHS (@PLN128 arc E) -------------------------------------
+ * A vector reaches C as a pointer into loft's own element bytes, so the loft
+ * element type and the C pointee are two spellings of one layout.  One reader
+ * per width, each POSITION-WEIGHTED so a reader striding differently from the
+ * writer answers a different number rather than the right one by luck. */
+LC_API int64_t lc_u32_dot(const uint32_t *p, int64_t n);
+LC_API int64_t lc_u16_dot(const uint16_t *p, int64_t n);
+LC_API int64_t lc_u8_dot(const unsigned char *p, int64_t n);
+LC_API int64_t lc_char_dot(const uint32_t *p, int64_t n);
+LC_API int64_t lc_bool_dot(const unsigned char *p, int64_t n);
+LC_API int64_t lc_f32_dot_milli(const float *p, int64_t n);
+
+/* The level-1 BLAS *function* shape: bare pointers in, the answer back BY VALUE
+ * in an SSE register.  `ddot_`, `dnrm2_` and `dasum_` are all this. */
+LC_API double lc_ddot_(const int64_t *n, const double *x, const double *y);
+LC_API float lc_sdot_(const int64_t *n, const float *x, const float *y);
+
 /* ---- BOUNDARY: what a trampoline cannot call --------------------------- */
 
 /* Floating point travels in SSE registers, not the integer registers a

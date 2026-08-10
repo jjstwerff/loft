@@ -799,7 +799,20 @@ impl Output<'_> {
             let wrap_bool =
                 !matches!(tail, Value::Null) && matches!(variables.tp(var).base(), Type::Boolean);
             let widen_block = block_needs_i64_widen(tail, variables.tp(var));
-            if wrap_bool || widen_block {
+            // The TEXT twin of the boolean cast above, and the same shape it
+            // describes: `return <text-fn>(<record-returning-call>(…))` inside a
+            // loop lifts the record call into a `__lift_N` temp, which makes this
+            // RHS an `Insert`, and the tail then landed uncast — a text-returning
+            // callee answers `Str` while the local is declared `String`
+            // (E0308).  Binding the record to a local first needs no lift, which
+            // is why only the call form broke, exactly as in loft#672.
+            //
+            // Keyed on the VARIABLE's type, like the other three text-assignment
+            // paths in this function (`needs_to_string`), rather than on the
+            // tail's node shape — a per-shape test here is what left this hole
+            // when the boolean one was closed.
+            let text_tail = !matches!(tail, Value::Null) && needs_to_string;
+            if wrap_bool || widen_block || text_tail {
                 write!(w, "(")?;
             }
             self.output_code_inner(w, tail)?;
@@ -807,6 +820,8 @@ impl Output<'_> {
                 write!(w, ") as u8")?;
             } else if widen_block {
                 write!(w, ") as i64")?;
+            } else if text_tail {
+                write!(w, ").to_string()")?;
             }
             return Ok(());
         }

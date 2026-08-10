@@ -2743,3 +2743,325 @@ a missing feature.
   *streaming* rather than a working set, where iteration and `len` mean something
   different by declaration rather than by accident. Ergonomics alone does not reopen it;
   the model question is the blocker.
+
+---
+
+## C105 — a hash lookup keeps its TWO random reads (no hash-in-slot, no entries in the bucket table)
+
+**Catalogue:** @F7 (`hash<T[keys]>` keyed collection).
+
+### Question
+
+`hash<T[k]>` lookups cost ~180 ns at 1M keys against a reported ~22 ns for .NET's
+`Dictionary<long,int>` ([loft#809](https://github.com/loft-lang/loft/issues/809)). Two
+designs were proposed against the gap: **arc D**, caching the key's hash in the bucket
+slot, and the shape behind Q1's "approach Dictionary" — putting the ENTRIES in the bucket
+table so a hit is one random read instead of two.
+
+### Evaluation
+
+@PLN135 arc H shipped the part that paid: entries moved into a chunked arena, insert 1.28x
+and bytes/entry 27.67 → 18.6 (−33%). What the two remaining proposals buy was then
+measured rather than argued.
+
+**Arc D — cache the hash in the slot.** Its real value is not the lookup; it is removing
+the from-scratch re-hash at every resize. Measured on 1M `integer` keys, alternating a
+reserved fill against a grown one so the gap IS the resize: 92 ms, 43 ms and 28 ms out of
+350–386 ms — a median ~12% of a GROWN insert and **0% of a reserved one**, because
+`reserve(h, n)` already removes the resize entirely. The cost is a bucket slot of 8 bytes
+instead of 4, doubling the table (5.3 MB → 10.7 MB at 1M), plus a SECOND persisted-store
+format break. On a hit it skips nothing: the entry still has to be read to return it.
+
+**Entries in the bucket table.** This is the one design that removes a random read, and
+it is the one @PLN135's Q5 already refused: growth reallocates the table, so every entry
+moves and every outstanding `DbRef` into the collection goes stale. That is a wrong READ
+rather than an error, in the subsystem ranked weakness #1, and
+[COMPATIBILITY.md](COMPATIBILITY.md) forbids it. Reference stability is a property callers
+have today.
+
+**The baseline is also not what it looks like.** The same 1M lookups cost 99–118 ns in
+ascending key order against 175–179 ns shuffled — the ENTRY read becoming prefetchable,
+since entries go into the arena in insertion order. Every @PLN135 figure before
+2026-08-09 was taken in insertion order, so the reported ~20x compared two sides that may
+not have used the same access order. A comparison whose sides differ in that is not a
+comparison.
+
+A layout-neutral hoist was written and measured too — `entry_ref` re-read the arena's
+directory field and its size header on EVERY probe, both loop-invariant. Alternating A/B
+over 1M shuffled lookups: median 214 ns before, 231 ns after. Inside the noise, because
+the loop is two cache misses and those reads are hot. Reverted rather than shipped.
+
+### Decision
+
+- **Closed 2026-08-10.** A hash lookup reads the bucket slot and then the entry, and both
+  stay random. Arc D is not worth a second format break and a doubled table for ≤12% of a
+  case `reserve` already fixes; entries-in-table is not worth reference stability at any
+  price. loft#809 is closed on the same evidence.
+- `reserve(h, n)` is the supported answer for a fill whose size is known, and it is worth
+  saying in a consumer's docs rather than optimising around its absence.
+
+### Revisit when
+
+- A like-for-like re-measurement — **same access order and same working set on both
+  sides** — still shows a large gap. The number loft#809 was opened on cannot currently
+  support that claim.
+- Reference stability into a keyed collection stops being a property loft offers, at
+  which point entries-in-table becomes available and would remove one of the two reads.
+- A hash's bucket table stops being the memory it is today (e.g. a load factor or slot
+  width change lands for another reason), so arc D's doubling is no longer the cost it is
+  now.
+
+---
+
+## C106 — `#c` has ONE arity ceiling for both backends, and it was raised rather than lowered
+
+**Catalogue:** @F92 (direct C binding), @F53 (native backend)
+
+### Context
+
+`#c` bindings were checked against `MAX_C_ARITY` on the interpreter ONLY — the check sat
+behind `if !native_mode` in `main.rs`. The two backends therefore had different binding
+capability, and nobody had measured it: `--native` bound and correctly called a 14-slot C
+function while the interpreter refused the same declaration naming `0..=12`.
+
+That is not a capability, it is a portability trap that fires late. The refusal fired at the
+CALL site, so a library author could declare a 13-slot binding, build it under `--native`,
+test it, and ship — and the failure landed on a downstream consumer who had not written the
+declaration and could not edit it. `loft debug` *is* the interpreter, so the bindings you
+could not debug were exactly the ones with no other way in.
+
+### The rejected option
+
+**Unify downward at 12.** This was the first recommendation, and it is what "one contract,
+and it is the interpreter's" reads like until you check the promise. COMPATIBILITY.md § *The
+error surface is one-directional* says adding an error is a break, that pre-freeze the
+disposition inverts to "be strict now" — **but** that *"the first resolution of a would-be-error
+is a rewrite to correct function, not an error. Erroring is the narrower choice, reserved for
+what cannot be given a sane defined behavior."*
+
+A functioning rewrite existed. The interpreter's ladder is one
+`extern "C" fn(u64 × N) -> u64` per rung, and every rung above 7 is the same stack-passing
+shape as 7 — mechanical, not a new risk per rung. Narrowing `--native` to 12 would have
+removed working programs to fix a problem that a loosening fixes for free.
+
+### Decision
+
+- **Closed 2026-08-10.** `MAX_C_ARITY = 32`, enforced on **both** backends. The ladder was
+  extended from 12 to 32; `--native` is held to the same number.
+- **32 has a reason, not a roundness.** A ladder cannot be unbounded, so past 32 an ANSI-C
+  shim is the answer — the stopping point is chosen, not accidental.
+
+  > **The sizing arithmetic here was wrong, and C107 corrected it.** This entry justified 32
+  > by "`dgemm_`'s 13 by-reference arguments cost TWO slots each, so it needs 26". The
+  > premise was that a `vector` always carries a count. It does not, and more to the point a
+  > Fortran routine *takes* no count — measured after this decision closed, `dgemm_` was not
+  > bindable at ANY ceiling. Under C107 it costs **13** slots, not 26. The number 32 does not
+  > change and neither does the decision; the margin is simply far larger than this text
+  > claimed.
+- **The tightening half is real but theoretical.** A binding of 33+ C slots that compiled
+  under `--native` is now refused. No real C API approaches that; and pre-freeze is the only
+  time this error can be added at all.
+- **Two-pass enforcement**, mirroring `superseded_fold_diagnostics`: declarations are checked
+  in code you OWN (stdlib or entry project), so the author sees it as they write it even if
+  nothing calls it yet — while merely LOADING a dependency that declares an over-ceiling
+  binding you never call does not fail your build, because a consumer cannot edit someone
+  else's declaration. Call sites are checked everywhere, since a call that cannot work must
+  be refused wherever it is written.
+- The `c-binding-not-interpretable` code KEEPS its name though it no longer means "the
+  interpreter specifically". A diagnostic code is a frozen public surface
+  ([DIAGNOSTICS.md](DIAGNOSTICS.md)), so the row moved and the name did not.
+- **Why this refuses the declaration when the wasm rule does not.** `#c` on the wasm targets
+  is refused at the CALL only, deliberately, "so a declaration is still portable"
+  ([PACKAGES.md](PACKAGES.md) § *The wasm and browser targets*) — a `#c` binding that wasm
+  cannot reach is still perfectly good on native and interpret, so failing the declaration
+  would break a legitimate cross-target library. Arity is not target-conditional: an
+  over-ceiling binding can never work **anywhere**, so there is no target on which the
+  declaration is valid and nothing is lost by saying so at the point it is written. The two
+  rules differ because the underlying facts differ, not because the surface is inconsistent.
+- **Revisit when** a real C API needs more than 32 integer-class slots — at which point the
+  question is whether to add rungs or to generate the shim, and it moves for BOTH backends
+  at once either way. Float-by-value does NOT reopen it: there is no cheap ladder move there
+  (the trampolines are integer-class by construction), and arc B's pointer idiom covers the
+  need.
+
+## C107 — the C signature decides whether a `vector` carries a count, not the loft type
+
+**Catalogue:** @F92 (direct C binding)
+
+### Context
+
+A loft `vector` crossed a `#c` boundary as an element pointer **and** a count, always, because
+C carries no length. That is the right shape for a C library written for loft, and it is the
+wrong shape for every numeric library that exists.
+
+Fortran passes every argument by reference, so a BLAS or LAPACK routine takes a list of bare
+pointers and learns the length from a separate `n` — itself a bare pointer. Measured against a
+purpose-built `dgemm_` with the real 13-argument signature, both ways of writing the
+declaration failed:
+
+- the **honest** one, naming the thirteen pointers the header shows, was refused for arity
+  ("the C signature takes 13 parameter(s), the loft declaration needs 26");
+- the one loft **accepted**, with a count after every pointer, delivered each count where the
+  callee expected the next pointer — SIGSEGV on the interpreter, nothing at all under
+  `--native`.
+
+So no real Fortran routine was bindable, at any arity ceiling. This was not visible from the
+fixture, whose C functions were written to loft's shape and therefore held the one axis that
+mattered fixed. C106's sizing arithmetic ("`dgemm_` needs 26 slots") is the same mistake
+written down.
+
+### The rejected options
+
+- **A shim generator (@PLN128 arc D as originally scoped).** Generate an ANSI-C shim per
+  routine that collapses the argument list. It works, but it makes every numeric binding
+  depend on a C toolchain at build time, and it was scoped for "routines that overflow 32
+  slots" when in fact *every* Fortran routine needed one.
+- **C-owned buffers as opaque handles.** Measured working, and it needs no language change at
+  all: allocate on the C side, hold each argument as an `integer`, one slot each. It stays the
+  right answer for a **retaining** API (it also dodges the E6b use-after-free). It is the wrong
+  default for numerics because it copies every array in and out across the boundary — an
+  8 MB round trip per call on a 1000×1000 matrix, which is precisely what calling BLAS was for.
+- **A new loft spelling** for "pass this without a count". Rejected as unnecessary surface: the
+  declaration already carries a full C signature, and that signature is by construction the
+  statement of what the symbol takes.
+
+### Decision
+
+- **Closed 2026-08-10.** A `vector` parameter crosses as a **bare element pointer** where the
+  C signature has no integer for it, and as **pointer-then-count** where it does.
+  `c_signature::plan` derives the assignment once; the declaration check, the interpreter's
+  `dispatch` and the `--native` emission all read it, so a vector cannot carry a count on one
+  backend and not the other.
+- **This is a loosening.** Every declaration that compiled before still compiles and still
+  means exactly what it meant — proven by a byte-identical `loft introspect` diff over the
+  counted paths. What changes is that declarations previously refused now bind.
+- **The assignment is unique when it exists, so inferring it is not a guess.** Take the
+  leftmost parameter where two readings differ: it is a vector, counted in one and bare in the
+  other, so from there one reading runs a slot behind. To end together some later vector must
+  be counted in the reading that is behind — and its *pointer* then lands on the slot the other
+  reading uses for a *count*. A slot cannot be both, so the two cannot both type-check.
+  `every_reachable_shape_has_at_most_one_reading` searches 12k+ shapes rather than resting on
+  the argument.
+- **The matching looks ahead rather than walking greedily.** `f(v: vector, sel: integer,
+  w: vector)` against `(const double*, int64_t, const double*, int64_t)` has the count on `w`,
+  not on `v`, and a left-to-right walk that takes an integer whenever one follows a pointer
+  gets it backwards. The fixture's `lc_split_` is position-weighted so that mistake answers a
+  different number instead of the right one by luck.
+- **What it costs.** A signature that omits a count the C function really takes is now accepted
+  instead of refused, and passes a bare pointer where the callee wants a length. That is the
+  same class as any other wrong signature — `#c`'s standing contract is that the declaration is
+  the sole authority and nothing at runtime can check it (the probe called an arity-1 symbol
+  through an arity-3 trampoline and got the right answer). It is not a new kind of hazard,
+  but it is one fewer check, and it is the price of being able to name the signature the header
+  actually shows.
+- **Revisit when** loft grows an address-of, which would let a by-reference scalar be spelled
+  without a 1-element vector and make the ergonomics question (@PLN128 Q1) moot.
+
+## C108 — a `vector<T>` and the C pointee are two spellings of ONE layout
+
+**Catalogue:** @F92 (direct C binding)
+
+### Context
+
+C107 made the C signature the authority on whether a `vector` carries a count.  It left the
+other half of the same declaration unchecked: **what the pointer points AT**.  A `vector`
+reaches C as a pointer into loft's own element bytes, with no conversion on either backend —
+`dispatch` hands over the store address and the `--native` emission passes the same one — so
+the loft element type and the C pointee are two spellings of a single layout.  Nothing
+compared them.
+
+Measured against real OpenBLAS on both backends, exit 0 and no diagnostic:
+
+- `vector<integer>` (8-byte elements) against LAPACK's `int *` pivot array — `dgesv_` answered
+  `ipiv = 8589934593, 0` where the pivots are `1, 2`;
+- `vector<single>` (4-byte) against `double *` — `daxpy_` wrote **24 bytes into a 12-byte loft
+  vector**, a write past the end of a store allocation from a declaration loft accepted;
+- `vector<i8>` / `vector<i16>` — loft stores narrow SIGNED elements as `val - min`
+  (`database/types.rs`), so a loft `0` is the byte `128` and C reads every value shifted;
+- `vector<text>` — the elements are loft's own 4-byte heap handles, so C dereferences a store
+  offset as an address: immediate SIGSEGV.  The fixture README had claimed this row worked;
+  nothing had ever bound it.
+
+The read-only cases are worse than the crashing one, because on little-endian a wrong width
+reads the *right* answer for a one-element scalar and only goes wrong once an array is longer
+than one — which is the shape of every bug that ships.
+
+### The rejected options
+
+- **Marshal a converted copy.** Well defined for a `const` pointer, and it hides the question:
+  the LP64-vs-ILP64 split is a real property of the installed library that the author has to
+  know either way, and copying is what calling BLAS was meant to avoid.  It also cannot work
+  for a write-back pointer without a second copy back, and an 8→4 narrowing can overflow.
+- **Check signedness too.** Rejected: signedness changes how a byte is read, never where the
+  next one is, and `vector<u8>` against `const char *` is the ordinary byte-buffer idiom.
+- **Refuse an unresolvable pointee** (`struct foo *`, a function pointer).  Rejected: the
+  pointee is diagnostics-only everywhere else, and refusing on it would break `write(2)`'s
+  `const void *`.
+
+### Decision
+
+- **Closed 2026-08-10.** A `vector<T>` binds to a C pointer only when the pointee has the same
+  **width** and the same **class** (integer vs float) as one loft element.  `void *` — and any
+  pointee this binding does not resolve — is **opaque** and always accepted: that is the author
+  saying "these are bytes, I mean it", which is how `write(2)` takes a `vector<u8>`.
+- **One home.** `CElement::of_loft` reads `data::element_storage_size`, the same function the
+  store lays elements out with, so the table cannot drift from the layout; `CElement::of_c`
+  resolves the pointee at parse time, where the target that decides C's widths is in hand.
+  `c_signature::options` is the only site that matches them, so the declaration check, the
+  interpreter's `dispatch` and the `--native` emission cannot form three opinions.
+- **This is a TIGHTENING**, and the only one in @PLN128.  COMPATIBILITY.md reserves an error
+  for what cannot be given a sane defined behaviour, and this qualifies: there is no correct
+  program behind these declarations, only a wrong one that sometimes returns a plausible
+  number.  Pre-freeze, and the refusal names the loft type to write instead.
+- **What it costs.** `vector<i8>` and `vector<i16>` no longer cross at all (use `vector<i32>`,
+  the unsigned sibling, or `void *`), and a numeric author must now write the integer width
+  their build of the library uses.  Nothing in this repo or the registry declared any of the
+  refused shapes.
+- **What it does NOT catch.** The library's own build is still invisible: `daxpy_` declared
+  with `int64_t` against an LP64 OpenBLAS is self-consistent and still reads the right answer
+  on little-endian for a positive scalar, then corrupts every out-parameter.  Only the header
+  the author is reading says which build is installed, which is why PACKAGES.md states it.
+- **Revisit when** a `#c` declaration can name the library's integer model, which would let the
+  ILP64 question be asked once per package instead of once per parameter.
+
+## C109 — a float RETURN crosses `#c`; a float ARGUMENT still does not
+
+**Catalogue:** @F92 (direct C binding)
+
+### Context
+
+@PLN128 Q3 settled "float by value" once, for both directions, and stayed with the refusal on
+the grounds that relaxing it would mean "a second, SSE-aware ladder".  That is true of an
+argument and false of a return, and merging them cost more than the decision was worth.
+
+The interpreter calls a `#c` symbol through a fixed ladder of per-arity trampolines,
+`extern "C" fn(u64 × N) -> u64`.  For an **argument**, the register file is chosen per
+position, so supporting a float anywhere would need a rung per SUBSET of positions —
+`2^arity`, genuinely impossible, and unnecessary because Fortran passes everything by
+reference.  For the **return** there is one axis: the value is in `xmm0` or it is not.  It
+costs one more expansion of the same arity list.
+
+Arc E is what made the cost visible.  Bound against real OpenBLAS, every level-1 BLAS
+*function* — `ddot_`, `dnrm2_`, `dasum_` — and every LAPACK auxiliary that answers a number
+(`dlange_`, `dlamch_`) was refused, and the cure the refusal named was an ANSI-C shim per
+routine: a C toolchain in the build of every numeric package, to work around a boundary that
+can just be correct.  That is the trade C107 had already declined for arguments.
+
+### Decision
+
+- **Closed 2026-08-10.** A C `double` return binds to loft `float`; a C `float` return binds to
+  loft `single`.  A float **argument** stays refused, with the pointer cure @PLN128 arc B
+  wrote.
+- **The pairing is exact, not widening.** A C `float` leaves a SINGLE in the return register,
+  so binding it to loft `float` would read those bits as a double and get a denormal — hence
+  two rungs (`call_at_arity_f64`, `call_at_arity_f32`) rather than one plus a cast.
+- **This is a LOOSENING**, which the compatibility promise permits unconditionally: nothing
+  that compiled stopped compiling, and the same declaration that was an error is now a call.
+- **`--native` needed nothing.** It hands the signature to rustc, which already emitted
+  `-> f64` / `-> f32` from `CType::rust_type`; only the interpreter lacked the rung.  The two
+  backends were checked against the same hand-computed value (`lc_ddot_`, `lc_sdot_`).
+- **The arity list is still written once.** `rung!` and `call_ladder!` are siblings — the list
+  is spelled in `call_ladder` and the return type is what varies — because a rung whose
+  function type and index list disagree transmutes to the wrong arity with nothing to catch it.
+- **Revisit when** someone needs a float argument badly enough to pay for an SSE-aware ladder;
+  it moves for both backends at once, as C106 requires.

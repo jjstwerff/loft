@@ -206,7 +206,13 @@ ceremony — and fix PHP's weaknesses.
    **Native-only by nature** (wasm has no C ABI / `dlopen`).
 2. **@PLN23 — MariaDB + PostgreSQL clients**, uniform API (prepared statements,
    transactions, bulk-edits) over `#c`.  PHP's killer feature; loft's biggest
-   current gap.
+   current gap.  **Closed 2026-08-10 on the claim, not on a package**: one
+   uniform interface drives four C libraries unchanged, and a loft object has a
+   canonical SQL shape — both running in `tests/fixtures/sqldb/`
+   ([plans/23-db-clients](plans/23-db-clients/README.md)).  What a shipping
+   library still needs — data enums, tuples, concurrency, and the schema-reading
+   direction below — is listed in that plan's closure record rather than left
+   implied.
 3. **@PLN4 — the real HTTP server** (routing + the native-reactor architecture,
    designed `2026-06-14` in `lib_plans/future/08-server/ARCHITECTURE.md`) for the
    web layer.
