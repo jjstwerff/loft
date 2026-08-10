@@ -151,7 +151,7 @@ fn sweep(mode: &str, leak_env: bool, expected: impl Fn(Expect) -> bool) {
     );
 }
 
-// @speed 1.3
+// @speed 2.3
 #[test]
 fn leak_cases_interp() {
     sweep("--interpret", false, |e| e.interp_leaks);

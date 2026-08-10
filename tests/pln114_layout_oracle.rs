@@ -174,7 +174,7 @@ fn new_routine(kinds: &[&str]) -> Option<usize> {
     Some(element_storage_size(&Type::Tuple(elems)))
 }
 
-// @speed 3.4
+// @speed 5.2
 #[test]
 fn tuple_layout_oracle() {
     let mut rows = Vec::new();

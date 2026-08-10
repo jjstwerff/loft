@@ -835,7 +835,7 @@ fn native_features() -> std::io::Result<()> {
 ///
 /// Runs concurrently with interpreter-based wrap tests (no WRAP_LOCK).
 /// Skips silently if `rustc` is not in PATH.
-// @speed 4.3
+// @speed 6.1
 #[test]
 fn native_scripts() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -1313,7 +1313,7 @@ fn a_c_string_return_crosses_identically_on_both_backends() -> std::io::Result<(
 /// The library is built here rather than mocked, and the control is the call
 /// that WORKS (`sk_present(41)` is 42, by hand): without it a `false` could just
 /// mean nothing loaded, which is the vacuous pass this test exists to refuse.
-// @speed 0.6
+// @speed 1.1
 #[test]
 fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -1418,7 +1418,7 @@ fn an_available_library_must_export_what_was_declared() -> std::io::Result<()> {
 /// running this test fetch it. Declared `[c] optional-libs` it costs nothing —
 /// the fixture builds and runs without it, and says so — which is what makes
 /// keeping a fourth backend in the tree cheap rather than a vendoring decision.
-// @speed 1.2
+// @speed 2.1
 #[test]
 fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> {
     let _guard = native_suite_lock()
@@ -3007,7 +3007,7 @@ fn run_lib_test_in_temp_cwd(
 /// Holds `native_suite_lock` so it serialises with the other native suites
 /// (shared `/tmp` rlib + binary cache).  Skips silently when `rustc` / the loft
 /// rlib are unavailable, like `native_scripts`.
-// @speed 1.6
+// @speed 2.5
 #[test]
 fn native_library_suite() -> std::io::Result<()> {
     let _guard = native_suite_lock()

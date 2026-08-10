@@ -1103,7 +1103,7 @@ fn assert_move_elide_preserves(src: &str, stem: &str, expected: &str) {
     }
 }
 
-// @speed 0.6
+// @speed 1.1
 #[test]
 fn move_elide_record_preserves_values_and_stays_leak_free() {
     // t1=9, t2=47 (40+7), t5=18 (9+9, two independent copies). The gate must not change ANY
@@ -1204,7 +1204,7 @@ fn t4_fresh() -> integer {                  // container built AFTER base → NO
 fn main() { print("{t1_local()} {t2_param(Bag{id:0,items:[100]})} {t4_fresh()}\n"); }
 "#;
 
-// @speed 0.6
+// @speed 1.1
 #[test]
 fn move_elide_construct_field_append_preserves_values_and_stays_leak_free() {
     // t1=30, t2=8 (param [100] + [7,8] → index 2), t4=25 (20 + 5).
@@ -1252,7 +1252,7 @@ fn e3_single_late() -> integer {             // single fresh construct, items la
 fn main() { print("{e1_single()} {e2_two()} {e3_single_late()}\n"); }
 "#;
 
-// @speed 0.7
+// @speed 1.2
 #[test]
 fn move_elide_fresh_construction_values_and_conservative_skips() {
     // Values preserved on both backends, leak-free (e1=25, e2=7, e3=39).
@@ -1303,7 +1303,7 @@ fn p3_argmut(n: integer) -> integer {        // n mutated at a callee's arg1 &-p
 fn main() { print("{p1_const(7)} {p2_reassigned(4)} {p3_argmut(5)}\n"); }
 "#;
 
-// @speed 0.7
+// @speed 1.2
 #[test]
 fn move_elide_param_field_widening_is_sound() {
     // p1=27 (20+7), p2=70 (30+40), p3=106 (1+105). Values must hold on BOTH backends: a wrong
@@ -1349,7 +1349,7 @@ fn m2_crossdep() -> integer {                // a2's field value reads a1 (a loc
 fn main() { print("{m1_three()} {m2_crossdep()}\n"); }
 "#;
 
-// @speed 0.6
+// @speed 1.2
 #[test]
 fn move_elide_multiple_fresh_constructs_per_fn() {
     // m1=10 (1+4+5), m2=117 (7+10+100). Values hold on both backends.
@@ -1410,7 +1410,7 @@ fn r4_param(base: vector<integer>) -> integer {  // param source → caller owns
 fn main() { print("{r1_replace()} {r2_heaptext()} {r3_survive()} {r4_param([99, 98])}\n"); }
 "#;
 
-// @speed 0.7
+// @speed 1.3
 #[test]
 fn move_elide_whole_vector_replacement_eliminates_double_copy() {
     // r1=21, r2=4, r3=30, r4=101 (99+2). A wrong move of r3/r4 would surface as a wrong value or a
@@ -1489,7 +1489,7 @@ fn main() {
 }
 "#;
 
-// @speed 0.6
+// @speed 1.3
 #[test]
 fn move_elide_handles_constructs_in_nested_blocks() {
     // Values hold on both backends (if=22, loop=140 — per-iteration, replace=107, outer=53).
@@ -1544,7 +1544,7 @@ fn empty_field_replace() -> integer {       // `s.v = fresh`, s.v starts EMPTY, 
 fn main() { print("{vlit_element()} {self_assign()} {empty_field_replace()}\n"); }
 "#;
 
-// @speed 0.6
+// @speed 1.2
 #[test]
 fn move_elide_corpus_hardening_shapes_stay_correct() {
     // A wrong elision of ANY of these surfaces here as a wrong value or a crash, on either backend.

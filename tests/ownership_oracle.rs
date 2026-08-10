@@ -156,7 +156,7 @@ fn oracle_fact_is_backend_identical_si2() {
 /// 5.2 — the fuzzer hook: every generated `program_ownership` case (9 shapes × 2 values × 3 churn =
 /// 54) runs the oracle check; the whole grammar must be 0 RED (no crying wolf at generative scale,
 /// not just the fixed corpus). The generator is the @PLN85 fuzz harness's `grammar_gen.py`.
-// @speed 2.2
+// @speed 3.6
 #[test]
 fn oracle_clean_on_generated_fuzz_corpus() {
     let fuzz_dir = root().join("doc/claude/plans/85-store-lifetime-retirement/fuzz");

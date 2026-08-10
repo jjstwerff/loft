@@ -64,7 +64,7 @@ impl Drop for Guard {
     }
 }
 
-// @speed 3.1
+// @speed 6.0
 #[test]
 fn agent_debugs_a_browser_wasm_client_through_the_server_relay() {
     if !have("node") || !wasm32_installed() {

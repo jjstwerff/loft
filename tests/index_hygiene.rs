@@ -71,7 +71,7 @@ fn idx_command(args: &[&str]) -> Command {
 // concurrently (cargo test default parallelism) corrupts
 // `index/tags.json`.  Serialising into one test avoids the
 // race without needing a global mutex.
-// @speed 1.4
+// @speed 2.3
 #[test]
 fn index_hygiene_clean() {
     // 1. Refresh the index.  `make index` must exit 0.

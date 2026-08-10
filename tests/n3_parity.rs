@@ -164,7 +164,7 @@ const DATALIB_PROG: &str = "use datalib;\n\
      \x20   println(\"{area(rd)}\");\n\
      }\n";
 
-// @speed 0.8
+// @speed 1.3
 #[test]
 fn datalib_store_touching_types_parity() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -273,7 +273,7 @@ const PLAINLIB_PROG: &str = "use plainlib;\n\
 /// Asserts both directions of the now-default flip: by DEFAULT `plainlib` (which
 /// has no `compile = "native"`) auto-builds + dispatches native; under
 /// `LOFT_NO_NATIVE_LIBS` it interprets and builds no cdylib.
-// @speed 0.9
+// @speed 1.2
 #[test]
 fn default_native_dispatches_unopted_library() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -352,7 +352,7 @@ fn single_cdylib(native_auto: &Path) -> Option<std::path::PathBuf> {
 ///    rebuild, no `rustc`);
 /// 3. with the source now unchanged since run 2, the next run **rebuilds** (the
 ///    cdylib mtime changes) and is native again.
-// @speed 1.4
+// @speed 2.8
 #[test]
 fn editing_a_library_interprets_then_rebuilds_when_stable() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -449,7 +449,7 @@ fn editing_a_library_interprets_then_rebuilds_when_stable() {
 /// resolved via the direct/sibling path, which — unlike `apply_manifest_side_effects`
 /// — never recorded it as a native candidate, so it had no cdylib and its direct
 /// calls interpreted.  Now both build, and the result matches interpreting.
-// @speed 1.2
+// @speed 1.7
 #[test]
 fn interdependent_libraries_are_fully_native() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -541,7 +541,7 @@ fn interdependent_libraries_are_fully_native() {
 /// report leaks against a pre-fix binary and is swept by `run_test`'s leak gate.
 /// The bridge-level free may now be redundant for this shape; proving it dead needs
 /// its own sentinel sweep, so it stays.
-// @speed 0.8
+// @speed 1.2
 #[test]
 fn shared_bridge_nested_return_no_orphan_leak() {
     if Command::new("rustc").arg("--version").output().is_err() {
@@ -648,7 +648,7 @@ fn shared_bridge_nested_return_no_orphan_leak() {
 ///
 /// `narrow_widen` covers the other half of the same coercion (a narrow int widening to
 /// the `integer` slot), which the early return dropped identically.
-// @speed 0.8
+// @speed 1.3
 #[test]
 fn boolean_compare_of_lifted_ref_field_builds_in_cdylib_672() {
     let pid = std::process::id();
@@ -735,7 +735,7 @@ fn boolean_compare_of_lifted_ref_field_builds_in_cdylib_672() {
 ///
 /// Non-vacuous by construction: the cold run pins the pre-edit answer, so a fix
 /// that simply never dispatched native would fail the first assert.
-// @speed 2.1
+// @speed 3.9
 #[test]
 fn a_dependency_edit_invalidates_its_dependents_cdylib() {
     if Command::new("rustc").arg("--version").output().is_err() {

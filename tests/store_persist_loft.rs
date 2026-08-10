@@ -1618,7 +1618,7 @@ fn persist_size_at(path: &Path, n: u32, per: u32, mode: &str, seed: Option<&str>
 /// capacity rounding is gone, the INTERIOR free space each order leaves is
 /// visible, and it genuinely differs.  Reclaiming that means relocating records
 /// and rewriting every DbRef — compaction, which loft#710 still asks for.
-// @speed 0.9
+// @speed 1.6
 #[test]
 fn persisted_size_tracks_content_not_construction() {
     let (small, _) = persist_size("size710_small", 125, 1000, "interleaved", None);
@@ -1885,7 +1885,7 @@ fn b0_run(
 /// vector of a record whose vector was ALREADY one element, and the digest came
 /// back identical. That reads exactly like a blind oracle and was a blind
 /// injury — the failure mode this whole test exists to make visible.
-// @speed 0.9
+// @speed 1.5
 #[test]
 fn store_digest_b0_oracle_sees_loss_not_layout() {
     for backend in ["--interpret", "--native"] {
@@ -2263,7 +2263,7 @@ fn store_compact_b2_rebuilds_at_load_without_losing_anything() {
 /// reads after the rebuild, and the collection is **still bound** — writing to it
 /// must still reach the file, or compaction would have quietly turned a
 /// persisted collection into a heap copy that stops persisting.
-// @speed 0.6
+// @speed 1.0
 #[test]
 fn store_compact_b3_shrinks_a_bound_file_across_runs() {
     let script = workspace_root().join("tests/scripts/store_compact_bound_b3.loft");
@@ -2480,7 +2480,7 @@ fn persisted_image_keeps_its_slack_after_store_reclaim() {
 /// must come through `store_reclaim` and a re-bind unchanged and still check
 /// clean, an unsealed one must still be reclaimable (or the "fix" is just a
 /// disable), and each refusal must name itself.
-// @speed 0.5
+// @speed 0.9
 #[test]
 fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
     let script = workspace_root().join("tests/scripts/store_reclaim_refusals.loft");
@@ -2614,7 +2614,7 @@ fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
 ///   `sorted<T[..]>` and an `index<T[..]>` field, and merely DECLARING that
 ///   hangs the interpreter and miscompiles on `--native` (loft#719). That cell
 ///   is not skipped for convenience — the shape itself does not work.
-// @speed 0.8
+// @speed 1.6
 #[test]
 fn compaction_is_correct_for_every_collection_kind_it_accepts() {
     let script = workspace_root().join("tests/scripts/store_compact_kinds.loft");
@@ -2741,7 +2741,7 @@ fn fixed_hash_seed_makes_a_persisted_store_reproducible() {
 /// leak still fit in the arena's slack, and it took sixteen to break through —
 /// so it is a companion, not the guard. It stays because it is the shape a
 /// program actually has.
-// @speed 1.1
+// @speed 2.0
 #[test]
 fn reading_a_collection_leaks_nothing_into_its_store() {
     let script = workspace_root().join("tests/scripts/store_iter_scratch.loft");
@@ -2876,7 +2876,7 @@ fn reading_a_collection_leaks_nothing_into_its_store() {
 ///
 /// The record counts and the payload digest are compared too: a file that
 /// stopped growing by LOSING records would otherwise satisfy both.
-// @speed 0.6
+// @speed 0.9
 #[test]
 fn bound_store_file_is_content_sized_when_the_binding_is_released() {
     let script = workspace_root().join("tests/scripts/store_bind_release_size.loft");

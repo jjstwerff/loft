@@ -56,7 +56,7 @@ const ENTRIES: usize = 40000;
 /// fallback (or a traversal that degrades with size) breaks this no matter the fixture.
 const PAGE_BUDGET: u64 = 8 * 64 * 1024;
 
-// @speed 0.5
+// @speed 1.0
 #[test]
 fn store_load_key_pages_over_the_browser_fetch_bridge() {
     if !which("node") {
@@ -235,7 +235,7 @@ fn store_load_key_pages_over_the_browser_fetch_bridge() {
 /// image so the loader has genuinely independent ranges to issue, and it runs the browser
 /// under a hard `timeout` — because the failure being guarded against is a hang, and a hang
 /// in a test that waits forever takes the whole suite with it instead of reporting.
-// @speed 0.5
+// @speed 0.9
 #[test]
 fn store_load_keys_batched_pages_over_the_browser_fetch_bridge() {
     if !which("node") {
