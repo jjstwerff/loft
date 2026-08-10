@@ -1528,6 +1528,38 @@ fn numeric_array_shapes_cross_identically_on_both_backends() -> std::io::Result<
          \x20 v2: vector<float> = [1.5];\n\
          \x20 w2: vector<float> = [2.0, 3.0];\n\
          \x20 println(\"split {lc_split(v2, 7, w2)}\");\n\
+         \x20 elements();\n\
+         }\n\
+         // @PLN128 arc E — one cell per element WIDTH loft may hand over, each\n\
+         // reader position-weighted in C so a stride that disagrees with loft's\n\
+         // answers a different number rather than the right one by luck.  This\n\
+         // is the half the declaration check lets through; the half it refuses\n\
+         // is `a_vector_element_must_match_the_c_pointee`.\n\
+         fn elements() {\n\
+         \x20 a32: vector<u32> = [1000, 2000, 3000];\n\
+         \x20 println(\"u32 {lc_u32_dot(a32)}\");\n\
+         \x20 a16: vector<u16> = [10, 20, 30];\n\
+         \x20 println(\"u16 {lc_u16_dot(a16)}\");\n\
+         \x20 a8: vector<u8> = [1, 2, 200];\n\
+         \x20 println(\"u8 {lc_u8_dot(a8)}\");\n\
+         \x20 ac: vector<character> = ['A', 'B', 'C'];\n\
+         \x20 println(\"char {lc_char_dot(ac)}\");\n\
+         \x20 ab: vector<boolean> = [true, false, true];\n\
+         \x20 println(\"bool {lc_bool_dot(ab)}\");\n\
+         \x20 af: vector<single> = [0.5 as single, 1.25 as single, 2.5 as single];\n\
+         \x20 println(\"single {lc_f32_dot(af)}\");\n\
+         // The level-1 BLAS *function* shape: the answer comes back BY VALUE in\n\
+         // an SSE register.  Refused until the caller grew a float-returning\n\
+         // rung, which is what made `ddot_`/`dnrm2_`/`dasum_` need an ANSI-C\n\
+         // shim each.  Both widths, because a C `float` return is a single in\n\
+         // that register and reading those bits as a double is a denormal.\n\
+         \x20 n3: vector<integer> = [3];\n\
+         \x20 dx: vector<float> = [1.5, 2.5, 4.0];\n\
+         \x20 dy: vector<float> = [4.0, 8.0, 16.0];\n\
+         \x20 println(\"ddot {lc_ddot(n3, dx, dy)}\");\n\
+         \x20 sx: vector<single> = [1.5 as single, 2.5 as single, 4.0 as single];\n\
+         \x20 sy: vector<single> = [4.0 as single, 8.0 as single, 16.0 as single];\n\
+         \x20 println(\"sdot {lc_sdot(n3, sx, sy)}\");\n\
          }\n",
     )?;
     let libdir = root.join("pkg");
@@ -1566,6 +1598,18 @@ fn numeric_array_shapes_cross_identically_on_both_backends() -> std::io::Result<
         "dgemm-t -1",
         // 1.5*100 + 7*10 + (2*1 + 3*2), scaled by 1000.
         "split 228000",
+        // @PLN128 arc E — one per element width, position-weighted so a wrong
+        // stride cannot answer the right number.  All six are in
+        // `lc_selftest.c` too, so C agrees with itself before loft is asked.
+        "u32 14000",
+        "u16 140",
+        "u8 605",
+        "char 398",
+        "bool 4",
+        "single 10500",
+        // The float RETURN, both widths.  1.5*4 + 2.5*8 + 4*16 = 90.
+        "ddot 90",
+        "sdot 90",
     ] {
         assert!(
             interp.contains(want),
@@ -3171,6 +3215,182 @@ fn a_text_return_must_say_it_is_a_c_string() -> std::io::Result<()> {
         assert_eq!(
             seen[0], seen[1],
             "and both backends must say it identically"
+        );
+    }
+    Ok(())
+}
+
+/// @PLN128 arc E — a `vector<T>` and the C pointee are two spellings of ONE
+/// layout, and a declaration where they disagree is refused.
+///
+/// Every case here was a running program with wrong numbers in it, measured
+/// against real OpenBLAS on both backends with exit 0 and no diagnostic:
+///
+/// * `vector<integer>` (8-byte) against LAPACK's `int *` pivot array — `dgesv_`
+///   answered `ipiv = 8589934593, 0` where the pivots are `1, 2`.
+/// * `vector<single>` (4-byte) against `double *` — `daxpy_` wrote 24 bytes
+///   into a 12-byte loft vector, which is a write past the end of a store
+///   allocation from a declaration loft accepted.
+/// * `vector<i8>` / `vector<i16>` — loft stores narrow SIGNED elements as
+///   `val - min`, so C reads every value shifted by 128 / 32768.
+/// * `vector<text>` — the elements are loft's own heap handles, so C
+///   dereferences a store offset as an address: immediate SIGSEGV.
+///
+/// None of them needs a library to be installed: the declaration is what is
+/// wrong, so the refusal lands before anything is called. The counterpart —
+/// every element width that DOES cross, checked against values C computes — is
+/// in `numeric_array_shapes_cross_identically_on_both_backends`.
+#[test]
+fn a_vector_element_must_match_the_c_pointee() -> std::io::Result<()> {
+    // (declaration, the words the refusal has to carry)
+    let cases = [
+        (
+            "pub fn f(v: vector<integer>);   #c \"lc_x\" \"void(int*)\"",
+            "striding 4 bytes",
+        ),
+        (
+            "pub fn f(v: vector<single>);   #c \"lc_x\" \"void(double*)\"",
+            "striding 8 bytes",
+        ),
+        // Same WIDTH, different class. The message must not claim an overrun
+        // here — there isn't one — only that every value arrives different.
+        (
+            "pub fn f(v: vector<float>);   #c \"lc_x\" \"void(const int64_t*)\"",
+            "the same width read as integers",
+        ),
+        (
+            "pub fn f(v: vector<i16>);   #c \"lc_x\" \"void(const short*)\"",
+            "loft stores narrow SIGNED elements as `val - min`",
+        ),
+        (
+            "pub fn f(v: vector<text>);   #c \"lc_x\" \"void(const char *const *)\"",
+            "loft's own heap handles",
+        ),
+    ];
+    for (decl, want) in cases {
+        let path = std::env::temp_dir().join("loft_pln128_elem_refuse.loft");
+        std::fs::write(&path, format!("{decl}\nfn main() {{ println(\"x\") }}\n"))?;
+        let mut seen = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+                .arg(backend)
+                .arg("--errors=compact")
+                .arg(&path)
+                .output()?;
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                !out.status.success(),
+                "{backend} must refuse `{decl}`: {stderr}"
+            );
+            assert!(
+                stderr.contains(want),
+                "{backend}: refusing `{decl}` must say `{want}`: {stderr}"
+            );
+            seen.push(stderr);
+        }
+        assert_eq!(
+            seen[0], seen[1],
+            "and both backends must say it identically"
+        );
+    }
+    // `void*` is the opaque escape hatch and stays open: it is how `write(2)`
+    // takes a `vector<u8>`, and it is the author saying "these are bytes".
+    let path = std::env::temp_dir().join("loft_pln128_elem_opaque.loft");
+    std::fs::write(
+        &path,
+        "pub fn f(v: vector<float>);   #c \"lc_x\" \"void(const void*, int64_t)\"\n\
+         fn main() { println(\"x\") }\n",
+    )?;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--errors=compact")
+            .arg(&path)
+            .output()?;
+        assert!(
+            out.status.success(),
+            "{backend} must accept an opaque `void*` pointee: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// @PLN128 arc E — a float RETURN binds; a float ARGUMENT still does not.
+///
+/// The plan settled the two together and that was one decision too few. An
+/// argument would need a trampoline per SUBSET of positions that are float —
+/// `2^arity`, genuinely impossible — while the return is a single axis and
+/// costs one more expansion of the same arity list. Refusing it cost the
+/// level-1 BLAS *functions* (`ddot_`, `dnrm2_`, `dasum_`) and every LAPACK
+/// auxiliary that answers a number, and the cure it prescribed was an ANSI-C
+/// shim per routine: a C toolchain in the build of every numeric package.
+///
+/// The pairing is exact rather than widening: a C `float` leaves a SINGLE in
+/// the return register, so binding it to loft `float` would read those bits as
+/// a double and get a denormal.
+#[test]
+fn a_float_return_binds_and_a_float_argument_still_does_not() -> std::io::Result<()> {
+    let cases = [
+        (
+            "pub fn f(v: vector<float>) -> integer;   #c \"lc_x\" \"double(const double*, int64_t)\"",
+            Some("must return `float`, not `integer`"),
+        ),
+        (
+            "pub fn f(v: vector<float>) -> float;   #c \"lc_x\" \"float(const double*, int64_t)\"",
+            Some("must return `single`, not `float`"),
+        ),
+        (
+            "pub fn f(v: integer) -> float;   #c \"lc_x\" \"int64_t(int64_t)\"",
+            Some("a float comes back only from a C `float` or `double`"),
+        ),
+        (
+            "pub fn f(v: float);   #c \"lc_x\" \"void(double)\"",
+            Some("travels in an SSE register the caller does not write"),
+        ),
+        // The two that now bind. Nothing is called, so no library is needed —
+        // the declaration either type-checks or it does not.
+        (
+            "pub fn f(v: vector<float>) -> float;   #c \"lc_x\" \"double(const double*, int64_t)\"",
+            None,
+        ),
+        (
+            "pub fn f(v: vector<single>) -> single;   #c \"lc_x\" \"float(const float*, int64_t)\"",
+            None,
+        ),
+    ];
+    for (decl, want) in cases {
+        let path = std::env::temp_dir().join("loft_pln128_float_return.loft");
+        std::fs::write(&path, format!("{decl}\nfn main() {{ println(\"x\") }}\n"))?;
+        let mut seen = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+                .arg(backend)
+                .arg("--errors=compact")
+                .arg(&path)
+                .output()?;
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            match want {
+                Some(w) => {
+                    assert!(
+                        !out.status.success(),
+                        "{backend} must refuse `{decl}`: {stderr}"
+                    );
+                    assert!(
+                        stderr.contains(w),
+                        "{backend}: refusing `{decl}` must say `{w}`: {stderr}"
+                    );
+                }
+                None => assert!(
+                    out.status.success(),
+                    "{backend} must accept `{decl}`: {stderr}"
+                ),
+            }
+            seen.push(stderr);
+        }
+        assert_eq!(
+            seen[0], seen[1],
+            "and both backends must answer `{decl}` identically"
         );
     }
     Ok(())

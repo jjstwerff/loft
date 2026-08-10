@@ -44,9 +44,10 @@ pub fn lc_arity7(a: integer, b: integer, c: integer, d: integer, e: integer, f: 
 #c "lc_arity7" "int64_t(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t)"
 pub fn lc_shim_f64(bits: integer) -> integer;  #c "lc_shim_f64" "int64_t(int64_t)"
 
-// @PLN128 — the numeric shapes. A `vector<T>` reaches C as pointer-then-count,
-// which is why each of these declares a count C would otherwise have no way to
-// know, and why a Fortran scalar costs TWO slots rather than one.
+// @PLN128 — the numeric shapes. A `vector<T>` reaches C as pointer-then-count
+// where the C signature has a parameter for the count, which is why each of
+// these declares one; the Fortran block below is the same loft spelling against
+// a signature that has none, and costs ONE slot per argument.
 pub fn lc_dsum_scaled(v: vector<float>) -> integer;
 #c "lc_dsum_scaled" "int64_t(const double*, int64_t)"
 // The load-bearing one: C writes THROUGH `y`, and loft sees the writes. Every
@@ -90,3 +91,30 @@ pub fn lc_dgemm(transa: text, transb: text, m: vector<integer>, n: vector<intege
 // really there belongs to `w`.
 pub fn lc_split(v: vector<float>, sel: integer, w: vector<float>) -> integer;
 #c "lc_split_" "int64_t(const double*, int64_t, const double*, int64_t)"
+
+// @PLN128 arc E — one binding per element WIDTH loft may hand over.  A vector
+// crosses as a pointer into loft's own element bytes, so the loft element type
+// and the C pointee are two spellings of one layout and the declaration is
+// refused when they disagree.  These are the agreeing half; the refusals are in
+// `a_vector_element_must_match_the_c_pointee`.
+pub fn lc_u32_dot(v: vector<u32>) -> integer;
+#c "lc_u32_dot" "int64_t(const unsigned*, int64_t)"
+pub fn lc_u16_dot(v: vector<u16>) -> integer;
+#c "lc_u16_dot" "int64_t(const unsigned short*, int64_t)"
+pub fn lc_u8_dot(v: vector<u8>) -> integer;
+#c "lc_u8_dot" "int64_t(const unsigned char*, int64_t)"
+pub fn lc_char_dot(v: vector<character>) -> integer;
+#c "lc_char_dot" "int64_t(const unsigned*, int64_t)"
+pub fn lc_bool_dot(v: vector<boolean>) -> integer;
+#c "lc_bool_dot" "int64_t(const unsigned char*, int64_t)"
+pub fn lc_f32_dot(v: vector<single>) -> integer;
+#c "lc_f32_dot_milli" "int64_t(const float*, int64_t)"
+
+// @PLN128 arc E — the level-1 BLAS *function* shape: bare pointers in, and the
+// answer BY VALUE in an SSE register.  `ddot_`, `dnrm2_` and `dasum_` are all
+// this shape, and until the caller grew a float-returning rung every one of
+// them needed an ANSI-C shim of its own.
+pub fn lc_ddot(n: vector<integer>, x: vector<float>, y: vector<float>) -> float;
+#c "lc_ddot_" "double(const int64_t*, const double*, const double*)"
+pub fn lc_sdot(n: vector<integer>, x: vector<single>, y: vector<single>) -> single;
+#c "lc_sdot_" "float(const int64_t*, const float*, const float*)"

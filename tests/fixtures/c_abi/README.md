@@ -56,7 +56,13 @@ and here you can read them and see.
 | `text` return, not UTF-8 | `const char *` Latin-1 | `lc_latin1_text` | direct |
 | `vector<integer>` | `const int64_t *`, count | `lc_i64_sum` | direct |
 | `vector<i32>` | `const int32_t *`, count | `lc_i32_sum` | direct |
-| `vector<text>` | `const char *const *`, count | `lc_strv_total` | direct |
+| `vector<u32>` / `<u16>` / `<u8>` | matching unsigned pointer | `lc_u32_dot`, `lc_u16_dot`, `lc_u8_dot` | direct |
+| `vector<character>` / `<boolean>` | `const uint32_t *` / `const unsigned char *` | `lc_char_dot`, `lc_bool_dot` | direct |
+| `vector<single>` | `const float *` | `lc_f32_dot_milli` | direct |
+| `vector<i8>` / `<i16>` | — | — | **REFUSED** — loft stores these biased (`val - min`) |
+| `double` RETURNED by value | `double(...)` | `lc_ddot_` | direct |
+| `float` RETURNED by value | `float(...)` | `lc_sdot_` | direct |
+| `vector<text>` | — | `lc_strv_total` | **REFUSED** — loft's elements are heap handles, not `char *` |
 | opaque handle (`PGconn *`) | `void *` as loft `integer` | `lc_open` / `lc_read` / `lc_bump` / `lc_close` | direct |
 | `null` (any type) | whatever the binding sends | `lc_is_null`, `lc_raw_i64`, `lc_raw_bool` | direct |
 | arity 0 / 1 / 6 / 7 / 12 | `int64_t …` | `lc_arity*` | direct |
@@ -69,7 +75,7 @@ and here you can read them and see.
 | out-parameter | `int64_t *` | `lc_divmod` | **shim** `lc_shim_div` / `_mod` |
 | varargs | `...` | `lc_var_sum` | **shim** `lc_shim_sum3` |
 
-## The FOREIGN half — why the last three rows are different (@PLN128 arc D)
+## The FOREIGN half — the rows written by the other side (@PLN128 arcs D and E)
 
 Everything above them was written **for loft**: each function takes a `vector` as
 a pointer *and* a count, because that is the shape loft used to insist on. That
@@ -94,7 +100,32 @@ position-weighted, that answers a different number instead of the right one by
 luck.
 
 **A fixture written to the shape under test cannot falsify it.** That is the
-lesson these three rows exist to keep.
+lesson those three rows exist to keep.
+
+`lc_ddot_` and `lc_sdot_` are the fourth and fifth, added by @PLN128 arc E: the
+level-1 BLAS *function* shape, where the answer comes back **by value** in an
+SSE register. Every earlier function here returns an integer or writes through a
+pointer, so the whole family — `ddot_`, `dnrm2_`, `dasum_`, and every LAPACK
+auxiliary that answers a number — was invisible to the matrix while the boundary
+refused it. Both widths are here because a C `float` return is a *single* in
+that register, not a narrowed double.
+
+**And the limit of a purpose-built fixture, learned the same way.** Arc E bound
+**real OpenBLAS** and found three things this library could not have shown,
+because everything in it was written by whoever was writing the declarations:
+
+- a `vector`'s element WIDTH was never checked against the C pointee, so
+  `vector<integer>` at LAPACK's `int *` answered `8589934593, 0` for the pivots
+  `1, 2`, and `vector<single>` at `double *` let C write 24 bytes into a 12-byte
+  loft vector — both silent, both backends;
+- loft stores narrow SIGNED elements as `val - min`, so `vector<i8>` and
+  `vector<i16>` never were C arrays;
+- the `vector<text>` row in the matrix above was **false** — it SIGSEGVs, and
+  nothing had ever bound it.
+
+The `lc_*_dot` readers below are the repair: one per element width, each
+position-weighted, so the layout loft writes and the layout C reads are pinned
+against each other rather than assumed.
 
 Values are chosen so a wrong answer is *reachable*, not merely unlikely:
 

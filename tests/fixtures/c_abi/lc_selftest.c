@@ -205,6 +205,51 @@ int main(void) {
     eq("split: one bare vector, one counted", lc_split_(v, 7, w, 2), 228000);
   }
   {
+    /* @PLN128 arc E — one reader per element width, each position-weighted so
+     * a wrong stride cannot answer the right number.  Hand-computed:
+     *   u32:  1000*1 + 2000*2 + 3000*3       = 14000
+     *   u16:  10*1 + 20*2 + 30*3             = 140
+     *   u8:   1*1 + 2*2 + 200*3              = 605
+     *   char: 'A'(65)*1 + 'B'(66)*2 + 'C'(67)*3 = 398
+     *   bool: 1*1 + 0*2 + 1*3                = 4
+     *   f32:  (0.5*1 + 1.25*2 + 2.5*3) * 1000 = 10500 */
+    uint32_t a32[3];
+    uint16_t a16[3];
+    unsigned char a8[3];
+    uint32_t ach[3];
+    unsigned char ab[3];
+    float af[3];
+    a32[0] = 1000; a32[1] = 2000; a32[2] = 3000;
+    a16[0] = 10;   a16[1] = 20;   a16[2] = 30;
+    a8[0]  = 1;    a8[1]  = 2;    a8[2]  = 200;
+    ach[0] = 65;   ach[1] = 66;   ach[2] = 67;
+    ab[0]  = 1;    ab[1]  = 0;    ab[2]  = 1;
+    af[0]  = 0.5f; af[1]  = 1.25f; af[2] = 2.5f;
+    eq("u32 elements", lc_u32_dot(a32, 3), 14000);
+    eq("u16 elements", lc_u16_dot(a16, 3), 140);
+    eq("u8 elements", lc_u8_dot(a8, 3), 605);
+    eq("character elements", lc_char_dot(ach, 3), 398);
+    eq("boolean elements", lc_bool_dot(ab, 3), 4);
+    eq("single elements", lc_f32_dot_milli(af, 3), 10500);
+  }
+  {
+    /* @PLN128 arc E — the level-1 BLAS *function* shape, answer by value.
+     *   ddot: 1.5*4 + 2.5*8 + 4.0*16 = 6 + 20 + 64 = 90
+     * The same numbers for both widths, so the f32 rung and the f64 rung are
+     * checked against ONE hand computation rather than two. */
+    int64_t n = 3;
+    double dx[3];
+    double dy[3];
+    float sx[3];
+    float sy[3];
+    dx[0] = 1.5; dx[1] = 2.5; dx[2] = 4.0;
+    dy[0] = 4.0; dy[1] = 8.0; dy[2] = 16.0;
+    sx[0] = 1.5f; sx[1] = 2.5f; sx[2] = 4.0f;
+    sy[0] = 4.0f; sy[1] = 8.0f; sy[2] = 16.0f;
+    eq("ddot_ returns a double by value", (int64_t)lc_ddot_(&n, dx, dy), 90);
+    eq("sdot_ returns a float by value", (int64_t)lc_sdot_(&n, sx, sy), 90);
+  }
+  {
     /* Column-major 2x2:  A = [[1,3],[2,4]]   B = [[5,7],[6,8]]
      *                    A*B = [[23,31],[34,46]]
      * with alpha=2, beta=10 and C = [[100,300],[200,400]]:

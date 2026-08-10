@@ -350,8 +350,78 @@ void lc_shim_scale(double *out, int64_t n_out, const double *v, int64_t n_v) {
   if (n_out >= 1 && n_v >= 1) out[0] = v[0] * 2.0;
 }
 
+/* ---- ELEMENT WIDTHS (@PLN128 arc E) -------------------------------------
+ * One reader per element width loft may hand over.  A vector reaches C as a
+ * pointer into loft's OWN element bytes, so these are what says the two sides
+ * agree about the stride: a reader striding differently from the writer reads
+ * garbage, and the weighted sums below make that visible rather than plausible
+ * (an unweighted sum survives a reversed or shifted array). */
+
+int64_t lc_u16_dot(const uint16_t *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_u8_dot(const unsigned char *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_u32_dot(const uint32_t *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_char_dot(const uint32_t *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (int64_t)p[i] * (i + 1);
+  return s;
+}
+
+int64_t lc_bool_dot(const unsigned char *p, int64_t n) {
+  int64_t s = 0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (p[i] ? 1 : 0) * (i + 1);
+  return s;
+}
+
+int64_t lc_f32_dot_milli(const float *p, int64_t n) {
+  double s = 0.0;
+  int64_t i;
+  for (i = 0; i < n; i++) s += (double)p[i] * (double)(i + 1);
+  return (int64_t)(s * 1000.0);
+}
+
 /* ---- FORTRAN SHAPE (@PLN128 arc D) --------------------------------------
  * Every argument by reference, no counts anywhere.  See lc_types.h. */
+
+/* @PLN128 arc E — the level-1 BLAS *function* shape: bare pointers in, and the
+ * answer comes back BY VALUE in an SSE register.  `ddot_`, `dnrm2_` and
+ * `dasum_` are all this, and until the caller grew a float-returning rung none
+ * of them could be bound without an ANSI-C shim per routine. */
+double lc_ddot_(const int64_t *n, const double *x, const double *y) {
+  double s = 0.0;
+  int64_t i;
+  for (i = 0; i < *n; i++) s += x[i] * y[i];
+  return s;
+}
+
+/* The `float` twin — `sdot_`.  A single is not a narrowed double: it comes back
+ * as a single in the same register, and reading those bits as a double is a
+ * denormal. */
+float lc_sdot_(const int64_t *n, const float *x, const float *y) {
+  float s = 0.0f;
+  int64_t i;
+  for (i = 0; i < *n; i++) s += x[i] * y[i];
+  return s;
+}
 
 void lc_daxpby_(const int64_t *n, const double *alpha, const double *x,
                 const double *beta, double *y) {

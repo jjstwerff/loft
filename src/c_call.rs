@@ -43,6 +43,77 @@
 
 use crate::c_signature::{CSignature, CType};
 
+/// ONE rung of the ladder: transmute `f` to the arity the index list names and
+/// call it.
+///
+/// The rung's function TYPE is derived from the same index list that supplies
+/// the arguments — `rung!(@ty $i)` maps each index to one `u64` — so the arity
+/// is written once per rung instead of twice.  It used to be spelled twice
+/// (`extern "C" fn(u64, u64, u64) -> u64, 0, 1, 2`), and a rung whose type and
+/// index list disagreed would have transmuted to the wrong arity with NOTHING
+/// to catch it: the probe called an arity-1 symbol through an arity-3
+/// trampoline and got the right answer, so there is no runtime signal.  One
+/// list, no disagreement possible.
+macro_rules! rung {
+    (@ty $i:literal) => { u64 };
+    ($ret:ty, $f:expr, $args:expr; $($i:literal),* $(,)?) => {{
+        let g: extern "C" fn($(rung!(@ty $i)),*) -> $ret =
+            unsafe { std::mem::transmute($f) };
+        g($($args[$i]),*)
+    }};
+}
+
+/// The arity ladder, written ONCE and expanded per RETURN class.
+///
+/// A sibling of [`rung`] rather than a macro nested inside it: the arity list
+/// is the part that must not drift between the three callers, so it is spelled
+/// once here and the return type is what varies.  See [`call_at_arity`] for why
+/// arity is the only ARGUMENT dimension.
+macro_rules! call_ladder {
+    ($ret:ty, $f:expr, $args:expr) => {{
+        let (f, args) = ($f, $args);
+        Some(match args.len() {
+            0 => {
+                let g: extern "C" fn() -> $ret = unsafe { std::mem::transmute(f) };
+                g()
+            }
+            1 => rung!($ret, f, args; 0),
+            2 => rung!($ret, f, args; 0, 1),
+            3 => rung!($ret, f, args; 0, 1, 2),
+            4 => rung!($ret, f, args; 0, 1, 2, 3),
+            5 => rung!($ret, f, args; 0, 1, 2, 3, 4),
+            6 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5),
+            7 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6),
+            8 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7),
+            9 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8),
+            10 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+            11 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+            12 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+            13 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+            14 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+            15 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+            16 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+            17 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+            18 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
+            19 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18),
+            20 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19),
+            21 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20),
+            22 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21),
+            23 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22),
+            24 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23),
+            25 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24),
+            26 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25),
+            27 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26),
+            28 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27),
+            29 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28),
+            30 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29),
+            31 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30),
+            32 => rung!($ret, f, args; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31),
+            _ => return None,
+        })
+    }};
+}
+
 /// Call `f` with `args`, at the arity `args.len()` names. `None` when the arity
 /// is past the ladder.
 ///
@@ -70,97 +141,41 @@ use crate::c_signature::{CSignature, CType};
 /// there is no runtime signal to check against. The declaration is the only
 /// authority, which is why it is checked when it is parsed.
 unsafe fn call_at_arity(f: *const (), args: &[u64]) -> Option<u64> {
-    // The rung's function TYPE is derived from the same index list that supplies
-    // the arguments — `at!(@ty $i)` maps each index to one `u64` — so the arity
-    // is written once per rung instead of twice.  It used to be spelled twice
-    // (`extern "C" fn(u64, u64, u64) -> u64, 0, 1, 2`), and a rung whose type
-    // and index list disagreed would have transmuted to the wrong arity with
-    // NOTHING to catch it: the probe called an arity-1 symbol through an
-    // arity-3 trampoline and got the right answer, so there is no runtime
-    // signal.  One list, no disagreement possible.
-    macro_rules! at {
-        (@ty $i:literal) => { u64 };
-        ($($i:literal),* $(,)?) => {{
-            let g: extern "C" fn($(at!(@ty $i)),*) -> u64 =
-                unsafe { std::mem::transmute(f) };
-            g($(args[$i]),*)
-        }};
-    }
-    Some(match args.len() {
-        0 => {
-            let g: extern "C" fn() -> u64 = unsafe { std::mem::transmute(f) };
-            g()
-        }
-        1 => at!(0),
-        2 => at!(0, 1),
-        3 => at!(0, 1, 2),
-        4 => at!(0, 1, 2, 3),
-        5 => at!(0, 1, 2, 3, 4),
-        6 => at!(0, 1, 2, 3, 4, 5),
-        7 => at!(0, 1, 2, 3, 4, 5, 6),
-        8 => at!(0, 1, 2, 3, 4, 5, 6, 7),
-        9 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8),
-        10 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
-        11 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
-        12 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-        13 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
-        14 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
-        15 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
-        16 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
-        17 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
-        18 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
-        19 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18
-        ),
-        20 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
-        ),
-        21 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
-        ),
-        22 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21
-        ),
-        23 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
-        ),
-        24 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
-        ),
-        25 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24
-        ),
-        26 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25
-        ),
-        27 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26
-        ),
-        28 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27
-        ),
-        29 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28
-        ),
-        30 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29
-        ),
-        31 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29, 30
-        ),
-        32 => at!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29, 30, 31
-        ),
-        _ => return None,
-    })
+    call_ladder!(u64, f, args)
+}
+
+/// The same ladder, transmuted to return a `double` (@PLN128 arc E).
+///
+/// A float RETURN and a float ARGUMENT are not the same problem, and the plan
+/// settled them together once by mistake. An argument would need a rung per
+/// SUBSET of positions that are float — the register file is chosen per
+/// argument, so the family is `2^arity` and genuinely impossible. The return is
+/// **one axis**: the value comes back in `xmm0` or it does not, so it costs one
+/// more expansion of the same arity list. Every argument stays integer-class,
+/// which is exactly the Fortran shape (everything by reference).
+///
+/// It is what makes the level-1 BLAS *functions* — `ddot_`, `dnrm2_`, `dasum_`
+/// — and the LAPACK auxiliaries (`dlange_`, `dlamch_`) bindable at all. Before
+/// it they were refused, and the cure the refusal named was an ANSI-C shim per
+/// routine, which puts a C toolchain in the build of every numeric package to
+/// work around a boundary that can just be correct.
+///
+/// # Safety
+/// As [`call_at_arity`], and `f` must return a C `double`.
+unsafe fn call_at_arity_f64(f: *const (), args: &[u64]) -> Option<f64> {
+    call_ladder!(f64, f, args)
+}
+
+/// The `float` twin of [`call_at_arity_f64`] — `snrm2_`, `sdot_`, `sasum_`.
+///
+/// A separate rung set rather than a `f64` call narrowed afterwards: a C
+/// `float` return leaves `xmm0` holding a single, and reading those bits as a
+/// double is a denormal, not the number.
+///
+/// # Safety
+/// As [`call_at_arity`], and `f` must return a C `float`.
+unsafe fn call_at_arity_f32(f: *const (), args: &[u64]) -> Option<f32> {
+    call_ladder!(f32, f, args)
 }
 
 /// Bring a raw return register back to a loft `integer`.
@@ -775,14 +790,25 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     let Some(f) = resolve(&binding.sig.symbol) else {
         panic!("{}", missing_symbol_message(&binding.sig.symbol));
     };
-    let Some(raw) = (unsafe { call_at_arity(f, &slots) }) else {
-        panic!(
-            "`#c` symbol '{}' needs {} arguments; the caller covers 0..={}. Wrap it \
-             in an ANSI-C shim with fewer parameters",
-            binding.sig.symbol,
-            slots.len(),
-            crate::c_signature::MAX_C_ARITY
+    // @PLN128 arc E — a float return goes down its own rung, because the value
+    // is in `xmm0` and no amount of casting an integer register reaches it.
+    // Taken before the integer path so the arity failure below is reported once,
+    // in the same words, whichever class the return is.
+    if let CType::Float { bits } = binding.sig.ret {
+        let ok = if bits == 32 {
+            (unsafe { call_at_arity_f32(f, &slots) }).map(|v| stores.put(stack, v))
+        } else {
+            (unsafe { call_at_arity_f64(f, &slots) }).map(|v| stores.put(stack, v))
+        };
+        assert!(
+            ok.is_some(),
+            "{}",
+            over_arity_message(&binding, slots.len())
         );
+        return;
+    }
+    let Some(raw) = (unsafe { call_at_arity(f, &slots) }) else {
+        panic!("{}", over_arity_message(&binding, slots.len()));
     };
 
     if binding.void_return {
@@ -810,6 +836,20 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     // The declared width is what makes this right; read raw, a negative `int`
     // would arrive as a large positive.
     stores.put(stack, narrow_return(raw, &binding.sig.ret));
+}
+
+/// The message for a call past the ladder, worded once.
+///
+/// Every return class ends here on the same failure, and a caller who hit the
+/// ceiling should not be told a different story depending on whether the symbol
+/// answers an integer or a double.
+fn over_arity_message(binding: &CBinding, slots: usize) -> String {
+    format!(
+        "`#c` symbol '{}' needs {slots} arguments; the caller covers 0..={}. Wrap it \
+         in an ANSI-C shim with fewer parameters",
+        binding.sig.symbol,
+        crate::c_signature::MAX_C_ARITY
+    )
 }
 
 /// Bring a C `char *` return back as loft text.

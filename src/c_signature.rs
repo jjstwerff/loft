@@ -115,9 +115,16 @@ pub enum CType {
     },
     /// Any pointer. `pointee` is kept for the diagnostic and for the
     /// `--native` extern emission, which has to write a real Rust type.
+    ///
+    /// `elem` is the pointee resolved to the value C reads at each stride, and
+    /// it is what a `vector` argument is checked against (@PLN128 arc E). It is
+    /// `None` for `void*`, for a pointer to a pointer, and for any spelling
+    /// this binding does not resolve — all of which mean **opaque**: the author
+    /// is asserting the bytes, which is how `write(2)` takes a `vector<u8>`.
     Pointer {
         konst: bool,
         pointee: String,
+        elem: Option<CElement>,
     },
     /// Parsed so it can be REFUSED with a useful message. A float argument
     /// travels in an SSE register, not the integer registers the caller uses —
@@ -126,6 +133,32 @@ pub enum CType {
     Float {
         bits: u8,
     },
+}
+
+/// One element of an array, as the byte image both sides must agree on.
+///
+/// @PLN128 arc E — a `vector` reaches C as a pointer into loft's OWN element
+/// bytes, with no conversion anywhere: `dispatch` hands over the store address
+/// and the `--native` emission passes the same one. So the loft element type
+/// and the C pointee are two spellings of a single layout, and a declaration
+/// where they disagree is a wrong program with nothing to catch it at runtime —
+/// measured against real OpenBLAS, `vector<integer>` against LAPACK's `int *`
+/// pivot array read back `8589934593, 0` where the answer is `1, 2`, and
+/// `vector<single>` against `double *` let C write 24 bytes into a 12-byte loft
+/// vector. Both on both backends, exit 0, no diagnostic.
+///
+/// `bytes` is the STRIDE, which is the whole point: it is what C advances by
+/// and what decides whether a write stays inside the vector. Signedness is
+/// deliberately absent — it changes how a byte is read, never where the next
+/// one is, and `vector<u8>` against `const char *` is the ordinary byte-buffer
+/// idiom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CElement {
+    /// Storage width in bytes — the stride.
+    pub bytes: u8,
+    /// Float-class rather than integer-class. Same width, entirely different
+    /// value: C reading eight integer bytes as a `double` gets a denormal.
+    pub float: bool,
 }
 
 impl CType {
@@ -194,10 +227,63 @@ impl CType {
                     if *signed { "signed " } else { "unsigned " }
                 )
             }
-            CType::Pointer { konst, pointee } => {
+            CType::Pointer { konst, pointee, .. } => {
                 format!("{}{pointee} *", if *konst { "const " } else { "" })
             }
             CType::Float { bits } => format!("{bits}-bit float"),
+        }
+    }
+}
+
+impl CElement {
+    /// The array element this C type is, or `None` when it is not a value C
+    /// lays out in an array — `void` and every pointer, which are the opaque
+    /// cases a `vector` may cross against unchecked.
+    #[must_use]
+    fn of_c(t: &CType) -> Option<CElement> {
+        match *t {
+            CType::Int { bits, .. } => Some(CElement {
+                bytes: bits / 8,
+                float: false,
+            }),
+            CType::Float { bits } => Some(CElement {
+                bytes: bits / 8,
+                float: true,
+            }),
+            CType::Void | CType::Pointer { .. } => None,
+        }
+    }
+
+    /// The array element ONE loft value is, or `None` when loft's bytes are not
+    /// C's — which is a refusal, not an opaque pass.
+    ///
+    /// Two loft types look like a C scalar and are not:
+    ///
+    /// * **`i8` and `i16`.** Narrow storage encodes `val - min`
+    ///   (`database/types.rs`, `key_descriptor_for_content`), so a loft `0` in a
+    ///   `vector<i8>` is the byte `128`. The 4- and 8-byte forms store the value
+    ///   itself, which is why `i32` and `integer` are fine and their narrower
+    ///   siblings are not.
+    /// * **`text`.** Its elements are loft's own 4-byte heap handles, so C
+    ///   dereferencing them as `char *` follows a store offset as an address —
+    ///   measured, an immediate SIGSEGV.
+    #[must_use]
+    fn of_loft(t: &Type) -> Option<CElement> {
+        let bytes = u8::try_from(crate::data::element_storage_size(t)).ok()?;
+        match t {
+            // A nullable element carries loft's sentinel as an ordinary number,
+            // which is the crossing `shape_of` already refuses for a scalar.
+            Type::Optional(_) => None,
+            Type::Integer(spec) => (bytes >= 4 || spec.min == 0).then_some(CElement {
+                bytes,
+                float: false,
+            }),
+            Type::Boolean | Type::Character => Some(CElement {
+                bytes,
+                float: false,
+            }),
+            Type::Float | Type::Single => Some(CElement { bytes, float: true }),
+            _ => None,
         }
     }
 }
@@ -287,15 +373,16 @@ impl CSignature {
         // and C's writes through a `double*` are visible to loft on return
         // (the write-back property the numeric stack is built on). Verified end
         // to end before this text was written.
-        if let CType::Float { bits } = self.ret {
-            out.push(format!(
-                "returns a {bits}-bit float, which comes back in an SSE register the caller does \
-                 not read. Wrap `{}` in an ANSI-C shim that writes the result through a `double*` \
-                 out-parameter instead, and bind that — a loft `vector<float>` crosses as a \
-                 pointer plus a count, so a 1-element vector carries the value back",
-                self.symbol
-            ));
-        }
+        // @PLN128 arc E — a float RETURN is no longer refused. The two halves
+        // are not one problem, which is the mistake this plan made when it
+        // settled them together: an ARGUMENT would need a trampoline per subset
+        // of positions that are float (`2^arity`, impossible), while the return
+        // is a single axis and costs one more expansion of the same arity list.
+        // Refusing it cost the level-1 BLAS *functions* — `ddot_`, `dnrm2_`,
+        // `dasum_` — and every LAPACK auxiliary that answers a number, and the
+        // cure it named was an ANSI-C shim per routine: a C toolchain in the
+        // build of every numeric package, to work around a boundary that can
+        // just be correct. See `c_call::call_at_arity_f64`.
         for (i, p) in self.params.iter().enumerate() {
             if let CType::Float { bits } = p {
                 out.push(format!(
@@ -358,7 +445,7 @@ fn position_mismatches(data: &Data, sig: &CSignature, params: &[Type]) -> Vec<St
                 }
                 c += 1;
             }
-            LoftCShape::Vector => {
+            LoftCShape::Vector(img) => {
                 if !matches!(sig.params.get(c), Some(CType::Pointer { .. })) {
                     errs.push(format!(
                         "parameter {} is `{}` in loft, so C parameter {} must be the element \
@@ -367,6 +454,48 @@ fn position_mismatches(data: &Data, sig: &CSignature, params: &[Type]) -> Vec<St
                         data.type_name_str(p),
                         c + 1,
                         spelling(c)
+                    ));
+                } else if let Some(CType::Pointer {
+                    elem: Some(want), ..
+                }) = sig.params.get(c)
+                    && *want != img
+                {
+                    // @PLN128 arc E — the pointer is right and the ELEMENT is
+                    // wrong, which is the one mismatch that produces a running
+                    // program with wrong numbers in it. The author is reading a
+                    // C header and a loft declaration side by side, so name
+                    // both sides; the fix is always to change one of them.
+                    //
+                    // The two failures are NOT the same failure and the message
+                    // must not merge them: a width disagreement walks off the
+                    // end of the vector, while a same-width class disagreement
+                    // stays inside it and only reads every value as a different
+                    // number. Claiming an overrun that cannot happen is how a
+                    // diagnostic teaches the wrong model.
+                    let consequence = if want.bytes == img.bytes {
+                        format!(
+                            "the same width read as {}, so every element arrives as a different \
+                             number — eight integer bytes read as a `double` are a denormal, not \
+                             the integer",
+                            if want.float { "floats" } else { "integers" }
+                        )
+                    } else {
+                        format!(
+                            "striding {} bytes, so C reads every element after the first from the \
+                             wrong offset — and where C writes, past the end of the vector",
+                            want.bytes
+                        )
+                    };
+                    errs.push(format!(
+                        "parameter {} is `{}` — {}-byte {} elements — but C parameter {} is \
+                         `{}`, {consequence}. Declare the loft element the way the C header \
+                         spells it, or `void*` in C if the bytes really are opaque",
+                        i + 1,
+                        data.type_name_str(p),
+                        img.bytes,
+                        if img.float { "float" } else { "integer" },
+                        c + 1,
+                        spelling(c),
                     ));
                 }
                 c += if matches!(sig.params.get(c + 1), Some(CType::Int { .. })) {
@@ -397,12 +526,22 @@ fn parse_type(src: &str, target: CTarget) -> Result<CType, String> {
                 "a pointer needs a pointee type, e.g. `void*` or `const char*`".to_string(),
             );
         }
-        // The pointee is not resolved: every pointer is one machine word, and
-        // the caller passes it as one. It is kept verbatim so the `--native`
-        // extern emission can write a faithful Rust type and the diagnostic can
-        // echo what was written.
+        // The pointer ITSELF is one machine word whatever it points at, so the
+        // spelling is kept verbatim for the diagnostic and the `--native`
+        // extern. What the pointee resolves to matters for exactly one
+        // question — whether a loft `vector`'s elements are the same layout
+        // (@PLN128 arc E) — and that resolution belongs here, where the target
+        // that decides C's widths is still in hand. A spelling this binding
+        // does not know (`struct foo`, a function pointer, `const char *const`)
+        // stays `None`, which reads as opaque rather than as a refusal: the
+        // pointee is diagnostics-only for every other purpose, and refusing on
+        // it would break `write(2)`'s `const void*`.
         return Ok(CType::Pointer {
             konst,
+            elem: parse_type(pointee, target)
+                .ok()
+                .as_ref()
+                .and_then(CElement::of_c),
             pointee: pointee.to_string(),
         });
     }
@@ -527,7 +666,12 @@ pub enum LoftCShape {
     /// of the two it is, per parameter, is the C signature's decision —
     /// [`plan`]. The pointer is valid **for the duration of the call only**;
     /// the elements live in a loft store that may move afterwards.
-    Vector,
+    ///
+    /// It carries the element's byte image because the pointer alone is not the
+    /// contract: C strides by the POINTEE's width, so a pointee that disagrees
+    /// with the loft element reads the wrong values and, when C writes,
+    /// straight past the end of the vector (@PLN128 arc E).
+    Vector(CElement),
     /// Cannot cross.
     Refused(&'static str),
 }
@@ -615,7 +759,7 @@ pub fn plan(params: &[Type], sig: &CSignature) -> Result<Vec<CArg>, PlanFailure>
     let (mut min, mut max) = (0usize, 0usize);
     for s in &shapes {
         match s {
-            LoftCShape::Vector => {
+            LoftCShape::Vector(_) => {
                 min += 1;
                 max += 2;
             }
@@ -679,7 +823,7 @@ fn options(shape: &LoftCShape, sig: &CSignature, c: usize) -> Vec<CArg> {
         // in both directions or it is not a convention at all.
         LoftCShape::Scalar if is_int(c) || is_ptr(c) => vec![CArg::Scalar],
         LoftCShape::Pointer if is_ptr(c) => vec![CArg::TextPointer],
-        LoftCShape::Vector if is_ptr(c) => {
+        LoftCShape::Vector(img) if pointee_takes(at(c), *img) => {
             if is_int(c + 1) {
                 vec![CArg::VectorPtrCount, CArg::VectorPtr]
             } else {
@@ -687,6 +831,18 @@ fn options(shape: &LoftCShape, sig: &CSignature, c: usize) -> Vec<CArg> {
             }
         }
         _ => Vec::new(),
+    }
+}
+
+/// May a loft vector whose elements are `img` cross at this C parameter?
+///
+/// Only at a POINTER, and only one whose pointee is the same layout — or one
+/// that resolves to nothing, which is the opaque escape hatch (`void*`,
+/// `struct foo*`) an author uses to say "these are bytes, I mean it".
+fn pointee_takes(t: Option<&CType>, img: CElement) -> bool {
+    match t {
+        Some(CType::Pointer { elem, .. }) => elem.is_none_or(|e| e == img),
+        _ => false,
     }
 }
 
@@ -698,7 +854,34 @@ pub fn shape_of(t: &Type) -> LoftCShape {
             LoftCShape::Scalar
         }
         Type::Text(_) => LoftCShape::Pointer,
-        Type::Vector(_, _) => LoftCShape::Vector,
+        // @PLN128 arc E — a vector crosses as loft's own element bytes, so the
+        // ELEMENT decides whether it crosses at all. The two shapes refused
+        // here look like C scalars and are not: see [`CElement::of_loft`].
+        Type::Vector(elem, _) => match CElement::of_loft(elem) {
+            Some(img) => LoftCShape::Vector(img),
+            None if matches!(**elem, Type::Text(_)) => LoftCShape::Refused(
+                "a `vector<text>` cannot cross — its elements are loft's own heap handles, not \
+                 `char *` pointers, so C dereferences a store offset as an address (measured: \
+                 SIGSEGV). Pass one `text` at a time, or have C read the bytes through a `void*`",
+            ),
+            None if matches!(**elem, Type::Integer(_)) => LoftCShape::Refused(
+                "a `vector<i8>` or `vector<i16>` cannot cross — loft stores narrow SIGNED \
+                 elements as `val - min`, so a loft `0` is the byte `128`, and C would read every \
+                 value shifted. Use `vector<i32>` or `vector<integer>`, `vector<u8>` / \
+                 `vector<u16>` if the values are unsigned, or declare the C parameter `void*` if \
+                 you really mean raw bytes",
+            ),
+            None if matches!(**elem, Type::Optional(_)) => LoftCShape::Refused(
+                "a vector of nullable elements cannot cross — loft's null is an ordinary number \
+                 over there, so C reads a sentinel as data. Declare the element non-null",
+            ),
+            None => LoftCShape::Refused(
+                "this vector's elements have no C representation. A vector crosses as a pointer \
+                 into loft's own element bytes, so each element must be one C value: an integer \
+                 (`integer`, `i32`, `u32`, `u16`, `u8`), `boolean`, `character`, `float` or \
+                 `single`",
+            ),
+        },
         // @PLN24 — `#c` is the declared edge of loft's no-runtime-errors rule,
         // and this is where that becomes a compile error instead of a promise.
         // A nullable value has no C representation: the sentinels are ordinary
@@ -822,6 +1005,26 @@ pub fn check(
             (CType::Void, _) => errs.push(format!(
                 "the loft declaration returns `{}` but the C signature returns `void`",
                 data.type_name_str(ret)
+            )),
+            // @PLN128 arc E — the float pair, ahead of every shape-based arm,
+            // because `shape_of` answers for the ARGUMENT direction (where a
+            // float genuinely cannot cross) and the return is not symmetric.
+            // Held to the exact pair rather than widened: a C `float` leaves a
+            // SINGLE in the return register, and reading those bits as a double
+            // is a denormal, not the number.
+            (CType::Float { bits: 64 }, _) if matches!(ret.base(), Type::Float) => {}
+            (CType::Float { bits: 32 }, _) if matches!(ret.base(), Type::Single) => {}
+            (CType::Float { bits }, _) => errs.push(format!(
+                "the C signature returns a {bits}-bit float, so the loft declaration must return \
+                 `{}`, not `{}`",
+                if *bits == 32 { "single" } else { "float" },
+                data.type_name_str(ret)
+            )),
+            (c, _) if matches!(ret.base(), Type::Float | Type::Single) => errs.push(format!(
+                "the loft declaration returns `{}` but the C signature returns `{}` — a float \
+                 comes back only from a C `float` or `double`",
+                data.type_name_str(ret),
+                c.spelling()
             )),
             (_, LoftCShape::Refused(why)) => {
                 errs.push(format!("the return type cannot be bound: {why}"));
@@ -1014,19 +1217,24 @@ mod tests {
         assert!(e.contains("not a C signature"), "{e}");
     }
 
-    /// A float is a good C type and a bad binding. It parses so the author is
-    /// told which of those they hit.
+    /// A float ARGUMENT is a good C type and a bad binding, so it parses and is
+    /// then refused with the cure. The RETURN is neither (@PLN128 arc E): the
+    /// register class is one axis there, so it crosses.
     #[test]
-    fn a_float_parses_and_is_then_refused_with_the_cure() {
-        let s = sig("double(double)");
-        let refusals = s.boundary_refusals();
-        assert_eq!(
-            refusals.len(),
-            2,
-            "the return AND the parameter: {refusals:?}"
-        );
+    fn a_float_argument_is_refused_with_the_cure_and_a_float_return_is_not() {
+        let refusals = sig("double(double)").boundary_refusals();
+        assert_eq!(refusals.len(), 1, "the PARAMETER alone: {refusals:?}");
+        assert!(refusals[0].contains("parameter 1"), "{:?}", refusals[0]);
         assert!(refusals[0].contains("SSE register"), "{:?}", refusals[0]);
-        assert!(refusals[0].contains("shim"), "{:?}", refusals[0]);
+        assert!(refusals[0].contains("POINTER"), "{:?}", refusals[0]);
+        // A double IN and a double OUT are not one decision, and this is where
+        // the difference shows: the same type refused as a parameter passes as
+        // a return.
+        assert!(
+            sig("double(const double*, int64_t)")
+                .boundary_refusals()
+                .is_empty()
+        );
         assert!(sig("int(int)").boundary_refusals().is_empty());
     }
 
@@ -1130,6 +1338,7 @@ mod tests {
             CType::Pointer {
                 konst: false,
                 pointee: "void".to_string(),
+                elem: None,
             },
             CType::Int {
                 bits: 64,

@@ -51,6 +51,42 @@ a Fortran argument list costs one slot per argument, so even LAPACK's largest dr
 fit without a shim. Existing declarations are unaffected: a signature that names a count
 still gets one.
 
+This is measured against **real OpenBLAS** — `daxpy_`, `dgemm_`, `dgesv_`, `ddot_` and
+`dnrm2_` as the library exports them — on both backends, against a C program computing
+the same answers.
+
+**A routine that returns a `double` binds too.** The level-1 BLAS functions answer by
+value (`ddot_`, `dnrm2_`, `dasum_`, and LAPACK's `dlange_`), and they used to be refused
+with advice to write an ANSI-C shim for each one:
+
+```loft
+pub fn ddot(n: vector<i32>, x: vector<float>, incx: vector<i32>,
+            y: vector<float>, incy: vector<i32>) -> float;
+#c "ddot_" "double(const int*, const double*, const int*, const double*, const int*)"
+```
+
+A `double` comes back as `float` and a C `float` as `single`. Passing a float *into* C
+by value is still refused, and still wants the 1-element-vector idiom — Fortran passes
+everything by reference, so numeric bindings never need it.
+
+**And the element type now has to match the C header.** A `vector` reaches C as a pointer
+into loft's own element bytes, so `vector<integer>` (8-byte elements) against a
+`const int *` was C reading every element from the wrong offset — and where C writes,
+straight past the end of your vector. Both used to run to completion with wrong numbers.
+The declaration is now refused, naming both widths:
+
+```
+parameter 5 is `vector<integer>` — 8-byte integer elements — but C parameter 5 is
+`int *`, striding 4 bytes, so C reads every element after the first from the wrong
+offset — and where C writes, past the end of the vector.
+```
+
+Write the element type the C header spells (`vector<i32>` for `int *`, `vector<float>`
+for `double *`), or `void *` in C if the bytes really are opaque. **Note for BLAS
+specifically:** the usual Linux build is LP64, so Fortran `INTEGER` is `int`, not
+`int64_t` — and that is one thing loft cannot check for you, because both builds export
+the same symbol names.
+
 ### A hash costs a third less memory, and fills faster
 
 `hash<T[key]>` used to give every entry a store record of its own — a header word each,

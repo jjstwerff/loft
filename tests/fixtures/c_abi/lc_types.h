@@ -203,6 +203,23 @@ LC_API void lc_dgemm_(const char *transa, const char *transb, const int64_t *m,
 LC_API int64_t lc_split_(const double *v, int64_t sel, const double *w,
                          int64_t nw);
 
+/* ---- ELEMENT WIDTHS (@PLN128 arc E) -------------------------------------
+ * A vector reaches C as a pointer into loft's own element bytes, so the loft
+ * element type and the C pointee are two spellings of one layout.  One reader
+ * per width, each POSITION-WEIGHTED so a reader striding differently from the
+ * writer answers a different number rather than the right one by luck. */
+LC_API int64_t lc_u32_dot(const uint32_t *p, int64_t n);
+LC_API int64_t lc_u16_dot(const uint16_t *p, int64_t n);
+LC_API int64_t lc_u8_dot(const unsigned char *p, int64_t n);
+LC_API int64_t lc_char_dot(const uint32_t *p, int64_t n);
+LC_API int64_t lc_bool_dot(const unsigned char *p, int64_t n);
+LC_API int64_t lc_f32_dot_milli(const float *p, int64_t n);
+
+/* The level-1 BLAS *function* shape: bare pointers in, the answer back BY VALUE
+ * in an SSE register.  `ddot_`, `dnrm2_` and `dasum_` are all this. */
+LC_API double lc_ddot_(const int64_t *n, const double *x, const double *y);
+LC_API float lc_sdot_(const int64_t *n, const float *x, const float *y);
+
 /* ---- BOUNDARY: what a trampoline cannot call --------------------------- */
 
 /* Floating point travels in SSE registers, not the integer registers a

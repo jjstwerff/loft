@@ -3,9 +3,34 @@
 
 ## Status
 
-**Arcs A, B, C and D DONE; E blocked on this box.**  A purpose-built C library
-reproducing each calling convention the numeric stack uses was bound through `#c` and run on
-both backends; the matrix below is that measurement, not a reading of the ABI.
+**Arcs A, B, C, D and E DONE.**  A purpose-built C library reproducing each calling
+convention the numeric stack uses was bound through `#c` and run on both backends; the matrix
+below is that measurement, not a reading of the ABI.  Arc E then bound **real OpenBLAS** —
+`daxpy_`, `dgemm_`, `dgesv_`, `ddot_`, `dnrm2_`, `sdot_` as the library exports them — against
+a C oracle, on both backends.
+
+**Arc E's headline is not that BLAS binds.  It is what binding it exposed: two silent-corruption
+classes and one capability the plan had refused by mistake.**
+
+1. **A `vector<T>` was checked against the C *pointer*, never against what it points AT.**
+   `vector<integer>` bound to LAPACK's `int *` pivot array ran to completion and answered
+   `ipiv = 8589934593, 0` where the pivots are `1, 2`; `vector<single>` bound to `double *` let
+   C write **24 bytes into a 12-byte loft vector** — a write past the end of a store
+   allocation, from a declaration loft accepted.  Both on both backends, exit 0, no
+   diagnostic.  `vector<i8>`/`vector<i16>` shifted every value by the storage bias, and
+   `vector<text>` SIGSEGV'd on a row the fixture README claimed worked.  **Fixed (C108):** the
+   element layout is now part of the declaration check.
+2. **A `double` RETURN was refused, and it did not need to be (C109).**  Q3 settled "float by
+   value" once, for both directions.  That is right for an argument — the register file is
+   chosen per position, so a float anywhere would need a rung per `2^arity` subset — and wrong
+   for a return, which is one axis and costs one more expansion of the same arity list.  The
+   refusal cost every level-1 BLAS *function* (`ddot_`, `dnrm2_`, `dasum_`) and every LAPACK
+   auxiliary that answers a number, and the cure it named was an ANSI-C shim per routine: a C
+   toolchain in the build of every numeric package.
+3. **What loft still cannot see: which build of the library is installed.**  BLAS ships LP64
+   (32-bit Fortran `INTEGER`) and ILP64 under the same symbol names.  A self-consistent 64-bit
+   declaration against an LP64 build reads the *right* answer for a positive scalar on
+   little-endian and then corrupts every out-parameter.  Documented, not detectable.
 
 **Arc D did not need a shim generator — it needed the boundary corrected.**  The fixture's C
 functions were all written to loft's pointer-and-count shape, which held fixed the one axis
@@ -22,10 +47,12 @@ argument-collapsing shim" (it did not bind at all), and "a Fortran argument list
 slots per scalar" (it costs one).  Both came from measuring a fixture built to loft's own
 shape — the benchmark held the axis fixed for free.
 
-**E6b remains the plan's most consequential finding.**  The retained-buffer case is a silent
-use-after-free on both backends; the earlier ✅ came from varying allocation count instead of
-whether the vector is used again.  It removes FFTW as the cheap first consumer.  The working
-cells are guarantee probes in `tests/native.rs`.
+**E6b is the one finding the plan closes WITHOUT a fix.**  The retained-buffer case is a
+silent use-after-free on both backends; the earlier ✅ came from varying allocation count
+instead of whether the vector is used again.  Unlike C108's overrun it cannot be caught at the
+declaration — the detectable condition ("a vector's last use is a `#c` call") is the *common
+correct* case — so it needs a way to DECLARE retention, which is design work (Q5).  It removes
+FFTW as the cheap first consumer.  The working cells are guarantee probes in `tests/native.rs`.
 
 **Issue:** [loft-lang/plans#128](https://github.com/loft-lang/plans/issues/128).
 
@@ -58,11 +85,27 @@ matters is that each is an oracle, not a recording.)
 | E6b | the same, but the vector has **no later use** | ❌ **silent UAF** | ❌ **silent UAF** |
 | E7 | **14 C argument slots** | ✅ 1015 | ✅ 1015 |
 | E7b | **33 C argument slots** (past the new ceiling) | ❌ refused | ❌ refused |
-| E3 | a `double` **by value** | ❌ refused | ❌ refused |
+| E3 | a `double` **argument** by value | ❌ refused | ❌ refused |
+| **E3b** | a `double` **RETURNED** by value (arc E, C109) | ✅ 90 | ✅ 90 |
+| **E3c** | a `float` returned by value — `single`, not a narrowed double | ✅ 90 | ✅ 90 |
 | **F1** | a **genuine Fortran routine** — 5 bare pointers, no counts (`daxpby_`) | ✅ 1003 2004.5 4008 | ✅ same |
 | **F2** | **`dgemm_` at full width** — 13 by-reference arguments, 13 slots | ✅ 1046 2068 3062 4092 | ✅ same |
 | **F3** | the two `char *` flags land where the callee reads them | ✅ −1 on `'T'` | ✅ same |
 | **F4** | counted and bare vectors **mixed in one signature** | ✅ 228000 | ✅ same |
+| **G1** | **real `daxpy_`** from `libopenblas.so.0` | ✅ 1003 2004.5 4008 | ✅ same |
+| **G3** | **real `dgemm_`**, 13 by-reference arguments | ✅ 1019 2043 3022 4050 | ✅ same |
+| **G4** | **real `dgesv_`** — LAPACK writes back into `a`, `ipiv` (`int*`), `b`, `info` | ✅ info=0 ipiv=1,2 x=1 3 | ✅ same |
+| **G2** | **real `ddot_`/`dnrm2_`**, answer by value | ✅ 22046.625 / 13 | ✅ same |
+| **G6** | `dgetrf_`+`dgetrs_` — a **gfortran-compiled** routine with a `CHARACTER` argument | ✅ info=0 x=1 3 | ✅ same |
+| **G9** | a `vector` element width that disagrees with the C pointee | ❌ refused (was: wrong values) | ❌ refused |
+| **G10** | `vector<integer>` at LAPACK's `int *` pivot array | ❌ refused (was: `8589934593, 0`) | ❌ refused |
+| **G11** | `vector<single>` at `double *` — C writes 24 B into 12 | ❌ refused (was: **heap overrun**) | ❌ refused |
+| **G12** | `vector<text>` at `const char *const *` | ❌ refused (was: SIGSEGV) | ❌ refused |
+| **G5** | a 64-bit `INTEGER` declaration against an **LP64** build | ⚠ binds, out-params corrupt | ⚠ same |
+
+The G-rows are arc E, measured against real OpenBLAS with `oracle.c` — a C program calling the
+same routines — as the expected value.  The G9–G12 rows were all ✅-looking runs before it: a
+program that finished, printed numbers, and exited 0.
 
 The F-rows are arc D, and they were all ❌ before it: F1/F2 refused for arity when declared
 honestly, and SIGSEGV when declared the way loft insisted on.  Expected values come from
@@ -103,7 +146,10 @@ both backends — which is what makes binding the numeric stack worth doing at a
 
 ## What this makes possible now
 
-- **HDF5 / GSL** — pointer+integer APIs throughout; nothing in the matrix blocks them.
+- **BLAS and LAPACK — done, not "possible".**  Bound against real OpenBLAS on both backends,
+  oracle-matched, no shim and no C toolchain.
+- **HDF5 / GSL** — pointer+integer APIs throughout; nothing in the matrix blocks them.  GSL in
+  particular gets easier with C109: its `gsl_*` functions overwhelmingly return a `double`.
 - **FFTW — NOT yet**, despite the pointer+integer API.  Its plan/execute split retains the
   caller's buffers between two calls, which is exactly the E6b use-after-free.  It needs
   either C-owned buffers held as opaque handles, or the retention declaration Q5 describes.
@@ -121,7 +167,7 @@ both backends — which is what makes binding the numeric stack worth doing at a
 | **B** — fix the recommendation the refusal prints | this doc, Q3 | **DONE** |
 | **C** — decide the backend capability contract | this doc, Q2 | **DONE** |
 | **D** — make Fortran argument lists bindable | this doc | **DONE** |
-| **E** — one numeric library bound end-to-end and dogfooded | this doc | Blocked — no target installed |
+| **E** — one numeric library bound end-to-end and dogfooded | this doc | **DONE** |
 
 **A (done).** `PACKAGES.md § Numeric libraries` carries the matrix, the
 scalar-by-1-element-vector idiom, the two-slots-per-Fortran-scalar arithmetic that sizes the
@@ -169,11 +215,32 @@ byte-identical before and after (`loft introspect` diff), and the guard was veri
 reintroducing the bug on each backend separately — the interpreter SIGSEGVs and `--native`
 fails to compile, and the test catches both.
 
-**E is blocked on this box, not on loft.**  No GSL, HDF5, BLAS or LAPACK is installed, no dev
-headers, and no passwordless `sudo` to add one; FFTW, the previously-nominated cheapest
-target, is ruled out by E6b regardless.  What arc E needs now is a machine with
-`libopenblas-dev` or `libgsl-dev` — the language side is proven against a C oracle, so the
-remaining work is dogfooding a real library rather than fixing the boundary.
+**E (done) — and "blocked on this box" was the wrong reading.**  The earlier note said arc E
+needed a machine with `libopenblas-dev`, because nothing numeric is installed here and there is
+no passwordless `sudo`.  Neither is required: a `#c` binding needs the **shared library**, not
+the headers, and `apt-get download` + `dpkg-deb -x` into `~/.local/lib` needs no root at all.
+`libopenblas0-pthread` and `libgfortran5`, thirty seconds, and the whole Fortran BLAS and
+LAPACK are reachable.  *A blocker that was never tested is a guess.*
+
+What binding it actually proved, beyond the three findings in the status above:
+
+- **The numeric core is real.**  `daxpy_`, `dgemm_` at full 13-argument width, and `dgesv_`
+  (LAPACK's linear solve, which writes back into four separate arguments) all answer exactly
+  what `oracle.c` computes, on both backends, with nothing copied at the boundary.
+- **Write-back into a `vector<i32>` works** — `dgesv_`'s `ipiv` and `info`.  Every earlier
+  write-back cell was `vector<float>`; this is a different element width through the same path,
+  and it had never been measured.
+- **A `character*1` flag crosses as `text` with no hidden string length.**  gfortran appends a
+  hidden `size_t` per `CHARACTER` argument, so this needed measuring against a routine really
+  compiled from Fortran rather than against OpenBLAS's hand-written `dgemm_`:
+  `dgetrf_` + `dgetrs_` (LAPACK, gfortran, `TRANS` is a `CHARACTER`) answer the oracle exactly.
+  These routines read only the first character, which is why the C convention every C caller of
+  BLAS already uses is enough.  A routine taking a real Fortran string still needs a shim.
+- **E6b does not bite here.**  BLAS and LAPACK retain nothing across calls, which is what makes
+  them the right first target and FFTW the wrong one.
+
+**The dogfood loop, in one line:** the binding worked on the first try, and everything worth
+fixing was found by writing the declaration *wrong* in the ways a real author would.
 
 **Probes graduated.** The working cells are now
 `native::numeric_array_shapes_cross_identically_on_both_backends`, against expected values
@@ -255,13 +322,23 @@ function's, not the author's.
    — a consumer cannot edit someone else's declaration.  Call sites are checked everywhere,
    because a call that cannot work must be refused wherever it is written.
 
-3. **Float by value — SETTLED by Q2's answer: stays refused on both backends.**  `--native`
-   emits typed `extern "C"` and could pass a double in an SSE register at no cost, but
-   relaxing it there alone would reintroduce exactly the split arc C just closed, for a need
-   arc B's pointer idiom already covers.  Unlike arity, there is no cheap "raise the ladder"
-   move here — the interpreter's trampolines are integer-class by construction, so a uniform
-   relaxation would mean a second, SSE-aware ladder.  Not worth it while pointers work; if it
-   is ever wanted, it moves for both backends at once.
+3. **Float by value — REOPENED and split by arc E.  The RETURN crosses (C109); the ARGUMENT
+   stays refused.**
+
+   The answer above was one decision too few, and the sentence that gave it away is *"a uniform
+   relaxation would mean a second, SSE-aware ladder"*.  For an **argument** that is an
+   understatement — the register file is chosen per position, so the family is `2^arity` and no
+   ladder exists.  For the **return** it is an overstatement: one axis, one more expansion of
+   the same arity list, `--native` already correct by construction.  Settling them together hid
+   a cheap fix behind an impossible one.
+
+   The cost of the mistake was concrete: every level-1 BLAS *function* (`ddot_`, `dnrm2_`,
+   `dasum_`) and every LAPACK auxiliary that answers a number was unbindable, and the cure the
+   refusal prescribed was an ANSI-C shim per routine — the same "C toolchain in every numeric
+   package's build" that arc D had already rejected as the wrong answer for arguments.
+
+   The pairing is exact rather than widening: a C `float` leaves a *single* in the return
+   register, so it binds to loft `single` and never to `float`.
 4. **Raising the interpreter ceiling — DONE in arc C: 12 → 32, and it is now the ceiling for
    both backends rather than the interpreter's alone.**  The ladder is one
    `extern "C" fn(u64 × N) -> u64` per rung and the rungs above 7 are all the same
@@ -298,6 +375,23 @@ function's, not the author's.
    one.  The fix has to be a declaration (`#c` marking a parameter as retained), which is
    design work, not a lint.
 
+**E (done).** The deliverable is in three places.  `tests/fixtures/c_abi` gained one reader per
+element width and the two by-value-return functions (`lc_ddot_`, `lc_sdot_`), each validated by
+`lc_selftest.c` in C first; `numeric_array_shapes_cross_identically_on_both_backends` runs them
+on both backends against those values.  The refusals are
+`a_vector_element_must_match_the_c_pointee` and
+`a_float_return_binds_and_a_float_argument_still_does_not`, and neither needs a library
+installed — the declaration is what is wrong, so nothing is ever called.  The real-OpenBLAS
+runs are the plan's G-rows above; they are deliberately NOT in the suite, because a gate that
+silently skips on every machine without the library reads as one that passes
+(`a-gate-that-skips-looks-like-a-gate-that-passes`) and the fixture already carries every
+shape they exercise.
+
+**One correction to the arc-B note, made by arc E rather than for it.**  The "one float
+declaration emits FOUR errors" defect is now two: the return half was two of the four, and it
+is no longer an error at all.  The remaining pair — `boundary_refusals` and `shape_of` both
+reporting the parameter — is unchanged and still wants the ownership decision arc B described.
+
 ## Method note
 
 Every cell above is now a guarantee probe in
@@ -314,6 +408,20 @@ it open was writing ONE C function to a foreign convention and pointing loft at 
 So: **when a matrix measures a boundary, at least one cell must be written by the other
 side of it.** The fixture now has three (`lc_daxpby_`, `lc_dgemm_`, `lc_split_`), and its
 README says why they are different.
+
+**Arc E is the same lesson one level out, and it is worth stating separately.**  Arc D fixed the
+fixture by adding a foreign *convention*; arc E replaced the fixture with a foreign *library*.
+The purpose-built one, corrected and honest, still agreed with loft about three things it had
+no business agreeing about — element widths, the element bias, and what a `vector<text>` is —
+because every one of its functions was written by the same person writing the declarations.
+OpenBLAS was written by strangers, exports 32-bit `INTEGER`s because Debian says so, and
+answers a `double` by value because Fortran functions do.  Each of those is a cell no fixture
+was ever going to contain.
+
+**And a blocker is a measurement too.**  Arc E sat "blocked — no target installed" through
+several sessions on the strength of two facts (nothing numeric installed, no passwordless
+`sudo`) and one unexamined assumption: that installing a library needs root.  It needs
+`apt-get download` and `dpkg-deb -x`.  The cost of not checking was the whole arc.
 
 ## Cross-arc dependencies
 
@@ -334,4 +442,5 @@ README says why they are different.
 - [`tests/fixtures/c_abi/`](../../../tests/fixtures/c_abi/) — the `#c` fixture and its
   `cc`-only build.  Its README § *The FOREIGN half* is where arc D's lesson lives.
 - [DESIGN_DECISIONS.md](../DESIGN_DECISIONS.md) § C106 (one arity ceiling), § C107 (the
-  signature decides the count).
+  signature decides the count), § C108 (the element layout is part of the declaration),
+  § C109 (a float return crosses; a float argument does not).

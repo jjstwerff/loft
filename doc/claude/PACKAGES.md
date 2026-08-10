@@ -568,11 +568,11 @@ author never saw it either, because the refusal fired at the call site rather
 than the declaration.
 
 Unifying downward would have narrowed what already compiles, so the ladder was
-extended to 32 instead and `--native` held to the same number.  32 is not a round
-number: loft has no address-of, so a by-reference scalar costs **two** slots
-(pointer + count), and `dgemm_`'s 13 by-reference arguments therefore need 26.
-32 clears the worst real case with margin.  Past it, a shim is the answer — a
-ladder cannot be unbounded.
+extended to 32 instead and `--native` held to the same number.  32 was sized
+against `dgemm_` when a by-reference scalar was still thought to cost two slots
+(pointer + count); since a `vector` carries a count only where the C signature
+has one, `dgemm_` costs **13** and LAPACK's 20-argument drivers fit with room to
+spare.  Past 32 a shim is the answer — a ladder cannot be unbounded.
 
 The check now runs on both backends, in two places: at the **declaration**, for
 code you own (your program, your library, the stdlib), so you see it as you write
@@ -597,8 +597,14 @@ itself:
 | **a full Fortran argument list — `dgemm_`'s thirteen bare pointers** | ✅ | ✅ |
 | counted and bare vectors **mixed in one signature** | ✅ | ✅ |
 | 14 C argument slots | ✅ | ✅ |
+| **a `double` RETURNED by value** (`ddot_`, `dnrm2_`) | ✅ | ✅ |
 | 33 C argument slots (past `MAX_C_ARITY`) | ❌ refused | ❌ refused |
-| a `double` **by value** | ❌ refused | ❌ refused |
+| a `double` **argument** by value | ❌ refused | ❌ refused |
+| a `vector` whose element width differs from the C pointee | ❌ refused | ❌ refused |
+
+Every row above was re-measured against **real OpenBLAS** — `daxpy_`, `dgemm_`,
+`dgesv_`, `ddot_`, `dnrm2_` as the library exports them — not only against a
+fixture written for loft.
 
 **The write-back cell is the one that matters.**  Every BLAS and LAPACK routine
 returns its result by writing through a caller-supplied pointer, so a boundary
@@ -666,6 +672,68 @@ Two things to know before binding real Fortran:
   per `character` argument. Reference BLAS and LAPACK do not read them for the
   length-1 flags, which is why C callers pass `"N"` and nothing else, but a
   routine that takes a real Fortran string needs a shim that supplies them.
+
+##### The element type must be the one the C header spells
+
+A `vector` reaches C as a pointer into **loft's own element bytes** — nothing is
+converted on the way — so the loft element type and the C pointee are two
+spellings of one layout, and a declaration where they disagree is refused:
+
+| loft element | write the pointee as |
+|---|---|
+| `integer` | a 64-bit integer (`int64_t`, `long` on LP64) |
+| `i32` / `u32` | a 32-bit integer (`int`) |
+| `u16` | a 16-bit integer (`short`) |
+| `u8` / `boolean` | an 8-bit integer (`char`) |
+| `character` | a 32-bit integer — the codepoint |
+| `float` | `double` |
+| `single` | `float` |
+| `i8` / `i16` | **refused** — see below |
+| `vector<text>` | **refused** — the elements are loft's handles, not `char *` |
+| anything above | `void *` — always accepted, and means "these are bytes" |
+
+Signedness is not checked: it changes how a byte is read, never where the next
+one starts, so `vector<u8>` against `const char *` is the ordinary byte-buffer
+idiom.  `i8` and `i16` are refused because loft stores narrow **signed** elements
+as `val - min`, so a loft `0` is the byte `128` — use `i32`, the unsigned
+sibling, or `void *` if you really mean raw bytes.
+
+**The width the C header uses is the one to write, and it is not always obvious.**
+BLAS and LAPACK ship in two builds: LP64 (Fortran `INTEGER` is 32-bit, which is
+what `libopenblas.so.0` on a typical Linux is) and ILP64 (64-bit).  The same
+symbol names serve both, so *nothing but the header tells you which is
+installed* — and the wrong choice is quiet:
+
+```loft
+// Against an LP64 build this reads the right answer for `n`, because the low
+// four bytes of an 8-byte 3 are 3 — and then `info` and `ipiv`, which C WRITES,
+// come back as -4294967296 and 8589934593.
+pub fn dgesv(n: vector<integer>, …);   #c "dgesv_" "void(const int64_t*, …)"
+```
+
+Declare the widths your build uses and the check above holds you to them
+consistently; it cannot tell you which build is on the machine.
+
+##### A `double` return comes back; a `double` argument still does not
+
+The level-1 BLAS *functions* answer by value — `ddot_`, `dnrm2_`, `dasum_`, and
+LAPACK's `dlange_` / `dlamch_` — and that binds directly:
+
+```loft
+pub fn ddot(n: vector<i32>, x: vector<float>, incx: vector<i32>,
+            y: vector<float>, incy: vector<i32>) -> float;
+#c "ddot_" "double(const int*, const double*, const int*, const double*, const int*)"
+```
+
+A C `double` returns as loft `float` and a C `float` as loft `single`, and the
+pairing is exact — a C `float` leaves a *single* in the return register, so
+binding it to `float` would read those bits as a denormal.
+
+A float **argument** is still refused, and that asymmetry is deliberate rather
+than unfinished: the register file is chosen per argument position, so supporting
+one anywhere would need a trampoline per subset of positions, while the return is
+a single axis.  It costs nothing in practice — Fortran passes every argument by
+reference, so a numeric binding has no by-value floats to pass.
 
 ##### The retention hazard — a pointer C keeps is a use-after-free
 

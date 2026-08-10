@@ -4671,6 +4671,14 @@ extern crate loft;"
         match (&sig.ret, def.returned().base()) {
             (crate::c_signature::CType::Void, _) => writeln!(w, "  {call};")?,
             (_, Type::Boolean) => writeln!(w, "  (({call}) != 0) as u8")?,
+            // @PLN128 arc E — a float return. The extern already declares `f64`
+            // / `f32` (`CType::rust_type`), so rustc gets the register class
+            // right by construction and the cast only names loft's slot width.
+            // The interpreter reaches the same value through its own rung
+            // (`c_call::call_at_arity_f64`); this is the half that needs no
+            // trampoline at all.
+            (_, Type::Float) => writeln!(w, "  ({call}) as f64")?,
+            (_, Type::Single) => writeln!(w, "  ({call}) as f32")?,
             // @PLN24 arc D — a `char *` return, copied into an owned `String`
             // (the wrapper is `-> String` via `returns_owned_string`).  The
             // three decisions are the interpreter's, restated: NULL is loft

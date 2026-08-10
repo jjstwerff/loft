@@ -2891,3 +2891,112 @@ written down.
   actually shows.
 - **Revisit when** loft grows an address-of, which would let a by-reference scalar be spelled
   without a 1-element vector and make the ergonomics question (@PLN128 Q1) moot.
+
+## C108 — a `vector<T>` and the C pointee are two spellings of ONE layout
+
+**Catalogue:** @F92 (direct C binding)
+
+### Context
+
+C107 made the C signature the authority on whether a `vector` carries a count.  It left the
+other half of the same declaration unchecked: **what the pointer points AT**.  A `vector`
+reaches C as a pointer into loft's own element bytes, with no conversion on either backend —
+`dispatch` hands over the store address and the `--native` emission passes the same one — so
+the loft element type and the C pointee are two spellings of a single layout.  Nothing
+compared them.
+
+Measured against real OpenBLAS on both backends, exit 0 and no diagnostic:
+
+- `vector<integer>` (8-byte elements) against LAPACK's `int *` pivot array — `dgesv_` answered
+  `ipiv = 8589934593, 0` where the pivots are `1, 2`;
+- `vector<single>` (4-byte) against `double *` — `daxpy_` wrote **24 bytes into a 12-byte loft
+  vector**, a write past the end of a store allocation from a declaration loft accepted;
+- `vector<i8>` / `vector<i16>` — loft stores narrow SIGNED elements as `val - min`
+  (`database/types.rs`), so a loft `0` is the byte `128` and C reads every value shifted;
+- `vector<text>` — the elements are loft's own 4-byte heap handles, so C dereferences a store
+  offset as an address: immediate SIGSEGV.  The fixture README had claimed this row worked;
+  nothing had ever bound it.
+
+The read-only cases are worse than the crashing one, because on little-endian a wrong width
+reads the *right* answer for a one-element scalar and only goes wrong once an array is longer
+than one — which is the shape of every bug that ships.
+
+### The rejected options
+
+- **Marshal a converted copy.** Well defined for a `const` pointer, and it hides the question:
+  the LP64-vs-ILP64 split is a real property of the installed library that the author has to
+  know either way, and copying is what calling BLAS was meant to avoid.  It also cannot work
+  for a write-back pointer without a second copy back, and an 8→4 narrowing can overflow.
+- **Check signedness too.** Rejected: signedness changes how a byte is read, never where the
+  next one is, and `vector<u8>` against `const char *` is the ordinary byte-buffer idiom.
+- **Refuse an unresolvable pointee** (`struct foo *`, a function pointer).  Rejected: the
+  pointee is diagnostics-only everywhere else, and refusing on it would break `write(2)`'s
+  `const void *`.
+
+### Decision
+
+- **Closed 2026-08-10.** A `vector<T>` binds to a C pointer only when the pointee has the same
+  **width** and the same **class** (integer vs float) as one loft element.  `void *` — and any
+  pointee this binding does not resolve — is **opaque** and always accepted: that is the author
+  saying "these are bytes, I mean it", which is how `write(2)` takes a `vector<u8>`.
+- **One home.** `CElement::of_loft` reads `data::element_storage_size`, the same function the
+  store lays elements out with, so the table cannot drift from the layout; `CElement::of_c`
+  resolves the pointee at parse time, where the target that decides C's widths is in hand.
+  `c_signature::options` is the only site that matches them, so the declaration check, the
+  interpreter's `dispatch` and the `--native` emission cannot form three opinions.
+- **This is a TIGHTENING**, and the only one in @PLN128.  COMPATIBILITY.md reserves an error
+  for what cannot be given a sane defined behaviour, and this qualifies: there is no correct
+  program behind these declarations, only a wrong one that sometimes returns a plausible
+  number.  Pre-freeze, and the refusal names the loft type to write instead.
+- **What it costs.** `vector<i8>` and `vector<i16>` no longer cross at all (use `vector<i32>`,
+  the unsigned sibling, or `void *`), and a numeric author must now write the integer width
+  their build of the library uses.  Nothing in this repo or the registry declared any of the
+  refused shapes.
+- **What it does NOT catch.** The library's own build is still invisible: `daxpy_` declared
+  with `int64_t` against an LP64 OpenBLAS is self-consistent and still reads the right answer
+  on little-endian for a positive scalar, then corrupts every out-parameter.  Only the header
+  the author is reading says which build is installed, which is why PACKAGES.md states it.
+- **Revisit when** a `#c` declaration can name the library's integer model, which would let the
+  ILP64 question be asked once per package instead of once per parameter.
+
+## C109 — a float RETURN crosses `#c`; a float ARGUMENT still does not
+
+**Catalogue:** @F92 (direct C binding)
+
+### Context
+
+@PLN128 Q3 settled "float by value" once, for both directions, and stayed with the refusal on
+the grounds that relaxing it would mean "a second, SSE-aware ladder".  That is true of an
+argument and false of a return, and merging them cost more than the decision was worth.
+
+The interpreter calls a `#c` symbol through a fixed ladder of per-arity trampolines,
+`extern "C" fn(u64 × N) -> u64`.  For an **argument**, the register file is chosen per
+position, so supporting a float anywhere would need a rung per SUBSET of positions —
+`2^arity`, genuinely impossible, and unnecessary because Fortran passes everything by
+reference.  For the **return** there is one axis: the value is in `xmm0` or it is not.  It
+costs one more expansion of the same arity list.
+
+Arc E is what made the cost visible.  Bound against real OpenBLAS, every level-1 BLAS
+*function* — `ddot_`, `dnrm2_`, `dasum_` — and every LAPACK auxiliary that answers a number
+(`dlange_`, `dlamch_`) was refused, and the cure the refusal named was an ANSI-C shim per
+routine: a C toolchain in the build of every numeric package, to work around a boundary that
+can just be correct.  That is the trade C107 had already declined for arguments.
+
+### Decision
+
+- **Closed 2026-08-10.** A C `double` return binds to loft `float`; a C `float` return binds to
+  loft `single`.  A float **argument** stays refused, with the pointer cure @PLN128 arc B
+  wrote.
+- **The pairing is exact, not widening.** A C `float` leaves a SINGLE in the return register,
+  so binding it to loft `float` would read those bits as a double and get a denormal — hence
+  two rungs (`call_at_arity_f64`, `call_at_arity_f32`) rather than one plus a cast.
+- **This is a LOOSENING**, which the compatibility promise permits unconditionally: nothing
+  that compiled stopped compiling, and the same declaration that was an error is now a call.
+- **`--native` needed nothing.** It hands the signature to rustc, which already emitted
+  `-> f64` / `-> f32` from `CType::rust_type`; only the interpreter lacked the rung.  The two
+  backends were checked against the same hand-computed value (`lc_ddot_`, `lc_sdot_`).
+- **The arity list is still written once.** `rung!` and `call_ladder!` are siblings — the list
+  is spelled in `call_ladder` and the return type is what varies — because a rung whose
+  function type and index list disagree transmutes to the wrong arity with nothing to catch it.
+- **Revisit when** someone needs a float argument badly enough to pay for an SSE-aware ladder;
+  it moves for both backends at once, as C106 requires.
