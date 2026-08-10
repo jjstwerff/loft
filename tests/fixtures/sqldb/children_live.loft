@@ -1,0 +1,223 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN23 S6 — the child tables, against a real engine.
+//
+// `schema_pure.loft` proves the DERIVATION. This proves the derivation was a
+// schema an engine accepts and a round trip that closes, which the pure gate
+// cannot: the design's own history says a DDL derivation is a hypothesis until
+// an `INSERT` goes through it. The cleanest version of the addressing rule was
+// falsified by exactly that — `ERROR 1062 Duplicate entry '7-3'` — and not by
+// re-reading the prose (OBJECT_MAPPING.md § What the probe falsified).
+//
+// **The three writes come off one derivation.** `derive_tables` answers the
+// parent and both children; `render` creates them; `insert_row` + the row
+// walks below fill them; `select_rows` reads them back. Nothing here names a
+// column, and nothing counts the owner's key columns — each column says where
+// its own value comes from (`ColumnSource`), which is the re-assertion § S6
+// collapses to one place.
+//
+// **What makes the read non-vacuous.** The data is chosen so a wrong address
+// rule reads differently rather than merely reading less:
+//
+//   - doc 9 holds the SAME tag twice (`a/1` at ordinals 0 and 1). Under a
+//     key-addressed rule those are one row; under the ordinal rule they are two.
+//     This is the falsified claim, standing as a test.
+//   - `a/1` also appears in doc 7, so an owner column that went missing merges
+//     two documents' children into one run rather than losing anything.
+//   - doc 11 has an EMPTY tag vector and doc 9 an empty score vector: a parent
+//     row with no children, which is a row the write path must still produce.
+//   - one tag's `note` is SQL NULL and another's is the empty string, side by
+//     side. They are not the same value, and most of why a binding exists at all
+//     is that they stay apart.
+//
+// sqlite, because it needs no server: a machine with no database still runs
+// this, so it cannot skip into a green that asserted nothing.
+//
+// The writes are grouped BY TABLE — all parents, then all scores, then all tags
+// — which is the shape OBJECT_MAPPING.md § S6 gives, and the one that takes
+// locks in a single order rather than in data-dependent order.
+
+use registry;
+use schema;
+use sql;
+
+struct Tag { const name: text, weight: integer, note: text? }
+struct Doc {
+  const id: integer,
+  title: text,
+  scores: vector<integer> = [],
+  tags: vector<Tag> = [],
+}
+struct World { docs: hash<Doc[id]> = [] }
+
+/// The three documents this gate writes — one definition, used by the writer
+/// and by the expected lines the reader is checked against.
+///
+/// **`note: null` is written out, and that is not noise.** An omitted `text?`
+/// field is the empty string, not loft's null — measured, not assumed — so a
+/// `Tag { name: "a", weight: 1 }` meaning "no note" stores `''`, and the cell
+/// that is supposed to prove SQL NULL survives the round trip would have been
+/// comparing two empty strings. The null and the empty string sit side by side
+/// in doc 7 for exactly that reason.
+fn world() -> World {
+  w = World { };
+  w.docs += [Doc { id: 7, title: "seven", scores: [10, 20], tags: [
+    Tag { name: "a", weight: 1, note: null },
+    Tag { name: "b", weight: 2, note: "" },
+  ] }];
+  w.docs += [Doc { id: 9, title: "nine", tags: [
+    Tag { name: "a", weight: 1, note: "x" },
+    Tag { name: "a", weight: 1, note: "x" },
+    Tag { name: "c", weight: 3, note: null },
+  ] }];
+  w.docs += [Doc { id: 11, title: "eleven", scores: [30] }];
+  return w;
+}
+
+/// The table called `nm`, or a refusal — never a guess by position.
+///
+/// The name comes from the package's own `child_table_name`, so asking for one
+/// is consulting the derivation rather than restating it.
+fn table_named(ts: vector<TableDef>, nm: text) -> TableDef {
+  for t in ts {
+    if t.nm == nm { return t }
+  }
+  return TableDef { nm: nm, refusal: "no derived table called {nm}" };
+}
+
+/// A PARENT row: every column comes from one record, which is the case
+/// `SrcField` covers and the only one a table with no owner has.
+fn parent_row(t: TableDef, d: Doc) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns { vals += [bound_of(c, field_value(d, c.position))] }
+  return vals;
+}
+
+/// A row of a RECORD-element child table (@PLN23 S6b).
+///
+/// Three sources in one row, and the COLUMN says which — no counting of owner
+/// key columns, so a composite key needs no change here. `position` is a byte
+/// offset in whichever record `src` names, so both records are read with the
+/// same call.
+fn tag_row(t: TableDef, owner: Doc, e: Tag, ord: integer) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ord)] }
+    else { vals += [bound_of(c, field_value(e, c.position))] }
+  }
+  return vals;
+}
+
+/// A row of a SCALAR-element child table (@PLN23 S6a).
+///
+/// The same walk, and the last column differs because the element has no field
+/// to read: `SrcElement` says the element IS the value, which is a different
+/// answer from "a field this program has no value for".
+fn score_row(t: TableDef, owner: Doc, v: integer, ord: integer) -> vector<Bound> {
+  vals: vector<Bound> = [];
+  for c in t.columns {
+    if c.src == SrcOwnerKey { vals += [bound_of(c, field_value(owner, c.position))] }
+    else if c.src == SrcOrdinal { vals += [val_int(ord)] }
+    else { vals += [val_int(v)] }
+  }
+  return vals;
+}
+
+/// Every row of one table, rendered as `a|b|c;a|b|c` — `~` for SQL NULL.
+///
+/// The `SELECT` and its order come off the same `TableDef` the writer used, so
+/// a reader that disagreed with the writer about a column would show up here as
+/// a value in the wrong place rather than as a query nobody compared.
+fn dump(d: AnyDb, dial: Dialect, t: TableDef) -> text {
+  q = t.select_rows(dial);
+  if !d.db_rows(q) { return "QUERY-FAILED {d.db_last_error()}" }
+  out = "";
+  while d.db_next() {
+    if out != "" { out += ";" }
+    for c in t.columns {
+      if c#count > 0 { out += "|" }
+      v = d.db_col(c#count);
+      if v == null { out += "~" } else { out += v ?? "" }
+    }
+  }
+  return out;
+}
+
+fn main() {
+  path = "{directory()}/.loft/pln23_children.db";
+  stale = delete(path);
+  _ = stale.ok();
+
+  d = connect("sqlite:{path}");
+  if !d.db_ok() {
+    println("SKIP children_live {d.db_last_error()}");
+    return;
+  }
+  dial = d.db_dialect();
+  if dial == null { println("FAIL no dialect"); d.db_shut(); return }
+
+  w = world();
+  ti = type_of(w.docs);
+  tables = derive_tables(ti);
+  parent = tables[0] ?? TableDef { nm: "", refusal: "no tables derived" };
+  if !parent.table_ok() { println("FAIL derive: {parent.refusal}"); d.db_shut(); return }
+  scores = table_named(tables, child_table_name(parent.nm, "scores"));
+  tags = table_named(tables, child_table_name(parent.nm, "tags"));
+  println("tables={len(tables)} parent={parent.nm} scores={scores.nm} tags={tags.nm}");
+
+  // The DDL for all three, in the order `derive_tables` gives — the owner
+  // first, because a child's rows reference it.
+  for t in tables {
+    for stmt in t.render(dial) {
+      if !d.db_exec(stmt) {
+        println("FAIL ddl [{stmt}]: {d.db_last_error()}");
+        d.db_shut();
+        return;
+      }
+    }
+  }
+
+  // One transaction: a collection written non-atomically leaves a graph half
+  // stored, and the read path cannot tell (T1-T3, and § What is NOT designed).
+  if !d.db_begin() { println("FAIL begin: {d.db_last_error()}"); d.db_shut(); return }
+
+  // Grouped BY TABLE, parent table first — one lock order for every writer,
+  // rather than the data-dependent order a per-object write takes.
+  for doc in w.docs {
+    if !d.db_run(parent.insert_row(dial, parent_row(parent, doc))) {
+      println("FAIL parent {doc.id}: {d.db_last_error()}");
+      d.db_shut();
+      return;
+    }
+  }
+  for doc2 in w.docs {
+    for s in doc2.scores {
+      if !d.db_run(scores.insert_row(dial, score_row(scores, doc2, s, s#count))) {
+        println("FAIL score {doc2.id}/{s#count}: {d.db_last_error()}");
+        d.db_shut();
+        return;
+      }
+    }
+  }
+  for doc3 in w.docs {
+    for e in doc3.tags {
+      if !d.db_run(tags.insert_row(dial, tag_row(tags, doc3, e, e#count))) {
+        println("FAIL tag {doc3.id}/{e#count}: {d.db_last_error()}");
+        d.db_shut();
+        return;
+      }
+    }
+  }
+  if !d.db_commit() { println("FAIL commit: {d.db_last_error()}"); d.db_shut(); return }
+
+  println("docs   {dump(d, dial, parent)}");
+  println("scores {dump(d, dial, scores)}");
+  println("tags   {dump(d, dial, tags)}");
+
+  d.db_shut();
+  gone = delete(path);
+  if !stale.ok() && !gone.ok() { println("note: the temp database was not removable") }
+  println("children_live ok");
+}

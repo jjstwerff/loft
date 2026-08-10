@@ -54,11 +54,43 @@ struct S6WorldB { docs: hash<S6DocB[id]> = [] }
 struct S6DocC { const id: integer, seen: hash<S6Tag[name]> = [] }
 struct S6WorldC { docs: hash<S6DocC[id]> = [] }
 
+// S6b's own failure paths. Each is silent without a check: two columns of one
+// name reach the engine as a `CREATE TABLE` only some engines reject, and a
+// dropped collection field produces a database whose reader disagrees with its
+// writer.
+struct S6Clash { const name: text, ord: integer }
+struct S6DocClash { const id: integer, items: vector<S6Clash> = [] }
+struct S6WorldClash { docs: hash<S6DocClash[id]> = [] }
+
+struct S6Own { const name: text, s6docown_id: integer }
+struct S6DocOwn { const id: integer, items: vector<S6Own> = [] }
+struct S6WorldOwn { docs: hash<S6DocOwn[id]> = [] }
+
+struct S6Deep { const name: text, marks: vector<integer> = [] }
+struct S6DocDeep { const id: integer, items: vector<S6Deep> = [] }
+struct S6WorldDeep { docs: hash<S6DocDeep[id]> = [] }
+
+// A nullable element field, and a composite owner key: two facts the child
+// table must carry through from a place other than its own element.
+struct S6Note { const label: text, body: text? }
+struct S6Pair { const a: integer, const b: text, notes: vector<S6Note> = [] }
+struct S6WorldPair { rows: hash<S6Pair[a, b]> = [] }
+
+// Both kinds of collection in ONE owner: three tables, and the field path in
+// the table NAME is what keeps them apart.
+struct S6DocBoth {
+  const id: integer,
+  scores: vector<integer> = [],
+  tags: vector<S6Tag> = [],
+}
+struct S6WorldBoth { docs: hash<S6DocBoth[id]> = [] }
+
 /// Stand-ins for the `?? ` on a vector index — never reached, and named so a
 /// failure reads as the index being absent rather than as a wrong value.
 fn no_def() -> TableDef { return TableDef { nm: "?", refusal: "?" }; }
 fn no_col() -> ColumnDef { return ColumnDef { nm: "?", kind: ColOther }; }
 fn no_index() -> IndexDef { return IndexDef { nm: "?" }; }
+fn no_ti() -> TypeInfo { return TypeInfo { name: "?", kind: OtherKind, collection: NotKeyed }; }
 
 fn main() {
   // Every `type_of` is bound to a LOCAL before it is passed. A reflected record
@@ -359,11 +391,23 @@ fn main() {
   for c6 in child6.columns { names6 += "{c6.nm}," }
   assert(names6 == "s6doc_id,ord,value,", "S6a child columns [{names6}]");
 
-  // The owner column is `position = -1`: no field of the ELEMENT fills it, and
-  // the number that means "not in the type" has to be there rather than a
-  // position borrowed from somewhere it would read wrongly.
+  // Each child column says WHERE its value comes from, and `position` is a byte
+  // offset in whichever record that is. The owner column carries the OWNER's
+  // offset — `S6Doc.id` at 0 — so the write path reads it with the same
+  // `field_value` call a parent row uses instead of counting key columns.
   first6 = child6.columns[0] ?? no_col();
-  assert(first6.position == -1, "S6a owner column position {first6.position}");
+  assert(first6.src == SrcOwnerKey, "S6a owner column source {first6.src}");
+  assert(first6.position == 0, "S6a owner column position {first6.position}");
+  ord6 = child6.columns[1] ?? no_col();
+  assert(ord6.src == SrcOrdinal, "S6a ord source {ord6.src}");
+  // A scalar element has no field to read, so the column names the ELEMENT.
+  // That is a different answer from `SrcField`, and the write path needs it to
+  // be: `field_value` on an integer has no position to take.
+  val6 = child6.columns[2] ?? no_col();
+  assert(val6.src == SrcElement, "S6a value source {val6.src}");
+  // The owner's own table is untouched by all of this.
+  pc6 = parent6.columns[0] ?? no_col();
+  assert(pc6.src == SrcField, "S6a parent column source {pc6.src}");
 
   // The index is on (owner, address) — what a child lookup is served by.
   ix6 = child6.indexes[0] ?? no_index();
@@ -379,14 +423,170 @@ fn main() {
     "S6a child DDL [{ddl6[0] ?? ""}]"
   );
 
-  // The kinds S6a does not build REFUSE, each naming its own step — a partial
+  // The kind S6 does not build yet REFUSES, naming its own step — a partial
   // schema is the outcome worse than none.
-  b6 = derive_tables(type_of(S6WorldB { }.docs));
-  assert(len(b6) == 1 && (b6[0] ?? no_def()).refusal.find("S6b") != null,
-    "S6a: a record-element vector must refuse naming S6b");
-  c6b = derive_tables(type_of(S6WorldC { }.docs));
+  wc = S6WorldC { };
+  ti_wc = type_of(wc.docs);
+  c6b = derive_tables(ti_wc);
   assert(len(c6b) == 1 && (c6b[0] ?? no_def()).refusal.find("S6c") != null,
-    "S6a: a keyed sub-collection must refuse naming S6c");
+    "S6: a keyed sub-collection must refuse naming S6c");
+
+  // --- @PLN23 S6b: a `vector<record>` field becomes ONE child table ----------
+  //
+  // The same rule as S6a, and only the last columns differ: the address half is
+  // identical, and the element's own stored fields follow it. That is what says
+  // the two are one rule rather than two shapes that happen to look alike.
+  wb = S6WorldB { };
+  ti_wb = type_of(wb.docs);
+  b6 = derive_tables(ti_wb);
+  assert(len(b6) == 2, "S6b: owner + one child, got {len(b6)}");
+  pb = b6[0] ?? no_def();
+  cb6 = b6[1] ?? no_def();
+  assert(pb.nm == "s6docb" && len(pb.columns) == 1, "S6b parent {pb.nm}/{len(pb.columns)}");
+  assert(cb6.nm == "s6docb_tags", "S6b child name {cb6.nm}");
+  nb = "";
+  for c in cb6.columns { nb += "{c.nm}," }
+  assert(nb == "s6docb_id,ord,name,weight,", "S6b child columns [{nb}]");
+
+  // The element's columns carry the ELEMENT's byte offsets, and those are NOT
+  // declaration order — `S6Tag` holds `name` at 8 and `weight` at 0. Anything
+  // pairing a column to a field by ORDER rather than by this number is wrong,
+  // and would read plausibly on a struct whose two orders agree.
+  tag_ti = type_named("S6Tag") ?? no_ti();
+  nm_pos = -1;
+  wt_pos = -1;
+  for tf in tag_ti.fields {
+    if tf.name == "name" { nm_pos = tf.position }
+    if tf.name == "weight" { wt_pos = tf.position }
+  }
+  assert(nm_pos != wt_pos, "S6b: the two element fields must be at different offsets");
+  cname = cb6.column_named("name") ?? no_col();
+  cweight = cb6.column_named("weight") ?? no_col();
+  assert(cname.position == nm_pos && cname.src == SrcField,
+    "S6b name column {cname.position}/{cname.src}, field at {nm_pos}");
+  assert(cweight.position == wt_pos && cweight.src == SrcField,
+    "S6b weight column {cweight.position}/{cweight.src}, field at {wt_pos}");
+  assert(cname.kind == ColText && cweight.kind == ColInteger,
+    "S6b element column kinds {cname.kind}/{cweight.kind}");
+
+  // The ADDRESS is unchanged by the element having fields — the owner's key and
+  // the ordinal, in that order, and the index over exactly that pair.
+  ob6 = cb6.columns[0] ?? no_col();
+  assert(ob6.src == SrcOwnerKey && ob6.nm == "s6docb_id", "S6b owner column {ob6.nm}/{ob6.src}");
+  ixb = cb6.indexes[0] ?? no_index();
+  ixnb = "";
+  for icb in ixb.columns { ixnb += "{icb.nm}," }
+  assert(ixnb == "s6docb_id,ord,", "S6b child index [{ixnb}]");
+  assert(ixb.nm == "s6docb_tags_by_owner", "S6b index name {ixb.nm}");
+
+  // Hand-written, not round-tripped through the renderer that produced it.
+  ddlb = cb6.render(dialect_sqlite());
+  assert(
+    (ddlb[0] ?? "") == "CREATE TABLE \"s6docb_tags\" (\"s6docb_id\" INTEGER NOT NULL, \"ord\" INTEGER NOT NULL, \"name\" TEXT NOT NULL, \"weight\" INTEGER NOT NULL)",
+    "S6b child DDL [{ddlb[0] ?? ""}]"
+  );
+
+  // The reader's SELECT comes off the SAME definition, ordered by the child's
+  // own index — which is the order that rebuilds each owner's vector.
+  dsq = dialect_sqlite();
+  selb = cb6.select_rows(dsq).statement(dsq.style, dsq.quote) ?? "";
+  assert(
+    selb == "SELECT \"s6docb_id\", \"ord\", \"name\", \"weight\" FROM \"s6docb_tags\" ORDER BY \"s6docb_id\" ASC, \"ord\" ASC",
+    "S6b child SELECT [{selb}]"
+  );
+
+  // The DIRECTION comes off the index as well, which an all-ascending child
+  // table cannot show: `visits` is declared `-started`, and a hard-coded `ASC`
+  // would read right everywhere above and wrong here.
+  selv = tv.select_rows(dsq).statement(dsq.style, dsq.quote) ?? "";
+  assert(selv.ends_with("ORDER BY \"person_id\" ASC, \"started\" DESC"),
+    "descending key in the read order [{selv}]");
+  // No index, no defined row order — a table read with nothing to order by
+  // reassembles a collection into whatever sequence the engine scanned.
+  assert(tr.select_rows(dsq).statement(dsq.style, dsq.quote) == null,
+    "a table with no index has no defined row order");
+
+  // --- S6b: a composite owner key, and a nullable element field --------------
+  //
+  // Two facts the child table carries from somewhere other than its own element:
+  // how many columns address an owner, and that one of the element's columns may
+  // be SQL NULL. A child table with one hard-coded owner column would pass every
+  // assertion above.
+  wp = S6WorldPair { };
+  ti_wp = type_of(wp.rows);
+  p6 = derive_tables(ti_wp);
+  assert(len(p6) == 2, "S6b composite: owner + one child, got {len(p6)}");
+  pp = p6[0] ?? no_def();
+  cp = p6[1] ?? no_def();
+  npair = "";
+  for c in cp.columns { npair += "{c.nm}," }
+  assert(npair == "s6pair_a,s6pair_b,ord,label,body,", "S6b composite child columns [{npair}]");
+  // Each owner column carries the position of the KEY it stands for, in key
+  // order, so the write path never matches a key to a column by name.
+  keys_seen = "";
+  for k in ti_wp.keys {
+    kc = cp.columns[k#count] ?? no_col();
+    assert(kc.src == SrcOwnerKey, "S6b composite owner column {kc.nm} source {kc.src}");
+    assert(kc.position == k.position, "S6b composite key {k#count} at {kc.position}, key says {k.position}");
+    keys_seen += "{kc.nm},";
+  }
+  assert(keys_seen == "s6pair_a,s6pair_b,", "S6b composite owner columns [{keys_seen}]");
+  bodyc = cp.column_named("body") ?? no_col();
+  assert(bodyc.nullable, "S6b: a nullable element field must give a nullable column");
+  labelc = cp.column_named("label") ?? no_col();
+  assert(!labelc.nullable, "S6b: a non-null element field must give NOT NULL");
+  ddlp = cp.render(dialect_sqlite());
+  assert(
+    (ddlp[0] ?? "") == "CREATE TABLE \"s6pair_notes\" (\"s6pair_a\" INTEGER NOT NULL, \"s6pair_b\" TEXT NOT NULL, \"ord\" INTEGER NOT NULL, \"label\" TEXT NOT NULL, \"body\" TEXT)",
+    "S6b composite DDL [{ddlp[0] ?? ""}]"
+  );
+
+  // --- S6b: both kinds of collection in ONE owner ----------------------------
+  //
+  // Three tables and no collision, because the field PATH lives in the table
+  // name rather than in a column.
+  wt6 = S6WorldBoth { };
+  ti_wt = type_of(wt6.docs);
+  t3 = derive_tables(ti_wt);
+  assert(len(t3) == 3, "S6b: two collections give three tables, got {len(t3)}");
+  n3 = "";
+  for t in t3 { n3 += "{t.nm}," }
+  assert(n3 == "s6docboth,s6docboth_scores,s6docboth_tags,", "S6b table names [{n3}]");
+  // The owner's table comes first because a child's rows reference it — the
+  // order a writer must send them in.
+  sc3 = t3[1] ?? no_def();
+  tg3 = t3[2] ?? no_def();
+  assert(len(sc3.columns) == 3 && len(tg3.columns) == 4,
+    "S6b: scalar child {len(sc3.columns)} columns, record child {len(tg3.columns)}");
+
+  // --- S6b: the failure paths peculiar to a record element -------------------
+  //
+  // Every one of these is SILENT without a check. The two collisions reach the
+  // engine as a `CREATE TABLE` naming one column twice — which sqlite rejects
+  // and not every engine does — and the nested collection would produce a
+  // database whose own reader disagrees with its writer.
+  wcl = S6WorldClash { };
+  ti_wcl = type_of(wcl.docs);
+  cl = derive_tables(ti_wcl);
+  assert(len(cl) == 1, "S6b: a collision must collapse the whole answer");
+  clr = (cl[0] ?? no_def()).refusal;
+  assert(clr.find("ord") != null && clr.find("collides") != null,
+    "S6b: an element field called ord must refuse naming it: {clr}");
+
+  wow = S6WorldOwn { };
+  ti_wow = type_of(wow.docs);
+  ow = derive_tables(ti_wow);
+  owr = (ow[0] ?? no_def()).refusal;
+  assert(owr.find("s6docown_id") != null && owr.find("collides") != null,
+    "S6b: an element field named like the owner column must refuse: {owr}");
+
+  wdp = S6WorldDeep { };
+  ti_wdp = type_of(wdp.docs);
+  dp = derive_tables(ti_wdp);
+  assert(len(dp) == 1, "S6b: a nested collection must collapse the whole answer");
+  dpr = (dp[0] ?? no_def()).refusal;
+  assert(dpr.find("marks") != null && dpr.find("S7") != null,
+    "S6b: a collection inside the element must refuse naming S7: {dpr}");
 
   // `derive` is UNCHANGED and still answers one table: a record with a
   // collection field refuses there rather than quietly losing the field, which

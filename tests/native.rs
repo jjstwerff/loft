@@ -2324,6 +2324,97 @@ fn a_table_loft_wrote_and_a_table_loft_found_are_one_value() -> std::io::Result<
     Ok(())
 }
 
+/// @PLN23 S6 — the child tables a collection field implies, against a real
+/// engine.
+///
+/// The pure gate proves the DERIVATION; this proves it was a schema an engine
+/// accepts and a round trip that closes. That distinction is the plan's own
+/// history: the cleanest version of the addressing rule — *the declared key
+/// addresses an element* — was falsified by an `INSERT`, not by re-reading the
+/// design (OBJECT_MAPPING.md § What the probe falsified).
+///
+/// Three lines, and each moves in a different direction if the address rule is
+/// wrong:
+///
+///   docs 7|seven;9|nine;11|eleven   doc 11's tag vector is EMPTY and doc 9's
+///           score vector is. A parent with no children is still a row, and a
+///           write path that emitted a parent only when it had children would
+///           lose it silently.
+///   scores 7|0|10;7|1|20;11|0|30   the S6a shape, unchanged by S6b landing
+///           beside it. Two collections of different kinds under one owner, and
+///           the field path in the table NAME is what keeps them apart.
+///   tags 7|0|a|1|~;7|1|b|2|;9|0|a|1|x;9|1|a|1|x;9|2|c|3|~   the S6b shape, and
+///           three claims at once. Doc 9 holds the SAME tag twice: under a
+///           key-addressed rule those collapse to one row, and under the ordinal
+///           rule they are rows 0 and 1 — the falsified claim, standing as a
+///           test. `a/1` is also doc 7's, so an owner column that went missing
+///           MERGES two documents rather than losing anything. And `~` is SQL
+///           NULL beside `b`'s empty string: not the same value, which is most
+///           of why a binding exists.
+///
+/// sqlite, so a machine with no database still runs it.
+#[test]
+fn a_collection_field_becomes_child_rows_a_real_engine_gives_back() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the sqlite backend ships a shim loft must compile
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("children_live.loft");
+
+    let expect = [
+        "tables=3 parent=doc scores=doc_scores tags=doc_tags",
+        "docs   7|seven;9|nine;11|eleven",
+        "scores 7|0|10;7|1|20;11|0|30",
+        "tags   7|0|a|1|~;7|1|b|2|;9|0|a|1|x;9|1|a|1|x;9|2|c|3|~",
+        "children_live ok",
+    ];
+
+    let mut first: Option<String> = None;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            return Ok(());
+        }
+        for line in expect {
+            assert!(
+                stdout.contains(line),
+                "{backend}: expected `{line}` in:\n{stdout}"
+            );
+        }
+        match &first {
+            None => first = Some(stdout),
+            Some(f) => assert_eq!(
+                answer_without_housekeeping(f),
+                answer_without_housekeeping(&stdout),
+                "both backends, one set of child tables"
+            ),
+        }
+    }
+    Ok(())
+}
+
 /// @PLN133 S7 — one connection string, and the registry that turns it into a
 /// connection every consumer can use.
 ///

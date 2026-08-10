@@ -49,6 +49,30 @@ pub enum ColumnType {
   ColOther,
 }
 
+/// Where a column's value comes from when a row is written.
+///
+/// A parent table draws every column from one record, so this says `SrcField`
+/// and never has to be read. A CHILD table draws one row from THREE places —
+/// the owner record, the element's position in the collection, and the element
+/// itself — and a writer that told them apart by COUNTING the owner's key
+/// columns would be a second derivation of a fact the definition already holds.
+/// That is the re-assertion § S6 collapses: the derivation says where each value
+/// comes from, and DDL, write and read all read the answer.
+pub enum ColumnSource {
+  /// `field_value(<this table's record>, position)` — the ordinary case, and
+  /// the only one a parent table or a definition read back from a database has.
+  SrcField,
+  /// `field_value(<the OWNER>, position)`. `position` is the owner's byte
+  /// offset, which is the number `KeyInfo.position` already carries.
+  SrcOwnerKey,
+  /// The element's index in its collection. No record holds it — the collection
+  /// does — so `position` means nothing for this column.
+  SrcOrdinal,
+  /// The element IS the value: a `vector<integer>` has no field to read, so the
+  /// column names the element rather than a field that does not exist.
+  SrcElement,
+}
+
 /// One column.
 pub struct ColumnDef {
   const nm: text,
@@ -68,6 +92,12 @@ pub struct ColumnDef {
   /// a column by value. `-1` for a column that is in the table and not in the
   /// type.
   position: integer = -1,
+  /// WHICH record `position` is an offset into — see `ColumnSource`.
+  ///
+  /// One number and one meaning: `position` is always a byte offset in the
+  /// record `src` names. Everything but a child table answers `SrcField`, which
+  /// is why it defaults to that.
+  src: ColumnSource = SrcField,
   /// Would an `INSERT` that omits this column succeed?
   ///
   /// Only a column read back from a database can answer no, and it is the one
@@ -1367,6 +1397,11 @@ fn derive_owner_columns(elem: TypeInfo) -> TableDef {
 /// unique by construction, which it is for an ordinal, so a UNIQUE index would
 /// be honest here in a way it is not for the owner's own key — `IndexDef` has no
 /// way to say so yet, and an ordinary index serves the lookup either way.
+///
+/// **A scalar element and a RECORD element differ only in the last columns.**
+/// The address half is identical, which is what says the two are one rule: a
+/// `vector<integer>` adds one `value` column, and a `vector<Tag>` (S6b) adds one
+/// column per stored field of `Tag`. Neither adds anything to the address.
 fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) -> TableDef {
   ct = type_named(f.type_name);
   if ct == null {
@@ -1385,32 +1420,91 @@ fn derive_child(owner_table: text, owner_keys: vector<ColumnDef>, f: FieldInfo) 
     return no_table("{owner_table}.{f.name}: the element type {coll.element} is not a type here");
   }
   elem = et ?? no_type();
-  if elem.kind == RecordKind || elem.kind == VariantKind {
-    return no_table("{owner_table}.{f.name} holds records — @PLN23 S6b");
+
+  // The ADDRESS columns first — (the owner's key, the ordinal) — because the
+  // invariant names that pair as what identifies the row, and putting it first
+  // makes the primary key a prefix rather than something a reader looks for.
+  cols: vector<ColumnDef> = [];
+  ixc: vector<IndexColumn> = [];
+  for k in owner_keys {
+    // `position` is the OWNER's byte offset, and `src` is what says so. No
+    // field of the ELEMENT fills this column, and a `-1` here would have made
+    // it indistinguishable from a column with no field at all — which is the
+    // difference the write path turns on once an element has fields of its own.
+    nm = owner_column(owner_table, k.nm);
+    cols += [ColumnDef { nm: nm, kind: k.kind, nullable: false,
+                         position: k.position, src: SrcOwnerKey }];
+    ixc += [IndexColumn { nm: nm }];
   }
+  cols += [ColumnDef { nm: "ord", kind: ColInteger, nullable: false, src: SrcOrdinal }];
+  ixc += [IndexColumn { nm: "ord" }];
+
+  tname = child_table_name(owner_table, f.name);
+  if elem.kind == RecordKind || elem.kind == VariantKind {
+    return record_child(tname, owner_table, f, elem, cols, ixc);
+  }
+
   value_kind = column_type(elem.kind);
   if value_kind == ColOther {
     return no_table("{owner_table}.{f.name} holds {coll.element}, which is not one column");
   }
-
-  cols: vector<ColumnDef> = [];
-  ixc: vector<IndexColumn> = [];
-  for k in owner_keys {
-    // `position` is -1: this column names the OWNER's key, and no field of the
-    // ELEMENT fills it. The write path supplies it from the owner, which is why
-    // the number that means "not in the type" has to be there rather than a
-    // position borrowed from somewhere it would read wrongly.
-    nm = owner_column(owner_table, k.nm);
-    cols += [ColumnDef { nm: nm, kind: k.kind, nullable: false, position: -1 }];
-    ixc += [IndexColumn { nm: nm }];
-  }
-  cols += [ColumnDef { nm: "ord", kind: ColInteger, nullable: false, position: -1 }];
-  ixc += [IndexColumn { nm: "ord" }];
   // A scalar element has no fields, so the element IS the value and the column
   // is named for that rather than for a field that does not exist.
-  cols += [ColumnDef { nm: "value", kind: value_kind, nullable: false, position: -1 }];
+  cols += [ColumnDef { nm: "value", kind: value_kind, nullable: false, src: SrcElement }];
+  return TableDef {
+    nm: tname,
+    columns: cols,
+    indexes: [IndexDef { nm: "{tname}_by_owner", columns: ixc }],
+  };
+}
 
-  tname = child_table_name(owner_table, f.name);
+/// @PLN23 S6b — the address columns, plus one column per stored field of the
+/// element record.
+///
+/// The element's columns carry the ELEMENT's byte positions, so the write path
+/// reads them out of the element with the same `field_value` call a parent row
+/// uses; `src` is what says which record to read them from.
+///
+/// Two failure paths are peculiar to this shape, and both are silent without a
+/// check here:
+///
+/// - **A collection inside the element** is a grandchild table, addressed by
+///   (owner, ord, ord). The rule extends to it and the derivation does not
+///   recurse yet, so it refuses and names the step rather than dropping the
+///   field.
+/// - **A name collision.** The address columns are named by this derivation and
+///   the element's are named by its author, so a `Tag` with a field called `ord`
+///   produces a `CREATE TABLE` with two columns of one name. Only the engine
+///   would notice, and only the engines that reject it.
+fn record_child(tname: text, owner_table: text, f: FieldInfo, elem: TypeInfo,
+                addr_cols: vector<ColumnDef>, ixc: vector<IndexColumn>) -> TableDef {
+  // The address columns' names, taken before anything is appended — a second
+  // list rather than a re-scan of `cols`, so what the element is checked
+  // against cannot grow as the element's own columns are added to it.
+  addr_names: vector<text> = [];
+  for ac in addr_cols { addr_names += [ac.nm] }
+
+  cols = addr_cols;
+  for ef in elem.fields {
+    if !is_data(ef) { continue }
+    if is_child_collection(ef) {
+      return no_table("{owner_table}.{f.name} holds {elem.name}, whose {ef.name} is a collection of its own — @PLN23 S7");
+    }
+    ek = column_type(ef.kind);
+    if ek == ColOther {
+      return no_table("{owner_table}.{f.name}: {elem.name}.{ef.name} is a {ef.type_name}, which is not one column");
+    }
+    for an in addr_names {
+      if an == ef.name {
+        return no_table("{owner_table}.{f.name}: {elem.name}.{ef.name} collides with {an}, the column this table addresses its rows by");
+      }
+    }
+    cols += [ColumnDef { nm: ef.name, kind: ek, nullable: ef.nullable,
+                         position: ef.position, src: SrcField }];
+  }
+  if len(cols) == len(addr_names) {
+    return no_table("{owner_table}.{f.name} holds {elem.name}, which has no stored columns");
+  }
   return TableDef {
     nm: tname,
     columns: cols,
@@ -1496,4 +1590,47 @@ pub fn derive_tables(t: TypeInfo) -> vector<TableDef> {
     out += [child];
   }
   return out;
+}
+
+/// Every row of a table, in the order its OWN index gives — the read half of
+/// the same definition that wrote them.
+///
+/// For a child table that order is `(owner, ord)`, which is the order that
+/// rebuilds each owner's collection: read the rows, and each owner's run of them
+/// is its vector, in position. Deriving the `ORDER BY` here rather than in each
+/// consumer is the same collapse the columns get — the design counted the read
+/// path's reassembly as one of the sites that must not restate the address rule.
+///
+/// Nothing is bound because nothing is filtered: a child table is read WHOLE and
+/// grouped by owner, which is the shape § S6 gives for writing it too. Selecting
+/// one owner's children per owner would be the interleaved shape that section
+/// exists to rule out.
+///
+/// **The direction comes from the index too**, so a collection declared
+/// `index<Visit[person_id, -started]>` reads back the way it is ordered. A
+/// hard-coded `ASC` would be a second answer to a question the definition
+/// already carries — and one that reads right on every ascending key, which is
+/// most of them.
+///
+/// Refused where there is no index: a table with nothing to order by has no
+/// defined row order, and an unordered read of a child table reassembles a
+/// collection into whatever sequence the engine happened to scan.
+pub fn select_rows(self: TableDef, d: Dialect) -> SqlText {
+  q: SqlText = SqlText { };
+  if self.refusal != "" { q.refused = true; return q }
+  ix = self.indexes[0] ?? IndexDef { nm: "" };
+  if len(ix.columns) == 0 { q.refused = true; return q }
+  q.lit("SELECT ");
+  for c in self.columns {
+    if c#count > 0 { q.lit(", ") }
+    quoted = d.quote_ident(c.nm);
+    if c.kind == ColFloat { q.lit(d.float_read(quoted)) } else { q.lit(quoted) }
+  }
+  q.lit(" FROM {d.quote_ident(self.nm)} ORDER BY ");
+  for ic in ix.columns {
+    if ic#count > 0 { q.lit(", ") }
+    dir = if ic.ascending { "ASC" } else { "DESC" };
+    q.lit("{d.quote_ident(ic.nm)} {dir}");
+  }
+  return q;
 }

@@ -7,9 +7,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**@PLN23 `status:active`** — S1–S5 and T1–T3 built and in the repo; S6+ (sub-records)
-is designed, not built. Of the two language gaps it surfaced, **@PLN124 is built** and S4
-is its first consumer; @PLN125 is not. @PLN24 (`#c`) has since closed.
+**@PLN23 `status:active`** — S1–S5, S6a–S6b and T1–T3 built and in the repo; S6c
+(keyed sub-collections) and S7 are designed, not built. Of the two language gaps it
+surfaced, **@PLN124 is built** and S4 is its first consumer; @PLN125 is not. @PLN24
+(`#c`) has since closed.
 
 S5 needed a third language gap closed, and closing it is what unblocked the write
 half: reflection described a TYPE and nothing could read a VALUE's field, which is
@@ -52,7 +53,9 @@ exists at all.
 | S4 prepared statements, on all four backends | done |
 | T1–T3 begin / commit / rollback, and nesting REFUSED | done |
 | S5 a flat struct round-trips, by a walk that names no column | done |
-| S6+ sub-records — vector, hash, sorted | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
+| S6a a `vector<scalar>` field becomes one child table | done |
+| S6b a `vector<record>` field, written to sqlite and read back | done |
+| S6c a keyed sub-collection — `hash`, then `sorted` | see [OBJECT_MAPPING.md](OBJECT_MAPPING.md) |
 | P1–P6 the other three platforms | see [PLATFORMS.md](PLATFORMS.md) — Linux only today |
 
 ## S4 — a value cannot become syntax

@@ -135,7 +135,9 @@ alongside one.
 | **S4** | prepared statements | **done** — all four backends, both loft backends, one generic `bound<D: SqlDb>`. `MYSQL_BIND` is an array of structs and this is where the ANSI-C shim earned its keep (@PLN24 arc D). Statements are built by loft's own format strings (@PLN124), so there are no `?` placeholders for a caller to write or a backend to find |
 | **T1–T3** | transactions | begin / commit / rollback on all three backends; nesting refused. See [INTERPOLATION_HOOK.md § Transaction ladder](INTERPOLATION_HOOK.md) — cheap, and S5 needs it |
 | **S5** | a FLAT struct round-trips | **done** — one loft struct ↔ one table, written and read back, compared by content digest. `round_trip.loft` no longer lists the row's values by hand; `row_of` walks the DEFINITION's columns, each of which carries the byte position of the field that fills it, and reads them with `field_value`. See § S5 below |
-| **S6** | sub-records, one kind per step | `vector<scalar>` → `vector<struct>` → `hash` → `sorted`. Each is one child table and one addressing rule |
+| **S6a** | a `vector<scalar>` field | **done** — one child table, columns `(owner key, ord, value)`, and `element_address` is the one place the address rule is stated |
+| **S6b** | a `vector<record>` field | **done** — the same address columns, and one column per stored field of the element. Written to sqlite and read back on both loft backends: § S6b below |
+| **S6c** | a keyed sub-collection | `hash` → `sorted`. `element_address` already answers both; the derivation refuses them and names this step |
 | **S7** | the mapping generalises | the single address function drives DDL, write, read; migration on a changed struct |
 
 S1–S3 are worth doing even if the mapping is never built: they are the proof
@@ -179,6 +181,86 @@ only channel that sees it.
 It compares against the SOURCE list, never against the value under test: a
 fallback to the record being checked would compare a thing with itself and pass
 whatever the database did.
+
+## S6b — the element's own columns, and where each value comes from
+
+A `vector<Tag>` differs from a `vector<integer>` in the LAST columns only. The
+address half — `(owner key, ord)` — is identical, which is what says the two are
+one rule rather than two shapes that happen to look alike:
+
+```sql
+CREATE TABLE "doc_scores" ("doc_id" INTEGER NOT NULL, "ord" INTEGER NOT NULL,
+                           "value" INTEGER NOT NULL)
+CREATE TABLE "doc_tags"   ("doc_id" INTEGER NOT NULL, "ord" INTEGER NOT NULL,
+                           "name" TEXT NOT NULL, "weight" INTEGER NOT NULL,
+                           "note" TEXT)
+```
+
+**A child row is drawn from three places, and the COLUMN says which.** S6a could
+leave every child column at `position = -1` because no field filled any of them.
+With a record element that stops being true: the element's columns carry the
+element's byte offsets, the owner's columns carry the owner's, and a writer that
+told them apart by COUNTING the owner's key columns would be a second derivation
+of a fact the definition already holds — the exact re-assertion this design
+collapses. So `ColumnDef` carries a `ColumnSource`:
+
+| `src` | the value is | `position` is |
+|---|---|---|
+| `SrcField` | `field_value(<this table's record>, position)` | that record's offset |
+| `SrcOwnerKey` | `field_value(<the owner>, position)` | the OWNER's offset |
+| `SrcOrdinal` | the element's index in the collection | nothing — no record holds it |
+| `SrcElement` | the element itself | nothing — a scalar has no field |
+
+One number with one meaning: `position` is always an offset into the record
+`src` names. The write path is then one loop over the columns with no counting,
+so a composite owner key needs no change to it — which is why the pure gate
+carries a two-key owner.
+
+### The failure paths peculiar to a record element
+
+Both are silent without a check, and neither exists for a scalar element:
+
+- **A name collision.** The address columns are named by the derivation and the
+  element's by its author, so a `Tag` with a field called `ord` — or one called
+  `doc_id` — produces a `CREATE TABLE` naming one column twice. Only the engine
+  would notice, and only the engines that reject it.
+- **A collection inside the element.** That is a grandchild table, addressed by
+  `(owner, ord, ord)`. The rule extends to it; the derivation does not recurse
+  yet, so it refuses and names S7 rather than dropping the field.
+
+Both refuse the WHOLE answer rather than one table, for the reason the ladder
+already gives: a partial schema builds a database whose own reader disagrees
+with its writer.
+
+### What the live gate measures
+
+`tests/fixtures/sqldb/children_live.loft` writes three documents to sqlite
+through this derivation and reads them back, byte-identical on both loft
+backends. The data is chosen so a wrong rule reads DIFFERENTLY rather than
+merely reading less:
+
+```
+docs   7|seven;9|nine;11|eleven
+scores 7|0|10;7|1|20;11|0|30
+tags   7|0|a|1|~;7|1|b|2|;9|0|a|1|x;9|1|a|1|x;9|2|c|3|~
+```
+
+- **Doc 9 holds the same tag twice.** Under the falsified key rule those are one
+  row; under the ordinal rule they are rows 0 and 1. The refuted claim is now a
+  test rather than a paragraph.
+- **`a/1` is also doc 7's**, so an owner column that went missing MERGES two
+  documents' children into one run instead of losing anything — a failure that
+  reads as extra data, which is the kind a count would not catch.
+- **Doc 11's tag vector is empty**, and doc 9's score vector is: a parent with no
+  children is still a row.
+- **`~` is SQL NULL beside `b`'s empty string.** Not the same value, and keeping
+  them apart is most of why a binding exists at all.
+
+One thing that had to be MEASURED rather than assumed: **an omitted `text?`
+field is the empty string, not loft's null.** `Tag { name: "a", weight: 1 }`
+meaning "no note" stores `''`, so the first version of the null cell compared two
+empty strings and passed while testing nothing. The gate writes `note: null`
+outright.
 
 ## S6 writes N graphs REGROUPED BY TABLE, not one graph at a time
 
