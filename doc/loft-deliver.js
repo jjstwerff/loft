@@ -106,14 +106,23 @@ function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
         // @PLN105 Phase 3 — a keyed collection pre-flattened at deliver time. The materialised data
         // record is NOT in the (type-shared) node; it is looked up in the `flat` redirect map by
         // this collection's `(rec, pos)` — so ONE `flatarray` node serves every instance (e.g. each
-        // element of a `vector<Bag>`). Otherwise identical to `array`.
+        // element of a `vector<Bag>`).
+        //
+        // `stride` says what an element is, and it is not always the same: 4 means a record
+        // number whose payload starts at byte 8 (radix, trie, index), 8 means a
+        // `(record, offset)` PAIR — a hash, whose entries are slots inside a chunked arena and
+        // have no record of their own. Defaulting to 4 keeps a descriptor written before the
+        // field existed readable.
         const dRec = (desc.flat && desc.flat[rec + "_" + pos]) || 0;
         if (dRec === 0) return [];
+        const stride = node.stride || 4;
         const len = view.getUint32(storeBase + dRec * 8 + 4, true);
         const a = new Array(len);
         for (let i = 0; i < len; i++) {
-          const elmRec = view.getUint32(storeBase + dRec * 8 + 8 + 4 * i, true);
-          a[i] = read(node.elem, elmRec, 8);
+          const at = storeBase + dRec * 8 + 8 + stride * i;
+          const elmRec = view.getUint32(at, true);
+          const elmPos = stride === 8 ? view.getUint32(at + 4, true) : 8;
+          a[i] = read(node.elem, elmRec, elmPos);
         }
         return a;
       }

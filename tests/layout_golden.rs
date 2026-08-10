@@ -474,6 +474,13 @@ fn placement_contract_is_pinned() {
     assert_eq!(loft::hash::BUCKET0, 32, "{BUMP}");
     assert_eq!(loft::hash::RESERVED_WORDS, 4, "{BUMP}");
     assert_eq!(loft::hash::SLOT_BYTES, 4, "{BUMP}");
+    // The high bit that says a slot names a RECORD rather than an arena index. THREE
+    // readers decode a bucket slot — `hash::entry_ref`, the bounds-checked walk in
+    // `Stores::validate_claims`, and `paged_reader::entry_at` — and a fourth is a
+    // matter of time. Pinning it here is what makes a decoder that does not know
+    // about it a red test rather than an entry silently read as a chunk that does
+    // not exist.
+    assert_eq!(loft::hash::SLOT_RECORD, 0x8000_0000, "{BUMP}");
     // The arena's own geometry: a slot's address is a pure function of its index, so
     // these three ARE where an entry lives.  A reader that tiles the index space
     // differently finds an entry at a byte offset nothing put one at.

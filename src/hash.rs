@@ -75,20 +75,28 @@ pub fn stride(store: &Store, claim: u32) -> u32 {
     store.get_u32_raw(claim, STRIDE_FLD)
 }
 
-/// What a bucket slot names.
+/// A bucket slot's high bit: this slot names a store RECORD, not an arena index.
 ///
-/// A hash has TWO kinds of entry and only one of them is its own.  A PRIMARY hash
-/// allocates its entries from the arena and a slot holds a 1-based index into it.  A
-/// SECONDARY index — a sibling field's `other_indexes` — is a second way to reach
-/// records the PRIMARY collection owns and allocated, so its slots hold those record
-/// numbers exactly as every slot did before @PLN135 arc H.  Nothing may move them:
-/// they belong to the other collection, which frees them.
+/// A hash has two kinds of entry and **one table can hold both**.  Entries it was
+/// asked to create come from its arena; entries handed to it already built belong to
+/// whoever built them — a sibling field's `other_indexes` makes one collection a
+/// second view of another's records, and neither may move or free what the other
+/// owns.  The loft parser's own `Data` does exactly this: `def_names` receives
+/// records that the definition list allocated, alongside entries of its own.
 ///
-/// The two are told apart by the stride the table records, because that is the fact
-/// itself: a table whose entries it allocated knows their width, and a table that
-/// borrows records has none to know.  `ensure_table` writes the width when
-/// `alloc_entry` mints the table and leaves it 0 when `add` does — so the
-/// discriminator is set by WHO ALLOCATED THE ENTRY, which is the same question.
+/// So the discriminator is per SLOT, not per table.  It was per table first — the
+/// recorded stride, on the theory that a table either allocates its entries or
+/// borrows them — and the parser falsified it in the debug-assertions gate: a hash
+/// with a real stride was handed a foreign record, `index_of` answered 0, and the
+/// entry was filed under a slot that means EMPTY.
+///
+/// A record number is safe to tag: it indexes WORDS, so the high bit would need a
+/// 16 GB store, and the test-suite ceiling alone is 2 GB (`TESTING.md`
+/// § Store-memory ceiling).  An arena index is bounded by the same store.
+pub const SLOT_RECORD: u32 = 0x8000_0000;
+
+/// Does this hash allocate its own entries?  True once it has an arena; a table that
+/// has only ever been handed foreign records has none, and frees nothing.
 #[must_use]
 pub fn owns_entries(store: &Store, claim: u32) -> bool {
     stride(store, claim) != 0
@@ -101,10 +109,10 @@ pub fn owns_entries(store: &Store, claim: u32) -> bool {
 /// own bytes.  For a borrowed record it is the record at its payload start, which is
 /// what a slot has always meant.
 fn entry_ref(store: &Store, claim: u32, index: u32, store_nr: u16, stride: u32) -> DbRef {
-    if stride == 0 {
+    if stride == 0 || index & SLOT_RECORD != 0 {
         return DbRef {
             store_nr,
-            rec: index,
+            rec: index & !SLOT_RECORD,
             pos: crate::store::RECORD_PAYLOAD,
         };
     }
@@ -118,13 +126,19 @@ fn entry_ref(store: &Store, claim: u32, index: u32, store_nr: u16, stride: u32) 
     }
 }
 
-/// The bucket-slot value for `rec` in table `claim` — the inverse of [`entry_ref`].
+/// The bucket-slot value for `rec` in table `claim` — the inverse of [`entry_at`].
+///
+/// An entry this table's arena did not hand out is a record somebody else owns, and
+/// is stored as a tagged record number.  `index_of` answering 0 IS that test: the
+/// scan covers every chunk the table has, so a miss means the entry is not in it.
 fn slot_value(store: &Store, claim: u32, rec: &DbRef, stride: u32) -> u32 {
-    if stride == 0 {
-        rec.rec
-    } else {
-        arena::index_of(store, claim, rec.rec, rec.pos, stride)
+    if stride != 0 {
+        let index = arena::index_of(store, claim, rec.rec, rec.pos, stride);
+        if index != 0 {
+            return index;
+        }
     }
+    rec.rec | SLOT_RECORD
 }
 
 /// Read the per-hash seed stored in bucket record `claim`.
@@ -565,6 +579,21 @@ pub fn table_bytes(hash_ref: &DbRef, stores: &[Store]) -> u32 {
 /// typically around 1.5× the live-record count.
 #[must_use]
 pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<DbRef> {
+    entries(hash_ref, stores)
+        .into_iter()
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// Every live entry, each paired with whether THIS table's arena allocated it.
+///
+/// The teardown needs the pair, not the ref: an entry the arena handed out comes
+/// back with the chunks, and one this table only BORROWS — a record a sibling
+/// collection allocated, reached through an `other_indexes` view — must be left
+/// entirely alone, not freed and not even recursed into, because the collection that
+/// owns it will do both.  One table can hold some of each ([`SLOT_RECORD`]).
+#[must_use]
+pub fn entries(hash_ref: &DbRef, stores: &[Store]) -> Vec<(DbRef, bool)> {
     let store = keys::store(hash_ref, stores);
     let claim = store.get_u32_raw(hash_ref.rec, hash_ref.pos);
     if claim == 0 {
@@ -576,7 +605,11 @@ pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<DbRef> {
     for i in 0..count {
         let index = store.get_u32_raw(claim, BUCKET0 + i * SLOT_BYTES);
         if index != 0 {
-            out.push(entry_ref(store, claim, index, hash_ref.store_nr, width));
+            let ours = width != 0 && index & SLOT_RECORD == 0;
+            out.push((
+                entry_ref(store, claim, index, hash_ref.store_nr, width),
+                ours,
+            ));
         }
     }
     out

@@ -981,3 +981,82 @@ pub fn a_released_iteration_scratch_is_not_acted_on_twice() {
         );
     }
 }
+
+/// One hash can hold BOTH kinds of entry, and each must be told apart by its slot.
+///
+/// Entries a collection is asked to create come from its arena (@PLN135 arc H).
+/// Entries handed to it already built belong to whoever built them — a sibling
+/// field's `other_indexes` makes one collection a second view of another's records,
+/// and neither may move or free what the other owns. The loft parser's own `Data`
+/// does exactly this: `def_names` receives records the definition list allocated,
+/// alongside entries of its own.
+///
+/// The discriminator was per TABLE first — the recorded stride, on the theory that a
+/// table either allocates its entries or borrows them. The parser falsified that in
+/// the debug-assertions gate: a hash with a real stride was handed a foreign record,
+/// `arena::index_of` answered 0, and the entry went into a slot whose value means
+/// EMPTY, so it could never be found again. The discriminator is now the slot's high
+/// bit (`hash::SLOT_RECORD`), which can describe a mixed table because it describes
+/// one entry at a time.
+#[test]
+pub fn a_hash_holds_arena_entries_and_borrowed_records_at_once() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "key", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["key".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    // Its OWN entries, through the normal path: these come from the arena.
+    stores.parse("[{key:1},{key:2}]", v, &into);
+
+    // A record somebody else allocated, inserted as a sibling view would insert it.
+    let size = u32::from(stores.size(s));
+    let foreign = stores.allocations[into.store_nr as usize].claim(1 + size.div_ceil(8));
+    stores.allocations[into.store_nr as usize].zero_fill(foreign);
+    let elsewhere = DbRef {
+        store_nr: into.store_nr,
+        rec: foreign,
+        pos: 8,
+    };
+    stores.allocations[into.store_nr as usize].set_int(foreign, 8, 99);
+    let keys = stores.keys(v).to_vec();
+    hash::add(&into, &elsewhere, &mut stores.allocations, &keys);
+
+    // All three resolve — the borrowed one included, which is the case that used to
+    // land in a slot meaning EMPTY.
+    for k in [1i64, 2, 99] {
+        let key = [Content::Long(k)];
+        let got = hash::find(&into, &stores.allocations, stores.keys(v), &key);
+        assert_ne!(got.rec, 0, "key {k} is not findable");
+        assert_eq!(
+            stores.allocations[got.store_nr as usize].get_int(got.rec, got.pos),
+            k,
+            "key {k} resolved to the wrong entry"
+        );
+    }
+    assert_eq!(hash::count(&into, &stores.allocations), 3);
+
+    // And the walk says WHICH are the table's own, because the teardown frees the
+    // arena's entries and must not touch the borrowed record.
+    let entries = hash::entries(&into, &stores.allocations);
+    let ours = entries.iter().filter(|(_, o)| *o).count();
+    let borrowed: Vec<&DbRef> = entries
+        .iter()
+        .filter(|(_, o)| !*o)
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(ours, 2, "the two parsed entries came from the arena");
+    assert_eq!(borrowed.len(), 1, "the handed-in record is borrowed");
+    assert_eq!(
+        borrowed[0].rec, foreign,
+        "a borrowed entry must decode back to the record it was given"
+    );
+}

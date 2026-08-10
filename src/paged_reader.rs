@@ -950,8 +950,10 @@ fn entry_at<P: PageProvider>(
     slot: u32,
     stride: u32,
 ) -> (u32, u32) {
-    if stride == 0 {
-        return (slot, 8);
+    // Per SLOT, not per table: the high bit marks a record number, and one table can
+    // hold both kinds (`hash::SLOT_RECORD`).
+    if stride == 0 || slot & crate::hash::SLOT_RECORD != 0 {
+        return (slot & !crate::hash::SLOT_RECORD, 8);
     }
     let dir = reader.u32_at(claim, crate::arena::DIR_FLD);
     if dir == 0 {

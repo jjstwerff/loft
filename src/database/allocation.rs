@@ -344,12 +344,21 @@ impl Stores {
                     // collection's records) is unchanged: its slots still name records
                     // the primary owns, so they come back as `owning_elem` exactly as
                     // before and the arena contributes nothing.
+                    // Per ENTRY, because one table can hold both kinds. An entry the
+                    // arena handed out is freed with the chunks below and must not be
+                    // deleted as a record; a BORROWED one — a record a sibling
+                    // collection allocated and still points at — is left completely
+                    // alone, since walking into it would free that collection's text
+                    // and vectors out from under it.
                     let owned = hash::owns_entries(self.store(rec), cur);
-                    for entry in hash::records(rec, &self.allocations) {
+                    for (entry, ours) in hash::entries(rec, &self.allocations) {
+                        if owned && !ours {
+                            continue;
+                        }
                         children.push(OwnedChild {
                             child: entry,
                             child_tp: v,
-                            owning_elem: (!owned).then_some(entry.rec),
+                            owning_elem: (!ours).then_some(entry.rec),
                         });
                     }
                     if owned {
@@ -2070,8 +2079,15 @@ impl Stores {
                     if slot == 0 {
                         continue;
                     }
-                    let (entry, pos) = if stride == 0 {
-                        (slot, crate::store::RECORD_PAYLOAD)
+                    // The slot's high bit says it names a RECORD rather than an arena
+                    // index (`hash::SLOT_RECORD`) — one table can hold both, so this
+                    // is decided per slot. Decoding a tagged record as an index would
+                    // read a chunk that does not exist and skip a live entry.
+                    let (entry, pos) = if stride == 0 || slot & crate::hash::SLOT_RECORD != 0 {
+                        (
+                            slot & !crate::hash::SLOT_RECORD,
+                            crate::store::RECORD_PAYLOAD,
+                        )
                     } else {
                         match crate::arena::slot(store, cur, slot, stride) {
                             Some(found) => found,

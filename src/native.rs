@@ -2780,7 +2780,7 @@ pub fn reflect_type_into(stores: &mut Stores, kt: u16) -> DbRef {
     // The element type, for the two kinds that hold one.
     let elem = match &node {
         Some(LayoutNode::Vector(e) | LayoutNode::Array(e) | LayoutNode::ChildRec(e)) => Some(*e),
-        Some(LayoutNode::FlatArray { elem }) => Some(*elem),
+        Some(LayoutNode::FlatArray { elem, .. }) => Some(*elem),
         Some(LayoutNode::Iterated(it)) => Some(it.elem()),
         _ => None,
     };

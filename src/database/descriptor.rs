@@ -200,11 +200,19 @@ pub enum LayoutNode {
     /// by every instance of that type — e.g. every element of a `vector<Bag>`); instead the reader
     /// looks it up in the delivery's `flat` redirect map by the current `(rec, pos)`, which
     /// `deliver_browser` materialised there. `data`'s offset-4 word is the element count, offset-8
-    /// onwards the element rec-nrs (`build_rec_scratch` layout), each element read at `(rec_nr, 8)`
-    /// as `elem`. Never appears in a REAL type descriptor — only injected at deliver time, so the
-    /// loopback/@PLN97-hash paths never see it.
+    /// onwards the elements, each read as `elem`. Never appears in a REAL type descriptor — only
+    /// injected at deliver time, so the loopback/@PLN97-hash paths never see it.
+    ///
+    /// `stride` says what an element IS, because that now depends on which kind was flattened:
+    /// **4** for a record number whose payload starts at byte 8 (`build_rec_scratch` — radix,
+    /// trie, index), **8** for a `(record, offset)` PAIR (`build_ref_scratch` — a hash, whose
+    /// entries are slots in a chunked arena and have no record of their own, @PLN135 arc H).
+    /// Carried rather than assumed: the reader had the 4 hard-coded, and a hash delivered through
+    /// it read every second word as a record number — the entries came back shifted, with a
+    /// `null` where the last one should be, and only `deliver_wasm` saw it.
     FlatArray {
         elem: u16,
+        stride: u32,
     },
     /// A keyed collection — walked by cursor, never structurally (see [`Iterated`]).
     Iterated(Iterated),
@@ -277,8 +285,8 @@ impl LayoutDesc {
                 format!("array<{}>(elem_size={})", self.name(*e), self.size(*e))
             }
             // Browser-synthetic; never rendered in a real layout dump.
-            LayoutNode::FlatArray { elem } => {
-                format!("flatarray<{}>", self.name(*elem))
+            LayoutNode::FlatArray { elem, stride } => {
+                format!("flatarray<{}>({stride})", self.name(*elem))
             }
             LayoutNode::Iterated(it) => match it {
                 Iterated::Sorted { elem, keys } => {
@@ -525,8 +533,11 @@ fn node_json(node: &LayoutNode, s: &mut String) {
         LayoutNode::Array(e) => {
             let _ = write!(s, "{{\"kind\":\"array\",\"elem\":{e}}}");
         }
-        LayoutNode::FlatArray { elem } => {
-            let _ = write!(s, "{{\"kind\":\"flatarray\",\"elem\":{elem}}}");
+        LayoutNode::FlatArray { elem, stride } => {
+            let _ = write!(
+                s,
+                "{{\"kind\":\"flatarray\",\"elem\":{elem},\"stride\":{stride}}}"
+            );
         }
         LayoutNode::Ref => s.push_str("{\"kind\":\"ref\"}"),
         LayoutNode::ChildRec(e) => {
