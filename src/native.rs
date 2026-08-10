@@ -1278,9 +1278,9 @@ fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// @PLN134 — interpreter handler for `store_persist_copy`.  Pops a path (text)
-/// + a reference (DbRef) and writes a REBUILT image of that slot, laid out so a
-/// paged reader touches few pages, without re-rooting the live slot.  Args pop in
-/// reverse, as everywhere: path, then the reference.  See
+/// and a reference (DbRef), then writes a REBUILT image of that slot, laid out so
+/// a paged reader touches few pages, without re-rooting the live slot.  Args pop
+/// in reverse, as everywhere: path, then the reference.  See
 /// `Stores::persist_copy` for why the rebuild is legal here and not in
 /// `bind_path`.
 #[cfg(feature = "mmap")]

@@ -1057,6 +1057,27 @@ distinct pages — one fetch per row. Written in trie key order they occupy **1*
 A deep copy already claims them in key order (`copy_claims_trie_body` walks the
 tree), so a rebuilt store has this; a store persisted as built does not.
 
+**`store_persist_copy(r, path)` is where a rebuilt image comes from**, and it is
+a separate call rather than a fix to `store_persist_bind` because of a contract.
+Binding documents *"Caller's existing DbRefs into that slot remain valid"*, and a
+record number IS its word offset — so the guarantee and the placement are the
+same fact, and reordering is exactly what it forbids (@PLN123 B2 records the same
+constraint at the compaction call site: the fresh branch is a WRITE, where a
+program's interior references are live). So the copy is rebuilt into a scratch
+store nobody holds a reference into, `relayout_tries` runs on THAT, and the live
+collection keeps every number it handed out. Measured on 74,692 real words, one
+20-record prefix query, bytes off the wire:
+
+| | requests | fetched |
+|---|---|---|
+| bound image, as built | 19.9 | 1.28 MB |
+| `store_persist_copy` image | **4.9** | **0.32 MB** |
+| whole-image download | 1 | 5.17 MB |
+
+The file is not bound, so writes after it do not reach it — it is the artefact
+you ship, written when the data is final. `store_persist_bind` remains the call
+for a store you go on writing to.
+
 Together: ~2.8 + 1.0 = **3.8 pages, 250 KB** per cold query, against 27 + 20 = 47
 as built and a 5.9 MB gzipped whole image — and a second keystroke costs ONE page
 with the reader's 64-page cache warm.

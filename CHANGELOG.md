@@ -26,6 +26,36 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A vocabulary you ship, not one you download
+
+A `trie<T[k]>` can already be read a page at a time — `store_load_prefix(local,
+"vocab.store", "kerk", 20)` fetches what the prefix walk touches instead of the
+whole file. But the records it returns sat wherever they were INSERTED, so
+answering 20 of them meant 20 scattered reads, and most of the saving went back.
+
+`store_persist_copy` writes the image with each record in its collection's own
+order — key order for a trie — so one prefix is one run. On a 74,692-word
+vocabulary, one 20-record query:
+
+| | requests | fetched |
+|---|---|---|
+| a bound image | 19.9 | 1.28 MB |
+| `store_persist_copy` | **4.9** | **0.32 MB** |
+| downloading it whole | 1 | 5.17 MB |
+
+```loft
+words: trie<Word[w]> = []
+for w in vocabulary() { words += [Word { w: w }] }
+store_persist_copy(words, "vocab.store")   // ship this file
+```
+
+It is a second call rather than a change to `store_persist_bind` because binding
+promises your references stay valid, and in a store a record's number *is* its
+position — so the promise and the layout are the same thing. This writes a
+rebuilt copy and leaves your collection untouched: nothing moves, every reference
+still reads, and the file is not bound, so later writes do not reach it. Use it
+when the data is final; keep `store_persist_bind` for a store you go on writing.
+
 ### BLAS, LAPACK and any Fortran routine now bind through `#c`
 
 A `vector` reaching C used to be a pointer **and** a count, always. That is right for
