@@ -11,6 +11,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > 20 minutes**, and anything that pushes past it gets parallelised or moved to a
 > slower cadence until we are consistently back under.
 >
+> **Compliance reading (2026-08-10): still not met — 31.6 m — but the cause is now
+> measured and one lever is untried.** See
+> [§ Where the 31 minutes actually are](#where-the-31-minutes-actually-are-2026-08-10--measured-and-one-axis-untried):
+> a single job is the whole critical path, its members' `rustc` storms make the
+> `heavy-serial` group ADDITIVE with the rest of the suite when caches are cold (which
+> CI always is), and both recorded sharding attempts split across that group rather than
+> along it.
+>
 > **Compliance reading (2026-08-09): the rule is not met, and has not moved since
 > this design was written.** Wall-clock to settle for the last 13 completed
 > `pull_request` runs of `ci.yml` — created→updated, which is what an author
@@ -21,6 +29,76 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > what this adds is that the whole-run figure has stayed there, so the
 > "parallelise or move to a slower cadence until we are consistently back under"
 > half of the rule is still owed work.
+
+## Where the 31 minutes actually are (2026-08-10) — measured, and one axis untried
+
+Per-job wall-clock on the last green PR run (`31359676983`). **One job is the whole
+critical path**; everything else finishes inside it:
+
+| job | wall |
+|---|---|
+| **Test (ubuntu-latest)** | **31.6 m** |
+| ASan UAF/OOB gate (ubuntu) | 14.2 m |
+| markdown viewer smoke | 6.8 m |
+| stack_align_guard sweep | 6.7 m |
+| Browser build + probe | 6.5 m |
+| doc index hygiene | 6.3 m |
+| everything else | ≤ 2 m |
+
+Inside that job: **Test 22 m**, Build 4.3 m + 1.7 m + 0.7 m, cache save 2.3 m. So the
+test step alone exceeds the 20-minute rule, and the macOS leg this document analyses is
+already gone from the PR matrix.
+
+### The measurement that matters is COLD, and that is what the earlier attempts missed
+
+Locally, in the SAME warm tree, back to back:
+
+| selection | wall |
+|---|---|
+| the `heavy-serial` group only (78 tests, 7 binaries) | 68 s |
+| everything else (3837 tests) | 102 s |
+| both together | 113 s |
+
+Warm, the two overlap: adding the serial group to the rest costs ~11 s. Cold — no
+`native-auto/` artifacts, no `.loft` caches, which is **every CI run** — the same three
+selections measured 226 s, 174 s and 398 s. **Cold they are ADDITIVE**: the group's
+members each spawn a storm of concurrent `rustc`, so while one runs it owns the machine
+and nothing overlaps with it, however parallel the rest is.
+
+That single fact explains both recorded sharding failures above, and it is why the axis
+they split on was wrong. Splitting by test COUNT and splitting by DURATION both
+scattered `heavy-serial` across shards, so both shards contained a machine-owning
+member and neither could overlap anything. **The split that has not been tried is the
+one along the group boundary itself** — every `heavy-serial` binary in one job, the
+other 3837 tests in the other. Cold, that is `max(226, 174)` instead of `226 + 174`:
+roughly 43% off the test step, ~9 minutes off the critical path.
+
+### The second lever: build once, not once per shard
+
+The reason sharding "multiplies overhead that never amortises" is that each shard
+rebuilds. `cargo nextest archive` removes that: one build job produces an archive, each
+test job runs `--archive-file` against it. Two shards then cost one 6-minute build plus
+the longer shard, not two builds.
+
+Together those two put the projection at roughly **6 m build + ~13 m longest shard ≈ 20
+minutes**, and make a third shard nearly free if it is still over.
+
+### What has already been taken out
+
+`n3_use_native` was the largest single member at **58.9 s**, because two of its tests
+ran the SAME twelve-context `rustc` loop — the pre-existing artifact-bound test and the
+loft#831 shim-survival guard added beside it. Folded into one test asserting both
+invariants over one loop: **58.9 s → 33.1 s**. In a group whose members cannot overlap
+with anything, that 26 s is 26 s off the critical path rather than 26 s of slack.
+
+### Do not re-derive this from a warm run
+
+The warm and cold figures differ by 3.5x on the same selection, in the same tree, with
+no change but the state of the caches. A local run that starts warm says the serial
+group is nearly free; CI is never warm. Wipe `**/native-auto/` and the loft caches
+before measuring anything intended to describe CI, and say which state a number came
+from — the same discipline `scripts/test_speed.py` enforces for the test-speed report,
+and for the same reason.
 
 ## The rule that decides placement
 
