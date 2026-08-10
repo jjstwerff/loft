@@ -9,6 +9,65 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `store_release` — a working-set hint, and the per-record shape it replaces is measured dead (@PLN126) (2026-08-11)
+
+@PLN126 opened on a measurement rather than an API: *does ordered insertion leave a
+finished record contiguous?* `src/database/spans.rs` answers it by painting every word
+of a built arena with the record that owns it, through `for_each_owned_child` — the same
+ownership walk `remove_claims` frees by, so the measurement cannot disagree with the
+runtime about who owns what. On `routing`'s generator shape (`hash<TTile[tkey]>`, two
+grown-by-append vectors):
+
+| | span/live mean | exclusive 4 KB pages | droppable below the finish frontier |
+|---|---|---|---|
+| strict key order (W=1) | **356×** | **0.0%** | **98.7%** |
+| 16 records open (W=16) | 391× | 0.0% | 93.0% |
+| 64 open | 540× | 0.1% | 86.9% |
+
+**Contiguity is false by two to three orders of magnitude, and the cause is not vector
+reallocation.** The outer `hash` keeps entries in a chunked arena claimed early, while a
+record's vectors are claimed at the frontier much later — so a record's own bytes sit
+either side of the whole store. With ONE record in the store and nothing else alive, its
+5-word slot and its 28 words of vectors are separated by 318 words of the collection's
+own spine.
+
+That kills the per-record release outright (0.0% exclusive pages is the granularity
+problem in a number) and, contrary to the plan's reasoning, does **not** kill the
+frontier release: that one needs the region below the mark not to be written again,
+which is a property of the allocator on an append-only workload, and it holds. So the
+plan was re-scoped onto the claim that measured true, and built.
+
+`store_release(collection) -> integer` (`Store::release_resident` → `Stores::release_store`)
+does `msync(MS_ASYNC)` + `madvise(MADV_DONTNEED)` over the whole pages below the mark
+that have not been released. Peak RSS 44.3 MB → **2.2 MB** on an 89 MB build, at 1.0×
+wall, one call per record. Content, references and file length are all untouched: the
+mapping is `MAP_SHARED`, so a released record re-reads from the file one fault later.
+
+Three costs the design could not have predicted, each found by an instrument:
+
+* **Deriving the frontier cost the whole point.** `Store::usage` walks the block chain,
+  one header per block, touching every page — so asking it what to drop faulted the
+  entire store back in first, and peak RSS became the whole file (80.9 MB against 44.3
+  for making no call at all). `Store::claimed_end` now carries the mark forward at
+  `claim_block`. It is a monotone UPPER bound on `live_end_words` — the safe direction
+  here, the wrong one for `shrink_to` / `reclaim_tail` / `bind_path`, which still read
+  the chain because truncating to an upper bound cuts live data.
+* **Each call must be bounded to what is new** (`Store::released_bytes`). Flushing from
+  zero every time re-syncs a region that grows with the run: 208× wall.
+* **`MS_ASYNC`, never `MS_SYNC`** — same resident set, and waiting costs ~1.5 ms a call.
+
+**It pays only for an ordered build** (1.01× at W=16), and the attribution is the free
+block count rather than the layout: 10 free blocks at W=1 against 3 691 at W=16 for the
+same data. The LLRB free-space tree's nodes live inside the freed blocks, so a scattered
+arena gives the allocator its own scattered working set — exactly the region the release
+just dropped.
+
+Gates: `tests/scripts/126-store-release-keeps-everything.loft` +
+`store_release_keeps_every_record_and_reference_both_backends` (a reference held across a
+release is checked by VALUE, because a re-faulted page returns a plausible number either
+way), `database::spans::one_tile_footprint_is_the_blocks_it_owns`, and the two `#[ignore]`
+measurements. Full workings: `doc/claude/plans/126-record-frontier.md`.
+
 ### A hash's entries move into a chunked arena, and the lookup win it was built for does not exist (@PLN135 arc H, #809) (2026-08-10)
 
 `hash<T[k]>` stops claiming one store record per entry. Entries are slots at a fixed

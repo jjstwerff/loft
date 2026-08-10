@@ -172,6 +172,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load", n_store_load),
     ("n_store_verify", n_store_verify),
     ("n_store_reclaim", n_store_reclaim),
+    ("n_store_release", n_store_release),
     #[cfg(paged_store)]
     ("n_store_bind_lazy", n_store_bind_lazy),
     #[cfg(feature = "native-extensions")]
@@ -1308,6 +1309,15 @@ fn n_store_verify(stores: &mut Stores, stack: &mut DbRef) {
 fn n_store_reclaim(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let bytes = stores.reclaim_store(v_ref.store_nr);
+    stores.put(stack, bytes);
+}
+
+/// Interpreter handler for `store_release` — flush what has been written to the
+/// bound file and drop it from the resident set, answering the bytes dropped.
+/// @PLN126; mirrors the `#rust` template in `default/02_files.loft`.
+fn n_store_release(stores: &mut Stores, stack: &mut DbRef) {
+    let v_ref = *stores.get::<DbRef>(stack);
+    let bytes = stores.release_store(v_ref.store_nr);
     stores.put(stack, bytes);
 }
 

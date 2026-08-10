@@ -6832,6 +6832,17 @@ You say when, because only the program knows whether a drop is permanent: a coll
 You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft\#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
 
 ```rust
+pub fn store_release(r: reference) -> integer fs#update
+```
+
+Say "everything I have written so far is finished": start writing it out to the file and stop holding it in memory. Returns the BYTES dropped from the resident set (0 when there was nothing to drop, or the collection is not bound to a file).
+For a GENERATOR streaming a large collection into a store bound with `store\_persist\_bind`. Without it the resident set grows with everything written so far, and the kernel only learns which pages are finished by evicting the wrong ones first. Measured on a 20 000-record build, one call per record: peak memory 44.3 MB -\> 2.2 MB (20x), at no cost in wall clock.
+tiles: hash\<TTile\[tkey\]\> = \[\] store\_persist\_bind(tiles, "tiles.store")   // bind FIRST — the file IS the arena for cell in cells { …fill the tile… store\_release(tiles)                     // this cell is done }
+Content is untouched and every reference into the collection stays valid: nothing moves and nothing is freed. Reading a released record simply re-reads it from the file, at the cost of one page fault. So this is a HINT — calling it too often, or on the wrong collection, costs a little speed and can never cost an answer.
+It pays when records are written IN KEY ORDER and not returned to. A generator that keeps many records open at once leaves the store scattered with free blocks (measured: 3 691 against 10 for the same data written in order) and the allocator then keeps re-reading them, so the same call gives back 1.0x instead of 20x. If your build streams in cell order, this is close to free; if it does not, sort it first and this is the reason to.
+Not `store\_reclaim`, which gives back the FILE's unused TAIL and changes its size. This changes only what is resident, and never the file's length. Not a durability barrier either — it asks for writeback to START; `store\_durable\_seal` is what promises the bytes have landed.
+
+```rust
 pub fn store_bind_lazy(local: reference, source: text) -> boolean
 ```
 

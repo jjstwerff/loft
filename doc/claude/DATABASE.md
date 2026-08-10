@@ -224,11 +224,61 @@ paged out to 8 GB of swap. `MemorySwapMax=0` is what makes a cap a cap; without 
 the measurement is vacuous in the direction that looks like success.
 
 The cost of capping is that the kernel's LRU only learns the working set by evicting
-the wrong pages first — ~2× wall at a modest cap, 271 s at an aggressive one. Letting
-a program say "this record is finished" would turn that cliff into a curve; that is
-**@PLN126**, and it opens on a measurement (does ordered insertion leave a finished
-record contiguous?) rather than on an API, because `MADV_DONTNEED` is per PAGE and a
-per-record hint cannot drop a record interleaved with live ones.
+the wrong pages first — ~2× wall at a modest cap, 271 s at an aggressive one.
+`store_release(collection)` lets the program say so instead, and turns that cliff
+into a curve.
+
+### `store_release` — the working set follows the program, not the eviction (@PLN126)
+
+`store_release(collection)` starts writing everything below the arena's high-water
+mark out to the bound file and drops it from the resident set, answering the bytes
+dropped. **Content is untouched and every reference stays valid**: nothing moves and
+nothing is freed, the mapping is `MAP_SHARED`, and reading a released record simply
+re-reads it from the file one page fault later. It is a HINT — calling it too often,
+or on a collection that is not bound, costs a little speed and can never cost an
+answer. Not `store_reclaim`, which changes the FILE's length; this never does. Not a
+durability barrier either — it asks for writeback to START, which is
+`store_durable_seal`'s job to promise.
+
+Measured on a 20 000-record generator, one call per record: **peak RSS 44.3 MB → 2.2
+MB (20×) at 1.0× wall clock.**
+
+**It pays for a build in KEY ORDER and does nothing for an interleaved one** (1.01× on
+the same data), and the reason is the allocator rather than the layout: a generator
+that keeps many records open at once relocates its growing vectors and leaves the
+arena scattered with free blocks — 3 691 against 10 for the same data written in
+order. The LLRB free-space tree's nodes live *inside* those freed blocks, so a
+scattered arena gives the allocator its own scattered working set, which is exactly
+the region the release just dropped. Stream in cell order and this is close to free.
+
+Three implementation facts, each of which cost 200× before it was found, and each
+recorded because the next residency feature meets all three again:
+
+* **Deriving the frontier costs the whole point.** `Store::usage` walks the block
+  chain, one header per block, touching every page of the arena — so asking it what to
+  drop faulted the entire store back in first (peak RSS became the whole file, 80.9 MB
+  against 44.3 MB for making no call at all). `Store::claimed_end` carries the mark
+  forward at `claim_block` instead. It is a monotone UPPER bound on `live_end_words`,
+  which is the safe direction here (flushing a few free pages costs a fault) and the
+  wrong one for `shrink_to` / `reclaim_tail` / `bind_path`, which still read the chain
+  because truncating to an upper bound cuts live data.
+* **Each call must be bounded to what is new.** Flushing from zero every time re-syncs
+  a region that grows with the run: 208× wall. `Store::released_bytes` is the
+  watermark.
+* **`MS_ASYNC`, never `MS_SYNC`.** Both reach the same resident set; waiting costs
+  ~1.5 ms a call, which is the difference between a call a generator can make per
+  record and one it cannot make at all.
+
+**Why there is no per-RECORD release, and it is not a matter of taste.** `MADV_DONTNEED`
+works on pages, and `database::spans` measured what one record of a real generator's
+shape (`hash<TTile[tkey]>` with two grown-by-append vectors) actually occupies:
+**0.0% of the pages a record touches hold only that record**, at every window and every
+scale tried. The span between a record's lowest and highest word is 356–1348× the bytes
+it owns, because the hash keeps its entries in a chunked arena claimed early while the
+record's vectors are claimed at the frontier much later — so a record's own bytes sit
+either side of the whole store. A frontier release needs none of that: it needs the
+region below the mark not to be written again, and 87–99% of its pages are not.
+Full workings: [plans/126-record-frontier.md](plans/126-record-frontier.md).
 
 **A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
 happens when the image is WRITTEN; after that `resize_store` returns early on any

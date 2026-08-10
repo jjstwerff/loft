@@ -1787,6 +1787,90 @@ fn store_reclaim_shrinks_a_bound_file_both_backends() {
     }
 }
 
+/// @PLN126 — `store_release(collection)` drops what has been written from the
+/// resident set and leaves the collection, its references and the file alone.
+///
+/// The memory half is not testable from inside a loft program and is not tested
+/// here: `database::spans::a_frontier_release_moves_the_resident_set` owns it
+/// (peak RSS 44.3 MB → 2.2 MB on a 20 000-record build, at no cost in wall clock).
+/// What a driver can own is the half that would fail SILENTLY — that dropping a
+/// record's pages does not change what the record says.
+///
+/// Both backends, because the call reaches the runtime through the interpreter's
+/// registry entry on one and the `#rust` template on the other, and a residency
+/// hint that is a no-op on one of them would look identical to one that works.
+#[test]
+fn store_release_keeps_every_record_and_reference_both_backends() {
+    let script = workspace_root().join("tests/scripts/126-store-release-keeps-everything.loft");
+    let line = |out: &str, key: &str| -> String {
+        out.lines()
+            .find(|l| l.starts_with(key))
+            .unwrap_or_else(|| panic!("no `{key}` line in:\n{out}"))
+            .to_string()
+    };
+
+    let mut digests = Vec::new();
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("release126_{}", backend.trim_start_matches('-')));
+        let path = dir.join("rows.store");
+        let (out, code) = run_script(&script, backend, &path);
+        assert_eq!(code, 0, "{backend} exit: {out:?}");
+
+        // A collection that is not bound to a file has nothing to flush, and must
+        // survive being asked. A hint that raised here could not be called from a
+        // library, which never knows how its caller's collection was built.
+        assert_eq!(
+            line(&out, "unbound"),
+            "unbound 0 live 1",
+            "{backend}: releasing a heap collection is a no-op, not a fault: {out}"
+        );
+        assert_eq!(
+            line(&out, "released_positive"),
+            "released_positive true",
+            "{backend}: a bound store built to 400 records had pages to drop — 0 here \
+             means the call ships and buys nothing: {out}"
+        );
+
+        // The claim that matters. `held` was taken before a release and read after
+        // one, and it is checked by VALUE: a re-faulted page hands back a plausible
+        // number whether or not it is the right one, so "it did not crash" proves
+        // nothing at all here.
+        assert_eq!(
+            line(&out, "held"),
+            "held id 7 label row 7 last 711 len 12",
+            "{backend}: a reference held across a release must still read its own \
+             record — 711 is 7*100+11, the last of record 7's twelve: {out}"
+        );
+        assert_eq!(
+            line(&out, "idempotent"),
+            "idempotent 0",
+            "{backend}: nothing written since the last call means nothing to drop, \
+             and re-flushing a region already flushed is what made this quadratic: {out}"
+        );
+        assert_eq!(
+            line(&out, "size_stable"),
+            "size_stable true",
+            "{backend}: this changes residency, never the file's length — that is \
+             `store_reclaim`: {out}"
+        );
+        assert_eq!(
+            line(&out, "live"),
+            "live 400 digest 319650265",
+            "{backend}: every record survives, unchanged: {out}"
+        );
+        assert_eq!(
+            line(&out, "hit"),
+            "hit row 399 miss true",
+            "{backend}: the collection still answers a hit and a miss: {out}"
+        );
+        digests.push(line(&out, "live"));
+    }
+    assert_eq!(
+        digests[0], digests[1],
+        "the two backends must agree on the content, not merely each with itself"
+    );
+}
+
 /// One `count/sum/xor/sound` line from `store_digest_b0.loft`.
 #[derive(PartialEq, Eq, Debug, Clone)]
 struct B0 {

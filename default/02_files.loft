@@ -535,6 +535,43 @@ pub fn store_reclaim(r: reference) -> integer fs#update;
 #rust"stores.reclaim_store((@r).store_nr)"
 #impure(io)
 
+// Say "everything I have written so far is finished": start writing it out to the
+// file and stop holding it in memory. Returns the BYTES dropped from the resident
+// set (0 when there was nothing to drop, or the collection is not bound to a file).
+//
+// For a GENERATOR streaming a large collection into a store bound with
+// `store_persist_bind`. Without it the resident set grows with everything written
+// so far, and the kernel only learns which pages are finished by evicting the wrong
+// ones first. Measured on a 20 000-record build, one call per record: peak memory
+// 44.3 MB -> 2.2 MB (20x), at no cost in wall clock.
+//
+//   tiles: hash<TTile[tkey]> = []
+//   store_persist_bind(tiles, "tiles.store")   // bind FIRST — the file IS the arena
+//   for cell in cells {
+//     …fill the tile…
+//     store_release(tiles)                     // this cell is done
+//   }
+//
+// Content is untouched and every reference into the collection stays valid: nothing
+// moves and nothing is freed. Reading a released record simply re-reads it from the
+// file, at the cost of one page fault. So this is a HINT — calling it too often, or
+// on the wrong collection, costs a little speed and can never cost an answer.
+//
+// It pays when records are written IN KEY ORDER and not returned to. A generator
+// that keeps many records open at once leaves the store scattered with free blocks
+// (measured: 3 691 against 10 for the same data written in order) and the allocator
+// then keeps re-reading them, so the same call gives back 1.0x instead of 20x. If
+// your build streams in cell order, this is close to free; if it does not, sort it
+// first and this is the reason to.
+//
+// Not `store_reclaim`, which gives back the FILE's unused TAIL and changes its size.
+// This changes only what is resident, and never the file's length. Not a durability
+// barrier either — it asks for writeback to START; `store_durable_seal` is what
+// promises the bytes have landed.
+pub fn store_release(r: reference) -> integer fs#update;
+#rust"stores.release_store((@r).store_nr)"
+#impure(io)
+
 // Working-set load: fetch ONE integer-keyed entry from a persisted HASH image
 // into the empty local hash `local`, reading only the pages the lookup touches
 // — not the whole file. The bounded-fetch counterpart of `store_load`, for when

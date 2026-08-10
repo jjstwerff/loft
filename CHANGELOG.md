@@ -56,6 +56,40 @@ rebuilt copy and leaves your collection untouched: nothing moves, every referenc
 still reads, and the file is not bound, so later writes do not reach it. Use it
 when the data is final; keep `store_persist_bind` for a store you go on writing.
 
+### A generator's memory follows what it is writing, not what it has written
+
+Binding a store to a file first already keeps a big build small — the file is the
+arena, and file-backed pages can be reclaimed where ordinary memory cannot. But the
+kernel only works out which pages are finished by evicting some wrong ones first, and
+a generator streaming a country's worth of data pays for every wrong guess.
+
+`store_release(collection)` says it outright: *everything I have written so far is
+finished*. It starts writing that out to the file and stops holding it in memory.
+
+```loft
+tiles: hash<TTile[tkey]> = []
+store_persist_bind(tiles, "tiles.store")   // bind FIRST — the file is the arena
+for cell in cells {
+  // …fill the tile…
+  store_release(tiles)                     // this one is done
+}
+```
+
+On a 20 000-record build, calling it after every record: peak memory **44.3 MB → 2.2
+MB**, and the wall clock does not move. Nothing about your data changes — no record
+moves, nothing is freed, and a reference you were already holding still reads the same
+value. Reading a released record just fetches it back from the file. So it is a hint:
+call it too often and you lose a little speed, never an answer.
+
+It pays when you write **in key order** and do not go back. A build that keeps many
+records open at once leaves the store scattered with gaps that the allocator keeps
+re-reading, and the same call then gives back nothing at all. If your generator streams
+in cell order this is close to free — and if it does not, this is a good reason to sort
+it first.
+
+It is not `store_reclaim`: that hands back the file's unused tail and changes its size,
+while this changes only what is held in memory.
+
 ### BLAS, LAPACK and any Fortran routine now bind through `#c`
 
 A `vector` reaching C used to be a pointer **and** a count, always. That is right for

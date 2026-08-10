@@ -180,6 +180,7 @@ const SEARCH_INDEX=[
 {name:"store_load_untrusted",kind:"fn",url:"stdlib-file-system.html"},
 {name:"store_verify",kind:"fn",url:"stdlib-file-system.html"},
 {name:"store_reclaim",kind:"fn",url:"stdlib-file-system.html"},
+{name:"store_release",kind:"fn",url:"stdlib-file-system.html"},
 {name:"store_bind_lazy",kind:"fn",url:"stdlib-file-system.html"},
 {name:"store_lazy_query",kind:"fn",url:"stdlib-file-system.html"},
 {name:"store_lazy_range",kind:"fn",url:"stdlib-file-system.html"},

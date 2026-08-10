@@ -4418,6 +4418,21 @@ impl Stores {
         }
     }
 
+    /// @PLN126 — flush what has been written to a bound store's file and drop it from
+    /// the resident set, answering the bytes dropped.  The loft-callable half of
+    /// [`crate::store::Store::release_resident`].
+    ///
+    /// A sibling of [`Self::reclaim_store`] and deliberately not a mode of it: that one
+    /// changes the file's LENGTH and is a decision about disk, this one changes only
+    /// what is resident and is a decision about memory.  A caller wants one or the
+    /// other, never "some of both".
+    pub fn release_store(&mut self, slot: u16) -> i64 {
+        match self.allocations.get_mut(slot as usize) {
+            Some(store) => i64::try_from(store.release_resident()).unwrap_or(i64::MAX),
+            None => 0,
+        }
+    }
+
     /// True when a field's type stores its value INLINE (a fixed-width scalar),
     /// so a working-set copy can move it as raw bytes with no pointer to
     /// relocate. Text (type 5) and Reference (type 6) are POINTERS; vectors /
