@@ -41,14 +41,13 @@ const CODES: &[(&str, &str)] = &[
         "cast-constant-out-of-range",
         "fn main() { x = 1e30 as integer; print(\"{x}\"); }",
     ),
-    // Over `MAX_C_ARITY` (12) C parameters — the interpreter's caller cannot reach it.
+    // Over `MAX_C_ARITY` (32) C parameters — past what a `#c` binding covers on
+    // EITHER backend (@PLN128 arc C; it was 12, interpreter-only).
     (
         "c-binding-not-interpretable",
-        "fn big(a: integer, b: integer, c: integer, d: integer, e: integer, f: integer, \
-         g: integer, h: integer, i: integer, j: integer, k: integer, l: integer, \
-         m: integer) -> integer; \
-         #c \"big\" \"int(int,int,int,int,int,int,int,int,int,int,int,int,int)\"\n\
-         fn main() { print(\"{big(1,2,3,4,5,6,7,8,9,10,11,12,13)}\"); }",
+        "fn big(p0: integer, p1: integer, p2: integer, p3: integer, p4: integer, p5: integer, p6: integer, p7: integer, p8: integer, p9: integer, p10: integer, p11: integer, p12: integer, p13: integer, p14: integer, p15: integer, p16: integer, p17: integer, p18: integer, p19: integer, p20: integer, p21: integer, p22: integer, p23: integer, p24: integer, p25: integer, p26: integer, p27: integer, p28: integer, p29: integer, p30: integer, p31: integer, p32: integer) -> integer; \
+         #c \"big\" \"int(int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int)\"\n\
+         fn main() { print(\"{big(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33)}\"); }",
     ),
     (
         "coalesce-default-type-mismatch",

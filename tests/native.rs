@@ -1247,6 +1247,187 @@ fn c_binding_matrix_against_a_declared_library() -> std::io::Result<()> {
     Ok(())
 }
 
+/// @PLN128 arc C / C106 — the `#c` arity ceiling is ONE contract, and both
+/// backends are held to it.
+///
+/// This is a regression guard for an asymmetry that was silent for a long time:
+/// the check ran behind `if !native_mode`, so `--native` bound and correctly
+/// CALLED a 14-slot C function while the interpreter refused the same
+/// declaration. A library author could ship that and only a downstream consumer
+/// would find out — `loft debug` is the interpreter, so the bindings you could
+/// not debug were exactly the ones with no other way in.
+///
+/// Both halves of the boundary are pinned, because either one alone can pass
+/// while the contract is broken: at `MAX_C_ARITY` both backends must CALL and
+/// agree on the value, and one past it both must REFUSE. The expected sums are
+/// position-weighted (argument `i` counts `i`), so a trampoline that dropped or
+/// reordered an argument gives a different number rather than a plausible one.
+#[test]
+fn the_c_arity_ceiling_is_the_same_on_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no C compiler on this machine
+    }
+    let max = loft::c_signature::MAX_C_ARITY;
+    let dir = std::env::temp_dir().join("loft_pln128_arity");
+    let src = dir.join("pkg/arity/src");
+    std::fs::create_dir_all(&src)?;
+
+    // One C function at the ceiling and one past it, each weighting argument i
+    // by i+1 so a dropped or reordered argument gives a different number rather
+    // than a plausible one.
+    let mut csrc = String::new();
+    for n in [max, max + 1] {
+        let params = (0..n)
+            .map(|i| format!("long long a{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let body = (0..n)
+            .map(|i| format!("a{i}*{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        csrc.push_str(&format!("long long ar{n}({params}) {{ return {body}; }}\n"));
+    }
+    std::fs::write(dir.join("arity.c"), &csrc)?;
+    let libname = if cfg!(target_os = "macos") {
+        "libarity.dylib"
+    } else {
+        "libarity.so"
+    };
+    let cc = std::process::Command::new("cc")
+        .args(["-O1", "-fPIC", "-shared", "-o"])
+        .arg(dir.join(libname))
+        .arg(dir.join("arity.c"))
+        .output()?;
+    assert!(
+        cc.status.success(),
+        "the arity fixture must build: {}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    std::fs::write(
+        dir.join("pkg/arity/loft.toml"),
+        format!(
+            "[library]\nname = \"arity\"\nversion = \"0.1.0\"\n\n[c]\nlibs = \"../../{libname}\"\n"
+        ),
+    )?;
+    let sig = |n: usize| {
+        let lp = (0..n)
+            .map(|i| format!("p{i}: integer"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cs = vec!["int64_t"; n].join(", ");
+        format!("pub fn ar{n}({lp}) -> integer;\n#c \"ar{n}\" \"int64_t({cs})\"\n")
+    };
+    // Sum of i^2 for i in 1..=n — hand-computable, and different for n and n+1.
+    let want = |n: usize| (1..=n).map(|i| i * i).sum::<usize>();
+    let run = |backend: &str, prog: &std::path::Path| -> std::io::Result<(String, String)> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--lib")
+            .arg(dir.join("pkg"))
+            .arg(prog)
+            .output()?;
+        Ok((
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
+    };
+
+    // Pass 1 — CALL SITES. The binding lives in a dependency; the program calls
+    // it. At the ceiling both backends must call it and agree on the value; one
+    // past it, both must refuse.
+    for (n, expect_ok) in [(max, true), (max + 1, false)] {
+        std::fs::write(src.join("arity.loft"), sig(n))?;
+        let call = (1..=n).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let prog = dir.join(format!("call{n}.loft"));
+        std::fs::write(
+            &prog,
+            format!("use arity;\nfn main() {{ println(\"R {{ar{n}({call})}}\") }}\n"),
+        )?;
+        let mut refused = Vec::new();
+        for backend in ["--interpret", "--native"] {
+            let (stdout, stderr) = run(backend, &prog)?;
+            if expect_ok {
+                assert!(
+                    stdout.contains(&format!("R {}", want(n))),
+                    "{backend} at the ceiling ({n} slots) must call and answer {}: \
+                     stdout={stdout:?} stderr={stderr:?}",
+                    want(n)
+                );
+            } else {
+                assert!(
+                    stderr.contains("c-binding-not-interpretable"),
+                    "{backend} past the ceiling ({n} slots) must refuse: \
+                     stdout={stdout:?} stderr={stderr:?}"
+                );
+            }
+            refused.push(stderr.contains("c-binding-not-interpretable"));
+        }
+        // The point of the guard: not that each backend behaves, but that they
+        // behave the SAME. The old bug passed a per-backend check.
+        assert_eq!(
+            refused[0], refused[1],
+            "the two backends disagreed about {n} C slots"
+        );
+    }
+
+    // Pass 2 — DECLARATION in code the author OWNS, never called. This is what
+    // puts the error in front of the person who can fix it; before arc C the
+    // only check was at the call site, so the author never saw it at all.
+    let owned = dir.join("owned.loft");
+    std::fs::write(
+        &owned,
+        format!(
+            "{}fn main() {{ println(\"declared, never called\") }}\n",
+            sig(max + 1)
+        ),
+    )?;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg(&owned)
+            .output()?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("c-binding-not-interpretable"),
+            "{backend} must refuse an over-ceiling DECLARATION in owned code even \
+             when nothing calls it: {stderr:?}"
+        );
+    }
+
+    // ...but a DEPENDENCY declaring one the program never calls must still load:
+    // a consumer cannot edit someone else's declaration, so it must not fail
+    // their build. Mirrors how `superseded_fold_diagnostics` scopes itself.
+    std::fs::write(
+        src.join("arity.loft"),
+        format!("{}{}", sig(max), sig(max + 1)),
+    )?;
+    let call = (1..=max)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let prog = dir.join("dep_ok.loft");
+    std::fs::write(
+        &prog,
+        format!("use arity;\nfn main() {{ println(\"R {{ar{max}({call})}}\") }}\n"),
+    )?;
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run(backend, &prog)?;
+        assert!(
+            stdout.contains(&format!("R {}", want(max))),
+            "{backend}: a dependency's over-ceiling binding that is never called must \
+             not break the build: stdout={stdout:?} stderr={stderr:?}"
+        );
+    }
+    Ok(())
+}
+
 /// @PLN128 — the three shapes every numeric library (BLAS, LAPACK, FFTW, HDF5)
 /// is actually made of, bound through `#c` and checked on both backends.
 ///

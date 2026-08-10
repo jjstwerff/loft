@@ -26,10 +26,18 @@
 //!   from a naive transmute-and-call, and it is the whole reason the
 //!   declaration carries a signature.
 //!
-//! The trampolines cover arity 0..=12. Beyond that the binding is refused
+//! The trampolines cover arity 0..=32. Beyond that the binding is refused
 //! rather than truncated — a wrong arity is silent (the probe called an arity-1
 //! symbol through an arity-3 trampoline and got the right answer), so nothing
 //! downstream would catch it.
+//!
+//! @PLN128 arc C — that ceiling is now the CONTRACT's, not this caller's. It was
+//! 12 and it bound the interpreter alone, so `--native` (which hands the
+//! signature to rustc and can emit any arity) bound shapes the interpreter
+//! refused, and a library could ship a binding only half of loft could call.
+//! The ladder was extended to 32 and `--native` is held to the same number:
+//! unifying by RAISING rather than narrowing, so nothing that compiled stopped
+//! compiling. See `c_signature::MAX_C_ARITY` and DESIGN_DECISIONS.md § C106.
 
 #![cfg(feature = "native-extensions")]
 
@@ -38,10 +46,22 @@ use crate::c_signature::{CSignature, CType};
 /// Call `f` with `args`, at the arity `args.len()` names. `None` when the arity
 /// is past the ladder.
 ///
-/// One transmute target per rung, written out rather than generated: every
-/// integer-class C type — `int`, `long`, a pointer, `char *`, an enum —
-/// occupies one `u64`, so arity is the only dimension. Thirteen function types,
-/// no combinatorial explosion, and no libffi.
+/// One transmute target per rung: every integer-class C type — `int`, `long`, a
+/// pointer, `char *`, an enum — occupies one `u64`, so arity is the only
+/// dimension. Thirty-three function types, no combinatorial explosion, and no
+/// libffi.
+///
+/// Rungs 6 and 7 straddle the SysV x86-64 boundary — the first six integer
+/// arguments travel in registers and the seventh onward on the stack — so those
+/// two are the ones a hand-written trampoline is most likely to get wrong, and
+/// the fixture pins both. Every rung above 7 is the same stack-passing shape as
+/// 7, which is why extending the ladder is mechanical rather than a new risk
+/// per rung.
+///
+/// The ceiling is [`MAX_C_ARITY`] and it is a **contract** number, not a
+/// property of this caller: `--native` hands the signature to rustc and would
+/// happily emit any arity, so the ladder is what both backends are held to
+/// rather than what only this one can do (@PLN128 arc C).
 ///
 /// # Safety
 /// `f` must be a C function whose parameters are all integer-class and whose
@@ -50,9 +70,19 @@ use crate::c_signature::{CSignature, CType};
 /// there is no runtime signal to check against. The declaration is the only
 /// authority, which is why it is checked when it is parsed.
 unsafe fn call_at_arity(f: *const (), args: &[u64]) -> Option<u64> {
+    // The rung's function TYPE is derived from the same index list that supplies
+    // the arguments — `at!(@ty $i)` maps each index to one `u64` — so the arity
+    // is written once per rung instead of twice.  It used to be spelled twice
+    // (`extern "C" fn(u64, u64, u64) -> u64, 0, 1, 2`), and a rung whose type
+    // and index list disagreed would have transmuted to the wrong arity with
+    // NOTHING to catch it: the probe called an arity-1 symbol through an
+    // arity-3 trampoline and got the right answer, so there is no runtime
+    // signal.  One list, no disagreement possible.
     macro_rules! at {
-        ($ty:ty, $($i:literal),*) => {{
-            let g: $ty = unsafe { std::mem::transmute(f) };
+        (@ty $i:literal) => { u64 };
+        ($($i:literal),* $(,)?) => {{
+            let g: extern "C" fn($(at!(@ty $i)),*) -> u64 =
+                unsafe { std::mem::transmute(f) };
             g($(args[$i]),*)
         }};
     }
@@ -61,97 +91,73 @@ unsafe fn call_at_arity(f: *const (), args: &[u64]) -> Option<u64> {
             let g: extern "C" fn() -> u64 = unsafe { std::mem::transmute(f) };
             g()
         }
-        1 => at!(extern "C" fn(u64) -> u64, 0),
-        2 => at!(extern "C" fn(u64, u64) -> u64, 0, 1),
-        3 => at!(extern "C" fn(u64, u64, u64) -> u64, 0, 1, 2),
-        4 => at!(extern "C" fn(u64, u64, u64, u64) -> u64, 0, 1, 2, 3),
-        5 => at!(extern "C" fn(u64, u64, u64, u64, u64) -> u64, 0, 1, 2, 3, 4),
-        6 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5
+        1 => at!(0),
+        2 => at!(0, 1),
+        3 => at!(0, 1, 2),
+        4 => at!(0, 1, 2, 3),
+        5 => at!(0, 1, 2, 3, 4),
+        6 => at!(0, 1, 2, 3, 4, 5),
+        7 => at!(0, 1, 2, 3, 4, 5, 6),
+        8 => at!(0, 1, 2, 3, 4, 5, 6, 7),
+        9 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8),
+        10 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+        11 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+        12 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+        13 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        14 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+        15 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+        16 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        17 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+        18 => at!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
+        19 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18
         ),
-        // 6 and 7 straddle the SysV boundary: the first six integer arguments
-        // travel in registers and the seventh onward on the stack. The probe
-        // pins both rungs for exactly that reason.
-        7 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6
+        20 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
         ),
-        8 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7
+        21 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
         ),
-        9 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8
+        22 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21
         ),
-        10 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9
+        23 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
         ),
-        11 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10
+        24 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
         ),
-        12 => at!(
-            extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64,
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11
+        25 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24
+        ),
+        26 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25
+        ),
+        27 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26
+        ),
+        28 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27
+        ),
+        29 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28
+        ),
+        30 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29
+        ),
+        31 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30
+        ),
+        32 => at!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31
         ),
         _ => return None,
     })

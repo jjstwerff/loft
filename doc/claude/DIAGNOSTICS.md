@@ -37,7 +37,7 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `format-unescaped-brace` | error | A literal `}` inside a format string, where `}` closes a hole. | Write it `}}`. | M · `@F35` |
 | `coalesce-default-type-mismatch` | error | A `??` default is not assignable where the value's type is expected. | Cast the default, or give it a matching type. | C · `@F2` |
 | `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. | C C · `@F37` `@F2` |
-| `c-binding-not-interpretable` | error | A function bound to a C symbol with `#c` was called on the interpreter, which cannot make that call. | Run it on `--native`, or give the binding an interpretable path. | M M · `@F92` `@F53` |
+| `c-binding-not-interpretable` | error | A `#c` binding takes more C arguments than the contract covers (`MAX_C_ARITY`, 32) — refused on BOTH backends, at the declaration in your own code and at any call site. | Wrap it in an ANSI-C shim taking at most 32 parameters. | M · `@F92` |
 | `superseded-call` | advice | A call to a `#superseded` symbol, from source you own. The old form keeps working — this is a signpost, never a removal. | Call the successor instead. | M · `@F109` |
 | `unknown-function` | error | A call to a name that does not resolve, where a similarly-spelled function exists. | Rename to the suggested function. | M · `@F16` |
 | `unknown-field` | error | A field or method that does not exist on the type, where a similarly-spelled one does. | Rename to the suggested field. | M · `@F12` |
@@ -150,8 +150,11 @@ credibility is what makes the click safe.
 Four of the codes show what that costs in practice. `coalesce-default-type-mismatch` has an
 obvious-looking rewrite — cast the default — that is **not** offered as an `edit`, because
 `"x" as integer` is a text parse that can fail, so synthesising it would answer one error
-with another. `c-binding-not-interpretable` offers two fixes and spells neither: one is C the
-compiler cannot write, and the other is not a source change at all. `lost-write`'s two
+with another. `c-binding-not-interpretable` offers one fix and does not spell it: it is C the
+compiler cannot write. (It offered a second — "run it on `--native`" — until @PLN128 arc C
+made the ceiling apply to both backends. The code NAME still says "interpretable" and now
+reads narrow, but a code is a frozen public surface, so the row moved and the name did
+not.) `lost-write`'s two
 ways out are BOTH conditional — the analysis proves the write is lost, never which of the
 two the author meant, and a mechanical tier there would be a guess wearing the safe label.
 

@@ -66,14 +66,34 @@ impl CTarget {
     }
 }
 
-/// The highest arity a `#c` binding can have.
+/// The highest arity a `#c` binding can have, on **either** backend.
 ///
 /// The interpreter calls through a fixed ladder of per-arity trampolines
 /// (`c_call`), and the ceiling is a fact about the CONTRACT rather than about
 /// that caller — the declaration is checked against it, so it lives with the
 /// signature and is readable on every build, including the ones with no C
 /// caller compiled in at all.
-pub const MAX_C_ARITY: usize = 12;
+///
+/// @PLN128 arc C — **32, and it binds both backends.** It was 12, enforced on
+/// the interpreter only, which made `#c` two different languages: a 13-slot
+/// binding compiled under `--native`, shipped, and failed for whoever
+/// interpreted it — including `loft debug`, which IS the interpreter. The
+/// author never saw it; the cost landed entirely on a downstream consumer who
+/// had not written the declaration.
+///
+/// Unifying downward would have narrowed what compiles today, so the ceiling
+/// was raised to meet `--native` instead: extending the ladder is loosening,
+/// which COMPATIBILITY.md permits unconditionally, and it leaves the tightening
+/// half theoretical rather than practical.
+///
+/// **Why 32.** loft has no address-of, so a by-reference scalar reaches C as a
+/// 1-element vector and costs TWO slots (pointer + count). `dgemm_` — the
+/// worst case this plan actually names — takes 13 by-reference arguments, so
+/// it needs 26. 32 clears that with margin while keeping the ladder readable.
+/// LAPACK's largest driver routines still exceed it and remain shim cases,
+/// which is the deliberate split: a ladder cannot be unbounded, and a shim
+/// generator (arc D) is the better answer past this point than more rungs.
+pub const MAX_C_ARITY: usize = 32;
 
 /// A C type as spelled in a `#c` signature.
 ///

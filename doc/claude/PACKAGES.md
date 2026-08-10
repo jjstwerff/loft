@@ -555,19 +555,31 @@ requires a discharge (`?? 0`, `x?`, `match`).
 **Two shape limits worth knowing before you write a binding.**  A `vector<T>`
 becomes an element pointer **immediately followed by** its count, so `write(fd,
 ptr, n)` binds directly while `memchr(ptr, ch, n)` and `fwrite(ptr, size, n, f)`
-— which separate the pair — need a shim.  And a binding may declare at most **12**
+— which separate the pair — need a shim.  And a binding may declare at most **32**
 C parameters: the interpreter calls through a fixed ladder of per-arity
 trampolines, and that ladder is where the ceiling comes from.
 
-**The ceiling is the INTERPRETER's, and the two backends do not agree** (@PLN128,
-measured both ways).  `--native` emits a typed `extern "C"` call and has no
-ladder, so it binds and correctly calls a 14-slot C function; the interpreter
-refuses the same declaration with `error[c-binding-not-interpretable]` naming
-`0..=12`.  The refusal fires where the binding is USED, not where it is declared,
-so a library can ship a 13+-slot binding that every `--native` consumer builds
-and every interpreted one — including `loft debug`, which is the interpreter —
-cannot call.  Treat 12 as the portable ceiling regardless of which backend you
-develop on.
+**One ceiling, both backends** (@PLN128 arc C).  It used to be 12 and it was
+enforced on the interpreter ONLY, which made `#c` two different languages: a
+13-slot binding compiled under `--native`, shipped, and failed for whoever
+interpreted it — including `loft debug`, which *is* the interpreter, so the
+bindings you could not debug were exactly the ones with no other way in.  The
+author never saw it either, because the refusal fired at the call site rather
+than the declaration.
+
+Unifying downward would have narrowed what already compiles, so the ladder was
+extended to 32 instead and `--native` held to the same number.  32 is not a round
+number: loft has no address-of, so a by-reference scalar costs **two** slots
+(pointer + count), and `dgemm_`'s 13 by-reference arguments therefore need 26.
+32 clears the worst real case with margin.  Past it, a shim is the answer — a
+ladder cannot be unbounded.
+
+The check now runs on both backends, in two places: at the **declaration**, for
+code you own (your program, your library, the stdlib), so you see it as you write
+it; and at any **call site**, including one reaching into a dependency, because
+that call genuinely cannot work.  Merely *loading* a dependency that declares an
+over-ceiling binding you never call is fine — a consumer cannot edit someone
+else's declaration, so it must not fail their build.
 
 #### Numeric libraries — what the boundary already does (@PLN128)
 
@@ -582,7 +594,8 @@ itself:
 | **C writes back through `double*`** (the `daxpy` shape) | ✅ | ✅ |
 | 1-element `vector<integer>` as a Fortran scalar `const int64_t*` | ✅ | ✅ |
 | a scalar `double` in and out through a pointer shim | ✅ | ✅ |
-| 14 C argument slots | ❌ refused, `0..=12` | ✅ |
+| 14 C argument slots | ✅ | ✅ |
+| 33 C argument slots (past `MAX_C_ARITY`) | ❌ refused | ❌ refused |
 | a `double` **by value** | ❌ refused | ❌ refused |
 
 **The write-back cell is the one that matters.**  Every BLAS and LAPACK routine
@@ -609,11 +622,14 @@ cast (`2.5` → `2`).  Pointers are the whole answer.
 
 **A Fortran argument list costs two C slots per scalar.**  loft has no address-of,
 so each by-reference scalar becomes a 1-element vector — pointer *and* count.
-`dgemm_` takes 13 by-reference arguments, so it needs ~26 slots against a ceiling
-of 12: **Fortran BLAS/LAPACK needs a shim that collapses the argument list**, and
-"Fortran passes everything by reference, so it binds unmodified" is false.
-Pointer-and-integer APIs (HDF5, GSL) have no such problem — though see the
-retention hazard below before reaching for one that keeps your buffers.
+`dgemm_` takes 13 by-reference arguments, so it needs **26** slots, not 13: that
+is what the 32-slot ceiling above was sized to clear.  Fortran BLAS level-3
+therefore binds without an argument-collapsing shim, but count in slots rather
+than in arguments before assuming any given routine does — LAPACK's larger
+driver routines (20+ arguments) still exceed 32 and need one.
+Pointer-and-integer APIs (HDF5, GSL) spend one slot per scalar and are nowhere
+near the ceiling — though see the retention hazard below before reaching for one
+that keeps your buffers.
 
 ##### The retention hazard — a pointer C keeps is a use-after-free
 

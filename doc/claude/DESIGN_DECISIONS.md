@@ -2743,3 +2743,73 @@ a missing feature.
   *streaming* rather than a working set, where iteration and `len` mean something
   different by declaration rather than by accident. Ergonomics alone does not reopen it;
   the model question is the blocker.
+
+## C106 — `#c` has ONE arity ceiling for both backends, and it was raised rather than lowered
+
+**Catalogue:** @F92 (direct C binding), @F53 (native backend)
+
+> Numbered C106, not C105: C105 is claimed by the in-flight `tuxedo-809-resize-rehash`
+> branch, and two entries sharing an id in a register whose whole job is to be citable is
+> worse than a gap.
+
+### Context
+
+`#c` bindings were checked against `MAX_C_ARITY` on the interpreter ONLY — the check sat
+behind `if !native_mode` in `main.rs`. The two backends therefore had different binding
+capability, and nobody had measured it: `--native` bound and correctly called a 14-slot C
+function while the interpreter refused the same declaration naming `0..=12`.
+
+That is not a capability, it is a portability trap that fires late. The refusal fired at the
+CALL site, so a library author could declare a 13-slot binding, build it under `--native`,
+test it, and ship — and the failure landed on a downstream consumer who had not written the
+declaration and could not edit it. `loft debug` *is* the interpreter, so the bindings you
+could not debug were exactly the ones with no other way in.
+
+### The rejected option
+
+**Unify downward at 12.** This was the first recommendation, and it is what "one contract,
+and it is the interpreter's" reads like until you check the promise. COMPATIBILITY.md § *The
+error surface is one-directional* says adding an error is a break, that pre-freeze the
+disposition inverts to "be strict now" — **but** that *"the first resolution of a would-be-error
+is a rewrite to correct function, not an error. Erroring is the narrower choice, reserved for
+what cannot be given a sane defined behavior."*
+
+A functioning rewrite existed. The interpreter's ladder is one
+`extern "C" fn(u64 × N) -> u64` per rung, and every rung above 7 is the same stack-passing
+shape as 7 — mechanical, not a new risk per rung. Narrowing `--native` to 12 would have
+removed working programs to fix a problem that a loosening fixes for free.
+
+### Decision
+
+- **Closed 2026-08-10.** `MAX_C_ARITY = 32`, enforced on **both** backends. The ladder was
+  extended from 12 to 32; `--native` is held to the same number.
+- **32 has a reason, not a roundness.** loft has no address-of, so a by-reference scalar
+  reaches C as a 1-element vector costing TWO slots (pointer + count). `dgemm_`'s 13
+  by-reference arguments therefore need 26. 32 clears the worst case this domain actually
+  names, with margin. A ladder cannot be unbounded, so past 32 an ANSI-C shim is the answer
+  (@PLN128 arc D) — the stopping point is chosen, not accidental.
+- **The tightening half is real but theoretical.** A binding of 33+ C slots that compiled
+  under `--native` is now refused. No real C API approaches that; and pre-freeze is the only
+  time this error can be added at all.
+- **Two-pass enforcement**, mirroring `superseded_fold_diagnostics`: declarations are checked
+  in code you OWN (stdlib or entry project), so the author sees it as they write it even if
+  nothing calls it yet — while merely LOADING a dependency that declares an over-ceiling
+  binding you never call does not fail your build, because a consumer cannot edit someone
+  else's declaration. Call sites are checked everywhere, since a call that cannot work must
+  be refused wherever it is written.
+- The `c-binding-not-interpretable` code KEEPS its name though it no longer means "the
+  interpreter specifically". A diagnostic code is a frozen public surface
+  ([DIAGNOSTICS.md](DIAGNOSTICS.md)), so the row moved and the name did not.
+- **Why this refuses the declaration when the wasm rule does not.** `#c` on the wasm targets
+  is refused at the CALL only, deliberately, "so a declaration is still portable"
+  ([PACKAGES.md](PACKAGES.md) § *The wasm and browser targets*) — a `#c` binding that wasm
+  cannot reach is still perfectly good on native and interpret, so failing the declaration
+  would break a legitimate cross-target library. Arity is not target-conditional: an
+  over-ceiling binding can never work **anywhere**, so there is no target on which the
+  declaration is valid and nothing is lost by saying so at the point it is written. The two
+  rules differ because the underlying facts differ, not because the surface is inconsistent.
+- **Revisit when** a real C API needs more than 32 integer-class slots — at which point the
+  question is whether to add rungs or to generate the shim, and it moves for BOTH backends
+  at once either way. Float-by-value does NOT reopen it: there is no cheap ladder move there
+  (the trampolines are integer-class by construction), and arc B's pointer idiom covers the
+  need.

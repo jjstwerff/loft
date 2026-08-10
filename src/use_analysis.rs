@@ -2549,8 +2549,8 @@ pub fn warn_dead_stores(
 /// `make ci` check once the surface is clean).  Every steer thus ships with its fold, or the lint
 /// fires.  INERT until a symbol is actually marked `#superseded`, so the suite is byte-identical.
 /// Populates `diags`; the caller renders them with the other diagnostics.
-/// @PLN24 arc B — refuse a CALL to a `#c` binding whose SHAPE the interpreter's
-/// caller does not cover.
+/// @PLN24 arc B / @PLN128 arc C — refuse a `#c` binding whose shape exceeds the
+/// arity the CONTRACT covers, on both backends.
 ///
 /// Arc B calls C for real, so this is no longer "the interpreter cannot do it";
 /// it is the narrow residue. A shape that works on one backend and silently
@@ -2558,8 +2558,25 @@ pub fn warn_dead_stores(
 /// catch — before arc B, `strlen("hello")` compiled under `--interpret` and
 /// answered **7562** — so anything not covered is refused loudly instead.
 ///
-/// Declaring a binding of any shape stays fine on every backend; only calling
-/// an uncovered one is refused.
+/// **Arc C made this ONE contract.** It used to run on the interpreter only, so
+/// an over-ceiling binding compiled and ran under `--native` and failed only
+/// when something interpreted it. That made `#c` two languages, and put the
+/// failure on a downstream consumer rather than on the author who wrote the
+/// declaration. Both backends are now held to [`MAX_C_ARITY`], which was raised
+/// to 32 so that unifying did not have to narrow what already compiles.
+///
+/// Two passes, because the two audiences need different things:
+///
+/// - **Declarations**, scoped to OWN code (the stdlib, or the entry project — a
+///   library author's own lib, a user's program). This is what puts the error
+///   in front of the person who can fix it, at the moment they write it, whether
+///   or not anything calls it yet. A third-party dependency is excluded for the
+///   same reason `superseded_fold_diagnostics` excludes it: a consumer cannot
+///   edit a dependency's declaration, so merely LOADING one must not fail.
+/// - **Call sites**, everywhere. Calling an over-ceiling binding genuinely
+///   cannot work, so it is refused wherever it appears — including through a
+///   third-party dependency, where it is the one case a consumer must be told
+///   about because the call is theirs.
 pub fn c_binding_call_unsupported(
     data: &Data,
     diags: &mut crate::diagnostics::Diagnostics,
@@ -2574,7 +2591,7 @@ pub fn c_binding_call_unsupported(
         }
         code.for_each_child(&mut |c| walk(c, data, found));
     }
-    /// Why this binding cannot be called here, or `None` when it can.
+    /// Why this binding is outside the contract, or `None` when it is inside.
     fn uncovered(data: &Data, d_nr: u32) -> Option<String> {
         let def = data.def(d_nr);
         if def.c_sig.is_empty() {
@@ -2588,18 +2605,34 @@ pub fn c_binding_call_unsupported(
         };
         if sig.params.len() > crate::c_signature::MAX_C_ARITY {
             return Some(format!(
-                "it takes {} C arguments and the interpreter's caller covers 0..={}",
+                "it takes {} C arguments and a `#c` binding covers 0..={}",
                 sig.params.len(),
                 crate::c_signature::MAX_C_ARITY
             ));
         }
         None
     }
+    // Declarations in own code first, so the author's own build names it even
+    // when nothing calls it; then call sites anywhere. `reported` keeps a
+    // binding that is both declared here AND called here to one diagnostic.
+    let mut reported: Vec<u32> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        let own = def.source == crate::data::STD_SOURCE || data.source_is_owned(def.source);
+        if own && !def.c_sig.is_empty() && uncovered(data, d_nr).is_some() {
+            reported.push(d_nr);
+        }
+    }
     let mut called: Vec<u32> = Vec::new();
     for d_nr in 0..data.definitions() {
         walk(data.def(d_nr).code(), data, &mut called);
     }
     for d_nr in called {
+        if !reported.contains(&d_nr) {
+            reported.push(d_nr);
+        }
+    }
+    for d_nr in reported {
         let def = data.def(d_nr);
         let pos = def.position();
         let file = if pos.file.is_empty() {
@@ -2612,7 +2645,7 @@ pub fn c_binding_call_unsupported(
             crate::diagnostics::Level::Error,
             Some("c-binding-not-interpretable"),
             &format!(
-                "`{}` is bound to the C symbol `{}` with `#c`, which the interpreter cannot \
+                "`{}` is bound to the C symbol `{}` with `#c`, which no backend can \
                  call: {why}",
                 def.display_name(),
                 def.c_symbol
@@ -2621,9 +2654,11 @@ pub fn c_binding_call_unsupported(
             pos.line,
             pos.pos,
         );
-        // @PLN131 — neither fix spells an `edit`: one is C the compiler cannot write, the
-        // other is not a source change at all.  The shim leads because it resolves the
-        // binding wherever it runs; `--native` only sidesteps the interpreter.
+        // @PLN131 — the fix does not spell an `edit`: it is C the compiler cannot
+        // write. @PLN128 arc C removed the second fix that used to sit here —
+        // "run it on `--native`, which can make the call as written" — because
+        // that is no longer true, and a fix line naming a backend that does not
+        // help is worse than no second option.
         diags.fix_last(crate::diagnostics::Fix {
             kind: crate::diagnostics::FixKind::Mechanical,
             title: format!(
@@ -2634,14 +2669,6 @@ pub fn c_binding_call_unsupported(
             edit: None,
             concept: "direct C binding",
             concept_ref: "@F92",
-        });
-        diags.fix_last(crate::diagnostics::Fix {
-            kind: crate::diagnostics::FixKind::Mechanical,
-            title: "run it on `--native`, which can make the call as written".to_string(),
-            condition: None,
-            edit: None,
-            concept: "native backend",
-            concept_ref: "@F53",
         });
     }
 }
