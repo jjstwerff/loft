@@ -2783,11 +2783,16 @@ removed working programs to fix a problem that a loosening fixes for free.
 
 - **Closed 2026-08-10.** `MAX_C_ARITY = 32`, enforced on **both** backends. The ladder was
   extended from 12 to 32; `--native` is held to the same number.
-- **32 has a reason, not a roundness.** loft has no address-of, so a by-reference scalar
-  reaches C as a 1-element vector costing TWO slots (pointer + count). `dgemm_`'s 13
-  by-reference arguments therefore need 26. 32 clears the worst case this domain actually
-  names, with margin. A ladder cannot be unbounded, so past 32 an ANSI-C shim is the answer
-  (@PLN128 arc D) — the stopping point is chosen, not accidental.
+- **32 has a reason, not a roundness.** A ladder cannot be unbounded, so past 32 an ANSI-C
+  shim is the answer — the stopping point is chosen, not accidental.
+
+  > **The sizing arithmetic here was wrong, and C107 corrected it.** This entry justified 32
+  > by "`dgemm_`'s 13 by-reference arguments cost TWO slots each, so it needs 26". The
+  > premise was that a `vector` always carries a count. It does not, and more to the point a
+  > Fortran routine *takes* no count — measured after this decision closed, `dgemm_` was not
+  > bindable at ANY ceiling. Under C107 it costs **13** slots, not 26. The number 32 does not
+  > change and neither does the decision; the margin is simply far larger than this text
+  > claimed.
 - **The tightening half is real but theoretical.** A binding of 33+ C slots that compiled
   under `--native` is now refused. No real C API approaches that; and pre-freeze is the only
   time this error can be added at all.
@@ -2813,3 +2818,76 @@ removed working programs to fix a problem that a loosening fixes for free.
   at once either way. Float-by-value does NOT reopen it: there is no cheap ladder move there
   (the trampolines are integer-class by construction), and arc B's pointer idiom covers the
   need.
+
+## C107 — the C signature decides whether a `vector` carries a count, not the loft type
+
+**Catalogue:** @F92 (direct C binding)
+
+### Context
+
+A loft `vector` crossed a `#c` boundary as an element pointer **and** a count, always, because
+C carries no length. That is the right shape for a C library written for loft, and it is the
+wrong shape for every numeric library that exists.
+
+Fortran passes every argument by reference, so a BLAS or LAPACK routine takes a list of bare
+pointers and learns the length from a separate `n` — itself a bare pointer. Measured against a
+purpose-built `dgemm_` with the real 13-argument signature, both ways of writing the
+declaration failed:
+
+- the **honest** one, naming the thirteen pointers the header shows, was refused for arity
+  ("the C signature takes 13 parameter(s), the loft declaration needs 26");
+- the one loft **accepted**, with a count after every pointer, delivered each count where the
+  callee expected the next pointer — SIGSEGV on the interpreter, nothing at all under
+  `--native`.
+
+So no real Fortran routine was bindable, at any arity ceiling. This was not visible from the
+fixture, whose C functions were written to loft's shape and therefore held the one axis that
+mattered fixed. C106's sizing arithmetic ("`dgemm_` needs 26 slots") is the same mistake
+written down.
+
+### The rejected options
+
+- **A shim generator (@PLN128 arc D as originally scoped).** Generate an ANSI-C shim per
+  routine that collapses the argument list. It works, but it makes every numeric binding
+  depend on a C toolchain at build time, and it was scoped for "routines that overflow 32
+  slots" when in fact *every* Fortran routine needed one.
+- **C-owned buffers as opaque handles.** Measured working, and it needs no language change at
+  all: allocate on the C side, hold each argument as an `integer`, one slot each. It stays the
+  right answer for a **retaining** API (it also dodges the E6b use-after-free). It is the wrong
+  default for numerics because it copies every array in and out across the boundary — an
+  8 MB round trip per call on a 1000×1000 matrix, which is precisely what calling BLAS was for.
+- **A new loft spelling** for "pass this without a count". Rejected as unnecessary surface: the
+  declaration already carries a full C signature, and that signature is by construction the
+  statement of what the symbol takes.
+
+### Decision
+
+- **Closed 2026-08-10.** A `vector` parameter crosses as a **bare element pointer** where the
+  C signature has no integer for it, and as **pointer-then-count** where it does.
+  `c_signature::plan` derives the assignment once; the declaration check, the interpreter's
+  `dispatch` and the `--native` emission all read it, so a vector cannot carry a count on one
+  backend and not the other.
+- **This is a loosening.** Every declaration that compiled before still compiles and still
+  means exactly what it meant — proven by a byte-identical `loft introspect` diff over the
+  counted paths. What changes is that declarations previously refused now bind.
+- **The assignment is unique when it exists, so inferring it is not a guess.** Take the
+  leftmost parameter where two readings differ: it is a vector, counted in one and bare in the
+  other, so from there one reading runs a slot behind. To end together some later vector must
+  be counted in the reading that is behind — and its *pointer* then lands on the slot the other
+  reading uses for a *count*. A slot cannot be both, so the two cannot both type-check.
+  `every_reachable_shape_has_at_most_one_reading` searches 12k+ shapes rather than resting on
+  the argument.
+- **The matching looks ahead rather than walking greedily.** `f(v: vector, sel: integer,
+  w: vector)` against `(const double*, int64_t, const double*, int64_t)` has the count on `w`,
+  not on `v`, and a left-to-right walk that takes an integer whenever one follows a pointer
+  gets it backwards. The fixture's `lc_split_` is position-weighted so that mistake answers a
+  different number instead of the right one by luck.
+- **What it costs.** A signature that omits a count the C function really takes is now accepted
+  instead of refused, and passes a bare pointer where the callee wants a length. That is the
+  same class as any other wrong signature — `#c`'s standing contract is that the declaration is
+  the sole authority and nothing at runtime can check it (the probe called an arity-1 symbol
+  through an arity-3 trampoline and got the right answer). It is not a new kind of hazard,
+  but it is one fewer check, and it is the price of being able to name the signature the header
+  actually shows.
+- **Revisit when** loft grows an address-of, which would let a by-reference scalar be spelled
+  without a 1-element vector and make the ergonomics question (@PLN128 Q1) moot.

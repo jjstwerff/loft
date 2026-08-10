@@ -86,13 +86,15 @@ impl CTarget {
 /// which COMPATIBILITY.md permits unconditionally, and it leaves the tightening
 /// half theoretical rather than practical.
 ///
-/// **Why 32.** loft has no address-of, so a by-reference scalar reaches C as a
-/// 1-element vector and costs TWO slots (pointer + count). `dgemm_` — the
-/// worst case this plan actually names — takes 13 by-reference arguments, so
-/// it needs 26. 32 clears that with margin while keeping the ladder readable.
-/// LAPACK's largest driver routines still exceed it and remain shim cases,
-/// which is the deliberate split: a ladder cannot be unbounded, and a shim
-/// generator (arc D) is the better answer past this point than more rungs.
+/// **Why 32.** A ladder cannot be unbounded, so the stopping point is chosen
+/// rather than accidental, and past it an ANSI-C shim is the honest answer.
+///
+/// The number was originally sized off "`dgemm_`'s 13 by-reference arguments
+/// cost two slots each, so it needs 26" — which arc D corrected. A `vector`
+/// carries a count only where the C signature has one ([`plan`]), and a Fortran
+/// routine takes none, so `dgemm_` costs **13**. Even LAPACK's 20+-argument
+/// drivers now fit. The margin is far wider than the ceiling was chosen for,
+/// which is a good position to be in and not a reason to move it.
 pub const MAX_C_ARITY: usize = 32;
 
 /// A C type as spelled in a `#c` signature.
@@ -310,6 +312,75 @@ impl CSignature {
     }
 }
 
+/// Name the C positions that disagree with the loft declaration, for the case
+/// where the parameter COUNT is reachable but no reading type-checks.
+///
+/// Deliberately a greedy left-to-right walk rather than a search: once no
+/// reading fits there is no correct alignment to report against, and the walk
+/// that consumes a count wherever C offers one is the alignment the author most
+/// likely intended. It reports every position it can, not the first, because an
+/// author fixing a long signature wants the whole list.
+fn position_mismatches(data: &Data, sig: &CSignature, params: &[Type]) -> Vec<String> {
+    let mut errs = Vec::new();
+    let mut c = 0usize;
+    for (i, p) in params.iter().enumerate() {
+        let spelling = |at: usize| {
+            sig.params.get(at).map_or_else(
+                || "nothing — the signature ends here".to_string(),
+                CType::spelling,
+            )
+        };
+        match shape_of(p) {
+            LoftCShape::Scalar => {
+                if !matches!(
+                    sig.params.get(c),
+                    Some(CType::Int { .. } | CType::Pointer { .. })
+                ) {
+                    errs.push(format!(
+                        "parameter {} is `{}` in loft but `{}` in C — a scalar needs a C integer \
+                         type, or a pointer if it is a handle",
+                        i + 1,
+                        data.type_name_str(p),
+                        spelling(c)
+                    ));
+                }
+                c += 1;
+            }
+            LoftCShape::Pointer => {
+                if !matches!(sig.params.get(c), Some(CType::Pointer { .. })) {
+                    errs.push(format!(
+                        "parameter {} is `{}` in loft but `{}` in C — a text crosses as a \
+                         NUL-terminated `const char*`",
+                        i + 1,
+                        data.type_name_str(p),
+                        spelling(c)
+                    ));
+                }
+                c += 1;
+            }
+            LoftCShape::Vector => {
+                if !matches!(sig.params.get(c), Some(CType::Pointer { .. })) {
+                    errs.push(format!(
+                        "parameter {} is `{}` in loft, so C parameter {} must be the element \
+                         pointer, not `{}`",
+                        i + 1,
+                        data.type_name_str(p),
+                        c + 1,
+                        spelling(c)
+                    ));
+                }
+                c += if matches!(sig.params.get(c + 1), Some(CType::Int { .. })) {
+                    2
+                } else {
+                    1
+                };
+            }
+            LoftCShape::Refused(_) => {}
+        }
+    }
+    errs
+}
+
 /// Resolve one C type name. Unknown spellings are refused rather than guessed:
 /// a `#c` declaration nobody can check at runtime must not contain a type
 /// nobody checked at compile time either.
@@ -441,8 +512,7 @@ fn parse_type(src: &str, target: CTarget) -> Result<CType, String> {
     Ok(t)
 }
 
-/// How many C parameters one loft parameter occupies, and which C types it may
-/// occupy them with.
+/// Which C parameters one loft parameter may occupy, and with which C types.
 ///
 /// This is the mapping table, and it lives here alone so that the arity check,
 /// the interpreter caller and the `--native` emission cannot drift into three
@@ -453,23 +523,170 @@ pub enum LoftCShape {
     Scalar,
     /// One pointer.
     Pointer,
-    /// A pointer plus an integer count — C has no length-carrying array, so a
-    /// loft `vector` is two C parameters. The pointer is valid **for the
-    /// duration of the call only**; the elements live in a loft store that may
-    /// move afterwards.
-    PointerAndCount,
+    /// A loft vector: an element pointer, optionally followed by a count. Which
+    /// of the two it is, per parameter, is the C signature's decision —
+    /// [`plan`]. The pointer is valid **for the duration of the call only**;
+    /// the elements live in a loft store that may move afterwards.
+    Vector,
     /// Cannot cross.
     Refused(&'static str),
 }
 
-impl LoftCShape {
+/// How ONE loft parameter is realised in C parameter slots.
+///
+/// The three callers — the declaration check, the interpreter's `dispatch` and
+/// the `--native` `extern "C"` emission — all read this rather than deciding
+/// for themselves, because a `vector` is the one loft type whose slot count is
+/// not a property of the loft type alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CArg {
+    /// One integer-class slot: an integer, boolean, character or enum — or a
+    /// handle whose value is a pointer.
+    Scalar,
+    /// One pointer: a `text`, as a NUL-terminated `const char *`.
+    TextPointer,
+    /// A vector as an element pointer **and** a count. C carries no length, so
+    /// this is the shape a C API written for loft takes.
+    VectorPtrCount,
+    /// A vector as a **bare** element pointer, with no count.
+    ///
+    /// @PLN128 arc D — the Fortran shape, and the reason this enum exists.
+    /// Every BLAS/LAPACK argument is a bare pointer: the routine learns the
+    /// length from a separate `n` argument, or does not need one because the
+    /// argument is a by-reference scalar. Measured before it was built: bound
+    /// with a count, `dgemm_`-shaped symbols are unreachable — the honest
+    /// signature is refused for arity and the shape loft accepted passed each
+    /// count where the callee expected the next pointer, which SIGSEGV'd.
+    VectorPtr,
+}
+
+impl CArg {
+    /// How many C parameters this realisation occupies.
     #[must_use]
-    pub fn params(self) -> usize {
+    pub fn slots(self) -> usize {
         match self {
-            LoftCShape::Scalar | LoftCShape::Pointer => 1,
-            LoftCShape::PointerAndCount => 2,
-            LoftCShape::Refused(_) => 0,
+            CArg::VectorPtrCount => 2,
+            _ => 1,
         }
+    }
+}
+
+/// Why no reading of the C signature fits the loft declaration.
+///
+/// Split from the message so the caller can fall back to a per-position walk
+/// for `NoMatch`, where naming the first parameter that disagrees is far more
+/// use than saying the whole thing failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlanFailure {
+    /// The C signature has a parameter count no assignment can reach.
+    Arity { min: usize, max: usize },
+    /// The count is reachable, but no assignment type-checks position by
+    /// position.
+    NoMatch,
+}
+
+/// Decide, per loft parameter, which C slots it occupies — the one place that
+/// answer is derived.
+///
+/// A `vector` may cross as a bare pointer or as pointer-then-count, and **the C
+/// signature decides which**, because the signature is the sole authority on
+/// what the symbol takes. Both are real APIs: a C library written for loft
+/// passes the length alongside the pointer, and every Fortran routine passes
+/// each argument as a bare pointer.
+///
+/// **The assignment is unique when it exists**, which is what makes inferring
+/// it safe rather than a guess. Suppose two readings both fit and take the
+/// leftmost parameter where they differ: it is a vector, counted in one and
+/// bare in the other, so from there one reading runs exactly one slot behind
+/// the other. To end together, some later vector must be counted in the reading
+/// that is behind — and that vector's *pointer* then lands on the slot the
+/// other reading uses for its *count*. A slot cannot be both a pointer and an
+/// integer, so the two readings cannot both type-check.
+/// `every_reachable_shape_has_at_most_one_reading` searches the small shapes
+/// exhaustively rather than resting on that argument alone.
+///
+/// # Errors
+///
+/// [`PlanFailure`] when no reading fits; the caller turns it into the message.
+pub fn plan(params: &[Type], sig: &CSignature) -> Result<Vec<CArg>, PlanFailure> {
+    let p = params.len();
+    let a = sig.params.len();
+    let shapes: Vec<LoftCShape> = params.iter().map(shape_of).collect();
+    let (mut min, mut max) = (0usize, 0usize);
+    for s in &shapes {
+        match s {
+            LoftCShape::Vector => {
+                min += 1;
+                max += 2;
+            }
+            LoftCShape::Refused(_) => {}
+            _ => {
+                min += 1;
+                max += 1;
+            }
+        }
+    }
+    if a < min || a > max {
+        return Err(PlanFailure::Arity { min, max });
+    }
+
+    // `ways[i][c]` — how many readings consume loft parameters `i..` against C
+    // parameters `c..` exactly, saturating at 2 so an ambiguous declaration is
+    // distinguishable from a unique one without counting them all.
+    let mut ways = vec![vec![0u8; a + 1]; p + 1];
+    ways[p][a] = 1;
+    for i in (0..p).rev() {
+        for c in (0..=a).rev() {
+            let mut w = 0u16;
+            for opt in options(&shapes[i], sig, c) {
+                w += u16::from(ways[i + 1][c + opt.slots()]);
+            }
+            ways[i][c] = u8::try_from(w.min(2)).unwrap_or(2);
+        }
+    }
+    if ways[0][0] == 0 {
+        return Err(PlanFailure::NoMatch);
+    }
+
+    let mut out = Vec::with_capacity(p);
+    let mut c = 0usize;
+    for (i, shape) in shapes.iter().enumerate() {
+        let Some(pick) = options(shape, sig, c)
+            .into_iter()
+            .find(|o| ways[i + 1][c + o.slots()] > 0)
+        else {
+            return Err(PlanFailure::NoMatch);
+        };
+        c += pick.slots();
+        out.push(pick);
+    }
+    Ok(out)
+}
+
+/// The realisations one loft parameter admits at C position `c`, in the order
+/// the reconstruction prefers them.
+///
+/// `VectorPtrCount` is offered first so that a declaration which fits both ways
+/// — which the uniqueness argument above says cannot happen — would still read
+/// as it did before the bare-pointer form existed.
+fn options(shape: &LoftCShape, sig: &CSignature, c: usize) -> Vec<CArg> {
+    let at = |i: usize| sig.params.get(i);
+    let is_ptr = |i: usize| matches!(at(i), Some(CType::Pointer { .. }));
+    let is_int = |i: usize| matches!(at(i), Some(CType::Int { .. }));
+    match shape {
+        // A C POINTER is allowed here, and deliberately: it is the handle
+        // convention (`PGconn *` held as a loft `integer`), which has to work
+        // in both directions or it is not a convention at all.
+        LoftCShape::Scalar if is_int(c) || is_ptr(c) => vec![CArg::Scalar],
+        LoftCShape::Pointer if is_ptr(c) => vec![CArg::TextPointer],
+        LoftCShape::Vector if is_ptr(c) => {
+            if is_int(c + 1) {
+                vec![CArg::VectorPtrCount, CArg::VectorPtr]
+            } else {
+                vec![CArg::VectorPtr]
+            }
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -481,7 +698,7 @@ pub fn shape_of(t: &Type) -> LoftCShape {
             LoftCShape::Scalar
         }
         Type::Text(_) => LoftCShape::Pointer,
-        Type::Vector(_, _) => LoftCShape::PointerAndCount,
+        Type::Vector(_, _) => LoftCShape::Vector,
         // @PLN24 — `#c` is the declared edge of loft's no-runtime-errors rule,
         // and this is where that becomes a compile error instead of a promise.
         // A nullable value has no C representation: the sentinels are ordinary
@@ -537,87 +754,37 @@ pub fn check(
 ) -> Vec<String> {
     let mut errs = sig.boundary_refusals();
 
-    // Arity, in C parameters rather than loft ones — a `vector` is two.
-    let mut expected = 0usize;
     for (i, p) in params.iter().enumerate() {
-        match shape_of(p) {
-            LoftCShape::Refused(why) => {
-                errs.push(format!("parameter {} cannot be bound: {why}", i + 1));
-            }
-            shape => expected += shape.params(),
+        if let LoftCShape::Refused(why) = shape_of(p) {
+            errs.push(format!("parameter {} cannot be bound: {why}", i + 1));
         }
     }
-    if errs.is_empty() && expected != sig.params.len() {
-        errs.push(format!(
-            "the C signature takes {} parameter(s), the loft declaration needs {expected} \
-             (a `text` is one `const char*`; a `vector` is a pointer AND a count, because C \
-             carries no length)",
-            sig.params.len()
-        ));
-    }
 
-    // Per-parameter class. Only reached when the arity agrees, so the indices
-    // line up and a mismatch names a real pair rather than a shifted one.
+    // Arity and per-parameter class together, because with a vector free to
+    // cross either way they are one question: `plan` succeeds exactly when some
+    // reading of the C signature both fits and type-checks.
     if errs.is_empty() {
-        let mut c = 0usize;
-        for (i, p) in params.iter().enumerate() {
-            match shape_of(p) {
-                LoftCShape::Scalar => {
-                    // A C POINTER is allowed here, and deliberately: it is the
-                    // handle convention (`PGconn *` held as a loft `integer`),
-                    // and it has to work in both directions or it is not a
-                    // convention at all — `lc_open` hands one back, `lc_read`
-                    // takes it. loft has no type that distinguishes a handle
-                    // from an integer, which is exactly why the plan chose
-                    // `integer` for it. The ABI is identical: both are one slot.
-                    if !matches!(sig.params[c], CType::Int { .. } | CType::Pointer { .. }) {
-                        errs.push(format!(
-                            "parameter {} is `{}` in loft but `{}` in C — a scalar needs a C \
-                             integer type, or a pointer if it is a handle",
-                            i + 1,
-                            data.type_name_str(p),
-                            sig.params[c].spelling()
-                        ));
-                    }
-                    c += 1;
-                }
-                LoftCShape::Pointer => {
-                    if !matches!(sig.params[c], CType::Pointer { .. }) {
-                        errs.push(format!(
-                            "parameter {} is `{}` in loft but `{}` in C — a text crosses as a \
-                             NUL-terminated `const char*`",
-                            i + 1,
-                            data.type_name_str(p),
-                            sig.params[c].spelling()
-                        ));
-                    }
-                    c += 1;
-                }
-                LoftCShape::PointerAndCount => {
-                    if !matches!(sig.params[c], CType::Pointer { .. }) {
-                        errs.push(format!(
-                            "parameter {} is `{}` in loft, so C parameter {} must be the element \
-                             pointer, not `{}`",
-                            i + 1,
-                            data.type_name_str(p),
-                            c + 1,
-                            sig.params[c].spelling()
-                        ));
-                    }
-                    if !matches!(sig.params[c + 1], CType::Int { .. }) {
-                        errs.push(format!(
-                            "parameter {} is `{}` in loft, so C parameter {} must be the element \
-                             count, not `{}`",
-                            i + 1,
-                            data.type_name_str(p),
-                            c + 2,
-                            sig.params[c + 1].spelling()
-                        ));
-                    }
-                    c += 2;
-                }
-                LoftCShape::Refused(_) => {}
-            }
+        match plan(params, sig) {
+            Ok(_) => {}
+            Err(PlanFailure::Arity { min, max }) => errs.push(if min == max {
+                format!(
+                    "the C signature takes {} parameter(s), the loft declaration needs {min} \
+                     (a `text` is one `const char*`)",
+                    sig.params.len()
+                )
+            } else {
+                format!(
+                    "the C signature takes {} parameter(s), the loft declaration needs between \
+                     {min} and {max} — a `vector` crosses as a bare element pointer, or as a \
+                     pointer AND a count where the C signature has an integer for it",
+                    sig.params.len()
+                )
+            }),
+            // The arity is reachable but nothing type-checks. Walk the
+            // declaration greedily and name the first C position that
+            // disagrees: which parameter is wrong is far more use than the fact
+            // that the whole reading failed.
+            Err(PlanFailure::NoMatch) => errs.extend(position_mismatches(data, sig, params)),
         }
     }
 
@@ -863,15 +1030,161 @@ mod tests {
         assert!(sig("int(int)").boundary_refusals().is_empty());
     }
 
+    fn vec_of(t: Type) -> Type {
+        Type::Vector(Box::new(t), crate::data::Deps::none())
+    }
+
+    fn text() -> Type {
+        Type::Text(crate::data::Deps::none())
+    }
+
     #[test]
     fn arity_counts_c_parameters_not_loft_ones() {
-        let ints = vec![Type::Vector(Box::new(int()), crate::data::Deps::none())];
+        let ints = vec![vec_of(int())];
         let ret = Type::Integer(crate::data::IntegerSpec::wide());
-        // A vector is a pointer AND a count.
+        // A vector is a pointer AND a count where the signature has one...
         assert!(check(&data(), &sig("long(const long*, long)"), &ints, &ret, false).is_empty());
-        let errs = check(&data(), &sig("long(const long*)"), &ints, &ret, false);
+        assert_eq!(
+            plan(&ints, &sig("long(const long*, long)")).unwrap(),
+            vec![CArg::VectorPtrCount]
+        );
+        // ...and a BARE pointer where it does not (@PLN128 arc D). This is what
+        // makes a Fortran routine bindable: `dgemm_` takes thirteen bare
+        // pointers, so a vector that always cost two slots could not reach it
+        // at any arity ceiling.
+        assert!(check(&data(), &sig("long(const long*)"), &ints, &ret, false).is_empty());
+        assert_eq!(
+            plan(&ints, &sig("long(const long*)")).unwrap(),
+            vec![CArg::VectorPtr]
+        );
+        // Neither reading can reach three.
+        let errs = check(
+            &data(),
+            &sig("long(const long*, long, long)"),
+            &ints,
+            &ret,
+            false,
+        );
         assert_eq!(errs.len(), 1);
-        assert!(errs[0].contains("carries no length"), "{}", errs[0]);
+        assert!(errs[0].contains("between 1 and 2"), "{}", errs[0]);
+    }
+
+    /// The `dgemm_` argument list, which is the case the plan is sized around:
+    /// thirteen by-reference arguments, thirteen C slots.
+    #[test]
+    fn a_fortran_argument_list_costs_one_slot_per_argument() {
+        let params = vec![
+            text(),
+            text(),
+            vec_of(int()),
+            vec_of(int()),
+            vec_of(int()),
+            vec_of(Type::Float),
+            vec_of(Type::Float),
+            vec_of(int()),
+            vec_of(Type::Float),
+            vec_of(int()),
+            vec_of(Type::Float),
+            vec_of(Type::Float),
+            vec_of(int()),
+        ];
+        let s = sig(
+            "void(const char*, const char*, const int64_t*, const int64_t*, const int64_t*, \
+             const double*, const double*, const int64_t*, const double*, const int64_t*, \
+             const double*, double*, const int64_t*)",
+        );
+        let p = plan(&params, &s).expect("a Fortran argument list is bindable");
+        assert_eq!(p.len(), 13);
+        assert_eq!(p[0], CArg::TextPointer);
+        assert!(
+            p[2..].iter().all(|a| *a == CArg::VectorPtr),
+            "every by-reference argument is a BARE pointer: {p:?}"
+        );
+        assert_eq!(
+            p.iter().map(|a| a.slots()).sum::<usize>(),
+            13,
+            "thirteen slots, not the twenty-six a mandatory count would cost"
+        );
+    }
+
+    /// A greedy left-to-right walk gets this wrong: an integer follows the
+    /// first vector's pointer, but it is a real argument and the count that IS
+    /// present belongs to the second vector.
+    #[test]
+    fn the_count_is_assigned_by_looking_ahead_not_greedily() {
+        let params = vec![vec_of(Type::Float), int(), vec_of(Type::Float)];
+        let s = sig("int64_t(const double*, int64_t, const double*, int64_t)");
+        assert_eq!(
+            plan(&params, &s).unwrap(),
+            vec![CArg::VectorPtr, CArg::Scalar, CArg::VectorPtrCount]
+        );
+    }
+
+    /// Inferring the count from the signature is only safe if the reading is
+    /// unique. The argument is written out on `plan`; this searches the small
+    /// shapes exhaustively rather than resting on it.
+    #[test]
+    fn every_reachable_shape_has_at_most_one_reading() {
+        let loft_kinds = [text(), int(), vec_of(Type::Float)];
+        let c_kinds = [
+            CType::Pointer {
+                konst: false,
+                pointee: "void".to_string(),
+            },
+            CType::Int {
+                bits: 64,
+                signed: true,
+            },
+        ];
+        let mut checked = 0usize;
+        // Every loft parameter list up to length 4 against every C parameter
+        // list up to length 6 — 3^4 x 2^6 shapes, which covers each way a
+        // vector's count can float past a scalar.
+        for lp in 1..=4usize {
+            for lmask in 0..3usize.pow(u32::try_from(lp).unwrap()) {
+                let params: Vec<Type> = (0..lp)
+                    .map(|i| loft_kinds[lmask / 3usize.pow(u32::try_from(i).unwrap()) % 3].clone())
+                    .collect();
+                for cp in 1..=6usize {
+                    for cmask in 0..(1usize << cp) {
+                        let sig = CSignature {
+                            symbol: "s".to_string(),
+                            ret: CType::Void,
+                            params: (0..cp).map(|i| c_kinds[(cmask >> i) & 1].clone()).collect(),
+                        };
+                        // Count the readings directly, rather than trusting the
+                        // saturating counter `plan` uses internally.
+                        let n = readings(&params, &sig, 0);
+                        assert!(
+                            n <= 1,
+                            "{n} readings for {params:?} against {:?}",
+                            sig.params
+                        );
+                        assert_eq!(
+                            n == 1,
+                            plan(&params, &sig).is_ok(),
+                            "`plan` must succeed exactly when a reading exists"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 10_000, "the search must be real: {checked}");
+    }
+
+    /// Count every reading, independently of `plan`'s saturating DP — a search
+    /// that shares the code it checks proves nothing.
+    fn readings(params: &[Type], sig: &CSignature, c: usize) -> usize {
+        let Some(first) = params.first() else {
+            return usize::from(c == sig.params.len());
+        };
+        let shape = shape_of(first);
+        let mut n = 0;
+        for opt in options(&shape, sig, c) {
+            n += readings(&params[1..], sig, c + opt.slots());
+        }
+        n
     }
 
     #[test]

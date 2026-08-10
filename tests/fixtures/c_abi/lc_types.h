@@ -167,6 +167,42 @@ LC_API int64_t lc_scalar_ref(const int64_t *p, int64_t n);
 LC_API void lc_shim_scale(double *out, int64_t n_out, const double *v,
                           int64_t n_v);
 
+/* ---- FORTRAN SHAPE (@PLN128 arc D) -------------------------------------
+ * Everything above takes loft's pointer-AND-count shape, because it was
+ * written for loft.  BLAS and LAPACK were not: Fortran passes EVERY argument
+ * by reference, so each one is a BARE pointer and the routine learns the
+ * length from a separate `n` — which is itself a bare pointer.  A fixture
+ * that only ever declares a count cannot tell whether a real numeric library
+ * binds, so these two declare none.
+ *
+ * The trailing underscore is the name a Fortran compiler emits, kept so the
+ * declaration reads exactly like the one an author would write against
+ * `libblas`. */
+
+/* y := alpha*x + beta*y — the daxpy/dscal shape, with both scalars by
+ * reference.  Proves the write-back half survives with no count present. */
+LC_API void lc_daxpby_(const int64_t *n, const double *alpha, const double *x,
+                       const double *beta, double *y);
+
+/* The `dgemm_` argument list at full width: THIRTEEN by-reference arguments,
+ * which is the case @PLN128 is sized around.  Column-major, and only the
+ * 'N'/'N' (no-transpose) case is implemented — the two `char *` arguments are
+ * read, so a binding that misplaces them is caught rather than ignored. */
+LC_API void lc_dgemm_(const char *transa, const char *transb, const int64_t *m,
+                      const int64_t *n, const int64_t *k, const double *alpha,
+                      const double *a, const int64_t *lda, const double *b,
+                      const int64_t *ldb, const double *beta, double *c,
+                      const int64_t *ldc);
+
+/* A signature where counted and bare vectors are MIXED, arranged so that a
+ * left-to-right walk which takes a count whenever an integer follows a pointer
+ * gets it wrong: `sel` is an integer sitting where `v`'s count would go, and
+ * the count that IS present belongs to `w`.  Position-weighted, so a binding
+ * that assigns the count to the wrong vector answers a different number rather
+ * than the right one by luck. */
+LC_API int64_t lc_split_(const double *v, int64_t sel, const double *w,
+                         int64_t nw);
+
 /* ---- BOUNDARY: what a trampoline cannot call --------------------------- */
 
 /* Floating point travels in SSE registers, not the integer registers a

@@ -60,11 +60,41 @@ and here you can read them and see.
 | opaque handle (`PGconn *`) | `void *` as loft `integer` | `lc_open` / `lc_read` / `lc_bump` / `lc_close` | direct |
 | `null` (any type) | whatever the binding sends | `lc_is_null`, `lc_raw_i64`, `lc_raw_bool` | direct |
 | arity 0 / 1 / 6 / 7 / 12 | `int64_t …` | `lc_arity*` | direct |
+| Fortran: 5 **bare** pointers, no counts | `const double *` … | `lc_daxpby_` | direct |
+| Fortran: `dgemm_`'s 13 by-reference arguments | `const char *`, `const int64_t *`, `const double *` | `lc_dgemm_` | direct |
+| counted and bare vectors **mixed** in one signature | `const double *, int64_t, const double *, int64_t` | `lc_split_` | direct |
 | `float` | `double` | `lc_f64` | **shim** `lc_shim_f64` |
 | `single` | `float` | `lc_f32` | **shim** `lc_shim_f32` |
 | struct by value | `struct lc_pair` | `lc_pair_dot` | **shim** `lc_shim_pair_dot` |
 | out-parameter | `int64_t *` | `lc_divmod` | **shim** `lc_shim_div` / `_mod` |
 | varargs | `...` | `lc_var_sum` | **shim** `lc_shim_sum3` |
+
+## The FOREIGN half — why the last three rows are different (@PLN128 arc D)
+
+Everything above them was written **for loft**: each function takes a `vector` as
+a pointer *and* a count, because that is the shape loft used to insist on. That
+made the fixture agree with loft about the one thing it should have been
+questioning, and a whole class of libraries stayed invisible behind it — the
+matrix could report "14 argument slots ✅" while no real BLAS routine was
+bindable at all.
+
+`lc_daxpby_`, `lc_dgemm_` and `lc_split_` are written to a **foreign**
+convention instead. Fortran passes every argument by reference, so each one is a
+bare pointer and the routine learns its length from a separate `n` — itself a
+bare pointer. Measured against them before the fix: the honest declaration was
+refused for arity, and the declaration loft accepted delivered each count where
+the callee expected the next pointer, which SIGSEGV'd the interpreter and
+produced nothing under `--native`.
+
+`lc_split_` is the composition cell: `sel` is an ordinary integer sitting where
+the first vector's count would go, and the count that IS present belongs to the
+second vector. A left-to-right walk that takes an integer whenever one follows a
+pointer assigns it to the wrong vector — and because the function is
+position-weighted, that answers a different number instead of the right one by
+luck.
+
+**A fixture written to the shape under test cannot falsify it.** That is the
+lesson these three rows exist to keep.
 
 Values are chosen so a wrong answer is *reachable*, not merely unlikely:
 

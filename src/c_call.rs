@@ -618,6 +618,11 @@ pub struct CBinding {
     /// than re-derived, because the two together are the mapping and either
     /// alone is half of it.
     pub loft_params: Vec<crate::data::Type>,
+    /// How each of those parameters is realised in C slots, from
+    /// [`crate::c_signature::plan`] — the one place that answer is derived, so
+    /// this caller and the `--native` emission cannot disagree about whether a
+    /// vector carries a count (@PLN128 arc D).
+    pub arg_plan: Vec<crate::c_signature::CArg>,
     pub void_return: bool,
     /// A `char *` return bound to loft `text`, which comes back through the
     /// destination record rather than the value stack (@PLN24 arc D).
@@ -669,9 +674,16 @@ pub fn register(state: &mut crate::state::State, data: &crate::data::Data) {
             .filter(|a| !a.name.starts_with("__") && !a.name.starts_with('#'))
             .map(|a| a.typedef.clone())
             .collect();
+        // A declaration whose shapes do not fit was already reported at the
+        // declaration; skipping it here leaves the call site to report the
+        // missing binding rather than marshalling against a guess.
+        let Ok(arg_plan) = crate::c_signature::plan(&loft_params, &sig) else {
+            continue;
+        };
         let binding = CBinding {
             sig,
             loft_params,
+            arg_plan,
             void_return: matches!(def.returned(), crate::data::Type::Void),
             text_return: crate::state::codegen::is_c_text_call(def),
         };
@@ -692,7 +704,7 @@ pub fn register(state: &mut crate::state::State, data: &crate::data::Data) {
 /// the slots are built backwards and reversed — the same shape every native
 /// handler in `native.rs` uses.
 fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef) {
-    use crate::data::Type;
+    use crate::c_signature::CArg;
     use crate::keys::{DbRef, Str};
 
     let idx = crate::extensions::current_lib_idx();
@@ -711,9 +723,9 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
     // first NUL, so the copy is what makes the two the same thing.
     let mut owned: Vec<Vec<u8>> = Vec::new();
     let mut slots: Vec<u64> = Vec::with_capacity(binding.sig.params.len());
-    for tp in binding.loft_params.iter().rev() {
-        match tp.base() {
-            Type::Text(_) => {
+    for arg in binding.arg_plan.iter().rev() {
+        match arg {
+            CArg::TextPointer => {
                 let s = *stores.get::<Str>(stack);
                 let bytes = s.str().as_bytes();
                 let mut b = Vec::with_capacity(bytes.len() + 1);
@@ -722,7 +734,7 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
                 slots.push(b.as_ptr() as u64);
                 owned.push(b);
             }
-            Type::Vector(_, _) => {
+            CArg::VectorPtr | CArg::VectorPtrCount => {
                 // A loft vector is an OUTER record whose word at (rec, pos)
                 // names the data record; the elements start at byte 8 and the
                 // count sits at byte 4. Pushed as count-then-pointer because
@@ -744,10 +756,18 @@ fn dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef
                     let p = std::ptr::from_ref(st.addr::<u8>(data_rec, 8)) as u64;
                     (p, count)
                 };
-                slots.push(count);
+                // @PLN128 arc D — the count goes only where the C signature has
+                // a parameter for it. A Fortran routine takes each argument as
+                // a bare pointer, so pushing a count there would land it where
+                // the callee expects the NEXT pointer.
+                if *arg == CArg::VectorPtrCount {
+                    slots.push(count);
+                }
                 slots.push(ptr);
             }
-            _ => slots.push(*stores.get::<i64>(stack) as u64),
+            CArg::Scalar => {
+                slots.push(*stores.get::<i64>(stack) as u64);
+            }
         }
     }
     slots.reverse();

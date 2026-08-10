@@ -594,6 +594,8 @@ itself:
 | **C writes back through `double*`** (the `daxpy` shape) | ✅ | ✅ |
 | 1-element `vector<integer>` as a Fortran scalar `const int64_t*` | ✅ | ✅ |
 | a scalar `double` in and out through a pointer shim | ✅ | ✅ |
+| **a full Fortran argument list — `dgemm_`'s thirteen bare pointers** | ✅ | ✅ |
+| counted and bare vectors **mixed in one signature** | ✅ | ✅ |
 | 14 C argument slots | ✅ | ✅ |
 | 33 C argument slots (past `MAX_C_ARITY`) | ❌ refused | ❌ refused |
 | a `double` **by value** | ❌ refused | ❌ refused |
@@ -620,16 +622,50 @@ There is deliberately no float→bits builtin, so a shim taking "the bit pattern
 an integer" is **not** a route a real program can take: `x as integer` is a value
 cast (`2.5` → `2`).  Pointers are the whole answer.
 
-**A Fortran argument list costs two C slots per scalar.**  loft has no address-of,
-so each by-reference scalar becomes a 1-element vector — pointer *and* count.
-`dgemm_` takes 13 by-reference arguments, so it needs **26** slots, not 13: that
-is what the 32-slot ceiling above was sized to clear.  Fortran BLAS level-3
-therefore binds without an argument-collapsing shim, but count in slots rather
-than in arguments before assuming any given routine does — LAPACK's larger
-driver routines (20+ arguments) still exceed 32 and need one.
-Pointer-and-integer APIs (HDF5, GSL) spend one slot per scalar and are nowhere
-near the ceiling — though see the retention hazard below before reaching for one
-that keeps your buffers.
+##### A `vector` carries a count only where the C signature has one
+
+C carries no length, so a `vector` normally crosses as **pointer then count** —
+and a C library written for loft takes exactly that. Fortran does not. BLAS and
+LAPACK pass **every** argument by reference, so each one is a bare pointer and
+the routine learns the length from a separate `n`, itself a bare pointer.
+
+**Both are supported, and the C signature is what chooses.** Write the signature
+the header shows you and the count appears exactly where the header puts one:
+
+```loft
+// A C library written for loft: the count is in the signature, so loft sends it.
+pub fn lc_i64_sum(v: vector<integer>) -> integer;
+#c "lc_i64_sum" "int64_t(const int64_t*, int64_t)"
+
+// Fortran: thirteen by-reference arguments, thirteen bare pointers, no counts.
+pub fn dgemm(transa: text, transb: text, m: vector<integer>, n: vector<integer>,
+             k: vector<integer>, alpha: vector<float>, a: vector<float>,
+             lda: vector<integer>, b: vector<float>, ldb: vector<integer>,
+             beta: vector<float>, c: vector<float>, ldc: vector<integer>);
+#c "dgemm_" "void(const char*, const char*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int64_t*, const double*, const int64_t*, const double*, double*, const int64_t*)"
+```
+
+So **a Fortran routine costs one slot per argument**: `dgemm_` needs 13, not 26,
+and even LAPACK's largest drivers (20+ arguments) fit under the 32-slot ceiling
+without an argument-collapsing shim. Pointer-and-integer APIs (HDF5, GSL) spend
+one slot per scalar and are nowhere near it either — though see the retention
+hazard below before reaching for one that keeps your buffers.
+
+A **scalar** by reference is a 1-element vector, because loft has no address-of:
+`m: vector<integer> = [2]` is how you pass Fortran's `const int64_t *m`. A
+`character*1` argument is `text` — `"N"` crosses as a NUL-terminated `const
+char *`, which is what a C caller passes.
+
+Two things to know before binding real Fortran:
+
+- **Reading of the signature is unambiguous, but only the signature is checked.**
+  Omit a count the C function really takes and the declaration is now *accepted*,
+  and passes a bare pointer where the callee wants a length. Nothing at runtime
+  can catch that — the same standing rule as any other wrong `#c` signature.
+- **Hidden string lengths.** A Fortran compiler appends a hidden length argument
+  per `character` argument. Reference BLAS and LAPACK do not read them for the
+  length-1 flags, which is why C callers pass `"N"` and nothing else, but a
+  routine that takes a real Fortran string needs a shim that supplies them.
 
 ##### The retention hazard — a pointer C keeps is a use-after-free
 

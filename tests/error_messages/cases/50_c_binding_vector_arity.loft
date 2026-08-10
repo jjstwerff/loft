@@ -1,0 +1,12 @@
+// @PLN128 arc D — a `vector` may cross as a bare element pointer or as
+// pointer-then-count, so its arity is a RANGE and the refusal has to say so.
+// Case 43 is the sibling with no vector in it, where the range collapses to one
+// number and the message says that instead.
+//
+// Two vectors span 2..=4 C parameters; five is reachable by neither reading.
+pub fn scale(a: vector<float>, b: vector<float>) -> integer;
+#c "lc_scale" "int64_t(const double*, int64_t, const double*, int64_t, int64_t)"
+
+fn main() {
+  println("declared, never called");
+}

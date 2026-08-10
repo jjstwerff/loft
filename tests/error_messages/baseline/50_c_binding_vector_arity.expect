@@ -1,0 +1,10 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: #c "lc_scale": the C signature takes 5 parameter(s), the loft declaration needs between 2 and 4 — a `vector` crosses as a bare element pointer, or as a pointer AND a count where the C signature has an integer for it
+  --> <cases>/50_c_binding_vector_arity.loft:8:14
+  |
+8 | #c "lc_scale" "int64_t(const double*, int64_t, const double*, int64_t, int64_t)"
+  |              ^
+
+error: aborting due to 1 previous error

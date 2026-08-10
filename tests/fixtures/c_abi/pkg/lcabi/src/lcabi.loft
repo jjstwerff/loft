@@ -60,3 +60,33 @@ pub fn lc_scalar_ref(p: vector<integer>) -> integer;
 // by pointer, needing no float→bits conversion (loft has none).
 pub fn lc_shim_scale(out: vector<float>, v: vector<float>);
 #c "lc_shim_scale" "void(double*, int64_t, const double*, int64_t)"
+
+// @PLN128 arc D — the FORTRAN shape: every argument a bare pointer, no counts
+// anywhere.  Nothing above this line could express it, which is why no real
+// BLAS or LAPACK routine was bindable: the signature a `nm` listing shows was
+// refused for arity, and the shape loft used to insist on delivered each count
+// where the callee expected the next pointer.
+//
+// The count is not a property of `vector` — it is the C signature's decision,
+// so these declarations are ordinary vectors and read the same as the counted
+// ones above.
+pub fn lc_daxpby(n: vector<integer>, alpha: vector<float>, x: vector<float>,
+                 beta: vector<float>, y: vector<float>);
+#c "lc_daxpby_" "void(const int64_t*, const double*, const double*, const double*, double*)"
+
+// `dgemm_` at full width: THIRTEEN by-reference arguments and thirteen C
+// slots, the case @PLN128 is sized around.  The two `char *` arguments are
+// `text`, which crosses as a NUL-terminated `const char *` — exactly what a C
+// caller passes for a Fortran `character*1`.
+pub fn lc_dgemm(transa: text, transb: text, m: vector<integer>, n: vector<integer>,
+                k: vector<integer>, alpha: vector<float>, a: vector<float>,
+                lda: vector<integer>, b: vector<float>, ldb: vector<integer>,
+                beta: vector<float>, c: vector<float>, ldc: vector<integer>);
+#c "lc_dgemm_" "void(const char*, const char*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int64_t*, const double*, const int64_t*, const double*, double*, const int64_t*)"
+
+// Counted and bare MIXED in one signature, arranged so a left-to-right walk
+// that grabs a count whenever an integer follows a pointer assigns it to the
+// wrong vector: `sel` sits where `v`'s count would go, and the count that is
+// really there belongs to `w`.
+pub fn lc_split(v: vector<float>, sel: integer, w: vector<float>) -> integer;
+#c "lc_split_" "int64_t(const double*, int64_t, const double*, int64_t)"

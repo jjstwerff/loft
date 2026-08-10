@@ -3,18 +3,29 @@
 
 ## Status
 
-**Arcs A, B and C DONE; D and E open.**  A purpose-built C library
+**Arcs A, B, C and D DONE; E blocked on this box.**  A purpose-built C library
 reproducing each calling convention the numeric stack uses was bound through `#c` and run on
-both backends; the matrix below is that measurement, not a reading of the ABI.  Most of the
-boundary already works — including the one property nobody had tested — and the blockers are
-not the ones previously assumed.
+both backends; the matrix below is that measurement, not a reading of the ABI.
 
-**The matrix was re-measured before any of it was written down, and one cell had to be
-corrected: E6b.**  The retained-buffer case does not pass — it is a silent use-after-free on
-both backends, and the earlier ✅ came from varying the wrong axis (allocation count instead
-of whether the vector is used again).  That correction is the plan's most consequential
-finding, because it removes FFTW as the cheap first consumer.  The working cells are now
-guarantee probes in `tests/native.rs`.
+**Arc D did not need a shim generator — it needed the boundary corrected.**  The fixture's C
+functions were all written to loft's pointer-and-count shape, which held fixed the one axis
+that decides whether a numeric library binds at all.  Measured against a *genuine* `dgemm_`
+signature (thirteen bare pointers, no counts), **no Fortran routine was bindable at any arity
+ceiling**: the honest declaration was refused for arity, and the shape loft accepted delivered
+each count where the callee expected the next pointer — SIGSEGV on the interpreter, nothing
+under `--native`.  The fix is that **the C signature decides whether a `vector` carries a
+count** (C107).  `dgemm_` now costs 13 slots rather than the 26 this plan asserted, binds
+directly, and copies nothing.
+
+**Two earlier claims were wrong and are corrected below**: "`dgemm_` binds without an
+argument-collapsing shim" (it did not bind at all), and "a Fortran argument list costs two C
+slots per scalar" (it costs one).  Both came from measuring a fixture built to loft's own
+shape — the benchmark held the axis fixed for free.
+
+**E6b remains the plan's most consequential finding.**  The retained-buffer case is a silent
+use-after-free on both backends; the earlier ✅ came from varying allocation count instead of
+whether the vector is used again.  It removes FFTW as the cheap first consumer.  The working
+cells are guarantee probes in `tests/native.rs`.
 
 **Issue:** [loft-lang/plans#128](https://github.com/loft-lang/plans/issues/128).
 
@@ -25,8 +36,9 @@ idiom a numeric author would accept.
 
 ## Effort + design
 
-- **Effort:** M (arc A is XS; arc D is the M)
-- **Design:** ✓ (the facts are settled and the contract decision is made — arc C)
+- **Effort:** M (arc A is XS; arc D was the M, and turned out to be S once measured — a
+  boundary correction rather than the generator it was scoped as)
+- **Design:** ✓ (C106 fixes the arity contract, C107 the count contract)
 - **Last touched:** 2026-08-10
 
 ## Composition matrix — Stage A (measured)
@@ -47,6 +59,14 @@ matters is that each is an oracle, not a recording.)
 | E7 | **14 C argument slots** | ✅ 1015 | ✅ 1015 |
 | E7b | **33 C argument slots** (past the new ceiling) | ❌ refused | ❌ refused |
 | E3 | a `double` **by value** | ❌ refused | ❌ refused |
+| **F1** | a **genuine Fortran routine** — 5 bare pointers, no counts (`daxpby_`) | ✅ 1003 2004.5 4008 | ✅ same |
+| **F2** | **`dgemm_` at full width** — 13 by-reference arguments, 13 slots | ✅ 1046 2068 3062 4092 | ✅ same |
+| **F3** | the two `char *` flags land where the callee reads them | ✅ −1 on `'T'` | ✅ same |
+| **F4** | counted and bare vectors **mixed in one signature** | ✅ 228000 | ✅ same |
+
+The F-rows are arc D, and they were all ❌ before it: F1/F2 refused for arity when declared
+honestly, and SIGSEGV when declared the way loft insisted on.  Expected values come from
+`lc_selftest.c`, which computes them in C.
 
 **E2 is the headline.**  Every BLAS and LAPACK routine returns its result by writing through
 a caller-supplied pointer.  Nobody had checked whether loft sees those writes.  It does, on
@@ -54,16 +74,19 @@ both backends — which is what makes binding the numeric stack worth doing at a
 
 ## Three corrections to the earlier framing
 
-1. **"Fortran-ABI BLAS binds today, unmodified" was false as stated — and arc C changed the
-   arithmetic.**  The reasoning —
+1. **"Fortran-ABI BLAS binds today, unmodified" was false as stated — and the arithmetic
+   this plan replaced it with was false too.**  The reasoning —
    Fortran passes everything by reference, so no float travels by value — is sound, and
-   E1/E2/E4 confirm the float half.  But `dgemm_` takes **13** by-reference arguments, and
-   loft has no address-of for a scalar: each scalar must be wrapped in a 1-element vector,
-   which costs **two** C slots (pointer + count), measured.  So `dgemm_` needs roughly 26
-   slots against an interpreter ceiling of 12, so a shim was mandatory.  Arc C raised the
-   ceiling to 32 specifically to clear this case: `dgemm_` now binds without an
-   argument-collapsing shim.  LAPACK's larger drivers (20+ arguments, 40+ slots) still need
-   one, so arc D survives — for the routines that genuinely overflow, not for BLAS-3.
+   E1/E2/E4 confirm the float half.  This plan then asserted that each by-reference scalar
+   costs **two** C slots, so `dgemm_` needs 26, and that arc C's ceiling of 32 cleared it.
+
+   **Both halves of that were wrong, and arc D is the correction.**  A count is not
+   something loft adds to a Fortran call — it is something the Fortran routine does not
+   *take*.  Declared honestly, `dgemm_` was refused ("takes 13 parameter(s), the loft
+   declaration needs 26"); declared with counts, the counts landed where the callee expected
+   pointers and it crashed.  The ceiling was never the binding constraint.  Since C107 a
+   `vector` carries a count only where the C signature has one, so `dgemm_` costs **13**
+   slots, binds directly, and LAPACK's 20+-argument drivers fit under 32 as well.
 
 2. **The arity ceiling was interpreter-only — FIXED in arc C.**  `--native` called a genuine
    14-slot C function and returned the correct hand-computed value while the interpreter
@@ -84,10 +107,10 @@ both backends — which is what makes binding the numeric stack worth doing at a
 - **FFTW — NOT yet**, despite the pointer+integer API.  Its plan/execute split retains the
   caller's buffers between two calls, which is exactly the E6b use-after-free.  It needs
   either C-owned buffers held as opaque handles, or the retention declaration Q5 describes.
-- **Fortran BLAS level-3** — bindable DIRECTLY since arc C raised the ceiling to 32:
-  `dgemm_`'s 13 by-reference arguments cost 26 slots and now fit.  The numeric core (arrays
-  in, results written back) is proven.  LAPACK's larger drivers still overflow 32 and need
-  the collapsing shim.
+- **Fortran BLAS and LAPACK** — bindable DIRECTLY since arc D.  One slot per by-reference
+  argument, so `dgemm_` costs 13 and even the 20+-argument drivers fit under 32.  The
+  numeric core (arrays in, results written back, nothing copied at the boundary) is proven
+  against a C oracle on both backends.
 - **CBLAS** — still blocked: `const double alpha` by value trips E3.
 
 ## Sub-arcs
@@ -97,8 +120,8 @@ both backends — which is what makes binding the numeric stack worth doing at a
 | **A** — write the matrix + the scalar-by-1-element-vector idiom into `PACKAGES.md` | this doc | **DONE** |
 | **B** — fix the recommendation the refusal prints | this doc, Q3 | **DONE** |
 | **C** — decide the backend capability contract | this doc, Q2 | **DONE** |
-| **D** — a shim generator for Fortran argument lists | this doc | Open |
-| **E** — one numeric library bound end-to-end and dogfooded | this doc | Open |
+| **D** — make Fortran argument lists bindable | this doc | **DONE** |
+| **E** — one numeric library bound end-to-end and dogfooded | this doc | Blocked — no target installed |
 
 **A (done).** `PACKAGES.md § Numeric libraries` carries the matrix, the
 scalar-by-1-element-vector idiom, the two-slots-per-Fortran-scalar arithmetic that sizes the
@@ -121,16 +144,50 @@ which touches refusals beyond floats; it should not ride along on a text change.
 **C (done).** See the decision under Q2 below.  One contract at `MAX_C_ARITY = 32`, enforced
 on both backends — at the declaration in owned code, and at every call site.
 
-**D and E remain open, for their own reasons now that C is decided.** D shrank: BLAS-3 no
-longer needs it, so it is only for the routines that genuinely overflow 32 slots.  E has no
-target on the development box — no GSL, HDF5, BLAS or LAPACK is installed, and no dev
-headers — and FFTW, the previously-nominated cheapest target, is ruled out by E6b.
+**D (done) — and it was not the arc that was written down here.**  The scoped work was a
+shim generator for the routines that overflow 32 slots.  Measuring first showed the premise
+was wrong twice: *every* Fortran routine needed help, not just the large ones, and the help
+needed was not an argument-collapsing shim.
+
+The fixture is what hid it.  `lc_types.c` was written to loft's pointer-and-count shape, so
+every arity cell in the matrix above ran against a C library that took counts — the axis
+that decides whether a numeric library binds was held fixed for free.  A purpose-built
+`dgemm_` with the real signature answered in one run: honest declaration refused for arity,
+loft-shaped declaration SIGSEGV.
+
+Three routes were measured before choosing:
+
+| route | works | why not the default |
+|---|---|---|
+| C-owned buffers as opaque `integer` handles | ✅ both backends, oracle-matched | copies every array in and out — 8 MB per call on a 1000×1000 matrix, which is what calling BLAS was for.  Stays the right answer for a **retaining** API (it also dodges E6b) |
+| a generated ANSI-C shim per routine | (not built) | puts a C toolchain in every numeric package's build, to work around a boundary that can just be correct |
+| **the signature decides the count** | ✅ chosen | zero-copy, no new surface, no toolchain; a loosening, so nothing that compiled stopped |
+
+`c_signature::plan` is the one home for the assignment; the declaration check, the
+interpreter's `dispatch` and the `--native` emission all read it.  The counted paths are
+byte-identical before and after (`loft introspect` diff), and the guard was verified by
+reintroducing the bug on each backend separately — the interpreter SIGSEGVs and `--native`
+fails to compile, and the test catches both.
+
+**E is blocked on this box, not on loft.**  No GSL, HDF5, BLAS or LAPACK is installed, no dev
+headers, and no passwordless `sudo` to add one; FFTW, the previously-nominated cheapest
+target, is ruled out by E6b regardless.  What arc E needs now is a machine with
+`libopenblas-dev` or `libgsl-dev` — the language side is proven against a C oracle, so the
+remaining work is dogfooding a real library rather than fixing the boundary.
 
 **Probes graduated.** The working cells are now
 `native::numeric_array_shapes_cross_identically_on_both_backends`, against expected values
 `lc_selftest.c` computes in C — agreement between two loft backends is not evidence that
-either matches C.  E6b is deliberately NOT a test: asserting the current output would lock
-in the use-after-free.
+either matches C.  The fixture gained `lc_daxpby_`, `lc_dgemm_` and `lc_split_`, which are
+the first functions in it written to a **foreign** convention rather than to loft's; that is
+the point of them, and the reason the earlier matrix could not see arc D.  E6b is
+deliberately NOT a test: asserting the current output would lock in the use-after-free.
+
+**One defect the fixture surfaced, fixed here.**  `advice[too-many-parameters]` fired on
+every Fortran binding (`dgemm_` takes 13) and both cures it names are impossible at a `#c`
+boundary: a struct cannot cross at all, and a default does not change the arity the C
+signature declares.  It no longer fires on a `#c` declaration — the parameter list is the C
+function's, not the author's.
 
 ## Phase ordering
 
@@ -141,16 +198,24 @@ in the use-after-free.
    change the message to name the idiom that works.  Depends on nothing.
 3. **C** — the contract decision.  **D** and any ceiling work follow from it, so it gates
    them.
-4. **D** — the shim generator, once C says what it is generating for.
-5. **E** — **NOT FFTW** (its plan/execute split hits the E6b use-after-free).  HDF5 or GSL
-   is the cheapest honest target now; BLAS level-3 is the one that proves D.
+4. **D** — done, and not as a shim generator: the boundary was corrected instead.  The
+   ordering assumption that C gated D held, but for the opposite reason — C's arithmetic was
+   what pointed at the wrong fix.
+5. **E** — **NOT FFTW** (its plan/execute split hits the E6b use-after-free).  BLAS or
+   LAPACK is now the cheapest honest target, since arc D binds them with no shim; GSL and
+   HDF5 remain fine.  Needs a machine with the dev package installed.
 
 ## Open design questions
 
-1. **Scalar-by-pointer ergonomics.**  Wrapping every scalar in a 1-element vector works, but
-   reads badly and costs a heap allocation per call.  A `&float` argument spelling, a
-   documented `scalar()` helper, or docs alone — decide before writing the first real
-   binding.
+1. **Scalar-by-pointer ergonomics — still open, and now the only ergonomic gap left.**
+   Wrapping every scalar in a 1-element vector works and costs one slot since arc D, but it
+   still reads badly and still costs a heap allocation per call.  A `&float` argument
+   spelling, a documented `scalar()` helper, or docs alone.
+
+   **One route is closed:** letting a plain `integer`/`float` bind to a C pointer type and
+   meaning "pass its address".  `integer` against a C pointer already means the HANDLE
+   convention (pass the value), which `lc_open`/`lc_read` depend on in both directions, so
+   the same spelling would mean two things and no runtime signal separates them.
 2. **The backend capability split.**  Does `#c` promise one capability on both backends, or
    may `--native` bind more?  loft's compatibility doctrine argues for one contract; the
    measured facts argue that uniformity costs `--native` capability it already has.  This is
@@ -235,10 +300,20 @@ in the use-after-free.
 
 ## Method note
 
-The probes are throwaway (`sp.c` plus five `.loft` drivers).  Any that survive into a real
-binding should graduate to `tests/scripts/` as guarantee probes — the **E2 write-back cell
-especially**, since it is the property the whole plan rests on and nothing in the suite
-currently pins it.
+Every cell above is now a guarantee probe in
+`native::numeric_array_shapes_cross_identically_on_both_backends`, against values
+`lc_selftest.c` computes in C.  The E2 write-back cell especially: the whole plan rests on
+it, and nothing pinned it before.
+
+**The lesson arc D cost, worth more than the arc.**  The fixture was written to loft's own
+pointer-and-count shape, so the composition matrix could report "14 argument slots ✅" while
+no real BLAS routine was bindable at all.  Every axis in the matrix was varied *inside* a
+convention that was itself the thing under test — the axis held fixed for free.  What broke
+it open was writing ONE C function to a foreign convention and pointing loft at it.
+
+So: **when a matrix measures a boundary, at least one cell must be written by the other
+side of it.** The fixture now has three (`lc_daxpby_`, `lc_dgemm_`, `lc_split_`), and its
+README says why they are different.
 
 ## Cross-arc dependencies
 
@@ -249,9 +324,14 @@ currently pins it.
 ## See also
 
 - [PACKAGES.md § Direct C binding — `#c`](../PACKAGES.md) — the binding contract; arc A's
-  home.
-- [`src/c_signature.rs`](../../../src/c_signature.rs) — `boundary_refusals`, the float refusal
-  and its message.
-- [`src/c_call.rs`](../../../src/c_call.rs) — the `0..=12` trampoline ladder.
-- [`tests/fixtures/c_abi/`](../../../tests/fixtures/c_abi/) — the existing `#c` fixture and
-  the `cc`-only build the probes were modelled on.
+  home, and where the bare-pointer idiom is written for an author.
+- [`src/c_signature.rs`](../../../src/c_signature.rs) — `plan` (the slot assignment, arc D),
+  `boundary_refusals` (the float refusal, arc B), `MAX_C_ARITY` (arc C).
+- [`src/c_call.rs`](../../../src/c_call.rs) — the `0..=32` trampoline ladder and the
+  interpreter's marshalling.
+- [`src/generation/mod.rs`](../../../src/generation/mod.rs) — `output_c_direct_call`, the
+  `--native` half of the same mapping.
+- [`tests/fixtures/c_abi/`](../../../tests/fixtures/c_abi/) — the `#c` fixture and its
+  `cc`-only build.  Its README § *The FOREIGN half* is where arc D's lesson lives.
+- [DESIGN_DECISIONS.md](../DESIGN_DECISIONS.md) § C106 (one arity ceiling), § C107 (the
+  signature decides the count).

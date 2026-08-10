@@ -178,6 +178,58 @@ int main(void) {
     eq("pointer shim scales a scalar double", (int64_t)(out[0] * 1000.0), 5000);
   }
 
+  /* @PLN128 arc D — the Fortran shape: every argument a bare pointer.  These
+   * are the expected values the loft matrix is checked against, computed here
+   * in C so a disagreement is the binding's. */
+  {
+    int64_t n = 3;
+    double alpha = 2.0, beta = 10.0;
+    double x[3];
+    double y[3];
+    x[0] = 1.5; x[1] = 2.25; x[2] = 4.0;
+    y[0] = 100.0; y[1] = 200.0; y[2] = 400.0;
+    lc_daxpby_(&n, &alpha, x, &beta, y);
+    /* hand-computed: 2*1.5 + 10*100 = 1003 ; 2*2.25 + 10*200 = 2004.5 ;
+     *                2*4.0 + 10*400 = 4008 */
+    eq("daxpby y0", (int64_t)(y[0] * 1000.0), 1003000);
+    eq("daxpby y1", (int64_t)(y[1] * 1000.0), 2004500);
+    eq("daxpby y2", (int64_t)(y[2] * 1000.0), 4008000);
+  }
+  {
+    /* v[0]*100 + sel*10 + (w[0]*1 + w[1]*2), scaled by 1000.
+     * 1.5*100 + 7*10 + (2*1 + 3*2) = 150 + 70 + 8 = 228 */
+    double v[1];
+    double w[2];
+    v[0] = 1.5;
+    w[0] = 2.0; w[1] = 3.0;
+    eq("split: one bare vector, one counted", lc_split_(v, 7, w, 2), 228000);
+  }
+  {
+    /* Column-major 2x2:  A = [[1,3],[2,4]]   B = [[5,7],[6,8]]
+     *                    A*B = [[23,31],[34,46]]
+     * with alpha=2, beta=10 and C = [[100,300],[200,400]]:
+     *   2*A*B + 10*C = [[1046,3062],[2068,4092]]
+     * stored column-major as 1046, 2068, 3062, 4092. */
+    char tn = 'N', tt = 'T';
+    int64_t m = 2, n = 2, k = 2, lda = 2, ldb = 2, ldc = 2;
+    double alpha = 2.0, beta = 10.0;
+    double a[4];
+    double b[4];
+    double c[4];
+    a[0] = 1.0; a[1] = 2.0; a[2] = 3.0; a[3] = 4.0;
+    b[0] = 5.0; b[1] = 6.0; b[2] = 7.0; b[3] = 8.0;
+    c[0] = 100.0; c[1] = 200.0; c[2] = 300.0; c[3] = 400.0;
+    lc_dgemm_(&tn, &tn, &m, &n, &k, &alpha, a, &lda, b, &ldb, &beta, c, &ldc);
+    eq("dgemm c0", (int64_t)c[0], 1046);
+    eq("dgemm c1", (int64_t)c[1], 2068);
+    eq("dgemm c2", (int64_t)c[2], 3062);
+    eq("dgemm c3", (int64_t)c[3], 4092);
+    /* A misplaced `char *` must be VISIBLE, not silently ignored. */
+    c[0] = 100.0; c[1] = 200.0; c[2] = 300.0; c[3] = 400.0;
+    lc_dgemm_(&tt, &tn, &m, &n, &k, &alpha, a, &lda, b, &ldb, &beta, c, &ldc);
+    eq("dgemm reports an unsupported transpose", (int64_t)c[0], -1);
+  }
+
   if (failures != 0) {
     printf("%d failure(s)\n", failures);
     return 1;

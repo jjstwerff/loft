@@ -1480,8 +1480,9 @@ fn numeric_array_shapes_cross_identically_on_both_backends() -> std::io::Result<
          \x20 x: vector<float> = [10.0, 20.0, 30.0];\n\
          \x20 lc_daxpy(y, x, 1200);\n\
          \x20 println(\"daxpy {y[0]*1000.0} {y[1]*1000.0} {y[2]*1000.0}\");\n\
-         // A Fortran scalar-by-reference: no address-of in loft, so a scalar is a\n\
-         // 1-element vector and costs TWO C slots.\n\
+         // A Fortran scalar-by-reference against a C function that DOES take a\n\
+         // count, so this one spends two slots. The Fortran cells below spend\n\
+         // one, and that is the signature's decision rather than the type's.\n\
          \x20 s: vector<integer> = [6];\n\
          \x20 println(\"scalar {lc_scalar_ref(s)}\");\n\
          // The idiom the float refusal prescribes, on a COMPUTED double rather\n\
@@ -1490,6 +1491,43 @@ fn numeric_array_shapes_cross_identically_on_both_backends() -> std::io::Result<
          \x20 out: vector<float> = [0.0];\n\
          \x20 lc_shim_scale(out, v);\n\
          \x20 println(\"shim {out[0]*1000.0}\");\n\
+         \x20 fortran();\n\
+         }\n\
+         // @PLN128 arc D — the shape every real numeric library actually has:\n\
+         // each argument a BARE pointer, no counts anywhere.  Before the count\n\
+         // became the signature's decision, none of this was reachable — the\n\
+         // honest declaration was refused for arity, and the shape loft insisted\n\
+         // on delivered each count where the callee expected the next pointer,\n\
+         // which SIGSEGV'd the interpreter and produced nothing under --native.\n\
+         fn fortran() {\n\
+         \x20 n: vector<integer> = [3];\n\
+         \x20 al: vector<float> = [2.0];\n\
+         \x20 be: vector<float> = [10.0];\n\
+         \x20 x: vector<float> = [1.5, 2.25, 4.0];\n\
+         \x20 y: vector<float> = [100.0, 200.0, 400.0];\n\
+         \x20 lc_daxpby(n, al, x, be, y);\n\
+         \x20 println(\"daxpby {y[0]*1000.0} {y[1]*1000.0} {y[2]*1000.0}\");\n\
+         // `dgemm_` at full width: thirteen by-reference arguments, thirteen C\n\
+         // slots.  This is the routine the ceiling was sized around.\n\
+         \x20 d: vector<integer> = [2];\n\
+         \x20 a2: vector<float> = [1.0, 2.0, 3.0, 4.0];\n\
+         \x20 b2: vector<float> = [5.0, 6.0, 7.0, 8.0];\n\
+         \x20 c2: vector<float> = [100.0, 200.0, 300.0, 400.0];\n\
+         \x20 lc_dgemm(\"N\", \"N\", d, d, d, al, a2, d, b2, d, be, c2, d);\n\
+         \x20 println(\"dgemm {c2[0]} {c2[1]} {c2[2]} {c2[3]}\");\n\
+         // The two `char *` arguments have to land where the callee reads them.\n\
+         // Asserting only the product above would pass with them misplaced,\n\
+         // because the fixture computes the same product either way — it reports\n\
+         // an unsupported transpose instead, so this cell is what pins them.\n\
+         \x20 c3: vector<float> = [100.0, 200.0, 300.0, 400.0];\n\
+         \x20 lc_dgemm(\"T\", \"N\", d, d, d, al, a2, d, b2, d, be, c3, d);\n\
+         \x20 println(\"dgemm-t {c3[0]}\");\n\
+         // Counted and bare in ONE signature, arranged so a left-to-right walk\n\
+         // that grabs a count whenever an integer follows a pointer gives it to\n\
+         // the wrong vector and answers a different number.\n\
+         \x20 v2: vector<float> = [1.5];\n\
+         \x20 w2: vector<float> = [2.0, 3.0];\n\
+         \x20 println(\"split {lc_split(v2, 7, w2)}\");\n\
          }\n",
     )?;
     let libdir = root.join("pkg");
@@ -1517,6 +1555,17 @@ fn numeric_array_shapes_cross_identically_on_both_backends() -> std::io::Result<
         "daxpy 13000 26000 39000",
         "scalar 42",
         "shim 5000",
+        // Every value below is computed in C by `lc_selftest.c`, not read off a
+        // loft run: agreement between two loft backends is not evidence that
+        // either matches C.  y := 2*x + 10*y over [1.5, 2.25, 4] and
+        // [100, 200, 400].
+        "daxpby 1003000 2004500 4008000",
+        // Column-major 2x2: 2*(A*B) + 10*C with A = [[1,3],[2,4]],
+        // B = [[5,7],[6,8]], C = [[100,300],[200,400]].
+        "dgemm 1046 2068 3062 4092",
+        "dgemm-t -1",
+        // 1.5*100 + 7*10 + (2*1 + 3*2), scaled by 1000.
+        "split 228000",
     ] {
         assert!(
             interp.contains(want),

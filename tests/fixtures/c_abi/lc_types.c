@@ -349,3 +349,43 @@ int64_t lc_scalar_ref(const int64_t *p, int64_t n) {
 void lc_shim_scale(double *out, int64_t n_out, const double *v, int64_t n_v) {
   if (n_out >= 1 && n_v >= 1) out[0] = v[0] * 2.0;
 }
+
+/* ---- FORTRAN SHAPE (@PLN128 arc D) --------------------------------------
+ * Every argument by reference, no counts anywhere.  See lc_types.h. */
+
+void lc_daxpby_(const int64_t *n, const double *alpha, const double *x,
+                const double *beta, double *y) {
+  int64_t i;
+  for (i = 0; i < *n; i++) y[i] = (*alpha) * x[i] + (*beta) * y[i];
+}
+
+int64_t lc_split_(const double *v, int64_t sel, const double *w, int64_t nw) {
+  double s = v[0] * 100.0 + (double)sel * 10.0;
+  int64_t i;
+  for (i = 0; i < nw; i++) s += w[i] * (double)(i + 1);
+  return (int64_t)(s * 1000.0);
+}
+
+void lc_dgemm_(const char *transa, const char *transb, const int64_t *m,
+               const int64_t *n, const int64_t *k, const double *alpha,
+               const double *a, const int64_t *lda, const double *b,
+               const int64_t *ldb, const double *beta, double *c,
+               const int64_t *ldc) {
+  int64_t i, j, p;
+  /* Only 'N'/'N' is implemented.  Reading the two chars is deliberate: a
+   * binding that delivers them in the wrong place answers -1 everywhere
+   * instead of quietly computing the right product from the rest. */
+  if (*transa != 'N' || *transb != 'N') {
+    for (j = 0; j < *n; j++)
+      for (i = 0; i < *m; i++) c[i + j * (*ldc)] = -1.0;
+    return;
+  }
+  for (j = 0; j < *n; j++) {
+    for (i = 0; i < *m; i++) {
+      double acc = 0.0;
+      for (p = 0; p < *k; p++)
+        acc += a[i + p * (*lda)] * b[p + j * (*ldb)];
+      c[i + j * (*ldc)] = (*alpha) * acc + (*beta) * c[i + j * (*ldc)];
+    }
+  }
+}

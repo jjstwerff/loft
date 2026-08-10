@@ -26,6 +26,31 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### BLAS, LAPACK and any Fortran routine now bind through `#c`
+
+A `vector` reaching C used to be a pointer **and** a count, always. That is right for
+a C library written for loft, and wrong for every numeric library there is: Fortran
+passes each argument by reference, so a BLAS routine takes a list of bare pointers and
+learns the length from a separate `n`. Neither way of writing the declaration worked —
+the honest one was refused for arity, and the one loft accepted handed each count to
+the callee where it expected the next pointer.
+
+**The C signature now decides.** Write the signature the header shows you and the count
+appears exactly where the header puts one:
+
+```loft
+pub fn dgemm(transa: text, transb: text, m: vector<integer>, n: vector<integer>,
+             k: vector<integer>, alpha: vector<float>, a: vector<float>,
+             lda: vector<integer>, b: vector<float>, ldb: vector<integer>,
+             beta: vector<float>, c: vector<float>, ldc: vector<integer>);
+#c "dgemm_" "void(const char*, const char*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int64_t*, const double*, const int64_t*, const double*, double*, const int64_t*)"
+```
+
+Nothing is copied at the boundary — C writes its result straight into your vector — and
+a Fortran argument list costs one slot per argument, so even LAPACK's largest drivers
+fit without a shim. Existing declarations are unaffected: a signature that names a count
+still gets one.
+
 ### A hash costs a third less memory, and fills faster
 
 `hash<T[key]>` used to give every entry a store record of its own — a header word each,
