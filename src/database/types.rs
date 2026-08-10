@@ -275,6 +275,11 @@ impl Stores {
                     let fld_content = self.content(f.content);
                     if fld_content != u16::MAX && fld_content == self.content(content) {
                         if others.is_empty() {
+                            // Leading `u16::MAX` marks this field as a VIEW of
+                            // records another field also holds — read by the
+                            // JSON walker to skip default-initialising it. It is
+                            // a marker, not a link, and everything that walks
+                            // this list skips it.
                             others.push(u16::MAX);
                         }
                         linked.insert(f_nr as u16, fld.len() as u16);
