@@ -55,14 +55,11 @@ fn cell(v: ValueInfo) -> text {
 /// list — which is how a consumer joins the two halves.
 fn by_name(t: TypeInfo, e: Every, name: text) -> text {
   for f in t.fields {
-    if f.name == name {
-      // Bound to a local rather than `return cell(field_value(…))`: inside a
-      // loop, `--native` fails to COMPILE a text-returning call whose argument
-      // is a freshly returned record (loft#TBD). The interpreter is correct;
-      // the local is the workaround, and it changes nothing here.
-      v = field_value(e, f.position);
-      return cell(v);
-    }
+    // `return cell(field_value(…))` inside a loop is the shape that lifts the
+    // record call into a temp — it failed to COMPILE on `--native` until the
+    // `Set(var, Insert(…))` tail learned the text coercion, and
+    // `pln23-text-call-on-lifted-record.loft` is its own guard now.
+    if f.name == name { return cell(field_value(e, f.position)) }
   }
   return "?no-such-field";
 }
