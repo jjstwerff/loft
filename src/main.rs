@@ -8393,6 +8393,54 @@ fn main() {
             }
             uses_par = out.uses_parallel();
         }
+        // loft#851 — say so when the program stores and this target cannot.
+        //
+        // `--html` binds no filesystem, and the file calls compile anyway: each
+        // one takes the inert branch and answers "absent", so a page that saves
+        // silently saves nothing and the build reports success. Reported BEFORE
+        // the wasm build, which takes the best part of a minute — a warning that
+        // arrives after it has already cost the reader the wait.
+        //
+        // A warning rather than advice, by the rule in CLAUDE.md: ignoring it
+        // produces lost writes, which is a wrong result and not a matter of
+        // style. Nothing is refused — the page is still built, because a program
+        // may reach a file only on a path the page never takes, and that is the
+        // author's call to make (loft#709 settled the same question for a call
+        // this target cannot serve).
+        {
+            let fs_sites = native_utils::filesystem_call_sites(&p.data);
+            if !fs_sites.is_empty() {
+                let shown: Vec<String> = fs_sites
+                    .iter()
+                    .take(5)
+                    .map(|(caller, callees)| {
+                        if callees.is_empty() {
+                            format!("    {caller}")
+                        } else {
+                            format!("    {caller} — {}", callees.join(", "))
+                        }
+                    })
+                    .collect();
+                let more = if fs_sites.len() > shown.len() {
+                    format!("\n    … and {} more", fs_sites.len() - shown.len())
+                } else {
+                    String::new()
+                };
+                eprintln!(
+                    "loft: warning — this program uses file I/O and the --html target binds no \
+                     filesystem.\n{}{}\n  \
+                     Each of these answers as if the file were absent: a write reports failure, \
+                     a read answers null, a size answers 0.  Nothing raises, so a page that \
+                     saves will appear to work and store nothing.\n  \
+                     To persist from a page today, carry the data over `host_output` to JS and \
+                     back with `globalThis.loftPush` — both are bound here.  For a browser \
+                     target WITH a filesystem, build `--native-wasm` (WASI) instead.\n  \
+                     See doc/claude/WASM.md § What each target binds.",
+                    shown.join("\n"),
+                    more
+                );
+            }
+        }
         // @PLN100 Slice 1 — build (on stale/missing) + locate loft's own wasm
         // runtime rlib in the ISOLATED `--html` shape dir (`target/loft/html/`), so
         // a wasm-bindgen `make wasm` build can't stomp it and no manual `make` step

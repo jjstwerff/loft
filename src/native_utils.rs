@@ -1106,6 +1106,64 @@ pub(crate) fn html_wasm_imports(
 /// Emitted for EVERY `loft_*` function import and applied only where the name is
 /// still free, so the shim and every library bridge keep precedence and a name
 /// the build-time scan misjudged is covered anyway.
+/// loft#851 — the filesystem calls a program makes, named with the function that
+/// makes them, or empty when it makes none.
+///
+/// `--html` binds no filesystem. Its page shim defines two wasm import modules,
+/// `loft_gl` and `loft_io`, and `loft_io` carries print / time / input / output /
+/// http and nothing that touches a file — a bundle importing anything else is
+/// rejected as broken before it is written. Meanwhile the loft-side file calls
+/// compile fine: the `wasm` (wasm-bindgen) feature that routes them to a JS host
+/// is deliberately off for this target, so each one takes its inert branch and
+/// answers "absent" — a write returns 0, a read returns null, a size returns 0.
+///
+/// The result is a page that draws correctly and stores nothing, with no
+/// diagnostic anywhere: `loft --html` reported success, and the emitted page had
+/// to be GREPPED to discover it (loft#851). This is the fact that makes the
+/// silence loud.
+///
+/// A call is a filesystem call when the definition it reaches carries an `fs#`
+/// capability link — the same `group#right` token the sandbox gates on, so there
+/// is one answer to "does this touch the filesystem" rather than a second list
+/// here to drift from it. Only callers OUTSIDE the stdlib are scanned: the stdlib
+/// is present in every program and its own internal file plumbing says nothing
+/// about what the user's program does.
+/// Grouped by the function that makes them, because that is the unit the reader
+/// edits: one line per function, listing the names it calls. Operator spellings
+/// (`OpSizeFile`, behind `f#size`) still TRIGGER the report but never appear in
+/// it — a message naming an internal opcode says nothing a reader can act on, and
+/// the function it sits in is the thing they can go and look at.
+pub(crate) fn filesystem_call_sites(data: &crate::data::Data) -> Vec<(String, Vec<String>)> {
+    let mut sites: Vec<(String, Vec<String>)> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        let caller = data.def(d_nr);
+        if caller.source == crate::data::STD_SOURCE || caller.code == crate::data::Value::Null {
+            continue;
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut touches_fs = false;
+        caller.code.walk(&mut |node| {
+            if let crate::data::Value::Call(callee, _) = node
+                && *callee != u32::MAX
+                && data.def(*callee).cap.starts_with("fs#")
+            {
+                touches_fs = true;
+                let name = data.def(*callee).name();
+                let name = name.strip_prefix("n_").unwrap_or(name);
+                if !name.starts_with("Op") && !names.iter().any(|n| n == name) {
+                    names.push(name.to_string());
+                }
+            }
+        });
+        if touches_fs {
+            let name = caller.name();
+            let name = name.strip_prefix("n_").unwrap_or(name);
+            sites.push((format!("{name} ({})", caller.position), names));
+        }
+    }
+    sites
+}
+
 pub(crate) fn host_import_stub_js(wasm: &[u8]) -> String {
     let Some(imports) = html_wasm_imports(wasm) else {
         return String::new();

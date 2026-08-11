@@ -49,6 +49,51 @@ harness — applies to the **third** build only.  For `--html` see
 [HTML_EXPORT.md](HTML_EXPORT.md) (its host-import list is complete);
 for the browser-interaction design see [BROWSER_INTEROP.md](BROWSER_INTEROP.md).
 
+### What each target binds
+
+The table above says which world a build belongs to.  This one says what a
+program can actually CALL in each, by host group — the question a consumer
+arrives with, and the one that previously took a grep of an emitted page to
+answer (loft#851).
+
+| Host group | interpreter / `--native` | `--html` | `--native-wasm` | IDE `make wasm` |
+|---|---|---|---|---|
+| file I/O (`file`, `read_bytes`, `write_bytes`, `list_dir`, `exists`, …) | yes | **no** | yes (WASI) | yes (VirtFS / `loftHost.fs_*`) |
+| graphics + audio (`gl_*`, `audio_*`) | yes | yes | no | no |
+| stdout / stdin (`println`, `host_input`) | yes | yes | yes | yes |
+| structured messages (`host_output` → `loftPush`) | no | yes | no | no |
+| http (`store_load_url`, range reads) | yes | yes | yes | yes |
+| clock (`now`, `ticks`) | yes | yes | yes | yes |
+| args / env | yes | **no** | yes | yes |
+| key–value storage | no | no | no | yes (`loftHost.storage_*`) |
+
+**A page that draws cannot store, and a wasm host that stores cannot draw.**
+The two browser-facing shells bind opposite halves, which is the gap loft#851
+reports; a rendering editor in a page needs both and today has to carry its
+persistence over `host_output` → JS → `globalThis.loftPush` by hand.
+
+**Calling into a group this target does not bind is not an error.**  The loft
+side compiles either way and the call answers as if the resource were absent —
+a write reports failure, a read answers null, a size answers 0.  That is the
+deliberate rule (loft#709: one source runs on every target, so a call this
+target cannot serve answers at runtime rather than refusing the build), and it
+is why the silence needs saying out loud instead: **`loft --html` warns at build
+time when the program reaches file I/O**, naming each calling function.  The
+scan keys on the `fs#` capability link a definition carries, the same token the
+sandbox gates on, so there is one answer to "does this touch the filesystem".
+
+**Why `--html` cannot simply reuse the `loftHost.fs_*` bridges below.**  Those
+are `js_sys::Reflect` lookups compiled under the `wasm` (wasm-bindgen) Cargo
+feature.  `--html` deliberately builds its runtime rlib
+`--no-default-features --features random`, and it REFUSES to write a page whose
+wasm imports anything beyond `loft_gl` and `loft_io` — a wasm-bindgen build
+imports `__wbindgen_placeholder__` 35+ times and cannot instantiate against the
+page's raw-extern glue (§ *The rlib-stomp hazard*).  So binding a filesystem to
+`--html` means adding file functions to the raw `loft_io` extern module and
+implementing them in `doc/loft-gl-wasm.js`, with `LayeredFS` (§ *Layered
+Filesystem*) as the natural backing — not wiring up the bridges documented
+below.  That work is unbuilt; loft#851 tracks it.
+
 ---
 
 ## Build Toolchain Dependencies
