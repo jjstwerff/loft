@@ -65,9 +65,16 @@ makes this plan-sized rather than a session-tail change.
 
 Each stage lands against the matrix below, on BOTH backends, with the full gate green.
 
-- **A — the query.** `owns_droppable(T)`: does T have a hook, or transitively contain a member
-  type that does. Cycle-guarded. Lands INERT (nothing consumes it), proved byte-identical in IR
-  and native Rust — the arc discipline INTERFACES.md describes.
+- **A — the query. SHIPPED.** `Data::owns_droppable(T)`: does T have a hook, or transitively
+  contain a member type that does. Cycle-guarded, and deliberately a different fact from
+  `drop_hook_nr` — a wrapper with no hook of its own around a type that has one answers `false`
+  there and `true` here, which is exactly loft#849. Landed INERT: 78 pure additions to `data.rs`
+  with zero callers, so it cannot change emitted output by construction (the stronger claim than
+  a byte-identical diff, which only samples). Tests in `tests/owns_droppable.rs`: every `true`
+  cell has a `false` twin differing in ONE axis, so a query that answered `true` for every record
+  type fails half of them. Two cycle cases — a self-referential node, and a two-type cycle where
+  the hook is reachable only through the back edge, asserted from BOTH ends (a guard that cached
+  its `false` for a revisited def would answer differently depending on which end asked).
 - **B — struct fields.** Synthesized per-type cascade fn; own hook first, then fields in
   reverse-declaration order; recursion through nesting. Cells c1/c2/c4/c5/c6/c9.
 - **C — the field-side move.** Suppress the source's drop when a droppable is copied into a

@@ -5515,6 +5515,84 @@ impl Data {
         self.def_nr(&key)
     }
 
+    /// @PLN139 stage A — does dropping a value of this type require doing ANYTHING?
+    ///
+    /// True when the type declares `OpDrop` itself, or when it transitively OWNS a member
+    /// that does: a struct field, an enum variant's payload, a collection's element. It is
+    /// the question the drop cascade asks per type, and the reason it is a separate fact
+    /// from [`drop_hook_nr`](Self::drop_hook_nr): the hook answers *"does T run code of its
+    /// own"*, this answers *"does T's death mean any work at all"*. A wrapper with no hook
+    /// of its own around a type that has one answers `false` to the first and `true` here,
+    /// and that combination is exactly loft#849 — the container nobody drops.
+    ///
+    /// **Cycle-guarded, because a type may reach itself.** A tree node holding
+    /// `children: vector<Node>` is ordinary loft, and a naive walk recurses forever. A def
+    /// already on the current path answers `false`: it contributes nothing the walk has not
+    /// already asked about, so the fixpoint is the union over the acyclic paths.
+    ///
+    /// Answering per CALL rather than memoising is deliberate at this stage — the query is
+    /// asked once per type at a drop site, not per site, and a cache would have to be
+    /// invalidated as definitions arrive (a library's hook is registered after its type).
+    /// If a later stage measures it hot, the memo belongs beside `known_type`, keyed the
+    /// same way.
+    #[must_use]
+    pub fn owns_droppable(&self, type_def: u32) -> bool {
+        let mut path = HashSet::new();
+        self.owns_droppable_walk(type_def, &mut path)
+    }
+
+    fn owns_droppable_walk(&self, d_nr: u32, path: &mut HashSet<u32>) -> bool {
+        if d_nr == u32::MAX || d_nr as usize >= self.definitions.len() {
+            return false;
+        }
+        if !path.insert(d_nr) {
+            return false; // already on this path — see the cycle note above
+        }
+        if self.drop_hook_nr(d_nr) != u32::MAX {
+            return true;
+        }
+        if self
+            .def(d_nr)
+            .attributes()
+            .iter()
+            .any(|a| self.type_owns_droppable(&a.typedef, path))
+        {
+            return true;
+        }
+        // An enum's variants are its CHILDREN, not its attributes, and each carries its own
+        // payload fields — so a droppable in `WH { h: H }` is reachable only this way.
+        self.children_of(d_nr)
+            .filter(|&c| self.def_type(c) == DefType::EnumValue)
+            .any(|c| self.owns_droppable_walk(c, path))
+    }
+
+    /// The [`owns_droppable`](Self::owns_droppable) walk over a member's TYPE — the step
+    /// that decides which type constructors can carry a droppable inside them.
+    ///
+    /// Every heap-record constructor forwards to its record definition; `Vector` and the
+    /// keyed collections forward to their element, because owning a collection of
+    /// droppables is owning the droppables. `Optional` / `RefVar` / `Rewritten` are
+    /// wrappers over a base type and peel. A `Function` does NOT forward: a closure record
+    /// is owned by the fn-ref slot's own cascade, not by the type that names it, and
+    /// following it would make every fn-ref-holding struct answer for its captures.
+    fn type_owns_droppable(&self, t: &Type, path: &mut HashSet<u32>) -> bool {
+        match t {
+            Type::Reference(d, _)
+            | Type::Enum(d, true, _)
+            | Type::Sorted(d, _, _)
+            | Type::Index(d, _, _)
+            | Type::Radix(d, _, _)
+            | Type::Trie(d, _, _)
+            | Type::Hash(d, _, _) => self.owns_droppable_walk(*d, path),
+            Type::Vector(elm, _) => self.type_owns_droppable(elm, path),
+            Type::Optional(inner) | Type::RefVar(inner) | Type::Rewritten(inner) => {
+                self.type_owns_droppable(inner, path)
+            }
+            Type::Tuple(elms) => elms.iter().any(|e| self.type_owns_droppable(e, path)),
+            _ => false,
+        }
+    }
+
     /// Could this definition be a lazy driver, and must it therefore be checked?
     ///
     /// Two rules, because the two names mean different things:
