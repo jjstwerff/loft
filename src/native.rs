@@ -277,11 +277,13 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_kernel_swap_step", crate::engine_host::n_kernel_swap_step),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_swap_retired", crate::engine_host::n_swap_retired),
+    // @PLN119 arc F — the single native behind `lib/git`.  Native targets only:
+    // it runs `git`, and no browser page has a subprocess to run it in.
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_git_query", crate::git_query::n_git_query),
     // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
     // declares them; native targets only — the kernel has no wasm story).
     #[cfg(not(target_arch = "wasm32"))]
-    // @PLN119 arc F — the single native behind `lib/git`.
-    ("n_git_query", crate::git_query::n_git_query),
     ("n_kernel_listen", crate::engine_host::n_kernel_listen),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_pump", crate::engine_host::n_kernel_pump),
