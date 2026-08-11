@@ -280,6 +280,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
     // declares them; native targets only — the kernel has no wasm story).
     #[cfg(not(target_arch = "wasm32"))]
+    // @PLN119 arc F — the single native behind `lib/git`.
+    ("n_git_query", crate::git_query::n_git_query),
     ("n_kernel_listen", crate::engine_host::n_kernel_listen),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_pump", crate::engine_host::n_kernel_pump),

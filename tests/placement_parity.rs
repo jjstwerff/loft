@@ -803,6 +803,52 @@ fn native_does_not_place_and_says_so_when_asked_to_insist() {
     );
 }
 
+/// @PLN119 arc F — a placed library resolves a relative path where the CALLER
+/// does.
+///
+/// loft anchors a program's relative file access at its own source directory and
+/// chdirs there before running. Workers are started long before that, so one
+/// inherited the INVOCATION directory instead — and then every relative path a
+/// placed library touched resolved somewhere else than the same library
+/// in-process. No error, no warning: `lib/git` simply answered "not a git
+/// repository" under one placement and the history under the other.
+///
+/// This is the cell the whole matrix was missing, and it is worth naming why:
+/// every earlier cell passes a value ACROSS the boundary, and this one asks what
+/// the far side already IS. A worker inherits an environment, not only a frame.
+#[test]
+fn a_placed_library_sees_the_same_working_directory() {
+    let library = "pub fn read_here(name: text) -> text {\n\
+                   \x20   f = file(name);\n\
+                   \x20   if !exists(f) { return \"MISSING\"; }\n\
+                   \x20   f.content()\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   println(\"beside-me {read_here(\"marker.txt\")}\");\n\
+                    }\n";
+    let root = scratch("cwd");
+    let consumer_path = root.join("consumer.loft");
+    std::fs::write(&consumer_path, consumer).expect("write consumer");
+    // The marker sits beside the CONSUMER, which is where loft anchors a
+    // relative path — and is not the directory the test runner is in.
+    std::fs::write(root.join("marker.txt"), "found-beside-the-program").expect("write marker");
+
+    write_library(&root, "inproc", library);
+    let inproc = run(&root, &consumer_path);
+    write_library(&root, "process", library);
+    let placed = run(&root, &consumer_path);
+
+    assert!(
+        inproc.stdout.contains("found-beside-the-program"),
+        "the in-process reference did not find the marker, so this test is \
+         measuring nothing: {:?} / {}",
+        inproc.stdout,
+        inproc.stderr
+    );
+    assert_indistinguishable("a relative path from a placed library", &inproc, &placed);
+}
+
 /// @PLN119 arc C — the @PLN94 ownership oracle over a placed program.
 ///
 /// **Read what this proves carefully, because the obvious reading is wrong.**

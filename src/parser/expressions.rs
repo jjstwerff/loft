@@ -2183,6 +2183,32 @@ use a separate collection or add after the loop"
                 })
                 .is_some();
         if matches!(f_type.base(), Type::Text(_)) && !is_boxed_text_lhs {
+            // A text assignment needs somewhere to assign TO. Every other type
+            // falls through to the general operator dispatch, which refuses a
+            // non-place left side ("Not implemented operation = for type
+            // integer" is what `5 = 6` gets); this arm intercepts text first and
+            // used to hand `assign_text` a target that names no variable — which
+            // reached codegen as a load of variable 65535 and took the whole
+            // compiler down with an index-out-of-bounds.
+            //
+            // The case that finds this is not the silly one. A file-scope
+            // `W: text = ""` is a CONSTANT, inlined at each use, so `W = "x"`
+            // from inside a function is an assignment to a literal — and it is
+            // an easy thing to write, because the same declaration for an
+            // `integer` is refused with a message.
+            if var_nr == u16::MAX && lhs_base_var(to) == u16::MAX {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "the left side of this assignment is a value, not a variable. A \
+                         file-scope `NAME: text = …` is a CONSTANT — it is inlined at every \
+                         use, so there is nothing to assign to. Declare it inside a function, \
+                         or wrap it in a zero-argument function and call that"
+                    );
+                }
+                return Type::Void;
+            }
             // @PLN25 slice (c): `.base()` so a `text?` accumulator routes to assign_text
             // (`OpAppendText`) like plain text. `s += x` on a null `text?` is ignored at
             // runtime (the append skips a null dest — a non-null text can never be null);

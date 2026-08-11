@@ -53,7 +53,8 @@ fn worker(name: &str, pkg: &Path) -> Worker {
     // SAFETY-ish: tests in one binary share the environment, but every test
     // here sets the same value, so the race is benign.
     unsafe { std::env::set_var("LOFT_WORKER_EXE", env!("CARGO_BIN_EXE_loft")) };
-    Worker::spawn(name, pkg, &workspace_root().join("default")).expect("worker did not come up")
+    Worker::spawn(name, pkg, &workspace_root().join("default"), Path::new(""))
+        .expect("worker did not come up")
 }
 
 #[test]
@@ -298,7 +299,12 @@ fn a_library_that_cannot_load_is_reported_against_its_name() {
     let dir = scratch("badload");
     let pkg = library(&dir, "badlib", "pub fn broken( -> integer {\n");
     unsafe { std::env::set_var("LOFT_WORKER_EXE", env!("CARGO_BIN_EXE_loft")) };
-    let started = Worker::spawn("badlib", &pkg, &workspace_root().join("default"));
+    let started = Worker::spawn(
+        "badlib",
+        &pkg,
+        &workspace_root().join("default"),
+        Path::new(""),
+    );
     match started {
         Ok(_) => panic!("a library that does not parse must not report a ready worker"),
         Err(e) => {

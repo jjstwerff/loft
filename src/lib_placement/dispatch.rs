@@ -359,6 +359,9 @@ pub fn mark_exports(data: &mut Data, pkg_dir: &str) -> Vec<(u32, String, String)
 ///
 /// Call after `byte_code`, which is what registers the stubs this replaces.
 ///
+/// `cwd` is where the CALLER will run — see [`Worker::spawn`]. Pass an empty
+/// path to inherit this process's current directory.
+///
 /// # Errors
 /// The first library whose worker will not start, named. A placed library that
 /// cannot run is not degraded to in-process silently: its whole reason for the
@@ -369,6 +372,7 @@ pub fn install(
     data: &Data,
     libs: &[(String, String)],
     stdlib_dir: &std::path::Path,
+    cwd: &std::path::Path,
 ) -> Result<usize, String> {
     let mut reg = Registry {
         workers: Vec::new(),
@@ -377,7 +381,7 @@ pub fn install(
     let dups = crate::generation::duplicate_fn_names(data);
     let mut wired = 0usize;
     for (name, pkg_dir) in libs {
-        let worker = Worker::spawn(name, std::path::Path::new(pkg_dir), stdlib_dir)
+        let worker = Worker::spawn(name, std::path::Path::new(pkg_dir), stdlib_dir, cwd)
             .map_err(|e| e.to_string())?;
         let w_idx = reg.workers.len();
         reg.workers.push(worker);

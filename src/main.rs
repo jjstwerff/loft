@@ -8181,7 +8181,24 @@ fn main() {
     #[cfg(target_os = "linux")]
     if !placed_libs.is_empty() && !native_requested {
         let stdlib = std::path::PathBuf::from(&default_str);
-        match loft::lib_placement::dispatch::install(&mut state, &p.data, &placed_libs, &stdlib) {
+        // The directory the program will RUN in, which is not the one this
+        // process is in yet: relative file access is anchored at `source_dir`
+        // and the chdir for it happens much later (search `set_current_dir`).
+        // A worker started now would inherit the INVOCATION directory instead,
+        // and then every relative path a placed library touched would resolve
+        // somewhere else than the same library in-process.
+        let run_cwd = if state.database.program_relative && !state.database.source_dir.is_empty() {
+            std::path::PathBuf::from(&state.database.source_dir)
+        } else {
+            std::path::PathBuf::new()
+        };
+        match loft::lib_placement::dispatch::install(
+            &mut state,
+            &p.data,
+            &placed_libs,
+            &stdlib,
+            &run_cwd,
+        ) {
             Ok(_) => {}
             // A placed library that will not start is fatal rather than a quiet
             // fall back to in-process: the declaration exists to get isolation,

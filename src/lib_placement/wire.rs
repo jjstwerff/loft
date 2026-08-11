@@ -557,7 +557,17 @@ impl Worker {
     /// A failure to create the wire, spawn the worker, or hear its ready
     /// response — each reported with the library name, because the operator's
     /// next question is always which library failed to place.
-    pub fn spawn(name: &str, pkg_dir: &Path, stdlib_dir: &Path) -> io::Result<Worker> {
+    /// `cwd` is the directory the CALLER will be running in — not necessarily
+    /// the one it is in now.
+    ///
+    /// loft anchors a program's relative file access at its own source directory
+    /// and chdirs there before running, but that happens long after libraries are
+    /// installed. A worker started before it would inherit the INVOCATION
+    /// directory, and then every relative path a placed library touched would
+    /// resolve somewhere else than the same library in-process — a divergence
+    /// with no error, found by `lib/git` answering "not a git repository" in one
+    /// placement and the history in the other.
+    pub fn spawn(name: &str, pkg_dir: &Path, stdlib_dir: &Path, cwd: &Path) -> io::Result<Worker> {
         let path = std::env::temp_dir().join(format!(
             "loft-place-{}-{}.wire",
             std::process::id(),
@@ -577,13 +587,17 @@ impl Worker {
             Some(p) => PathBuf::from(p),
             None => std::env::current_exe()?,
         };
-        let child = std::process::Command::new(exe)
+        let mut command = std::process::Command::new(exe);
+        command
             .arg("--lib-worker")
             .arg(&path)
             .arg(pkg_dir)
             .arg("--default")
-            .arg(stdlib_dir)
-            .spawn()?;
+            .arg(stdlib_dir);
+        if !cwd.as_os_str().is_empty() {
+            command.current_dir(cwd);
+        }
+        let child = command.spawn()?;
 
         let mut w = Worker {
             wire,
@@ -825,7 +839,14 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
     // Report the store-numbering base before answering the handshake, so the
     // caller never observes a ready worker without one.
     let mut program = match loaded {
-        Ok(p) => {
+        Ok(mut p) => {
+            // Resolve a relative path the way the CALLER does. The caller spawned
+            // this worker in the directory it will itself run in, so that
+            // directory — not the library's own — is what `file("x")` means to
+            // the code this worker serves.
+            if let Ok(here) = std::env::current_dir() {
+                p.anchor_paths_at(&here);
+            }
             wire.set_store_base(p.store_count());
             wire.set_epoch(p.store_epoch());
             Some(p)

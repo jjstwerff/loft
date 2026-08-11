@@ -262,6 +262,19 @@ impl Program {
         &mut self.state.database
     }
 
+    /// Anchor this program's relative file access at `dir`.
+    ///
+    /// A loaded library resolves `file("x")` against its OWN directory, which is
+    /// right for a program and wrong for @PLN119's worker: the calls it serves
+    /// were written by a consumer somewhere else, and in-process that consumer's
+    /// directory is what `file("x")` means. Without this a placed library reads a
+    /// different file from the same library in-process — silently, because both
+    /// paths are perfectly valid, just not the same one.
+    pub(crate) fn anchor_paths_at(&mut self, dir: &std::path::Path) {
+        self.state.database.source_dir = dir.to_string_lossy().into_owned();
+        self.state.database.program_relative = true;
+    }
+
     /// The store type id this program uses for `ty`, and the layout it reads
     /// those bytes under (@PLN97's `layout_algo_hash`).
     ///
