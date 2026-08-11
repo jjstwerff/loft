@@ -1,123 +1,42 @@
 # @PLN126 — tell a bound store a record is finished
 
-> Promoted from loft#747. The issue is `status:future` and opens on a **measurement**,
-> not an API: *does ordered insertion leave a finished record contiguous?* This file is
-> the design half — the invariant that measurement is a test of, written down before the
-> instrument existed, so the number has something to falsify.
+> **Status — DONE 2026-08-11.** Shipped `store_release(collection)`; declined the
+> per-record release the issue proposed. Reference for the post-plan contract lives in
+> [DATABASE.md § `store_release`](../DATABASE.md) and
+> [STDLIB.md](../STDLIB.md); the catalogue entry is `loft-lang/features#112` (@F112).
+> This file is a closure record: the prediction written before the instrument existed,
+> the measurement that falsified half of it, and what the build then cost.
 
-## Goal
+## Outcome
 
-Let a program say **"this record is finished"** to a bound store, so a generator's
-resident set follows its working set by intent rather than by the kernel discovering it
-through eviction.
-
-## What is already settled — do not re-chase
-
-DATABASE.md § *Binding FIRST is the low-memory choice* carries the measured table.
-Bind-first is 4.4× lower RSS than bind-last, a 4 M-feature build completes under a
-32 MB cap, and a bound store's pages are reclaimable where anonymous heap is not. So
-dataset size does not set a hard memory requirement. What remains is the cost of the
-kernel learning the working set **by evicting the wrong pages first** — ~2× wall at a
-modest cap, 271 s at an aggressive one.
-
-`MemoryMax` alone proves nothing on a box with swap; `MemorySwapMax=0` is what makes a
-cap a cap.
-
-## The invariant the design rests on
-
-The issue narrows three candidate shapes to one — append-only / ordered-write — because
-`madvise(MADV_DONTNEED)` works on **pages**, and a per-record release cannot honour
-"drop this record" when the record's bytes share pages with live neighbours. That
-narrowing buys the plan a single sentence to defend:
-
-> **A record finished in key order occupies a contiguous byte range that nothing writes
-> to again — so "everything below the write frontier" names exactly the finished set,
-> and the whole API is one call.**
-
-Everything the plan proposes is downstream of that. It decomposes into three claims that
-fail independently:
-
-* **C1 — contiguity.** A finished record's own bytes (its block, its inner container
-  blocks, its texts) form one range: `span ≈ live`, where `span` is the interval between
-  its lowest and highest occupied word.
-* **C2 — no re-touch.** Nothing written after the record is finished lands below the
-  frontier that existed when it finished.
-* **C3 — page exclusivity.** At the 4 KB granularity `madvise` actually operates on, a
-  finished record's pages hold no bytes of a record still being written.
-
-C1 is the claim the issue states. **C2 and C3 are the ones the API depends on**, and C1
-can hold while both fail: a record can be perfectly contiguous and still sit on pages
-that a later record's allocations reach back into.
-
-## The failure mode this plan actually risks
-
-Getting the frontier wrong is **not** a correctness fault. `MADV_DONTNEED` on a shared
-file-backed mapping, after `msync`, drops resident pages and re-reads them from the file
-on the next access — so a hint that drops the wrong page produces the right answer,
-slowly. The whole risk is therefore a **silent green**: the call ships, the API reads
-well, and it buys nothing that a counter would have shown was not there.
-
-That is why the measurement comes first, and why it has to report re-touch and page
-exclusivity rather than only the ratio the issue named.
-
-## Counting the re-assertion sites
-
-For C2 to hold, *every* site that decides where bytes land must respect the frontier.
-Reading `src/store.rs`, placement is decided in four places:
-
-| site | what it does |
+| the issue proposed | outcome |
 |---|---|
-| `claim` → `fl_take_ge` | **best fit**: the *smallest* free block ≥ the request, wherever it sits |
-| `claim` → `coalesce_free` → `fl_take_ge` | the same, after merging adjacent frees |
-| `claim_scan` → `claim_grow` | first fit by linear scan, growing the arena only at the end |
-| `resize` in-place | absorbs the physically-next block when it is free, at 7/4 |
+| per-record release (`store_flush(collection)`) | **declined** — 0.0% of the pages a record touches are its own |
+| automatic write-back + eviction of untouched pages | not pursued — the kernel already does this, badly, and that is the cost being removed |
+| append-only / ordered-write frontier | **shipped** as `store_release`, on a premise the issue did not state |
 
-Three of the four can place a write **below** an established frontier, and none of them
-knows a frontier exists. So `N = 3`, and omission is silent by construction (see above).
-That is the brittleness, known before any code: the design's premise is not a property
-the allocator has, it is a property someone would have to give it.
+The plan's decision rule was *"if finished records are not contiguous, this collapses
+into the same granularity problem and should be re-scoped or declined."* They are not
+contiguous — and taken literally that rule would have thrown away a working feature.
+Contiguity was only ever the **proposed** enabling condition for a frontier hint. What a
+frontier actually needs is that the region below the mark is not written again, which is
+a property of the ALLOCATOR on an append-only workload, and it measured true. Hence
+re-scope, not decline.
 
-## The prediction — written before the instrument
+## The prediction, written before the instrument
 
-From reading the allocator, not from running it:
+Kept because the record of what was expected is what makes the measurement worth
+anything. Four predictions from reading `src/store.rs`; three held, **P3 was wrong**.
 
-* **P1.** With a strictly sequential build (one record open at a time), C1 holds and
-  `span/live ≈ 1`. A growing vector at the top of the arena has the free tail as its
-  physical successor, so `resize` absorbs it in place and never relocates.
-* **P2.** With `W > 1` records open at once, a record's vector has a live neighbour
-  behind it, so `resize` falls through to `claim` + `copy` + `delete`. The relocation
-  goes to the frontier and leaves a hole. `span/live` grows with `W`.
-* **P3.** C2 fails even at `W = 1`, and best fit is why: the hole a relocation leaves is
-  the *smallest block that fits* for some later small allocation, so later records get
-  pulled back down into it. The outer collection's own growth leaves such holes low in
-  the arena from the very start.
-* **P4.** C3 is strictly weaker than C2 and fails wherever C2 does, plus wherever a
-  record's block merely *shares* a 4 KB page with a live neighbour — which at these
-  record sizes is most of them.
-
-If P1–P4 hold, the issue's own decision rule fires: *"the append-only shape collapses
-into the same granularity problem as the per-record one, and this plan should be
-re-scoped or declined rather than built."*
-
-The prediction is written to be falsifiable in the direction that matters: if
-`span/live` stays at 1 and re-touch stays at 0 across the whole matrix, the frontier
-primitive is straightforward and the API is one call.
-
-## The instrument
-
-`src/database/spans.rs` (`#[cfg(test)]`, `#[ignore]`) — a measurement, not a gate.
-
-It walks a built collection through `Stores::for_each_owned_child`, the Cluster-C
-ownership keystone, so "the blocks a record owns" is answered by the same code that
-frees them. A second enumeration would be a second definition of ownership, and the
-whole question is which bytes belong to whom.
-
-Per top-level record it reports `live` words, `span`, the **foreign live words inside
-that span**, and the 4 KB pages it touches split into exclusive and shared. Across the
-build it replays allocation order to report what fraction of writes land below the
-frontier that existed when each record finished.
-
-The axes it varies are recorded with the results below, including the ones held fixed.
+* **P1 ✓** — a strictly sequential build never relocates: a growing vector at the top of
+  the arena has the free tail as its physical successor, so `resize` absorbs it in place.
+* **P2 ✓** — with `W > 1` records open, a vector has a live neighbour behind it and
+  relocates; `span/live` grows with `W`.
+* **P3 ✗** — predicted that best fit would backfill the freed holes with later records
+  and so break the frontier. It does not: a relocating vector DOUBLES, so the block it
+  frees is too small for the next request and reuse stays local in time. The frontier
+  measured 87–99% clean.
+* **P4 ✓** — page exclusivity fails wherever the frontier claim's cousin does, and worse.
 
 ## Results
 
@@ -161,19 +80,6 @@ finish-frontier hold nothing that is written afterwards. Best fit does backfill 
 holes, but a relocating vector doubles, so the block it frees is too small for the next
 request and the reuse stays local in time rather than reaching back across the arena.
 
-## What that changes
-
-The issue reasoned: a per-record release fails on page granularity → therefore the
-append-only shape → therefore contiguity is the condition to check. The measurement
-splits that chain in the middle.
-
-* **The per-record shape is dead**, and now measured rather than argued: 0.0% exclusive
-  pages is the granularity problem in a number.
-* **The frontier shape does not need contiguity.** It needs the region below the mark not
-  to be written again — a property of the ALLOCATOR on an append-only workload, not of
-  any record's layout. That property holds. So the plan is re-scoped, not declined, and
-  the condition it re-scopes onto is the one that was measured true.
-
 ## What it cost to make the frontier call work
 
 Three things the design could not have known, each found by an instrument rather than by
@@ -215,25 +121,21 @@ This is why the docs say to stream in key order, and it is a stronger reason tha
 plan had: ordering is not a nicety that makes the hint tidier, it is the condition under
 which the hint does anything at all.
 
-## Decision — re-scope and build, on the measured premise
+## What shipped, and what defends it
 
-Built:
-
-* `Store::release_resident` — `msync(MS_ASYNC)` + `madvise(MADV_DONTNEED)` over the
-  whole pages below the carried mark that have not been released yet.
-* `Stores::release_store`, and `store_release(collection) -> integer` in
-  `default/02_files.loft` + `src/native.rs`.
-* `Store::claimed_end` / `Store::released_bytes` — the two pieces of bookkeeping without
-  which the call is quadratic and self-defeating.
-
-Not built, and now refused on evidence rather than on a hand-wave: a per-record release.
-0.0% of a record's pages are its own.
+* `Store::release_resident` — `msync(MS_ASYNC)` + `madvise(MADV_DONTNEED)` over the whole
+  pages below the carried mark not yet released. `Stores::release_store` and
+  `store_release(collection) -> integer` (`default/02_files.loft`, `src/native.rs`).
+* `Store::claimed_end` / `Store::released_bytes` — the bookkeeping without which the call
+  is quadratic and self-defeating.
+* **Not built**, refused on evidence rather than on a hand-wave: a per-record release.
 
 Gates: `tests/scripts/126-store-release-keeps-everything.loft` +
-`store_release_keeps_every_record_and_reference_both_backends` (content, references and
-file length survive, both backends, values hand-checked);
-`database::spans::one_tile_footprint_is_the_blocks_it_owns` (the span instrument against
-arithmetic); the two `#[ignore]` measurements above.
+`store_release_keeps_every_record_and_reference_both_backends` — content, references and
+file length survive on both backends, and a reference held ACROSS a release is checked by
+VALUE, because a re-faulted page returns a plausible number either way.
+`database::spans::one_tile_footprint_is_the_blocks_it_owns` pins the span instrument to
+arithmetic rather than to a second run of itself. The two sweeps above are `#[ignore]`.
 
 ## The axis this could not see
 
@@ -241,3 +143,14 @@ Every cell here is a generator that only ever APPENDS. A workload that revisits 
 records — an editor, a simulation — would re-dirty pages below the frontier, and nothing
 measured says what that costs. `store_release` is documented as a hint for streaming
 writers for that reason, and the residue is what the dogfood loop is for.
+
+## See also
+
+* [DATABASE.md § `store_release`](../DATABASE.md) — the contract, and the three
+  implementation facts the next residency feature will meet again.
+* [STDLIB.md](../STDLIB.md) — the call's row. Catalogue entry: `loft-lang/features#112`.
+* `src/database/spans.rs` — the span instrument, and how to re-run both sweeps.
+* @PLN134 / @PLN136 laid the same arena out for PAGING; this
+  plan asks what a WRITER can drop from it. `store_persist_copy` moves records and is
+  legal only on a copy nobody holds a reference into; `store_release` moves nothing,
+  which is why it is legal on the live store.
