@@ -81,7 +81,8 @@ fn a_narrow_argument_does_not_inherit_the_previous_calls_bytes() {
     let mut p = prog();
     assert_eq!(p.call("thru_u8", &[Value::Int(1)]).unwrap(), Value::Int(1));
     assert_eq!(
-        p.call("taint", &[Value::Int(0x0F0F_0F0F_0F0F_0F0F)]).unwrap(),
+        p.call("taint", &[Value::Int(0x0F0F_0F0F_0F0F_0F0F)])
+            .unwrap(),
         Value::Int(0x0F0F_0F0F_0F0F_0F0F)
     );
     assert_eq!(

@@ -173,6 +173,141 @@ fn a_call_in_a_loop_keeps_its_answer() {
     );
 }
 
+/// Narrow integers, at the edges of every declared width.
+///
+/// These crossed WRONG before @PLN119 arc B: the marshal wrote a narrow value
+/// at its storage width into a stack cell that is eight bytes wide, so `-1` as
+/// an `i8` came back as `255` and a `u8` argument inherited whatever the
+/// previous call had left in the upper seven bytes.  The edges are the point —
+/// a sweep of small positive numbers passes on a marshal that gets sign and
+/// width entirely wrong.
+#[test]
+fn every_integer_width_crosses_with_its_sign() {
+    let library = "pub fn e_u8(v: u8) -> u8 { v }\n\
+                   pub fn e_i8(v: i8) -> i8 { v }\n\
+                   pub fn e_u16(v: u16) -> u16 { v }\n\
+                   pub fn e_i16(v: i16) -> i16 { v }\n\
+                   pub fn e_u32(v: u32) -> u32 { v }\n\
+                   pub fn e_i32(v: i32) -> i32 { v }\n\
+                   pub fn mixed(a: u8, b: boolean, c: text, d: i16, e: integer) -> integer {\n\
+                   \x20   r = e + d + a + len(c);\n\
+                   \x20   if b { r += 1000; }\n\
+                   \x20   r\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   println(\"u8  {e_u8(255)} {e_u8(0)}\");\n\
+                    \x20   println(\"i8  {e_i8(-128)} {e_i8(-1)} {e_i8(127)}\");\n\
+                    \x20   println(\"u16 {e_u16(65535)}\");\n\
+                    \x20   println(\"i16 {e_i16(-32768)} {e_i16(-1)}\");\n\
+                    \x20   println(\"u32 {e_u32(4294967294)}\");\n\
+                    \x20   println(\"i32 {e_i32(-2147483648)} {e_i32(-1)}\");\n\
+                    \x20   println(\"mix {mixed(200, true, \"abc\", -9, 7)}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("narrow", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("narrow integers", &inproc, &placed);
+    // Hand-computed, so this is not just two runs agreeing on a wrong answer:
+    // 7 + (-9) + 200 + 3 + 1000 = 1201.
+    assert!(
+        inproc.stdout.contains("i8  -128 -1 127") && inproc.stdout.contains("mix 1201"),
+        "the hand-computed values are not what ran: {:?}",
+        inproc.stdout
+    );
+}
+
+/// `single` and a text RETURN — the two shapes arc A refused rather than
+/// approximate.
+///
+/// The text return is the interesting one: it does not come back on the stack,
+/// and the call site picks between two conventions depending on where the
+/// result is going.  So this exercises both — assigned to a variable, and used
+/// in a value position (inside a format string) — plus nesting one call in
+/// another, reassigning the same variable, and a loop, because a destination
+/// that leaked or was reused would cross two answers rather than lose one.
+#[test]
+fn single_and_text_returns_cross() {
+    let library = "pub fn echo_single(v: single) -> single { v }\n\
+                   pub fn scale(v: single, by: integer) -> single { v * by }\n\
+                   pub fn shout(s: text) -> text { \"<{s}>\" }\n\
+                   pub fn tag(s: text) -> text { \"[{s}]\" }\n\
+                   pub fn grow(n: integer) -> text {\n\
+                   \x20   out = \"\";\n\
+                   \x20   for i in 0..n { out += \"a{i * 0}\"; }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn mix(a: integer, b: boolean, c: text, d: single, e: integer) -> text {\n\
+                   \x20   \"{a}|{b}|{c}|{d}|{e}\"\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   println(\"s1 {echo_single(0.5 as single)} {echo_single(-2.25 as single)}\");\n\
+                    \x20   println(\"s2 {scale(1.5 as single, 4)}\");\n\
+                    \x20   v = shout(\"hi\");\n\
+                    \x20   println(\"assigned {v}\");\n\
+                    \x20   println(\"inline {shout(\"hi\")}\");\n\
+                    \x20   println(\"unicode {shout(\"héllo ✓\")}\");\n\
+                    \x20   println(\"nested {tag(shout(\"x\"))}\");\n\
+                    \x20   println(\"twice {tag(\"a\")}{tag(\"b\")}\");\n\
+                    \x20   println(\"long {len(grow(300))}\");\n\
+                    \x20   println(\"mix {mix(7, true, \"cc\", 0.5 as single, -9)}\");\n\
+                    \x20   r = shout(\"1\");\n\
+                    \x20   r = shout(\"2\");\n\
+                    \x20   println(\"reassigned {r}\");\n\
+                    \x20   acc = \"\";\n\
+                    \x20   for i in 0..3 { acc += tag(\"{i}\"); }\n\
+                    \x20   println(\"loop {acc}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("single_text", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("single and text returns", &inproc, &placed);
+    for expect in [
+        "s1 0.5 -2.25",
+        "assigned <hi>",
+        "inline <hi>",
+        "nested [<x>]",
+        "twice [a][b]",
+        "long 600",
+        "mix 7|true|cc|0.5|-9",
+        "reassigned <2>",
+        "loop [0][1][2]",
+    ] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?} in the output, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// A text return the compiler never gave a work buffer — the usual case being a
+/// constant, `fn version() -> text { "1.0" }`.
+///
+/// The caller offers nowhere for such an answer to live, so the function is not
+/// placed and runs in-process.  What must hold is that this is INVISIBLE: the
+/// program behaves identically either way, which is the whole claim placement
+/// makes.  Without the refusal the dispatcher would push a `Str` over a String
+/// freed the moment the call returned.
+#[test]
+fn a_text_return_with_no_work_buffer_still_behaves_identically() {
+    let library = "pub fn version() -> text { \"1.0.0\" }\n\
+                   pub fn add(a: integer, b: integer) -> integer { a + b }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   println(\"v = {version()}\");\n\
+                    \x20   w = version();\n\
+                    \x20   println(\"w = {w} / {add(1, 2)}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("constret", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("a constant text return", &inproc, &placed);
+    assert!(
+        inproc.stdout.contains("v = 1.0.0") && inproc.stdout.contains("w = 1.0.0 / 3"),
+        "{:?}",
+        inproc.stdout
+    );
+}
+
 #[test]
 fn a_warning_in_the_library_does_not_decide_whether_it_can_be_placed() {
     // A library that is CORRECT but not diagnostic-free. The worker loads it

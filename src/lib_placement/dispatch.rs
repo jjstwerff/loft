@@ -13,19 +13,28 @@
 //! hands them to the worker over the wire, and writes the answer back. The
 //! interpreter never learns that anything unusual happened, which is the point.
 //!
-//! # What arc A routes
+//! # What this routes
 //!
-//! Parameters may be integer-family, boolean, or text; returns may be void,
-//! integer-family, or boolean. A function outside that is simply **not marked**,
-//! so it runs in-process — byte-identically, which is the same fallback a
-//! library that cannot compile native already takes. Nothing becomes a call that
-//! fails later.
+//! Parameters and returns may be integer-family, boolean, `single` or text, plus
+//! a void return. A function outside that is simply **not marked**, so it runs
+//! in-process — byte-identically, which is the same fallback a library that
+//! cannot compile native already takes. Nothing becomes a call that fails later.
+//! Structs, vectors and references need the arena and are still outside.
 //!
-//! `single` and text RETURNS are deliberately excluded rather than approximated.
-//! A text return travels the interpreter's dest-buffer protocol
-//! (`n_set_bridge_dest`), which codegen emits only for a cdylib call, and
-//! guessing at it would produce a wrong value rather than a refusal. Both, plus
-//! structs, vectors and references, are the boundary marshal of arc B.
+//! # A text return rides the protocol it already has
+//!
+//! A text return does not come back on the stack. It travels the interpreter's
+//! destination-buffer protocol: codegen emits `n_set_bridge_dest` immediately
+//! before the call, stashing the caller's work-buffer record, and the callee
+//! writes into that record and pushes nothing.
+//!
+//! Nothing had to be added for a placed call to use it. That routing keys on
+//! [`crate::state::codegen::is_cdylib_text_call`] — a non-empty `def.native`
+//! symbol plus a text return — which is exactly the shape [`mark_exports`]
+//! leaves behind, so the two calls emit already. What remains is this side of
+//! the contract: take the stashed destination, write the worker's answer into
+//! it, and push nothing. Approximating it, which is why arc A refused text
+//! returns rather than guessing, would have returned a wrong value.
 
 use super::wire::Worker;
 use crate::data::{Data, DefType, Type};
@@ -42,7 +51,16 @@ enum Kind {
     Void,
     Int,
     Bool,
+    Single,
     Text,
+    /// The hidden `&text` work buffer a text-returning loft function carries.
+    ///
+    /// Not a value on the wire — the worker never sees it. It is a slot the
+    /// CALLER allocated and passed for the answer to be written into, and it is
+    /// listed among the parameters because the emitted code pushes it like any
+    /// other argument: a dispatcher that skipped it would leave it on the stack
+    /// and every later frame would read one cell off.
+    WorkBuf,
 }
 
 /// Classify a loft type for the wire, or refuse it.
@@ -51,10 +69,34 @@ fn kind_of(ty: &Type, returning: bool) -> Option<Kind> {
         Type::Void | Type::Null if returning => Some(Kind::Void),
         Type::Integer(_) => Some(Kind::Int),
         Type::Boolean => Some(Kind::Bool),
-        // A text return needs the dest-buffer protocol; see the module header.
-        Type::Text(_) if !returning => Some(Kind::Text),
+        Type::Single => Some(Kind::Single),
+        Type::Text(_) => Some(Kind::Text),
         _ => None,
     }
+}
+
+/// The frame shape of one call: every attribute the emitted code pushes, in
+/// declaration order, hidden work buffers included.
+///
+/// The two lists a signature produces are different questions and must not be
+/// conflated: what the WORKER is sent (user parameters) and what the emitted
+/// code PUSHES (those plus the compiler's hidden ones).
+fn frame_kinds(def: &crate::data::Definition) -> Option<Vec<Kind>> {
+    def.attributes()
+        .iter()
+        .map(|a| {
+            if crate::native_lib::is_text_work_buffer(&a.typedef) {
+                Some(Kind::WorkBuf)
+            } else if a.hidden {
+                // Some other compiler-inserted parameter. Its layout is not
+                // known here, so refuse the function rather than pop a frame
+                // shape that is a guess.
+                None
+            } else {
+                kind_of(&a.typedef, false)
+            }
+        })
+        .collect()
 }
 
 /// One placed function: which worker serves it, what it is called there, and
@@ -104,15 +146,28 @@ pub fn mark_exports(data: &mut Data, pkg_dir: &str) -> Vec<(u32, String, String)
         if name.starts_with('_') {
             continue;
         }
-        let params: Vec<Type> = def
-            .attributes()
-            .iter()
-            .filter(|a| !a.hidden)
-            .map(|a| a.typedef.clone())
-            .collect();
-        if kind_of(&def.returned, true).is_none()
-            || params.iter().any(|t| kind_of(t, false).is_none())
-        {
+        // Both questions must be answerable: what the worker is sent, and what
+        // the emitted code pushes. A signature that fails either runs in-process.
+        let Some(frame) = frame_kinds(def) else {
+            continue;
+        };
+        let Some(ret) = kind_of(&def.returned, true) else {
+            continue;
+        };
+        // A text answer needs somewhere in the CALLER to live, and the caller
+        // only ever offers one of two: a destination record (where the result is
+        // assigned to a text variable) or the hidden work buffer a promoted text
+        // return carries. A function whose text return was never promoted — the
+        // usual reason being that it returns a constant, `fn version() -> text {
+        // "1.0" }` — offers neither, and a `Str` over the worker's own answer
+        // would point at a String freed the moment this call returns.
+        //
+        // So it is not placed, and runs in-process instead. That is the same
+        // fallback every other signature the wire cannot carry takes, and by the
+        // invariant it is the same program. Making it uniform means promoting
+        // such a return to a retbuf (@PLN104's transform, which today only
+        // considers the main program's own definitions).
+        if ret == Kind::Text && !frame.contains(&Kind::WorkBuf) {
             continue;
         }
         let sym = format!(
@@ -167,13 +222,7 @@ pub fn install(
             let Some(&lib_idx) = state.library_names.get(&sym) else {
                 continue;
             };
-            let params: Vec<Kind> = def
-                .attributes()
-                .iter()
-                .filter(|a| !a.hidden)
-                .filter_map(|a| kind_of(&a.typedef, false))
-                .collect();
-            let Some(ret) = kind_of(&def.returned, true) else {
+            let (Some(params), Some(ret)) = (frame_kinds(def), kind_of(&def.returned, true)) else {
                 continue;
             };
             reg.calls.insert(
@@ -217,21 +266,50 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
         panic!("no placed signature for library index {lib_idx}");
     };
 
-    // Pop in reverse (the stack is LIFO), then restore declaration order.
+    // Pop in reverse (the stack is LIFO), then restore declaration order. Every
+    // cell the emitted code pushed is popped here, hidden ones included — a cell
+    // left behind does not fail here, it shifts every later frame by one.
     let mut args: Vec<Value> = Vec::with_capacity(placed.params.len());
+    let mut work_buf: Option<DbRef> = None;
     for k in placed.params.iter().rev() {
-        args.push(match k {
+        match k {
             // The whole cell, unnarrowed: the callee's declared width is what
             // decides the value, exactly as the native bridge treats it.
-            Kind::Int => Value::Int(*stores.get::<i64>(stack)),
-            Kind::Bool => Value::Bool(*stores.get::<bool>(stack)),
-            Kind::Text => Value::Text(stores.get::<crate::keys::Str>(stack).str().to_string()),
-            Kind::Void => Value::Void,
-        });
+            Kind::Int => args.push(Value::Int(*stores.get::<i64>(stack))),
+            Kind::Bool => args.push(Value::Bool(*stores.get::<bool>(stack))),
+            // `single` is a 4-byte cell, so it pops as `f32` — reading it as an
+            // `f64` would take the next argument's bytes with it.
+            Kind::Single => args.push(Value::Float(f64::from(*stores.get::<f32>(stack)))),
+            Kind::Text => {
+                args.push(Value::Text(
+                    stores.get::<crate::keys::Str>(stack).str().to_string(),
+                ));
+            }
+            Kind::Void => args.push(Value::Void),
+            // Popped, never sent: it is the caller's answer slot, not an input.
+            Kind::WorkBuf => work_buf = Some(*stores.get::<DbRef>(stack)),
+        }
     }
     args.reverse();
 
     let ret = placed.ret;
+    // Claimed before the crossing, so it is claimed on EVERY exit below —
+    // including a fault, where a destination left set would redirect the next
+    // text call in the program into this call's buffer.
+    let text_dest = if ret == Kind::Text {
+        stores.bridge_text_dest.take()
+    } else {
+        None
+    };
+    // Checked before the crossing, while the signature is still in hand: a text
+    // answer with nowhere to go is a routing bug, and refusing it here is what
+    // arc A chose over approximating the protocol and returning a wrong value.
+    assert!(
+        ret != Kind::Text || text_dest.is_some() || work_buf.is_some(),
+        "placed text call '{}' has nowhere to put its answer — neither a stashed \
+         destination nor a work buffer reached the dispatcher",
+        placed.func
+    );
     let out = reg.workers[placed.worker].call(&placed.func, &args);
     // The lock is held across the crossing on purpose (see `PLACEMENT`), but a
     // fault must not poison it while a guard is live.
@@ -242,6 +320,32 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
             (Kind::Void, _) => {}
             (Kind::Int, Value::Int(i)) => stores.put::<i64>(stack, i),
             (Kind::Bool, Value::Bool(b)) => stores.put(stack, b),
+            (Kind::Single, Value::Float(f)) => stores.put::<f32>(stack, f as f32),
+            // A text return has two call shapes and the call site chose which
+            // one, so this reads the choice rather than assuming it — the same
+            // two branches the cdylib bridge (`bridge_text_result`) has.
+            //
+            //   * Destination-passing, emitted where the result is assigned to a
+            //     text variable: the answer goes straight into that variable's
+            //     record and NOTHING is pushed.
+            //   * Otherwise the ordinary loft convention, which every other
+            //     position uses: the answer goes into the hidden work buffer the
+            //     caller passed, and a `Str` over it is pushed as the result.
+            (Kind::Text, Value::Text(s)) => {
+                let into = text_dest.or(work_buf).expect("checked before the crossing");
+                let buf = stores
+                    .store_mut(&into)
+                    .addr_mut::<String>(into.rec, into.pos);
+                // Append: the call site cleared the buffer beforehand, exactly
+                // as it does for an in-process text return.
+                buf.push_str(&s);
+                if text_dest.is_none() {
+                    // `Str` borrows the buffer's bytes; the buffer is the
+                    // caller's own variable and outlives this result.
+                    let result = crate::keys::Str::new(buf.as_str());
+                    stores.put(stack, result);
+                }
+            }
             (k, v) => panic!("placed call returned {v:?} where the signature declares {k:?}"),
         },
         // A fault inside a placed library surfaces as the caller's runtime
