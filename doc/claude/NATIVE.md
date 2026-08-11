@@ -1830,9 +1830,11 @@ native, and Rust reference implementations.
 
 **If native is slower than expected:**
 
-Profile with `RUSTFLAGS="-C debuginfo=2"` and `cargo flamegraph`.
-Common issues: unnecessary store allocation, bounds checks in tight
-loops, string allocation overhead.
+Profile it: `make profile ARGS="--native prog.loft"`, and
+`PROFILE_FLAGS="--annotate"` for the hot source lines
+([PERFORMANCE.md § Profiling a run](PERFORMANCE.md)). Common issues:
+unnecessary store allocation, bounds checks in tight loops, string
+allocation overhead.
 
 ### Files
 

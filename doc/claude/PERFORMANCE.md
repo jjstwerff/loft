@@ -9,6 +9,7 @@ design for each planned improvement.
 
 ## Contents
 
+- [Profiling a run](#profiling-a-run)
 - [Benchmark results](#benchmark-results)
 - [How the interpreter executes](#how-the-interpreter-executes)
 - [Interpreter vs Python](#interpreter-vs-python)
@@ -25,6 +26,66 @@ design for each planned improvement.
 - [See also](#see-also)
 
 ---
+
+## Profiling a run
+
+`make profile ARGS="--interpret --check prog.loft"` answers *where did this run spend its
+time*, down to the source line. `scripts/profile.sh` is the same thing with flags.
+
+```
+make profile ARGS="--interpret --check prog.loft"
+PROFILE_FLAGS="--annotate"  # the hot function's source LINES
+PROFILE_FLAGS="--calls"     # who calls the hot function
+PROFILE_FLAGS="--no-cache"  # profile a COMPILE, not a startup-cache reload
+```
+
+### One-time setup
+
+Sampling a user process needs `perf_event_paranoid <= 1`; the script refuses with the exact
+command when it is higher.
+
+```bash
+echo 'kernel.perf_event_paranoid = 1' | sudo tee /etc/sysctl.d/99-perf.conf
+sudo sysctl --system
+```
+
+### The four choices that make a profile honest
+
+These are baked into the script rather than offered as options, because each one is a way a
+profile can be confidently wrong.
+
+**Self time, not inclusive.** loft's hot paths are recursive tree walkers — `scopes::scan`,
+`use_analysis::collect_defs`, every `for_each_child` descent. Inclusive time hands ~100 % to
+the walker at the root and names nothing. Self time names the function actually burning
+cycles; `--calls` then tells you who reaches it.
+
+**Frame pointers, not DWARF.** `--call-graph=dwarf` copies stack memory per sample. Against a
+walker that recurses hundreds deep that is slow *and* truncates exactly the chains you came
+for. The profiling profile is built `-Cforce-frame-pointers=yes`, so `fp` unwinding is both
+cheap and complete.
+
+**A separate cargo profile.** `[profile.profiling]` is release plus line tables.
+Release itself stays untouched on purpose: RELEASE.md pins a release binary's sha256 and
+`make speed` measures release, so adding debug info there changes the artifact both are
+about. (The old `make profile` did exactly that — `RUSTFLAGS=-g cargo build --release`.)
+
+**A cache hit is not a compile.** loft answers a second run of an unchanged file from the
+startup cache: same command, same output, a tenth of the time, and a flat profile that blames
+the store loader. That is the normal result of profiling the same file twice, so the script
+detects it and says so — use `--no-cache`, or vary the file's content per measurement.
+
+### Count before you time
+
+For an *asymptotic* question — "why is this quadratic?" — a profiler is the wrong first tool.
+It names the hot function but not the exponent, and the hot function is usually innocent. Add
+a counter, run it at two sizes, and read the growth.
+
+loft#854 is the worked example. Timing said `scopes::check` was 100 % of an 8 000-element
+compile. Counting said `scan` was called 33 832 → 61 832 → 117 832 times for 2 000 → 4 000 →
+8 000 elements — *linear*, while time went up 4× per doubling. Two numbers, and the whole
+"the walk re-traverses" family of explanations was dead: the walk is linear, so one call had
+to be doing O(n) work. Only then is a profiler the right instrument, and it went straight to
+`use_analysis::collect_defs`.
 
 ## Benchmark results
 
