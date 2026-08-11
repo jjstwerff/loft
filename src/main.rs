@@ -10258,6 +10258,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     if runtime_err.is_none() {
         state.check_store_leaks();
     }
+    // @PLN119 arc A — say goodbye to each placed library's worker rather than
+    // leaving the kernel to do it. `PR_SET_PDEATHSIG` is the backstop that
+    // covers every `exit` path below and an outright kill; this is the graceful
+    // one, and it runs after the leak check so a worker teardown can never be
+    // what a leak report is describing.
+    #[cfg(target_os = "linux")]
+    loft::lib_placement::dispatch::shutdown();
     // @PLN130 F8 — LOFT_STRICT_STORES makes both store-lifetime faults fatal: a reference
     // that outlived its store, and a store nobody freed.  Reported at every site during the
     // run (so one run surfaces all of them), and turned into a non-zero exit here so a probe
