@@ -117,7 +117,10 @@ impl Wire {
     /// A missing or unmappable file, a wrong magic (not our file), or a
     /// protocol mismatch (a stale worker executable against a newer caller).
     pub fn attach(path: &Path) -> io::Result<Wire> {
-        let file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?;
         let w = Wire::map(&file, path, false)?;
         if w.get_u32(OFF_MAGIC) != MAGIC {
             return Err(io::Error::new(
@@ -509,7 +512,11 @@ impl Worker {
     /// # Errors
     /// The worker's own error text for a fault inside the library, or a
     /// transport failure (a dead worker, an oversized frame).
-    pub fn call(&self, func: &str, args: &[crate::host::Value]) -> Result<crate::host::Value, String> {
+    pub fn call(
+        &self,
+        func: &str,
+        args: &[crate::host::Value],
+    ) -> Result<crate::host::Value, String> {
         if func.is_empty() {
             return Err("empty function name".to_string());
         }
@@ -518,7 +525,11 @@ impl Worker {
 
     /// The handshake and every later call take the same path; `func == ""` is
     /// the handshake, which the worker answers with void once it is loaded.
-    fn call_raw(&self, func: &str, args: &[crate::host::Value]) -> Result<crate::host::Value, String> {
+    fn call_raw(
+        &self,
+        func: &str,
+        args: &[crate::host::Value],
+    ) -> Result<crate::host::Value, String> {
         if self.dead.get() {
             return Err(format!("library '{}' worker is gone", self.name));
         }
@@ -566,6 +577,19 @@ impl Worker {
 /// caller as an error, which is what makes a placed library's error behaviour
 /// match an in-process one.
 pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
+    // Die with the caller. A worker is meaningless without the process that
+    // started it, and the caller cannot be relied on to say goodbye: it may
+    // `exit` from any of a dozen places, or be killed outright. Without this a
+    // crashed run leaves a worker holding the terminal's stdout, which reads as
+    // the run itself having hung.
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+    }
+    // Re-check after arming: if the caller died in the window before the
+    // `prctl`, the signal has already been missed.
+    if unsafe { libc::getppid() } == 1 {
+        std::process::exit(0);
+    }
     let wire = match Wire::attach(wire_path) {
         Ok(w) => w,
         Err(e) => {

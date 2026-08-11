@@ -175,6 +175,9 @@ pub mod host;
 // arm needs no dependency at all.  `remote-store` is listed because the paged
 // loaders' range GETs live here too (loft#678) and that feature can be selected
 // without `registry`.
+/// @PLN119 — where a library RUNS (in-process or a worker process).  Distinct
+/// from [`placement`], which is where a keyed collection puts an entry on disk.
+pub mod lib_placement;
 #[cfg(any(
     feature = "registry",
     feature = "remote-store",
@@ -184,9 +187,6 @@ pub(crate) mod net;
 pub mod ownership_cfg;
 #[cfg(paged_store)]
 pub mod paged_reader;
-/// @PLN119 — where a library RUNS (in-process or a worker process).  Distinct
-/// from [`placement`], which is where a keyed collection puts an entry on disk.
-pub mod lib_placement;
 pub mod placement;
 pub mod portable_path;
 pub mod resolution;

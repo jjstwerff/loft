@@ -806,6 +806,14 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         if sym.starts_with("loft_shared_") {
             continue;
         }
+        // @PLN119 arc A: a process-placed library's symbol is served by a worker
+        // over the placement wire, not by a cdylib in this process. It has
+        // already been wired by `lib_placement::dispatch::install`, so looking
+        // for it here would find nothing and report a missing cdylib that was
+        // never supposed to exist.
+        if sym.starts_with("loft_placed_") {
+            continue;
+        }
 
         // Only replace stubs — skip hand-written glue from native::init().
         if let Some(stubs) = stub_syms
@@ -1507,7 +1515,6 @@ unsafe extern "C" fn ffi_reload(ctx: LoftStoreCtx, out_ptr: *mut *mut u8, out_si
 /// `Call = fn(&mut Stores, &mut DbRef)` handler learns WHICH binding it is
 /// serving. Read by the `#c` dispatcher (@PLN24 arc B) for the same reason the
 /// native auto-dispatcher reads it.
-#[cfg(feature = "native-extensions")]
 #[must_use]
 pub fn current_lib_idx() -> u16 {
     CURRENT_LIB_IDX.with(std::cell::Cell::get)

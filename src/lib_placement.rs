@@ -43,7 +43,7 @@
 //! and the ownership rules (@PLN119 arcs B and C) and are not implemented here.
 //! The handshake already exchanges the store-numbering base those arcs translate
 //! against, so attaching does not have to change when they land.
-
+//!
 //! # Platform
 //!
 //! The declaration is portable — every platform parses `placement` and every
@@ -107,5 +107,10 @@ impl Placement {
 #[cfg(target_os = "linux")]
 pub mod wire;
 
+/// Routing a placed library's calls from the interpreter into its worker —
+/// what makes the declaration take effect on an ordinary `use`.
 #[cfg(target_os = "linux")]
-pub use wire::{serve, Wire, Worker};
+pub mod dispatch;
+
+#[cfg(target_os = "linux")]
+pub use wire::{Wire, Worker, serve};

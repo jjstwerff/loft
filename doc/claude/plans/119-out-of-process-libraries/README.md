@@ -7,11 +7,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **Q1 answered GREEN (2026-07-24)**, **Q4 answered (2026-08-11): the
-crossing is affordable, and it pins the handshake to adaptive spin-then-sleep**
-(see [Open design questions](#open-design-questions) 4 — the naive futex wake is
-30× worse and would have made placement visible in the source).  Arc A in
-progress.
+Open — **arc A DONE (2026-08-11)**: a library declares `placement = "process"`
+and its consumers call it unchanged, across a real process boundary, with the
+parity gate green for scalar and text-argument calls
+([Arc A as built](#arc-a-as-built-2026-08-11)).  **Q1 answered GREEN
+(2026-07-24)**; **Q4 answered (2026-08-11)** — the crossing is affordable, and it
+pins the handshake to adaptive spin-then-sleep (the naive futex wake is 30×
+worse and would have made placement visible in the source).  Next: arc C
+(ownership) then arc B proper, per [Phase ordering](#phase-ordering).
 Opened 2026-07-24 from the question "does loft have a safe way to spawn
 sub-processes?".  It does not, and the answer is deliberately not to add one:
 `lib_plans/67-process/`'s `run(cmd, args) -> {stdout, stderr, code}` is
@@ -151,12 +154,76 @@ plan-58 failure.
 
 | Item | Source | Status |
 |---|---|---|
-| **A** — placement declaration + attach handshake (`store_nr` translation, epoch check) | this README | Open |
+| **A** — placement declaration + attach handshake (`store_nr` translation, epoch check) | this README | **Done 2026-08-11** (scalars + text arguments; see below) |
 | **B** — boundary marshal: arena residency for every value reachable from an argument or return | this README + Q1 | Open — **unblocked**; residency proven, the job is to build args in the arena |
 | **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | Open |
 | **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | Open |
 | **E** — `placement = "remote"` over the existing paged / Range reader | @PLN97 arc G | Open — blocked-ish on [#632](https://github.com/loft-lang/loft/issues/632): the paged loaders silently refuse a **field-declared** collection (the store's `known_type` is the wrapper struct), and the refusal is indistinguishable from "key absent" |
 | **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | Open |
+
+## Arc A as built (2026-08-11)
+
+A library writes one line in its own `loft.toml`:
+
+```toml
+[library]
+placement = "process"
+```
+
+and its consumers are unchanged — `use maths;` then `add(2, 3)`. The call
+compiles to an `OpStaticCall`, whose stub is replaced by a dispatcher that reads
+the arguments off the interpreter stack, crosses a shared mmap to a worker
+process holding the library, and writes the answer back.
+
+| Piece | Where |
+|---|---|
+| Declaration + validation (portable) | `src/lib_placement.rs` |
+| The wire: mapping, handshake, frame codec, both ends | `src/lib_placement/wire.rs` |
+| Marking + the interpreter dispatcher | `src/lib_placement/dispatch.rs` |
+| Worker entry (`--lib-worker`, internal) | `src/main.rs` |
+| **The gate** — one consumer, one library, both placements | `tests/placement_parity.rs` |
+| Transport in isolation (`ping` crosses, shapes survive, faults) | `tests/placement_worker.rs` |
+
+Three things worth carrying forward:
+
+- **The boundary reuses `host::Value`.** The worker loads the library as a
+  `host::Program` and serves calls through the same typed marshaller a Rust
+  caller uses. That is the plan's own "no second wire vocabulary" rule applied to
+  its own implementation, and it is why arc A is small.
+- **A signature the wire cannot carry is not marked**, so it runs in-process —
+  byte-identically, the same fallback an uncompilable native library takes.
+  Nothing becomes a call that fails later. Arc A carries integer-family, boolean
+  and text ARGUMENTS, and void / integer-family / boolean RETURNS.
+- **A text return is excluded on purpose.** It travels the interpreter's
+  dest-buffer protocol (`n_set_bridge_dest`), which codegen emits only for a
+  cdylib call; approximating it would return a wrong value rather than refuse.
+  It belongs with arc B, next to `single`, structs, vectors and references.
+
+**The gate isolates ONE axis.** Left alone, the in-process side auto-compiles the
+library to a cdylib while the placed side does not, so the two runs would differ
+in whether a native build ran — and that build's chatter reads as a placement
+difference when it is nothing of the kind. Both sides are pinned to the
+interpreter (`LOFT_NO_NATIVE_LIBS=1`) so placement is the only thing that
+changed. The gate carries its own control (`the_gate_can_fail`): it compares two
+deliberately DIFFERENT libraries and requires the comparison to notice, because a
+parity gate that cannot report a difference passes forever.
+
+**Still honest about what is unproven.** `store_nr` translation and the epoch
+check are exchanged at handshake but nothing reads them yet — arc A sends no
+references, so there is nothing to translate. They are written at attach anyway
+because adding them when arc B needs them would be a protocol change that
+silently mismatches a running worker. Do not read the handshake fields as
+evidence that translation works.
+
+**Two known limits, both arc-A-shaped rather than accidental:**
+
+1. **Calls to a placed library serialise.** The wire has one request slot, so
+   the dispatcher holds a lock across the crossing — correctness, not caution,
+   but it makes a placed library a poor fit for a hot `par` arm. The plan's
+   single-writer discipline is where this gets revisited.
+2. **The transport is Linux-only** (it is built on `futex`). Elsewhere a placed
+   library runs in-process, which by the invariant is the same program;
+   `LOFT_REQUIRE_PLACEMENT=1` makes the lost isolation an error instead.
 
 ## Phase ordering
 
@@ -164,9 +231,11 @@ plan-58 failure.
    Residency is proven for every text shape across a real process handoff, so
    arc B is unblocked and starts from "build arguments in the arena", not from
    "can text cross at all".
-2. **Arc A** — attach handshake and `store_nr` translation, with the epoch check
-   wired to the existing mutation counter.  A no-op library (`fn ping() -> integer`)
-   crossing the boundary is the first green cell.
+2. ~~**Arc A** — attach handshake and `store_nr` translation~~ — **DONE
+   2026-08-11** ([Arc A as built](#arc-a-as-built-2026-08-11)).  `fn ping() ->
+   integer` crosses the boundary, and the parity gate holds for scalar and
+   text-argument calls.  The epoch/`store_nr` words are exchanged but unread
+   until references cross.
 3. **Arc C** — ownership, with the @PLN94 oracle run on both placements; the leak
    half of the parity gate cannot pass before this.
 4. **Arc B proper** — the full type-kind × placement matrix from Stage A.

@@ -195,12 +195,21 @@ impl Program {
         let mut p = parser::Parser::new();
         p.parse_dir(&stdlib_dir.to_string_lossy(), true, false)
             .map_err(|e| {
-                LoftError::Parse(format!("cannot read stdlib at {}: {e}", stdlib_dir.display()))
+                LoftError::Parse(format!(
+                    "cannot read stdlib at {}: {e}",
+                    stdlib_dir.display()
+                ))
             })?;
         let src = pkg_dir.join("src");
-        let dir = if src.is_dir() { src } else { pkg_dir.to_path_buf() };
+        let dir = if src.is_dir() {
+            src
+        } else {
+            pkg_dir.to_path_buf()
+        };
         p.parse_dir(&dir.to_string_lossy(), false, false)
-            .map_err(|e| LoftError::Parse(format!("cannot read library at {}: {e}", dir.display())))?;
+            .map_err(|e| {
+                LoftError::Parse(format!("cannot read library at {}: {e}", dir.display()))
+            })?;
         scopes::check(&mut p.data);
         let mut data = p.data;
         let mut state = State::new(p.database);

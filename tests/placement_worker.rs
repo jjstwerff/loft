@@ -88,10 +88,22 @@ fn every_scalar_shape_survives_the_crossing() {
     // Distinctive values, and the EDGES: a negative integer catches a narrow or
     // unsigned misread on the wire, which is exactly the class of bug the
     // `#native` ABI contract already had to learn the hard way.
-    assert_eq!(w.call("echo_int", &[Value::Int(-9_007_199_254_740_993)]), Ok(Value::Int(-9_007_199_254_740_993)));
-    assert_eq!(w.call("echo_bool", &[Value::Bool(true)]), Ok(Value::Bool(true)));
-    assert_eq!(w.call("echo_bool", &[Value::Bool(false)]), Ok(Value::Bool(false)));
-    assert_eq!(w.call("echo_single", &[Value::Float(0.5)]), Ok(Value::Float(0.5)));
+    assert_eq!(
+        w.call("echo_int", &[Value::Int(-9_007_199_254_740_993)]),
+        Ok(Value::Int(-9_007_199_254_740_993))
+    );
+    assert_eq!(
+        w.call("echo_bool", &[Value::Bool(true)]),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(
+        w.call("echo_bool", &[Value::Bool(false)]),
+        Ok(Value::Bool(false))
+    );
+    assert_eq!(
+        w.call("echo_single", &[Value::Float(0.5)]),
+        Ok(Value::Float(0.5))
+    );
 
     // Text: empty, multi-byte, and longer than the 256-byte threshold where a
     // literal stops being inlined — the shapes @PLN119 Q1 proved are
@@ -105,7 +117,10 @@ fn every_scalar_shape_survives_the_crossing() {
         );
     }
     assert_eq!(
-        w.call("joined", &[Value::Text("a".into()), Value::Text("b".into())]),
+        w.call(
+            "joined",
+            &[Value::Text("a".into()), Value::Text("b".into())]
+        ),
         Ok(Value::Text("a/b".into()))
     );
 }
@@ -115,7 +130,11 @@ fn the_probe_can_fail() {
     // A test suite that only ever asserts agreement proves nothing about its own
     // sensitivity. Ask for a wrong answer and require the harness to say so.
     let dir = scratch("canary");
-    let pkg = library(&dir, "canarylib", "pub fn ping(x: integer) -> integer { x + 1 }\n");
+    let pkg = library(
+        &dir,
+        "canarylib",
+        "pub fn ping(x: integer) -> integer { x + 1 }\n",
+    );
     let w = worker("canarylib", &pkg);
     assert_ne!(
         w.call("ping", &[Value::Int(41)]),
@@ -131,14 +150,24 @@ fn a_fault_in_the_library_is_the_callers_error_not_a_dead_worker() {
     // an error, and — the part that matters — the worker is still there
     // afterwards.
     let dir = scratch("fault");
-    let pkg = library(&dir, "faultlib", "pub fn ping(x: integer) -> integer { x + 1 }\n");
+    let pkg = library(
+        &dir,
+        "faultlib",
+        "pub fn ping(x: integer) -> integer { x + 1 }\n",
+    );
     let w = worker("faultlib", &pkg);
 
     let missing = w.call("no_such_function", &[Value::Int(1)]);
-    assert!(missing.is_err(), "calling an absent fn should error, got {missing:?}");
+    assert!(
+        missing.is_err(),
+        "calling an absent fn should error, got {missing:?}"
+    );
 
     let wrong_arity = w.call("ping", &[]);
-    assert!(wrong_arity.is_err(), "wrong arity should error, got {wrong_arity:?}");
+    assert!(
+        wrong_arity.is_err(),
+        "wrong arity should error, got {wrong_arity:?}"
+    );
 
     assert_eq!(
         w.call("ping", &[Value::Int(1)]),
