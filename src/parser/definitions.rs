@@ -1781,6 +1781,12 @@ impl Parser {
             self.lexer.has_token("#");
             let id = self.lexer.has_identifier();
             if id == Some("native".to_string()) {
+                // Capture the cstring's position BEFORE consuming it — once
+                // `has_cstring()` returns, the lexer has advanced past the
+                // closing quote onto the next token, so a diagnostic at the
+                // current cursor would point at the NEXT declaration instead
+                // of the offending annotation.
+                let sym_pos = self.lexer.peek().position;
                 if let Some(sym) = self.lexer.has_cstring() {
                     // Explicit override — for the rare case where the native
                     // symbol differs from the loft fn name (e.g. a
@@ -1794,8 +1800,9 @@ impl Parser {
                     // symbol that genuinely DIFFERS from the fn name.
                     let canonical = self.data.def(self.context).name().to_string();
                     if sym == canonical {
-                        diagnostic!(
+                        diagnostic_at!(
                             self.lexer,
+                            &sym_pos,
                             Level::Error,
                             "redundant `#native \"{sym}\"` — the symbol equals the \
                              function name; write a bare `#native` instead (an \

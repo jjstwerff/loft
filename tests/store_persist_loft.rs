@@ -1478,6 +1478,91 @@ fn reload_on_missing_file_returns_true_with_empty_view() {
     assert!(path.exists(), "bind should create the file");
 }
 
+fn handoff_residency_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_handoff_residency.loft")
+}
+
+/// Assert every text-residency cell a reader task should have recovered from
+/// the handoff file. `label` names the read path so a failure says which one.
+fn assert_handoff_cells(out: &str, label: &str) {
+    for want in [
+        "h short=zeta-42 len=7",
+        "h long=300 match=true",
+        "h built=R-0#1#2#3#4#",
+        "h utf8=héllo-π len=7",
+        "h words=3 w0=kappa w1=lambda-9 w2=mu",
+        "h nums=4 n3=44",
+        "h narrow b=217 w=-31000",
+        "h absent=null",
+    ] {
+        assert!(
+            out.contains(want),
+            "{label}: missing {want:?} in output: {out:?}"
+        );
+    }
+    assert!(
+        !out.contains("h ABSENT"),
+        "{label}: entry not found: {out:?}"
+    );
+}
+
+/// @PLN119 Q1 — a store file is a HANDOFF between tasks: text written by one
+/// process is read back, intact, by a SEPARATE one. That is what makes the
+/// store usable as a shared mmap arena, so the text shapes are the point —
+/// short, over-256 (past the inline-constant threshold), runtime-built,
+/// multi-byte, and `vector<text>` (whose elements are string pointers).
+///
+/// Both whole-store read paths are covered: `store_load` (portable heap copy)
+/// and `store_persist_bind` (mmap adopt). Contrast
+/// `store_load_vectext_refuse.loft`: the PAGED loader refuses `vector<text>`
+/// because relocating an entry into a DIFFERENT store would dangle each
+/// element pointer. Whole-store transfer never relocates, so the same field
+/// survives here — different paths, both correct.
+#[test]
+fn handoff_text_residency_survives_a_separate_process() {
+    let dir = scratch("handoff_text_residency");
+    let path = dir.join("handoff.store");
+    let script = handoff_residency_script();
+
+    let (w_out, w_code) = run_mode(&script, &path, "write");
+    assert_eq!(w_code, 0, "{w_out:?}");
+    assert!(w_out.contains("write ok"), "write failed: {w_out:?}");
+    assert!(
+        path.exists(),
+        "the handoff file must exist after the write task"
+    );
+
+    // A FRESH process — only the file crosses.
+    let (i_out, i_code) = run_mode(&script, &path, "readimage");
+    assert_eq!(i_code, 0, "{i_out:?}");
+    assert!(i_out.contains("readimage load=true"), "{i_out:?}");
+    assert_handoff_cells(&i_out, "readimage");
+
+    // Another fresh process, this time adopting the image via mmap.
+    let (m_out, m_code) = run_mode(&script, &path, "readmmap");
+    assert_eq!(m_code, 0, "{m_out:?}");
+    assert!(m_out.contains("readmmap bind=true"), "{m_out:?}");
+    assert_handoff_cells(&m_out, "readmmap");
+}
+
+#[test]
+fn handoff_text_residency_reads_on_native_backend() {
+    let dir = scratch("handoff_text_residency_native");
+    let path = dir.join("handoff.store");
+    let script = handoff_residency_script();
+
+    let (w_out, w_code) = run_mode_backend("--interpret", &script, &path, "write");
+    assert_eq!(w_code, 0, "{w_out:?}");
+    assert!(w_out.contains("write ok"), "write failed: {w_out:?}");
+
+    // Written by the interpreter, read by a natively-compiled process: the
+    // image is portable across backends, not just across processes.
+    let (n_out, n_code) = run_mode_backend("--native", &script, &path, "readimage");
+    assert_eq!(n_code, 0, "{n_out:?}");
+    assert!(n_out.contains("readimage load=true"), "{n_out:?}");
+    assert_handoff_cells(&n_out, "native readimage");
+}
+
 /// `run_mode` that also hands back stderr — the refusal channel the paged
 /// loaders warn on.
 fn run_mode_with_stderr(script: &Path, path: &Path, mode: &str) -> (String, String, i32) {
